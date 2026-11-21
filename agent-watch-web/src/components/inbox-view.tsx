@@ -1,7 +1,7 @@
 import '#components/later-today.css'
 
 import { Button } from '@fohte/ui/button'
-import { ChevronRight, Filter, X } from 'lucide-react'
+import { ChevronDown, ChevronRight, Filter, X } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 
 import { InboxFilterBar } from '#components/inbox-filter-bar'
@@ -24,6 +24,8 @@ type InboxViewProps = {
   showAllInProgress: boolean
   onShowMore: () => void
   onSelect: (id: string) => void
+  todoLaterExpanded?: boolean
+  onTodoLaterExpandedChange?: (expanded: boolean) => void
   laterExpanded: boolean
   onToggleLater: () => void
   onToggleToday: (id: string, isToday: boolean) => void
@@ -66,6 +68,8 @@ export function InboxView({
   showAllInProgress,
   onShowMore,
   onSelect,
+  todoLaterExpanded: controlledTodoLaterExpanded,
+  onTodoLaterExpandedChange,
   laterExpanded,
   onToggleLater,
   todaySessions,
@@ -95,9 +99,12 @@ export function InboxView({
 }: InboxViewProps) {
   const [localFilterQuery, setLocalFilterQuery] = useState('')
   const [localDialogOpen, setLocalDialogOpen] = useState(false)
+  const [localTodoLaterExpanded, setLocalTodoLaterExpanded] = useState(false)
   const [draftQuery, setDraftQuery] = useState(controlledFilterQuery ?? '')
   const filterQuery = controlledFilterQuery ?? localFilterQuery
   const filterDialogOpen = controlledFilterDialogOpen ?? localDialogOpen
+  const todoLaterExpanded =
+    controlledTodoLaterExpanded ?? localTodoLaterExpanded
   const filters = parseInboxFilterQuery(filterQuery)
   const filteredSessions = filterInboxSessions(sessions, filters)
   const allNeedsActionCount = sessions.filter(
@@ -110,6 +117,7 @@ export function InboxView({
     (session) => (session.todoLaterCount ?? 0) > 0,
   )
   const firstTodoLaterSession = todoLaterSessions[0]
+  const hasMultipleTodoLaterSessions = todoLaterSessions.length > 1
   const todoLaterCount = todoLaterSessions.reduce(
     (count, session) => count + (session.todoLaterCount ?? 0),
     0,
@@ -327,21 +335,61 @@ export function InboxView({
           isMobile,
         })}
         {todoLaterCount > 0 && firstTodoLaterSession !== undefined ? (
-          <Button
-            type="button"
-            variant="plain"
-            className="todo-later-row cursor-pointer"
-            onClick={() => {
-              onSelect(firstTodoLaterSession.id)
-            }}
-          >
-            <span className="todo-later-label">To-do later</span>
-            <span className="todo-later-count">{todoLaterCount}</span>
-            <span className="todo-later-title">
-              {firstTodoLaterSession.todoLaterTitle}
-            </span>
-            <ChevronRight aria-hidden="true" className="todo-later-chevron" />
-          </Button>
+          <>
+            <Button
+              type="button"
+              variant="plain"
+              className="todo-later-row cursor-pointer"
+              aria-expanded={
+                hasMultipleTodoLaterSessions ? todoLaterExpanded : undefined
+              }
+              onClick={() => {
+                if (hasMultipleTodoLaterSessions) {
+                  const nextExpanded = !todoLaterExpanded
+                  if (onTodoLaterExpandedChange !== undefined) {
+                    onTodoLaterExpandedChange(nextExpanded)
+                  } else {
+                    setLocalTodoLaterExpanded(nextExpanded)
+                  }
+                } else {
+                  onSelect(firstTodoLaterSession.id)
+                }
+              }}
+            >
+              <span className="todo-later-label">To-do later</span>
+              <span className="todo-later-count">{todoLaterCount}</span>
+              <span className="todo-later-title">
+                {firstTodoLaterSession.todoLaterTitle}
+              </span>
+              {hasMultipleTodoLaterSessions && todoLaterExpanded ? (
+                <ChevronDown
+                  aria-hidden="true"
+                  className="todo-later-chevron"
+                />
+              ) : (
+                <ChevronRight
+                  aria-hidden="true"
+                  className="todo-later-chevron"
+                />
+              )}
+            </Button>
+            {hasMultipleTodoLaterSessions && todoLaterExpanded ? (
+              <ul
+                className="session-list todo-later-session-list"
+                aria-label="To-do later sessions"
+              >
+                {todoLaterSessions.map((session) => (
+                  <InboxSessionListItem
+                    key={session.id}
+                    session={session}
+                    selectedId={selectedId}
+                    onSelect={onSelect}
+                    isMobile={isMobile}
+                  />
+                ))}
+              </ul>
+            ) : null}
+          </>
         ) : null}
         <Button
           type="button"

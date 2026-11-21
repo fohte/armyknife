@@ -90,6 +90,7 @@ export function useCommandPaletteController({
       const newDoneSessions = sessionsToClose.filter((session) => {
         if (
           session.category !== 'done' ||
+          (session.todoLaterCount ?? 0) > 0 ||
           pendingCloseSessionIds.current.has(session.id) ||
           seenSessionIds.has(session.id)
         ) {

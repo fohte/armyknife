@@ -320,6 +320,82 @@ function readTodoLaterState(row: HTMLButtonElement, selection: [string][]) {
   }
 }
 
+it('lets users open each session in a multi-session To-do later group', () => {
+  const onSelect = vi.fn<(id: string) => void>()
+  const progressSession = sessions.at(2)
+  if (progressSession === undefined) {
+    throw new Error('Expected an in-progress session')
+  }
+  renderInbox({
+    sessions: [
+      ...sessions,
+      {
+        ...progressSession,
+        id: 'first-folded-session',
+        category: 'done',
+        title: 'Check a phone alert',
+        todoLaterCount: 2,
+        todoLaterTitle: 'Check the alert sound',
+      },
+      {
+        ...progressSession,
+        id: 'second-folded-session',
+        category: 'done',
+        title: 'Verify a delivery',
+        todoLaterCount: 1,
+        todoLaterTitle: 'Check the delivery status',
+      },
+    ],
+    onSelect,
+  })
+
+  const row = requireElement(
+    container.querySelector<HTMLButtonElement>('.todo-later-row'),
+  )
+  act(() => {
+    row.click()
+  })
+  const sessionRows = Array.from(
+    container.querySelectorAll<HTMLButtonElement>(
+      '.todo-later-session-list [data-session-row]',
+    ),
+  )
+  act(() => {
+    sessionRows.forEach((sessionRow) => {
+      sessionRow.click()
+    })
+  })
+
+  expect(
+    readExpandedTodoLaterState(row, sessionRows, onSelect.mock.calls),
+  ).toEqual({
+    label: 'To-do later',
+    count: '3',
+    title: 'Check the alert sound',
+    expanded: 'true',
+    sessionTitles: ['Check a phone alert', 'Verify a delivery'],
+    selection: [['first-folded-session'], ['second-folded-session']],
+  })
+})
+
+function readExpandedTodoLaterState(
+  row: HTMLButtonElement,
+  sessionRows: HTMLButtonElement[],
+  selection: [string][],
+) {
+  return {
+    label: row.querySelector('.todo-later-label')?.textContent,
+    count: row.querySelector('.todo-later-count')?.textContent,
+    title: row.querySelector('.todo-later-title')?.textContent,
+    expanded: row.getAttribute('aria-expanded'),
+    sessionTitles: sessionRows.map(
+      (sessionRow) =>
+        sessionRow.querySelector('.session-title')?.textContent ?? null,
+    ),
+    selection,
+  }
+}
+
 function requireElement<T extends Element>(element: T | null): T {
   if (element === null) throw new Error('Expected element was not rendered')
   return element

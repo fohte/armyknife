@@ -286,6 +286,26 @@ export const InboxShowsFoldedTodosBelowNeedsActionOnPhone: Story = {
   parameters: { viewport: { defaultViewport: 'mobile1' } },
 }
 
+export const InboxExpandsMultipleFoldedTodoSessions: Story = {
+  name: 'The inbox expands To-do later to select among sessions',
+  args: {
+    todoLaterExpanded: true,
+    sessions: [
+      ...sessions,
+      sampleSession('sample-folded-alert', 'done', 'Review a phone alert', {
+        kind: 'Todo',
+        todoLaterCount: 2,
+        todoLaterTitle: 'Check the alert sound',
+      }),
+      sampleSession('sample-folded-delivery', 'done', 'Verify a delivery', {
+        kind: 'Todo',
+        todoLaterCount: 1,
+        todoLaterTitle: 'Check the delivery status',
+      }),
+    ],
+  },
+}
+
 export const InboxFiltersSessionsByProjectAndKind: Story = {
   name: 'The inbox shows project and kind filters as removable chips',
   args: { filterQuery: 'project:sample project kind:question,review' },

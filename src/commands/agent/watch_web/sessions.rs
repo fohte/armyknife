@@ -35,7 +35,7 @@ use crate::shared::config::{self, AgentConfig};
 mod category;
 mod question_preview;
 use self::category::{
-    SessionCategory, SessionKind, category_for_with_interruption, category_for_with_later,
+    SessionCategory, SessionKind, TodoLaterCategoryContext, categories_for_with_todo_later,
     kind_for_with_todo,
 };
 mod sorting;
@@ -566,28 +566,21 @@ async fn list_sessions<S: SessionSource>(
             let todo_title = unanswered_todo_titles.get(&session.session_id);
             let folded_todo_summary = snapshot.folded_todo_summaries.get(&session.session_id);
             let needs_action = interrupted || proposal_title.is_some() || todo_title.is_some();
-            let category_when_not_later = category_for_with_interruption(
+            let (category, category_when_not_later) = categories_for_with_todo_later(
                 session,
-                turn,
-                needs_action,
-                has_running_background_task,
-                agent_status_state,
-            );
-            let waiting =
-                agent_is_waiting && category_when_not_later == SessionCategory::InProgress;
-            let category = if todo_title.is_some() {
-                SessionCategory::NeedsAction
-            } else {
-                category_for_with_later(
-                    session,
+                TodoLaterCategoryContext {
                     turn,
                     needs_action,
+                    has_unanswered_todo: todo_title.is_some(),
+                    has_folded_todo: folded_todo_summary.is_some(),
                     has_running_background_task,
                     agent_status_state,
                     state,
                     now,
-                )
-            };
+                },
+            );
+            let waiting =
+                agent_is_waiting && category_when_not_later == SessionCategory::InProgress;
             let crit_url = session.crit_urls.last().cloned();
             let crit_exposed_url = crit_url.as_ref().and_then(|url| {
                 session
@@ -611,7 +604,8 @@ async fn list_sessions<S: SessionSource>(
                 session,
                 turn,
                 proposal_title.is_some(),
-                todo_title.is_some() || folded_todo_summary.is_some(),
+                todo_title.is_some(),
+                folded_todo_summary.is_some(),
                 has_running_background_task,
             );
             let title = snapshot
@@ -2619,6 +2613,109 @@ mod tests {
         expected["sessions"][0]["todoLaterCount"] = serde_json::json!(2);
         expected["sessions"][0]["todoLaterTitle"] = serde_json::json!("Check the alert sound");
         expected["sessions"][0]["preview"] = serde_json::json!("Check the alert sound");
+
+        assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn folded_todos_alone_do_not_keep_a_stopped_session_in_needs_action(
+        mut source: TestSessionSource,
+    ) {
+        source.web_states[0].later_until = None;
+        source.folded_todo_summaries.insert(
+            "child-session".to_string(),
+            FoldedTodoSummary {
+                count: 2,
+                first_title: Some("Check the alert sound".to_string()),
+            },
+        );
+
+        let mut expected = expected_response(
+            "done",
+            None,
+            true,
+            ExpectedSessionDetails {
+                kind: Some("Todo"),
+                category_when_not_later: "done",
+                is_paused: false,
+                unread: true,
+                crit_url: None,
+            },
+            ExpectedSessionResponse {
+                engine: "claude",
+                work_type: None,
+                work_type_nav_labels: serde_json::json!({}),
+                updated_at: "1970-01-01T00:16:40Z",
+                elapsed_seconds: 100,
+                can_open_in_terminal: true,
+            },
+        );
+        expected["sessions"][0]["todoLaterCount"] = serde_json::json!(2);
+        expected["sessions"][0]["todoLaterTitle"] = serde_json::json!("Check the alert sound");
+        expected["sessions"][0]["preview"] = serde_json::json!("Check the alert sound");
+
+        assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
+    }
+
+    #[rstest]
+    #[case::failed(SessionStatus::Failed, None, "Error", false)]
+    #[case::crit_review(
+        SessionStatus::WaitingInput,
+        Some("https://crit.example/review/1"),
+        "Review",
+        true
+    )]
+    #[tokio::test]
+    async fn folded_todos_do_not_hide_error_or_review_kinds(
+        mut source: TestSessionSource,
+        #[case] status: SessionStatus,
+        #[case] crit_url: Option<&str>,
+        #[case] expected_kind: &str,
+        #[case] is_waiting_for_crit_review: bool,
+    ) {
+        source.sessions[0].status = status;
+        source.sessions[0].crit_urls = crit_url.map_or_else(Vec::new, |url| vec![url.to_string()]);
+        source.web_states[0].later_until = None;
+        source.folded_todo_summaries.insert(
+            "child-session".to_string(),
+            FoldedTodoSummary {
+                count: 1,
+                first_title: Some("Check the alert sound".to_string()),
+            },
+        );
+
+        let mut expected = expected_response(
+            "needs_action",
+            None,
+            true,
+            ExpectedSessionDetails {
+                kind: Some(expected_kind),
+                category_when_not_later: "needs_action",
+                is_paused: false,
+                unread: false,
+                crit_url,
+            },
+            ExpectedSessionResponse {
+                engine: "claude",
+                work_type: None,
+                work_type_nav_labels: serde_json::json!({}),
+                updated_at: "1970-01-01T00:16:40Z",
+                elapsed_seconds: 100,
+                can_open_in_terminal: true,
+            },
+        );
+        expected["sessions"][0]["todoLaterCount"] = serde_json::json!(1);
+        expected["sessions"][0]["todoLaterTitle"] = serde_json::json!("Check the alert sound");
+        expected["sessions"][0]["preview"] = serde_json::json!("Check the alert sound");
+        expected["sessions"][0]["isWaitingForCritReview"] =
+            serde_json::json!(is_waiting_for_crit_review);
+        if let Some(crit_url) = crit_url {
+            expected["sessions"][0]["webUis"] = serde_json::json!([{
+                "name": "crit",
+                "url": crit_url,
+            }]);
+        }
 
         assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
     }
