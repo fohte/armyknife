@@ -43,10 +43,12 @@ function props(overrides: Partial<Props> = {}): Props {
 }
 
 it('opens a folded to-do and preserves its added-folded marker', async () => {
-  const onFold = vi.fn(() => Promise.resolve(true))
+  const onFold = vi.fn<(folded: boolean) => Promise<boolean>>(() =>
+    Promise.resolve(true),
+  )
   renderCard(props({ folded: true, addedFolded: true, onFold }))
 
-  await userEvent.click(
+  await clickAndFlushFold(
     requireElement(
       container.querySelector<HTMLButtonElement>('.chat-todo-folded-row'),
     ),
@@ -72,10 +74,12 @@ function readFoldedTodoCardState(calls: [boolean][]) {
 }
 
 it('folds a pending to-do from its heading', async () => {
-  const onFold = vi.fn(() => Promise.resolve(true))
+  const onFold = vi.fn<(folded: boolean) => Promise<boolean>>(() =>
+    Promise.resolve(true),
+  )
   renderCard(props({ onFold }))
 
-  await userEvent.click(
+  await clickAndFlushFold(
     requireElement(
       container.querySelector<HTMLButtonElement>('.chat-todo-fold-button'),
     ),
@@ -83,6 +87,73 @@ it('folds a pending to-do from its heading', async () => {
 
   expect(onFold.mock.calls).toEqual([[true]])
 })
+
+it('disables fold controls until the update settles', async () => {
+  let resolveFold: (succeeded: boolean) => void = () => {}
+  const pendingFold = new Promise<boolean>((resolve) => {
+    resolveFold = resolve
+  })
+  const onFold = vi.fn<(folded: boolean) => Promise<boolean>>(() => pendingFold)
+  renderCard(props({ onFold }))
+
+  const unfoldedControl = requireElement(
+    container.querySelector<HTMLButtonElement>('.chat-todo-fold-button'),
+  )
+  await act(async () => {
+    await userEvent.click(unfoldedControl)
+  })
+  const unfoldedControlDisabled = unfoldedControl.disabled
+
+  renderCard(props({ folded: true, onFold }))
+  const foldedControl = requireElement(
+    container.querySelector<HTMLButtonElement>('.chat-todo-folded-row'),
+  )
+  const foldedControlDisabled = foldedControl.disabled
+  const callsDuringRequest = onFold.mock.calls
+
+  await act(async () => {
+    resolveFold(true)
+    await pendingFold
+  })
+  const foldedControlDisabledAfter = requireElement(
+    container.querySelector<HTMLButtonElement>('.chat-todo-folded-row'),
+  ).disabled
+
+  expect(
+    foldControlState(
+      unfoldedControlDisabled,
+      foldedControlDisabled,
+      callsDuringRequest,
+      foldedControlDisabledAfter,
+    ),
+  ).toEqual({
+    unfoldedControlDisabled: true,
+    foldedControlDisabled: true,
+    callsDuringRequest: [[true]],
+    foldedControlDisabledAfter: false,
+  })
+})
+
+function foldControlState(
+  unfoldedControlDisabled: boolean,
+  foldedControlDisabled: boolean,
+  callsDuringRequest: [boolean][],
+  foldedControlDisabledAfter: boolean,
+) {
+  return {
+    unfoldedControlDisabled,
+    foldedControlDisabled,
+    callsDuringRequest,
+    foldedControlDisabledAfter,
+  }
+}
+
+async function clickAndFlushFold(button: HTMLButtonElement) {
+  await act(async () => {
+    await userEvent.click(button)
+    await Promise.resolve()
+  })
+}
 
 function renderCard(cardProps: Props) {
   root ??= createRoot(container)

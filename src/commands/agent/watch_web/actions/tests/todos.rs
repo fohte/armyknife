@@ -55,6 +55,47 @@ async fn folds_a_pending_todo_without_erasing_its_added_folded_marker(
 
 #[rstest]
 #[tokio::test]
+async fn folding_a_completed_todo_returns_conflict(action_context: ActionContext) {
+    action_context.save_session(&session("sample-session"));
+    let sessions_dir = action_context.temp_dir.path().join("sessions");
+    let seq = store::add_agent_todo_in(
+        &sessions_dir,
+        "sample-session",
+        "Check the alert sound",
+        None,
+        false,
+    )
+    .unwrap();
+    store::resolve_agent_todo_from(
+        &sessions_dir,
+        "sample-session",
+        seq,
+        store::TodoResolution::Completed,
+        None,
+    )
+    .unwrap();
+
+    let response = action_context
+        .router()
+        .oneshot(post(
+            &format!("/sessions/sample-session/todos/{seq}/fold"),
+            json!({ "folded": true }),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response_snapshot(response, &action_context).await,
+        json!({
+            "status": StatusCode::CONFLICT.as_u16(),
+            "body": { "error": "todo is not pending" },
+            "calls": [],
+        }),
+    );
+}
+
+#[rstest]
+#[tokio::test]
 async fn completing_a_todo_notifies_the_session_before_persisting(action_context: ActionContext) {
     action_context.save_session(&session("sample-session"));
     store::add_agent_todo_in(

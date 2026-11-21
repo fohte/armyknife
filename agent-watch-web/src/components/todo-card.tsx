@@ -67,6 +67,7 @@ export function TodoCard({
     null,
   )
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [isFoldPending, setIsFoldPending] = useState(false)
   const currentResolution = resolution ?? resolutionLocally
   const isResolved = currentResolution !== null
 
@@ -104,6 +105,16 @@ export function TodoCard({
       })
     } finally {
       setIsSubmitting(false)
+    }
+  }
+
+  const foldTodo = async (nextFolded: boolean) => {
+    if (isFoldPending) return
+    setIsFoldPending(true)
+    try {
+      await onFold(nextFolded)
+    } finally {
+      setIsFoldPending(false)
     }
   }
 
@@ -152,8 +163,9 @@ export function TodoCard({
           variant="plain"
           className="chat-todo-folded-row cursor-pointer"
           aria-expanded={false}
+          disabled={isFoldPending}
           onClick={() => {
-            void onFold(false)
+            void foldTodo(false)
           }}
         >
           <span className="chat-todo-folded-label">
@@ -173,7 +185,9 @@ export function TodoCard({
     <article
       className="chat-todo-card"
       aria-label="User task"
-      aria-busy={isSubmitting || attachmentState.isProcessingAttachments}
+      aria-busy={
+        isSubmitting || isFoldPending || attachmentState.isProcessingAttachments
+      }
       data-resolution="pending"
     >
       <header className="chat-todo-heading">
@@ -185,8 +199,9 @@ export function TodoCard({
           aria-label="Fold this to-do"
           title="Fold"
           aria-expanded={true}
+          disabled={isFoldPending}
           onClick={() => {
-            void onFold(true)
+            void foldTodo(true)
           }}
         >
           <ChevronUp aria-hidden="true" />

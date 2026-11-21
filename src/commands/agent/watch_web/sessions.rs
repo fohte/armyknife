@@ -2516,24 +2516,31 @@ mod tests {
             },
         );
 
-        let (status, response) = sessions_response(source).await;
-
-        assert_eq!(
-            (
-                status,
-                response["sessions"].as_array().map(Vec::len),
-                response["sessions"][0]["id"].clone(),
-                response["sessions"][0]["todoLaterCount"].clone(),
-                response["sessions"][0]["todoLaterTitle"].clone(),
-            ),
-            (
-                StatusCode::OK,
-                Some(1),
-                serde_json::json!("child-session"),
-                serde_json::json!(1),
-                serde_json::json!("Check the alert sound"),
-            ),
+        let mut expected = expected_response(
+            "later",
+            Some("1970-01-01T01:18:20Z"),
+            true,
+            ExpectedSessionDetails {
+                kind: Some("Todo"),
+                category_when_not_later: "done",
+                is_paused: false,
+                unread: false,
+                crit_url: None,
+            },
+            ExpectedSessionResponse {
+                engine: "claude",
+                work_type: None,
+                work_type_nav_labels: serde_json::json!({}),
+                updated_at: "1970-01-01T00:16:40Z",
+                elapsed_seconds: 100,
+                can_open_in_terminal: true,
+            },
         );
+        expected["sessions"][0]["todoLaterCount"] = serde_json::json!(1);
+        expected["sessions"][0]["todoLaterTitle"] = serde_json::json!("Check the alert sound");
+        expected["sessions"][0]["preview"] = serde_json::json!("Check the alert sound");
+
+        assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
     }
 
     #[rstest]

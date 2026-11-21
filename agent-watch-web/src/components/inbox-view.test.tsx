@@ -294,16 +294,24 @@ it('groups folded to-dos after Needs action and opens the first session', () => 
     label: 'To-do later',
     count: '2',
     title: 'Check the alert sound',
+    afterNeedsAction: true,
     progressTitles: ['Add request metrics'],
     selection: [['folded-todo-session']],
   })
 })
 
 function readTodoLaterState(row: HTMLButtonElement, selection: [string][]) {
+  const needsAction = requireElement(
+    container.querySelector('.needs-action-section'),
+  )
   return {
     label: row.querySelector('.todo-later-label')?.textContent,
     count: row.querySelector('.todo-later-count')?.textContent,
     title: row.querySelector('.todo-later-title')?.textContent,
+    afterNeedsAction:
+      (needsAction.compareDocumentPosition(row) &
+        Node.DOCUMENT_POSITION_FOLLOWING) !==
+      0,
     progressTitles: Array.from(
       container.querySelectorAll('.in-progress-section .session-title'),
       (title) => title.textContent,
