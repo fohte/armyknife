@@ -6016,6 +6016,78 @@ it('attaches dropped files through the composer and sends their data', async () 
   })
 })
 
+it('attaches files dropped on a proposal comment without activating the conversation drop target', async () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction, { ...session, id: crypto.randomUUID() }, undefined, [
+    proposal,
+  ])
+  const file = new File(['payload'], 'dropped.png', { type: 'image/png' })
+  const dataTransfer = { types: ['Files'], files: [file], dropEffect: 'none' }
+  const comment = requireElement(
+    container.querySelector<HTMLTextAreaElement>('.chat-proposal-comment'),
+  )
+  const dispatchFileEvent = (type: 'dragenter' | 'dragover' | 'drop') => {
+    const event = new Event(type, { bubbles: true, cancelable: true })
+    Object.defineProperty(event, 'dataTransfer', { value: dataTransfer })
+    act(() => {
+      comment.dispatchEvent(event)
+    })
+    return event
+  }
+
+  const dragEnter = dispatchFileEvent('dragenter')
+  const targetAfterDragEnter = container.querySelector(
+    '.conversation-drop-target',
+  )
+  const dragOver = dispatchFileEvent('dragover')
+  const targetAfterDragOver = container.querySelector(
+    '.conversation-drop-target',
+  )
+  const drop = dispatchFileEvent('drop')
+  expect(
+    await waitForState(
+      () =>
+        container.querySelector(
+          '.chat-proposal-card .attachment-preview-item span',
+        )?.textContent === file.name,
+    ),
+  ).toBe(true)
+
+  const snapshot = () => ({
+    dragEnterPrevented: dragEnter.defaultPrevented,
+    dragOverPrevented: dragOver.defaultPrevented,
+    dropPrevented: drop.defaultPrevented,
+    targetAfterDragEnter: targetAfterDragEnter?.textContent ?? null,
+    targetAfterDragOver: targetAfterDragOver?.textContent ?? null,
+    targetAfterDrop:
+      container.querySelector('.conversation-drop-target')?.textContent ?? null,
+    commentAttachmentNames: Array.from(
+      container.querySelectorAll(
+        '.chat-proposal-card .attachment-preview-item span',
+      ),
+      (element) => element.textContent,
+    ),
+    composerAttachmentNames: Array.from(
+      container.querySelectorAll(
+        '.conversation-composer .attachment-preview-item span',
+      ),
+      (element) => element.textContent,
+    ),
+    actionCalls: onAction.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    dragEnterPrevented: true,
+    dragOverPrevented: true,
+    dropPrevented: true,
+    targetAfterDragEnter: null,
+    targetAfterDragOver: null,
+    targetAfterDrop: null,
+    commentAttachmentNames: ['dropped.png'],
+    composerAttachmentNames: [],
+    actionCalls: [],
+  })
+})
+
 it('hides the drop target when a file drag leaves the conversation', () => {
   const onAction = vi.fn(() => Promise.resolve(true))
   renderView(onAction)
