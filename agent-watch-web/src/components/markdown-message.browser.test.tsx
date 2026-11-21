@@ -631,9 +631,10 @@ it('keeps the link next to an expandable linked Markdown image', async () => {
 it('keeps a separate open action for a linked Markdown image targeting a web UI', async () => {
   const webUi: WebUiLinkTarget = {
     name: 'Canvas editor',
-    url: 'http://localhost:43123/studio/',
+    url: 'https://canvas.example.invalid/studio/',
   }
-  const targetUrl = 'http://localhost:43123/studio/pages/sample#page-fixture'
+  const targetUrl =
+    'https://canvas.example.invalid/studio/pages/sample#page-fixture'
   const onOpenWebUi = vi.fn()
   root = createRoot(container)
   act(() => {
@@ -661,7 +662,18 @@ it('keeps a separate open action for a linked Markdown image targeting a web UI'
   }
   const registeredLink = openLink
   if (enlarge === null) throw new Error('Expected the linked image button')
+  let nativeLinkDefaultPrevented = false
+  const recordLinkDefault = (event: MouseEvent) => {
+    if (
+      event.target instanceof Element &&
+      event.target.closest('.markdown-image-link') !== null
+    ) {
+      nativeLinkDefaultPrevented = event.defaultPrevented
+    }
+  }
+  container.addEventListener('click', recordLinkDefault)
   await act(async () => userEvent.click(registeredLink))
+  container.removeEventListener('click', recordLinkDefault)
   await act(async () => userEvent.click(enlarge))
 
   function getState() {
@@ -675,6 +687,7 @@ it('keeps a separate open action for a linked Markdown image targeting a web UI'
       },
       lightbox: getImageLightboxState(),
       onOpenWebUi: onOpenWebUi.mock.calls,
+      nativeLinkDefaultPrevented,
       webUiName: container.querySelector('.markdown-web-ui-link-name')
         ?.textContent,
     }
@@ -693,6 +706,7 @@ it('keeps a separate open action for a linked Markdown image targeting a web UI'
       imageAlt: 'Fixture illustration',
     },
     onOpenWebUi: [[webUi, targetUrl]],
+    nativeLinkDefaultPrevented: true,
     webUiName: 'Canvas editor',
   })
 })
