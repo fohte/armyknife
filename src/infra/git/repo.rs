@@ -233,6 +233,7 @@ pub fn current_branch(repo: &GitRepo) -> Result<String> {
 }
 
 /// Get the main branch name for a specific repository.
+/// Agent worktree creation only uses `origin/main` and `origin/master` as default bases.
 pub fn get_main_branch_for_repo(repo: &GitRepo) -> Result<String> {
     if repo.remote_branch_exists("origin/main") {
         return Ok("main".to_string());
