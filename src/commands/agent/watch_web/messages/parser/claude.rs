@@ -1445,7 +1445,7 @@ mod tests {
     #[test]
     fn resolves_a_human_origin_vibe_notice_as_an_event() {
         let user_marker = "⟦armyknife-user:fixture-marker-violet⟧";
-        let message_id = "armyknife-vibe-mode:fixture-message-teal";
+        let message_id = "armyknife-action:fixture-message-teal";
         let queued_content = "<armyknife-vibe-mode-on>watch-web からユーザーが vibe mode を on にしました。</armyknife-vibe-mode-on>";
         let delivered_content = crate::commands::agent::watch_web_user_marker::prefix_message(
             user_marker,

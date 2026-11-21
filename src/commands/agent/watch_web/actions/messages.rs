@@ -16,6 +16,7 @@ use super::super::super::{
     types::{Engine, Session, SessionStatus},
 };
 use super::super::attachments;
+use super::super::messages::{action_event, queued_prompt};
 use super::keyed_mutex_registry::KeyedMutexRegistry;
 use super::{ActionState, ApiError, load_session, resolve_sessions_dir, run_blocking};
 
@@ -318,6 +319,15 @@ pub(super) fn watch_web_message_content(
         }
         _ => content.to_string(),
     }
+}
+
+pub(super) fn watch_web_action_message_content(
+    session: &Session,
+    marker: Option<&str>,
+    content: &str,
+) -> String {
+    let content = watch_web_message_content(session, marker, content);
+    queued_prompt::add_id_marker(&content, &action_event::new_action_message_id())
 }
 fn send_via_peer_notify(
     session_id: &str,

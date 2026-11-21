@@ -95,7 +95,7 @@ pub(super) async fn request_change(
             .then(|| store::ensure_watch_web_user_marker_from(&sessions_dir, &target.session_id))
             .transpose()?;
         let content =
-            super::messages::watch_web_message_content(&target, marker.as_deref(), &content);
+            super::messages::watch_web_action_message_content(&target, marker.as_deref(), &content);
         runtime.send_message(&target, &content)?;
         store::set_agent_decision_review_from(&sessions_dir, &id, seq, "change")?;
         Ok(ChangeOutcome::Sent)
@@ -130,7 +130,9 @@ fn change_message(session: &Session, target: &Session, title: &str, comment: &st
         "}
     };
     format!(
-        "<armyknife-decision-change>{}</armyknife-decision-change>",
-        message.trim_end()
+        "<{}>{}</{}>",
+        super::super::messages::action_event::DECISION_CHANGE_TAG,
+        message.trim_end(),
+        super::super::messages::action_event::DECISION_CHANGE_TAG,
     )
 }

@@ -82,12 +82,7 @@ pub(super) fn user_content(prompt: &WatchWebQueuedPrompt) -> Vec<UserContentPart
 pub(super) fn chat_item(prompt: &WatchWebQueuedPrompt) -> ChatItem {
     let content = strip_id_marker(&prompt.content);
     if let Some((tag, body)) = tagged_body(&content)
-        && (!action_event::is_vibe_mode_tag(tag)
-            || prompt
-                .message_id
-                .as_deref()
-                .is_some_and(action_event::is_vibe_mode_message_id))
-        && let Some(text) = action_event::event_text(tag, body)
+        && let Some(text) = action_event::event_text(tag, body, prompt.message_id.as_deref())
     {
         return ChatItem::Event {
             kind: EventKind::Armyknife,
@@ -223,6 +218,21 @@ mod tests {
     }
 
     #[rstest]
+    #[case::todo_completed(
+        "armyknife-todo-completed",
+        "The user marked the to-do as done: Review the fixture.",
+        "The user marked the to-do as done: Review the fixture."
+    )]
+    #[case::todo_rejected(
+        "armyknife-todo-rejected",
+        "The user rejected the to-do: Review the fixture.",
+        "The user rejected the to-do: Review the fixture."
+    )]
+    #[case::decision_change(
+        "armyknife-decision-change",
+        "Requested change to the fixture decision.",
+        "Requested change to the fixture decision."
+    )]
     #[case::vibe_on(
         "armyknife-vibe-mode-on",
         "watch-web からユーザーが vibe mode を on にしました。",
@@ -233,14 +243,14 @@ mod tests {
         "watch-web からユーザーが vibe mode を off にしました。祖先セッションから引き継いでいる場合、vibe mode は引き続き有効です。",
         "Vibe mode turned off"
     )]
-    fn tagged_vibe_prompts_are_events_while_queued(
+    fn tagged_action_prompts_are_events_while_queued(
         #[case] tag: &str,
         #[case] body: &str,
         #[case] expected_text: &str,
     ) {
         let prompt = WatchWebQueuedPrompt {
             id: 7,
-            message_id: Some("armyknife-vibe-mode:fixture-message-cyan".to_owned()),
+            message_id: Some("armyknife-action:fixture-message-cyan".to_owned()),
             content: format!("<{tag}>{body}</{tag}>"),
             attachments: Vec::<WatchWebQueuedAttachment>::new(),
             resolved: false,
@@ -262,13 +272,19 @@ mod tests {
         );
     }
 
-    #[test]
-    fn user_text_with_a_vibe_tag_stays_queued_user_content() {
+    #[rstest]
+    #[case::vibe(
+        "<armyknife-vibe-mode-on>watch-web からユーザーが vibe mode を on にしました。</armyknife-vibe-mode-on>"
+    )]
+    #[case::todo("<armyknife-todo-completed>A user-authored fixture.</armyknife-todo-completed>")]
+    #[case::decision(
+        "<armyknife-decision-change>A user-authored fixture.</armyknife-decision-change>"
+    )]
+    fn user_text_with_an_action_tag_stays_queued_user_content(#[case] content: &str) {
         let prompt = WatchWebQueuedPrompt {
             id: 7,
             message_id: Some("fixture-message-cyan".to_owned()),
-            content: "<armyknife-vibe-mode-on>watch-web からユーザーが vibe mode を on にしました。</armyknife-vibe-mode-on>"
-                .to_owned(),
+            content: content.to_owned(),
             attachments: Vec::<WatchWebQueuedAttachment>::new(),
             resolved: false,
             sent_at: Utc::now(),
@@ -291,7 +307,7 @@ mod tests {
     fn resolved_event_prompt_is_not_marked_resolved_again() {
         let prompt = WatchWebQueuedPrompt {
             id: 7,
-            message_id: Some("armyknife-vibe-mode:fixture-message-cyan".to_owned()),
+            message_id: Some("armyknife-action:fixture-message-cyan".to_owned()),
             content: "<armyknife-vibe-mode-on>watch-web からユーザーが vibe mode を on にしました。</armyknife-vibe-mode-on>"
                 .to_owned(),
             attachments: Vec::<WatchWebQueuedAttachment>::new(),
@@ -302,7 +318,7 @@ mod tests {
             kind: EventKind::Armyknife,
             text: add_id_marker(
                 "Vibe mode turned on",
-                "armyknife-vibe-mode:fixture-message-cyan",
+                "armyknife-action:fixture-message-cyan",
             ),
             failed: false,
             timestamp: Some(prompt.sent_at.to_rfc3339()),

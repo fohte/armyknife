@@ -347,12 +347,11 @@ impl CodexParserState {
                                 super::super::queued_prompt::strip_id_marker(&text);
                             if let Some((tag, body)) =
                                 super::super::tagged_message::tagged_body(&content_without_id)
-                                && (!super::super::action_event::is_vibe_mode_tag(tag)
-                                    || queued_prompt_id.as_deref().is_some_and(
-                                        super::super::action_event::is_vibe_mode_message_id,
-                                    ))
-                                && let Some(event_text) =
-                                    super::super::action_event::event_text(tag, body)
+                                && let Some(event_text) = super::super::action_event::event_text(
+                                    tag,
+                                    body,
+                                    queued_prompt_id.as_deref(),
+                                )
                             {
                                 effects.push(CodexEffect::ArmyknifeEvent {
                                     text: CodexText::new(event_text)?,
@@ -427,25 +426,13 @@ impl CodexParserState {
                     } => {
                         tools.flush_into(&mut items);
                         let text = text.decode()?;
-                        if super::super::tagged_message::tagged_body(&text).is_some_and(
-                            |(tag, _)| super::super::action_event::is_vibe_mode_tag(tag),
-                        ) {
-                            items.push(ChatItem::User {
-                                text,
-                                from: None,
-                                timestamp: timestamp.map(|timestamp| timestamp.to_rfc3339()),
-                                rewind_id: rewind_id.clone(),
-                                queued_prompt_id: None,
-                            });
-                        } else {
-                            append_user_text_with_rewind_id(
-                                &mut items,
-                                text,
-                                parent,
-                                *timestamp,
-                                rewind_id.clone(),
-                            );
-                        }
+                        append_user_text_with_rewind_id(
+                            &mut items,
+                            text,
+                            parent,
+                            *timestamp,
+                            rewind_id.clone(),
+                        );
                     }
                     CodexEffect::ArmyknifeEvent {
                         text,
@@ -1142,14 +1129,15 @@ mod tests {
     #[test]
     fn renders_marked_todo_completions_as_armyknife_events() {
         let transcript = indoc! {r#"
-            {"type":"event_msg","timestamp":"2026-06-01T12:05:00Z","payload":{"type":"item_completed","item":{"type":"UserMessage","content":"<armyknife-todo-completed>Fixture action text.</armyknife-todo-completed>"}}}
+            {"type":"event_msg","timestamp":"2026-06-01T12:05:00Z","payload":{"type":"item_completed","item":{"type":"UserMessage","content":"<armyknife-todo-completed>Fixture action text.</armyknife-todo-completed>\n<!-- armyknife-queued-prompt-id:armyknife-action:fixture-message-gold -->"}}}
         "#};
 
         assert_eq!(
             parse(Cursor::new(transcript), None).unwrap(),
             vec![ChatItem::Event {
                 kind: EventKind::Armyknife,
-                text: "Fixture action text.".to_string(),
+                text: "Fixture action text.\n<!-- armyknife-queued-prompt-id:armyknife-action:fixture-message-gold -->"
+                    .to_string(),
                 failed: false,
                 timestamp: Some("2026-06-01T12:05:00+00:00".to_string()),
             }],
@@ -1159,14 +1147,15 @@ mod tests {
     #[test]
     fn renders_marked_todo_rejections_as_armyknife_events() {
         let transcript = indoc! {r#"
-            {"type":"event_msg","timestamp":"2026-06-01T12:05:00Z","payload":{"type":"item_completed","item":{"type":"UserMessage","content":"<armyknife-todo-rejected>Fixture rejection text.</armyknife-todo-rejected>"}}}
+            {"type":"event_msg","timestamp":"2026-06-01T12:05:00Z","payload":{"type":"item_completed","item":{"type":"UserMessage","content":"<armyknife-todo-rejected>Fixture rejection text.</armyknife-todo-rejected>\n<!-- armyknife-queued-prompt-id:armyknife-action:fixture-message-gold -->"}}}
         "#};
 
         assert_eq!(
             parse(Cursor::new(transcript), None).unwrap(),
             vec![ChatItem::Event {
                 kind: EventKind::Armyknife,
-                text: "Fixture rejection text.".to_string(),
+                text: "Fixture rejection text.\n<!-- armyknife-queued-prompt-id:armyknife-action:fixture-message-gold -->"
+                    .to_string(),
                 failed: false,
                 timestamp: Some("2026-06-01T12:05:00+00:00".to_string()),
             }],
@@ -1267,7 +1256,7 @@ mod tests {
         #[case] body: &str,
         #[case] expected_text: &str,
     ) {
-        let message_id = "armyknife-vibe-mode:fixture-message-cyan";
+        let message_id = "armyknife-action:fixture-message-cyan";
         let user_message = format!("<{tag}>{body}</{tag}>");
         let delivered_message = queued_prompt::add_id_marker(&user_message, message_id);
         let transcript = format!(

@@ -91,8 +91,11 @@ pub(super) async fn resolve_todo(
         stored_comment =
             attachments::append_image_previews_to_comment(stored_comment, &saved_attachments);
         let content = attachments::append_paths_to_message(content, &attachment_paths);
-        let content =
-            super::messages::watch_web_message_content(&session, marker.as_deref(), &content);
+        let content = super::messages::watch_web_action_message_content(
+            &session,
+            marker.as_deref(),
+            &content,
+        );
         let runtime = state.runtime;
         let send_session = session.clone();
         if let Err(error) =
@@ -137,11 +140,11 @@ fn todo_resolution_message(
 ) -> String {
     let (tag, summary) = match resolution {
         UserTodoResolution::Completed => (
-            "armyknife-todo-completed",
+            super::super::messages::action_event::TODO_COMPLETED_TAG,
             format!("The user marked the to-do as done: {title}."),
         ),
         UserTodoResolution::Rejected => (
-            "armyknife-todo-rejected",
+            super::super::messages::action_event::TODO_REJECTED_TAG,
             format!("The user rejected the to-do: {title}."),
         ),
     };
