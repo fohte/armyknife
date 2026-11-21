@@ -311,6 +311,22 @@ pub(crate) async fn get_merge_status_for_branch(repo: &GitRepo, branch: &str) ->
     close_status_for_branch(repo, branch, status)
 }
 
+pub(crate) async fn get_merge_status_for_branch_from_local_refs(
+    repo: &GitRepo,
+    branch: &str,
+) -> MergeStatus {
+    let status = get_merge_status_for_repo(repo, branch).await;
+    let repo_for_default_branch = repo.clone();
+    let repo_for_ancestry = repo.clone();
+    close_status_for_branch_from_local_refs_with(
+        status,
+        branch.to_string(),
+        move || get_main_branch_for_repo(&repo_for_default_branch).ok(),
+        move |ancestor, descendant| repo_for_ancestry.is_ancestor(ancestor, descendant),
+    )
+    .await
+}
+
 fn close_status_for_branch(repo: &GitRepo, branch: &str, status: MergeStatus) -> MergeStatus {
     if !matches!(&status, MergeStatus::NotMerged { .. }) {
         return status;
@@ -323,26 +339,38 @@ fn close_status_for_branch(repo: &GitRepo, branch: &str, status: MergeStatus) ->
     close_status_for_branch_with(
         status,
         branch,
-        refreshed,
         default_branch.as_deref(),
         |ancestor, descendant| repo.is_ancestor(ancestor, descendant),
     )
 }
 
+async fn close_status_for_branch_from_local_refs_with(
+    status: MergeStatus,
+    branch: String,
+    get_default_branch: impl FnOnce() -> Option<String> + Send + 'static,
+    is_ancestor: impl FnOnce(&str, &str) -> bool + Send + 'static,
+) -> MergeStatus {
+    if !matches!(&status, MergeStatus::NotMerged { .. }) {
+        return status;
+    }
+
+    let fallback_status = status.clone();
+    tokio::task::spawn_blocking(move || {
+        let default_branch = get_default_branch();
+        close_status_for_branch_with(status, &branch, default_branch.as_deref(), is_ancestor)
+    })
+    .await
+    .unwrap_or(fallback_status)
+}
+
 fn close_status_for_branch_with(
     status: MergeStatus,
     branch: &str,
-    origin_ref_refreshed: bool,
     default_branch: Option<&str>,
     is_ancestor: impl FnOnce(&str, &str) -> bool,
 ) -> MergeStatus {
     if !matches!(&status, MergeStatus::NotMerged { .. })
-        || !branch_has_no_unique_commits_with(
-            branch,
-            origin_ref_refreshed,
-            default_branch,
-            is_ancestor,
-        )
+        || !branch_has_no_unique_commits_with(branch, default_branch, is_ancestor)
     {
         return status;
     }
@@ -357,12 +385,9 @@ fn branch_has_no_unique_commits(repo: &GitRepo, branch: &str) -> bool {
     let default_branch = refreshed
         .then(|| get_main_branch_for_repo(repo).ok())
         .flatten();
-    branch_has_no_unique_commits_with(
-        branch,
-        refreshed,
-        default_branch.as_deref(),
-        |ancestor, descendant| repo.is_ancestor(ancestor, descendant),
-    )
+    branch_has_no_unique_commits_with(branch, default_branch.as_deref(), |ancestor, descendant| {
+        repo.is_ancestor(ancestor, descendant)
+    })
 }
 
 fn ensure_branch_no_unique_commits_before_delete(
@@ -395,11 +420,10 @@ fn ensure_branch_no_unique_commits_before_delete(
 
 fn branch_has_no_unique_commits_with(
     branch: &str,
-    origin_ref_refreshed: bool,
     default_branch: Option<&str>,
     is_ancestor: impl FnOnce(&str, &str) -> bool,
 ) -> bool {
-    let Some(default_branch) = default_branch.filter(|_| origin_ref_refreshed) else {
+    let Some(default_branch) = default_branch else {
         return false;
     };
     let branch_ref = format!("refs/heads/{branch}");
@@ -539,55 +563,77 @@ mod tests {
     #[rstest]
     #[case::no_pr_without_unique_commits(
         MergeStatus::NotMerged { reason: "No PR found".to_string() },
-        true,
         Some("main"),
         true,
         MergeStatus::NoUniqueCommits { reason: "No commits unique to branch".to_string() },
     )]
     #[case::open_pr_without_unique_commits(
         MergeStatus::NotMerged { reason: "pull request is open".to_string() },
-        true,
         Some("main"),
         true,
         MergeStatus::NoUniqueCommits { reason: "No commits unique to branch".to_string() },
     )]
     #[case::branch_has_unique_commits(
         MergeStatus::NotMerged { reason: "No PR found".to_string() },
-        true,
         Some("main"),
         false,
-        MergeStatus::NotMerged { reason: "No PR found".to_string() },
-    )]
-    #[case::origin_fetch_failed(
-        MergeStatus::NotMerged { reason: "No PR found".to_string() },
-        false,
-        Some("main"),
-        true,
         MergeStatus::NotMerged { reason: "No PR found".to_string() },
     )]
     #[case::default_branch_missing(
         MergeStatus::NotMerged { reason: "No PR found".to_string() },
-        true,
         None,
         true,
         MergeStatus::NotMerged { reason: "No PR found".to_string() },
     )]
-    fn close_status_uses_fresh_origin_ancestry(
+    fn close_status_uses_origin_ancestry(
         #[case] status: MergeStatus,
-        #[case] origin_ref_refreshed: bool,
         #[case] default_branch: Option<&str>,
         #[case] is_ancestor: bool,
         #[case] expected: MergeStatus,
     ) {
         assert_eq!(
-            close_status_for_branch_with(
-                status,
-                "agent-branch",
-                origin_ref_refreshed,
-                default_branch,
-                |_, _| is_ancestor,
-            ),
+            close_status_for_branch_with(status, "agent-branch", default_branch, |_, _| {
+                is_ancestor
+            },),
             expected,
+        );
+    }
+
+    #[tokio::test]
+    async fn close_status_checks_local_origin_ancestry_on_a_blocking_worker() {
+        let caller_thread = std::thread::current().id();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let status = close_status_for_branch_from_local_refs_with(
+            MergeStatus::NotMerged {
+                reason: "No PR found".to_string(),
+            },
+            "agent-branch".to_string(),
+            || Some("main".to_string()),
+            move |ancestor, descendant| {
+                sender
+                    .send((
+                        std::thread::current().id(),
+                        ancestor.to_string(),
+                        descendant.to_string(),
+                    ))
+                    .expect("send ancestry inputs");
+                true
+            },
+        )
+        .await;
+        let (worker_thread, ancestor, descendant) =
+            receiver.recv().expect("receive ancestry inputs");
+
+        assert_eq!(
+            (status, worker_thread != caller_thread, ancestor, descendant,),
+            (
+                MergeStatus::NoUniqueCommits {
+                    reason: "No commits unique to branch".to_string(),
+                },
+                true,
+                "refs/heads/agent-branch".to_string(),
+                "refs/remotes/origin/main".to_string(),
+            ),
         );
     }
 
@@ -599,7 +645,6 @@ mod tests {
                 reason: "pull request is open".to_string(),
             },
             "agent-branch",
-            true,
             Some("main"),
             |ancestor, descendant| {
                 compared_refs = Some((ancestor.to_string(), descendant.to_string()));

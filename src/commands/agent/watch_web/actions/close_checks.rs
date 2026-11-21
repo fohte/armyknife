@@ -82,13 +82,16 @@ impl CloseChecks {
             branch,
             |path| worktree::uncommitted_files(path).unwrap_or_default(),
             move |branch| async move {
-                // The UI preview skips the synchronous origin fetch; close refreshes and
-                // revalidates before deletion.
+                // The preview checks local refs; close fetches and revalidates before deletion.
                 let status_branch = branch.clone();
-                inspect_close_merge_status(
-                    branch,
-                    crate::infra::git::get_merge_status_for_repo(&repo, &status_branch),
-                )
+                let status_repo = repo.clone();
+                inspect_close_merge_status(branch, async move {
+                    worktree_delete::get_merge_status_for_branch_from_local_refs(
+                        &status_repo,
+                        &status_branch,
+                    )
+                    .await
+                })
                 .await
             },
             move |path| {
@@ -303,19 +306,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn no_pr_status_stays_unmerged_in_watch_close_check() {
-        let checks = CloseChecks::from_observations(
+    async fn no_unique_commits_are_cleanup_eligible_in_watch_close_check() {
+        let checks = CloseChecks::inspect_with(
             PathBuf::from("/fictional/worktree"),
-            Vec::new(),
             Some("feature/fictional".to_string()),
-            inspect_close_merge_status("feature/fictional".to_string(), async {
-                MergeStatus::NotMerged {
-                    reason: "No PR found".to_string(),
-                }
-            })
-            .await,
-            Some(Ok(Vec::new())),
-        );
+            |_| Vec::new(),
+            |branch| async move {
+                inspect_close_merge_status(branch, async {
+                    MergeStatus::NoUniqueCommits {
+                        reason: "No commits unique to branch".to_string(),
+                    }
+                })
+                .await
+            },
+            |_| Ok(Vec::new()),
+        )
+        .await;
 
         assert_eq!(
             serde_json::to_value(checks).unwrap(),
@@ -323,8 +329,8 @@ mod tests {
                 "path": "/fictional/worktree",
                 "files": [],
                 "branch": "feature/fictional",
-                "merged": false,
-                "reason": "No PR found",
+                "merged": true,
+                "reason": null,
                 "processes": [],
                 "processInspectionUnavailable": false,
             }),
