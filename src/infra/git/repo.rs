@@ -159,6 +159,13 @@ impl GitRepo {
         .is_some()
     }
 
+    /// Check whether `ancestor` is reachable from `descendant`.
+    pub fn is_ancestor(&self, ancestor: &str, descendant: &str) -> bool {
+        is_ancestor_with(&self.workdir, ancestor, descendant, |dir, args| {
+            run_git_optional(dir, args).is_some()
+        })
+    }
+
     pub fn origin_url(&self) -> Result<String> {
         run_git(&self.workdir, ["remote", "get-url", "origin"])
             .map_err(|_| GitError::NoOriginRemote.into())
@@ -180,6 +187,18 @@ impl GitRepo {
 fn resolve_relative(base: &Path, raw: &str) -> PathBuf {
     let p = PathBuf::from(raw);
     if p.is_absolute() { p } else { base.join(p) }
+}
+
+fn is_ancestor_with<R>(
+    workdir: &Path,
+    ancestor: &str,
+    descendant: &str,
+    run: impl FnOnce(&Path, [&str; 4]) -> R,
+) -> R {
+    run(
+        workdir,
+        ["merge-base", "--is-ancestor", ancestor, descendant],
+    )
 }
 
 fn path_to_string(path: &Path) -> String {
@@ -214,6 +233,7 @@ pub fn current_branch(repo: &GitRepo) -> Result<String> {
 }
 
 /// Get the main branch name for a specific repository.
+/// Agent worktree creation only uses `origin/main` and `origin/master` as default bases.
 pub fn get_main_branch_for_repo(repo: &GitRepo) -> Result<String> {
     if repo.remote_branch_exists("origin/main") {
         return Ok("main".to_string());
@@ -338,6 +358,29 @@ mod tests {
             Some(branch) => assert_eq!(result.unwrap(), branch),
             None => assert!(result.is_err()),
         }
+    }
+
+    #[test]
+    fn is_ancestor_checks_commit_reachability() {
+        let result = is_ancestor_with(
+            Path::new("/fictional/repo"),
+            "refs/heads/agent-branch",
+            "refs/remotes/origin/main",
+            |dir, args| (dir.to_path_buf(), args.map(str::to_string)),
+        );
+
+        assert_eq!(
+            result,
+            (
+                PathBuf::from("/fictional/repo"),
+                [
+                    "merge-base".to_string(),
+                    "--is-ancestor".to_string(),
+                    "refs/heads/agent-branch".to_string(),
+                    "refs/remotes/origin/main".to_string(),
+                ],
+            ),
+        );
     }
 
     mod parse_repo_tests {
