@@ -228,11 +228,6 @@ mod tests {
         "watch-web からユーザーが vibe mode を off にしました。祖先セッションから引き継いでいる場合、vibe mode は引き続き有効です。",
         "Vibe mode turned off"
     )]
-    #[case::vibe_inherited(
-        "armyknife-vibe-mode-inherited",
-        "watch-web からユーザーが vibe mode を off にしました。祖先セッションから引き継いでいる場合、vibe mode は引き続き有効です。",
-        "Vibe mode remains on"
-    )]
     fn tagged_vibe_prompts_are_events_while_queued(
         #[case] tag: &str,
         #[case] body: &str,

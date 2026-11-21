@@ -484,16 +484,6 @@ mod tests {
         Some("⟦armyknife-user:fixture-marker-cobalt⟧"),
         MessageKind::Event { kind: EventKind::Armyknife, text: "Vibe mode turned off".to_owned(), failed: false },
     )]
-    #[case::marked_vibe_mode_inherited_is_an_event(
-        json!({"type":"user","origin":{"kind":"peer","from":"unknown"}}),
-        indoc! {"
-            ⟦armyknife-user:fixture-marker-cobalt⟧
-            This message was sent by the human user in armyknife watch-web, either as a message or an action notification.
-            <armyknife-vibe-mode-inherited>watch-web からユーザーが vibe mode を off にしました。祖先セッションから引き継いでいる場合、vibe mode は引き続き有効です。</armyknife-vibe-mode-inherited>
-        "},
-        Some("⟦armyknife-user:fixture-marker-cobalt⟧"),
-        MessageKind::Event { kind: EventKind::Armyknife, text: "Vibe mode remains on".to_owned(), failed: false },
-    )]
     #[case::marked_vibe_tag_with_user_text_stays_user(
         json!({"type":"user","origin":{"kind":"peer","from":"unknown"}}),
         indoc! {"

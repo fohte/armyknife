@@ -4,8 +4,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::super::messages::action_event::{
-    VIBE_MODE_INHERITED_TAG, VIBE_MODE_OFF_NOTICE, VIBE_MODE_OFF_TAG, VIBE_MODE_ON_NOTICE,
-    VIBE_MODE_ON_TAG,
+    VIBE_MODE_OFF_NOTICE, VIBE_MODE_OFF_TAG, VIBE_MODE_ON_NOTICE, VIBE_MODE_ON_TAG,
 };
 use crate::commands::agent::types::{Engine, SessionStatus};
 use crate::commands::agent::{store, vibe};
@@ -90,8 +89,6 @@ pub(super) async fn set_vibe(
 
     let (event_tag, message) = if request.enabled {
         (VIBE_MODE_ON_TAG, VIBE_MODE_ON_NOTICE)
-    } else if matches!(&resulting_vibe_mode, vibe::VibeState::Inherited { .. }) {
-        (VIBE_MODE_INHERITED_TAG, VIBE_MODE_OFF_NOTICE)
     } else {
         (VIBE_MODE_OFF_TAG, VIBE_MODE_OFF_NOTICE)
     };
