@@ -99,6 +99,54 @@ struct SessionPullRequestView {
     is_current_branch: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionRowView {
+    id: String,
+    engine: Engine,
+    work_type: Option<String>,
+    category: SessionCategory,
+    kind: Option<SessionKind>,
+    title: String,
+    preview: Option<String>,
+    elapsed_seconds: u64,
+    task: Option<TqTaskView>,
+    repo: String,
+    vibe_mode: VibeState,
+    decision_count: i64,
+}
+
+struct SessionRowDetails {
+    category: SessionCategory,
+    kind: Option<SessionKind>,
+    title: String,
+    preview: Option<String>,
+    elapsed_seconds: u64,
+    task: Option<TqTaskView>,
+    repo: String,
+    vibe_mode: VibeState,
+    decision_count: i64,
+}
+
+impl SessionRowView {
+    fn new(session: &Session, details: SessionRowDetails) -> Self {
+        Self {
+            id: session.session_id.clone(),
+            engine: session.engine,
+            work_type: session.work_type.clone(),
+            category: details.category,
+            kind: details.kind,
+            title: details.title,
+            preview: details.preview,
+            elapsed_seconds: details.elapsed_seconds,
+            task: details.task,
+            repo: details.repo,
+            vibe_mode: details.vibe_mode,
+            decision_count: details.decision_count,
+        }
+    }
+}
+
 fn session_pull_request_view(pull_request: &SessionPullRequestInfo) -> SessionPullRequestView {
     SessionPullRequestView {
         number: pull_request.progress.pull_request.number,
@@ -132,27 +180,18 @@ enum SessionActivityStatus {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SessionView {
-    id: String,
-    engine: Engine,
-    work_type: Option<String>,
-    category: SessionCategory,
+    #[serde(flatten)]
+    row: SessionRowView,
     is_paused: bool,
     activity_status: SessionActivityStatus,
     waiting_reason: Option<String>,
     waiting_for_background_tasks: bool,
     category_when_not_later: SessionCategory,
-    kind: Option<SessionKind>,
-    title: String,
-    preview: Option<String>,
     updated_at: DateTime<Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
     last_prompted_at: Option<DateTime<Utc>>,
-    elapsed_seconds: u64,
     unread: bool,
-    task: Option<TqTaskView>,
     tasks: Vec<TqTaskView>,
-    repo: String,
-    vibe_mode: VibeState,
     branch: Option<String>,
     can_open_in_terminal: bool,
     project: String,
@@ -169,7 +208,6 @@ struct SessionView {
     later_until: Option<DateTime<Utc>>,
     is_today: bool,
     is_compacting: bool,
-    decision_count: i64,
     unreviewed_decision_count: i64,
     #[serde(skip_serializing_if = "is_zero")]
     todo_later_count: usize,
@@ -177,6 +215,20 @@ struct SessionView {
     todo_later_title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     review_document_id: Option<String>,
+}
+
+impl std::ops::Deref for SessionView {
+    type Target = SessionRowView;
+
+    fn deref(&self) -> &Self::Target {
+        &self.row
+    }
+}
+
+impl std::ops::DerefMut for SessionView {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.row
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -187,7 +239,7 @@ struct SessionsResponse {
     sessions: Vec<SessionView>,
 }
 
-struct SessionSnapshot {
+pub(super) struct SessionSnapshot {
     revision: i64,
     sessions: Vec<Session>,
     all_sessions: Vec<Session>,
@@ -205,6 +257,36 @@ struct SessionSnapshot {
 
 fn is_zero(value: &usize) -> bool {
     *value == 0
+}
+
+pub(super) async fn session_vibe_modes(
+    snapshot: &SessionSnapshot,
+    sessions: &[Session],
+    repo_by_id: &HashMap<String, String>,
+) -> Result<Vec<VibeState>, StatusCode> {
+    let sessions = sessions.to_vec();
+    let all_sessions = snapshot.all_sessions.clone();
+    let repo_by_id = repo_by_id.clone();
+    let config = snapshot.vibe_config.clone();
+    let ancestor_loader = snapshot.vibe_ancestor_loader.clone();
+    tokio::task::spawn_blocking(move || {
+        states_for_sessions(
+            &sessions,
+            &all_sessions,
+            &repo_by_id,
+            &config,
+            |session_id| ancestor_loader(session_id),
+        )
+    })
+    .await
+    .map_err(|error| {
+        tracing::error!(%error, "failed to resolve session vibe states");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?
+    .map_err(|error| {
+        tracing::warn!(%error, "failed to load session vibe state");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })
 }
 
 trait SessionSource: Clone + Send + Sync + 'static {
@@ -395,6 +477,8 @@ async fn list_sessions<S: SessionSource>(
         tracing::error!(%error, "failed to resolve review document state");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
+    let vibe_modes =
+        session_vibe_modes(&snapshot, &response_sessions, &snapshot.repo_by_id).await?;
     let now = source.now();
     let state_by_id = snapshot
         .web_states
@@ -404,30 +488,6 @@ async fn list_sessions<S: SessionSource>(
     let unanswered_proposal_titles = snapshot.unanswered_proposal_titles;
     let unanswered_todo_titles = snapshot.unanswered_todo_titles;
     let tree_related_session_ids = session_tree_related_ids(&snapshot.all_sessions);
-    let all_sessions_for_vibe = snapshot.all_sessions;
-    let sessions_for_vibe = response_sessions.clone();
-    let repo_by_id_for_vibe = snapshot.repo_by_id.clone();
-    let vibe_config = snapshot.vibe_config;
-    let vibe_ancestor_loader = snapshot.vibe_ancestor_loader;
-    let vibe_modes = tokio::task::spawn_blocking(move || {
-        states_for_sessions(
-            &sessions_for_vibe,
-            &all_sessions_for_vibe,
-            &repo_by_id_for_vibe,
-            &vibe_config,
-            |session_id| vibe_ancestor_loader(session_id),
-        )
-    })
-    .await
-    .map_err(|error| {
-        tracing::error!(%error, "failed to resolve session vibe states");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?
-    .map_err(|error| {
-        tracing::warn!(%error, "failed to load session vibe state");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
     let mut sessions = response_sessions
         .iter()
         .zip(vibe_modes)
@@ -545,11 +605,48 @@ async fn list_sessions<S: SessionSource>(
                     exposed_url: crit_exposed_url,
                 }))
                 .collect();
+            let kind = kind_for_with_todo(
+                session,
+                turn,
+                proposal_title.is_some(),
+                todo_title.is_some() || folded_todo_summary.is_some(),
+                has_running_background_task,
+            );
+            let title = snapshot
+                .title_by_id
+                .get(&session.session_id)
+                .cloned()
+                .unwrap_or_default();
+            let preview = question_previews
+                .get(&session.session_id)
+                .cloned()
+                .or_else(|| proposal_title.cloned())
+                .or_else(|| todo_title.cloned())
+                .or_else(|| folded_todo_summary.and_then(|summary| summary.first_title.clone()))
+                .or_else(|| session.last_message.clone());
+            let elapsed_seconds = now
+                .signed_duration_since(session.updated_at)
+                .num_seconds()
+                .max(0) as u64;
+            let decision_count = snapshot
+                .decision_counts
+                .get(&session.session_id)
+                .map_or(0, |counts| counts.total);
             SessionView {
-                id: session.session_id.clone(),
-                engine: session.engine,
-                work_type: session.work_type.clone(),
-                category,
+                row: SessionRowView::new(
+                    session,
+                    SessionRowDetails {
+                        category,
+                        kind,
+                        title,
+                        preview,
+                        elapsed_seconds,
+                        task,
+                        repo: repo.clone(),
+                        vibe_mode,
+                        decision_count,
+                    },
+                ),
                 is_paused: session.status == SessionStatus::Paused,
                 activity_status: if matches!(
                     display_status,
@@ -578,36 +675,10 @@ async fn list_sessions<S: SessionSource>(
                     && has_running_background_task
                     && category_when_not_later == SessionCategory::InProgress,
                 category_when_not_later,
-                kind: kind_for_with_todo(
-                    session,
-                    turn,
-                    proposal_title.is_some(),
-                    todo_title.is_some() || folded_todo_summary.is_some(),
-                    has_running_background_task,
-                ),
-                title: snapshot
-                    .title_by_id
-                    .get(&session.session_id)
-                    .cloned()
-                    .unwrap_or_default(),
-                preview: question_previews
-                    .get(&session.session_id)
-                    .cloned()
-                    .or_else(|| proposal_title.cloned())
-                    .or_else(|| todo_title.cloned())
-                    .or_else(|| folded_todo_summary.and_then(|summary| summary.first_title.clone()))
-                    .or_else(|| session.last_message.clone()),
                 updated_at: session.updated_at,
                 last_prompted_at: session.last_prompted_at,
-                elapsed_seconds: now
-                    .signed_duration_since(session.updated_at)
-                    .num_seconds()
-                    .max(0) as u64,
                 unread: display_status == DisplayStatus::UnreadStopped,
-                task,
                 tasks,
-                repo: repo.clone(),
-                vibe_mode,
                 branch: session
                     .pr_context
                     .as_ref()
@@ -626,10 +697,6 @@ async fn list_sessions<S: SessionSource>(
                 later_until: state.and_then(|state| state.later_until),
                 is_today: state.is_some_and(|state| state.is_today),
                 is_compacting: state.is_some_and(|state| state.is_compacting),
-                decision_count: snapshot
-                    .decision_counts
-                    .get(&session.session_id)
-                    .map_or(0, |counts| counts.total),
                 unreviewed_decision_count: snapshot
                     .decision_counts
                     .get(&session.session_id)
@@ -1387,6 +1454,39 @@ mod tests {
         (status, value)
     }
 
+    fn expected_child_tree(vibe_mode: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "revision": 7,
+            "sessions": [{
+                "id": "child-session",
+                "parentId": null,
+                "engine": "claude",
+                "workType": null,
+                "category": "later",
+                "isActive": true,
+                "kind": "Stopped",
+                "title": "child title",
+                "preview": "last message",
+                "elapsedSeconds": 100,
+                "task": {
+                    "id": "task-id",
+                    "number": 17,
+                    "title": "task title",
+                    "priority": 1,
+                    "isClosed": false,
+                },
+                "repo": "example-org/example-repo",
+                "vibeMode": vibe_mode,
+                "decisionCount": 4,
+                "pullRequest": { "number": 42, "state": "Open" },
+                "pullRequests": [
+                    { "number": 42, "state": "Open" },
+                    { "number": 43, "state": "Open" },
+                ],
+            }],
+        })
+    }
+
     #[tokio::test]
     async fn session_tree_route_excludes_ended_ancestors_and_keeps_active_session_data() {
         let (status, tree) = session_tree_response(source(), "child-session").await;
@@ -1395,38 +1495,44 @@ mod tests {
             (status, tree),
             (
                 StatusCode::OK,
-                serde_json::json!({
-                "revision": 7,
-                "sessions": [
-                    {
-                        "id": "child-session",
-                        "parentId": null,
-                        "engine": "claude",
-                        "workType": null,
-                        "category": "later",
-                        "isActive": true,
-                        "kind": "Stopped",
-                        "title": "child title",
-                        "preview": "last message",
-                        "elapsedSeconds": 100,
-                        "task": {
-                            "id": "task-id",
-                            "number": 17,
-                            "title": "task title",
-                            "priority": 1,
-                            "isClosed": false,
-                        },
-                        "repo": "example-org/example-repo",
-                        "decisionCount": 4,
-                        "pullRequest": { "number": 42, "state": "Open" },
-                        "pullRequests": [
-                            { "number": 42, "state": "Open" },
-                            { "number": 43, "state": "Open" },
-                        ],
-                    },
-                ],
-                }),
+                expected_child_tree(serde_json::json!({ "mode": "repo_disabled" })),
             ),
+        );
+    }
+
+    #[rstest]
+    #[case::enabled(true, false, "enabled", None)]
+    #[case::inherited(false, true, "inherited", Some("parent-session"))]
+    #[tokio::test]
+    async fn session_tree_route_reports_vibe_state(
+        mut source: TestSessionSource,
+        #[case] vibe_enabled: bool,
+        #[case] launched_with_vibe: bool,
+        #[case] expected_mode: &str,
+        #[case] expected_ancestor: Option<&str>,
+    ) {
+        source.vibe_config = Arc::new(
+            serde_yaml::from_str(indoc::indoc! {"
+                orgs:
+                  example-org:
+                    vibe: true
+            "})
+            .unwrap(),
+        );
+        source.sessions[0].vibe_enabled = vibe_enabled;
+        source.sessions[0].launched_with_vibe = launched_with_vibe;
+        source.all_sessions[0] = source.sessions[0].clone();
+        source.all_sessions[1].vibe_enabled = expected_ancestor.is_some();
+
+        let (status, tree) = session_tree_response(source, "child-session").await;
+        let mut expected_vibe_mode = serde_json::json!({ "mode": expected_mode });
+        if let Some(ancestor_session_id) = expected_ancestor {
+            expected_vibe_mode["ancestorSessionId"] = serde_json::json!(ancestor_session_id);
+        }
+
+        assert_eq!(
+            (status, tree),
+            (StatusCode::OK, expected_child_tree(expected_vibe_mode)),
         );
     }
 
@@ -1467,6 +1573,7 @@ mod tests {
                             "isClosed": false,
                         },
                         "repo": "example-org/example-repo",
+                        "vibeMode": { "mode": "repo_disabled" },
                         "decisionCount": 4,
                         "pullRequest": { "number": 42, "state": "Open" },
                         "pullRequests": [
@@ -1541,6 +1648,7 @@ mod tests {
                             "isClosed": false,
                         },
                         "repo": "example-org/example-repo",
+                        "vibeMode": { "mode": "repo_disabled" },
                         "decisionCount": 4,
                         "pullRequest": { "number": 42, "state": "Open" },
                         "pullRequests": [
@@ -1561,6 +1669,7 @@ mod tests {
                         "elapsedSeconds": 300,
                         "task": null,
                         "repo": "example-org/grandchild-repo",
+                        "vibeMode": { "mode": "repo_disabled" },
                         "decisionCount": 0,
                         "pullRequest": null,
                         "pullRequests": [],
