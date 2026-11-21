@@ -1,7 +1,11 @@
 .mobile-sheet-overlay {
   position: fixed;
   z-index: 1000;
-  inset: 0;
+  top: var(--mobile-viewport-top, 0px);
+  right: 0;
+  bottom: auto;
+  left: 0;
+  height: var(--mobile-viewport-height, 100dvh);
   display: flex;
   align-items: flex-end;
   background: rgb(0 0 0 / 55%);
@@ -9,6 +13,8 @@
 
 .story-mobile-layout .mobile-sheet-overlay {
   position: absolute;
+  inset: 0;
+  height: auto;
 }
 
 .mobile-sheet {
@@ -32,7 +38,7 @@
 .mobile-sheet--fullscreen {
   display: flex;
   height: 100%;
-  min-height: 100dvh;
+  min-height: var(--mobile-viewport-height, 100dvh);
   max-height: 100%;
   flex-direction: column;
   overflow: hidden;

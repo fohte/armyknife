@@ -9,6 +9,7 @@ import {
 import { LaterMenu } from '#components/later-menu'
 import { SessionPullRequests } from '#components/session-pull-requests'
 import type { PullRequest } from '#types'
+import { useInboxFilterShortcut } from '#use-inbox-filter-shortcut'
 
 const pullRequests: PullRequest[] = [
   {
@@ -163,6 +164,38 @@ function ToastDismissHarness() {
     <AsyncActionFeedbackProvider>
       <ToastDismissContents />
     </AsyncActionFeedbackProvider>
+  )
+}
+
+function LaterFilterShortcutHarness({
+  onOpenFilter,
+}: {
+  onOpenFilter: () => void
+}) {
+  const [filterOpen, setFilterOpen] = useState(false)
+  const openFilter = () => {
+    onOpenFilter()
+    setFilterOpen(true)
+  }
+  useInboxFilterShortcut(filterOpen, openFilter)
+
+  return (
+    <>
+      {filterOpen ? (
+        <div aria-label="Filter inbox" aria-modal="true" role="dialog" />
+      ) : null}
+      <LaterMenu
+        isMobile
+        sessionTitle="Fixture session"
+        isLater={false}
+        laterTimes={null}
+        laterTimesError
+        isSubmitting={false}
+        onSelect={() => undefined}
+        onBackNow={() => undefined}
+        onClose={() => undefined}
+      />
+    </>
   )
 }
 
@@ -662,6 +695,34 @@ it('closes an unrelated menu when a toast receives a pointerdown', async () => {
       ) !== null,
   })
   expect(snapshot()).toEqual({ laterMenuVisible: false, toastVisible: true })
+})
+
+it('does not open the Inbox filter shortcut while Later is active', () => {
+  const onOpenFilter = vi.fn()
+  act(() => {
+    root?.render(<LaterFilterShortcutHarness onOpenFilter={onOpenFilter} />)
+  })
+  act(() => {
+    window.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: '/',
+        bubbles: true,
+        cancelable: true,
+      }),
+    )
+  })
+
+  const snapshot = () => ({
+    filterOpenCalls: onOpenFilter.mock.calls,
+    dialogs: Array.from(
+      container.querySelectorAll<HTMLElement>('[role="dialog"]'),
+      (dialog) => dialog.getAttribute('aria-label'),
+    ),
+  })
+  expect(snapshot()).toEqual({
+    filterOpenCalls: [],
+    dialogs: ['Later'],
+  })
 })
 
 it('lists a merged current-branch pull request only in Merged', () => {

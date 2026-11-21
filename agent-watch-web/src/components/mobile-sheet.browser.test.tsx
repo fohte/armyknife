@@ -78,6 +78,8 @@ afterEach(() => {
   if (root !== null) act(() => root?.unmount())
   root = null
   container.remove()
+  document.documentElement.style.removeProperty('--mobile-viewport-top')
+  document.documentElement.style.removeProperty('--mobile-viewport-height')
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
@@ -201,5 +203,32 @@ it('keeps a non-dismissible full-screen sheet open', async () => {
     closeCalls: [],
     dialogClass: 'mobile-sheet mobile-sheet--fullscreen',
     presentation: 'fullscreen',
+  })
+})
+
+it('fits a full-screen sheet to the visual viewport', async () => {
+  document.documentElement.style.setProperty('--mobile-viewport-top', '40px')
+  document.documentElement.style.setProperty(
+    '--mobile-viewport-height',
+    '320px',
+  )
+  await openSheet({ onClose: vi.fn(), presentation: 'fullscreen' })
+  const overlay = container.querySelector<HTMLElement>('.mobile-sheet-overlay')
+  const sheet = container.querySelector<HTMLElement>('.mobile-sheet')
+  if (overlay === null || sheet === null) {
+    throw new Error('The full-screen sheet is missing')
+  }
+
+  const snapshot = () => ({
+    overlayTop: overlay.getBoundingClientRect().top,
+    overlayHeight: overlay.getBoundingClientRect().height,
+    sheetTop: sheet.getBoundingClientRect().top,
+    sheetBottom: sheet.getBoundingClientRect().bottom,
+  })
+  expect(snapshot()).toEqual({
+    overlayTop: 40,
+    overlayHeight: 320,
+    sheetTop: 40,
+    sheetBottom: 360,
   })
 })

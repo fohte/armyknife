@@ -17,7 +17,10 @@ export function useInboxFilterShortcut(
       ) {
         return
       }
-      if (!dialogOpen) {
+      if (
+        !dialogOpen &&
+        document.querySelector('[aria-modal="true"]') === null
+      ) {
         event.preventDefault()
         openDialog()
       }
