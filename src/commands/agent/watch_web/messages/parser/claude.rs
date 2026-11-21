@@ -1445,7 +1445,7 @@ mod tests {
     #[test]
     fn resolves_a_human_origin_vibe_notice_as_an_event() {
         let user_marker = "⟦armyknife-user:fixture-marker-violet⟧";
-        let message_id = "fixture-message-teal";
+        let message_id = "armyknife-vibe-mode:fixture-message-teal";
         let queued_content = "<armyknife-vibe-mode-on>watch-web からユーザーが vibe mode を on にしました。</armyknife-vibe-mode-on>";
         let delivered_content = crate::commands::agent::watch_web_user_marker::prefix_message(
             user_marker,
@@ -1500,6 +1500,68 @@ mod tests {
                 }],
                 Vec::new(),
                 vec![7],
+            ),
+        );
+    }
+
+    #[test]
+    fn keeps_a_human_origin_vibe_notice_as_user_content_without_action_id() {
+        let user_marker = "⟦armyknife-user:fixture-marker-amber⟧";
+        let message_id = "fixture-message-coral";
+        let queued_content = "<armyknife-vibe-mode-on>watch-web からユーザーが vibe mode を on にしました。</armyknife-vibe-mode-on>";
+        let delivered_content = crate::commands::agent::watch_web_user_marker::prefix_message(
+            user_marker,
+            &super::super::super::queued_prompt::add_id_marker(queued_content, message_id),
+        );
+        let transcript = json!({
+            "type": "user",
+            "uuid": "fixture-user-message",
+            "parentUuid": null,
+            "origin": {"kind": "human"},
+            "timestamp": "2026-06-01T12:05:00Z",
+            "message": {"content": delivered_content},
+        })
+        .to_string();
+        let queued_prompts = [WatchWebQueuedPrompt {
+            id: 9,
+            message_id: Some(message_id.to_owned()),
+            content: queued_content.to_owned(),
+            attachments: Vec::<WatchWebQueuedAttachment>::new(),
+            resolved: false,
+            sent_at: Utc.timestamp_opt(1_000, 0).unwrap(),
+        }];
+        let (mut messages, background_tasks, mut resolved_ids) =
+            parse_with_decisions_and_queued_prompts(
+                Cursor::new(transcript),
+                None,
+                None,
+                Some(user_marker),
+                Utc.timestamp_opt(1_000, 0).unwrap(),
+                &[],
+                &queued_prompts,
+            )
+            .unwrap();
+        resolved_ids.extend(
+            super::super::super::queued_prompt::resolve_transcript_messages(
+                &mut messages,
+                &queued_prompts,
+            ),
+        );
+        resolved_ids.sort_unstable();
+        resolved_ids.dedup();
+
+        assert_eq!(
+            (messages, background_tasks, resolved_ids),
+            (
+                vec![ChatItem::User {
+                    rewind_id: Some("fixture-user-message".to_owned()),
+                    text: queued_content.to_owned(),
+                    timestamp: Some("2026-06-01T12:05:00+00:00".to_owned()),
+                    from: None,
+                    queued_prompt_id: Some(message_id.to_owned()),
+                }],
+                Vec::new(),
+                vec![9],
             ),
         );
     }

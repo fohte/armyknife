@@ -107,6 +107,7 @@ pub(super) async fn send_message(
         sessions_dir,
         session,
         marker,
+        message_id: None,
         queued_content,
         message_content: content,
         queued_attachments,
@@ -131,6 +132,7 @@ pub(super) struct QueuedPromptDelivery {
     pub(super) sessions_dir: PathBuf,
     pub(super) session: Session,
     pub(super) marker: Option<String>,
+    pub(super) message_id: Option<String>,
     pub(super) queued_content: String,
     pub(super) message_content: String,
     pub(super) queued_attachments: Vec<store::WatchWebQueuedAttachment>,
@@ -164,12 +166,13 @@ async fn send_queued_prompt_with_policy(
         sessions_dir,
         session,
         marker,
+        message_id,
         queued_content,
         message_content,
         queued_attachments,
         attachment_paths,
     } = delivery;
-    let message_id = uuid::Uuid::new_v4().to_string();
+    let message_id = message_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let sent_at = Utc::now();
     let queued_prompt_id = run_blocking({
         let sessions_dir = sessions_dir.clone();

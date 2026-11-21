@@ -82,6 +82,11 @@ pub(super) fn user_content(prompt: &WatchWebQueuedPrompt) -> Vec<UserContentPart
 pub(super) fn chat_item(prompt: &WatchWebQueuedPrompt) -> ChatItem {
     let content = strip_id_marker(&prompt.content);
     if let Some((tag, body)) = tagged_body(&content)
+        && (!action_event::is_vibe_mode_tag(tag)
+            || prompt
+                .message_id
+                .as_deref()
+                .is_some_and(action_event::is_vibe_mode_message_id))
         && let Some(text) = action_event::event_text(tag, body)
     {
         return ChatItem::Event {
@@ -235,7 +240,7 @@ mod tests {
     ) {
         let prompt = WatchWebQueuedPrompt {
             id: 7,
-            message_id: Some("fixture-message-cyan".to_owned()),
+            message_id: Some("armyknife-vibe-mode:fixture-message-cyan".to_owned()),
             content: format!("<{tag}>{body}</{tag}>"),
             attachments: Vec::<WatchWebQueuedAttachment>::new(),
             resolved: false,
@@ -262,7 +267,7 @@ mod tests {
         let prompt = WatchWebQueuedPrompt {
             id: 7,
             message_id: Some("fixture-message-cyan".to_owned()),
-            content: "<armyknife-vibe-mode-on>Here is user-authored text.</armyknife-vibe-mode-on>"
+            content: "<armyknife-vibe-mode-on>watch-web からユーザーが vibe mode を on にしました。</armyknife-vibe-mode-on>"
                 .to_owned(),
             attachments: Vec::<WatchWebQueuedAttachment>::new(),
             resolved: false,
@@ -286,7 +291,7 @@ mod tests {
     fn resolved_event_prompt_is_not_marked_resolved_again() {
         let prompt = WatchWebQueuedPrompt {
             id: 7,
-            message_id: Some("fixture-message-cyan".to_owned()),
+            message_id: Some("armyknife-vibe-mode:fixture-message-cyan".to_owned()),
             content: "<armyknife-vibe-mode-on>watch-web からユーザーが vibe mode を on にしました。</armyknife-vibe-mode-on>"
                 .to_owned(),
             attachments: Vec::<WatchWebQueuedAttachment>::new(),
@@ -295,7 +300,10 @@ mod tests {
         };
         let mut messages = [ChatItem::Event {
             kind: EventKind::Armyknife,
-            text: add_id_marker("Vibe mode turned on", "fixture-message-cyan"),
+            text: add_id_marker(
+                "Vibe mode turned on",
+                "armyknife-vibe-mode:fixture-message-cyan",
+            ),
             failed: false,
             timestamp: Some(prompt.sent_at.to_rfc3339()),
         }];

@@ -348,7 +348,9 @@ impl CodexParserState {
                             if let Some((tag, body)) =
                                 super::super::tagged_message::tagged_body(&content_without_id)
                                 && (!super::super::action_event::is_vibe_mode_tag(tag)
-                                    || queued_prompt_id.is_some())
+                                    || queued_prompt_id.as_deref().is_some_and(
+                                        super::super::action_event::is_vibe_mode_message_id,
+                                    ))
                                 && let Some(event_text) =
                                     super::super::action_event::event_text(tag, body)
                             {
@@ -1211,6 +1213,44 @@ mod tests {
         );
     }
 
+    #[test]
+    fn keeps_a_queued_vibe_notice_as_user_content_without_action_id() {
+        let message_id = "fixture-message-coral";
+        let content = "<armyknife-vibe-mode-on>watch-web からユーザーが vibe mode を on にしました。</armyknife-vibe-mode-on>";
+        let delivered_content = queued_prompt::add_id_marker(content, message_id);
+        let turn_context = json!({"type":"turn_context","payload":{"turn_id":"fixture-turn-id"}});
+        let delivery = json!({"type":"event_msg","timestamp":"2026-06-01T12:05:00Z","payload":{"type":"item_completed","item":{"type":"UserMessage","content":delivered_content}}});
+        let transcript = indoc::formatdoc! {r#"
+            {turn_context}
+            {delivery}
+        "#};
+        let queued_prompts = [WatchWebQueuedPrompt {
+            id: 9,
+            message_id: Some(message_id.to_owned()),
+            content: content.to_owned(),
+            attachments: Vec::<WatchWebQueuedAttachment>::new(),
+            resolved: false,
+            sent_at: Utc::now(),
+        }];
+        let mut messages = parse(Cursor::new(transcript), None).unwrap();
+        let resolved_ids =
+            queued_prompt::resolve_transcript_messages(&mut messages, &queued_prompts);
+
+        assert_eq!(
+            (messages, resolved_ids),
+            (
+                vec![ChatItem::User {
+                    rewind_id: Some("fixture-turn-id".to_owned()),
+                    text: content.to_owned(),
+                    timestamp: Some("2026-06-01T12:05:00+00:00".to_owned()),
+                    from: None,
+                    queued_prompt_id: Some(message_id.to_owned()),
+                }],
+                vec![9],
+            ),
+        );
+    }
+
     #[rstest]
     #[case::enabled(
         "armyknife-vibe-mode-on",
@@ -1227,7 +1267,7 @@ mod tests {
         #[case] body: &str,
         #[case] expected_text: &str,
     ) {
-        let message_id = "fixture-message-cyan";
+        let message_id = "armyknife-vibe-mode:fixture-message-cyan";
         let user_message = format!("<{tag}>{body}</{tag}>");
         let delivered_message = queued_prompt::add_id_marker(&user_message, message_id);
         let transcript = format!(

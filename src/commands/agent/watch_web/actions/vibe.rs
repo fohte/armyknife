@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 
 use super::super::messages::action_event::{
     VIBE_MODE_OFF_NOTICE, VIBE_MODE_OFF_TAG, VIBE_MODE_ON_NOTICE, VIBE_MODE_ON_TAG,
+    new_vibe_mode_message_id,
 };
 use crate::commands::agent::types::{Engine, SessionStatus};
 use crate::commands::agent::{store, vibe};
@@ -98,6 +99,7 @@ pub(super) async fn set_vibe(
         sessions_dir: sessions_dir.clone(),
         session,
         marker,
+        message_id: Some(new_vibe_mode_message_id()),
         queued_content: event_message.clone(),
         message_content: event_message,
         queued_attachments: Vec::<store::WatchWebQueuedAttachment>::new(),
