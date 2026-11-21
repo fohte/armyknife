@@ -22,6 +22,10 @@ export type AsyncActionStatus =
   | 'closed'
   | 'closeFailed'
 
+export function isAsyncActionFailureStatus(status: AsyncActionStatus) {
+  return status === 'mergeFailed' || status === 'closeFailed'
+}
+
 export type AsyncAction = {
   id: number
   sessionId: string

@@ -30,26 +30,9 @@
 .async-action-activity-state.is-error {
   color: var(--aw-color-error);
 }
-.async-action-activity-button.is-mobile {
-  position: relative;
-  width: 44px;
-  height: 44px;
-  justify-content: center;
-  border-color: var(--aw-border-control);
-  padding: 0;
-}
 .async-action-activity-button.is-drawer {
   height: 44px;
   border: 0;
   padding: 0 4px;
   font-size: 14px;
-}
-.async-action-activity-count {
-  position: absolute;
-  right: 3px;
-  bottom: 1px;
-  color: var(--aw-text-secondary);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  line-height: 1;
 }

@@ -12,7 +12,10 @@ import {
   X,
 } from 'lucide-react'
 
-import { useOptionalAsyncActionFeedback } from '#async-action-feedback'
+import {
+  isAsyncActionFailureStatus,
+  useOptionalAsyncActionFeedback,
+} from '#async-action-feedback'
 import type { WorkTypeNavGroup } from '#board-model'
 import type { CommandPaletteShortcut } from '#command-palette-shortcut'
 import { ActivityButton } from '#components/activity-button'
@@ -47,6 +50,7 @@ type AgentWatchNavProps = {
   isMobile?: boolean
   inboxCollapsed?: boolean
   onToggleInbox?: () => void
+  onCloseNavigation?: () => void
   activityCount?: number
   activityFailed?: boolean
 }
@@ -70,14 +74,14 @@ export function AgentWatchNav({
   isMobile = false,
   inboxCollapsed = false,
   onToggleInbox = () => undefined,
+  onCloseNavigation,
   activityCount,
   activityFailed,
 }: AgentWatchNavProps) {
   const { usage, error } = useAgentUsageContext()
   const actionFeedback = useOptionalAsyncActionFeedback()
-  const failedActions = actionFeedback?.actions.some(
-    (action) =>
-      action.status === 'mergeFailed' || action.status === 'closeFailed',
+  const failedActions = actionFeedback?.actions.some((action) =>
+    isAsyncActionFailureStatus(action.status),
   )
   const showActivityFailure = activityFailed ?? failedActions ?? false
   const recentSessions = sessions
@@ -305,6 +309,10 @@ export function AgentWatchNav({
       {isMobile ? (
         <ActivityButton
           drawer
+          onOpenActivity={() => {
+            onCloseNavigation?.()
+            actionFeedback?.openActivity()
+          }}
           {...(activityCount === undefined ? {} : { activityCount })}
           {...(activityFailed === undefined ? {} : { failed: activityFailed })}
         />

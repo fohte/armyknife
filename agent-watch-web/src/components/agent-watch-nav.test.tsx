@@ -1,6 +1,6 @@
 import '#index.css'
 
-import { act, type ComponentProps, useEffect } from 'react'
+import { act, type ComponentProps, useEffect, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { userEvent } from 'vitest/browser'
@@ -10,6 +10,7 @@ import {
   useAsyncActionStarter,
 } from '#async-action-feedback'
 import { AgentWatchNav } from '#components/agent-watch-nav'
+import { MobileNavDrawer } from '#components/mobile-nav-drawer'
 import type { Session } from '#types'
 
 let container: HTMLDivElement
@@ -83,6 +84,44 @@ function StartFailedAction() {
   }, [start])
 
   return null
+}
+
+function MobileNavigationWithActivity({
+  onCloseNavigation,
+}: {
+  onCloseNavigation: () => void
+}) {
+  const [open, setOpen] = useState(true)
+  const closeNavigation = () => {
+    onCloseNavigation()
+    setOpen(false)
+  }
+
+  return (
+    <MobileNavDrawer open={open} onClose={closeNavigation}>
+      <AgentWatchNav
+        activeView="inbox"
+        isMobile
+        paletteShortcut={{
+          modifier: 'ctrlKey',
+          label: 'Ctrl K',
+          ariaLabel: 'Control K',
+        }}
+        needsActionCount={0}
+        savedViews={[]}
+        selectedSavedViewId={null}
+        workTypeNavGroups={[]}
+        onViewChange={() => undefined}
+        onSelectSavedView={() => undefined}
+        onDeleteSavedView={() => undefined}
+        todaySessions={[]}
+        onSelectToday={() => undefined}
+        onSelectSession={() => undefined}
+        onOpenPalette={() => undefined}
+        onCloseNavigation={closeNavigation}
+      />
+    </MobileNavDrawer>
+  )
 }
 
 beforeEach(() => {
@@ -664,31 +703,13 @@ it('shows the failed Activity entry above quota in the mobile navigation', () =>
 })
 
 it('marks Inbox when an async action in Activity fails', async () => {
+  const onCloseNavigation = vi.fn()
   root = createRoot(container)
   await act(() => {
     root?.render(
       <AsyncActionFeedbackProvider>
         <StartFailedAction />
-        <AgentWatchNav
-          activeView="inbox"
-          isMobile
-          paletteShortcut={{
-            modifier: 'ctrlKey',
-            label: 'Ctrl K',
-            ariaLabel: 'Control K',
-          }}
-          needsActionCount={0}
-          savedViews={[]}
-          selectedSavedViewId={null}
-          workTypeNavGroups={[]}
-          onViewChange={() => undefined}
-          onSelectSavedView={() => undefined}
-          onDeleteSavedView={() => undefined}
-          todaySessions={[]}
-          onSelectToday={() => undefined}
-          onSelectSession={() => undefined}
-          onOpenPalette={() => undefined}
-        />
+        <MobileNavigationWithActivity onCloseNavigation={onCloseNavigation} />
       </AsyncActionFeedbackProvider>,
     )
     return Promise.resolve()
@@ -711,5 +732,27 @@ it('marks Inbox when an async action in Activity fails', async () => {
     inboxLabel: 'Inbox, Activity has failed actions',
     inboxFailureIndicator: true,
     activityLabel: 'Activity, failed actions',
+  })
+
+  if (activityButton === null) {
+    throw new Error('The Activity button is missing')
+  }
+  await act(async () => {
+    await userEvent.click(activityButton)
+  })
+
+  const openSnapshot = () => ({
+    closeNavigationCalls: onCloseNavigation.mock.calls,
+    activityDialogVisible:
+      container.querySelector('[role="dialog"][aria-label="Activity"]') !==
+      null,
+    navigationDialogOpen:
+      container.querySelector<HTMLDialogElement>('.mobile-nav-drawer')?.open ??
+      false,
+  })
+  expect(openSnapshot()).toEqual({
+    closeNavigationCalls: [[]],
+    activityDialogVisible: true,
+    navigationDialogOpen: false,
   })
 })

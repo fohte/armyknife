@@ -2,10 +2,12 @@ import '#components/activity-button.css'
 
 import { Activity } from 'lucide-react'
 
-import { useOptionalAsyncActionFeedback } from '#async-action-feedback'
+import {
+  isAsyncActionFailureStatus,
+  useOptionalAsyncActionFeedback,
+} from '#async-action-feedback'
 
 type ActivityButtonProps = {
-  mobile?: boolean
   drawer?: boolean
   activityCount?: number
   failed?: boolean
@@ -14,7 +16,6 @@ type ActivityButtonProps = {
 }
 
 export function ActivityButton({
-  mobile = false,
   drawer = false,
   activityCount,
   failed: failedOverride,
@@ -32,10 +33,7 @@ export function ActivityButton({
   ).length
   const failed =
     failedOverride ??
-    actions.some(
-      (action) =>
-        action.status === 'mergeFailed' || action.status === 'closeFailed',
-    )
+    actions.some((action) => isAsyncActionFailureStatus(action.status))
   const label =
     running > 0
       ? `${String(running)} running`
@@ -47,25 +45,19 @@ export function ActivityButton({
       aria-expanded={activityOpen}
       aria-haspopup="dialog"
       aria-label={`Activity, ${label}`}
-      className={`async-action-activity-button${mobile ? ' is-mobile' : ''}${drawer ? ' is-drawer' : ''}${activityOpen ? ' is-open' : ''}`}
+      className={`async-action-activity-button${drawer ? ' is-drawer' : ''}${activityOpen ? ' is-open' : ''}`}
       type="button"
       onClick={() => {
         openActivity()
       }}
     >
-      <Activity aria-hidden="true" size={mobile ? 18 : drawer ? 16 : 14} />
-      {mobile ? (
-        <span className="async-action-activity-count">{String(count)}</span>
-      ) : (
-        <span>Activity</span>
-      )}
-      {!mobile ? (
-        <span
-          className={`async-action-activity-state${failed ? ' is-error' : running > 0 ? ' is-running' : ''}`}
-        >
-          {String(count)}
-        </span>
-      ) : null}
+      <Activity aria-hidden="true" size={drawer ? 16 : 14} />
+      <span>Activity</span>
+      <span
+        className={`async-action-activity-state${failed ? ' is-error' : running > 0 ? ' is-running' : ''}`}
+      >
+        {String(count)}
+      </span>
     </button>
   )
 }
