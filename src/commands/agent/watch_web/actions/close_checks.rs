@@ -30,19 +30,11 @@ struct CloseProcess {
 }
 
 impl CloseChecks {
-    pub(super) async fn inspect(session: &Session, stop_and_close: bool) -> Self {
+    pub(super) async fn inspect(session: &Session, filter_stopped_agent: bool) -> Self {
         let session_path = session.cwd.clone();
         let target_path = session_path.clone();
-        let inspection_session = session.clone();
-        let (target, stopped_agent_pid) = tokio::task::spawn_blocking(move || {
-            let stopped_agent_pid = if stop_and_close {
-                crate::commands::agent::close::resolve_agent_pid_for_session(&inspection_session)
-                    .ok()
-                    .flatten()
-            } else {
-                None
-            };
-            let target = worktree_delete::resolve_target(&target_path)
+        let target = tokio::task::spawn_blocking(move || {
+            worktree_delete::resolve_target(&target_path)
                 .ok()
                 .map(|target| {
                     let branch = worktree_delete::resolve_merge_guard_branch(
@@ -50,24 +42,31 @@ impl CloseChecks {
                         target.branch_name.as_deref(),
                     );
                     (target, branch)
-                });
-            (target, stopped_agent_pid)
+                })
         })
         .await
-        .unwrap_or_default();
+        .ok()
+        .flatten();
         match target {
-            Some((target, branch)) => Self::inspect_target(target, branch, stopped_agent_pid).await,
-            None => Self::inspect_without_target(session_path, stopped_agent_pid).await,
+            Some((target, branch)) => {
+                Self::inspect_target(target, branch, session.clone(), filter_stopped_agent).await
+            }
+            None => {
+                Self::inspect_without_target(session_path, session.clone(), filter_stopped_agent)
+                    .await
+            }
         }
     }
 
     async fn inspect_target(
         target: WorktreeDeleteTarget,
         branch: Option<String>,
-        stopped_agent_pid: Option<u32>,
+        session: Session,
+        filter_stopped_agent: bool,
     ) -> Self {
         let worktree_path = target.worktree_path.clone();
         let repo = target.main_repo;
+        let process_session = session;
         Self::inspect_with(
             worktree_path,
             branch,
@@ -84,7 +83,13 @@ impl CloseChecks {
             move |path| {
                 check_process_guard_for_close(
                     path,
-                    stopped_agent_pid,
+                    &process_session,
+                    filter_stopped_agent,
+                    |session| {
+                        crate::commands::agent::close::resolve_agent_pid_for_session(session)
+                            .ok()
+                            .flatten()
+                    },
                     find_non_shell_processes_in_path,
                 )
             },
@@ -94,8 +99,10 @@ impl CloseChecks {
 
     async fn inspect_without_target(
         worktree_path: PathBuf,
-        stopped_agent_pid: Option<u32>,
+        session: Session,
+        filter_stopped_agent: bool,
     ) -> Self {
+        let process_session = session;
         Self::inspect_with(
             worktree_path,
             None,
@@ -104,7 +111,13 @@ impl CloseChecks {
             move |path| {
                 check_process_guard_for_close(
                     path,
-                    stopped_agent_pid,
+                    &process_session,
+                    filter_stopped_agent,
+                    |session| {
+                        crate::commands::agent::close::resolve_agent_pid_for_session(session)
+                            .ok()
+                            .flatten()
+                    },
                     find_non_shell_processes_in_path,
                 )
             },
@@ -187,11 +200,16 @@ impl CloseChecks {
     }
 }
 
-fn check_process_guard_for_close(
+pub(super) fn check_process_guard_for_close(
     worktree_path: &Path,
-    stopped_agent_pid: Option<u32>,
+    session: &Session,
+    filter_stopped_agent: bool,
+    resolve_agent_pid: impl FnOnce(&Session) -> Option<u32>,
     detect_processes: impl FnOnce(&Path) -> Option<Vec<ProcessInPath>>,
 ) -> Result<Vec<ProcessInPath>, WorktreeProcessGuardError> {
+    let stopped_agent_pid = filter_stopped_agent
+        .then(|| resolve_agent_pid(session))
+        .flatten();
     cleanup::check_process_guard(worktree_path, false, |path| {
         detect_processes(path).map(|processes| {
             processes
@@ -323,35 +341,61 @@ mod tests {
         );
     }
 
+    fn fictional_session() -> Session {
+        serde_json::from_value(json!({
+            "session_id": "fictional-session",
+            "cwd": "/fictional/worktree",
+            "tmux_info": {
+                "session_name": "fictional-session",
+                "window_name": "fictional-window",
+                "window_index": 0,
+                "pane_id": "%12",
+                "socket_path": "/fictional/tmux.sock",
+            },
+            "status": "running",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "last_message": null,
+        }))
+        .unwrap()
+    }
+
     #[rstest::rstest]
     #[case::stopped_agent_is_filtered(
-        Some(12345),
+        true,
         "23456 (fictional-worker)",
         vec![(23456, "fictional-worker")],
     )]
     #[case::running_agent_remains_a_blocker(
-        None,
+        false,
         "12345 (fictional-agent), 23456 (fictional-worker)",
         vec![(12345, "fictional-agent"), (23456, "fictional-worker")],
     )]
     fn process_guard_filters_only_the_agent_selected_for_stopping(
-        #[case] stopped_agent_pid: Option<u32>,
+        #[case] filter_stopped_agent: bool,
         #[case] expected_process_list: &str,
         #[case] expected_processes: Vec<(u32, &str)>,
     ) {
         let worktree_path = PathBuf::from("/fictional/worktree");
-        let actual = check_process_guard_for_close(&worktree_path, stopped_agent_pid, |_| {
-            Some(vec![
-                ProcessInPath {
-                    pid: 12345,
-                    comm: "fictional-agent".to_string(),
-                },
-                ProcessInPath {
-                    pid: 23456,
-                    comm: "fictional-worker".to_string(),
-                },
-            ])
-        });
+        let session = fictional_session();
+        let actual = check_process_guard_for_close(
+            &worktree_path,
+            &session,
+            filter_stopped_agent,
+            |session| (session.session_id == "fictional-session").then_some(12345),
+            |_| {
+                Some(vec![
+                    ProcessInPath {
+                        pid: 12345,
+                        comm: "fictional-agent".to_string(),
+                    },
+                    ProcessInPath {
+                        pid: 23456,
+                        comm: "fictional-worker".to_string(),
+                    },
+                ])
+            },
+        );
         let Err(WorktreeProcessGuardError::ActiveProcesses {
             worktree_path,
             process_list,

@@ -37,11 +37,15 @@ pub(super) async fn close(
         .close_session(&session, request.keep_worktree, request.stop_and_close)
         .await
     {
+        let filter_stopped_agent = request.stop_and_close
+            && error
+                .downcast_ref::<crate::shared::cleanup::WorktreeProcessGuardError>()
+                .is_some();
         log_close_failure(&session.session_id, &error);
         let mut api_error = ApiError::close(error);
         if api_error.needs_close_checks() {
             let checks =
-                (state.close_checks_inspector)(session.clone(), request.stop_and_close).await;
+                (state.close_checks_inspector)(session.clone(), filter_stopped_agent).await;
             api_error.set_close_checks(checks);
         }
         return Err(api_error);

@@ -455,10 +455,29 @@ mod tests {
     use crate::commands::agent::types::{MAIN_THREAD_AGENT_KEY, TmuxInfo};
 
     fn test_close_checks_inspector() -> CloseChecksInspector {
-        Arc::new(|_, _| {
-            Box::pin(async {
+        Arc::new(|session, filter_stopped_agent| {
+            Box::pin(async move {
+                let worktree_path = PathBuf::from("/fictional/worktree");
+                let process_inspection = close_checks::check_process_guard_for_close(
+                    &worktree_path,
+                    &session,
+                    filter_stopped_agent,
+                    |session| (session.session_id == "sample-session").then_some(12345),
+                    |_| {
+                        Some(vec![
+                            crate::infra::process::ProcessInPath {
+                                pid: 12345,
+                                comm: "fictional-agent".to_string(),
+                            },
+                            crate::infra::process::ProcessInPath {
+                                pid: 23456,
+                                comm: "fictional-worker".to_string(),
+                            },
+                        ])
+                    },
+                );
                 CloseChecks::from_observations(
-                    PathBuf::from("/fictional/worktree"),
+                    worktree_path,
                     vec!["src/fictional.rs".to_string()],
                     Some("feature/fictional".to_string()),
                     Some(crate::shared::worktree_delete::classify_merge_guard_status(
@@ -467,16 +486,7 @@ mod tests {
                             reason: "pull request is open".to_string(),
                         },
                     )),
-                    Some(Err(
-                        crate::shared::cleanup::WorktreeProcessGuardError::ActiveProcesses {
-                            worktree_path: PathBuf::from("/fictional/worktree"),
-                            process_list: "12345 (fictional-worker)".to_string(),
-                            processes: vec![crate::infra::process::ProcessInPath {
-                                pid: 12345,
-                                comm: "fictional-worker".to_string(),
-                            }],
-                        },
-                    )),
+                    Some(process_inspection),
                 )
             })
         })
@@ -730,9 +740,9 @@ mod tests {
                         FakeCloseFailure::ActiveProcesses => anyhow::Error::new(
                             crate::shared::cleanup::WorktreeProcessGuardError::ActiveProcesses {
                                 worktree_path: PathBuf::from("/fictional/worktree"),
-                                process_list: "12345 (fictional-worker)".to_string(),
+                                process_list: "23456 (fictional-worker)".to_string(),
                                 processes: vec![crate::infra::process::ProcessInPath {
-                                    pid: 12345,
+                                    pid: 23456,
                                     comm: "fictional-worker".to_string(),
                                 }],
                             },
@@ -2711,7 +2721,10 @@ mod tests {
                         "branch": "feature/fictional",
                         "merged": false,
                         "reason": "pull request is open",
-                        "processes": [{ "pid": 12345, "name": "fictional-worker" }],
+                        "processes": [
+                            { "pid": 12345, "name": "fictional-agent" },
+                            { "pid": 23456, "name": "fictional-worker" },
+                        ],
                         "processInspectionUnavailable": false,
                     },
                 },
@@ -2728,18 +2741,45 @@ mod tests {
     #[rstest]
     #[case::dirty_worktree(
         FakeCloseFailure::DirtyWorktree,
+        false,
+        false,
         "Worktree contains uncommitted changes or untracked files: /fictional/worktree; commit or move them before closing",
         "dirty_worktree"
     )]
     #[case::active_processes(
         FakeCloseFailure::ActiveProcesses,
-        "Worktree '/fictional/worktree' contains running processes: 12345 (fictional-worker). Stop them and retry, or close the session while keeping the worktree.",
+        false,
+        false,
+        "Worktree '/fictional/worktree' contains running processes: 23456 (fictional-worker). Stop them and retry, or close the session while keeping the worktree.",
+        "worktree_process_guard"
+    )]
+    #[case::stop_and_close_dirty_preflight_keeps_the_session_agent(
+        FakeCloseFailure::DirtyWorktree,
+        true,
+        false,
+        "Worktree contains uncommitted changes or untracked files: /fictional/worktree; commit or move them before closing",
+        "dirty_worktree"
+    )]
+    #[case::stop_and_close_unmerged_preflight_keeps_the_session_agent(
+        FakeCloseFailure::UnmergedWorktree,
+        true,
+        false,
+        "Branch `sample-branch` is not merged (not merged); close the session while keeping its worktree to continue",
+        "unmerged_worktree"
+    )]
+    #[case::stop_and_close_process_guard_filters_the_stopped_agent(
+        FakeCloseFailure::ActiveProcesses,
+        true,
+        true,
+        "Worktree '/fictional/worktree' contains running processes: 23456 (fictional-worker). Stop them and retry, or close the session while keeping the worktree.",
         "worktree_process_guard"
     )]
     #[tokio::test]
     async fn close_returns_all_checks_for_each_guard_failure(
         action_context: ActionContext,
         #[case] failure: FakeCloseFailure,
+        #[case] stop_and_close: bool,
+        #[case] filter_stopped_agent: bool,
         #[case] expected_error: &str,
         #[case] expected_code: &str,
     ) {
@@ -2748,7 +2788,10 @@ mod tests {
 
         let response = action_context
             .router()
-            .oneshot(post_empty("/sessions/sample-session/close"))
+            .oneshot(post(
+                "/sessions/sample-session/close",
+                json!({ "stopAndClose": stop_and_close }),
+            ))
             .await
             .unwrap();
 
@@ -2765,7 +2808,14 @@ mod tests {
                         "branch": "feature/fictional",
                         "merged": false,
                         "reason": "pull request is open",
-                        "processes": [{ "pid": 12345, "name": "fictional-worker" }],
+                        "processes": if filter_stopped_agent {
+                            json!([{ "pid": 23456, "name": "fictional-worker" }])
+                        } else {
+                            json!([
+                                { "pid": 12345, "name": "fictional-agent" },
+                                { "pid": 23456, "name": "fictional-worker" },
+                            ])
+                        },
                         "processInspectionUnavailable": false,
                     },
                 },
@@ -2773,7 +2823,7 @@ mod tests {
                     "kind": "close",
                     "sessionId": "sample-session",
                     "keepWorktree": false,
-                    "stopAndClose": false,
+                    "stopAndClose": stop_and_close,
                 }],
             }),
         );
