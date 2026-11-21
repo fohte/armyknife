@@ -10,6 +10,7 @@ import type { Session, SessionsResponse } from '#types'
 const capturedFeed = vi.hoisted(() => ({
   onSessions: null as
     ((response: unknown, changedSessionIds: readonly string[]) => void) | null,
+  onUpdateAvailable: null as ((version: string | null) => void) | null,
 }))
 
 vi.mock('#session-feed', () => ({
@@ -18,10 +19,14 @@ vi.mock('#session-feed', () => ({
       response: unknown,
       changedSessionIds: readonly string[],
     ) => void,
+    _onError: (message: string | null) => void,
+    dependencies?: { onUpdateAvailable?: (version: string | null) => void },
   ) => {
     capturedFeed.onSessions = onSessions
+    capturedFeed.onUpdateAvailable = dependencies?.onUpdateAvailable ?? null
     return () => {
       capturedFeed.onSessions = null
+      capturedFeed.onUpdateAvailable = null
     }
   },
 }))
@@ -1028,6 +1033,7 @@ beforeEach(() => {
   container = document.createElement('div')
   document.body.append(container)
   capturedFeed.onSessions = null
+  capturedFeed.onUpdateAvailable = null
 })
 
 afterEach(() => {
@@ -1044,6 +1050,44 @@ afterEach(() => {
   vi.useRealTimers()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
+})
+
+it('shows the phone update below its header and dismisses it until a new version', () => {
+  vi.useFakeTimers()
+  setMobileViewport(true)
+  renderApp()
+  act(() => {
+    capturedFeed.onUpdateAvailable?.('fixture-version-next')
+  })
+  const noticeBeforeDismiss = container.querySelector('.update-notice')
+  const mobileHeader = container.querySelector('.mobile-inbox-brand')
+  if (noticeBeforeDismiss === null || mobileHeader === null) {
+    throw new Error('Update notice not found')
+  }
+  clickButton('.update-notice-dismiss')
+  act(() => {
+    capturedFeed.onUpdateAvailable?.('fixture-version-next')
+  })
+  const noticeAfterDismiss = container.querySelector('.update-notice')
+  act(() => {
+    capturedFeed.onUpdateAvailable?.('fixture-version-newer')
+  })
+  const snapshot = () => ({
+    noticeBeforeDismiss: noticeBeforeDismiss.textContent,
+    noticeFollowsHeader:
+      (mobileHeader.compareDocumentPosition(noticeBeforeDismiss) &
+        Node.DOCUMENT_POSITION_FOLLOWING) !==
+      0,
+    noticeAfterDismiss: noticeAfterDismiss?.textContent ?? null,
+    noticeForNextVersion:
+      container.querySelector('.update-notice')?.textContent ?? null,
+  })
+  expect(snapshot()).toEqual({
+    noticeBeforeDismiss: 'New version vfixture-version-next is ready.Reload',
+    noticeFollowsHeader: true,
+    noticeAfterDismiss: null,
+    noticeForNextVersion: 'New version vfixture-version-newer is ready.Reload',
+  })
 })
 
 it('saves a filtered view, restores it, and opens it from navigation', async () => {

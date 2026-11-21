@@ -1,7 +1,7 @@
 import '#components/new-session.css'
 
 import { ArrowLeft, ChevronDown, Folder, GitBranch, X } from 'lucide-react'
-import { useRef, useState } from 'react'
+import { type ReactNode, useRef, useState } from 'react'
 
 import { NewSessionModelPicker } from '#components/new-session-model-picker'
 import { SessionDirectoryOptions } from '#components/session-directory-options'
@@ -21,6 +21,7 @@ type NewSessionFormProps = {
   launchPending?: boolean
   onClose: () => void
   onLaunched: (launchId: string) => void
+  mobileUpdateNotice?: ReactNode
 }
 
 export function NewSessionForm({
@@ -31,6 +32,7 @@ export function NewSessionForm({
   launchPending = false,
   onClose,
   onLaunched,
+  mobileUpdateNotice,
 }: NewSessionFormProps) {
   const [directoryPickerOpen, setDirectoryPickerOpen] = useState(
     initialDirectoryPickerOpen,
@@ -121,6 +123,7 @@ export function NewSessionForm({
           </div>
         ) : null}
       </header>
+      {isMobile ? mobileUpdateNotice : null}
       <div className="new-session-placeholder" aria-live="polite">
         {launchPending
           ? 'Starting session… Waiting for it to appear in the session list.'

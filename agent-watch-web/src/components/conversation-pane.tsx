@@ -1,4 +1,5 @@
 import {
+  type ReactNode,
   useCallback,
   useEffect,
   useMemo,
@@ -57,6 +58,7 @@ type ConversationPaneProps = {
   onToggleToday?: (isToday: boolean) => void
   composerFocusRequestId?: number | null
   onComposerFocusRequestHandled?: (requestId: number) => void
+  mobileUpdateNotice?: ReactNode
 } & SessionTreeCallbacks
 
 export function ConversationPane({
@@ -85,6 +87,7 @@ export function ConversationPane({
   onToggleToday = () => undefined,
   composerFocusRequestId = null,
   onComposerFocusRequestHandled = () => undefined,
+  mobileUpdateNotice,
 }: ConversationPaneProps) {
   const sessionLinkTargets = useSessionLinkTargets(sessions)
   const onSelectSessionRef = useRef(onSelectSession)
@@ -391,6 +394,7 @@ export function ConversationPane({
       actionsSettled={actionsSettled}
       composerFocusRequestId={composerFocusRequestId}
       onComposerFocusRequestHandled={onComposerFocusRequestHandled}
+      mobileUpdateNotice={isMobile ? mobileUpdateNotice : undefined}
       pendingPermissionActions={pendingPermissionActions}
       openInTerminalStatus={displayOpenInTerminalStatus}
       interruptPending={interruptPending}
