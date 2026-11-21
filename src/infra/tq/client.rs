@@ -9,6 +9,7 @@ use std::collections::HashSet;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use serde::{Deserialize, Serialize};
 
 use super::error::{Result, TqError};
@@ -44,6 +45,12 @@ const CLAUDE_CODE_PROVIDER: &str = "claude_code";
 /// backend must not leak a blocking-pool thread and child process on every
 /// session-creation-triggered refetch.
 const TQ_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Keep variable query parameters below common reverse-proxy request-line
+/// limits while reserving space for the endpoint and fixed filters.
+const MAX_TQ_REQUEST_URI_BYTES: usize = 4 * 1024;
+const TQ_STATIC_REQUEST_URI_RESERVE_BYTES: usize = 1024;
+const MAX_TQ_ID_QUERY_BYTES: usize = MAX_TQ_REQUEST_URI_BYTES - TQ_STATIC_REQUEST_URI_RESERVE_BYTES;
 
 /// A tq task's open/closed state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
@@ -145,7 +152,12 @@ impl TqClient {
         &self,
         session_ids: &HashSet<String>,
     ) -> Result<Vec<SessionTasks>> {
-        let ids: Vec<String> = session_ids.iter().cloned().collect();
+        if session_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut ids: Vec<String> = session_ids.iter().cloned().collect();
+        ids.sort_unstable();
         let args = build_session_list_args(&ids);
         let join_result = tokio::task::spawn_blocking(move || run_session_list(&ids)).await;
         match join_result {
@@ -164,7 +176,8 @@ impl TqClient {
             return Ok(Vec::new());
         }
 
-        let ids = task_ids.iter().cloned().collect::<Vec<_>>();
+        let mut ids = task_ids.iter().cloned().collect::<Vec<_>>();
+        ids.sort_unstable();
         let args = build_task_list_args(&ids);
         let join_result = tokio::task::spawn_blocking(move || run_task_list(&ids)).await;
         match join_result {
@@ -261,9 +274,22 @@ fn run_tq_command(args: &[String]) -> Result<std::process::Output> {
 /// per id in `session_ids`) to completion and parses its stdout. Blocking, so
 /// callers must run it via [`tokio::task::spawn_blocking`].
 fn run_session_list(session_ids: &[String]) -> Result<Vec<SessionTasks>> {
-    let args = build_session_list_args(session_ids);
-    let output = run_tq_command(&args)?;
-    parse_session_list(&String::from_utf8_lossy(&output.stdout))
+    let chunks = chunk_ids(
+        session_ids,
+        MAX_TQ_ID_QUERY_BYTES,
+        0,
+        "session-id=".len(),
+        1,
+    )?;
+    let mut sessions = Vec::new();
+    for chunk in chunks {
+        let args = build_session_list_args(&chunk);
+        let output = run_tq_command(&args)?;
+        sessions.extend(parse_session_list(&String::from_utf8_lossy(
+            &output.stdout,
+        ))?);
+    }
+    Ok(sessions)
 }
 
 /// Builds the argv for [`run_session_list`]. Isolated from the process spawn
@@ -285,9 +311,64 @@ fn build_task_list_args(task_ids: &[String]) -> Vec<String> {
 }
 
 fn run_task_list(task_ids: &[String]) -> Result<Vec<TqTaskSummary>> {
-    let args = build_task_list_args(task_ids);
-    let output = run_tq_command(&args)?;
-    parse_task_list(&String::from_utf8_lossy(&output.stdout))
+    let chunks = chunk_ids(task_ids, MAX_TQ_ID_QUERY_BYTES, "ids=".len(), 0, 5)?;
+    let mut tasks = Vec::new();
+    for chunk in chunks {
+        let args = build_task_list_args(&chunk);
+        let output = run_tq_command(&args)?;
+        tasks.extend(parse_task_list(&String::from_utf8_lossy(&output.stdout))?);
+    }
+    Ok(tasks)
+}
+
+/// Splits identifiers so their encoded query component stays within a
+/// conservative request-URI budget. `fixed_bytes` accounts for one query
+/// key, `item_overhead_bytes` for a key repeated per item, and
+/// `separator_bytes` for separators between values.
+fn chunk_ids(
+    ids: &[String],
+    max_query_bytes: usize,
+    fixed_bytes: usize,
+    item_overhead_bytes: usize,
+    separator_bytes: usize,
+) -> Result<Vec<Vec<String>>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut chunks = Vec::new();
+    let mut chunk = Vec::new();
+    let mut query_bytes = fixed_bytes;
+
+    for id in ids {
+        let item_bytes = encoded_query_value_len(id) + item_overhead_bytes;
+        let separator = usize::from(!chunk.is_empty()) * separator_bytes;
+        if fixed_bytes + item_bytes > max_query_bytes {
+            return Err(TqError::command_failed(
+                &[] as &[&str],
+                "an identifier exceeds the tq query size budget",
+                None,
+            ));
+        }
+        if !chunk.is_empty() && query_bytes + separator + item_bytes > max_query_bytes {
+            chunks.push(std::mem::take(&mut chunk));
+            query_bytes = fixed_bytes;
+        }
+
+        query_bytes += usize::from(!chunk.is_empty()) * separator_bytes + item_bytes;
+        chunk.push(id.clone());
+    }
+
+    if !chunk.is_empty() {
+        chunks.push(chunk);
+    }
+    Ok(chunks)
+}
+
+fn encoded_query_value_len(value: &str) -> usize {
+    utf8_percent_encode(value, NON_ALPHANUMERIC)
+        .to_string()
+        .len()
 }
 
 fn parse_task_list(stdout: &str) -> Result<Vec<TqTaskSummary>> {
@@ -660,6 +741,42 @@ mod tests {
                 "--ids",
                 "task-one,task-two"
             ]
+        );
+    }
+
+    #[test]
+    fn chunks_repeated_session_ids_by_encoded_query_size() {
+        assert_eq!(
+            chunk_ids(
+                &["aa".to_string(), "bb".to_string(), "cc".to_string(),],
+                32,
+                0,
+                "session-id=".len(),
+                1,
+            )
+            .unwrap(),
+            vec![
+                vec!["aa".to_string(), "bb".to_string()],
+                vec!["cc".to_string()],
+            ],
+        );
+    }
+
+    #[test]
+    fn chunks_comma_separated_task_ids_with_encoded_delimiters() {
+        assert_eq!(
+            chunk_ids(
+                &["a/b".to_string(), "cd".to_string(), "ef".to_string(),],
+                16,
+                "ids=".len(),
+                0,
+                5,
+            )
+            .unwrap(),
+            vec![
+                vec!["a/b".to_string(), "cd".to_string()],
+                vec!["ef".to_string()],
+            ],
         );
     }
 
