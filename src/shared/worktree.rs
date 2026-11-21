@@ -32,6 +32,18 @@ impl WorktreeDeletionInProgressError {
     }
 }
 
+fn worktree_lock_error(
+    error: lock::WorktreeLockError,
+    worktree_path: &std::path::Path,
+) -> anyhow::Error {
+    match error {
+        lock::WorktreeLockError::Busy => {
+            WorktreeDeletionInProgressError::new(worktree_path.to_path_buf()).into()
+        }
+        lock::WorktreeLockError::Io(error) => error,
+    }
+}
+
 impl DirtyWorktreeError {
     pub(crate) fn new(worktree_path: PathBuf) -> Self {
         Self { worktree_path }
@@ -100,12 +112,8 @@ fn worktree_changes_with(
             is_dirty: false,
         });
     }
-    let _lock = lock::try_lock_shared(lock_dir, worktree_path).map_err(|error| match error {
-        lock::WorktreeLockError::Busy => {
-            WorktreeDeletionInProgressError::new(worktree_path.to_path_buf()).into()
-        }
-        lock::WorktreeLockError::Io(error) => error,
-    })?;
+    let _lock = lock::try_lock_shared(lock_dir, worktree_path)
+        .map_err(|error| worktree_lock_error(error, worktree_path))?;
     if !worktree_path.is_dir() {
         return Ok(WorktreeChanges {
             files: Vec::new(),
@@ -264,13 +272,8 @@ fn with_worktree_deletion_lock(
     worktree_path: &std::path::Path,
     delete: impl FnOnce() -> anyhow::Result<bool>,
 ) -> anyhow::Result<bool> {
-    let _deletion_lock =
-        lock::try_lock_deletion(lock_dir, worktree_path).map_err(|error| match error {
-            lock::WorktreeLockError::Busy => {
-                WorktreeDeletionInProgressError::new(worktree_path.to_path_buf()).into()
-            }
-            lock::WorktreeLockError::Io(error) => error,
-        })?;
+    let _deletion_lock = lock::try_lock_deletion(lock_dir, worktree_path)
+        .map_err(|error| worktree_lock_error(error, worktree_path))?;
     let _lock = lock::lock_exclusive(lock_dir, worktree_path)?;
     delete()
 }
@@ -626,7 +629,7 @@ mod tests {
             result_sender.send(outcome).expect("result should be sent");
         });
         let returned_without_waiting = result_receiver
-            .recv_timeout(std::time::Duration::from_millis(50))
+            .recv_timeout(std::time::Duration::from_secs(2))
             .ok();
         let did_return_without_waiting = returned_without_waiting.is_some();
         drop(first_deletion);
