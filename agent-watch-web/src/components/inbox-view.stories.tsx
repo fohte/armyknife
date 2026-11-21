@@ -1,4 +1,4 @@
-import type { Meta, StoryObj } from '@storybook/react-vite'
+import type { Decorator, Meta, StoryObj } from '@storybook/react-vite'
 
 import { InboxView } from '#components/inbox-view'
 import type { Session } from '#types'
@@ -190,6 +190,21 @@ const sessions: Session[] = [
   ),
 ]
 
+const iPhoneViewportDecorator: Decorator = (Story) => (
+  <div
+    className="story-mobile-layout"
+    data-layout="mobile"
+    style={{
+      width: '390px',
+      height: '844px',
+      display: 'flex',
+      position: 'relative',
+    }}
+  >
+    <Story />
+  </div>
+)
+
 const meta = {
   component: InboxView,
   args: {
@@ -277,22 +292,7 @@ export const IPhoneFilterIsOpen: Story = {
     filterQuery: 'kind:question,review',
     filterDialogOpen: true,
   },
-  decorators: [
-    (Story) => (
-      <div
-        className="story-mobile-layout"
-        data-layout="mobile"
-        style={{
-          width: '390px',
-          height: '844px',
-          display: 'flex',
-          position: 'relative',
-        }}
-      >
-        <Story />
-      </div>
-    ),
-  ],
+  decorators: [iPhoneViewportDecorator],
 }
 
 export const IPhoneInboxShowsFilteredSessions: Story = {
@@ -302,22 +302,7 @@ export const IPhoneInboxShowsFilteredSessions: Story = {
     filterQuery: 'project:sample project kind:question,review',
     selectedId: null,
   },
-  decorators: [
-    (Story) => (
-      <div
-        className="story-mobile-layout"
-        data-layout="mobile"
-        style={{
-          width: '390px',
-          height: '844px',
-          display: 'flex',
-          position: 'relative',
-        }}
-      >
-        <Story />
-      </div>
-    ),
-  ],
+  decorators: [iPhoneViewportDecorator],
 }
 
 export const IPhoneInboxSavesTheFilteredView: Story = {
@@ -329,22 +314,7 @@ export const IPhoneInboxSavesTheFilteredView: Story = {
     saveViewName: 'Sample service reviews',
     selectedId: null,
   },
-  decorators: [
-    (Story) => (
-      <div
-        className="story-mobile-layout"
-        data-layout="mobile"
-        style={{
-          width: '390px',
-          height: '844px',
-          display: 'flex',
-          position: 'relative',
-        }}
-      >
-        <Story />
-      </div>
-    ),
-  ],
+  decorators: [iPhoneViewportDecorator],
 }
 
 export const InboxIsLoading: Story = {
