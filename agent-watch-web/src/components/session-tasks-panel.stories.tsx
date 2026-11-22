@@ -16,6 +16,12 @@ const meta = {
         priority: 1,
       },
       {
+        id: 'example-secondary-open-task',
+        number: 9002,
+        title: 'Outline verification steps',
+        priority: 2,
+      },
+      {
         id: 'example-completed-task-a',
         number: 2047,
         title: 'Document request behavior',

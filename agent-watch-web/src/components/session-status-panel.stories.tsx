@@ -486,7 +486,7 @@ const statusTabs = ({
   },
 ]
 
-const phoneStatusTabs = statusTabs({ size: 'phone' })
+const phoneStatusTabs = statusTabs({ size: 'phone', openTaskCount: 2 })
 const phoneStatusManyTabs = statusTabs({ size: 'phone', openTaskCount: 4 })
 
 const phoneStatusViewport = (Story: ComponentType) => (
@@ -528,7 +528,7 @@ export const StatusRunning: Story = {
 }
 
 export const StatusTasks: Story = {
-  ...desktopStatusStory('tasks'),
+  ...desktopStatusStory('tasks', { openTaskCount: 2 }),
   name: 'The desktop status panel shows linked tasks.',
 }
 

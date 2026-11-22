@@ -1,3 +1,5 @@
+import '#index.css'
+
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -81,6 +83,40 @@ function getTabLayoutSnapshot(activeTabId: string) {
       headerBounds !== undefined &&
       closeButtonBounds.left >= tabListBounds.right &&
       closeButtonBounds.right <= headerBounds.right,
+  }
+}
+
+function getTabBarLayoutSnapshot() {
+  const bar = container.querySelector<HTMLElement>('.session-status-panel-tabs')
+  const tabList = container.querySelector<HTMLElement>('[role="tablist"]')
+  const activeTab = container.querySelector<HTMLElement>(
+    '[role="tab"][aria-selected="true"]',
+  )
+  const closeButton = container.querySelector<HTMLElement>(
+    '.session-status-panel-close',
+  )
+  const barBounds = bar?.getBoundingClientRect()
+  const activeTabBounds = activeTab?.getBoundingClientRect()
+  const closeButtonBounds = closeButton?.getBoundingClientRect()
+  const round = (value: number) => Math.round(value * 100) / 100
+
+  return {
+    barHeight: barBounds?.height,
+    tabListHeight: tabList?.getBoundingClientRect().height,
+    activeTabHeight: activeTabBounds?.height,
+    activeTabBottomGap:
+      barBounds === undefined || activeTabBounds === undefined
+        ? null
+        : round(barBounds.bottom - activeTabBounds.bottom),
+    labelCountGap: activeTab === null ? null : getComputedStyle(activeTab).gap,
+    closeTopInset:
+      barBounds === undefined || closeButtonBounds === undefined
+        ? null
+        : round(closeButtonBounds.top - barBounds.top),
+    closeRightInset:
+      barBounds === undefined || closeButtonBounds === undefined
+        ? null
+        : round(barBounds.right - closeButtonBounds.right),
   }
 }
 
@@ -279,6 +315,62 @@ it('closes the status panel from its tab bar', () => {
   })
 
   expect(onClose.mock.calls).toEqual([[]])
+})
+
+it('aligns the status tabs with the full bar on desktop and phone', async () => {
+  const tabs = [
+    { id: 'overview', label: 'Overview', count: 3, content: 'Overview' },
+    { id: 'updates', label: 'Updates', count: 5, content: 'Updates' },
+  ]
+  root = createRoot(container)
+
+  const renderAndSettle = async (size: 'desktop' | 'phone') => {
+    await act(async () => {
+      container.style.width = size === 'desktop' ? '640px' : '390px'
+      root?.render(
+        <SessionStatusPanel
+          tabs={tabs}
+          activeTabId="updates"
+          onTabChange={vi.fn()}
+          onClose={vi.fn()}
+          size={size}
+        />,
+      )
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            resolve()
+          })
+        })
+      })
+    })
+  }
+
+  await renderAndSettle('desktop')
+  const desktopSnapshot = getTabBarLayoutSnapshot()
+  await renderAndSettle('phone')
+  const phoneSnapshot = getTabBarLayoutSnapshot()
+  const snapshot = () => ({ desktop: desktopSnapshot, phone: phoneSnapshot })
+  expect(snapshot()).toEqual({
+    desktop: {
+      barHeight: 48,
+      tabListHeight: 47,
+      activeTabHeight: 47,
+      activeTabBottomGap: 1,
+      labelCountGap: '6px',
+      closeTopInset: 9.5,
+      closeRightInset: 10,
+    },
+    phone: {
+      barHeight: 45,
+      tabListHeight: 44,
+      activeTabHeight: 44,
+      activeTabBottomGap: 1,
+      labelCountGap: '6px',
+      closeTopInset: null,
+      closeRightInset: null,
+    },
+  })
 })
 
 it('shows the mobile page heading and focuses the dialog without outlining an action', () => {

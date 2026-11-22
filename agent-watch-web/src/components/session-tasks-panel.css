@@ -38,12 +38,17 @@
   list-style: none;
 }
 
-.session-tasks-panel-list > li {
+.session-tasks-panel-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   min-width: 0;
   min-height: var(--status-task-row-height, 0);
   align-items: center;
+}
+
+.session-tasks-panel-row--open:has(> .session-tasks-panel-primary-action) {
+  background: color-mix(in srgb, var(--aw-bg-pressed) 70%, transparent);
+  box-shadow: inset 2px 0 0 var(--aw-color-working);
 }
 
 .session-tasks-panel-item {
@@ -55,11 +60,6 @@
   padding: 6px 4px 6px var(--status-horizontal-padding, 18px);
   color: var(--aw-text-primary);
   text-decoration: none;
-}
-
-.session-tasks-panel-item--open:has(+ .session-tasks-panel-primary-action) {
-  background: color-mix(in srgb, var(--aw-bg-pressed) 70%, transparent);
-  box-shadow: inset 2px 0 0 var(--aw-color-working);
 }
 
 .session-tasks-panel-item--completed {
@@ -92,8 +92,7 @@
   opacity: 0.55;
 }
 
-.session-tasks-panel-item--open:hover,
-.session-tasks-panel-item--completed:hover {
+.session-tasks-panel-row:hover {
   background: var(--aw-bg-pressed);
 }
 
