@@ -1,6 +1,10 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
 import type { ComponentType } from 'react'
 
+import {
+  type AsyncAction,
+  isAsyncActionFailureStatus,
+} from '#async-action-feedback'
 import { AgentWatchNav } from '#components/agent-watch-nav'
 import { AsyncActionFeedbackHost } from '#components/async-action-feedback-host'
 import type { Session } from '#types'
@@ -33,6 +37,206 @@ const phoneSheetPmSession: Session = {
   kind: null,
   title: 'Review the example monitor',
   unread: false,
+}
+
+const desktopNavStarredSession: Session = {
+  id: 'desktop-nav-starred-session',
+  engine: 'claude',
+  workType: 'development',
+  category: 'needs_action',
+  isPaused: false,
+  kind: 'Question',
+  title: 'Review the notification route',
+  preview: 'Choose a retry limit.',
+  elapsedSeconds: 10,
+  unread: true,
+  task: null,
+  repo: 'example/service',
+  project: 'example project',
+  parent: null,
+  ancestorSessionIds: [],
+  pullRequest: null,
+  isToday: true,
+}
+
+function withDesktopLayout(
+  Story: ComponentType,
+  context: { args: { actions: readonly AsyncAction[] } },
+) {
+  const actions = context.args.actions
+  const failed = actions.some((action) =>
+    isAsyncActionFailureStatus(action.status),
+  )
+  const failedCount = actions.filter((action) =>
+    isAsyncActionFailureStatus(action.status),
+  ).length
+  const runningCount = actions.filter(
+    (action) => action.status === 'merging' || action.status === 'closing',
+  ).length
+  const count = failed
+    ? failedCount
+    : runningCount > 0
+      ? runningCount
+      : actions.length
+  return (
+    <div
+      className="desktop-activity-story"
+      style={{
+        position: 'relative',
+        display: 'flex',
+        width: 1440,
+        height: 900,
+        overflow: 'hidden',
+        background: 'var(--aw-bg-app)',
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          width: 240,
+          flex: 'none',
+          background: 'var(--aw-bg-nav)',
+        }}
+      >
+        <AgentWatchNav
+          activeView="inbox"
+          paletteShortcut={{
+            modifier: 'metaKey',
+            label: '⌘K',
+            ariaLabel: 'Command K',
+          }}
+          needsActionCount={5}
+          savedViews={[]}
+          selectedSavedViewId={null}
+          workTypeNavGroups={[]}
+          onViewChange={() => undefined}
+          onSelectSavedView={() => undefined}
+          onDeleteSavedView={() => undefined}
+          todaySessions={[desktopNavStarredSession]}
+          onSelectToday={() => undefined}
+          onSelectSession={() => undefined}
+          onOpenPalette={() => undefined}
+          activityOpen
+          activityCount={count}
+          activityFailed={failed}
+        />
+      </div>
+      <div
+        style={{
+          width: 460,
+          flex: 'none',
+          borderRight: '1px solid var(--aw-border-control)',
+          background: 'var(--aw-bg-surface)',
+        }}
+      >
+        <header
+          style={{
+            height: 48,
+            borderBottom: '1px solid var(--aw-border-control)',
+          }}
+        />
+      </div>
+      <main style={{ minWidth: 0, flex: 1 }}>
+        <header
+          style={{
+            height: 48,
+            borderBottom: '1px solid var(--aw-border-control)',
+          }}
+        />
+      </main>
+      <Story />
+    </div>
+  )
+}
+
+const desktopFailureAction = {
+  id: 1,
+  kind: 'close' as const,
+  sessionId: 'example-close-session',
+  sessionTitle: 'Review the notification route',
+  status: 'closeFailed' as const,
+  error: 'The example workspace could not be closed.',
+  checks: {
+    path: '~/work/example-service',
+    files: [],
+    branch: 'feature/example-route',
+    merged: true,
+    reason: null,
+    processes: [
+      { pid: 23451, name: 'example server' },
+      { pid: 23452, name: 'example worker' },
+    ],
+    processInspectionUnavailable: false,
+  },
+  createdAt: 1_799_000_000_000,
+}
+
+const desktopActivityAction = {
+  id: 2,
+  kind: 'merge' as const,
+  sessionId: 'example-merge-session',
+  sessionTitle: 'Review the notification route',
+  pullRequestNumber: 48,
+  status: 'mergeFailed' as const,
+  error:
+    'The example branch changed after the latest review. Confirm the new version before merging.',
+  createdAt: 1_799_000_000_003,
+}
+
+const desktopClosedAction = {
+  id: 3,
+  kind: 'close' as const,
+  sessionId: 'example-closed-session',
+  sessionTitle: 'Review the deployment monitor',
+  status: 'closed' as const,
+  createdAt: 1_799_000_000_002,
+}
+
+const desktopQueuedAction = {
+  id: 4,
+  kind: 'merge' as const,
+  sessionId: 'example-queued-session',
+  sessionTitle: 'Review the rollout monitor',
+  pullRequestNumber: 49,
+  status: 'queued' as const,
+  message: 'The example merge is waiting for checks.',
+  createdAt: 1_798_999_700_000,
+}
+
+const desktopAlreadyMergedAction = {
+  id: 5,
+  kind: 'merge' as const,
+  sessionId: 'example-already-merged-session',
+  sessionTitle: 'Review the retry limit',
+  pullRequestNumber: 50,
+  status: 'alreadyMerged' as const,
+  createdAt: 1_798_999_000_000,
+}
+
+const desktopMergedAction = {
+  id: 6,
+  kind: 'merge' as const,
+  sessionId: 'example-merged-session',
+  sessionTitle: 'Review the alert wording',
+  pullRequestNumber: 51,
+  status: 'merged' as const,
+  createdAt: 1_798_998_500_000,
+}
+
+const desktopClosedEarlierAction = {
+  ...desktopClosedAction,
+  id: 7,
+  sessionTitle: 'Review the monitoring schedule',
+  createdAt: 1_798_999_300_000,
+}
+
+const desktopMergedEarlierAction = {
+  ...desktopMergedAction,
+  id: 8,
+  sessionId: 'example-prior-merge-session',
+  sessionTitle: 'Review the fallback route',
+  pullRequestNumber: 52,
+  createdAt: 1_798_998_900_000,
 }
 
 function withPhoneNavigation(activityCount: number, activityFailed: boolean) {
@@ -105,6 +309,7 @@ const meta = {
     ],
     toastIds: [1],
     activityOpen: false,
+    activityPosition: null,
     toastBottomOffset: null,
     selectedActionId: null,
     retry: () => undefined,
@@ -132,6 +337,52 @@ export const ActivityKeepsTheResult: Story = {
 export const ActivityShowsEmptyState: Story = {
   name: 'Activity explains where merge and close results will appear.',
   args: { actions: [], toastIds: [], activityOpen: true },
+}
+
+export const DesktopActivityShowsEmptyState: Story = {
+  name: 'The desktop Activity opens beside its navigation row when empty.',
+  parameters: { layout: 'fullscreen' },
+  args: {
+    actions: [],
+    toastIds: [],
+    activityOpen: true,
+    activityPosition: { left: 248 },
+  },
+  decorators: [withDesktopLayout],
+}
+
+export const DesktopActivityShowsResults: Story = {
+  name: 'The desktop Activity lists recent action results.',
+  parameters: { layout: 'fullscreen' },
+  args: {
+    actions: [
+      desktopActivityAction,
+      desktopClosedAction,
+      desktopQueuedAction,
+      desktopAlreadyMergedAction,
+      desktopMergedAction,
+    ],
+    toastIds: [],
+    activityOpen: true,
+    activityPosition: { left: 248 },
+  },
+  decorators: [withDesktopLayout],
+}
+
+export const DesktopActivityShowsCloseFailure: Story = {
+  name: 'The desktop Activity shows why a failed close needs attention.',
+  parameters: { layout: 'fullscreen' },
+  args: {
+    actions: [
+      desktopFailureAction,
+      desktopClosedEarlierAction,
+      desktopMergedEarlierAction,
+    ],
+    toastIds: [],
+    activityOpen: true,
+    activityPosition: { left: 248 },
+  },
+  decorators: [withDesktopLayout],
 }
 
 export const PhoneShowsEmptyActivity: Story = {

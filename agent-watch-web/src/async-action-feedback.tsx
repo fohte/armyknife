@@ -75,6 +75,7 @@ type AsyncActionFeedbackValue = {
   toastIds: readonly number[]
   toastRef: RefObject<HTMLDivElement | null>
   activityOpen: boolean
+  activityPosition: { left: number } | null
   toastBottomOffset: number | null
   setToastBottomOffset: (offset: number | null) => void
   pendingMergeRetryActionIds: readonly number[]
@@ -87,7 +88,7 @@ type AsyncActionFeedbackValue = {
   finishMergeRetryConfirmation: (id: number) => void
   dismissToast: (id: number) => void
   clearFinished: () => void
-  openActivity: (actionId?: number) => void
+  openActivity: (actionId?: number, anchor?: HTMLElement) => void
   closeActivity: () => void
   closeWithWorktree: (id: number) => void
   openInTerminal: (id: number) => void
@@ -106,6 +107,9 @@ export function AsyncActionFeedbackProvider({
   const [actions, setActions] = useState<AsyncAction[]>([])
   const [toastIds, setToastIds] = useState<number[]>([])
   const [activityOpen, setActivityOpen] = useState(false)
+  const [activityPosition, setActivityPosition] = useState<{
+    left: number
+  } | null>(null)
   const [toastBottomOffset, setToastBottomOffset] = useState<number | null>(
     null,
   )
@@ -307,14 +311,23 @@ export function AsyncActionFeedbackProvider({
     }
   }, [actions])
 
-  const openActivity = useCallback((actionId?: number) => {
-    setSelectedActionId(actionId ?? null)
-    setActivityOpen(true)
-  }, [])
+  const openActivity = useCallback(
+    (actionId?: number, anchor?: HTMLElement) => {
+      setSelectedActionId(actionId ?? null)
+      setActivityPosition(
+        anchor === undefined
+          ? null
+          : { left: Math.round(anchor.getBoundingClientRect().right + 16) },
+      )
+      setActivityOpen(true)
+    },
+    [],
+  )
 
   const closeActivity = useCallback(() => {
     setActivityOpen(false)
     setSelectedActionId(null)
+    setActivityPosition(null)
   }, [])
 
   const closeWithWorktree = useCallback((id: number) => {
@@ -340,6 +353,7 @@ export function AsyncActionFeedbackProvider({
         toastIds,
         toastRef,
         activityOpen,
+        activityPosition,
         toastBottomOffset,
         setToastBottomOffset,
         pendingMergeRetryActionIds,
@@ -364,6 +378,7 @@ export function AsyncActionFeedbackProvider({
         toastIds={toastIds}
         toastRef={toastRef}
         activityOpen={activityOpen}
+        activityPosition={activityPosition}
         toastBottomOffset={toastBottomOffset}
         selectedActionId={selectedActionId}
         retry={retry}

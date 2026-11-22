@@ -54,6 +54,7 @@ type AgentWatchNavProps = {
   activityCount?: number
   activityRunning?: boolean
   activityFailed?: boolean
+  activityOpen?: boolean
 }
 
 export function AgentWatchNav({
@@ -79,6 +80,7 @@ export function AgentWatchNav({
   activityCount,
   activityRunning,
   activityFailed,
+  activityOpen,
 }: AgentWatchNavProps) {
   const { usage, error } = useAgentUsageContext()
   const actionFeedback = useOptionalAsyncActionFeedback()
@@ -187,7 +189,6 @@ export function AgentWatchNav({
             Board
           </Button>
         </div>
-        {!isMobile ? <ActivityButton /> : null}
         {savedViews.length > 0 ? (
           <section
             className="saved-views-nav"
@@ -306,24 +307,21 @@ export function AgentWatchNav({
           </section>
         ))}
       </div>
-      {isMobile ? (
-        <div className="agent-watch-nav-activity">
-          <ActivityButton
-            drawer
-            {...(activityRunning === undefined
-              ? {}
-              : { isRunning: activityRunning })}
-            onOpenActivity={() => {
-              onCloseNavigation?.()
-              actionFeedback?.openActivity()
-            }}
-            {...(activityCount === undefined ? {} : { activityCount })}
-            {...(activityFailed === undefined
-              ? {}
-              : { failed: activityFailed })}
-          />
-        </div>
-      ) : null}
+      <div className="agent-watch-nav-activity">
+        <ActivityButton
+          drawer={isMobile}
+          {...(activityRunning === undefined
+            ? {}
+            : { isRunning: activityRunning })}
+          onOpenActivity={(anchor) => {
+            if (isMobile) onCloseNavigation?.()
+            actionFeedback?.openActivity(undefined, anchor)
+          }}
+          {...(activityCount === undefined ? {} : { activityCount })}
+          {...(activityFailed === undefined ? {} : { failed: activityFailed })}
+          {...(activityOpen === undefined ? {} : { active: activityOpen })}
+        />
+      </div>
       <QuotaPanel
         error={error}
         isMobile={isMobile}
