@@ -235,7 +235,13 @@ mod tests {
     }
 
     #[rstest]
-    fn notifies_after_a_parent_instruction_and_deferred_stop_without_a_new_report(
+    #[case::parent_instruction_delivered(false, false, true)]
+    #[case::parent_instruction_failed(true, false, true)]
+    #[case::report_after_parent_instruction(false, true, false)]
+    fn reports_after_parent_instructions_define_the_stop_boundary(
+        #[case] parent_instruction_failed: bool,
+        #[case] report_after_parent_instruction: bool,
+        #[case] expected_notification: bool,
         sessions_dir: TempDir,
     ) {
         let mut session = delegate_session(Engine::Claude, "fixture-delegate", "fixture-parent");
@@ -261,9 +267,20 @@ mod tests {
             &session.session_id,
             "A fictional follow-up instruction.",
             at(12, 0),
-            true,
+            parent_instruction_failed,
         )
         .unwrap();
+        if report_after_parent_instruction {
+            insert_watch_web_peer_out_message_from(
+                sessions_dir.path(),
+                &session.session_id,
+                "fixture-parent",
+                "A fictional follow-up report.",
+                at(13, 0),
+                false,
+            )
+            .unwrap();
+        }
 
         session
             .pending_bg_task_ids
@@ -294,21 +311,23 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(
-            (first_check, calls.lock().unwrap().clone()),
-            (
-                false,
-                vec![(
-                    "fixture-parent".to_string(),
-                    indoc! {"
+        let expected_calls = if expected_notification {
+            vec![(
+                "fixture-parent".to_string(),
+                indoc! {"
                         <delegation-update>
                         Session: fixture-delegate
                         Last message: I finished sample change.
                         </delegation-update>"
-                    }
-                    .to_string(),
-                )],
-            ),
+                }
+                .to_string(),
+            )]
+        } else {
+            Vec::<(String, String)>::new()
+        };
+        assert_eq!(
+            (first_check, calls.lock().unwrap().clone()),
+            (false, expected_calls),
         );
     }
 
