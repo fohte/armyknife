@@ -99,6 +99,7 @@ type ConversationPaneViewProps = {
   selectedDecisionSeq?: number | null
   decisionJump?: { seq: number } | null
   onDecisionJumpComplete?: () => void
+  onDecisionJumpSucceeded?: () => void
   onToggleStatusPanel?: () => void
   onOpenTasks?: () => void
   onSelectDecision?: (seq: number) => void
@@ -153,6 +154,7 @@ export function ConversationPaneView({
   selectedDecisionSeq = null,
   decisionJump = null,
   onDecisionJumpComplete = () => undefined,
+  onDecisionJumpSucceeded = () => undefined,
   onToggleStatusPanel = () => undefined,
   onOpenTasks = () => undefined,
   onSelectDecision = () => undefined,
@@ -235,10 +237,14 @@ export function ConversationPaneView({
     )
     if (decisionRow !== null) {
       decisionRow.scrollIntoView({ block: 'center' })
-      onDecisionJumpComplete()
+      onDecisionJumpSucceeded()
       return
     }
-    if (start > 0 || (epoch !== undefined && olderCursor != null)) loadOlder()
+    if (start > 0 || (epoch !== undefined && olderCursor != null)) {
+      loadOlder()
+      return
+    }
+    onDecisionJumpComplete()
   }, [
     decisionJump,
     epoch,
@@ -246,6 +252,7 @@ export function ConversationPaneView({
     messages,
     olderCursor,
     onDecisionJumpComplete,
+    onDecisionJumpSucceeded,
     start,
   ])
   const sessionLinkTargets = useSessionLinkTargets(

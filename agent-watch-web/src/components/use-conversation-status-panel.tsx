@@ -151,8 +151,11 @@ export function useConversationStatusPanel({
   const [decisionJump, setDecisionJump] = useState<{ seq: number } | null>(null)
   const onDecisionJumpComplete = useCallback(() => {
     setDecisionJump(null)
+  }, [])
+  const onDecisionJumpSucceeded = useCallback(() => {
+    onDecisionJumpComplete()
     if (isMobile) onCloseStatusPanel()
-  }, [isMobile, onCloseStatusPanel])
+  }, [isMobile, onCloseStatusPanel, onDecisionJumpComplete])
   const [reviewDocumentState, setReviewDocumentState] =
     useState<ReviewDocumentState | null>(null)
   const reviewDocumentStateRef = useRef<ReviewDocumentState | null>(null)
@@ -527,6 +530,7 @@ export function useConversationStatusPanel({
     fullscreenWebUi,
     mobileWebUi,
     onDecisionJumpComplete,
+    onDecisionJumpSucceeded,
     onSelectDecision: setSelectedDecisionSeq,
     decisionJump,
     onTabChange: setActivePanelTabId,

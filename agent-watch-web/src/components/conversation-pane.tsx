@@ -346,6 +346,7 @@ export function ConversationPane({
     onOpenWebUiInFullscreen,
     mobileWebUi,
     onDecisionJumpComplete,
+    onDecisionJumpSucceeded,
     onSelectDecision,
     decisionJump,
     onTabChange,
@@ -427,6 +428,7 @@ export function ConversationPane({
       selectedDecisionSeq={selectedDecisionSeq}
       decisionJump={decisionJump}
       onDecisionJumpComplete={onDecisionJumpComplete}
+      onDecisionJumpSucceeded={onDecisionJumpSucceeded}
       onToggleStatusPanel={onToggleStatusPanel}
       onSelectDecision={onSelectDecision}
       mobileStatusPanel={statusPanel}
