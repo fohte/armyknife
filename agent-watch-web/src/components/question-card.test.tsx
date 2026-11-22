@@ -303,7 +303,7 @@ it('renders copy controls outside a single-choice option description button', ()
   })
 })
 
-it('frames a recorded choice together with its description', () => {
+it('frames a recorded choice with its description without doubling dividers', () => {
   renderQuestion(
     props({
       canAnswer: false,
@@ -330,6 +330,14 @@ it('frames a recorded choice together with its description', () => {
       '.chat-question-choice-row.is-selected',
     ),
   )
+  const choices = requireElement(
+    container.querySelector<HTMLElement>('.chat-question-choices'),
+  )
+  const unselectedRow = requireElement(
+    choices.querySelector<HTMLElement>(
+      '.chat-question-choice-row:not(.is-selected)',
+    ),
+  )
   const selectedButton = requireElement(
     selectedRow.querySelector<HTMLButtonElement>('button'),
   )
@@ -337,6 +345,8 @@ it('frames a recorded choice together with its description', () => {
     selectedRow.querySelector<HTMLElement>('.chat-question-choice-description'),
   )
   const rowStyle = getComputedStyle(selectedRow)
+  const choicesStyle = getComputedStyle(choices)
+  const unselectedRowStyle = getComputedStyle(unselectedRow)
   const buttonStyle = getComputedStyle(selectedButton)
 
   const getActual = () => ({
@@ -347,6 +357,8 @@ it('frames a recorded choice together with its description', () => {
       rowStyle.borderLeftWidth,
     ],
     rowBackground: rowStyle.backgroundColor,
+    choicesBorderTop: choicesStyle.borderTopWidth,
+    unselectedRowBorderTop: unselectedRowStyle.borderTopWidth,
     buttonBorder: [
       buttonStyle.borderTopWidth,
       buttonStyle.borderRightWidth,
@@ -359,6 +371,8 @@ it('frames a recorded choice together with its description', () => {
   expect(getActual()).toEqual({
     rowBorder: ['1px', '1px', '1px', '1px'],
     rowBackground: 'rgb(20, 20, 20)',
+    choicesBorderTop: '0px',
+    unselectedRowBorderTop: '0px',
     buttonBorder: ['0px', '0px', '0px', '0px'],
     buttonBackground: 'rgba(0, 0, 0, 0)',
     descriptionInsideSelectedRow: true,
