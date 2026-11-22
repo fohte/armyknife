@@ -1,12 +1,13 @@
 .async-action-toast-stack {
   position: fixed;
   z-index: 1000;
-  right: 24px;
-  bottom: 128px;
+  right: auto;
+  bottom: 16px;
+  left: 16px;
   display: flex;
   width: min(360px, calc(100vw - 32px));
-  max-height: calc(100dvh - 160px);
-  flex-direction: column;
+  max-height: calc(100dvh - 32px);
+  flex-direction: column-reverse;
   gap: 8px;
   overflow-y: auto;
   pointer-events: none;
@@ -108,11 +109,13 @@
 .async-action-activity-close {
   display: none;
 }
-@media (max-width: 700px) {
+@media (max-width: 760px) {
   .async-action-toast-stack {
     right: 16px;
     bottom: 112px;
+    left: auto;
     max-height: calc(100dvh - 128px);
+    flex-direction: column;
   }
 }
 

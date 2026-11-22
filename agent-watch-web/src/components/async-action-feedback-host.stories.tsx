@@ -238,6 +238,55 @@ const desktopMergedEarlierAction = {
   createdAt: 1_798_998_900_000,
 }
 
+const desktopRunningToast = {
+  id: 9,
+  kind: 'merge' as const,
+  sessionId: 'example-running-merge-session',
+  sessionTitle: 'Review the example deployment',
+  pullRequestNumber: 53,
+  status: 'merging' as const,
+  createdAt: 1_799_000_000_005,
+}
+
+const desktopClosingToast = {
+  id: 10,
+  kind: 'close' as const,
+  sessionId: 'example-closing-session',
+  sessionTitle: 'Review the example monitor',
+  status: 'closing' as const,
+  createdAt: 1_799_000_000_006,
+}
+
+const phoneMergedToast = {
+  id: 11,
+  kind: 'merge' as const,
+  sessionId: 'example-phone-merge-session',
+  sessionTitle: 'Review the example deployment',
+  pullRequestNumber: 54,
+  status: 'merged' as const,
+  createdAt: 1_799_000_000_007,
+}
+
+const phoneClosedToast = {
+  id: 12,
+  kind: 'close' as const,
+  sessionId: 'example-phone-close-session',
+  sessionTitle: 'Review the example monitor',
+  status: 'closed' as const,
+  createdAt: 1_799_000_000_006,
+}
+
+const phoneFailedToast = {
+  id: 13,
+  kind: 'merge' as const,
+  sessionId: 'example-phone-failed-merge-session',
+  sessionTitle: 'Review the example deployment',
+  pullRequestNumber: 55,
+  status: 'mergeFailed' as const,
+  error: 'The example branch changed after confirmation.',
+  createdAt: 1_799_000_000_005,
+}
+
 function withPhoneNavigation(activityCount: number, activityFailed: boolean) {
   return (Story: ComponentType) => (
     <div
@@ -291,6 +340,37 @@ function withPhoneNavigation(activityCount: number, activityFailed: boolean) {
   )
 }
 
+function withPhoneReplyComposer(Story: ComponentType) {
+  return (
+    <div
+      className="story-mobile-layout"
+      style={{
+        position: 'relative',
+        boxSizing: 'border-box',
+        width: '100vw',
+        maxWidth: 390,
+        height: '100vh',
+        overflow: 'hidden',
+        background: 'var(--aw-bg-app)',
+      }}
+    >
+      <div
+        aria-label="Reply composer"
+        style={{
+          position: 'absolute',
+          right: 0,
+          bottom: 0,
+          left: 0,
+          height: 80,
+          borderTop: '1px solid var(--aw-border-control)',
+          background: 'var(--aw-bg-surface)',
+        }}
+      />
+      <Story />
+    </div>
+  )
+}
+
 const meta = {
   component: AsyncActionFeedbackHost,
   args: {
@@ -327,6 +407,26 @@ type Story = StoryObj<typeof meta>
 
 export const FailureToastIsVisible: Story = {
   name: 'A failed merge stays visible as a toast.',
+}
+
+export const DesktopShowsOneToast: Story = {
+  name: 'The desktop shows one failed close toast in the lower left corner.',
+  parameters: { layout: 'fullscreen' },
+  args: {
+    actions: [desktopFailureAction],
+    toastIds: [desktopFailureAction.id],
+  },
+  decorators: [withDesktopLayout],
+}
+
+export const DesktopStacksMultipleToasts: Story = {
+  name: 'New desktop toasts stack below the older toast.',
+  parameters: { layout: 'fullscreen' },
+  args: {
+    actions: [desktopRunningToast, desktopClosingToast],
+    toastIds: [desktopClosingToast.id, desktopRunningToast.id],
+  },
+  decorators: [withDesktopLayout],
 }
 
 export const ActivityKeepsTheResult: Story = {
@@ -483,6 +583,34 @@ export const ToastsSitAboveAnOpenPhoneSheet: Story = {
       </div>
     ),
   ],
+}
+
+export const PhoneShowsOneToast: Story = {
+  name: 'The phone keeps one toast above the reply composer.',
+  parameters: {
+    layout: 'fullscreen',
+    viewport: { defaultViewport: 'mobile2' },
+  },
+  args: {
+    actions: [phoneMergedToast],
+    toastIds: [phoneMergedToast.id],
+    toastBottomOffset: 112,
+  },
+  decorators: [withPhoneReplyComposer],
+}
+
+export const PhoneStacksMultipleToasts: Story = {
+  name: 'The phone keeps multiple toasts above the reply composer.',
+  parameters: {
+    layout: 'fullscreen',
+    viewport: { defaultViewport: 'mobile2' },
+  },
+  args: {
+    actions: [phoneClosedToast, phoneFailedToast],
+    toastIds: [phoneFailedToast.id, phoneClosedToast.id],
+    toastBottomOffset: 112,
+  },
+  decorators: [withPhoneReplyComposer],
 }
 
 export const PhoneShowsClosedSessionAndMergeFailure: Story = {

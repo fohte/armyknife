@@ -114,7 +114,6 @@ it('closes Activity before retrying a failed action', () => {
     activityOpen: false,
   })
 })
-
 it('shows command output as the only command failure action', () => {
   const action: AsyncAction = {
     id: 9,
@@ -339,4 +338,88 @@ it('positions the toast stack at the supplied screen offset', () => {
   expect(stack === null ? null : getComputedStyle(stack).bottom).toEqual(
     '200px',
   )
+})
+
+it('anchors desktop toast stacks to the lower left and preserves phone positioning', async () => {
+  container = document.createElement('div')
+  document.body.append(container)
+  root = createRoot(container)
+  await page.viewport(1440, 900)
+  act(() => {
+    root?.render(
+      <AsyncActionFeedbackHost
+        actions={[failedMerge]}
+        toastIds={[failedMerge.id]}
+        activityOpen={false}
+        toastBottomOffset={null}
+        selectedActionId={null}
+        retry={() => undefined}
+        dismissToast={() => undefined}
+        clearFinished={() => undefined}
+        openActivity={() => undefined}
+        closeActivity={() => undefined}
+        closeWithWorktree={() => undefined}
+        openInTerminal={() => undefined}
+        showCommandOutput={() => undefined}
+      />,
+    )
+  })
+  const desktopStack = container.querySelector<HTMLElement>(
+    '.async-action-toast-stack',
+  )
+  if (desktopStack === null) {
+    throw new Error('Expected the desktop toast stack')
+  }
+  const desktop = {
+    left: getComputedStyle(desktopStack).left,
+    bottom: getComputedStyle(desktopStack).bottom,
+    flexDirection: getComputedStyle(desktopStack).flexDirection,
+    width: getComputedStyle(desktopStack).width,
+    maxHeight: getComputedStyle(desktopStack).maxHeight,
+  }
+
+  await page.viewport(720, 844)
+  const tablet = {
+    right: getComputedStyle(desktopStack).right,
+    bottom: getComputedStyle(desktopStack).bottom,
+    flexDirection: getComputedStyle(desktopStack).flexDirection,
+    width: getComputedStyle(desktopStack).width,
+    maxHeight: getComputedStyle(desktopStack).maxHeight,
+  }
+
+  await page.viewport(390, 844)
+  const phone = {
+    left: getComputedStyle(desktopStack).left,
+    right: getComputedStyle(desktopStack).right,
+    bottom: getComputedStyle(desktopStack).bottom,
+    flexDirection: getComputedStyle(desktopStack).flexDirection,
+    width: getComputedStyle(desktopStack).width,
+    maxHeight: getComputedStyle(desktopStack).maxHeight,
+  }
+
+  const snapshot = () => ({ desktop, tablet, phone })
+  expect(snapshot()).toEqual({
+    desktop: {
+      left: '16px',
+      bottom: '16px',
+      flexDirection: 'column-reverse',
+      width: '360px',
+      maxHeight: '868px',
+    },
+    tablet: {
+      right: '16px',
+      bottom: '112px',
+      flexDirection: 'column',
+      width: '360px',
+      maxHeight: '716px',
+    },
+    phone: {
+      left: '16px',
+      right: '16px',
+      bottom: '112px',
+      flexDirection: 'column',
+      width: '358px',
+      maxHeight: '716px',
+    },
+  })
 })
