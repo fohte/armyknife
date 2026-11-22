@@ -103,7 +103,8 @@ pub(in crate::commands::agent::watch_web::messages::parser) fn append_user_text_
     if text.trim().is_empty() {
         return;
     }
-    let classification = classifier::classify_codex_user_message(&text);
+    let classification =
+        classifier::classify_inbound(&serde_json::json!({"type":"user"}), &text, None);
     append_classification(
         items,
         classification,

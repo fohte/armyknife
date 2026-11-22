@@ -298,24 +298,6 @@ fn has_explicit_failure(record: &Value) -> bool {
             .is_some_and(|errors| !errors.is_empty())
 }
 
-pub(super) fn classify_codex_user_message(text: &str) -> MessageKind {
-    let Some(message) = extract_peer_message(text, None) else {
-        return MessageKind::User {
-            text: text.to_owned(),
-        };
-    };
-    let Some(session_id) = message.sender_id.as_ref() else {
-        return MessageKind::User {
-            text: text.to_owned(),
-        };
-    };
-    let text = peer_message_text(&message);
-    MessageKind::PeerIn {
-        session_id: session_id.clone(),
-        text,
-    }
-}
-
 pub(super) fn one_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
