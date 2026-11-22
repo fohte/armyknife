@@ -72,6 +72,13 @@ function requestReviewDocumentAction(
   setState: Dispatch<SetStateAction<ReviewDocumentState | null>>,
   run: ReturnType<typeof useSessionOperations>['run'],
 ) {
+  const savedRevision = (value: unknown) =>
+    typeof value === 'object' &&
+    value !== null &&
+    'revision' in value &&
+    typeof value.revision === 'string'
+      ? value.revision
+      : null
   const matchesDocument = (
     current: ReviewDocumentState | null,
   ): current is ReviewDocumentState =>
@@ -87,12 +94,18 @@ function requestReviewDocumentAction(
     }
   })
 
-  const onSuccess = () => {
+  const onSuccess = (result: unknown) => {
+    const revision = savedRevision(result)
     setState((current) => {
       if (!matchesDocument(current)) return current
       return action === 'save'
         ? {
             ...current,
+            ...(current.document === null || revision === null
+              ? {}
+              : {
+                  document: { ...current.document, revision },
+                }),
             saveStatus: 'saved',
             saveError: null,
             unsavedChanges: false,
@@ -116,6 +129,7 @@ function requestReviewDocumentAction(
     `review-document/${action}`,
     {
       id: document.id,
+      revision: document.revision,
       frontmatter: document.frontmatter,
       body: document.body,
     },
