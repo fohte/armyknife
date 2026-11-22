@@ -456,11 +456,20 @@ it('saves the edited document and sends the same edits before finishing review',
 
   await act(async () => {
     await page.getByRole('textbox', { name: 'title' }).fill('Edited title')
+  })
+  await act(async () => {
     await page.getByRole('checkbox', { name: 'enabled' }).click()
+  })
+  await act(async () => {
     await page
       .getByRole('textbox', { name: 'Markdown body' })
       .fill('Edited body.')
   })
+  await waitForState(
+    () =>
+      container.querySelector('.review-document-body')?.textContent ===
+      'Edited body.',
+  )
   expect(container.querySelector('.review-document-status')?.textContent).toBe(
     'Unsaved changes',
   )
