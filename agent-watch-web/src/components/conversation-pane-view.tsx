@@ -2,14 +2,7 @@ import '#components/conversation-pane.css'
 import '#components/conversation-pane-view.css'
 
 import { Button } from '@fohte/ui/button'
-import {
-  type ReactNode,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react'
+import { type ReactNode, useCallback, useMemo, useRef, useState } from 'react'
 
 import { useOptionalAsyncActionFeedback } from '#async-action-feedback'
 import { useAgentUsageContext } from '#components/agent-usage-context'
@@ -30,6 +23,7 @@ import { SessionLinkElapsedSecondsContext } from '#components/session-link-elaps
 import { SessionUsageRow } from '#components/session-usage-row'
 import { useComposerDraft } from '#components/use-composer-draft'
 import { useComposerMessage } from '#components/use-composer-message'
+import { useConversationDecisionJump } from '#components/use-conversation-decision-jump'
 import { useConversationMessageElements } from '#components/use-conversation-message-elements'
 import { useConversationPaneKeyboard } from '#components/use-conversation-pane-keyboard'
 import { useConversationScroll } from '#components/use-conversation-scroll'
@@ -226,64 +220,21 @@ export function ConversationPaneView({
     epoch,
     olderCursor,
   })
-  const decisionJumpLoadAttempt = useRef<{
-    epoch: string | undefined
-    olderCursor: string | undefined
-    start: number
-  } | null>(null)
+  useConversationDecisionJump({
+    decisionJump,
+    epoch,
+    loadingOlder,
+    loadOlder,
+    messages,
+    olderCursor,
+    onComplete: onDecisionJumpComplete,
+    onSucceeded: onDecisionJumpSucceeded,
+    start,
+  })
   useOwnMessageKeyboardNavigation({
     isMobile,
     scrollRef: conversationScrollRef,
   })
-  useEffect(() => {
-    if (decisionJump === null) {
-      decisionJumpLoadAttempt.current = null
-      return
-    }
-    const decisionRow = document.getElementById(
-      `decision-row-${String(decisionJump.seq)}`,
-    )
-    if (decisionRow !== null) {
-      decisionJumpLoadAttempt.current = null
-      decisionRow.scrollIntoView({ block: 'center' })
-      onDecisionJumpSucceeded()
-      return
-    }
-    const previousAttempt = decisionJumpLoadAttempt.current
-    if (previousAttempt !== null) {
-      if (loadingOlder) return
-      const pageAdvanced =
-        previousAttempt.start !== start ||
-        previousAttempt.epoch !== epoch ||
-        previousAttempt.olderCursor !== olderCursor
-      decisionJumpLoadAttempt.current = null
-      if (!pageAdvanced) {
-        onDecisionJumpComplete()
-        return
-      }
-    }
-    if (start > 0 || (epoch !== undefined && olderCursor != null)) {
-      decisionJumpLoadAttempt.current = {
-        epoch,
-        olderCursor,
-        start,
-      }
-      loadOlder()
-      return
-    }
-    decisionJumpLoadAttempt.current = null
-    onDecisionJumpComplete()
-  }, [
-    decisionJump,
-    epoch,
-    loadOlder,
-    loadingOlder,
-    messages,
-    olderCursor,
-    onDecisionJumpComplete,
-    onDecisionJumpSucceeded,
-    start,
-  ])
   const sessionLinkTargets = useSessionLinkTargets(
     sessions,
     providedSessionLinkTargets,
