@@ -144,6 +144,15 @@ it('renders decision details as markdown with linked session IDs', () => {
   })
 })
 
+it('separates alternatives in an expanded panel decision', () => {
+  renderCard({ variant: 'panel', expanded: true })
+
+  expect(
+    requireElement(container.querySelector('.decision-card-considered'))
+      .textContent,
+  ).toBe('Retry using the latest duration / Retry once per package')
+})
+
 it('expands the conversation row when its summary is selected', () => {
   renderCard()
 
@@ -154,7 +163,7 @@ it('expands the conversation row when its summary is selected', () => {
   })
 
   expect(container.querySelector('.decision-card-details')?.textContent).toBe(
-    'Why · The current service has no reliable timing data.Also considered · Retry using the latest durationRetry once per packageEasy to change · One configuration value in the CI workflow.OKChange…Not blocking · keeps working',
+    'Why · The current service has no reliable timing data.Also considered · Retry using the latest duration / Retry once per packageEasy to change · One configuration value in the CI workflow.OKChange…Not blocking · keeps working',
   )
 })
 
