@@ -990,6 +990,10 @@ fn process_hook_event_impl_with_env_and_unreported_stop(
     }
     drop(session_lock);
 
+    if event == HookEvent::SessionStart && input.source.as_deref() == Some("resume") {
+        store::clear_session_closed_from(sessions_dir, &session.session_id)?;
+    }
+
     if event == HookEvent::PermissionDenied && input.engine == Engine::Claude {
         let tool_input = input
             .tool_input
@@ -4329,6 +4333,36 @@ mod tests {
         session.session_id = session_id.to_string();
         mutate(&mut session);
         store::save_session_to(sessions_dir, &session).expect("save");
+    }
+
+    #[test]
+    fn resuming_a_claude_session_clears_its_close_marker() {
+        let temp_dir = tempfile::TempDir::new().expect("temp directory should be created");
+        let sessions_dir = temp_dir.path();
+        save_test_session(sessions_dir, "test-123", |session| {
+            session.status = SessionStatus::Ended;
+        });
+        store::mark_session_closed_from(sessions_dir, "test-123")
+            .expect("close marker should be saved");
+
+        process_hook_event_impl(
+            HookEvent::SessionStart,
+            create_test_input_with_session_and_source("test-123", None, Some("resume")),
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("resume hook should save the session");
+
+        assert_eq!(
+            (
+                store::load_session_from(sessions_dir, "test-123")
+                    .expect("session should load")
+                    .expect("session should exist")
+                    .status,
+                store::closed_session_ids_from(sessions_dir).expect("close markers should load"),
+            ),
+            (SessionStatus::Stopped, std::collections::HashSet::new()),
+        );
     }
 
     #[test]

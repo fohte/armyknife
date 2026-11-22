@@ -498,6 +498,10 @@ pub(crate) fn mark_session_closed_from(sessions_dir: &Path, session_id: &str) ->
     database::mark_session_closed(sessions_dir, session_id)
 }
 
+pub(crate) fn clear_session_closed_from(sessions_dir: &Path, session_id: &str) -> Result<()> {
+    database::clear_session_closed(sessions_dir, session_id)
+}
+
 pub(crate) fn closed_session_ids_from(sessions_dir: &Path) -> Result<HashSet<String>> {
     database::closed_session_ids(sessions_dir)
 }
