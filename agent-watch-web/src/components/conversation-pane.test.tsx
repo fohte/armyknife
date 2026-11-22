@@ -392,6 +392,59 @@ function renderView(
   })
 }
 
+it('keeps the phone composer reachable when several merge rows fill the viewport', () => {
+  container.style.cssText =
+    'position: fixed; inset: 0 auto auto 0; width: 390px; height: 260px'
+  const pullRequests = [42, 43, 44].map((number) => ({
+    number,
+    state: 'Open' as const,
+    owner: 'example-org',
+    repo: `example-service-${String(number)}`,
+    title: `Update service ${String(number)}`,
+    url: `https://github.com/example-org/example-service-${String(number)}/pull/${String(number)}`,
+    headSha: `fixture-head-${String(number)}`,
+    ciState: 'Successful' as const,
+    isCurrentBranch: number === 42,
+  }))
+  const currentPullRequest = pullRequests[0]
+  if (currentPullRequest === undefined) {
+    throw new Error('Expected current pull request')
+  }
+  renderView(
+    () => Promise.resolve(true),
+    { ...session, pullRequest: currentPullRequest, pullRequests },
+    undefined,
+    [],
+    actions,
+    true,
+  )
+
+  const snapshot = () => {
+    const pane = container.querySelector('.conversation-pane')
+    const slot = container.querySelector('.conversation-merge-band-slot')
+    const sendButton = container.querySelector<HTMLButtonElement>(
+      '.conversation-composer [aria-label="Send message"]',
+    )
+    const paneBounds = pane?.getBoundingClientRect()
+    const sendButtonBounds = sendButton?.getBoundingClientRect()
+    return {
+      mergeRows: container.querySelectorAll('.merge-band-row').length,
+      mergeBandOverflow:
+        slot === null ? null : getComputedStyle(slot).overflowY,
+      sendButtonVisible:
+        paneBounds !== undefined &&
+        sendButtonBounds !== undefined &&
+        sendButtonBounds.top >= paneBounds.top &&
+        sendButtonBounds.bottom <= paneBounds.bottom,
+    }
+  }
+  expect(snapshot()).toEqual({
+    mergeRows: 3,
+    mergeBandOverflow: 'auto',
+    sendButtonVisible: true,
+  })
+})
+
 it('resumes an ended session and restores the composer after it becomes active', async () => {
   let resolveResume: ((success: boolean) => void) | undefined
   const resumeRequest = new Promise<boolean>((resolve) => {

@@ -229,6 +229,20 @@
   text-align: center;
 }
 
+.conversation-merge-band-slot {
+  display: flex;
+  width: 100%;
+  flex: 0 0 auto;
+  flex-direction: column;
+}
+
+.conversation-pane[data-mobile='true'] .conversation-merge-band-slot {
+  min-height: 0;
+  flex: 0 1 auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
 .conversation-load-older {
   align-self: center;
   color: var(--aw-text-secondary);

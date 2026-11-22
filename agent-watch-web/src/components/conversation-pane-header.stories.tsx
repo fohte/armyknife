@@ -134,7 +134,7 @@ export const MobileHeaderShowsTaskAndRepository: Story = {
 }
 
 export const SessionPullRequestCanBeMerged: Story = {
-  name: 'The header offers to merge the session pull request',
+  name: 'The header shows the PR button for a mergeable pull request',
   args: {
     session: {
       ...session,
@@ -153,7 +153,7 @@ export const SessionPullRequestCanBeMerged: Story = {
 }
 
 export const SessionPullRequestWaitsForChecks: Story = {
-  name: 'The header keeps Merge unavailable while checks are running',
+  name: 'The header shows that the pull request checks are still running',
   args: {
     session: {
       ...session,

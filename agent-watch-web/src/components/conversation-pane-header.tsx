@@ -9,15 +9,16 @@ import {
   Star,
 } from 'lucide-react'
 import { type SubmitEvent, useState } from 'react'
+import { createPortal } from 'react-dom'
 
 import { DesktopConversationActionsMenu } from '#components/desktop-conversation-actions-menu'
+import { MergeBand } from '#components/merge-band'
 import { MobileConversationActionsMenu } from '#components/mobile-conversation-actions-menu'
 import { OpenInTerminalAction } from '#components/open-in-terminal-action'
-import { PullRequestMergeAction } from '#components/pull-request-merge-action'
 import { PullRequestMergeConfirmation } from '#components/pull-request-merge-confirmation'
 import { SessionHeading } from '#components/session-heading'
 import {
-  getRepresentativePullRequest,
+  pullRequestMergeReason,
   SessionPullRequests,
 } from '#components/session-pull-requests'
 import { SessionTaskLinks } from '#components/session-task-links'
@@ -46,6 +47,7 @@ type ConversationPaneHeaderProps = {
   titleEditing?: boolean
   mobileActionsMenuOpen?: boolean
   pullRequestsOpen?: boolean
+  mergeBandTarget?: HTMLElement | null
   onAction: (
     action: string,
     payload?: Record<string, unknown>,
@@ -72,6 +74,7 @@ export function ConversationPaneHeader({
   titleEditing = false,
   mobileActionsMenuOpen,
   pullRequestsOpen,
+  mergeBandTarget = null,
   onAction,
   onOpenInTerminal,
   onSelectSession,
@@ -99,43 +102,52 @@ export function ConversationPaneHeader({
       : session.pullRequest === null
         ? []
         : [session.pullRequest]
-  const pullRequest = getRepresentativePullRequest(pullRequests) ?? null
   const merge = useConversationPaneHeaderMerge({
     session,
     pullRequests,
     setPullRequestListOpen,
   })
-  const mergeAction =
-    !merge.showHeaderMergeAction ||
-    merge.headerMergeOperation === null ? null : (
-      <PullRequestMergeAction
-        merging={merge.isMerging(merge.headerMergeOperation)}
-        result={
-          merge.mergeActionFor(merge.headerMergeOperation)?.status === 'merged'
-            ? 'merged'
-            : merge.mergeActionFor(merge.headerMergeOperation)?.status ===
-                'alreadyMerged'
-              ? 'alreadyMerged'
-              : merge.mergeActionFor(merge.headerMergeOperation)?.status ===
-                  'queued'
-                ? 'queued'
-                : merge.mergeActionFor(merge.headerMergeOperation)?.status ===
-                    'mergeFailed'
-                  ? 'failed'
-                  : null
-        }
-        onClick={() => {
-          const target = merge.headerMergeOperation
-          if (pullRequest === null || target === null) return
-          const action = merge.mergeActionFor(target)
-          if (action?.status === 'mergeFailed') {
-            merge.retryMerge(action.id)
-            return
-          }
-          merge.openMergeConfirmation(pullRequest)
-        }}
-      />
-    )
+  const mergeRows = merge.mergeablePullRequests.flatMap((target) => {
+    const status = merge.mergeStatusFor(target)
+    if (status === 'merged' || status === 'alreadyMerged') return []
+    const canRetry = status === 'mergeFailed' && merge.isMergeable(target)
+    const error =
+      status === 'mergeFailed'
+        ? canRetry
+          ? merge.mergeActionFor(target)?.error
+          : pullRequestMergeReason(target)
+        : undefined
+    return [
+      {
+        pullRequest: target,
+        status:
+          status === null
+            ? ('ready' as const)
+            : status === 'mergeFailed'
+              ? ('mergeFailed' as const)
+              : status,
+        ...(status === 'mergeFailed' ? { canRetry } : {}),
+        ...(error === undefined ? {} : { error }),
+      },
+    ]
+  })
+  const mergeBand =
+    mergeBandTarget === null
+      ? null
+      : createPortal(
+          <MergeBand
+            rows={mergeRows}
+            isMobile={isMobile}
+            onMerge={merge.openMergeConfirmation}
+            onRetry={(target) => {
+              const action = merge.mergeActionFor(target)
+              if (action?.status === 'mergeFailed') merge.retryMerge(action.id)
+            }}
+          />,
+          mergeBandTarget,
+        )
+  const mergeStatusFor = (target: (typeof pullRequests)[number]) =>
+    merge.mergeStatusFor(target)
   const linkedTasks = getSessionTasks(session)
   const mobileRepoName = session.repo.split('/').at(-1) ?? session.repo
 
@@ -275,17 +287,7 @@ export function ConversationPaneHeader({
               repo={session.repo}
               isMobile
               open={pullRequestListOpen}
-              onMerge={merge.openMergeConfirmation}
-              isMerging={merge.isMerging}
-              isMergeSuccessful={merge.isMergeSuccessful}
-              mergeStatus={(target) =>
-                merge.mergeActionFor(target)?.status ?? null
-              }
-              onRetryMerge={(target) => {
-                const action = merge.mergeActionFor(target)
-                if (action?.status === 'mergeFailed')
-                  merge.retryMerge(action.id)
-              }}
+              mergeStatus={mergeStatusFor}
               onOpenChange={setPullRequestListOpen}
             />
             <MobileConversationActionsMenu
@@ -399,20 +401,9 @@ export function ConversationPaneHeader({
                   repo={session.repo}
                   isMobile={false}
                   open={pullRequestListOpen}
-                  onMerge={merge.openMergeConfirmation}
-                  isMerging={merge.isMerging}
-                  isMergeSuccessful={merge.isMergeSuccessful}
-                  mergeStatus={(target) =>
-                    merge.mergeActionFor(target)?.status ?? null
-                  }
-                  onRetryMerge={(target) => {
-                    const action = merge.mergeActionFor(target)
-                    if (action?.status === 'mergeFailed')
-                      merge.retryMerge(action.id)
-                  }}
+                  mergeStatus={mergeStatusFor}
                   onOpenChange={setPullRequestListOpen}
                 />
-                {mergeAction}
                 {session.category === 'done' && onClose !== undefined ? (
                   <Button
                     className="conversation-close cursor-pointer"
@@ -437,9 +428,11 @@ export function ConversationPaneHeader({
           </div>
         </>
       )}
+      {mergeBand}
       {merge.mergeConfirmationOpen && merge.mergeTarget !== null ? (
         <PullRequestMergeConfirmation
           number={merge.mergeTarget.number}
+          repository={`${merge.mergeTarget.owner}/${merge.mergeTarget.repo}`}
           headSha={merge.mergeTarget.expectedHeadSha}
           merging={merge.isMerging(merge.mergeTarget)}
           mobile={isMobile}

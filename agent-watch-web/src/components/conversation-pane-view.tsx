@@ -2,21 +2,10 @@ import '#components/conversation-pane.css'
 import '#components/conversation-pane-view.css'
 
 import { Button } from '@fohte/ui/button'
-import {
-  type ReactNode,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react'
+import { type ReactNode, useCallback, useMemo, useRef, useState } from 'react'
 
-import {
-  formatAsyncActionTime,
-  useOptionalAsyncActionFeedback,
-} from '#async-action-feedback'
+import { useOptionalAsyncActionFeedback } from '#async-action-feedback'
 import { useAgentUsageContext } from '#components/agent-usage-context'
-import { AsyncActionItem } from '#components/async-action-item'
 import type {
   CommandOutputRefresh,
   CommandOutputStart,
@@ -33,17 +22,16 @@ import type {
   PendingPermissionActions,
   PermissionRequestIdentity,
 } from '#components/permission-card'
+import { renderConversationAsyncActionItems } from '#components/render-conversation-async-action-items'
+import { scrollToConversationStatusCard } from '#components/scroll-to-conversation-status-card'
 import { SessionLinkElapsedSecondsContext } from '#components/session-link-elapsed-seconds'
 import { SessionUsageRow } from '#components/session-usage-row'
-import { useComposerDraft } from '#components/use-composer-draft'
-import { useComposerMessage } from '#components/use-composer-message'
-import { useConversationDecisionJump } from '#components/use-conversation-decision-jump'
+import { useConversationCommandOutputHighlight } from '#components/use-conversation-command-output-highlight'
 import { useConversationMessageElements } from '#components/use-conversation-message-elements'
-import { useConversationPaneKeyboard } from '#components/use-conversation-pane-keyboard'
-import { useConversationScroll } from '#components/use-conversation-scroll'
+import { useConversationPaneComposer } from '#components/use-conversation-pane-composer'
+import { useConversationPaneInput } from '#components/use-conversation-pane-input'
+import { useConversationPaneScrolling } from '#components/use-conversation-pane-scrolling'
 import { useConversationSelectionReply } from '#components/use-conversation-selection-reply'
-import { useFileDrop } from '#components/use-file-drop'
-import { useOwnMessageKeyboardNavigation } from '#components/use-own-message-keyboard-navigation'
 import { useSessionResume } from '#components/use-session-resume'
 import { useSessionLinkTargets } from '#session-link-targets'
 import type {
@@ -178,18 +166,12 @@ export function ConversationPaneView({
   onComposerFocusRequestHandled = () => undefined,
 }: ConversationPaneViewProps) {
   const actionFeedback = useOptionalAsyncActionFeedback()
-  const commandOutputHighlightTimer = useRef<number | null>(null)
-  const commandOutputAction = actionFeedback?.actions.find(
-    (action) =>
-      actionFeedback.pendingCommandOutputActionIds.includes(action.id) &&
-      action.kind === 'command' &&
-      action.sessionId === session.id,
-  )
   const { usage } = useAgentUsageContext()
+  const [mergeBandTarget, setMergeBandTarget] = useState<HTMLDivElement | null>(
+    null,
+  )
   const sessionUsage =
     usage?.sessions.find((entry) => entry.sessionId === session.id) ?? null
-  const interruptInFlight = useRef(false)
-  const [isInterrupting, setIsInterrupting] = useState(false)
   const isEnded = actions?.message === false
   const { isPending: isResumePending, resume } = useSessionResume(
     session.id,
@@ -205,15 +187,10 @@ export function ConversationPaneView({
     () => new Date(currentYear, currentMonth, currentDay),
     [currentYear, currentMonth, currentDay],
   )
-  const { draft, updateDraft, clearDraftIfUnchanged, storageAvailable } =
-    useComposerDraft(session.id)
   const {
-    focusDraft,
-    position: selectionReplyPosition,
-    dismiss: dismissSelectionReply,
-    reply: replyToSelection,
-  } = useConversationSelectionReply({ draft, isMobile, updateDraft })
-  const {
+    draft,
+    updateDraft,
+    storageAvailable,
     attachments,
     error: attachmentError,
     isSending,
@@ -221,19 +198,23 @@ export function ConversationPaneView({
     onPasteFiles,
     removeAttachment,
     sendMessage,
-  } = useComposerMessage({
+  } = useConversationPaneComposer({
     sessionId: session.id,
-    draft,
     messageEnabled: actions?.message !== false,
     externalSending: sending,
-    clearDraftIfUnchanged,
     onAction,
   })
+  const {
+    focusDraft,
+    position: selectionReplyPosition,
+    dismiss: dismissSelectionReply,
+    reply: replyToSelection,
+  } = useConversationSelectionReply({ draft, isMobile, updateDraft })
   const {
     loadOlder,
     onScroll,
     scrollRef: conversationScrollRef,
-  } = useConversationScroll({
+  } = useConversationPaneScrolling({
     messages,
     loadingOlder,
     onLoadOlder,
@@ -242,59 +223,16 @@ export function ConversationPaneView({
     start,
     epoch,
     olderCursor,
+    decisionJump,
+    isMobile,
+    onDecisionJumpComplete,
+    onDecisionJumpSucceeded,
   })
-  useEffect(
-    () => () => {
-      if (commandOutputHighlightTimer.current !== null) {
-        window.clearTimeout(commandOutputHighlightTimer.current)
-      }
-    },
-    [],
-  )
-  useEffect(() => {
-    if (
-      loading ||
-      commandOutputAction === undefined ||
-      commandOutputAction.commandOutputIndex === undefined
-    ) {
-      return
-    }
-    const target = conversationScrollRef.current?.querySelector<HTMLElement>(
-      `[data-command-result="true"][data-conversation-index="${String(commandOutputAction.commandOutputIndex)}"]`,
-    )
-    if (target === undefined || target === null) return
-
-    target.dataset['commandOutputHighlighted'] = 'true'
-    target.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    if (commandOutputHighlightTimer.current !== null) {
-      window.clearTimeout(commandOutputHighlightTimer.current)
-    }
-    commandOutputHighlightTimer.current = window.setTimeout(() => {
-      delete target.dataset['commandOutputHighlighted']
-      commandOutputHighlightTimer.current = null
-    }, 1_500)
-    actionFeedback?.consumeCommandOutput(commandOutputAction.id)
-  }, [
-    actionFeedback,
-    commandOutputAction,
-    conversationScrollRef,
+  useConversationCommandOutputHighlight({
     loading,
     messages,
-  ])
-  useConversationDecisionJump({
-    decisionJump,
-    epoch,
-    loadingOlder,
-    loadOlder,
-    messages,
-    olderCursor,
-    onComplete: onDecisionJumpComplete,
-    onSucceeded: onDecisionJumpSucceeded,
-    start,
-  })
-  useOwnMessageKeyboardNavigation({
-    isMobile,
     scrollRef: conversationScrollRef,
+    sessionId: session.id,
   })
   const sessionLinkTargets = useSessionLinkTargets(
     sessions,
@@ -363,39 +301,28 @@ export function ConversationPaneView({
     backgroundTasks,
   })
   const returnToRequestCard = () => {
-    const cardSelector =
-      statusBandState?.kind === 'permission'
-        ? '.chat-permission-card:not(.chat-permission-denied-card)'
-        : '.chat-question-card[data-has-unanswered-question="true"]'
-    const cards =
-      conversationScrollRef.current?.querySelectorAll<HTMLElement>(cardSelector)
-    cards?.[cards.length - 1]?.scrollIntoView({
-      behavior: 'smooth',
-      block: 'center',
-    })
+    scrollToConversationStatusCard(
+      conversationScrollRef.current,
+      statusBandState?.kind === 'permission',
+    )
   }
-  const handlePasteFiles = (files: File[]) => {
-    onPasteFiles(files)
-    onClearError()
-  }
-  const interrupt = useCallback(() => {
-    if (interruptInFlight.current || actions?.interrupt !== true) return
-    interruptInFlight.current = true
-    setIsInterrupting(true)
-    const finish = () => {
-      interruptInFlight.current = false
-      setIsInterrupting(false)
-    }
-    void onAction('interrupt').then(finish, finish)
-  }, [actions?.interrupt, onAction])
-  const { isFileDragActive, onDragEnter, onDragOver, onDragLeave, onDrop } =
-    useFileDrop(handlePasteFiles)
-
-  const onComposerKeyDown = useConversationPaneKeyboard({
+  const {
+    handlePasteFiles,
+    interrupt,
+    isFileDragActive,
+    isInterrupting,
+    onComposerKeyDown,
+    onDragEnter,
+    onDragOver,
+    onDragLeave,
+    onDrop,
+  } = useConversationPaneInput({
     isMobile,
     canInterrupt: actions?.interrupt === true,
     interruptPending,
-    interrupt,
+    onAction,
+    onClearError,
+    onPasteFiles,
     updateDraft,
     sendMessage,
   })
@@ -416,6 +343,7 @@ export function ConversationPaneView({
       <ConversationPaneHeader
         key={session.id}
         session={session}
+        mergeBandTarget={mergeBandTarget}
         vibeMode={vibeMode}
         actions={actions}
         isMobile={isMobile}
@@ -474,26 +402,13 @@ export function ConversationPaneView({
         >
           {conversationMessageElements}
         </MarkdownCommandContextProvider>
-        {actionFeedback?.actions
-          .filter((action) => action.sessionId === session.id)
-          .map((action) => (
-            <AsyncActionItem
-              action={action}
-              form="line"
-              key={action.id}
-              {...(action.kind === 'command'
-                ? { time: formatAsyncActionTime(action.createdAt) }
-                : {})}
-              onCloseKeepWorktree={() => {
-                actionFeedback.closeWithWorktree(action.id)
-              }}
-              onRetry={() => {
-                actionFeedback.retry(action.id)
-              }}
-            />
-          ))}
+        {renderConversationAsyncActionItems({
+          feedback: actionFeedback,
+          sessionId: session.id,
+        })}
       </div>
 
+      <div className="conversation-merge-band-slot" ref={setMergeBandTarget} />
       {isEnded ? (
         <EndedSessionBanner
           endedAt={session.updatedAt}

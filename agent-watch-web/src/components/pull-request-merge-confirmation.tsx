@@ -2,6 +2,7 @@ import { ConfirmDialog } from '#components/confirm-dialog'
 
 type PullRequestMergeConfirmationProps = {
   number: number
+  repository: string
   headSha: string
   merging: boolean
   mobile?: boolean
@@ -11,6 +12,7 @@ type PullRequestMergeConfirmationProps = {
 
 export function PullRequestMergeConfirmation({
   number,
+  repository,
   headSha,
   merging,
   mobile = false,
@@ -20,7 +22,7 @@ export function PullRequestMergeConfirmation({
   return (
     <ConfirmDialog
       title="Merge this pull request?"
-      description={`Merge PR #${String(number)} using the confirmed head commit?`}
+      description={`Merge PR #${String(number)} in ${repository} using the confirmed head commit?`}
       confirmLabel="Confirm merge"
       pendingLabel="Merging…"
       pending={merging}

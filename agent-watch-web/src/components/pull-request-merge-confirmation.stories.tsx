@@ -6,6 +6,7 @@ const meta = {
   component: PullRequestMergeConfirmation,
   args: {
     number: 42,
+    repository: 'example-org/example-service',
     headSha: 'confirmed-example-head',
     merging: false,
     onCancel: () => undefined,

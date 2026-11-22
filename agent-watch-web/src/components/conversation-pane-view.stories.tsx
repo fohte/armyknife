@@ -41,6 +41,20 @@ const endedSession: Session = {
   updatedAt: '2026-01-01T05:32:00.000Z',
 }
 
+const endedSessionWithMerge = {
+  ...endedSession,
+  pullRequest: {
+    number: 73,
+    state: 'Open',
+    owner: 'example-org',
+    repo: 'example-service',
+    title: 'Prepare the delivery retry change',
+    headSha: 'fixture-merge-head',
+    ciState: 'Successful',
+    isCurrentBranch: true,
+  },
+} satisfies Session
+
 const endedActions: SessionActions = {
   ...actions,
   message: false,
@@ -1000,6 +1014,24 @@ export const EndedMobileSessionIsResuming: Story = {
     actions: endedActions,
     isMobile: true,
     isResuming: true,
+  },
+  decorators: [iPhoneViewportDecorator],
+}
+
+export const EndedSessionCanStillMergeItsPullRequest: Story = {
+  name: 'The merge band appears above the ended session notice',
+  args: {
+    session: endedSessionWithMerge,
+    actions: endedActions,
+  },
+}
+
+export const EndedIPhoneSessionCanStillMergeItsPullRequest: Story = {
+  name: 'The iPhone merge band appears above the ended session notice',
+  args: {
+    isMobile: true,
+    session: endedSessionWithMerge,
+    actions: endedActions,
   },
   decorators: [iPhoneViewportDecorator],
 }
