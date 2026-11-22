@@ -79,7 +79,8 @@ html[data-mobile-layout='true'] {
 }
 
 .agent-watch-shell[data-layout='mobile'] .inbox-view > .mobile-inbox-brand,
-.story-mobile-layout .inbox-view > .mobile-inbox-brand {
+.story-mobile-layout .inbox-view > .mobile-inbox-brand,
+.story-mobile-layout > .mobile-inbox-brand {
   display: flex;
   height: auto;
   flex: 0 0 auto;
