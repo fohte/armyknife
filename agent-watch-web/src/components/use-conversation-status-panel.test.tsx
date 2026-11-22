@@ -77,6 +77,9 @@ async function waitForState(condition: () => boolean) {
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   container = document.createElement('div')
+  container.style.display = 'flex'
+  container.style.width = '480px'
+  container.style.height = '720px'
   document.body.append(container)
   root = createRoot(container)
 })
@@ -466,6 +469,11 @@ it('saves the edited document and sends the same edits before finishing review',
       .getByRole('textbox', { name: 'Markdown body' })
       .fill('Edited body.')
   })
+  await waitForState(
+    () =>
+      container.querySelector('.review-document-editor .cm-content')
+        ?.textContent === 'Edited body.',
+  )
   await waitForState(
     () =>
       container.querySelector('.review-document-body')?.textContent ===
