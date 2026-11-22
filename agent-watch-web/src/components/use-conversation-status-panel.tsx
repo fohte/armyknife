@@ -147,6 +147,7 @@ export function useConversationStatusPanel({
   const [selectedDecisionSeq, setSelectedDecisionSeq] = useState<number | null>(
     null,
   )
+  const [decisionJump, setDecisionJump] = useState<{ seq: number } | null>(null)
   const [reviewDocumentState, setReviewDocumentState] =
     useState<ReviewDocumentState | null>(null)
   const reviewDocumentStateRef = useRef<ReviewDocumentState | null>(null)
@@ -464,7 +465,11 @@ export function useConversationStatusPanel({
                 session={session}
                 selectedSeq={selectedDecision?.seq ?? null}
                 showReviewed={isMobile}
-                onSelect={setSelectedDecisionSeq}
+                onSelect={(seq) => {
+                  setSelectedDecisionSeq(seq)
+                  setDecisionJump({ seq })
+                  if (isMobile) onCloseStatusPanel()
+                }}
                 onOk={(seq) => onAction(`decisions/${String(seq)}/ok`)}
                 onChange={(seq, comment) =>
                   onAction(`decisions/${String(seq)}/change`, { comment })
@@ -518,6 +523,7 @@ export function useConversationStatusPanel({
     fullscreenWebUi,
     mobileWebUi,
     onSelectDecision: setSelectedDecisionSeq,
+    decisionJump,
     onTabChange: setActivePanelTabId,
     selectedDecisionSeq: selectedDecision?.seq ?? null,
     tabs,

@@ -2,7 +2,14 @@ import '#components/conversation-pane.css'
 import '#components/conversation-pane-view.css'
 
 import { Button } from '@fohte/ui/button'
-import { type ReactNode, useCallback, useMemo, useRef, useState } from 'react'
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 
 import { useOptionalAsyncActionFeedback } from '#async-action-feedback'
 import { useAgentUsageContext } from '#components/agent-usage-context'
@@ -90,6 +97,7 @@ type ConversationPaneViewProps = {
   mobileWebUi?: ReactNode
   mobileUpdateNotice?: ReactNode
   selectedDecisionSeq?: number | null
+  decisionJump?: { seq: number } | null
   onToggleStatusPanel?: () => void
   onOpenTasks?: () => void
   onSelectDecision?: (seq: number) => void
@@ -142,6 +150,7 @@ export function ConversationPaneView({
   mobileWebUi = null,
   mobileUpdateNotice,
   selectedDecisionSeq = null,
+  decisionJump = null,
   onToggleStatusPanel = () => undefined,
   onOpenTasks = () => undefined,
   onSelectDecision = () => undefined,
@@ -217,6 +226,12 @@ export function ConversationPaneView({
     isMobile,
     scrollRef: conversationScrollRef,
   })
+  useEffect(() => {
+    if (decisionJump === null) return
+    document
+      .getElementById(`decision-row-${String(decisionJump.seq)}`)
+      ?.scrollIntoView({ block: 'center' })
+  }, [decisionJump])
   const sessionLinkTargets = useSessionLinkTargets(
     sessions,
     providedSessionLinkTargets,
