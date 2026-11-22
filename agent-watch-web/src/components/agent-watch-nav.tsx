@@ -54,7 +54,6 @@ type AgentWatchNavProps = {
   activityCount?: number
   activityRunning?: boolean
   activityFailed?: boolean
-  activityOpen?: boolean
 }
 
 export function AgentWatchNav({
@@ -80,7 +79,6 @@ export function AgentWatchNav({
   activityCount,
   activityRunning,
   activityFailed,
-  activityOpen,
 }: AgentWatchNavProps) {
   const { usage, error } = useAgentUsageContext()
   const actionFeedback = useOptionalAsyncActionFeedback()
@@ -319,7 +317,6 @@ export function AgentWatchNav({
           }}
           {...(activityCount === undefined ? {} : { activityCount })}
           {...(activityFailed === undefined ? {} : { failed: activityFailed })}
-          {...(activityOpen === undefined ? {} : { active: activityOpen })}
         />
       </div>
       <QuotaPanel

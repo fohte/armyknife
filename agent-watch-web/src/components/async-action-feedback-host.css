@@ -44,7 +44,6 @@
 .async-action-activity.is-anchored {
   position: fixed;
   right: auto;
-  bottom: 148px;
   max-height: min(600px, calc(100dvh - 172px));
 }
 .async-action-activity > header {

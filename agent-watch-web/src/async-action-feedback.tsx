@@ -75,7 +75,7 @@ type AsyncActionFeedbackValue = {
   toastIds: readonly number[]
   toastRef: RefObject<HTMLDivElement | null>
   activityOpen: boolean
-  activityPosition: { left: number } | null
+  activityPosition: { left: number; bottom: number } | null
   toastBottomOffset: number | null
   setToastBottomOffset: (offset: number | null) => void
   pendingMergeRetryActionIds: readonly number[]
@@ -109,6 +109,7 @@ export function AsyncActionFeedbackProvider({
   const [activityOpen, setActivityOpen] = useState(false)
   const [activityPosition, setActivityPosition] = useState<{
     left: number
+    bottom: number
   } | null>(null)
   const [toastBottomOffset, setToastBottomOffset] = useState<number | null>(
     null,
@@ -314,11 +315,15 @@ export function AsyncActionFeedbackProvider({
   const openActivity = useCallback(
     (actionId?: number, anchor?: HTMLElement) => {
       setSelectedActionId(actionId ?? null)
-      setActivityPosition(
-        anchor === undefined
-          ? null
-          : { left: Math.round(anchor.getBoundingClientRect().right + 16) },
-      )
+      if (anchor === undefined) {
+        setActivityPosition(null)
+      } else {
+        const rect = anchor.getBoundingClientRect()
+        setActivityPosition({
+          left: Math.round(rect.right + 16),
+          bottom: Math.round(window.innerHeight - rect.bottom),
+        })
+      }
       setActivityOpen(true)
     },
     [],

@@ -818,6 +818,7 @@ it('opens desktop Activity beside its row below the navigation list', async () =
     throw new Error('Desktop navigation Activity is missing')
   }
 
+  quota.style.height = '200px'
   const anchor = activityButton.getBoundingClientRect()
   await act(async () => {
     await userEvent.click(activityButton)
@@ -847,7 +848,7 @@ it('opens desktop Activity beside its row below the navigation list', async () =
       activityToQuotaGap: quotaRect.top - activityRect.bottom,
       quotaBottomGap: navRect.bottom - quotaRect.bottom,
       dialogLeftGap: dialogRect.left - anchor.right,
-      dialogBottomGap: window.innerHeight - dialogRect.bottom,
+      dialogToActivityBottomGap: dialogRect.bottom - anchor.bottom,
       backdropColor: getComputedStyle(backdrop).backgroundColor,
     }
   }
@@ -862,7 +863,7 @@ it('opens desktop Activity beside its row below the navigation list', async () =
     activityToQuotaGap: 4,
     quotaBottomGap: 0,
     dialogLeftGap: 16,
-    dialogBottomGap: 148,
+    dialogToActivityBottomGap: 0,
     backdropColor: 'rgba(0, 0, 0, 0)',
   })
 })

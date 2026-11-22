@@ -10,7 +10,7 @@ type AsyncActionFeedbackHostProps = {
   toastIds: readonly number[]
   toastRef?: RefObject<HTMLDivElement | null>
   activityOpen: boolean
-  activityPosition?: { left: number } | null
+  activityPosition?: { left: number; bottom: number } | null
   toastBottomOffset: number | null
   selectedActionId: number | null
   retry: (id: number) => void
@@ -118,7 +118,10 @@ export function AsyncActionFeedbackHost({
             style={
               activityPosition === null
                 ? undefined
-                : { left: `${String(activityPosition.left)}px` }
+                : {
+                    left: `${String(activityPosition.left)}px`,
+                    bottom: `${String(activityPosition.bottom)}px`,
+                  }
             }
             onMouseDown={(event) => {
               event.stopPropagation()

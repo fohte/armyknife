@@ -116,7 +116,6 @@ function withDesktopLayout(
           onSelectToday={() => undefined}
           onSelectSession={() => undefined}
           onOpenPalette={() => undefined}
-          activityOpen
           activityCount={count}
           activityFailed={failed}
         />
@@ -346,7 +345,7 @@ export const DesktopActivityShowsEmptyState: Story = {
     actions: [],
     toastIds: [],
     activityOpen: true,
-    activityPosition: { left: 248 },
+    activityPosition: { left: 248, bottom: 148 },
   },
   decorators: [withDesktopLayout],
 }
@@ -364,7 +363,7 @@ export const DesktopActivityShowsResults: Story = {
     ],
     toastIds: [],
     activityOpen: true,
-    activityPosition: { left: 248 },
+    activityPosition: { left: 248, bottom: 148 },
   },
   decorators: [withDesktopLayout],
 }
@@ -380,7 +379,7 @@ export const DesktopActivityShowsCloseFailure: Story = {
     ],
     toastIds: [],
     activityOpen: true,
-    activityPosition: { left: 248 },
+    activityPosition: { left: 248, bottom: 148 },
   },
   decorators: [withDesktopLayout],
 }
