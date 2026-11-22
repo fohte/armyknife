@@ -338,9 +338,11 @@ export function QuestionCard({
             <div className="chat-question-choices">
               {question.choices.map((choice, choiceIndex) => {
                 const isSelected = selectedLabels.includes(choice.label)
+                const description = choice.description ?? ''
+                const hasDescription = description.length > 0
                 return (
                   <div
-                    className={`chat-question-choice-row${isSelected ? ' is-selected' : hasRecordedAnswer ? ' is-unselected' : ''}`}
+                    className={`chat-question-choice-row${isSelected ? ' is-selected' : hasRecordedAnswer ? ' is-unselected' : ''}${hasDescription ? ' has-description' : ''}`}
                     key={`${String(choiceIndex)}-${choice.label}`}
                   >
                     <Button
@@ -383,10 +385,9 @@ export function QuestionCard({
                         </span>
                       ) : null}
                     </Button>
-                    {choice.description !== undefined &&
-                    choice.description.length > 0 ? (
+                    {hasDescription ? (
                       <div className="chat-question-choice-description">
-                        <MarkdownMessage>{choice.description}</MarkdownMessage>
+                        <MarkdownMessage>{description}</MarkdownMessage>
                       </div>
                     ) : null}
                   </div>

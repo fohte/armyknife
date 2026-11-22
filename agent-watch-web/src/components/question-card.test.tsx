@@ -344,10 +344,18 @@ it('frames a recorded choice with its description without doubling dividers', ()
   const description = requireElement(
     selectedRow.querySelector<HTMLElement>('.chat-question-choice-description'),
   )
+  const descriptionParagraph = requireElement(
+    description.querySelector<HTMLParagraphElement>('p'),
+  )
+  const choiceContent = requireElement(
+    selectedButton.querySelector<HTMLElement>('.chat-question-choice-content'),
+  )
   const rowStyle = getComputedStyle(selectedRow)
   const choicesStyle = getComputedStyle(choices)
   const unselectedRowStyle = getComputedStyle(unselectedRow)
   const buttonStyle = getComputedStyle(selectedButton)
+  const choiceContentStyle = getComputedStyle(choiceContent)
+  const paragraphStyle = getComputedStyle(descriptionParagraph)
 
   const getActual = () => ({
     rowBorder: [
@@ -366,6 +374,13 @@ it('frames a recorded choice with its description without doubling dividers', ()
       buttonStyle.borderLeftWidth,
     ],
     buttonBackground: buttonStyle.backgroundColor,
+    buttonMinHeight: buttonStyle.minHeight,
+    choiceContentPaddingBottom: choiceContentStyle.paddingBottom,
+    descriptionParagraph: {
+      margin: paragraphStyle.margin,
+      color: paragraphStyle.color,
+      fontSize: paragraphStyle.fontSize,
+    },
     descriptionInsideSelectedRow: description.parentElement === selectedRow,
   })
   expect(getActual()).toEqual({
@@ -375,6 +390,13 @@ it('frames a recorded choice with its description without doubling dividers', ()
     unselectedRowBorderTop: '0px',
     buttonBorder: ['0px', '0px', '0px', '0px'],
     buttonBackground: 'rgba(0, 0, 0, 0)',
+    buttonMinHeight: '0px',
+    choiceContentPaddingBottom: '0px',
+    descriptionParagraph: {
+      margin: '0px',
+      color: 'rgb(161, 161, 170)',
+      fontSize: '11.5px',
+    },
     descriptionInsideSelectedRow: true,
   })
 })

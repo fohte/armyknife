@@ -155,11 +155,45 @@ export const ChoiceDescriptionShowsCodeBlock: Story = {
   },
 }
 
+export const ChoiceDescriptionBeforeAnswer: Story = {
+  name: 'A question shows its choice description before an answer',
+  decorators: [
+    (Story, { args }) => (
+      <div
+        className={args.isMobile ? 'conversation-pane' : undefined}
+        data-mobile={args.isMobile ? 'true' : undefined}
+        style={{ width: 'min(672px, calc(100vw - 32px))', margin: '0 auto' }}
+      >
+        <Story />
+      </div>
+    ),
+  ],
+  args: {
+    questions: [
+      {
+        header: 'Retry limit',
+        question: 'How many attempts should run?',
+        choices: [
+          {
+            label: 'Three attempts',
+            description: 'Stop after three failures.',
+          },
+          { label: 'Five attempts', description: 'Continue for longer.' },
+        ],
+        multi_select: false,
+        answer: null,
+      },
+    ],
+  },
+}
+
 export const ChoiceDescriptionAfterAnswer: Story = {
   name: 'An answered question keeps its selected choice and description',
   decorators: [
-    (Story) => (
+    (Story, { args }) => (
       <div
+        className={args.isMobile ? 'conversation-pane' : undefined}
+        data-mobile={args.isMobile ? 'true' : undefined}
         style={{ width: 'min(672px, calc(100vw - 32px))', margin: '0 auto' }}
       >
         <Story />
