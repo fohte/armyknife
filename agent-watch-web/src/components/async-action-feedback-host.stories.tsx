@@ -84,8 +84,8 @@ function withDesktopLayout(
       style={{
         position: 'relative',
         display: 'flex',
-        width: 1440,
-        height: 900,
+        width: '100vw',
+        height: '100vh',
         overflow: 'hidden',
         background: 'var(--aw-bg-app)',
       }}
