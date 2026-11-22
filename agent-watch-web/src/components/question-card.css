@@ -25,9 +25,12 @@
   opacity: 0.45;
 }
 
-.chat-question-choices [data-slot='button'].is-selected {
+.chat-question-choice-row.is-selected {
   border: 1px solid var(--aw-color-neutral);
   background: var(--aw-bg-surface);
+}
+
+.chat-question-choices [data-slot='button'].is-selected {
   color: var(--aw-text-body);
   opacity: 1;
 }

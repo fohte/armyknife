@@ -1,3 +1,5 @@
+import '#index.css'
+
 import type { ComponentProps } from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
@@ -298,6 +300,68 @@ it('renders copy controls outside a single-choice option description button', ()
   expect(snapshot()).toEqual({
     copyButtonRendered: true,
     copyButtonNestedInChoice: false,
+  })
+})
+
+it('frames a recorded choice together with its description', () => {
+  renderQuestion(
+    props({
+      canAnswer: false,
+      questions: [
+        {
+          header: 'Retry limit',
+          question: 'How many attempts should run?',
+          choices: [
+            {
+              label: 'Three attempts',
+              description: 'Stop after three failures.',
+            },
+            { label: 'Five attempts', description: 'Continue for longer.' },
+          ],
+          multi_select: false,
+          answer: 'Three attempts',
+        },
+      ],
+    }),
+  )
+
+  const selectedRow = requireElement(
+    container.querySelector<HTMLElement>(
+      '.chat-question-choice-row.is-selected',
+    ),
+  )
+  const selectedButton = requireElement(
+    selectedRow.querySelector<HTMLButtonElement>('button'),
+  )
+  const description = requireElement(
+    selectedRow.querySelector<HTMLElement>('.chat-question-choice-description'),
+  )
+  const rowStyle = getComputedStyle(selectedRow)
+  const buttonStyle = getComputedStyle(selectedButton)
+
+  const getActual = () => ({
+    rowBorder: [
+      rowStyle.borderTopWidth,
+      rowStyle.borderRightWidth,
+      rowStyle.borderBottomWidth,
+      rowStyle.borderLeftWidth,
+    ],
+    rowBackground: rowStyle.backgroundColor,
+    buttonBorder: [
+      buttonStyle.borderTopWidth,
+      buttonStyle.borderRightWidth,
+      buttonStyle.borderBottomWidth,
+      buttonStyle.borderLeftWidth,
+    ],
+    buttonBackground: buttonStyle.backgroundColor,
+    descriptionInsideSelectedRow: description.parentElement === selectedRow,
+  })
+  expect(getActual()).toEqual({
+    rowBorder: ['1px', '1px', '1px', '1px'],
+    rowBackground: 'rgb(20, 20, 20)',
+    buttonBorder: ['0px', '0px', '0px', '0px'],
+    buttonBackground: 'rgba(0, 0, 0, 0)',
+    descriptionInsideSelectedRow: true,
   })
 })
 
