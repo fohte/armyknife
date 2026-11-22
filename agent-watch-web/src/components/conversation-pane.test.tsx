@@ -5046,7 +5046,7 @@ it('clears a mobile decision jump when no older messages remain', async () => {
     return Promise.resolve(jsonResponse({}))
   })
   vi.stubGlobal('fetch', fetcher)
-  const decisionRowLookup = vi.spyOn(document, 'getElementById')
+  const scrollIntoView = vi.spyOn(HTMLElement.prototype, 'scrollIntoView')
 
   function MobileConversationHarness() {
     const [statusPanelOpen, setStatusPanelOpen] = useState(true)
@@ -5091,12 +5091,6 @@ it('clears a mobile decision jump when no older messages remain', async () => {
       ),
     )
   })
-  await waitForState(
-    () =>
-      decisionRowLookup.mock.calls.filter(
-        ([elementId]) => elementId === 'decision-row-12',
-      ).length === 1,
-  )
   await act(async () => {
     await userEvent.click(
       requireElement(
@@ -5112,15 +5106,170 @@ it('clears a mobile decision jump when no older messages remain', async () => {
     statusPanelVisible:
       container.querySelector('.mobile-session-status-overlay') !== null,
     decisionVisible: container.querySelector('#decision-row-12') !== null,
-    decisionRowLookups: decisionRowLookup.mock.calls.filter(
-      ([elementId]) => elementId === 'decision-row-12',
-    ).length,
+    scrollCalls: scrollIntoView.mock.calls,
   })
   expect(snapshot()).toEqual({
     statusPanelVisible: true,
     decisionVisible: true,
-    decisionRowLookups: 1,
+    scrollCalls: [],
   })
+})
+
+it('does not retry a mobile decision jump after older history fails', async () => {
+  const decision: ChatItem = {
+    type: 'decision',
+    seq: 12,
+    title: 'Keep retry limits predictable',
+    why: 'A fixed limit prevents repeated delivery attempts.',
+    considered: ['Retry until the request succeeds'],
+    easyToChange: 'Update one worker setting.',
+    review: null,
+    createdAt: '2026-11-11T03:25:59Z',
+  }
+  const message: ChatItem = { type: 'assistant', text: 'A current message.' }
+  let olderRequestCount = 0
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.endsWith('/messages?before=100&limit=100')) {
+      olderRequestCount += 1
+      if (olderRequestCount === 1) {
+        return Promise.reject(new Error('History unavailable'))
+      }
+      return Promise.resolve(
+        jsonResponse(
+          messagesResponse([], [], {
+            start: 0,
+            total: 101,
+            decisions: [decision],
+          }),
+        ),
+      )
+    }
+    if (url.endsWith('/messages?limit=100')) {
+      return Promise.resolve(
+        jsonResponse(
+          messagesResponse([message], [], {
+            start: 100,
+            total: 101,
+            decisions: [decision],
+          }),
+        ),
+      )
+    }
+    if (url.includes('/messages?from=')) {
+      return Promise.resolve(
+        jsonResponse(
+          messagesResponse([message, decision], [], {
+            start: 100,
+            total: 102,
+            decisions: [decision],
+          }),
+        ),
+      )
+    }
+    if (url.endsWith('/actions')) {
+      return Promise.resolve(jsonResponse(actions))
+    }
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+  const scrollIntoView = vi.spyOn(HTMLElement.prototype, 'scrollIntoView')
+
+  function MobileConversationHarness() {
+    const [statusPanelOpen, setStatusPanelOpen] = useState(true)
+    const [refreshKey, setRefreshKey] = useState(0)
+    return (
+      <>
+        <button
+          type="button"
+          aria-label="Refresh conversation"
+          onClick={() => {
+            setRefreshKey((current) => current + 1)
+          }}
+        />
+        <ConversationPane
+          session={{ ...session, decisionCount: 1, unreviewedDecisionCount: 1 }}
+          shouldSkipSessionTreeFetch
+          initialSessionTree={[]}
+          refreshKey={refreshKey}
+          sessionTreeRefreshKey={0}
+          onSelectSession={() => undefined}
+          isMobile
+          statusPanelOpen={statusPanelOpen}
+          onCloseStatusPanel={() => {
+            setStatusPanelOpen(false)
+          }}
+        />
+      </>
+    )
+  }
+
+  root = createRoot(container)
+  act(() => root?.render(<MobileConversationHarness />))
+  await waitForState(
+    () => container.querySelector('.decision-card--panel') !== null,
+  )
+  await act(async () => {
+    await userEvent.click(
+      requireElement(
+        container.querySelector<HTMLButtonElement>(
+          '.decision-card--panel .decision-panel-card-heading',
+        ),
+      ),
+    )
+  })
+  await waitForState(() => {
+    const loadOlderButton = container.querySelector<HTMLButtonElement>(
+      '.conversation-load-older',
+    )
+    return (
+      loadOlderButton !== null &&
+      !loadOlderButton.disabled &&
+      loadOlderButton.textContent === 'Load older messages' &&
+      container.querySelector('[role="alert"]')?.textContent ===
+        'History unavailable'
+    )
+  })
+  const afterFailure = {
+    statusPanelVisible:
+      container.querySelector('.mobile-session-status-overlay') !== null,
+    olderRequestCount,
+    loadOlderButton: container.querySelector('.conversation-load-older')
+      ?.textContent,
+  }
+  await act(async () => {
+    await userEvent.click(
+      requireElement(
+        container.querySelector<HTMLButtonElement>(
+          'button[aria-label="Refresh conversation"]',
+        ),
+      ),
+    )
+  })
+  await waitForState(() => container.querySelector('#decision-row-12') !== null)
+
+  const afterRefresh = {
+    statusPanelVisible:
+      container.querySelector('.mobile-session-status-overlay') !== null,
+    decisionVisible: container.querySelector('#decision-row-12') !== null,
+    olderRequestCount,
+    scrollCalls: scrollIntoView.mock.calls,
+  }
+  const expected = {
+    afterFailure: {
+      statusPanelVisible: true,
+      olderRequestCount: 1,
+      loadOlderButton: 'Load older messages',
+    },
+    afterRefresh: {
+      statusPanelVisible: true,
+      decisionVisible: true,
+      olderRequestCount: 1,
+      scrollCalls: [],
+    },
+  }
+  const snapshot = () => ({ afterFailure, afterRefresh })
+  expect(snapshot()).toEqual(expected)
 })
 
 it('selects Running by default and switches to Decisions from its tab', () => {

@@ -226,29 +226,58 @@ export function ConversationPaneView({
     epoch,
     olderCursor,
   })
+  const decisionJumpLoadAttempt = useRef<{
+    epoch: string | undefined
+    olderCursor: string | undefined
+    start: number
+  } | null>(null)
   useOwnMessageKeyboardNavigation({
     isMobile,
     scrollRef: conversationScrollRef,
   })
   useEffect(() => {
-    if (decisionJump === null) return
+    if (decisionJump === null) {
+      decisionJumpLoadAttempt.current = null
+      return
+    }
     const decisionRow = document.getElementById(
       `decision-row-${String(decisionJump.seq)}`,
     )
     if (decisionRow !== null) {
+      decisionJumpLoadAttempt.current = null
       decisionRow.scrollIntoView({ block: 'center' })
       onDecisionJumpSucceeded()
       return
     }
+    const previousAttempt = decisionJumpLoadAttempt.current
+    if (previousAttempt !== null) {
+      if (loadingOlder) return
+      const pageAdvanced =
+        previousAttempt.start !== start ||
+        previousAttempt.epoch !== epoch ||
+        previousAttempt.olderCursor !== olderCursor
+      decisionJumpLoadAttempt.current = null
+      if (!pageAdvanced) {
+        onDecisionJumpComplete()
+        return
+      }
+    }
     if (start > 0 || (epoch !== undefined && olderCursor != null)) {
+      decisionJumpLoadAttempt.current = {
+        epoch,
+        olderCursor,
+        start,
+      }
       loadOlder()
       return
     }
+    decisionJumpLoadAttempt.current = null
     onDecisionJumpComplete()
   }, [
     decisionJump,
     epoch,
     loadOlder,
+    loadingOlder,
     messages,
     olderCursor,
     onDecisionJumpComplete,
