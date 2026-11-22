@@ -27,59 +27,74 @@ afterEach(() => {
 
 it.each([
   {
-    label: 'an empty Activity button',
-    activityCount: 0,
+    label: 'an idle phone drawer entry',
+    props: { activityCount: 0, drawer: true },
     expected: {
       ariaExpanded: 'false',
       ariaHasPopup: 'dialog',
       ariaLabel: 'Activity, no actions yet',
       count: null,
-      className: 'async-action-activity-button is-empty',
+      className: 'async-action-activity-button is-drawer is-empty',
+      iconSize: '16',
+      height: '44px',
+      borderTopWidth: '0px',
     },
   },
   {
-    label: 'Activity with one result',
-    activityCount: 1,
+    label: 'a running phone drawer entry',
+    props: { activityCount: 2, drawer: true, isRunning: true },
     expected: {
       ariaExpanded: 'false',
       ariaHasPopup: 'dialog',
-      ariaLabel: 'Activity, results available',
-      count: '1',
-      className: 'async-action-activity-button',
+      ariaLabel: 'Activity, 1 running',
+      count: '2',
+      className: 'async-action-activity-button is-drawer',
+      iconSize: '16',
+      height: '44px',
+      borderTopWidth: '0px',
     },
   },
-])(
-  '$label remains available in the navigation',
-  ({ activityCount, expected }) => {
-    root = createRoot(container)
-    act(() => {
-      root?.render(
-        <ActivityButton
-          activityCount={activityCount}
-          onOpenActivity={() => undefined}
-        />,
-      )
-    })
-
-    const button = container.querySelector<HTMLButtonElement>(
-      '.async-action-activity-button',
-    )
-    const snapshot = () =>
-      button === null
-        ? null
-        : {
-            ariaExpanded: button.getAttribute('aria-expanded'),
-            ariaHasPopup: button.getAttribute('aria-haspopup'),
-            ariaLabel: button.getAttribute('aria-label'),
-            count:
-              button.querySelector('.async-action-activity-state')
-                ?.textContent ?? null,
-            className: button.className,
-          }
-
-    expect(snapshot()).toEqual(expected)
+  {
+    label: 'a failed phone drawer entry',
+    props: { activityCount: 2, drawer: true, failed: true },
+    expected: {
+      ariaExpanded: 'false',
+      ariaHasPopup: 'dialog',
+      ariaLabel: 'Activity, failed actions',
+      count: '2',
+      className: 'async-action-activity-button is-drawer',
+      iconSize: '16',
+      height: '44px',
+      borderTopWidth: '0px',
+    },
   },
-)
+])('$label shows the matching state', ({ props, expected }) => {
+  root = createRoot(container)
+  act(() => {
+    root?.render(<ActivityButton {...props} onOpenActivity={() => undefined} />)
+  })
+
+  const button = container.querySelector<HTMLButtonElement>(
+    '.async-action-activity-button',
+  )
+  const snapshot = () =>
+    button === null
+      ? null
+      : {
+          ariaExpanded: button.getAttribute('aria-expanded'),
+          ariaHasPopup: button.getAttribute('aria-haspopup'),
+          ariaLabel: button.getAttribute('aria-label'),
+          iconSize: button.querySelector('svg')?.getAttribute('width'),
+          height: getComputedStyle(button).height,
+          borderTopWidth: getComputedStyle(button).borderTopWidth,
+          count:
+            button.querySelector('.async-action-activity-state')?.textContent ??
+            null,
+          className: button.className,
+        }
+
+  expect(snapshot()).toEqual(expected)
+})
 
 it('closes empty Activity with Escape on desktop', async () => {
   await page.viewport(1280, 800)

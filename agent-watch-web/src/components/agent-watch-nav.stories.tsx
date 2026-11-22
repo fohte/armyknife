@@ -156,19 +156,85 @@ export const RecentSessionsAppearOnMobile: Story = {
   },
 }
 
-export const MobileNavigationShowsFailedActivity: Story = {
-  name: 'The mobile navigation marks Inbox while Activity has a failure',
+export const PhoneDrawerShowsActivityBeforeAnyAction: Story = {
+  name: 'The phone drawer shows muted Activity before any actions run.',
+  args: { isMobile: true, activityCount: 0 },
+  parameters: { layout: 'fullscreen' },
+  decorators: [
+    (StoryComponent) => (
+      <div
+        style={{
+          display: 'flex',
+          width: 320,
+          height: 844,
+          overflow: 'hidden',
+          background: 'var(--aw-bg-app)',
+        }}
+      >
+        <StoryComponent />
+      </div>
+    ),
+  ],
+}
+
+export const PhoneDrawerShowsRecentActivity: Story = {
+  name: 'The phone drawer shows the count of recent results.',
+  args: { isMobile: true, activityCount: 3 },
+  parameters: { layout: 'fullscreen' },
+  decorators: [
+    (StoryComponent) => (
+      <div
+        style={{
+          display: 'flex',
+          width: 320,
+          height: 844,
+          overflow: 'hidden',
+          background: 'var(--aw-bg-app)',
+        }}
+      >
+        <StoryComponent />
+      </div>
+    ),
+  ],
+}
+
+export const PhoneDrawerShowsRunningActivity: Story = {
+  name: 'The phone drawer marks Activity while an action is running.',
+  args: { isMobile: true, activityCount: 1, activityRunning: true },
+  parameters: { layout: 'fullscreen' },
+  decorators: [
+    (StoryComponent) => (
+      <div
+        style={{
+          display: 'flex',
+          width: 320,
+          height: 844,
+          overflow: 'hidden',
+          background: 'var(--aw-bg-app)',
+        }}
+      >
+        <StoryComponent />
+      </div>
+    ),
+  ],
+}
+
+export const PhoneDrawerShowsFailedActivity: Story = {
+  name: 'The phone drawer marks Inbox and Activity after a failure.',
   args: {
     isMobile: true,
     activityCount: 2,
     activityFailed: true,
   },
+  parameters: { layout: 'fullscreen' },
   decorators: [
     (StoryComponent) => (
       <div
         style={{
+          display: 'flex',
           width: '320px',
           height: '844px',
+          overflow: 'hidden',
           background: 'var(--aw-bg-app)',
         }}
       >
