@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.862](https://github.com/fohte/armyknife/compare/v0.1.861...v0.1.862) (2026-11-22)
+
+
+### Features
+
+* **agent-watch-web:** centralize merge entry ([#2116](https://github.com/fohte/armyknife/issues/2116)) ([e14c7a8](https://github.com/fohte/armyknife/commit/e14c7a8e34cb5b914144ed686a23d764675235b8))
+
 ## [0.1.861](https://github.com/fohte/armyknife/compare/v0.1.860...v0.1.861) (2026-11-22)
 
 
