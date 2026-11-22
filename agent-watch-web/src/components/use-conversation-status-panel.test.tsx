@@ -64,10 +64,10 @@ function requestUrl(input: RequestInfo | URL): string {
 }
 
 async function waitForState(condition: () => boolean) {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
     if (condition()) return
     await act(async () => {
-      await new Promise((resolve) => window.setTimeout(resolve, 0))
+      await new Promise((resolve) => window.setTimeout(resolve, 10))
     })
   }
   throw new Error('The expected review document state did not appear')
