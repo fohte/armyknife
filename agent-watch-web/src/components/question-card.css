@@ -1,6 +1,7 @@
 .chat-question-choices {
   display: flex;
   flex-direction: column;
+  --chat-question-shortcut-width: 7.2px;
 }
 
 .chat-question-choice-row:first-child:not(.is-selected) {
@@ -26,6 +27,10 @@
 
 .chat-question-choice-row.has-description .chat-question-choice-content {
   padding-bottom: 0;
+}
+
+.chat-question-choice-row.has-shortcut.has-description [data-slot='button'] {
+  align-items: baseline;
 }
 
 .chat-question-choice-row:not(.is-selected)
@@ -63,15 +68,21 @@
 }
 
 .chat-question-choices kbd {
+  width: var(--chat-question-shortcut-width);
   color: var(--aw-text-muted);
   font-family: var(--font-mono);
   font-size: 12px;
+  text-align: center;
 }
 
 .chat-question-choice-description {
   padding: 0 16px 8px;
   color: var(--aw-text-muted);
   font-size: 12px;
+}
+
+.chat-question-choice-row.has-shortcut .chat-question-choice-description {
+  padding-left: calc(16px + 12px + var(--chat-question-shortcut-width));
 }
 
 .chat-question-card .chat-question-choice-description p {

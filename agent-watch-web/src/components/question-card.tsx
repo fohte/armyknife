@@ -340,9 +340,10 @@ export function QuestionCard({
                 const isSelected = selectedLabels.includes(choice.label)
                 const description = choice.description ?? ''
                 const hasDescription = description.length > 0
+                const hasShortcut = showNumberShortcuts && choiceIndex < 9
                 return (
                   <div
-                    className={`chat-question-choice-row${isSelected ? ' is-selected' : hasRecordedAnswer ? ' is-unselected' : ''}${hasDescription ? ' has-description' : ''}`}
+                    className={`chat-question-choice-row${isSelected ? ' is-selected' : hasRecordedAnswer ? ' is-unselected' : ''}${hasDescription ? ' has-description' : ''}${hasShortcut ? ' has-shortcut' : ''}`}
                     key={`${String(choiceIndex)}-${choice.label}`}
                   >
                     <Button
@@ -365,9 +366,7 @@ export function QuestionCard({
                         }
                       }}
                     >
-                      {showNumberShortcuts && choiceIndex < 9 ? (
-                        <kbd>{choiceIndex + 1}</kbd>
-                      ) : null}
+                      {hasShortcut ? <kbd>{choiceIndex + 1}</kbd> : null}
                       <span className="chat-question-choice-content">
                         <MarkdownMessage
                           className="chat-question-choice-text"

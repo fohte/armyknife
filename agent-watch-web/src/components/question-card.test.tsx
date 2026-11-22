@@ -424,7 +424,7 @@ it('keeps descriptions compact on unanswered choices', () => {
 
   const row = requireElement(
     container.querySelector<HTMLElement>(
-      '.chat-question-choice-row.has-description:not(.is-selected)',
+      '.chat-question-choice-row.has-description.has-shortcut:not(.is-selected)',
     ),
   )
   const button = requireElement(row.querySelector<HTMLButtonElement>('button'))
@@ -433,17 +433,26 @@ it('keeps descriptions compact on unanswered choices', () => {
       '.chat-question-choice-description p',
     ),
   )
+  const choiceTitle = requireElement(
+    row.querySelector<HTMLElement>('.chat-question-choice-text'),
+  )
   const choiceContent = requireElement(
     button.querySelector<HTMLElement>('.chat-question-choice-content'),
   )
   const buttonStyle = getComputedStyle(button)
   const choiceContentStyle = getComputedStyle(choiceContent)
   const paragraphStyle = getComputedStyle(descriptionParagraph)
+  const choiceTitleRect = choiceTitle.getBoundingClientRect()
+  const descriptionRect = descriptionParagraph.getBoundingClientRect()
 
   const getActual = () => ({
     answerState: button.getAttribute('aria-pressed'),
     buttonMinHeight: buttonStyle.minHeight,
+    buttonAlignItems: buttonStyle.alignItems,
     choiceContentPaddingBottom: choiceContentStyle.paddingBottom,
+    alignmentOffset: Number(
+      (descriptionRect.left - choiceTitleRect.left).toFixed(2),
+    ),
     descriptionParagraph: {
       margin: paragraphStyle.margin,
       color: paragraphStyle.color,
@@ -453,7 +462,9 @@ it('keeps descriptions compact on unanswered choices', () => {
   expect(getActual()).toEqual({
     answerState: 'false',
     buttonMinHeight: '0px',
+    buttonAlignItems: 'baseline',
     choiceContentPaddingBottom: '0px',
+    alignmentOffset: 0,
     descriptionParagraph: {
       margin: '0px',
       color: 'rgb(161, 161, 170)',
