@@ -246,6 +246,48 @@ it('shows the mobile web UI URL and closes it from the header', () => {
   })
 })
 
+it('expands a mobile status web UI tab without opening another browser tab', () => {
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <WebUiPane
+        name="Canvas editor"
+        url="https://example.test/design/"
+        targetUrlOverride="https://example.test/design/"
+        previewMessage="The embedded design page is shown here."
+        mobileTabPresentation
+        onClose={() => undefined}
+      />,
+    )
+  })
+
+  const fullscreenButton = container.querySelector<HTMLButtonElement>(
+    'button[aria-label="Show Canvas editor fullscreen"]',
+  )
+  if (fullscreenButton !== null)
+    act(() => {
+      fullscreenButton.click()
+    })
+
+  const snapshot = () => ({
+    fullscreen: container
+      .querySelector('.web-ui-pane')
+      ?.classList.contains('is-fullscreen'),
+    fullscreenPressed: container
+      .querySelector<HTMLButtonElement>(
+        'button[aria-label="Exit Canvas editor fullscreen"]',
+      )
+      ?.getAttribute('aria-pressed'),
+    externalLink:
+      container.querySelector('a[aria-label="Open in a new tab"]') !== null,
+  })
+  expect(snapshot()).toEqual({
+    fullscreen: true,
+    fullscreenPressed: 'true',
+    externalLink: false,
+  })
+})
+
 it('closes the mobile web UI when its target URL is unavailable', () => {
   const onClose = vi.fn()
   root = createRoot(container)

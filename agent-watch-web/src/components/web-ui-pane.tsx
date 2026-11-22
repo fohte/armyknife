@@ -52,7 +52,7 @@ export function WebUiPane({
 
   return (
     <aside
-      className={`web-ui-pane${isFullscreen ? ' is-fullscreen' : ''}${mobilePresentation ? ' is-mobile-fullscreen' : ''}`}
+      className={`web-ui-pane${isFullscreen ? ' is-fullscreen' : ''}${mobilePresentation || (mobileTabPresentation && isFullscreen) ? ' is-mobile-fullscreen' : ''}`}
       aria-label={name}
       role={mobilePresentation ? 'dialog' : undefined}
       aria-modal={mobilePresentation || undefined}
@@ -68,7 +68,23 @@ export function WebUiPane({
               <span className="web-ui-pane-mobile-url">{targetUrl ?? url}</span>
             </div>
             <div className="web-ui-pane-mobile-actions">
-              {targetUrl !== null ? (
+              {mobileTabPresentation ? (
+                <Button
+                  type="button"
+                  variant="plain"
+                  aria-label={
+                    isFullscreen
+                      ? `Exit ${name} fullscreen`
+                      : `Show ${name} fullscreen`
+                  }
+                  aria-pressed={isFullscreen}
+                  onClick={() => {
+                    setIsFullscreen((current) => !current)
+                  }}
+                >
+                  {isFullscreen ? '↙' : '⛶'}
+                </Button>
+              ) : targetUrl !== null ? (
                 <a
                   className="web-ui-pane-open-new-tab"
                   href={targetUrl}
