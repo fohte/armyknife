@@ -9,7 +9,7 @@ const currentBranchPullRequest: PullRequest = {
   state: 'Open',
   owner: 'example-org',
   repo: 'example-repo',
-  title: 'Show delivery status in the session header',
+  title: 'Show delivery status',
   url: 'https://github.com/example-org/example-repo/pull/42',
   headSha: 'fixture-head-sha',
   ciState: 'InProgress',
@@ -47,7 +47,7 @@ const otherPullRequests: PullRequest[] = [
     state: 'Open',
     owner: 'example-org',
     repo: 'example-infra',
-    title: 'Add delivery retry settings',
+    title: 'Add retry settings',
     url: 'https://github.com/example-org/example-infra/pull/43',
     headSha: 'fixture-other-sha',
     ciState: 'Successful',
@@ -58,7 +58,7 @@ const otherPullRequests: PullRequest[] = [
     state: 'Merged',
     owner: 'example-org',
     repo: 'example-repo',
-    title: 'Record delivery attempts',
+    title: 'Record attempts',
     url: 'https://github.com/example-org/example-repo/pull/41',
     headSha: 'fixture-merged-sha',
     ciState: 'Unknown',
@@ -76,6 +76,7 @@ const allMergedPullRequests: PullRequest[] = [
 
 const meta = {
   component: SessionPullRequests,
+  parameters: { layout: 'fullscreen' },
   args: {
     pullRequests: [currentBranchPullRequest],
     repo: 'example-org/example-repo',

@@ -8,7 +8,7 @@
   padding: 10px max(24px, calc((100% - 712px) / 2));
   box-sizing: border-box;
   border-top: 1px solid var(--aw-border);
-  background: var(--aw-bg-app);
+  background: var(--aw-bg-nav);
   color: var(--aw-text-primary);
 }
 
@@ -28,7 +28,6 @@
 .merge-band-copy {
   display: grid;
   min-width: 0;
-  gap: 3px;
 }
 
 .merge-band-heading {
@@ -41,14 +40,13 @@
 
 .merge-band-heading strong {
   color: var(--aw-text-primary);
-  font-weight: 600;
+  font-weight: 700;
 }
 
 .merge-band-dot {
   width: 7px;
   height: 7px;
   flex: 0 0 auto;
-  border-radius: 50%;
   background: var(--aw-color-success);
 }
 
@@ -90,6 +88,8 @@
   border-radius: 0;
   padding: 0 14px;
   font-size: 12px;
+  font-family: inherit;
+  font-weight: 400;
 }
 
 .merge-band-action.is-ready {
@@ -106,7 +106,7 @@
 
 .merge-band-action.is-pending {
   border-color: var(--aw-border);
-  color: var(--aw-text-secondary);
+  color: var(--aw-text-muted);
   opacity: 1;
 }
 

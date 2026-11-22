@@ -267,13 +267,26 @@ export function SessionPullRequests({
                   <span className="session-pr-row-repo">
                     {pullRequestRepo(pullRequest, repo)}
                   </span>
+                  {isMobile ? (
+                    <span
+                      className="session-pr-row-mobile-state"
+                      aria-hidden="true"
+                    >
+                      ·{' '}
+                      {pullRequest.state === 'Merged'
+                        ? '✓ Merged'
+                        : pullRequest.state}
+                    </span>
+                  ) : null}
                 </span>
               </a>
-              <span
-                className={`session-pr-row-state${rowStateClass(pullRequest, mergeStatusFor(pullRequest))}`}
-              >
-                {rowStateLabel(pullRequest, mergeStatusFor(pullRequest))}
-              </span>
+              {isMobile && pullRequest.state === 'Merged' ? null : (
+                <span
+                  className={`session-pr-row-state${rowStateClass(pullRequest, mergeStatusFor(pullRequest))}`}
+                >
+                  {rowStateLabel(pullRequest, mergeStatusFor(pullRequest))}
+                </span>
+              )}
             </div>
           ))}
         </div>

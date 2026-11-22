@@ -18,7 +18,7 @@ const pullRequests: PullRequest[] = [
     state: 'Open',
     owner: 'example-org',
     repo: 'example-repo',
-    title: 'Show delivery status in the session header',
+    title: 'Show delivery status',
     url: 'https://github.com/example-org/example-repo/pull/42',
     ciState: 'InProgress',
     isCurrentBranch: true,
@@ -28,7 +28,7 @@ const pullRequests: PullRequest[] = [
     state: 'Open',
     owner: 'example-org',
     repo: 'example-infra',
-    title: 'Add delivery retry settings',
+    title: 'Add retry settings',
     url: 'https://github.com/example-org/example-infra/pull/43',
     ciState: 'Successful',
     headSha: 'fixture-head-sha',
@@ -39,7 +39,7 @@ const pullRequests: PullRequest[] = [
     state: 'Merged',
     owner: 'example-org',
     repo: 'example-repo',
-    title: 'Record delivery attempts',
+    title: 'Record attempts',
     url: 'https://github.com/example-org/example-repo/pull/41',
     ciState: 'Unknown',
     isCurrentBranch: false,
@@ -292,6 +292,9 @@ it.each([
           .replace(/^#\d+\s*/, '')
           .trim(),
         repo: row.querySelector('.session-pr-row-repo')?.textContent ?? null,
+        mobileState:
+          row.querySelector('.session-pr-row-mobile-state')?.textContent ??
+          null,
         reason: row.querySelector('.session-pr-row-state')?.textContent ?? null,
         hasAction: row.querySelector('button') !== null,
         ciState:
@@ -338,8 +341,9 @@ it.each([
       pullRequests: [
         {
           number: '#42',
-          title: 'Show delivery status in the session header',
+          title: 'Show delivery status',
           repo: 'example-org/example-repo',
+          mobileState: isMobile ? '· Open' : null,
           reason: 'CI running',
           hasAction: false,
           ciState: 'CI running',
@@ -347,8 +351,9 @@ it.each([
         },
         {
           number: '#43',
-          title: 'Add delivery retry settings',
+          title: 'Add retry settings',
           repo: 'example-org/example-infra',
+          mobileState: isMobile ? '· Open' : null,
           reason: 'CI passed',
           hasAction: false,
           ciState: 'CI passed',
@@ -356,9 +361,10 @@ it.each([
         },
         {
           number: '#41',
-          title: 'Record delivery attempts',
+          title: 'Record attempts',
           repo: 'example-org/example-repo',
-          reason: 'Merged',
+          mobileState: isMobile ? '· ✓ Merged' : null,
+          reason: isMobile ? null : 'Merged',
           hasAction: false,
           ciState: 'CI status unknown',
           href: 'https://github.com/example-org/example-repo/pull/41',

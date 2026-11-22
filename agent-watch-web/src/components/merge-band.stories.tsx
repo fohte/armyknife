@@ -44,6 +44,7 @@ const phoneDecorator: Decorator = (Story) => (
 
 const meta = {
   component: MergeBand,
+  parameters: { layout: 'fullscreen' },
   args: {
     rows: [row('ready')],
     isMobile: false,
