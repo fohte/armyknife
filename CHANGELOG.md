@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.849](https://github.com/fohte/armyknife/compare/v0.1.848...v0.1.849) (2026-11-22)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** align iPhone Session status ([#2088](https://github.com/fohte/armyknife/issues/2088)) ([97cf699](https://github.com/fohte/armyknife/commit/97cf699a0579e76d4c624982ab6c889b1c4a5cd4))
+
 ## [0.1.848](https://github.com/fohte/armyknife/compare/v0.1.847...v0.1.848) (2026-11-22)
 
 
