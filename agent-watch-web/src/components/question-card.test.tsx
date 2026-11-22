@@ -401,6 +401,67 @@ it('frames a recorded choice with its description without doubling dividers', ()
   })
 })
 
+it('keeps descriptions compact on unanswered choices', () => {
+  renderQuestion(
+    props({
+      questions: [
+        {
+          header: 'Retry limit',
+          question: 'How many attempts should run?',
+          choices: [
+            {
+              label: 'Three attempts',
+              description: 'Stop after three failures.',
+            },
+            { label: 'Five attempts' },
+          ],
+          multi_select: false,
+          answer: null,
+        },
+      ],
+    }),
+  )
+
+  const row = requireElement(
+    container.querySelector<HTMLElement>(
+      '.chat-question-choice-row.has-description:not(.is-selected)',
+    ),
+  )
+  const button = requireElement(row.querySelector<HTMLButtonElement>('button'))
+  const descriptionParagraph = requireElement(
+    row.querySelector<HTMLParagraphElement>(
+      '.chat-question-choice-description p',
+    ),
+  )
+  const choiceContent = requireElement(
+    button.querySelector<HTMLElement>('.chat-question-choice-content'),
+  )
+  const buttonStyle = getComputedStyle(button)
+  const choiceContentStyle = getComputedStyle(choiceContent)
+  const paragraphStyle = getComputedStyle(descriptionParagraph)
+
+  const getActual = () => ({
+    answerState: button.getAttribute('aria-pressed'),
+    buttonMinHeight: buttonStyle.minHeight,
+    choiceContentPaddingBottom: choiceContentStyle.paddingBottom,
+    descriptionParagraph: {
+      margin: paragraphStyle.margin,
+      color: paragraphStyle.color,
+      fontSize: paragraphStyle.fontSize,
+    },
+  })
+  expect(getActual()).toEqual({
+    answerState: 'false',
+    buttonMinHeight: '0px',
+    choiceContentPaddingBottom: '0px',
+    descriptionParagraph: {
+      margin: '0px',
+      color: 'rgb(161, 161, 170)',
+      fontSize: '11.5px',
+    },
+  })
+})
+
 it('answers a desktop single-choice question with its number shortcut', async () => {
   const onAnswer = vi.fn(() => Promise.resolve(true))
   renderQuestion(props({ questions: singleChoiceQuestions, onAnswer }))
