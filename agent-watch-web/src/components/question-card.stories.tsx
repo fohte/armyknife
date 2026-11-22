@@ -157,6 +157,15 @@ export const ChoiceDescriptionShowsCodeBlock: Story = {
 
 export const ChoiceDescriptionAfterAnswer: Story = {
   name: 'An answered question keeps its selected choice and description',
+  decorators: [
+    (Story) => (
+      <div
+        style={{ width: 'min(672px, calc(100vw - 32px))', margin: '0 auto' }}
+      >
+        <Story />
+      </div>
+    ),
+  ],
   args: {
     canAnswer: false,
     questions: [
