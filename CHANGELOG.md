@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.861](https://github.com/fohte/armyknife/compare/v0.1.860...v0.1.861) (2026-11-22)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** use transcript structure ([#2114](https://github.com/fohte/armyknife/issues/2114)) ([7f1f80c](https://github.com/fohte/armyknife/commit/7f1f80c4b9a3c086f962fc68aa570b2015e92098))
+
 ## [0.1.860](https://github.com/fohte/armyknife/compare/v0.1.859...v0.1.860) (2026-11-22)
 
 
