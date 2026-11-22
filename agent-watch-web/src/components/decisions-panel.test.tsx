@@ -115,6 +115,40 @@ it('uses Y to approve the selected decision and select the next pending one', as
   headerButton.remove()
 })
 
+it('selects the next pending decision after its OK button is clicked', async () => {
+  const onOk = vi.fn(() => Promise.resolve(true))
+  const onSelect = vi.fn()
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <DecisionsPanel
+        decisions={decisions}
+        session={session}
+        selectedSeq={1}
+        showReviewed
+        onSelect={onSelect}
+        onOk={onOk}
+        onChange={vi.fn(() => Promise.resolve(true))}
+      />,
+    )
+  })
+
+  const okButton = container.querySelector<HTMLButtonElement>(
+    '.decision-card--panel[data-selected="true"] .decision-card-buttons button',
+  )
+  if (okButton === null) throw new Error('Missing OK action')
+  await act(async () => {
+    okButton.click()
+    await Promise.resolve()
+  })
+
+  const snapshot = () => ({ ok: onOk.mock.calls, next: onSelect.mock.calls })
+  expect(snapshot()).toEqual({
+    ok: [[1]],
+    next: [[2]],
+  })
+})
+
 it('hides ok decisions and keeps change requests visible', () => {
   root = createRoot(container)
   act(() => {

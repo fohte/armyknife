@@ -1,6 +1,6 @@
 import '#components/decisions-panel.css'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { type Decision, DecisionCard } from '#components/decision-card'
 import type { Session } from '#types'
@@ -78,6 +78,15 @@ export function DecisionsPanel({
     () => orderedDecisions.filter((decision) => decision.review === null),
     [orderedDecisions],
   )
+  const approveDecision = useCallback(
+    async (seq: number) => {
+      const success = await onOk(seq)
+      if (!success) return
+      const nextDecision = pendingSeqs.find((decision) => decision.seq !== seq)
+      if (nextDecision !== undefined) onSelect(nextDecision.seq)
+    },
+    [onOk, onSelect, pendingSeqs],
+  )
 
   useEffect(() => {
     if (editingSeq === null) return
@@ -118,13 +127,7 @@ export function DecisionsPanel({
         selectedDecision.review === null
       ) {
         event.preventDefault()
-        void onOk(selectedDecision.seq).then((success) => {
-          if (!success) return
-          const nextDecision = pendingSeqs.find(
-            (seq) => seq.seq !== selectedDecision.seq,
-          )
-          if (nextDecision !== undefined) onSelect(nextDecision.seq)
-        })
+        void approveDecision(selectedDecision.seq)
         return
       }
 
@@ -149,7 +152,7 @@ export function DecisionsPanel({
     return () => {
       window.removeEventListener('keydown', onKeyDown)
     }
-  }, [onOk, onSelect, pendingSeqs, selectedDecision])
+  }, [approveDecision, selectedDecision])
 
   return (
     <section className="decisions-panel" aria-label="Decisions in this session">
@@ -179,7 +182,7 @@ export function DecisionsPanel({
                 onSelect={() => {
                   onSelect(decision.seq)
                 }}
-                onOk={() => onOk(decision.seq)}
+                onOk={() => approveDecision(decision.seq)}
                 onBeginChange={() => {
                   onSelect(decision.seq)
                   setEditingSeq(decision.seq)
