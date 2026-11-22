@@ -1,6 +1,9 @@
+import '#index.css'
+
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { userEvent } from 'vitest/browser'
 
 import { SessionTasksPanel } from '#components/session-tasks-panel'
 import type { SessionTask } from '#types'
@@ -193,20 +196,38 @@ it('keeps each completed task title and age on separate lines', () => {
   ])
 })
 
-it('reserves a trailing column for the fully visible primary label', () => {
+it('keeps primary controls inside full-width task rows', () => {
   container.style.width = '320px'
+  const inProgressTasks = [
+    {
+      id: 'example-primary-open-task',
+      number: 9001,
+      title: 'Review sample workflow',
+      priority: 1,
+    },
+    {
+      id: 'example-secondary-open-task',
+      number: 9002,
+      title: 'Outline verification steps',
+      priority: 2,
+    },
+  ]
   act(() => {
     root?.render(
       <SessionTasksPanel
-        tasks={tasks}
+        tasks={inProgressTasks}
         repo="example/service"
-        primaryTaskId="example-open-task"
+        primaryTaskId="example-primary-open-task"
         onMakePrimary={() => Promise.resolve(true)}
       />,
     )
   })
 
-  const row = container.querySelector('.session-tasks-panel-list > li')
+  const rows = Array.from(
+    container.querySelectorAll('.session-tasks-panel-row'),
+  )
+  const primaryRow = rows[0] ?? null
+  const secondaryRow = rows[1] ?? null
   const primaryLabel = container.querySelector('.session-tasks-panel-primary')
   const primaryAction = container.querySelector(
     '.session-tasks-panel-primary-action',
@@ -222,18 +243,28 @@ it('reserves a trailing column for the fully visible primary label', () => {
   const primaryLabelTextRight = getTextRight(primaryLabel)
   const primaryActionTextRight = getTextRight(primaryAction)
   const snapshot = () => ({
-    rowDisplay: row === null ? null : getComputedStyle(row).display,
+    rowClasses: rows.map((row) => row.className),
+    primaryLabelIsInPrimaryRow: primaryLabel?.parentElement === primaryRow,
+    actionIsInSecondaryRow: primaryAction?.parentElement === secondaryRow,
+    rowDisplay:
+      primaryRow === null ? null : getComputedStyle(primaryRow).display,
     primaryLabel: primaryLabel?.textContent,
     primaryLabelFitsRow:
-      row !== null &&
+      primaryRow !== null &&
       primaryLabelTextRight !== null &&
-      primaryLabelTextRight <= row.getBoundingClientRect().right,
+      primaryLabelTextRight <= primaryRow.getBoundingClientRect().right,
     primaryLabelAlignsWithAction:
       primaryLabelTextRight !== null &&
       primaryActionTextRight !== null &&
       Math.abs(primaryLabelTextRight - primaryActionTextRight) <= 1,
   })
   expect(snapshot()).toEqual({
+    rowClasses: [
+      'session-tasks-panel-row session-tasks-panel-row--open',
+      'session-tasks-panel-row session-tasks-panel-row--open',
+    ],
+    primaryLabelIsInPrimaryRow: true,
+    actionIsInSecondaryRow: true,
     rowDisplay: 'grid',
     primaryLabel: 'Primary',
     primaryLabelFitsRow: true,
@@ -282,6 +313,42 @@ it('formats completed task ages in minutes and days', () => {
     '✓#2047 Document request behavior 35m',
     '✓#2046 Add a retry example 2d',
   ])
+})
+
+it('marks completed task rows for full-row hover styling', async () => {
+  const completedTasks = tasks
+    .filter((task) => task.isClosed === true)
+    .slice(0, 1)
+
+  act(() => {
+    root?.render(
+      <SessionTasksPanel
+        tasks={completedTasks}
+        repo="example/service"
+        primaryTaskId={null}
+      />,
+    )
+  })
+
+  const row = container.querySelector<HTMLElement>(
+    '.session-tasks-panel-row--completed',
+  )
+  if (row === null) throw new Error('Expected a completed task row')
+
+  await userEvent.hover(row)
+  const snapshot = () => ({
+    rowClass: row.className,
+    rowDisplay: getComputedStyle(row).display,
+    rowBackground: getComputedStyle(row).backgroundColor,
+    titleIsInsideRow:
+      row.querySelector('.session-tasks-panel-item--completed') !== null,
+  })
+  expect(snapshot()).toEqual({
+    rowClass: 'session-tasks-panel-row session-tasks-panel-row--completed',
+    rowDisplay: 'grid',
+    rowBackground: 'rgb(38, 38, 38)',
+    titleIsInsideRow: true,
+  })
 })
 
 it('makes a completed secondary task primary from the Tasks tab', async () => {

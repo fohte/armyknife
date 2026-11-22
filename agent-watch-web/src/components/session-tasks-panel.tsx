@@ -76,7 +76,10 @@ export function SessionTasksPanel({
           </h3>
           <ul className="session-tasks-panel-list">
             {inProgressTasks.map((task) => (
-              <li key={task.id}>
+              <li
+                key={task.id}
+                className="session-tasks-panel-row session-tasks-panel-row--open"
+              >
                 <a
                   className="session-tasks-panel-item session-tasks-panel-item--open"
                   href={`https://tq.fohte.net/tasks/${encodeURIComponent(task.id)}`}
@@ -119,7 +122,10 @@ export function SessionTasksPanel({
               const age =
                 task.updatedAt == null ? null : formatTaskAge(task.updatedAt)
               return (
-                <li key={task.id}>
+                <li
+                  key={task.id}
+                  className="session-tasks-panel-row session-tasks-panel-row--completed"
+                >
                   <a
                     className="session-tasks-panel-item session-tasks-panel-item--completed"
                     href={`https://tq.fohte.net/tasks/${encodeURIComponent(task.id)}`}
