@@ -557,6 +557,13 @@ it('keeps edits after a save error and retries the same document', async () => {
     await page
       .getByRole('textbox', { name: 'Markdown body' })
       .fill('Edited body.')
+  })
+  await waitForState(
+    () =>
+      container.querySelector('.review-document-body')?.textContent ===
+      'Edited body.',
+  )
+  await act(async () => {
     await page.getByRole('button', { name: 'Save' }).click()
   })
   await waitForState(() => container.querySelector('[role="alert"]') !== null)
