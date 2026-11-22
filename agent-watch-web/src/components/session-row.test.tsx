@@ -47,7 +47,7 @@ const session: Session = {
 }
 
 function renderRow(
-  density: 'full' | 'compact',
+  density: 'full' | 'compact' | 'compact-phone',
   viewSession: Session = session,
   isMobile = false,
 ) {
@@ -71,7 +71,11 @@ function snapshot() {
 
   return {
     density:
-      row?.classList.contains('density-full') === true ? 'full' : 'compact',
+      row?.classList.contains('density-full') === true
+        ? 'full'
+        : row?.classList.contains('density-compact-phone') === true
+          ? 'compact-phone'
+          : 'compact',
     mobile: row?.classList.contains('is-mobile') ?? false,
     title: container.querySelector('.session-title')?.textContent,
     age: container.querySelector('.session-age')?.textContent,
@@ -190,6 +194,22 @@ it('shows compact rows without a preview and reserves the missing role slot', ()
 
   expect(snapshot()).toEqual({
     density: 'compact',
+    mobile: false,
+    title: 'Review the retry policy',
+    age: '2m',
+    preview: null,
+    role: 'No role',
+    engine: 'codex',
+    task: 'P2 #17 Improve request reliability +1',
+    repositoryLines: ['sample/service'],
+  })
+})
+
+it('shows compact phone rows with the same three detail lines', () => {
+  renderRow('compact-phone', { ...session, workType: null })
+
+  expect(snapshot()).toEqual({
+    density: 'compact-phone',
     mobile: false,
     title: 'Review the retry policy',
     age: '2m',

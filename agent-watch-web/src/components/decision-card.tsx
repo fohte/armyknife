@@ -184,9 +184,10 @@ export function DecisionCard({
             <span>Also considered · </span>
             <div className="decision-card-considered">
               {decision.considered.map((item, index) => (
-                <MarkdownMessage key={String(index)} inline>
-                  {item}
-                </MarkdownMessage>
+                <Fragment key={String(index)}>
+                  {index > 0 ? ' / ' : null}
+                  <MarkdownMessage inline>{item}</MarkdownMessage>
+                </Fragment>
               ))}
             </div>
           </div>
@@ -251,10 +252,7 @@ export function DecisionCard({
                   >
                     {variant === 'panel' ? (
                       <>
-                        Change…{' '}
-                        <span className="decision-card-target-name">
-                          (sends to {targetName ?? 'this session'})
-                        </span>
+                        Change…
                         <kbd>C</kbd>
                       </>
                     ) : (

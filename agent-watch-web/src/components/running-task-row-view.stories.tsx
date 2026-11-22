@@ -24,7 +24,8 @@ const meta = {
   decorators: [
     (Story) => (
       <div
-        className="session-status-panel session-status-panel--mobile"
+        className="session-status-panel"
+        data-size="phone"
         style={{ width: '390px', height: '844px', display: 'flex' }}
       >
         <ul

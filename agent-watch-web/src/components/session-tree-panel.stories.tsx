@@ -78,7 +78,7 @@ export const SelectedSessionWithPendingChild: Story = {
 
 export const PhoneStatusTreePresentation: Story = {
   name: 'The phone status tree shows the selected session and its descendants.',
-  args: { mobilePresentation: true },
+  args: { size: 'phone' },
   decorators: [
     (Story) => (
       <div style={{ width: '390px', height: '844px', display: 'flex' }}>

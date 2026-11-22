@@ -57,7 +57,11 @@ const meta = {
   },
   decorators: [
     (Story) => (
-      <div style={{ width: '460px', height: '800px', display: 'flex' }}>
+      <div
+        className="session-status-panel"
+        data-size="desktop"
+        style={{ width: '460px', height: '800px', display: 'flex' }}
+      >
         <Story />
       </div>
     ),
@@ -74,6 +78,17 @@ export const PendingDecisionIsSelected: Story = {
 export const PhoneStatusIncludesReviewedDecisions: Story = {
   name: 'The phone status panel includes reviewed decisions in its list.',
   args: { showReviewed: true },
+  decorators: [
+    (Story) => (
+      <div
+        className="session-status-panel"
+        data-size="phone"
+        style={{ width: '390px', height: '844px', display: 'flex' }}
+      >
+        <Story />
+      </div>
+    ),
+  ],
 }
 
 export const UnreviewedDecisionsAppearFirst: Story = {

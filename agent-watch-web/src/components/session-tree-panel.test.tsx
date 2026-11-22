@@ -67,12 +67,16 @@ const sessions: SessionTreeNode[] = [
 let container: HTMLDivElement
 let root: Root | null = null
 
-function renderTree(onSelectSession = vi.fn()) {
+function renderTree(
+  onSelectSession = vi.fn(),
+  size: 'desktop' | 'phone' = 'desktop',
+) {
   root = createRoot(container)
   act(() => {
     root?.render(
       <SessionTreePanel
         sessions={sessions}
+        size={size}
         selectedSessionId="root"
         onSelectSession={onSelectSession}
       />,
@@ -144,6 +148,77 @@ it('shows every tree session with the shared row and keeps ended sessions visibl
     },
   ])
 })
+
+it.each([
+  { size: 'desktop', density: 'density-compact' },
+  { size: 'phone', density: 'density-compact-phone' },
+] as const)(
+  'keeps each tree row on three lines at $size size',
+  ({ size, density }) => {
+    renderTree(vi.fn(), size)
+
+    expect(
+      Array.from(
+        container.querySelectorAll<HTMLElement>('[role="treeitem"]'),
+        (row) => ({
+          density: Array.from(
+            row.querySelector('.session-row-content')?.classList ?? [],
+          ).find((className) => className.startsWith('density-')),
+          detailLines: Array.from(
+            row.querySelector('.session-content')?.children ?? [],
+            (line) => line.className,
+          ),
+        }),
+      ),
+    ).toEqual([
+      {
+        density,
+        detailLines: [
+          'session-title-line',
+          'session-meta-line',
+          'session-repo-line',
+        ],
+      },
+      {
+        density,
+        detailLines: [
+          'session-title-line',
+          'session-meta-line',
+          'session-repo-line',
+        ],
+      },
+      {
+        density,
+        detailLines: [
+          'session-title-line',
+          'session-meta-line',
+          'session-repo-line',
+        ],
+      },
+    ])
+  },
+)
+
+it.each([
+  { size: 'desktop', expectedMarginTop: '5px' },
+  { size: 'phone', expectedMarginTop: '10px' },
+] as const)(
+  'aligns the tree caret with the title row at $size size',
+  ({ size, expectedMarginTop }) => {
+    renderTree(vi.fn(), size)
+
+    const row = container.querySelector('.session-tree-main-line')
+    const caret = container.querySelector('.session-tree-caret')
+    const snapshot = () => ({
+      rowAlignment: row === null ? null : getComputedStyle(row).alignItems,
+      caretMarginTop: caret === null ? null : getComputedStyle(caret).marginTop,
+    })
+    expect(snapshot()).toEqual({
+      rowAlignment: 'flex-start',
+      caretMarginTop: expectedMarginTop,
+    })
+  },
+)
 
 it('opens an active row with Enter and does not open an ended row by click', () => {
   const onSelectSession = renderTree()

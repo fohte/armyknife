@@ -16,10 +16,10 @@ type ReviewDocumentPanelProps = {
   status?: 'idle' | 'saving' | 'saved' | 'error' | 'finishing'
   unsavedChanges?: boolean
   error?: string | null
-  mobileView?: 'edit' | 'preview'
+  view?: 'edit' | 'preview'
   onFrontmatterChange?: (value: JsonValue) => void
   onBodyChange?: (value: string) => void
-  onMobileViewChange?: (view: 'edit' | 'preview') => void
+  onViewChange?: (view: 'edit' | 'preview') => void
   onSave?: () => void
   onFinish?: () => void
 }
@@ -283,10 +283,10 @@ export function ReviewDocumentPanel({
   status = 'idle',
   unsavedChanges = false,
   error = null,
-  mobileView = 'edit',
+  view = 'edit',
   onFrontmatterChange = () => undefined,
   onBodyChange = () => undefined,
-  onMobileViewChange = () => undefined,
+  onViewChange = () => undefined,
   onSave = () => undefined,
   onFinish = () => undefined,
 }: ReviewDocumentPanelProps) {
@@ -301,7 +301,7 @@ export function ReviewDocumentPanel({
   return (
     <article
       className="review-document-panel"
-      data-mobile-view={mobileView}
+      data-view={view}
       data-status={status}
     >
       <div className="review-document-content">
@@ -344,19 +344,19 @@ export function ReviewDocumentPanel({
             <h2>Body</h2>
             <div className="review-document-view-toggle" aria-label="Body view">
               <button
-                aria-pressed={mobileView === 'edit'}
+                aria-pressed={view === 'edit'}
                 type="button"
                 onClick={() => {
-                  onMobileViewChange('edit')
+                  onViewChange('edit')
                 }}
               >
                 Edit
               </button>
               <button
-                aria-pressed={mobileView === 'preview'}
+                aria-pressed={view === 'preview'}
                 type="button"
                 onClick={() => {
-                  onMobileViewChange('preview')
+                  onViewChange('preview')
                 }}
               >
                 Preview

@@ -116,6 +116,11 @@ export const CompactSessionRow: Story = {
   args: { density: 'compact' },
 }
 
+export const CompactPhoneSessionRow: Story = {
+  name: 'A phone compact row keeps the task and repository on separate lines',
+  args: { density: 'compact-phone' },
+}
+
 export const VibeEnabledSession: Story = {
   name: 'The enabled session shows a filled bolt beside its title',
   args: {

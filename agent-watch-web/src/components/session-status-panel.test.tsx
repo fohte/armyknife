@@ -281,7 +281,7 @@ it('closes the status panel from its tab bar', () => {
   expect(onClose.mock.calls).toEqual([[]])
 })
 
-it('shows the mobile page heading and focuses its back action', () => {
+it('shows the mobile page heading and focuses the dialog without outlining an action', () => {
   root = createRoot(container)
   act(() => {
     root?.render(
@@ -293,7 +293,7 @@ it('shows the mobile page heading and focuses its back action', () => {
         onTabChange={vi.fn()}
         onClose={() => undefined}
         sessionTitle="Sample session title"
-        mobilePresentation
+        size="phone"
       />,
     )
   })
@@ -301,6 +301,7 @@ it('shows the mobile page heading and focuses its back action', () => {
   const backButton = container.querySelector<HTMLButtonElement>(
     '[aria-label="Back to the conversation"]',
   )
+  const dialog = container.querySelector<HTMLElement>('[role="dialog"]')
   const snapshot = () => ({
     heading: container.querySelector('h1')?.textContent,
     sessionTitle: container.querySelector(
@@ -311,7 +312,10 @@ it('shows the mobile page heading and focuses its back action', () => {
       ?.getAttribute('aria-modal'),
     tabLabel: container.querySelector('[role="tab"]')?.textContent,
     backButtonVisible: backButton !== null,
+    dialogFocused: document.activeElement === dialog,
     backButtonFocused: document.activeElement === backButton,
+    dialogOutline:
+      dialog === null ? null : getComputedStyle(dialog).outlineStyle,
     closeButtonVisible:
       container.querySelector('.session-status-panel-close') !== null,
   })
@@ -321,7 +325,9 @@ it('shows the mobile page heading and focuses its back action', () => {
     dialog: 'true',
     tabLabel: 'Running1',
     backButtonVisible: true,
-    backButtonFocused: true,
+    dialogFocused: true,
+    backButtonFocused: false,
+    dialogOutline: 'none',
     closeButtonVisible: false,
   })
 })
@@ -338,7 +344,7 @@ it('returns to the conversation when the mobile back action is pressed', () => {
         activeTabId="running"
         onTabChange={vi.fn()}
         onClose={onClose}
-        mobilePresentation
+        size="phone"
       />,
     )
   })
@@ -364,7 +370,7 @@ it('keeps keyboard focus inside the mobile status page', () => {
         activeTabId="running"
         onTabChange={vi.fn()}
         onClose={() => undefined}
-        mobilePresentation
+        size="phone"
       />,
     )
   })
@@ -375,12 +381,15 @@ it('keeps keyboard focus inside the mobile status page', () => {
   const tab = container.querySelector<HTMLButtonElement>('[role="tab"]')
   const focusedElements: string[] = []
   const recordFocus = () => {
+    const dialog = container.querySelector('[role="dialog"]')
     focusedElements.push(
-      document.activeElement === backButton
-        ? 'back'
-        : document.activeElement === tab
-          ? 'tab'
-          : 'outside',
+      document.activeElement === dialog
+        ? 'dialog'
+        : document.activeElement === backButton
+          ? 'back'
+          : document.activeElement === tab
+            ? 'tab'
+            : 'outside',
     )
   }
   recordFocus()
@@ -406,5 +415,5 @@ it('keeps keyboard focus inside the mobile status page', () => {
   })
   recordFocus()
 
-  expect(focusedElements).toEqual(['back', 'tab', 'back'])
+  expect(focusedElements).toEqual(['dialog', 'tab', 'back'])
 })

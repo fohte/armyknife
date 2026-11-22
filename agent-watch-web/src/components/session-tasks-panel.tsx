@@ -132,20 +132,23 @@ export function SessionTasksPanel({
                     >
                       ✓
                     </span>
-                    <span className="session-tasks-panel-title">
-                      <span className="session-task-link-id">
-                        #{String(task.number)}
-                      </span>{' '}
-                      {task.title}
+                    <span className="session-tasks-panel-copy">
+                      <span className="session-tasks-panel-title">
+                        <span className="session-task-link-id">
+                          #{String(task.number)}
+                        </span>{' '}
+                        {task.title}
+                      </span>
+                      {age === null ? null : ' '}
+                      {age === null ? null : (
+                        <time
+                          className="session-tasks-panel-age"
+                          dateTime={task.updatedAt ?? undefined}
+                        >
+                          {age}
+                        </time>
+                      )}
                     </span>
-                    {age === null ? null : (
-                      <time
-                        className="session-tasks-panel-age"
-                        dateTime={task.updatedAt ?? undefined}
-                      >
-                        {` ${age}`}
-                      </time>
-                    )}
                   </a>
                   {primaryControl(task)}
                 </li>

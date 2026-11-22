@@ -391,7 +391,7 @@ export function ConversationPane({
       onTabChange={onTabChange}
       onClose={onCloseStatusPanel}
       sessionTitle={session.title}
-      mobilePresentation={isMobile}
+      size={isMobile ? 'phone' : 'desktop'}
     />
   ) : null
 

@@ -4988,7 +4988,7 @@ it('shows running tasks in the desktop status panel and counts them in the heade
     sections: ['SUBAGENTS', 'BACKGROUND TASKS'],
     tasks: [
       '◐FixtureExplorerInspect the fictional module2h 0m',
-      '▶cargo test -p fictional-crateOutput2h 0m',
+      '▶cargo test -p fictional-crate2h 0mOutput',
     ],
     panelToggle: '2',
     workingStatus: 'Waiting',
@@ -5717,7 +5717,7 @@ it('shows the unreviewed count instead of the total on the Decisions tab', () =>
   })
   expect(snapshot()).toEqual({
     tab: 'Decisions1',
-    decisions: ['unreviewed'],
+    decisions: ['unreviewed', 'ok'],
     progress: '1 / 2 reviewed',
   })
 })
@@ -6222,6 +6222,9 @@ it('opens and closes the existing status panel over the mobile conversation', as
 
   const opened = {
     overlay: container.querySelector('.mobile-session-status-overlay') !== null,
+    dialogFocused:
+      document.activeElement ===
+      container.querySelector('.mobile-session-status-overlay [role="dialog"]'),
     selectedTab: container.querySelector('[role="tab"][aria-selected="true"]')
       ?.textContent,
     decisionHeading: container.querySelector('.decisions-panel-header h2')
@@ -6247,9 +6250,10 @@ it('opens and closes the existing status panel over the mobile conversation', as
   expect(snapshot()).toEqual({
     opened: {
       overlay: true,
+      dialogFocused: true,
       selectedTab: 'Decisions1',
       decisionHeading: 'Decisions in this session',
-      backButtonFocused: true,
+      backButtonFocused: false,
     },
     closed: { overlay: false, conversation: true, focusRestored: true },
   })

@@ -144,6 +144,15 @@ it('renders decision details as markdown with linked session IDs', () => {
   })
 })
 
+it('separates alternatives in an expanded panel decision', () => {
+  renderCard({ variant: 'panel', expanded: true })
+
+  expect(
+    requireElement(container.querySelector('.decision-card-considered'))
+      .textContent,
+  ).toBe('Retry using the latest duration / Retry once per package')
+})
+
 it('expands the conversation row when its summary is selected', () => {
   renderCard()
 
@@ -154,7 +163,7 @@ it('expands the conversation row when its summary is selected', () => {
   })
 
   expect(container.querySelector('.decision-card-details')?.textContent).toBe(
-    'Why · The current service has no reliable timing data.Also considered · Retry using the latest durationRetry once per packageEasy to change · One configuration value in the CI workflow.OKChange…Not blocking · keeps working',
+    'Why · The current service has no reliable timing data.Also considered · Retry using the latest duration / Retry once per packageEasy to change · One configuration value in the CI workflow.OKChange…Not blocking · keeps working',
   )
 })
 
@@ -336,13 +345,13 @@ it('keeps the conversation summary on one row at mobile widths', async () => {
   })
 })
 
-it('keeps panel actions within the card when the target name is long', () => {
+it('keeps the change target note below the panel actions when the name is long', () => {
   container.style.width = '280px'
+  const targetName = 'unbroken'.repeat(12)
   renderCard({
     variant: 'panel',
     expanded: true,
-    targetName:
-      'a long target session name for an asynchronous refactoring run',
+    targetName,
   })
 
   const card = requireElement(container.querySelector('.decision-card'))
@@ -351,26 +360,34 @@ it('keeps panel actions within the card when the target name is long', () => {
       '.decision-card-buttons [data-slot="button"]:last-child',
     ),
   )
-  const targetName = requireElement(
-    changeButton.querySelector('.decision-card-target-name'),
+  const targetNote = requireElement(
+    container.querySelector('.decision-card-target-note'),
   )
   const shortcut = requireElement(changeButton.querySelector('kbd'))
   const cardBounds = card.getBoundingClientRect()
   const changeButtonBounds = changeButton.getBoundingClientRect()
   const shortcutBounds = shortcut.getBoundingClientRect()
-  expect(
-    JSON.stringify({
-      changeButtonFitsCard: changeButtonBounds.right <= cardBounds.right,
-      targetNameIsEllipsized:
-        getComputedStyle(targetName).textOverflow === 'ellipsis' &&
-        targetName.scrollWidth > targetName.clientWidth,
-      shortcutFitsButton:
-        shortcutBounds.width > 0 &&
-        shortcutBounds.right <= changeButtonBounds.right,
-    }),
-  ).toBe(
-    '{"changeButtonFitsCard":true,"targetNameIsEllipsized":true,"shortcutFitsButton":true}',
-  )
+  const targetNoteTextRange = document.createRange()
+  targetNoteTextRange.selectNodeContents(targetNote)
+  const targetNoteTextBounds = Array.from(targetNoteTextRange.getClientRects())
+  const getActual = () => ({
+    changeButtonFitsCard: changeButtonBounds.right <= cardBounds.right,
+    targetNoteText: targetNote.textContent,
+    targetNoteTextFitsCard: targetNoteTextBounds.every(
+      (bounds) => bounds.right <= cardBounds.right,
+    ),
+    targetNoteWraps: targetNoteTextBounds.length > 1,
+    shortcutFitsButton:
+      shortcutBounds.width > 0 &&
+      shortcutBounds.right <= changeButtonBounds.right,
+  })
+  expect(getActual()).toEqual({
+    changeButtonFitsCard: true,
+    targetNoteText: `Change… sends to ${targetName}`,
+    targetNoteTextFitsCard: true,
+    targetNoteWraps: true,
+    shortcutFitsButton: true,
+  })
 })
 
 it.each([

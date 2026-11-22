@@ -61,7 +61,7 @@ export function useWebUiFullscreen({
         targetUrlOverride={webUiRequest.targetUrl}
         fullscreenRequest={request}
         defaultFullscreen
-        mobilePresentation
+        size="phone"
         onClose={closeWebUi}
       />
     ) : null

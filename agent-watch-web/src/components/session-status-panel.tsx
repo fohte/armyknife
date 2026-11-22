@@ -20,20 +20,21 @@ export type SessionStatusPanelTab = {
 type SessionStatusPanelProps = {
   tabs: readonly SessionStatusPanelTab[]
   activeTabId: string | null
+  size?: 'desktop' | 'phone'
   onTabChange: (id: string) => void
   onClose: () => void
   sessionTitle?: string
-  mobilePresentation?: boolean
 }
 
 export function SessionStatusPanel({
   tabs,
   activeTabId,
+  size = 'desktop',
   onTabChange,
   onClose,
   sessionTitle,
-  mobilePresentation = false,
 }: SessionStatusPanelProps) {
+  const isPhone = size === 'phone'
   const visibleTabs = tabs.filter((tab) => tab.visible ?? tab.count > 0)
   const visibleTabSignature = visibleTabs
     .map((tab) => `${tab.id}:${tab.label}:${String(tab.count)}`)
@@ -42,15 +43,14 @@ export function SessionStatusPanel({
   const panelRef = useRef<HTMLElement>(null)
   const tabListRef = useRef<HTMLDivElement>(null)
   const activeTabRef = useRef<HTMLButtonElement>(null)
-  const backButtonRef = useRef<HTMLButtonElement>(null)
   const [hasHiddenTabs, setHasHiddenTabs] = useState({
     left: false,
     right: false,
   })
   useFocusTrap({
     containerRef: panelRef,
-    initialFocusRef: backButtonRef,
-    isActive: mobilePresentation,
+    initialFocusRef: panelRef,
+    isActive: isPhone,
   })
 
   const updateHiddenTabs = useCallback(() => {
@@ -105,19 +105,17 @@ export function SessionStatusPanel({
     <aside
       ref={panelRef}
       id="session-status-panel"
-      className={`session-status-panel${mobilePresentation ? ' session-status-panel--mobile' : ''}`}
+      className="session-status-panel"
+      data-size={size}
       aria-label="Session status panel"
-      aria-labelledby={
-        mobilePresentation ? 'session-status-panel-title' : undefined
-      }
-      role={mobilePresentation ? 'dialog' : undefined}
-      aria-modal={mobilePresentation || undefined}
-      tabIndex={mobilePresentation ? -1 : undefined}
+      aria-labelledby={isPhone ? 'session-status-panel-title' : undefined}
+      role={isPhone ? 'dialog' : undefined}
+      aria-modal={isPhone || undefined}
+      tabIndex={isPhone ? -1 : undefined}
     >
-      {mobilePresentation ? (
+      {isPhone ? (
         <header className="session-status-panel-mobile-header">
           <Button
-            ref={backButtonRef}
             className="session-status-panel-back"
             type="button"
             variant="plain"
@@ -177,7 +175,7 @@ export function SessionStatusPanel({
             ))}
           </div>
         </div>
-        {mobilePresentation ? null : (
+        {isPhone ? null : (
           <Button
             className="session-status-panel-close"
             type="button"
