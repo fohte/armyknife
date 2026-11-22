@@ -10,6 +10,7 @@ type DecisionsPanelProps = {
   session: Session
   selectedSeq: number | null
   relativeTimeReference?: number
+  showReviewed?: boolean
   onSelect: (seq: number) => void
   onOk: (seq: number) => Promise<boolean>
   onChange: (seq: number, comment: string) => Promise<boolean>
@@ -44,14 +45,18 @@ export function DecisionsPanel({
   session,
   selectedSeq,
   relativeTimeReference = Date.now(),
+  showReviewed = false,
   onSelect,
   onOk,
   onChange,
 }: DecisionsPanelProps) {
   const [editingSeq, setEditingSeq] = useState<number | null>(null)
   const displayedDecisions = useMemo(
-    () => decisions.filter((decision) => decision.review !== 'ok'),
-    [decisions],
+    () =>
+      showReviewed
+        ? decisions
+        : decisions.filter((decision) => decision.review !== 'ok'),
+    [decisions, showReviewed],
   )
   const selectedDecision =
     displayedDecisions.find((decision) => decision.seq === selectedSeq) ??
@@ -188,15 +193,22 @@ export function DecisionsPanel({
             )
           })
         )}
+        {showReviewed ? (
+          <p className="decisions-panel-jump-hint">
+            Tap a decision to jump to it in the conversation.
+          </p>
+        ) : null}
       </div>
-      <footer
-        className="decisions-panel-footer"
-        aria-label="Decision shortcuts"
-      >
-        <span>Y OK and next</span>
-        <span>C Change</span>
-        <span>↵ Jump to it in the conversation</span>
-      </footer>
+      {showReviewed ? null : (
+        <footer
+          className="decisions-panel-footer"
+          aria-label="Decision shortcuts"
+        >
+          <span>Y OK and next</span>
+          <span>C Change</span>
+          <span>↵ Jump to it in the conversation</span>
+        </footer>
+      )}
     </section>
   )
 }

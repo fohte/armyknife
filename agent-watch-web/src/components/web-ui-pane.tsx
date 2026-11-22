@@ -15,6 +15,8 @@ type WebUiPaneProps = {
   fullscreenRequest?: number
   targetUrlOverride?: string | null
   mobilePresentation?: boolean
+  mobileTabPresentation?: boolean
+  previewMessage?: string
 }
 
 export function WebUiPane({
@@ -27,6 +29,8 @@ export function WebUiPane({
   fullscreenRequest = 0,
   targetUrlOverride,
   mobilePresentation = false,
+  mobileTabPresentation = false,
+  previewMessage,
 }: WebUiPaneProps) {
   const [isFullscreen, setIsFullscreen] = useState(
     defaultFullscreen || fullscreenRequest > 0,
@@ -55,9 +59,9 @@ export function WebUiPane({
       id="web-ui-pane"
     >
       <header
-        className={`web-ui-pane-header${mobilePresentation ? ' is-mobile-fullscreen' : ''}`}
+        className={`web-ui-pane-header${mobilePresentation ? ' is-mobile-fullscreen' : ''}${mobileTabPresentation ? ' is-mobile-tab' : ''}`}
       >
-        {mobilePresentation ? (
+        {mobilePresentation || mobileTabPresentation ? (
           <>
             <div className="web-ui-pane-mobile-heading">
               <span className="web-ui-pane-title">{name}</span>
@@ -124,7 +128,7 @@ export function WebUiPane({
             )}
           </>
         )}
-        {mobilePresentation ? null : (
+        {mobilePresentation || mobileTabPresentation ? null : (
           <>
             <Button
               type="button"
@@ -152,7 +156,9 @@ export function WebUiPane({
           </>
         )}
       </header>
-      {targetUrl !== null ? (
+      {previewMessage !== undefined ? (
+        <div className="web-ui-pane-preview">{previewMessage}</div>
+      ) : targetUrl !== null ? (
         <iframe
           key={fullscreenRequest}
           title={`${name} web interface`}

@@ -14,6 +14,7 @@ type ReviewDocumentPanelProps = {
   frontmatter: JsonValue
   body: string
   status?: 'idle' | 'saving' | 'saved' | 'error' | 'finishing'
+  unsavedChanges?: boolean
   error?: string | null
   mobileView?: 'edit' | 'preview'
   onFrontmatterChange?: (value: JsonValue) => void
@@ -280,6 +281,7 @@ export function ReviewDocumentPanel({
   frontmatter,
   body,
   status = 'idle',
+  unsavedChanges = false,
   error = null,
   mobileView = 'edit',
   onFrontmatterChange = () => undefined,
@@ -386,7 +388,7 @@ export function ReviewDocumentPanel({
               ? 'Saved'
               : status === 'finishing'
                 ? 'Finishing review…'
-                : error}
+                : (error ?? (unsavedChanges ? 'Unsaved changes' : ''))}
         </span>
         {error === null ? null : (
           <span className="review-document-error" role="alert">

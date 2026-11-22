@@ -247,6 +247,7 @@
 @media (max-width: 700px) {
   .review-document-editor .cm-editor {
     font-size: 16px;
+    line-height: 1.6;
   }
 
   .review-document-input {
@@ -274,4 +275,135 @@
   .review-document-actions .review-document-status {
     flex-basis: 100%;
   }
+}
+
+.session-status-panel--mobile .review-document-panel {
+  gap: 12px;
+  padding: 12px 12px 0;
+}
+
+.session-status-panel--mobile .review-document-content {
+  gap: 12px;
+}
+
+.session-status-panel--mobile .review-document-frontmatter > h2,
+.session-status-panel--mobile .review-document-body-heading > h2 {
+  display: none;
+}
+
+.session-status-panel--mobile .review-document-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 120px;
+  gap: 8px;
+}
+
+.session-status-panel--mobile .review-document-field {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.session-status-panel--mobile .review-document-input {
+  height: 44px;
+}
+
+.session-status-panel--mobile .review-document-body-editor {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.session-status-panel--mobile .review-document-body-heading {
+  justify-content: stretch;
+  margin: 0;
+}
+
+.session-status-panel--mobile .review-document-view-toggle {
+  display: grid;
+  width: 100%;
+  grid-template-columns: 1fr 1fr;
+  padding: 2px;
+  background: var(--aw-border-row);
+}
+
+.session-status-panel--mobile .review-document-view-toggle button {
+  min-height: 32px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.session-status-panel--mobile
+  .review-document-view-toggle
+  button[aria-pressed='true'] {
+  background: var(--aw-border-control);
+}
+
+.session-status-panel--mobile .review-document-body-columns {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.session-status-panel--mobile .review-document-edit-column,
+.session-status-panel--mobile .review-document-preview-column {
+  min-height: 0;
+  flex: 1 1 auto;
+  border-radius: 0;
+}
+
+.session-status-panel--mobile .review-document-edit-column {
+  border-color: var(--aw-border);
+  background: var(--aw-bg-app);
+}
+
+.session-status-panel--mobile .review-document-input {
+  background: var(--aw-bg-app);
+}
+
+.session-status-panel--mobile .review-document-editor,
+.session-status-panel--mobile .review-document-editor .cm-editor {
+  height: 100%;
+  min-height: 0;
+  max-height: none;
+}
+
+.session-status-panel--mobile .review-document-editor .cm-line span {
+  color: var(--aw-text-body);
+  font-style: normal;
+  font-weight: 400;
+  text-decoration: none;
+}
+
+.session-status-panel--mobile .review-document-editor .cm-content {
+  line-height: 1.6;
+}
+
+.session-status-panel--mobile .review-document-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding: 10px 0 max(16px, env(safe-area-inset-bottom, 0px));
+}
+
+.session-status-panel--mobile .review-document-actions .review-document-status,
+.session-status-panel--mobile .review-document-actions .review-document-error {
+  grid-column: 1 / -1;
+}
+
+.session-status-panel--mobile .review-document-status {
+  color: var(--aw-text-muted);
+}
+
+.session-status-panel--mobile .review-document-actions button {
+  width: 100%;
+  min-height: 44px;
+  margin: 0;
+}
+
+.session-status-panel--mobile .review-document-actions .review-document-finish {
+  border-color: var(--aw-color-working);
 }

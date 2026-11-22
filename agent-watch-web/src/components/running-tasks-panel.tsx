@@ -10,11 +10,13 @@ import type { BackgroundTask } from '#types'
 type RunningTasksPanelProps = {
   sessionId: string
   tasks: readonly BackgroundTask[]
+  initialOutputByTaskId?: Readonly<Record<string, string>>
 }
 
 export function RunningTasksPanel({
   sessionId,
   tasks,
+  initialOutputByTaskId = {},
 }: RunningTasksPanelProps) {
   const subagents = tasks.filter((task) => task.kind === 'subagent')
   const backgroundTasks = tasks.filter(
@@ -60,14 +62,21 @@ export function RunningTasksPanel({
         <section className="running-tasks-group" aria-label="Background tasks">
           <h2>BACKGROUND TASKS</h2>
           <ul>
-            {backgroundTasks.map((task) => (
-              <li className="running-task" key={task.id}>
-                <span className="running-task-icon" aria-hidden="true">
-                  ▶
-                </span>
-                <BackgroundTaskRow sessionId={sessionId} task={task} />
-              </li>
-            ))}
+            {backgroundTasks.map((task) => {
+              const initialOutput = initialOutputByTaskId[task.id]
+              return (
+                <li className="running-task" key={task.id}>
+                  <span className="running-task-icon" aria-hidden="true">
+                    ▶
+                  </span>
+                  <BackgroundTaskRow
+                    sessionId={sessionId}
+                    task={task}
+                    initialOutput={initialOutput}
+                  />
+                </li>
+              )
+            })}
           </ul>
         </section>
       ) : null}
@@ -78,17 +87,19 @@ export function RunningTasksPanel({
 function BackgroundTaskRow({
   sessionId,
   task,
+  initialOutput,
 }: {
   sessionId: string
   task: BackgroundTask
+  initialOutput: string | undefined
 }) {
   const outputId = useId()
-  const [isOpen, setIsOpen] = useState(false)
-  const [output, setOutput] = useState<string | null>(null)
+  const [isOpen, setIsOpen] = useState(initialOutput !== undefined)
+  const [output, setOutput] = useState<string | null>(initialOutput ?? null)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    if (!isOpen) return
+    if (!isOpen || initialOutput !== undefined) return
     let active = true
     let timeout: number | null = null
     let requestPending = false
@@ -118,7 +129,7 @@ function BackgroundTaskRow({
       active = false
       if (timeout !== null) window.clearTimeout(timeout)
     }
-  }, [isOpen, sessionId, task.id])
+  }, [initialOutput, isOpen, sessionId, task.id])
 
   return (
     <div className="running-task-content">

@@ -171,6 +171,23 @@ it('edits typed fields and the mobile Markdown editor before saving or finishing
   })
 })
 
+it('shows the unsaved state before the review actions', () => {
+  root = createRoot(container)
+  act(() =>
+    root?.render(
+      <ReviewDocumentPanel
+        frontmatter={{ title: 'Fixture title' }}
+        body="Fixture body."
+        unsavedChanges
+      />,
+    ),
+  )
+
+  expect(container.querySelector('.review-document-status')?.textContent).toBe(
+    'Unsaved changes',
+  )
+})
+
 it.each([
   { device: 'mobile', width: 390 },
   { device: 'desktop', width: 1280 },
