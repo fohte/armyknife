@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.857](https://github.com/fohte/armyknife/compare/v0.1.856...v0.1.857) (2026-11-22)
+
+
+### Bug Fixes
+
+* **agent:** detect unreported stops after replies ([#2106](https://github.com/fohte/armyknife/issues/2106)) ([4b27883](https://github.com/fohte/armyknife/commit/4b27883004cd7ec984718718da3f4d3a99a3ecc8))
+
 ## [0.1.856](https://github.com/fohte/armyknife/compare/v0.1.855...v0.1.856) (2026-11-22)
 
 
