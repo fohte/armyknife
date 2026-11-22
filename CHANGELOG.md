@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.850](https://github.com/fohte/armyknife/compare/v0.1.849...v0.1.850) (2026-11-22)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** align desktop Activity UI ([#2092](https://github.com/fohte/armyknife/issues/2092)) ([09fbbc3](https://github.com/fohte/armyknife/commit/09fbbc3ecaf2ee35df42930d05a64ffc54f45be0))
+
 ## [0.1.849](https://github.com/fohte/armyknife/compare/v0.1.848...v0.1.849) (2026-11-22)
 
 
