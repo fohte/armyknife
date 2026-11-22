@@ -3,7 +3,7 @@ import '#index.css'
 import { act, type ComponentProps, useEffect, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { userEvent } from 'vitest/browser'
+import { page, userEvent } from 'vitest/browser'
 
 import {
   AsyncActionFeedbackProvider,
@@ -676,8 +676,16 @@ it('shows the failed Activity entry above quota in the mobile navigation', () =>
   const activityButton = container.querySelector<HTMLButtonElement>(
     '.async-action-activity-button',
   )
+  const activityEntry = container.querySelector<HTMLElement>(
+    '.agent-watch-nav-activity',
+  )
   const nav = container.querySelector('nav')
-  if (inboxButton === null || activityButton === null || nav === null) {
+  if (
+    inboxButton === null ||
+    activityButton === null ||
+    activityEntry === null ||
+    nav === null
+  ) {
     throw new Error('Mobile navigation Activity state is missing')
   }
 
@@ -686,19 +694,74 @@ it('shows the failed Activity entry above quota in the mobile navigation', () =>
     inboxFailureIndicator:
       inboxButton.querySelector('.view-switch-inbox-failure') !== null,
     activityLabel: activityButton.getAttribute('aria-label'),
+    searchIconVisible: container.querySelector('.agent-watch-command') !== null,
     navigationFooter: Array.from(nav.children, (element) => element.className),
     activityButtonClass: activityButton.className,
+    activityEntryFlex: getComputedStyle(activityEntry).flex,
+    activityEntryMargin: getComputedStyle(activityEntry).margin,
   })
   expect(snapshot()).toEqual({
     inboxLabel: 'Inbox, Activity has failed actions',
     inboxFailureIndicator: true,
     activityLabel: 'Activity, failed actions',
+    searchIconVisible: false,
     navigationFooter: [
       'agent-watch-nav-scroll',
-      'async-action-activity-button is-drawer',
+      'agent-watch-nav-activity',
       'quota-panel',
     ],
     activityButtonClass: 'async-action-activity-button is-drawer',
+    activityEntryFlex: '0 0 auto',
+    activityEntryMargin: '8px 0px 4px',
+  })
+})
+
+it('fills the phone drawer and pins Activity and quota below its scroll list', async () => {
+  await page.viewport(390, 844)
+  container.style.display = 'flex'
+  container.style.width = '320px'
+  container.style.height = '844px'
+  container.style.overflow = 'hidden'
+  renderNav([], {
+    isMobile: true,
+    todaySessions: Array.from({ length: 24 }, (_, index) => ({
+      ...baseTodaySession,
+      id: `starred-${String(index)}`,
+      title: `Starred session ${String(index)}`,
+    })),
+    activityCount: 3,
+  })
+
+  const nav = container.querySelector<HTMLElement>('.agent-watch-nav')
+  const scroll = container.querySelector<HTMLElement>('.agent-watch-nav-scroll')
+  const activity = container.querySelector<HTMLElement>(
+    '.agent-watch-nav-activity',
+  )
+  const quota = container.querySelector<HTMLElement>('.quota-panel')
+  if (nav === null || scroll === null || activity === null || quota === null) {
+    throw new Error('The phone drawer footer is missing')
+  }
+
+  const snapshot = () => {
+    const navRect = nav.getBoundingClientRect()
+    const scrollRect = scroll.getBoundingClientRect()
+    const activityRect = activity.getBoundingClientRect()
+    const quotaRect = quota.getBoundingClientRect()
+    return {
+      navHeight: navRect.height,
+      scrollHasOverflow: scroll.scrollHeight > scroll.clientHeight,
+      scrollToActivityGap: activityRect.top - scrollRect.bottom,
+      activityToQuotaGap: quotaRect.top - activityRect.bottom,
+      quotaBottomGap: navRect.bottom - quotaRect.bottom,
+    }
+  }
+
+  expect(snapshot()).toEqual({
+    navHeight: 844,
+    scrollHasOverflow: true,
+    scrollToActivityGap: 8,
+    activityToQuotaGap: 4,
+    quotaBottomGap: 0,
   })
 })
 

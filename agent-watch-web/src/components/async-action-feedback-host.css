@@ -106,12 +106,15 @@
   .async-action-activity-backdrop {
     align-items: flex-end;
     padding: 0;
+    background: rgb(0 0 0 / 55%);
   }
   .async-action-activity {
     width: 100%;
+    height: auto;
     max-height: 85dvh;
     border-width: 1px 0 0;
-    padding-bottom: max(30px, env(safe-area-inset-bottom));
+    padding: 16px 0 max(30px, env(safe-area-inset-bottom));
+    box-shadow: 0 -12px 36px rgb(0 0 0 / 30%);
   }
   .async-action-activity > header {
     padding: 0 8px 6px 16px;
@@ -137,5 +140,45 @@
     min-height: 44px;
     margin: 10px 16px 0;
     border: 1px solid var(--aw-border-control);
+    color: var(--aw-text-primary);
+  }
+  .async-action-activity-list .async-action-item--row {
+    grid-template-columns: 16px minmax(0, 1fr) auto;
+    column-gap: 12px;
+    padding-right: 16px;
+  }
+  .async-action-activity-list {
+    min-height: 0;
+  }
+  .async-action-activity-list .async-action-item--row > time {
+    position: static;
+    color: var(--aw-text-muted);
+    font-size: 12px;
+  }
+  .async-action-activity-list
+    .async-action-item--row
+    .async-action-item-content
+    strong {
+    font-size: 14px;
+  }
+  .async-action-activity-list .async-action-item--row .async-action-controls {
+    display: flex;
+    align-self: flex-start;
+    flex-wrap: wrap;
+  }
+  .async-action-activity-list .async-action-item--row .async-action-session,
+  .async-action-activity-list
+    .async-action-item--row
+    .async-action-item-content
+    > span {
+    font-size: 13px;
+  }
+  .async-action-activity-list .async-action-item--row .async-action-session {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .async-action-activity-list .async-action-item--row .async-action-error {
+    color: var(--aw-text-body) !important;
   }
 }

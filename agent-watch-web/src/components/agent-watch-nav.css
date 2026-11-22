@@ -43,6 +43,11 @@
   overflow-y: auto;
 }
 
+.agent-watch-nav-activity {
+  flex: none;
+  margin: 8px 0 4px;
+}
+
 .view-switch-inbox-button {
   position: relative;
 }

@@ -142,6 +142,7 @@ export function AsyncActionFeedbackHost({
                   <AsyncActionItem
                     action={action}
                     form="row"
+                    time={timeLabel(action.createdAt)}
                     onRetry={() => {
                       closeActivity()
                       retry(action.id)
@@ -157,7 +158,6 @@ export function AsyncActionFeedbackHost({
                       openInTerminal(action.id)
                     }}
                   />
-                  <time>{timeLabel(action.createdAt)}</time>
                 </div>
               ))}
             </div>

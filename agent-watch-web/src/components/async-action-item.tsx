@@ -12,6 +12,7 @@ import type { CloseWorktreeChecks } from '#session-operation-types'
 type AsyncActionItemProps = {
   action: AsyncAction
   form: 'toast' | 'row' | 'line'
+  time?: string
   onRetry?: () => void
   onDetails?: () => void
   onDismiss?: () => void
@@ -107,6 +108,7 @@ function copy(action: AsyncAction) {
 export function AsyncActionItem({
   action,
   form,
+  time,
   onRetry,
   onDetails,
   onDismiss,
@@ -147,7 +149,7 @@ export function AsyncActionItem({
       <Icon
         className={isRunning ? 'async-action-spinner' : undefined}
         aria-hidden="true"
-        size={form === 'line' ? 13 : 15}
+        size={form === 'line' ? 13 : form === 'row' ? 14 : 15}
       />
       <div className="async-action-item-content">
         <strong>{label}</strong>
@@ -230,6 +232,9 @@ export function AsyncActionItem({
       ) : null}
       {isQueue ? (
         <span className="async-action-timer" aria-hidden="true" />
+      ) : null}
+      {form === 'row' && time !== undefined ? (
+        <time className="async-action-item-time">{time}</time>
       ) : null}
     </div>
   )

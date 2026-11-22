@@ -9,8 +9,8 @@ import {
 
 type ActivityButtonProps = {
   drawer?: boolean
-  iconOnly?: boolean
   activityCount?: number
+  isRunning?: boolean
   failed?: boolean
   active?: boolean
   onOpenActivity?: () => void
@@ -18,8 +18,8 @@ type ActivityButtonProps = {
 
 export function ActivityButton({
   drawer = false,
-  iconOnly = false,
   activityCount,
+  isRunning: runningOverride,
   failed: failedOverride,
   active,
   onOpenActivity,
@@ -29,9 +29,15 @@ export function ActivityButton({
   const count = activityCount ?? actions.length
   const activityOpen = active ?? feedback?.activityOpen ?? false
   const openActivity = onOpenActivity ?? (() => feedback?.openActivity())
-  const running = actions.filter(
-    (action) => action.status === 'merging' || action.status === 'closing',
-  ).length
+  const running =
+    runningOverride === undefined
+      ? actions.filter(
+          (action) =>
+            action.status === 'merging' || action.status === 'closing',
+        ).length
+      : runningOverride
+        ? 1
+        : 0
   const failed =
     failedOverride ??
     actions.some((action) => isAsyncActionFailureStatus(action.status))
@@ -46,13 +52,13 @@ export function ActivityButton({
       aria-expanded={activityOpen}
       aria-haspopup="dialog"
       aria-label={`Activity, ${count === 0 ? 'no actions yet' : label}`}
-      className={`async-action-activity-button${drawer ? ' is-drawer' : ''}${iconOnly ? ' is-icon-only' : ''}${count === 0 ? ' is-empty' : ''}${activityOpen ? ' is-open' : ''}`}
+      className={`async-action-activity-button${drawer ? ' is-drawer' : ''}${count === 0 ? ' is-empty' : ''}${activityOpen ? ' is-open' : ''}`}
       type="button"
       onClick={() => {
         openActivity()
       }}
     >
-      <Activity aria-hidden="true" size={iconOnly ? 18 : drawer ? 16 : 14} />
+      <Activity aria-hidden="true" size={drawer ? 16 : 14} />
       <span>Activity</span>
       {count > 0 ? (
         <span
