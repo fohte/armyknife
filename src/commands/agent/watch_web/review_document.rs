@@ -7,6 +7,7 @@ use axum::extract::{DefaultBodyLimit, Path as RoutePath, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::commands::agent::review_queue::{ReviewDocumentQueue, review_document_queue};
 use crate::commands::agent::store;
@@ -25,6 +26,7 @@ type ReviewDocumentEditLock = Arc<tokio::sync::Mutex<()>>;
 #[serde(rename_all = "camelCase")]
 struct ReviewDocumentResponse {
     id: String,
+    revision: String,
     frontmatter: serde_json::Value,
     body: String,
 }
@@ -33,6 +35,7 @@ struct ReviewDocumentResponse {
 #[serde(rename_all = "camelCase")]
 struct ReviewDocumentEditRequest {
     id: String,
+    revision: String,
     frontmatter: serde_json::Value,
     body: String,
 }
@@ -40,6 +43,7 @@ struct ReviewDocumentEditRequest {
 #[derive(Serialize)]
 struct ReviewDocumentSaved {
     success: bool,
+    revision: String,
 }
 
 pub(super) fn router() -> Router {
@@ -134,8 +138,13 @@ async fn save_review_document(
     axum::Json(request): axum::Json<ReviewDocumentEditRequest>,
 ) -> Result<axum::Json<ReviewDocumentSaved>, StatusCode> {
     let _edit_guard = edit_lock.lock().await;
-    save_document_for_session(load_session, load_review_queue, session_id, request, false).await?;
-    Ok(axum::Json(ReviewDocumentSaved { success: true }))
+    let revision =
+        save_document_for_session(load_session, load_review_queue, session_id, request, false)
+            .await?;
+    Ok(axum::Json(ReviewDocumentSaved {
+        success: true,
+        revision,
+    }))
 }
 
 async fn finish_review_document(
@@ -148,8 +157,13 @@ async fn finish_review_document(
     axum::Json(request): axum::Json<ReviewDocumentEditRequest>,
 ) -> Result<axum::Json<ReviewDocumentSaved>, StatusCode> {
     let _edit_guard = edit_lock.lock().await;
-    save_document_for_session(load_session, load_review_queue, session_id, request, true).await?;
-    Ok(axum::Json(ReviewDocumentSaved { success: true }))
+    let revision =
+        save_document_for_session(load_session, load_review_queue, session_id, request, true)
+            .await?;
+    Ok(axum::Json(ReviewDocumentSaved {
+        success: true,
+        revision,
+    }))
 }
 
 async fn save_document_for_session(
@@ -158,7 +172,7 @@ async fn save_document_for_session(
     session_id: String,
     request: ReviewDocumentEditRequest,
     finishing: bool,
-) -> Result<(), StatusCode> {
+) -> Result<String, StatusCode> {
     tokio::task::spawn_blocking(move || {
         let session = load_session(&session_id)
             .map_err(|error| {
@@ -194,6 +208,17 @@ async fn save_document_for_session(
         {
             return Err(StatusCode::CONFLICT);
         }
+        let current_content = std::fs::read(&marker.path).map_err(|error| {
+            tracing::warn!(%error, "failed to read active review document before saving");
+            if error.kind() == std::io::ErrorKind::NotFound {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
+        })?;
+        if request.revision != review_document_revision(&current_content) {
+            return Err(StatusCode::CONFLICT);
+        }
         let fifo_path = finish_request_fifo_path(&marker.path);
         if !is_fifo(&fifo_path) {
             return Err(StatusCode::CONFLICT);
@@ -209,6 +234,7 @@ async fn save_document_for_session(
             None
         };
         let content = render_review_document(&marker.path, request.frontmatter, &request.body)?;
+        let revision = review_document_revision(content.as_bytes());
         overwrite_review_document(&marker.path, content.as_bytes())?;
         if finishing {
             crate::shared::human_in_the_loop::try_signal_fifo(&fifo_path).map_err(|error| {
@@ -232,7 +258,7 @@ async fn save_document_for_session(
                 return Err(StatusCode::INTERNAL_SERVER_ERROR);
             }
         }
-        Ok(())
+        Ok(revision)
     })
     .await
     .map_err(|error| {
@@ -421,6 +447,7 @@ fn select_review_document(
 
 fn load_review_document(marker: &ReviewDocumentMarker) -> anyhow::Result<ReviewDocumentResponse> {
     let content = std::fs::read_to_string(&marker.path)?;
+    let revision = review_document_revision(content.as_bytes());
     let (frontmatter, body) = match crate::shared::yaml_frontmatter::split_frontmatter(&content) {
         Some((_, yaml, body_offset)) => (
             serde_json::to_value(serde_yaml::from_str::<serde_yaml::Value>(yaml)?)?,
@@ -431,9 +458,14 @@ fn load_review_document(marker: &ReviewDocumentMarker) -> anyhow::Result<ReviewD
 
     Ok(ReviewDocumentResponse {
         id: marker.id.clone(),
+        revision,
         frontmatter,
         body,
     })
+}
+
+fn review_document_revision(content: &[u8]) -> String {
+    crate::shared::hex::encode(&Sha256::digest(content))
 }
 
 #[cfg(test)]
@@ -457,8 +489,13 @@ mod tests {
 
     use super::{
         ReviewDocumentOperationLock, finish_ack_fifo_path, finish_request_fifo_path,
-        router_with_loaders, router_with_session_loader,
+        review_document_revision, router_with_loaders, router_with_session_loader,
     };
+
+    fn current_revision(path: &Path) -> String {
+        let content = std::fs::read(path).expect("fixture document should be readable");
+        review_document_revision(&content)
+    }
 
     struct ActiveReviewDocument {
         temp_dir: TempDir,
@@ -611,6 +648,7 @@ mod tests {
                 StatusCode::OK,
                 serde_json::json!({
                     "id": "fixture-review",
+                    "revision": current_revision(&document_path),
                     "frontmatter": {
                         "summary": "Fixture summary",
                         "enabled": true,
@@ -673,6 +711,7 @@ mod tests {
                 StatusCode::OK,
                 serde_json::json!({
                     "id": "visible-review",
+                    "revision": current_revision(&visible_path),
                     "frontmatter": null,
                     "body": "Visible body.",
                 }),
@@ -720,6 +759,7 @@ mod tests {
                 StatusCode::OK,
                 serde_json::json!({
                     "id": "review-z-older",
+                    "revision": current_revision(&older_path),
                     "frontmatter": null,
                     "body": "Earlier body.",
                 }),
@@ -808,6 +848,7 @@ mod tests {
                         serde_json::json!({
                             "id": "fixture-review",
                             "path": outside_path,
+                            "revision": current_revision(&document_path),
                             "frontmatter": { "approved": true },
                             "body": "New body.",
                         })
@@ -833,7 +874,10 @@ mod tests {
             ),
             (
                 StatusCode::OK,
-                serde_json::json!({ "success": true }),
+                serde_json::json!({
+                    "success": true,
+                    "revision": current_revision(&document_path),
+                }),
                 indoc! {"
                     ---
                     approved: true
@@ -860,6 +904,7 @@ mod tests {
                     .body(Body::from(
                         serde_json::json!({
                             "id": "fixture-review",
+                            "revision": current_revision(&document_path),
                             "frontmatter": null,
                             "body": "Edited plain Markdown body.",
                         })
@@ -894,6 +939,7 @@ mod tests {
                     .body(Body::from(
                         serde_json::json!({
                             "id": "another-review",
+                            "revision": current_revision(&document_path),
                             "frontmatter": null,
                             "body": "Must not be saved.",
                         })
@@ -911,6 +957,53 @@ mod tests {
                     .expect("fixture document should be readable"),
             ),
             (StatusCode::CONFLICT, "Original body.".to_string()),
+        );
+    }
+
+    #[rstest]
+    #[case::save("save")]
+    #[case::finish("finish")]
+    #[tokio::test]
+    async fn rejects_a_stale_revision_without_overwriting_the_document(
+        active_review_document: ActiveReviewDocument,
+        #[case] action: &str,
+    ) {
+        let document_path = active_review_document.document_path;
+        let revision = current_revision(&document_path);
+        std::fs::write(&document_path, "Latest body from another editor.")
+            .expect("latest document should be written");
+        let session = active_review_document.session;
+        let app = router_with_session_loader(move |_| Ok(Some(session.clone())));
+        let response = app
+            .oneshot(
+                Request::post(format!(
+                    "/sessions/fixture-session/review-document/{action}"
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "id": "fixture-review",
+                        "revision": revision,
+                        "frontmatter": null,
+                        "body": "Stale client content.",
+                    })
+                    .to_string(),
+                ))
+                .expect("request should be valid"),
+            )
+            .await
+            .expect("request should complete");
+
+        assert_eq!(
+            (
+                response.status(),
+                std::fs::read_to_string(&document_path)
+                    .expect("fixture document should be readable"),
+            ),
+            (
+                StatusCode::CONFLICT,
+                "Latest body from another editor.".to_string(),
+            ),
         );
     }
 
@@ -956,6 +1049,7 @@ mod tests {
             .body(Body::from(
                 serde_json::json!({
                     "id": "fixture-review",
+                    "revision": current_revision(&document_path),
                     "frontmatter": null,
                     "body": "Saved before review closes.",
                 })
@@ -1011,7 +1105,10 @@ mod tests {
             ),
             (
                 StatusCode::OK,
-                serde_json::json!({ "success": true }),
+                serde_json::json!({
+                    "success": true,
+                    "revision": current_revision(&document_path),
+                }),
                 "Saved before review closes.".to_string(),
                 "Saved before review closes.".to_string(),
                 1,
@@ -1039,6 +1136,7 @@ mod tests {
                     .body(Body::from(
                         serde_json::json!({
                             "id": "fixture-review",
+                            "revision": current_revision(&document_path),
                             "frontmatter": null,
                             "body": "Late finish should not overwrite this document.",
                         })

@@ -90,6 +90,16 @@ export const SaveFailed: Story = {
   decorators: [desktopViewport],
 }
 
+export const SaveRejectedBecauseDocumentChanged: Story = {
+  name: 'The review document explains that the draft changed elsewhere',
+  args: {
+    status: 'error',
+    error:
+      'This draft changed since you opened it. Reload the page to see the latest version.',
+  },
+  decorators: [desktopViewport],
+}
+
 export const FinishingReview: Story = {
   name: 'The review is finishing after the document was saved',
   args: { status: 'finishing' },

@@ -190,6 +190,7 @@ function requestFor(operation: SessionOperation) {
         path: `review-document/${operation.type === 'review_document_save' ? 'save' : 'finish'}`,
         body: {
           id: operation.id,
+          revision: operation.revision,
           frontmatter: operation.frontmatter,
           body: operation.body,
         },
@@ -260,9 +261,15 @@ export function createSessionOperation(
     case 'review-document/save':
     case 'review-document/finish': {
       const id = requiredString('id')
+      const revision = requiredString('revision')
       const body = requiredString('body')
       const frontmatter = payload['frontmatter']
-      if (id === null || body === null || !isJsonValue(frontmatter)) {
+      if (
+        id === null ||
+        revision === null ||
+        body === null ||
+        !isJsonValue(frontmatter)
+      ) {
         return errOperation('Invalid review document operation')
       }
       return ok<SessionOperation, Error>({
@@ -272,6 +279,7 @@ export function createSessionOperation(
             : 'review_document_finish',
         sessionId,
         id,
+        revision,
         frontmatter,
         body,
       })
@@ -470,15 +478,29 @@ export function submitSessionOperation(operation: SessionOperation) {
   const request = requestFor(operation)
   return postAction(operation.sessionId, request.path, request.body).andThen(
     (response) => {
-      if (!response.ok)
+      if (!response.ok) {
+        if (
+          response.status === 409 &&
+          (operation.type === 'review_document_save' ||
+            operation.type === 'review_document_finish')
+        ) {
+          return err<unknown, SessionOperationError>(
+            new Error(
+              'This draft changed since you opened it. Reload the page to see the latest version.',
+            ),
+          )
+        }
         return errorFromResponse(response).andThen((error) => err(error))
+      }
       if (
         operation.type !== 'message' &&
         operation.type !== 'merge' &&
         operation.type !== 'rewind' &&
         operation.type !== 'vibe' &&
         operation.type !== 'command_preview' &&
-        operation.type !== 'command_execute'
+        operation.type !== 'command_execute' &&
+        operation.type !== 'review_document_save' &&
+        operation.type !== 'review_document_finish'
       )
         return ok<unknown, SessionOperationError>(undefined)
       return ResultAsync.fromPromise<unknown, SessionOperationError>(

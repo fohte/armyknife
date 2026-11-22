@@ -272,6 +272,7 @@ it('fetches and renders the review document when the status panel opens', async 
       new Response(
         JSON.stringify({
           id: 'fixture-review-a',
+          revision: 'fixture-revision-a',
           frontmatter: { title: 'Fixture pull request' },
           body: '**Fixture draft body**',
         }),
@@ -336,6 +337,7 @@ it('preserves unsaved review edits when a preview link opens a web UI', async ()
       new Response(
         JSON.stringify({
           id: 'fixture-review-a',
+          revision: 'fixture-revision-a',
           frontmatter: { title: 'Saved title' },
           body: '[Open canvas page](http://localhost:43123/studio/pages/sample#page-fixture)',
         }),
@@ -435,10 +437,11 @@ it('saves the edited document and sends the same edits before finishing review',
           method === 'GET'
             ? {
                 id: 'fixture-review-a',
+                revision: 'fixture-revision-a',
                 frontmatter: { title: 'Fixture title', enabled: false },
                 body: 'Fixture body.',
               }
-            : { success: true },
+            : { success: true, revision: 'fixture-revision-b' },
         ),
         { status: 200, headers: { 'Content-Type': 'application/json' } },
       ),
@@ -507,6 +510,7 @@ it('saves the edited document and sends the same edits before finishing review',
       method: 'POST',
       body: {
         id: 'fixture-review-a',
+        revision: 'fixture-revision-a',
         frontmatter: { title: 'Edited title', enabled: true },
         body: 'Edited body.',
       },
@@ -516,6 +520,7 @@ it('saves the edited document and sends the same edits before finishing review',
       method: 'POST',
       body: {
         id: 'fixture-review-a',
+        revision: 'fixture-revision-b',
         frontmatter: { title: 'Edited title', enabled: true },
         body: 'Edited body.',
       },
@@ -537,6 +542,7 @@ it('keeps edits after a save error and retries the same document', async () => {
         new Response(
           JSON.stringify({
             id: 'fixture-review-a',
+            revision: 'fixture-revision-a',
             frontmatter: { title: 'Fixture title' },
             body: 'Fixture body.',
           }),
@@ -547,14 +553,17 @@ it('keeps edits after a save error and retries the same document', async () => {
     saveAttempts += 1
     return Promise.resolve(
       saveAttempts === 1
-        ? new Response(
-            JSON.stringify({ error: 'The review document changed.' }),
-            { status: 409, headers: { 'Content-Type': 'application/json' } },
-          )
-        : new Response(JSON.stringify({ success: true }), {
-            status: 200,
-            headers: { 'Content-Type': 'application/json' },
-          }),
+        ? new Response(null, { status: 409 })
+        : new Response(
+            JSON.stringify({
+              success: true,
+              revision: 'fixture-revision-b',
+            }),
+            {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' },
+            },
+          ),
     )
   })
   vi.stubGlobal('fetch', fetcher)
@@ -620,7 +629,8 @@ it('keeps edits after a save error and retries the same document', async () => {
 
   expect(retrySnapshot()).toEqual({
     afterFailure: {
-      alert: 'The review document changed.',
+      alert:
+        'This draft changed since you opened it. Reload the page to see the latest version.',
       title: 'Edited title',
       body: 'Edited body.',
     },
@@ -641,6 +651,7 @@ it('keeps edits after a save error and retries the same document', async () => {
         method: 'POST',
         body: {
           id: 'fixture-review-a',
+          revision: 'fixture-revision-a',
           frontmatter: { title: 'Edited title' },
           body: 'Edited body.',
         },
@@ -650,6 +661,7 @@ it('keeps edits after a save error and retries the same document', async () => {
         method: 'POST',
         body: {
           id: 'fixture-review-a',
+          revision: 'fixture-revision-a',
           frontmatter: { title: 'Edited title' },
           body: 'Edited body.',
         },
@@ -665,6 +677,7 @@ it('refetches the review document when its active ID changes', async () => {
       new Response(
         JSON.stringify({
           id: 'fixture-review-a',
+          revision: 'fixture-revision-a',
           frontmatter: { title: 'First fixture' },
           body: 'First body',
         }),
@@ -675,6 +688,7 @@ it('refetches the review document when its active ID changes', async () => {
       new Response(
         JSON.stringify({
           id: 'fixture-review-b',
+          revision: 'fixture-revision-b',
           frontmatter: { title: 'Second fixture' },
           body: 'Second body',
         }),
