@@ -70,6 +70,7 @@ async function waitForState(condition: () => boolean) {
       await new Promise((resolve) => window.setTimeout(resolve, 10))
     })
   }
+  if (condition()) return
   throw new Error('The expected review document state did not appear')
 }
 
