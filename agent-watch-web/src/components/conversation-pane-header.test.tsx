@@ -934,6 +934,7 @@ it('shows merge feedback when a PR uses the session repository fallback', async 
       'button[aria-label^="Merge PR #46"]',
     ),
   )
+  const mergeButtonLabel = mergeButton.getAttribute('aria-label')
   act(() => {
     mergeButton.click()
   })
@@ -955,6 +956,7 @@ it('shows merge feedback when a PR uses the session repository fallback', async 
   })
 
   const mergeState = () => ({
+    mergeButtonLabel,
     request: fetchMock.mock.calls.map(([url, init]) => ({
       url,
       body: init?.body,
@@ -962,6 +964,7 @@ it('shows merge feedback when a PR uses the session repository fallback', async 
     feedback: container.querySelector('[role="alert"]')?.textContent,
   })
   expect(mergeState()).toEqual({
+    mergeButtonLabel: 'Merge PR #46',
     request: [
       {
         url: '/api/sessions/fixture-session/pull-requests/46/merge',
