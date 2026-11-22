@@ -256,7 +256,17 @@ it.each([
   { description: 'desktop', isMobile: false },
   { description: 'mobile', isMobile: true },
 ])('opens and closes the $description pull request list', ({ isMobile }) => {
-  render(isMobile)
+  const closedPullRequest: PullRequest = {
+    number: 44,
+    state: 'Closed',
+    owner: 'example-org',
+    repo: 'example-infra',
+    title: 'Close an old pull request',
+    url: 'https://github.com/example-org/example-infra/pull/44',
+    ciState: 'Unknown',
+    isCurrentBranch: false,
+  }
+  render(isMobile, [...pullRequests, closedPullRequest])
   const trigger = container.querySelector<HTMLButtonElement>(
     '.session-pr-trigger',
   )
@@ -295,6 +305,10 @@ it.each([
         mobileState:
           row.querySelector('.session-pr-row-mobile-state')?.textContent ??
           null,
+        mobileStateAriaHidden:
+          row
+            .querySelector('.session-pr-row-mobile-state')
+            ?.getAttribute('aria-hidden') ?? null,
         reason: row.querySelector('.session-pr-row-state')?.textContent ?? null,
         hasAction: row.querySelector('button') !== null,
         ciState:
@@ -331,7 +345,7 @@ it.each([
     opened: {
       expanded: 'true',
       hasPullRequestIcon: true,
-      count: '3',
+      count: '4',
       triggerSize: isMobile
         ? { width: '44px', height: '44px' }
         : { width: '30px', height: '26px' },
@@ -344,6 +358,7 @@ it.each([
           title: 'Show delivery status',
           repo: 'example-org/example-repo',
           mobileState: isMobile ? '· Open' : null,
+          mobileStateAriaHidden: null,
           reason: 'CI running',
           hasAction: false,
           ciState: 'CI running',
@@ -354,16 +369,29 @@ it.each([
           title: 'Add retry settings',
           repo: 'example-org/example-infra',
           mobileState: isMobile ? '· Open' : null,
+          mobileStateAriaHidden: null,
           reason: 'CI passed',
           hasAction: false,
           ciState: 'CI passed',
           href: 'https://github.com/example-org/example-infra/pull/43',
         },
         {
+          number: '#44',
+          title: 'Close an old pull request',
+          repo: 'example-org/example-infra',
+          mobileState: isMobile ? '· Closed' : null,
+          mobileStateAriaHidden: null,
+          reason: isMobile ? null : 'Closed',
+          hasAction: false,
+          ciState: 'CI status unknown',
+          href: 'https://github.com/example-org/example-infra/pull/44',
+        },
+        {
           number: '#41',
           title: 'Record attempts',
           repo: 'example-org/example-repo',
           mobileState: isMobile ? '· ✓ Merged' : null,
+          mobileStateAriaHidden: null,
           reason: isMobile ? null : 'Merged',
           hasAction: false,
           ciState: 'CI status unknown',
