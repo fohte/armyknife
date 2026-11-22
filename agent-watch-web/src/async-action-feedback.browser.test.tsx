@@ -1,6 +1,7 @@
 import { act, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { userEvent } from 'vitest/browser'
 
 import {
   AsyncActionFeedbackProvider,
@@ -78,6 +79,36 @@ function MissingProviderHarness({
   )
 }
 
+function CommandFeedbackHarness({
+  run,
+}: {
+  run: () => Promise<AsyncActionOutcome>
+}) {
+  const feedback = useOptionalAsyncActionFeedback()
+  const startAsyncAction = useAsyncActionStarter(() => undefined)
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => {
+          startAsyncAction({
+            kind: 'command',
+            sessionId: 'example-session',
+            sessionTitle: 'Example session',
+            command: "printf 'sample output'",
+            run,
+          })
+        }}
+      >
+        Start command
+      </button>
+      <output>
+        {JSON.stringify(feedback?.actions.map(({ status }) => status))}
+      </output>
+    </>
+  )
+}
+
 function textContent(selector: string) {
   return container.querySelector(selector)?.textContent ?? null
 }
@@ -115,6 +146,53 @@ it('runs the action and reports a provider error when used outside its provider'
     providerError:
       'useAsyncActionFeedback must be used inside AsyncActionFeedbackProvider',
     runCalls: 1,
+  })
+})
+
+it('keeps a command in the toast while it runs and reports its success', async () => {
+  let finishCommand: (outcome: AsyncActionOutcome) => void = () => undefined
+  const run = vi.fn(
+    () =>
+      new Promise<AsyncActionOutcome>((resolve) => {
+        finishCommand = resolve
+      }),
+  )
+  act(() => {
+    root?.render(
+      <AsyncActionFeedbackProvider>
+        <CommandFeedbackHarness run={run} />
+      </AsyncActionFeedbackProvider>,
+    )
+  })
+
+  const startButton = container.querySelector('button')
+  if (!(startButton instanceof HTMLButtonElement)) {
+    throw new Error('Expected the start command button')
+  }
+  await act(async () => {
+    await userEvent.click(startButton)
+  })
+  const running = {
+    status: textContent('output'),
+    toast: textContent('.async-action-toast-stack'),
+  }
+  await act(async () => {
+    finishCommand({ status: 'ranCommand' })
+    await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    running,
+    completedStatus: textContent('output'),
+    completedToast: textContent('.async-action-toast-stack'),
+  })
+  expect(snapshot()).toEqual({
+    running: {
+      status: '["runningCommand"]',
+      toast: "Running commandprintf 'sample output'",
+    },
+    completedStatus: '["ranCommand"]',
+    completedToast: "Ran commandprintf 'sample output'",
   })
 })
 

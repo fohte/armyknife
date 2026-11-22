@@ -52,6 +52,11 @@ export function usePendingMergeRetryNavigation({
       action.kind === 'merge' &&
       action.status === 'mergeFailed',
   )
+  const pendingCommandOutputAction = actionFeedback?.actions.find(
+    (action) =>
+      actionFeedback.pendingCommandOutputActionIds.includes(action.id) &&
+      action.kind === 'command',
+  )
   const activeRetryActionId =
     actionFeedback?.activeMergeRetryConfirmationActionId ?? null
   const activeRetryAction = actionFeedback?.actions.find(
@@ -94,6 +99,27 @@ export function usePendingMergeRetryNavigation({
     activeRetryActionId,
     openSessionInInbox,
     pendingAction,
+    sessions,
+    visibility,
+  ])
+
+  useEffect(() => {
+    if (
+      pendingCommandOutputAction === undefined ||
+      !sessions.some(
+        (session) => session.id === pendingCommandOutputAction.sessionId,
+      ) ||
+      isConversationVisibleFor(pendingCommandOutputAction.sessionId, visibility)
+    ) {
+      return
+    }
+
+    actionFeedback?.closeActivity()
+    openSessionInInbox(pendingCommandOutputAction.sessionId)
+  }, [
+    actionFeedback,
+    openSessionInInbox,
+    pendingCommandOutputAction,
     sessions,
     visibility,
   ])

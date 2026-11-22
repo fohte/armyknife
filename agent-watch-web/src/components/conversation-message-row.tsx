@@ -22,6 +22,7 @@ function areConversationMessagePropsEqual(
     case 'queued_user':
     case 'user_with_content':
       return (
+        previous.conversationIndex === next.conversationIndex &&
         previous.actions?.rewind === next.actions?.rewind &&
         previous.onSelectSession === next.onSelectSession &&
         previous.onRewind === next.onRewind &&
@@ -35,6 +36,7 @@ function areConversationMessagePropsEqual(
       return (
         previous.onSelectSession === next.onSelectSession &&
         previous.onCommandExecuted === next.onCommandExecuted &&
+        previous.onCommandStarted === next.onCommandStarted &&
         previous.sessionId === next.sessionId &&
         previous.onRewind === next.onRewind &&
         previous.sessions === next.sessions

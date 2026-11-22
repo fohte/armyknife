@@ -2,11 +2,25 @@ import '#components/conversation-pane.css'
 import '#components/conversation-pane-view.css'
 
 import { Button } from '@fohte/ui/button'
-import { type ReactNode, useCallback, useMemo, useRef, useState } from 'react'
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 
-import { useOptionalAsyncActionFeedback } from '#async-action-feedback'
+import {
+  formatAsyncActionTime,
+  useOptionalAsyncActionFeedback,
+} from '#async-action-feedback'
 import { useAgentUsageContext } from '#components/agent-usage-context'
 import { AsyncActionItem } from '#components/async-action-item'
+import type {
+  CommandOutputRefresh,
+  CommandOutputStart,
+} from '#components/command-result-message'
 import { ConversationPaneHeader } from '#components/conversation-pane-header'
 import { ConversationSelectionReply } from '#components/conversation-selection-reply'
 import { ConversationStatusBand } from '#components/conversation-status-band'
@@ -76,7 +90,8 @@ type ConversationPaneViewProps = {
     payload?: Record<string, unknown>,
     permissionIdentity?: PermissionRequestIdentity,
   ) => Promise<boolean>
-  onCommandExecuted?: () => void
+  onCommandExecuted?: CommandOutputRefresh
+  onCommandStarted?: CommandOutputStart
   onRewind?: (
     messageId: string,
     mode: RewindMode,
@@ -136,6 +151,7 @@ export function ConversationPaneView({
   onClearError = () => undefined,
   onAction,
   onCommandExecuted,
+  onCommandStarted,
   onRewind,
   onOpenInTerminal,
   onSelectSession,
@@ -162,6 +178,13 @@ export function ConversationPaneView({
   onComposerFocusRequestHandled = () => undefined,
 }: ConversationPaneViewProps) {
   const actionFeedback = useOptionalAsyncActionFeedback()
+  const commandOutputHighlightTimer = useRef<number | null>(null)
+  const commandOutputAction = actionFeedback?.actions.find(
+    (action) =>
+      actionFeedback.pendingCommandOutputActionIds.includes(action.id) &&
+      action.kind === 'command' &&
+      action.sessionId === session.id,
+  )
   const { usage } = useAgentUsageContext()
   const sessionUsage =
     usage?.sessions.find((entry) => entry.sessionId === session.id) ?? null
@@ -220,6 +243,44 @@ export function ConversationPaneView({
     epoch,
     olderCursor,
   })
+  useEffect(
+    () => () => {
+      if (commandOutputHighlightTimer.current !== null) {
+        window.clearTimeout(commandOutputHighlightTimer.current)
+      }
+    },
+    [],
+  )
+  useEffect(() => {
+    if (
+      loading ||
+      commandOutputAction === undefined ||
+      commandOutputAction.commandOutputIndex === undefined
+    ) {
+      return
+    }
+    const target = conversationScrollRef.current?.querySelector<HTMLElement>(
+      `[data-command-result="true"][data-conversation-index="${String(commandOutputAction.commandOutputIndex)}"]`,
+    )
+    if (target === undefined || target === null) return
+
+    target.dataset['commandOutputHighlighted'] = 'true'
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    if (commandOutputHighlightTimer.current !== null) {
+      window.clearTimeout(commandOutputHighlightTimer.current)
+    }
+    commandOutputHighlightTimer.current = window.setTimeout(() => {
+      delete target.dataset['commandOutputHighlighted']
+      commandOutputHighlightTimer.current = null
+    }, 1_500)
+    actionFeedback?.consumeCommandOutput(commandOutputAction.id)
+  }, [
+    actionFeedback,
+    commandOutputAction,
+    conversationScrollRef,
+    loading,
+    messages,
+  ])
   useConversationDecisionJump({
     decisionJump,
     epoch,
@@ -271,6 +332,7 @@ export function ConversationPaneView({
     hasUnansweredProposal,
   } = useConversationMessageElements({
     messages,
+    start,
     ...(decisions === undefined ? {} : { decisions }),
     ...(responseHasUnansweredProposal === undefined
       ? {}
@@ -286,6 +348,7 @@ export function ConversationPaneView({
     onSelectDecision,
     onAction,
     ...(onCommandExecuted === undefined ? {} : { onCommandExecuted }),
+    ...(onCommandStarted === undefined ? {} : { onCommandStarted }),
     onOpenInTerminal: openInTerminal,
     openInTerminalStatus,
     onSelectSession: selectLinkedSession,
@@ -405,7 +468,9 @@ export function ConversationPaneView({
         ) : null}
         <MarkdownCommandContextProvider
           sessionId={session.id}
+          sessionTitle={session.title}
           {...(onCommandExecuted === undefined ? {} : { onCommandExecuted })}
+          {...(onCommandStarted === undefined ? {} : { onCommandStarted })}
         >
           {conversationMessageElements}
         </MarkdownCommandContextProvider>
@@ -416,6 +481,9 @@ export function ConversationPaneView({
               action={action}
               form="line"
               key={action.id}
+              {...(action.kind === 'command'
+                ? { time: formatAsyncActionTime(action.createdAt) }
+                : {})}
               onCloseKeepWorktree={() => {
                 actionFeedback.closeWithWorktree(action.id)
               }}

@@ -153,6 +153,24 @@ function RetryNavigationHarness({
       >
         Open Activity
       </button>
+      <button
+        type="button"
+        onClick={() => {
+          const actionId = feedback?.start({
+            kind: 'command',
+            sessionId: otherSession.id,
+            sessionTitle: otherSession.title,
+            command: "printf 'sample output'",
+            run: () =>
+              Promise.resolve({ status: 'commandFailed', exitCode: 1 }),
+          })
+          if (actionId !== undefined) {
+            feedback?.requestCommandOutput(actionId)
+          }
+        }}
+      >
+        Show command output
+      </button>
       {currentSession === undefined ? null : (
         <ConversationPaneHeader
           session={currentSession}
@@ -292,3 +310,57 @@ it.each(retryDepartures)(
     })
   },
 )
+
+it('opens the command session when output is requested from another view', async () => {
+  act(() => {
+    root?.render(
+      <AsyncActionFeedbackProvider>
+        <SessionOperationProvider>
+          <RetryNavigationHarness
+            departure={{
+              description: 'the Board',
+              button: 'Open board',
+              route: {
+                view: 'board' as const,
+                selectedId: otherSession.id,
+                conversationOpen: false,
+              },
+            }}
+            onAction={() => Promise.resolve(true)}
+          />
+        </SessionOperationProvider>
+      </AsyncActionFeedbackProvider>,
+    )
+  })
+
+  act(() => {
+    requireElement(
+      [...container.querySelectorAll<HTMLButtonElement>('button')].find(
+        (button) => button.textContent === 'Open board',
+      ) ?? null,
+    ).click()
+  })
+  await act(async () => {
+    requireElement(
+      [...container.querySelectorAll<HTMLButtonElement>('button')].find(
+        (button) => button.textContent === 'Show command output',
+      ) ?? null,
+    ).click()
+    await Promise.resolve()
+  })
+  await act(async () => {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      if (
+        container.querySelector('[data-testid="route"]')?.textContent ===
+        `inbox:${otherSession.id}:true`
+      ) {
+        return
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 0))
+    }
+  })
+
+  expect(container.querySelector('[data-testid="route"]')?.textContent).toEqual(
+    `inbox:${otherSession.id}:true`,
+  )
+})

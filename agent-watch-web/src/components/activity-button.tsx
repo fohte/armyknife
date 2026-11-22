@@ -4,6 +4,7 @@ import { Activity } from 'lucide-react'
 
 import {
   isAsyncActionFailureStatus,
+  isAsyncActionRunningStatus,
   useOptionalAsyncActionFeedback,
 } from '#async-action-feedback'
 
@@ -30,8 +31,8 @@ export function ActivityButton({
   const failedCount = actions.filter((action) =>
     isAsyncActionFailureStatus(action.status),
   ).length
-  const runningCount = actions.filter(
-    (action) => action.status === 'merging' || action.status === 'closing',
+  const runningCount = actions.filter((action) =>
+    isAsyncActionRunningStatus(action.status),
   ).length
   const running =
     runningOverride === undefined ? runningCount : runningOverride ? 1 : 0
