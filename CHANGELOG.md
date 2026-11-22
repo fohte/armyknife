@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.844](https://github.com/fohte/armyknife/compare/v0.1.843...v0.1.844) (2026-11-22)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** hide swipe actions at rest ([#2080](https://github.com/fohte/armyknife/issues/2080)) ([0148a29](https://github.com/fohte/armyknife/commit/0148a296870c4288ea524b667eedee6659e7a8bd))
+
 ## [0.1.843](https://github.com/fohte/armyknife/compare/v0.1.842...v0.1.843) (2026-11-21)
 
 
