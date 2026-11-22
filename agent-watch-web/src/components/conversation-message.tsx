@@ -134,9 +134,13 @@ export function renderConversationMessage({
       </div>
     )
   }
-  if (message.type === 'assistant') {
+  if (message.type === 'assistant' || message.type === 'narration') {
+    const className =
+      message.type === 'narration'
+        ? 'chat-assistant-message chat-narration-message'
+        : 'chat-assistant-message'
     return (
-      <article className="chat-assistant-message">
+      <article className={className}>
         <MarkdownMessage
           copyableCodeBlocks
           {...(sessionId === undefined ? {} : { sessionId })}
@@ -145,13 +149,6 @@ export function renderConversationMessage({
         >
           {message.text}
         </MarkdownMessage>
-      </article>
-    )
-  }
-  if (message.type === 'narration') {
-    return (
-      <article className="chat-narration-message">
-        <MarkdownMessage>{message.text}</MarkdownMessage>
       </article>
     )
   }

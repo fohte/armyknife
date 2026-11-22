@@ -27,7 +27,40 @@ it('renders narration as muted conversation text', () => {
       }),
     ),
   ).toBe(
-    '<article class="chat-narration-message"><div class="markdown-message"><p>I will inspect the fictional request before answering.</p></div></article>',
+    '<article class="chat-assistant-message chat-narration-message"><div class="markdown-message"><p>I will inspect the fictional request before answering.</p></div></article>',
+  )
+})
+
+it('renders narration links and code blocks with assistant message controls', () => {
+  expect(
+    renderToStaticMarkup(
+      renderConversationMessage({
+        actions: null,
+        actionsReady: true,
+        isMobile: false,
+        selected: false,
+        decisionPosition: undefined,
+        onSelectDecision: () => undefined,
+        message: {
+          type: 'narration',
+          text: '[the guide](https://example.com/guide)\n\n```sh\n! printf sample\n```',
+        },
+        pendingAction: null,
+        openInTerminalStatus: null,
+        onAction: () => Promise.resolve(true),
+        onOpenInTerminal: () => undefined,
+        onSelectSession: () => undefined,
+        sessionEngine: 'claude',
+        sessionId: 'fictional-session',
+        sessions: [],
+      }),
+    ),
+  ).toBe(
+    [
+      '<article class="chat-assistant-message chat-narration-message"><div class="markdown-message"><p><a href="https://example.com/guide" target="_blank" rel="noopener noreferrer">the guide</a></p>',
+      '<div class="markdown-code-block"><div class="syntax-code-block-container"><div class="syntax-code-block-toolbar"><span class="syntax-code-block-language">sh</span><button class="syntax-code-block-copy-button" type="button" aria-label="Copy code" title="Copy code">Copy</button></div><pre class="syntax-code-block" data-language="sh"><code class="language-sh">! printf sample',
+      '</code></pre></div><span class="bang-command-actions"><span class="bang-command-control"><button aria-label="Run command 1" class="bang-command-button" type="button">Run command 1</button></span></span></div></div></article>',
+    ].join(String.fromCharCode(10)),
   )
 })
 
