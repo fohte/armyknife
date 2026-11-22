@@ -426,3 +426,37 @@ it.each([
   })
   expect(snapshot()).toEqual({ menuVisible: false })
 })
+
+it('quotes selected narration text into the composer', () => {
+  render([{ type: 'narration', text: 'A fictional narrated sentence.' }])
+  selectText(
+    requireElement(container.querySelector('.chat-narration-message p')),
+  )
+
+  act(() => {
+    requireElement(
+      container.querySelector<HTMLButtonElement>(
+        '.conversation-selection-reply button',
+      ),
+    ).click()
+  })
+
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  const snapshot = () => ({
+    draft: textarea.value,
+    focused: document.activeElement === textarea,
+    selectionStart: textarea.selectionStart,
+    selectionEnd: textarea.selectionEnd,
+    menuVisible:
+      container.querySelector('.conversation-selection-reply') !== null,
+  })
+  expect(snapshot()).toEqual({
+    draft: '> A fictional narrated sentence.\n\n',
+    focused: true,
+    selectionStart: 34,
+    selectionEnd: 34,
+    menuVisible: false,
+  })
+})
