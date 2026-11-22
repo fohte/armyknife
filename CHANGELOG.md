@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.848](https://github.com/fohte/armyknife/compare/v0.1.847...v0.1.848) (2026-11-22)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** align iPhone Inbox layout ([#2089](https://github.com/fohte/armyknife/issues/2089)) ([6144f44](https://github.com/fohte/armyknife/commit/6144f44b21b9b38ed8a7c9a5a08087c28d7be93e))
+
 ## [0.1.847](https://github.com/fohte/armyknife/compare/v0.1.846...v0.1.847) (2026-11-22)
 
 
