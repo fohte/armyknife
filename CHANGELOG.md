@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.854](https://github.com/fohte/armyknife/compare/v0.1.853...v0.1.854) (2026-11-22)
+
+
+### Bug Fixes
+
+* **agent-close:** end sessions without panes ([#2094](https://github.com/fohte/armyknife/issues/2094)) ([cc16fc3](https://github.com/fohte/armyknife/commit/cc16fc33c40a27c22bcbf6785c3553863f94d712))
+
 ## [0.1.853](https://github.com/fohte/armyknife/compare/v0.1.852...v0.1.853) (2026-11-22)
 
 
