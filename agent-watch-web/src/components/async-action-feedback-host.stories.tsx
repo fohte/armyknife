@@ -254,7 +254,7 @@ const desktopClosingToast = {
   sessionId: 'example-closing-session',
   sessionTitle: 'Review the example monitor',
   status: 'closing' as const,
-  createdAt: 1_799_000_000_004,
+  createdAt: 1_799_000_000_006,
 }
 
 const phoneMergedToast = {

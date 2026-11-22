@@ -109,7 +109,7 @@
 .async-action-activity-close {
   display: none;
 }
-@media (max-width: 700px) {
+@media (max-width: 760px) {
   .async-action-toast-stack {
     right: 16px;
     bottom: 112px;

@@ -375,6 +375,16 @@ it('anchors desktop toast stacks to the lower left and preserves phone positioni
     bottom: getComputedStyle(desktopStack).bottom,
     flexDirection: getComputedStyle(desktopStack).flexDirection,
     width: getComputedStyle(desktopStack).width,
+    maxHeight: getComputedStyle(desktopStack).maxHeight,
+  }
+
+  await page.viewport(720, 844)
+  const tablet = {
+    right: getComputedStyle(desktopStack).right,
+    bottom: getComputedStyle(desktopStack).bottom,
+    flexDirection: getComputedStyle(desktopStack).flexDirection,
+    width: getComputedStyle(desktopStack).width,
+    maxHeight: getComputedStyle(desktopStack).maxHeight,
   }
 
   await page.viewport(390, 844)
@@ -384,15 +394,24 @@ it('anchors desktop toast stacks to the lower left and preserves phone positioni
     bottom: getComputedStyle(desktopStack).bottom,
     flexDirection: getComputedStyle(desktopStack).flexDirection,
     width: getComputedStyle(desktopStack).width,
+    maxHeight: getComputedStyle(desktopStack).maxHeight,
   }
 
-  const snapshot = () => ({ desktop, phone })
+  const snapshot = () => ({ desktop, tablet, phone })
   expect(snapshot()).toEqual({
     desktop: {
       left: '16px',
       bottom: '16px',
       flexDirection: 'column-reverse',
       width: '360px',
+      maxHeight: '868px',
+    },
+    tablet: {
+      right: '16px',
+      bottom: '112px',
+      flexDirection: 'column',
+      width: '360px',
+      maxHeight: '716px',
     },
     phone: {
       left: '16px',
@@ -400,6 +419,7 @@ it('anchors desktop toast stacks to the lower left and preserves phone positioni
       bottom: '112px',
       flexDirection: 'column',
       width: '358px',
+      maxHeight: '716px',
     },
   })
 })
