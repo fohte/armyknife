@@ -2,6 +2,10 @@ import '#components/conversation-message.css'
 
 import type { ReactNode } from 'react'
 
+import type {
+  CommandOutputRefresh,
+  CommandOutputStart,
+} from '#components/command-result-message'
 import { DecisionCard } from '#components/decision-card'
 import { FileAttachmentCard } from '#components/file-attachment-card'
 import { MarkdownMessage } from '#components/markdown-message'
@@ -43,7 +47,9 @@ export type ConversationMessageRowProps = {
     payload?: Record<string, unknown>,
     permissionIdentity?: PermissionRequestIdentity,
   ) => Promise<boolean>
-  onCommandExecuted?: () => void
+  onCommandExecuted?: CommandOutputRefresh
+  onCommandStarted?: CommandOutputStart
+  conversationIndex?: number
   onOpenInTerminal: () => void
   onSelectSession: (id: string) => void
   onRewind?: (
@@ -65,10 +71,12 @@ export function renderConversationMessage({
   decisionPosition,
   onSelectDecision,
   message,
+  conversationIndex,
   pendingAction,
   openInTerminalStatus,
   onAction,
   onCommandExecuted,
+  onCommandStarted,
   onOpenInTerminal,
   onSelectSession,
   onRewind = () => Promise.resolve(false),
@@ -96,6 +104,7 @@ export function renderConversationMessage({
         canRewind={actions?.rewind === true}
         sessionEngine={sessionEngine}
         onRewind={onRewind}
+        {...(conversationIndex === undefined ? {} : { conversationIndex })}
         {...(now === undefined ? {} : { now })}
       />
     )
@@ -142,9 +151,9 @@ export function renderConversationMessage({
     return (
       <article className={className}>
         <MarkdownMessage
-          copyableCodeBlocks
           {...(sessionId === undefined ? {} : { sessionId })}
           {...(onCommandExecuted === undefined ? {} : { onCommandExecuted })}
+          {...(onCommandStarted === undefined ? {} : { onCommandStarted })}
           mobile={isMobile}
         >
           {message.text}

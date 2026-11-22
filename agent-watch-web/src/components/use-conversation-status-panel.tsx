@@ -62,7 +62,7 @@ type ReviewDocumentState = {
   saveStatus: 'idle' | 'saving' | 'saved' | 'error' | 'finishing'
   saveError: string | null
   unsavedChanges: boolean
-  mobileView: 'edit' | 'preview'
+  view: 'edit' | 'preview'
 }
 
 function requestReviewDocumentAction(
@@ -251,7 +251,7 @@ export function useConversationStatusPanel({
       saveStatus: 'idle',
       saveError: null,
       unsavedChanges: false,
-      mobileView: 'edit',
+      view: 'edit',
     })
     void requestJson(
       `/api/sessions/${encodeURIComponent(session.id)}/review-document`,
@@ -268,7 +268,7 @@ export function useConversationStatusPanel({
             saveStatus: 'idle',
             saveError: null,
             unsavedChanges: false,
-            mobileView: 'edit',
+            view: 'edit',
           }
           reviewDocumentStateRef.current = nextState
           setReviewDocumentState(nextState)
@@ -285,7 +285,7 @@ export function useConversationStatusPanel({
             saveStatus: 'idle',
             saveError: null,
             unsavedChanges: false,
-            mobileView: 'edit',
+            view: 'edit',
           })
         }
       },
@@ -359,7 +359,7 @@ export function useConversationStatusPanel({
                     sessions={sessionTree}
                     selectedSessionId={session.id}
                     onSelectSession={onSelectSession}
-                    mobilePresentation={isMobile}
+                    size={isMobile ? 'phone' : 'desktop'}
                     viewState={sessionTreeViewState}
                     {...(onSessionTreeViewStateChange === undefined
                       ? {}
@@ -399,7 +399,7 @@ export function useConversationStatusPanel({
                   status={reviewDocumentState.saveStatus}
                   unsavedChanges={reviewDocumentState.unsavedChanges}
                   error={reviewDocumentState.saveError}
-                  mobileView={reviewDocumentState.mobileView}
+                  view={reviewDocumentState.view}
                   onFrontmatterChange={(frontmatter) => {
                     setReviewDocumentState((current) =>
                       current?.document === null || current === null
@@ -426,9 +426,9 @@ export function useConversationStatusPanel({
                           },
                     )
                   }}
-                  onMobileViewChange={(mobileView) => {
+                  onViewChange={(view) => {
                     setReviewDocumentState((current) =>
-                      current === null ? current : { ...current, mobileView },
+                      current === null ? current : { ...current, view },
                     )
                   }}
                   onSave={() => {
@@ -472,7 +472,7 @@ export function useConversationStatusPanel({
                 decisions={decisions}
                 session={session}
                 selectedSeq={selectedDecision?.seq ?? null}
-                showReviewed={isMobile}
+                showReviewed
                 onSelect={(seq) => {
                   setSelectedDecisionSeq(seq)
                   setDecisionJump({ seq })
@@ -502,7 +502,7 @@ export function useConversationStatusPanel({
             ? { targetUrlOverride: fullscreenWebUi.targetUrl }
             : {})}
           exposedUrl={webUi.exposedUrl ?? null}
-          mobileTabPresentation={isMobile}
+          size={isMobile ? 'phone' : 'desktop'}
           fullscreenRequest={
             fullscreenWebUi?.webUi.name === webUi.name ? fullscreenRequest : 0
           }

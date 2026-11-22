@@ -83,6 +83,7 @@ mod tests {
     use super::*;
     use crate::commands::agent::store::{
         check_unreported_stop, insert_watch_web_peer_out_message_from,
+        mark_watch_web_peer_out_message_delivered_from,
     };
     use crate::commands::agent::types::{ChildLaunchPermission, Engine, SessionStatus};
 
@@ -232,6 +233,113 @@ mod tests {
         .unwrap();
 
         assert_eq!(*calls.lock().unwrap(), Vec::<(String, String)>::new());
+    }
+
+    #[rstest]
+    #[case::parent_instruction_delivered(false, false, false, true)]
+    #[case::parent_instruction_failed(true, false, false, false)]
+    #[case::failed_instruction_redelivered(true, true, false, true)]
+    #[case::report_after_parent_instruction(false, false, true, false)]
+    fn reports_after_parent_instructions_define_the_stop_boundary(
+        #[case] parent_instruction_failed: bool,
+        #[case] redeliver_parent_instruction: bool,
+        #[case] report_after_parent_instruction: bool,
+        #[case] expected_notification: bool,
+        sessions_dir: TempDir,
+    ) {
+        let mut session = delegate_session(Engine::Claude, "fixture-delegate", "fixture-parent");
+        let first_check = check_unreported_stop(
+            sessions_dir.path(),
+            &session.session_id,
+            "fixture-parent",
+            session.created_at,
+        )
+        .unwrap();
+        insert_watch_web_peer_out_message_from(
+            sessions_dir.path(),
+            &session.session_id,
+            "fixture-parent",
+            "A fictional report.",
+            at(11, 0),
+            false,
+        )
+        .unwrap();
+        let parent_instruction_id = insert_watch_web_peer_out_message_from(
+            sessions_dir.path(),
+            "fixture-parent",
+            &session.session_id,
+            "A fictional follow-up instruction.",
+            at(12, 0),
+            parent_instruction_failed,
+        )
+        .unwrap();
+        if report_after_parent_instruction {
+            insert_watch_web_peer_out_message_from(
+                sessions_dir.path(),
+                &session.session_id,
+                "fixture-parent",
+                "A fictional follow-up report.",
+                at(13, 0),
+                false,
+            )
+            .unwrap();
+        }
+
+        session
+            .pending_bg_task_ids
+            .insert("fixture-task".to_string());
+        notify_if_unreported(
+            &session,
+            &stop_input(Engine::Claude),
+            sessions_dir.path(),
+            &config(Some(TEMPLATE)),
+            |_, _| {},
+        )
+        .unwrap();
+        session.pending_bg_task_ids.clear();
+        if redeliver_parent_instruction {
+            mark_watch_web_peer_out_message_delivered_from(
+                sessions_dir.path(),
+                parent_instruction_id,
+                at(14, 0),
+            )
+            .unwrap();
+        }
+
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let calls_for_notify = Arc::clone(&calls);
+        notify_if_unreported(
+            &session,
+            &stop_input(Engine::Claude),
+            sessions_dir.path(),
+            &config(Some(TEMPLATE)),
+            move |recipient, message| {
+                calls_for_notify
+                    .lock()
+                    .unwrap()
+                    .push((recipient.to_string(), message.to_string()));
+            },
+        )
+        .unwrap();
+
+        let expected_calls = if expected_notification {
+            vec![(
+                "fixture-parent".to_string(),
+                indoc! {"
+                        <delegation-update>
+                        Session: fixture-delegate
+                        Last message: I finished sample change.
+                        </delegation-update>"
+                }
+                .to_string(),
+            )]
+        } else {
+            Vec::<(String, String)>::new()
+        };
+        assert_eq!(
+            (first_check, calls.lock().unwrap().clone()),
+            (false, expected_calls),
+        );
     }
 
     #[rstest]

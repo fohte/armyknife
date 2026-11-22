@@ -4,7 +4,8 @@ import type { ComponentType } from 'react'
 import type { Decision } from '#components/decision-card'
 import { DecisionsPanel } from '#components/decisions-panel'
 import { ReviewDocumentPanel } from '#components/review-document-panel'
-import { RunningTasksPanel } from '#components/running-tasks-panel'
+import { BackgroundTaskRowView } from '#components/running-task-row-view'
+import { RunningTasksPanelView } from '#components/running-tasks-panel-view'
 import { SessionStatusPanel } from '#components/session-status-panel'
 import { SessionTasksPanel } from '#components/session-tasks-panel'
 import { SessionTreePanel } from '#components/session-tree-panel'
@@ -17,6 +18,12 @@ import type {
 } from '#types'
 
 const phoneStatusTimeReference = Date.now()
+
+const defaultStatusViewport = (Story: ComponentType) => (
+  <div style={{ width: '420px', height: '600px', display: 'flex' }}>
+    <Story />
+  </div>
+)
 
 const meta = {
   component: SessionStatusPanel,
@@ -33,13 +40,6 @@ const meta = {
     onTabChange: () => undefined,
     onClose: () => undefined,
   },
-  decorators: [
-    (Story) => (
-      <div style={{ width: '420px', height: '600px', display: 'flex' }}>
-        <Story />
-      </div>
-    ),
-  ],
 } satisfies Meta<typeof SessionStatusPanel>
 
 export default meta
@@ -47,10 +47,12 @@ type Story = StoryObj<typeof meta>
 
 export const CritIsTheActiveTab: Story = {
   name: 'The panel shows crit as the active tab',
+  decorators: [defaultStatusViewport],
 }
 
 export const ReviewDocumentIsActive: Story = {
   name: 'The panel shows an active Review tab with typed frontmatter',
+  decorators: [defaultStatusViewport],
   args: {
     tabs: [
       {
@@ -77,6 +79,7 @@ export const ReviewDocumentIsActive: Story = {
 
 export const OneRunningItemIsAvailable: Story = {
   name: 'The panel shows a count for one running item',
+  decorators: [defaultStatusViewport],
   args: {
     tabs: [
       {
@@ -92,6 +95,7 @@ export const OneRunningItemIsAvailable: Story = {
 
 export const DecisionsShowUnreviewedCount: Story = {
   name: 'The Decisions tab shows how many decisions need review',
+  decorators: [defaultStatusViewport],
   args: {
     tabs: [
       {
@@ -114,6 +118,7 @@ export const DecisionsShowUnreviewedCount: Story = {
 
 export const ManyTabsKeepCloseActionVisible: Story = {
   name: 'The panel scrolls many tabs while keeping the close action visible',
+  decorators: [defaultStatusViewport],
   parameters: {
     overflowCheck: {
       ignoreSelectors: ['.session-status-panel-tablist'],
@@ -141,35 +146,36 @@ export const ManyTabsKeepCloseActionVisible: Story = {
 
 export const NoTabsAreAvailable: Story = {
   name: 'The panel shows an empty state when no tabs have items',
+  decorators: [defaultStatusViewport],
   args: {
     tabs: [{ id: 'crit', label: 'crit', count: 0, content: null }],
     activeTabId: null,
   },
 }
 
-const phoneStatusTasks = (openCount: number, completedCount: number) => [
+const statusTasks = (openCount: number, completedCount: number) => [
   ...Array.from({ length: openCount }, (_, index) => ({
-    id: `phone-open-task-${String(index + 1)}`,
-    number: 7301 + index,
+    id: `status-open-task-${String(index + 1)}`,
+    number: 2048 + index,
     title:
       [
-        'Improve delivery reliability',
-        'Add retry metrics',
-        'Document queue behavior',
-        'Review alert thresholds',
-      ][index] ?? 'Refine the delivery workflow',
+        '通知の信頼性を上げる',
+        '再送のテストを足す',
+        '送信キューを分ける',
+        '配信チェックを入れる',
+      ][index] ?? '通知の再送処理を見直す',
     priority: index === 0 ? 1 : 2,
   })),
   ...Array.from({ length: completedCount }, (_, index) => ({
-    id: `phone-closed-task-${String(index + 1)}`,
-    number: 7201 + index,
+    id: `status-closed-task-${String(index + 1)}`,
+    number: [2047, 2046, 2043, 2041][index % 4] ?? 2047,
     title:
       [
-        'Add request tracing',
-        'Document retry limits',
-        'Separate delivery queues',
-        'Cover the timeout path',
-      ][index % 4] ?? 'Improve service diagnostics',
+        '再送の上限を設定に出す',
+        '送信キューを分ける',
+        '失敗時の記録を残す',
+        '再送のテストを足す',
+      ][index % 4] ?? '再送の上限を設定に出す',
     priority: index % 3 === 0 ? 1 : null,
     isClosed: true,
     updatedAt: new Date(
@@ -178,45 +184,71 @@ const phoneStatusTasks = (openCount: number, completedCount: number) => [
   })),
 ]
 
-const phoneStatusTabs = [
+type StatusStoryOptions = {
+  size?: 'desktop' | 'phone'
+  treeKeyboardFocus?: boolean
+  openTaskCount?: number
+  reviewView?: 'edit' | 'preview'
+}
+
+const runningStatusContent = (
+  <RunningTasksPanelView
+    subagents={
+      [
+        {
+          id: 'fixture-agent-task',
+          description: '再送処理の呼び出し元を探す',
+          elapsedSeconds: 42,
+          kind: 'subagent',
+          agentType: 'Explore',
+        },
+      ] satisfies BackgroundTask[]
+    }
+    backgroundTaskRows={[
+      <BackgroundTaskRowView
+        key="fixture-shell-task"
+        task={{
+          id: 'fixture-shell-task',
+          description: 'cargo test -p service',
+          elapsedSeconds: 65,
+          kind: 'background_task',
+        }}
+        isOpen
+        output={[
+          'running 24 tests',
+          'test retry::stops_after_limit ... ok',
+          'test retry::backs_off ... ok',
+        ].join('\n')}
+        error={null}
+        onToggle={() => undefined}
+      />,
+    ]}
+  />
+)
+
+const statusTabs = ({
+  size = 'desktop',
+  treeKeyboardFocus = false,
+  openTaskCount = 1,
+  reviewView = 'edit',
+}: StatusStoryOptions = {}) => [
   {
     id: 'running',
     label: 'Running',
     count: 2,
-    content: (
-      <RunningTasksPanel
-        sessionId="fixture-session"
-        tasks={
-          [
-            {
-              id: 'fixture-agent-task',
-              description: 'Inspect retry behavior',
-              elapsedSeconds: 42,
-              kind: 'subagent',
-              agentType: 'Research',
-            },
-            {
-              id: 'fixture-shell-task',
-              description: 'cargo test -p fictional-crate',
-              elapsedSeconds: 65,
-              kind: 'background_task',
-            },
-          ] satisfies BackgroundTask[]
-        }
-      />
-    ),
+    content: runningStatusContent,
   },
   {
     id: 'tasks',
     label: 'Tasks',
-    count: 13,
+    count: openTaskCount + 12,
     showCount: true,
     content: (
       <SessionTasksPanel
         repo="example/service"
-        primaryTaskId="phone-open-task-1"
+        primaryTaskId="status-open-task-1"
         onMakePrimary={() => Promise.resolve(true)}
-        tasks={phoneStatusTasks(1, 12) satisfies SessionTask[]}
+        tasks={statusTasks(openTaskCount, 12) satisfies SessionTask[]}
       />
     ),
   },
@@ -228,7 +260,16 @@ const phoneStatusTabs = [
     countTone: 'warning' as const,
     content: (
       <SessionTreePanel
-        mobilePresentation
+        size={size}
+        viewState={
+          treeKeyboardFocus
+            ? {
+                expandedSessionIds: ['root-session', 'selected-session'],
+                focusedSessionId: 'selected-session',
+                treeHasFocus: true,
+              }
+            : null
+        }
         selectedSessionId="selected-session"
         onSelectSession={() => undefined}
         sessions={
@@ -241,13 +282,13 @@ const phoneStatusTabs = [
               category: 'in_progress',
               isActive: true,
               kind: null,
-              title: 'Delivery workflow',
-              preview: 'Coordinating the task',
+              title: '通知まわりの改修',
+              preview: '通知の信頼性を上げる',
               elapsedSeconds: 720,
               task: {
-                id: 'phone-tree-task-1',
-                number: 7301,
-                title: 'Improve delivery reliability',
+                id: 'status-tree-task-1',
+                number: 2048,
+                title: '通知の信頼性を上げる',
                 priority: 1,
               },
               repo: 'example/service',
@@ -263,13 +304,13 @@ const phoneStatusTabs = [
               category: 'needs_action',
               isActive: true,
               kind: 'Question',
-              title: 'Review delivery retries',
-              preview: 'Check the retry behavior',
+              title: '通知の再送処理を見直す',
+              preview: '再送処理を retry() にまとめました',
               elapsedSeconds: 8,
               task: {
-                id: 'phone-tree-task-2',
-                number: 7302,
-                title: 'Review retry behavior',
+                id: 'status-tree-task-2',
+                number: 2048,
+                title: '通知の信頼性を上げる',
                 priority: 2,
               },
               repo: 'example/service',
@@ -285,13 +326,13 @@ const phoneStatusTabs = [
               category: 'in_progress',
               isActive: true,
               kind: null,
-              title: 'Record retry attempts',
-              preview: 'Add delivery metrics',
+              title: '再送の記録を残す',
+              preview: '失敗時の記録を残す',
               elapsedSeconds: 60,
               task: {
-                id: 'phone-tree-task-3',
-                number: 7303,
-                title: 'Add retry metrics',
+                id: 'status-tree-task-3',
+                number: 2048,
+                title: '通知の信頼性を上げる',
                 priority: 1,
               },
               repo: 'example/service',
@@ -307,13 +348,13 @@ const phoneStatusTabs = [
               category: 'needs_action',
               isActive: true,
               kind: 'Review',
-              title: 'Review rollout checks',
-              preview: 'Confirm the release checks',
+              title: '配信チェックの PR を確認する',
+              preview: '配信チェックを入れる',
               elapsedSeconds: 120,
               task: {
-                id: 'phone-tree-task-4',
-                number: 7304,
-                title: 'Check release process',
+                id: 'status-tree-task-4',
+                number: 2050,
+                title: '配信チェックを入れる',
                 priority: 2,
               },
               repo: 'example/service',
@@ -329,13 +370,13 @@ const phoneStatusTabs = [
               category: 'done',
               isActive: false,
               kind: null,
-              title: 'Separate delivery queues',
-              preview: 'The queue change is complete',
+              title: '送信キューを分ける',
+              preview: '送信キューを分けました',
               elapsedSeconds: 7200,
               task: {
-                id: 'phone-tree-task-5',
-                number: 7305,
-                title: 'Separate delivery queues',
+                id: 'status-tree-task-5',
+                number: 2048,
+                title: '通知の信頼性を上げる',
                 priority: 1,
               },
               repo: 'example/service',
@@ -356,11 +397,12 @@ const phoneStatusTabs = [
     showCount: false,
     content: (
       <ReviewDocumentPanel
-        frontmatter={{ title: 'Review the delivery policy', status: 'draft' }}
+        frontmatter={{ title: '再送処理の設計', status: 'draft' }}
         body={
-          '## Policy\n\nUse longer delays after failures\nStop after three attempts.'
+          '## 方針\n\n失敗したら待ち時間を倍にして\n最大 3 回まで送り直す。'
         }
         unsavedChanges
+        view={reviewView}
       />
     ),
   },
@@ -377,11 +419,10 @@ const phoneStatusTabs = [
             {
               type: 'decision',
               seq: 1,
-              title: 'Use a fixed retry limit',
-              why: 'A capped retry budget prevents repeated deliveries from overloading the receiving service.',
-              considered: ['Retry using the latest duration'],
-              easyToChange:
-                'The retry interval comes from one worker configuration setting.',
+              title: '待ち時間を指数的に伸ばす',
+              why: '相手のサーバーが落ちているときに負荷をかけないため。',
+              considered: ['一定間隔で再試行する'],
+              easyToChange: '間隔の計算は 1 か所にまとまっている。',
               review: null,
               createdAt: new Date(
                 phoneStatusTimeReference - 34 * 60 * 1_000,
@@ -390,10 +431,10 @@ const phoneStatusTabs = [
             {
               type: 'decision',
               seq: 2,
-              title: 'Keep delivery history in one table',
-              why: 'The first release only needs a short audit trail.',
-              considered: ['Split records by delivery channel'],
-              easyToChange: 'The persistence adapter owns the table mapping.',
+              title: '再送の記録を既存のテーブルに足す',
+              why: '最初のリリースでは短い履歴だけが必要です。',
+              considered: ['配信経路ごとに記録を分ける'],
+              easyToChange: '保存先のテーブルは adapter で切り替えられます。',
               review: 'ok',
               createdAt: new Date(
                 phoneStatusTimeReference - 60 * 60 * 1_000,
@@ -407,8 +448,8 @@ const phoneStatusTabs = [
             category: 'in_progress',
             isPaused: false,
             kind: null,
-            title: 'Set a retry policy',
-            preview: null,
+            title: '通知の再送処理を見直す',
+            preview: '通知の再送処理について相談しています。',
             elapsedSeconds: 120,
             unread: false,
             task: null,
@@ -429,38 +470,24 @@ const phoneStatusTabs = [
     ),
   },
   {
-    id: 'web-ui-preview',
-    label: 'Preview',
+    id: 'web-ui-crit',
+    label: 'crit',
     count: 1,
     content: (
       <WebUiPane
-        name="Preview"
-        url="https://example.test/dashboard"
-        targetUrlOverride="https://example.test/dashboard"
-        previewMessage="The web interface is shown here."
-        mobileTabPresentation
+        name="crit"
+        url="http://127.0.0.1:3000/review/example"
+        targetUrlOverride="http://127.0.0.1:3000/review/example"
+        previewMessage="The web UI shows here."
+        size={size}
         onClose={() => undefined}
       />
     ),
   },
 ]
 
-const phoneStatusManyTabs = phoneStatusTabs.map((tab) =>
-  tab.id === 'tasks'
-    ? {
-        ...tab,
-        count: 16,
-        content: (
-          <SessionTasksPanel
-            repo="example/service"
-            primaryTaskId="phone-open-task-1"
-            onMakePrimary={() => Promise.resolve(true)}
-            tasks={phoneStatusTasks(4, 12) satisfies SessionTask[]}
-          />
-        ),
-      }
-    : tab,
-)
+const phoneStatusTabs = statusTabs({ size: 'phone' })
+const phoneStatusManyTabs = statusTabs({ size: 'phone', openTaskCount: 4 })
 
 const phoneStatusViewport = (Story: ComponentType) => (
   <div
@@ -471,17 +498,84 @@ const phoneStatusViewport = (Story: ComponentType) => (
   </div>
 )
 
+const desktopStatusViewport = (Story: ComponentType) => (
+  <div style={{ width: '640px', height: '900px', display: 'flex' }}>
+    <Story />
+  </div>
+)
+
 const phoneStatusStoryParameters = {
   overflowCheck: {
     ignoreSelectors: ['.session-status-panel-tablist'],
   },
 }
 
+const desktopStatusStory = (
+  activeTabId: string,
+  options: Omit<StatusStoryOptions, 'size'> = {},
+) =>
+  ({
+    args: {
+      tabs: statusTabs({ ...options, size: 'desktop' }),
+      activeTabId,
+    },
+    decorators: [desktopStatusViewport],
+  }) satisfies Story
+
+export const StatusRunning: Story = {
+  ...desktopStatusStory('running'),
+  name: 'The desktop status panel shows running tasks.',
+}
+
+export const StatusTasks: Story = {
+  ...desktopStatusStory('tasks'),
+  name: 'The desktop status panel shows linked tasks.',
+}
+
+export const StatusTaskLinks: Story = {
+  ...desktopStatusStory('tasks', { openTaskCount: 3 }),
+  name: 'The desktop status panel shows multiple linked tasks.',
+}
+
+export const StatusTree: Story = {
+  ...desktopStatusStory('tree'),
+  name: 'The desktop status panel shows the session tree.',
+}
+
+export const StatusTreeKeyboardFocus: Story = {
+  name: 'The desktop status tree shows its keyboard focus.',
+  args: {
+    tabs: statusTabs({ treeKeyboardFocus: true }),
+    activeTabId: 'tree',
+  },
+  decorators: [desktopStatusViewport],
+}
+
+export const StatusReview: Story = {
+  ...desktopStatusStory('review-document'),
+  name: 'The desktop status panel shows the Review tab.',
+}
+
+export const StatusReviewPreview: Story = {
+  ...desktopStatusStory('review-document', { reviewView: 'preview' }),
+  name: 'The desktop status panel shows the Review preview.',
+}
+
+export const StatusDecisions: Story = {
+  ...desktopStatusStory('decisions'),
+  name: 'The desktop status panel shows pending decisions.',
+}
+
+export const StatusWebUi: Story = {
+  ...desktopStatusStory('web-ui-crit'),
+  name: 'The desktop status panel shows a Web UI tab.',
+}
+
 export const PhoneStatusRunning: Story = {
   name: 'The phone status page shows running tasks',
   args: {
-    mobilePresentation: true,
-    sessionTitle: 'Improve delivery reliability',
+    size: 'phone',
+    sessionTitle: '通知の信頼性を上げる',
     tabs: phoneStatusTabs,
     activeTabId: 'running',
   },
@@ -492,8 +586,8 @@ export const PhoneStatusRunning: Story = {
 export const PhoneStatusTasks: Story = {
   name: 'The phone status page shows linked tasks',
   args: {
-    mobilePresentation: true,
-    sessionTitle: 'Improve delivery reliability',
+    size: 'phone',
+    sessionTitle: '通知の信頼性を上げる',
     tabs: phoneStatusTabs,
     activeTabId: 'tasks',
   },
@@ -504,8 +598,8 @@ export const PhoneStatusTasks: Story = {
 export const PhoneStatusTasksMany: Story = {
   name: 'The phone status page shows several linked tasks',
   args: {
-    mobilePresentation: true,
-    sessionTitle: 'Improve delivery reliability',
+    size: 'phone',
+    sessionTitle: '通知の信頼性を上げる',
     tabs: phoneStatusManyTabs,
     activeTabId: 'tasks',
   },
@@ -516,8 +610,8 @@ export const PhoneStatusTasksMany: Story = {
 export const PhoneStatusTree: Story = {
   name: 'The phone status page shows the session tree',
   args: {
-    mobilePresentation: true,
-    sessionTitle: 'Improve delivery reliability',
+    size: 'phone',
+    sessionTitle: '通知の信頼性を上げる',
     tabs: phoneStatusTabs,
     activeTabId: 'tree',
   },
@@ -528,9 +622,21 @@ export const PhoneStatusTree: Story = {
 export const PhoneStatusReview: Story = {
   name: 'The phone status page shows the Review tab',
   args: {
-    mobilePresentation: true,
-    sessionTitle: 'Improve delivery reliability',
+    size: 'phone',
+    sessionTitle: '通知の信頼性を上げる',
     tabs: phoneStatusTabs,
+    activeTabId: 'review-document',
+  },
+  decorators: [phoneStatusViewport],
+  parameters: phoneStatusStoryParameters,
+}
+
+export const PhoneStatusReviewPreview: Story = {
+  name: 'The phone status page shows the Review preview',
+  args: {
+    size: 'phone',
+    sessionTitle: '通知の信頼性を上げる',
+    tabs: statusTabs({ size: 'phone', reviewView: 'preview' }),
     activeTabId: 'review-document',
   },
   decorators: [phoneStatusViewport],
@@ -540,8 +646,8 @@ export const PhoneStatusReview: Story = {
 export const PhoneStatusDecisions: Story = {
   name: 'The phone status page shows pending decisions',
   args: {
-    mobilePresentation: true,
-    sessionTitle: 'Improve delivery reliability',
+    size: 'phone',
+    sessionTitle: '通知の信頼性を上げる',
     tabs: phoneStatusTabs,
     activeTabId: 'decisions',
   },
@@ -552,10 +658,10 @@ export const PhoneStatusDecisions: Story = {
 export const PhoneStatusWebUi: Story = {
   name: 'The phone status page shows a Web UI tab',
   args: {
-    mobilePresentation: true,
-    sessionTitle: 'Improve delivery reliability',
+    size: 'phone',
+    sessionTitle: '通知の信頼性を上げる',
     tabs: phoneStatusTabs,
-    activeTabId: 'web-ui-preview',
+    activeTabId: 'web-ui-crit',
   },
   decorators: [phoneStatusViewport],
   parameters: phoneStatusStoryParameters,

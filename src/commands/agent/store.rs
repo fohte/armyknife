@@ -36,7 +36,7 @@ pub(crate) use database::{
 pub(crate) use database::{AgentTodo, TodoResolution};
 pub(crate) use peer_out_messages::insert_watch_web_peer_out_message_from;
 pub(crate) use peer_out_messages::{
-    insert_watch_web_peer_out_message, mark_watch_web_peer_out_message_delivered,
+    insert_watch_web_peer_out_message, mark_watch_web_peer_out_message_delivered_from,
     watch_web_peer_out_messages_from,
 };
 pub(crate) use queued_prompts::{
@@ -492,6 +492,18 @@ pub(crate) fn list_all_sessions_from(sessions_dir: &Path) -> Result<Vec<Session>
 
 pub(crate) fn session_store_revision() -> Result<i64> {
     session_store_revision_from(&sessions_dir()?)
+}
+
+pub(crate) fn mark_session_closed_from(sessions_dir: &Path, session_id: &str) -> Result<()> {
+    database::mark_session_closed(sessions_dir, session_id)
+}
+
+pub(crate) fn clear_session_closed_from(sessions_dir: &Path, session_id: &str) -> Result<()> {
+    database::clear_session_closed(sessions_dir, session_id)
+}
+
+pub(crate) fn closed_session_ids_from(sessions_dir: &Path) -> Result<HashSet<String>> {
+    database::closed_session_ids(sessions_dir)
 }
 
 pub(crate) fn session_store_revision_from(sessions_dir: &Path) -> Result<i64> {

@@ -47,9 +47,10 @@ pub(crate) fn insert_watch_web_peer_out_message(
     )
 }
 
-pub(crate) fn mark_watch_web_peer_out_message_delivered(
+pub(crate) fn mark_watch_web_peer_out_message_delivered_from(
+    sessions_dir: &Path,
     id: i64,
     sent_at: DateTime<Utc>,
 ) -> Result<()> {
-    database::mark_watch_web_peer_out_message_delivered(&super::sessions_dir()?, id, sent_at)
+    database::mark_watch_web_peer_out_message_delivered(sessions_dir, id, sent_at)
 }

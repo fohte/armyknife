@@ -28,13 +28,18 @@ export function BackgroundTaskRowView({
       <span className="running-task-icon" aria-hidden="true">
         ▶
       </span>
-      <div className="running-task-content">
+      <div className="running-task-content running-task-content--background">
         <div className="running-task-heading">
           <span
             className="running-task-description running-task-description--command"
             title={task.description}
           >
             {task.description}
+          </span>
+        </div>
+        <div className="running-task-controls">
+          <span className="running-task-elapsed">
+            {formatElapsedTime(task.elapsedSeconds)}
           </span>
           <button
             aria-controls={outputId}
@@ -46,9 +51,6 @@ export function BackgroundTaskRowView({
             Output
           </button>
         </div>
-        <span className="running-task-elapsed">
-          {formatElapsedTime(task.elapsedSeconds)}
-        </span>
         {isOpen ? (
           <BackgroundTaskOutput id={outputId} output={output} error={error} />
         ) : null}

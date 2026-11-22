@@ -13,6 +13,10 @@ import { AsyncActionFeedbackHost } from '#components/async-action-feedback-host'
 import type { CloseWorktreeChecks } from '#session-operation-types'
 
 export type AsyncActionStatus =
+  | 'runningCommand'
+  | 'ranCommand'
+  | 'commandFailed'
+  | 'commandTimedOut'
   | 'merging'
   | 'merged'
   | 'alreadyMerged'
@@ -23,15 +27,34 @@ export type AsyncActionStatus =
   | 'closeFailed'
 
 export function isAsyncActionFailureStatus(status: AsyncActionStatus) {
-  return status === 'mergeFailed' || status === 'closeFailed'
+  return (
+    status === 'mergeFailed' ||
+    status === 'closeFailed' ||
+    status === 'commandFailed' ||
+    status === 'commandTimedOut'
+  )
+}
+
+export function isAsyncActionRunningStatus(status: AsyncActionStatus) {
+  return (
+    status === 'merging' || status === 'closing' || status === 'runningCommand'
+  )
+}
+
+export function formatAsyncActionTime(timestamp: number) {
+  const date = new Date(timestamp)
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
 }
 
 export type AsyncAction = {
   id: number
   sessionId: string
   sessionTitle: string
-  kind: 'merge' | 'close'
+  kind: 'merge' | 'close' | 'command'
   status: AsyncActionStatus
+  command?: string
+  commandOutputIndex?: number
+  exitCode?: number
   pullRequestNumber?: number
   pullRequestOwner?: string
   pullRequestRepo?: string
@@ -43,6 +66,16 @@ export type AsyncAction = {
 }
 
 export type AsyncActionOutcome =
+  | {
+      status: 'ranCommand' | 'commandTimedOut'
+      commandOutputIndex?: number
+    }
+  | {
+      status: 'commandFailed'
+      exitCode?: number
+      error?: string
+      commandOutputIndex?: number
+    }
   | { status: 'merged' | 'alreadyMerged' | 'queued'; message?: string }
   | { status: 'closed' }
   | {
@@ -52,9 +85,10 @@ export type AsyncActionOutcome =
     }
 
 export type StartAsyncActionOptions = {
-  kind: 'merge' | 'close'
+  kind: 'merge' | 'close' | 'command'
   sessionId: string
   sessionTitle: string
+  command?: string
   pullRequestNumber?: number
   pullRequestOwner?: string
   pullRequestRepo?: string
@@ -70,6 +104,17 @@ type AsyncActionRetryUpdate = Pick<
   'run' | 'onRetry' | 'pullRequestHeadSha'
 >
 
+function runningStatusFor(kind: AsyncAction['kind']): AsyncActionStatus {
+  switch (kind) {
+    case 'merge':
+      return 'merging'
+    case 'close':
+      return 'closing'
+    case 'command':
+      return 'runningCommand'
+  }
+}
+
 type AsyncActionFeedbackValue = {
   actions: readonly AsyncAction[]
   toastIds: readonly number[]
@@ -79,6 +124,7 @@ type AsyncActionFeedbackValue = {
   toastBottomOffset: number | null
   setToastBottomOffset: (offset: number | null) => void
   pendingMergeRetryActionIds: readonly number[]
+  pendingCommandOutputActionIds: readonly number[]
   activeMergeRetryConfirmationActionId: number | null
   start: (options: StartAsyncActionOptions) => number
   retry: (id: number) => void
@@ -86,6 +132,8 @@ type AsyncActionFeedbackValue = {
   requestMergeRetryConfirmation: (id: number) => void
   consumeMergeRetryConfirmation: (id: number) => void
   finishMergeRetryConfirmation: (id: number) => void
+  requestCommandOutput: (id: number) => void
+  consumeCommandOutput: (id: number) => void
   dismissToast: (id: number) => void
   clearFinished: () => void
   openActivity: (actionId?: number, anchor?: HTMLElement) => void
@@ -117,6 +165,8 @@ export function AsyncActionFeedbackProvider({
   const [pendingMergeRetryActionIds, setPendingMergeRetryActionIds] = useState<
     number[]
   >([])
+  const [pendingCommandOutputActionIds, setPendingCommandOutputActionIds] =
+    useState<number[]>([])
   const [
     activeMergeRetryConfirmationActionId,
     setActiveMergeRetryConfirmationActionId,
@@ -152,7 +202,7 @@ export function AsyncActionFeedbackProvider({
           if (action.id !== id) return action
           const next: AsyncAction = {
             ...action,
-            status: action.kind === 'merge' ? 'merging' : 'closing',
+            status: runningStatusFor(action.kind),
           }
           delete next.error
           delete next.message
@@ -173,6 +223,16 @@ export function AsyncActionFeedbackProvider({
           } else {
             delete next.checks
           }
+          if ('exitCode' in outcome) {
+            next.exitCode = outcome.exitCode
+          } else {
+            delete next.exitCode
+          }
+          if ('commandOutputIndex' in outcome) {
+            next.commandOutputIndex = outcome.commandOutputIndex
+          } else {
+            delete next.commandOutputIndex
+          }
           return next
         }),
       )
@@ -180,7 +240,8 @@ export function AsyncActionFeedbackProvider({
         outcome.status === 'merged' ||
         outcome.status === 'alreadyMerged' ||
         outcome.status === 'queued' ||
-        outcome.status === 'closed'
+        outcome.status === 'closed' ||
+        outcome.status === 'ranCommand'
       ) {
         const timer = setTimeout(() => {
           dismissToast(id)
@@ -210,7 +271,10 @@ export function AsyncActionFeedbackProvider({
           kind: options.kind,
           sessionId: options.sessionId,
           sessionTitle: options.sessionTitle,
-          status: options.kind === 'merge' ? 'merging' : 'closing',
+          status: runningStatusFor(options.kind),
+          ...(options.command === undefined
+            ? {}
+            : { command: options.command }),
           ...(options.pullRequestNumber === undefined
             ? {}
             : { pullRequestNumber: options.pullRequestNumber }),
@@ -285,13 +349,26 @@ export function AsyncActionFeedbackProvider({
     )
   }, [])
 
+  const requestCommandOutput = useCallback(
+    (id: number) => {
+      setPendingCommandOutputActionIds((current) =>
+        current.includes(id) ? current : [...current, id],
+      )
+      dismissToast(id)
+    },
+    [dismissToast],
+  )
+
+  const consumeCommandOutput = useCallback((id: number) => {
+    setPendingCommandOutputActionIds((current) =>
+      current.filter((actionId) => actionId !== id),
+    )
+  }, [])
+
   const clearFinished = useCallback(() => {
     const finished = new Set(
       actions
-        .filter(
-          (action) =>
-            action.status !== 'merging' && action.status !== 'closing',
-        )
+        .filter((action) => !isAsyncActionRunningStatus(action.status))
         .map((action) => action.id),
     )
     setActions((current) =>
@@ -299,6 +376,9 @@ export function AsyncActionFeedbackProvider({
     )
     setToastIds((current) => current.filter((id) => !finished.has(id)))
     setPendingMergeRetryActionIds((current) =>
+      current.filter((id) => !finished.has(id)),
+    )
+    setPendingCommandOutputActionIds((current) =>
       current.filter((id) => !finished.has(id)),
     )
     for (const id of finished) {
@@ -362,6 +442,7 @@ export function AsyncActionFeedbackProvider({
         toastBottomOffset,
         setToastBottomOffset,
         pendingMergeRetryActionIds,
+        pendingCommandOutputActionIds,
         activeMergeRetryConfirmationActionId,
         start,
         retry,
@@ -369,6 +450,8 @@ export function AsyncActionFeedbackProvider({
         requestMergeRetryConfirmation,
         consumeMergeRetryConfirmation,
         finishMergeRetryConfirmation,
+        requestCommandOutput,
+        consumeCommandOutput,
         dismissToast,
         clearFinished,
         openActivity,
@@ -393,6 +476,7 @@ export function AsyncActionFeedbackProvider({
         closeActivity={closeActivity}
         closeWithWorktree={closeWithWorktree}
         openInTerminal={openInTerminal}
+        showCommandOutput={requestCommandOutput}
       />
     </AsyncActionFeedbackContext.Provider>
   )

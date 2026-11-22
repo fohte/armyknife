@@ -2,19 +2,19 @@
   width: 100%;
   min-height: 0;
   overflow: auto;
-  padding: 6px 0 12px;
+  padding: 8px 0 24px;
   color: var(--aw-text-primary);
 }
 
 .session-tasks-panel-heading {
   display: flex;
-  min-height: 30px;
+  height: var(--status-heading-height, 30px);
   align-items: center;
   gap: 6px;
   margin: 0;
-  padding: 0 18px;
+  padding: 0 var(--status-horizontal-padding, 18px);
   color: var(--aw-text-muted);
-  font-size: 11.5px;
+  font-size: var(--status-heading-font-size, 11.5px);
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -39,38 +39,52 @@
 }
 
 .session-tasks-panel-list > li {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   min-width: 0;
+  min-height: var(--status-task-row-height, 0);
   align-items: center;
 }
 
 .session-tasks-panel-item {
   display: grid;
-  grid-template-columns: 14px minmax(0, 1fr);
+  grid-template-columns: var(--status-icon-size, 14px) minmax(0, 1fr);
   align-items: center;
   gap: 10px;
   min-width: 0;
-  flex: 1 1 auto;
-  padding: 7px 18px;
+  padding: 6px 4px 6px var(--status-horizontal-padding, 18px);
   color: var(--aw-text-primary);
   text-decoration: none;
 }
 
+.session-tasks-panel-item--open:has(+ .session-tasks-panel-primary-action) {
+  background: color-mix(in srgb, var(--aw-bg-pressed) 70%, transparent);
+  box-shadow: inset 2px 0 0 var(--aw-color-working);
+}
+
+.session-tasks-panel-item--completed {
+  color: var(--aw-text-secondary);
+}
+
 .session-tasks-panel-primary,
 .session-tasks-panel-primary-action {
-  flex: 0 0 auto;
-  margin: 0 18px 0 8px;
+  margin: 0 4px 0 8px;
   color: var(--aw-text-muted);
-  font-size: 11px;
+  font-size: var(--status-xs-font-size, 11.5px);
   white-space: nowrap;
 }
 
 .session-tasks-panel-primary-action {
-  padding: 3px 6px;
-  border: 1px solid var(--aw-border-control);
+  min-height: var(--status-action-height, 30px);
+  padding: 0 12px;
+  border: 0;
   background: transparent;
   color: var(--aw-text-secondary);
   cursor: pointer;
+}
+
+.session-tasks-panel-primary {
+  margin-right: 16px;
 }
 
 .session-tasks-panel-primary-action:disabled {
@@ -83,14 +97,9 @@
   background: var(--aw-bg-pressed);
 }
 
-.session-tasks-panel-item--completed {
-  grid-template-columns: 14px minmax(0, 1fr) auto;
-  padding-block: 6px;
-  color: var(--aw-text-secondary);
-}
-
 .session-tasks-panel-icon {
   color: var(--aw-color-working);
+  font-size: var(--status-small-font-size, 12px);
 }
 
 .session-tasks-panel-item--completed .session-tasks-panel-icon {
@@ -106,30 +115,37 @@
 .session-tasks-panel-title {
   min-width: 0;
   overflow: hidden;
+  font-size: var(--status-font-size, 13px);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.session-tasks-panel-meta {
+.session-task-link-id {
+  color: var(--aw-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--status-task-id-font-size, 12px);
+}
+
+.session-tasks-panel-item--completed .session-task-link-id {
+  color: var(--aw-text-secondary);
+}
+
+.session-tasks-panel-meta,
+.session-tasks-panel-age {
   overflow: hidden;
   color: var(--aw-text-muted);
-  font-size: 12px;
+  font-size: var(--status-small-font-size, 12px);
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.session-tasks-panel-item--completed .session-tasks-panel-title {
-  grid-column: 2;
 }
 
 .session-tasks-panel-age {
-  color: var(--aw-text-muted);
   font-family: var(--font-mono);
-  font-size: 11.5px;
-  white-space: nowrap;
+  font-size: var(--status-xs-font-size, 11.5px);
 }
 
 .session-tasks-panel-show-more {
+  min-height: var(--status-action-height, 30px);
   margin: 4px 0 0 42px;
   padding: 0;
   border: 0;
@@ -137,85 +153,5 @@
   color: var(--aw-text-secondary);
   cursor: pointer;
   font: inherit;
-  font-size: 12px;
-}
-
-.session-status-panel--mobile .session-tasks-panel {
-  padding: 8px 0 24px;
-}
-
-.session-status-panel--mobile .session-tasks-panel-heading {
-  min-height: 32px;
-  padding: 0 16px;
-  font-size: 12px;
-}
-
-.session-status-panel--mobile .session-tasks-panel-list > li {
-  min-height: 56px;
-  padding: 0;
-}
-
-.session-status-panel--mobile .session-tasks-panel-item--open {
-  min-height: 60px;
-  box-sizing: border-box;
-  grid-template-columns: 16px minmax(0, 1fr);
-  gap: 10px;
-  padding: 6px 4px 6px 16px;
-}
-
-.session-status-panel--mobile
-  .session-tasks-panel-item--open:has(+ .session-tasks-panel-primary-action) {
-  background: color-mix(in srgb, var(--aw-bg-pressed) 70%, transparent);
-  box-shadow: inset 2px 0 0 var(--aw-color-working);
-}
-
-.session-status-panel--mobile .session-tasks-panel-primary,
-.session-status-panel--mobile .session-tasks-panel-primary-action {
-  margin: 0 8px 0 0;
-  padding: 0 8px;
-  font-size: 13px;
-}
-
-.session-status-panel--mobile .session-tasks-panel-primary-action {
-  min-height: 44px;
-  border: 0;
-  color: var(--aw-text-secondary);
-  font-weight: 400;
-}
-
-.session-status-panel--mobile .session-tasks-panel-title {
-  color: var(--aw-text-primary);
-  font-size: 14px;
-  font-weight: 400;
-}
-
-.session-status-panel--mobile .session-task-link-id {
-  color: var(--aw-text-muted);
-  font-size: 13.5px;
-  font-weight: 400;
-}
-
-.session-status-panel--mobile
-  .session-tasks-panel-item--completed
-  .session-task-link-id {
-  color: var(--aw-text-secondary);
-}
-
-.session-status-panel--mobile .session-tasks-panel-item--completed {
-  min-height: 56px;
-  grid-template-columns: 16px minmax(0, 1fr);
-  padding: 4px 4px 4px 16px;
-}
-
-.session-status-panel--mobile
-  .session-tasks-panel-item--completed
-  .session-tasks-panel-age {
-  grid-column: 2;
-  grid-row: 2;
-}
-
-.session-status-panel--mobile .session-tasks-panel-show-more {
-  min-height: 44px;
-  margin-top: 0;
-  font-size: 13.5px;
+  font-size: var(--status-small-font-size, 12px);
 }

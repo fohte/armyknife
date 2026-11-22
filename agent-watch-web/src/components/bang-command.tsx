@@ -1,19 +1,26 @@
 import { useState } from 'react'
 
+import { useAsyncActionStarter } from '#async-action-feedback'
 import {
   BangCommandButton,
   type CommandStatus,
 } from '#components/bang-command-button'
 import { BangCommandDialog } from '#components/bang-command-dialog'
+import type {
+  CommandOutputRefresh,
+  CommandOutputStart,
+} from '#components/command-result-message'
 import { useSessionOperations } from '#session-operation-context'
 import { createSessionOperation } from '#session-operations'
 
 type BangCommandActionsProps = {
   commands: readonly string[]
   messageText: string
+  sessionTitle: string
   sessionId: string
   mobile?: boolean
-  onCommandExecuted?: () => void
+  onCommandExecuted?: CommandOutputRefresh
+  onCommandStarted?: CommandOutputStart
 }
 
 type CommandPreview = { cwd: string }
@@ -48,21 +55,23 @@ function isCommandExecution(value: unknown): value is CommandExecution {
 export function BangCommandActions({
   commands,
   messageText,
+  sessionTitle,
   sessionId,
   mobile = false,
   onCommandExecuted,
+  onCommandStarted,
 }: BangCommandActionsProps) {
   const { run } = useSessionOperations()
+  const startAsyncAction = useAsyncActionStarter(() => undefined)
   const [activeKey, setActiveKey] = useState<string | null>(null)
   const [selectedCommands, setSelectedCommands] = useState<string[]>([])
   const [cwd, setCwd] = useState('')
   const [previewing, setPreviewing] = useState(false)
+  const [executing, setExecuting] = useState(false)
   const [statuses, setStatuses] = useState<Record<string, CommandStatus>>({})
   const [messages, setMessages] = useState<Record<string, string>>({})
-  const [executing, setExecuting] = useState(false)
   const onFailure = (key: string, error: Error) => {
     setPreviewing(false)
-    setExecuting(false)
     setActiveKey(null)
     setStatuses((current) => ({ ...current, [key]: 'failed' }))
     setMessages((current) => ({ ...current, [key]: error.message }))
@@ -108,27 +117,41 @@ export function BangCommandActions({
   const confirm = () => {
     if (activeKey === null || executing) return
     const key = activeKey
-    setExecuting(true)
     setStatuses((current) => ({ ...current, [key]: 'running' }))
-    const operation = createSessionOperation(sessionId, 'commands/execute', {
-      messageText,
-      commands: selectedCommands,
-    })
-    operation.match(
-      (value) => {
-        void run(value).then((result) => {
-          result.match(
-            (response) => {
+    const commands = [...selectedCommands]
+    const outputStartIndex = onCommandStarted?.() ?? null
+    setExecuting(true)
+    startAsyncAction({
+      kind: 'command',
+      sessionId,
+      sessionTitle,
+      command: commands.join('\n'),
+      run: async () => {
+        try {
+          const operation = createSessionOperation(
+            sessionId,
+            'commands/execute',
+            {
+              messageText,
+              commands,
+            },
+          )
+          if (operation.isErr()) {
+            onFailure(key, operation.error)
+            return { status: 'commandFailed', error: operation.error.message }
+          }
+          const result = await run(operation.value)
+          return await result.match(
+            async (response) => {
               if (!isCommandExecution(response)) {
-                onFailure(
-                  key,
-                  new Error('The server returned an invalid response'),
+                const error = new Error(
+                  'The server returned an invalid response',
                 )
-                return
+                onFailure(key, error)
+                return { status: 'commandFailed', error: error.message }
               }
-              onCommandExecuted?.()
-              setExecuting(false)
-              setActiveKey(null)
+              const commandOutputIndex =
+                (await onCommandExecuted?.(commands, outputStartIndex)) ?? null
               setStatuses((current) => ({
                 ...current,
                 [key]: response.succeeded ? 'succeeded' : 'failed',
@@ -141,17 +164,39 @@ export function BangCommandActions({
                     ? 'Completed'
                     : `Failed (exit code ${String(response.exitCode)})`,
               }))
+              return response.timedOut
+                ? {
+                    status: 'commandTimedOut',
+                    ...(commandOutputIndex === null
+                      ? {}
+                      : { commandOutputIndex }),
+                  }
+                : response.succeeded
+                  ? {
+                      status: 'ranCommand',
+                      ...(commandOutputIndex === null
+                        ? {}
+                        : { commandOutputIndex }),
+                    }
+                  : {
+                      status: 'commandFailed',
+                      exitCode: response.exitCode,
+                      ...(commandOutputIndex === null
+                        ? {}
+                        : { commandOutputIndex }),
+                    }
             },
             (error) => {
               onFailure(key, error)
+              return { status: 'commandFailed', error: error.message }
             },
           )
-        })
+        } finally {
+          setExecuting(false)
+        }
       },
-      (error) => {
-        onFailure(key, error)
-      },
-    )
+    })
+    setActiveKey(null)
   }
 
   const statusFor = (key: string) => statuses[key] ?? 'idle'
@@ -204,7 +249,6 @@ export function BangCommandActions({
         }}
         onConfirm={confirm}
         open={activeKey !== null && !previewing}
-        running={executing}
       />
     </span>
   )

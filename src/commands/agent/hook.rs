@@ -210,6 +210,12 @@ pub(super) fn mark_session_ended_after_close(session_id: &str) -> Result<()> {
     session_lifecycle::mark_session_ended_after_close(session_id)
 }
 
+pub(super) fn mark_session_ended_after_close_if_unchanged(
+    expected_session: &Session,
+) -> Result<bool> {
+    session_lifecycle::mark_session_ended_after_close_if_unchanged(expected_session)
+}
+
 /// Ends prior sessions attached to `pane_id` when another session takes it.
 /// Claude sessions are evicted only when Paused; a new Codex thread confirms
 /// that the previous Codex thread no longer owns the pane.
@@ -915,7 +921,15 @@ fn process_hook_event_impl_with_env_and_unreported_stop(
     let keep_failed_after_idle_prompt = session.status == SessionStatus::Failed
         && event == HookEvent::Notification
         && input.notification_type.as_deref() == Some("idle_prompt");
-    if !keep_paused && !keep_failed_after_idle_prompt {
+    // `a agent close` can end a Codex session while its process keeps running,
+    // so later passive hooks must not revive it.
+    let explicitly_reactivated = event == HookEvent::UserPromptSubmit
+        || (event == HookEvent::SessionStart
+            && matches!(input.source.as_deref(), Some("resume" | "clear" | "fork")));
+    let keep_ended = session.engine == Engine::Codex
+        && session.status == SessionStatus::Ended
+        && !explicitly_reactivated;
+    if !keep_paused && !keep_failed_after_idle_prompt && !keep_ended {
         if let Some(status) = status {
             session.status = status;
         } else if event != HookEvent::PermissionDenied
@@ -989,6 +1003,10 @@ fn process_hook_event_impl_with_env_and_unreported_stop(
         session_lock.save(&session)?;
     }
     drop(session_lock);
+
+    if event == HookEvent::SessionStart && input.source.as_deref() == Some("resume") {
+        store::clear_session_closed_from(sessions_dir, &session.session_id)?;
+    }
 
     if event == HookEvent::PermissionDenied && input.engine == Engine::Claude {
         let tool_input = input
@@ -4332,6 +4350,36 @@ mod tests {
     }
 
     #[test]
+    fn resuming_a_claude_session_clears_its_close_marker() {
+        let temp_dir = tempfile::TempDir::new().expect("temp directory should be created");
+        let sessions_dir = temp_dir.path();
+        save_test_session(sessions_dir, "test-123", |session| {
+            session.status = SessionStatus::Ended;
+        });
+        store::mark_session_closed_from(sessions_dir, "test-123")
+            .expect("close marker should be saved");
+
+        process_hook_event_impl(
+            HookEvent::SessionStart,
+            create_test_input_with_session_and_source("test-123", None, Some("resume")),
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("resume hook should save the session");
+
+        assert_eq!(
+            (
+                store::load_session_from(sessions_dir, "test-123")
+                    .expect("session should load")
+                    .expect("session should exist")
+                    .status,
+                store::closed_session_ids_from(sessions_dir).expect("close markers should load"),
+            ),
+            (SessionStatus::Stopped, std::collections::HashSet::new()),
+        );
+    }
+
+    #[test]
     fn hook_event_keeps_session_cwd_from_record_creation() {
         let temp_dir = tempfile::TempDir::new().expect("temp dir creation should succeed");
         let sessions_dir = temp_dir.path();
@@ -6082,6 +6130,48 @@ mod tests {
                 (session.agent_status, session.agent_status_clear_pending),
                 (Some(expected), true)
             );
+        }
+
+        #[rstest]
+        #[case::stop(HookEvent::Stop, None, SessionStatus::Ended)]
+        #[case::post_tool_use(HookEvent::PostToolUse, None, SessionStatus::Ended)]
+        #[case::user_prompt_submit(HookEvent::UserPromptSubmit, None, SessionStatus::Running)]
+        #[case::session_resume(HookEvent::SessionStart, Some("resume"), SessionStatus::Stopped)]
+        #[case::session_clear(HookEvent::SessionStart, Some("clear"), SessionStatus::Running)]
+        #[case::session_compact(HookEvent::SessionStart, Some("compact"), SessionStatus::Ended)]
+        #[case::session_fork(HookEvent::SessionStart, Some("fork"), SessionStatus::Running)]
+        fn ended_codex_session_reopens_only_after_explicit_activity(
+            #[case] event: HookEvent,
+            #[case] source: Option<&str>,
+            #[case] expected_status: SessionStatus,
+        ) {
+            let temp_dir = create_temp_sessions_dir();
+            let mut existing = create_test_session(None);
+            existing.engine = Engine::Codex;
+            store::save_session_to(temp_dir.path(), &existing).expect("session should save");
+            session_lifecycle::mark_session_ended_after_close_in(
+                "test-123",
+                temp_dir.path(),
+                &SideEffects::none(),
+            )
+            .expect("close should end the session");
+
+            let mut input = create_test_input_with_source(None, source);
+            input.engine = Engine::Codex;
+            temp_env::with_vars([("TMUX_PANE", None::<&str>)], || {
+                process_hook_event_without_instruction(
+                    event,
+                    input,
+                    temp_dir.path(),
+                    &SideEffects::none(),
+                )
+                .expect("hook should succeed");
+            });
+
+            let session = store::load_session_from(temp_dir.path(), "test-123")
+                .expect("session should load")
+                .expect("session should exist");
+            assert_eq!(session.status, expected_status);
         }
 
         #[rstest]

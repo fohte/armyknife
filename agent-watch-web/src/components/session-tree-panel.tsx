@@ -15,7 +15,7 @@ type SessionTreePanelProps = {
   sessions: readonly SessionTreeNode[]
   selectedSessionId: string
   onSelectSession: (id: string) => void
-  mobilePresentation?: boolean
+  size?: 'desktop' | 'phone'
   viewState?: SessionTreeViewState | null
   onViewStateChange?: (state: SessionTreeViewState) => void
 }
@@ -24,7 +24,7 @@ export function SessionTreePanel({
   sessions,
   selectedSessionId,
   onSelectSession,
-  mobilePresentation = false,
+  size = 'desktop',
   viewState: controlledViewState,
   onViewStateChange,
 }: SessionTreePanelProps) {
@@ -154,9 +154,7 @@ export function SessionTreePanel({
   }
 
   return (
-    <div
-      className={`session-tree-panel${mobilePresentation ? ' session-tree-panel--mobile' : ''}`}
-    >
+    <div className="session-tree-panel" data-size={size}>
       <div
         ref={treeRef}
         className="session-tree-list"
@@ -223,7 +221,7 @@ export function SessionTreePanel({
                 )}
                 <SessionRow
                   session={{ ...session, elapsedSeconds }}
-                  density="compact"
+                  density={size === 'phone' ? 'compact-phone' : 'compact'}
                 />
               </div>
             </div>

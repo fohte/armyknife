@@ -23,6 +23,7 @@ mod proposals;
 mod queued_prompts;
 mod replacements;
 mod resolution_lock;
+mod session_closures;
 mod todos;
 mod unreported_stop_checks;
 mod vibe_setting_revision;
@@ -68,6 +69,7 @@ pub(crate) use queued_prompts::{
 pub(crate) use replacements::{
     all_unreplaced_sessions, resolve_current_session_id, save_rewind_sessions,
 };
+pub(crate) use session_closures::{clear_session_closed, closed_session_ids, mark_session_closed};
 pub(crate) use todos::{AgentTodo, TodoResolution};
 pub(crate) use todos::{
     add_agent_todo, agent_todos, incomplete_agent_todo_titles, lock_agent_todo_resolution,

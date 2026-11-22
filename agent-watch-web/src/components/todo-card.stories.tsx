@@ -63,6 +63,13 @@ export const TodoShowsMarkdownDetail: Story = {
   },
 }
 
+export const TodoShowsMarkdownCodeBlock: Story = {
+  name: 'A to-do code block includes the copy toolbar',
+  args: {
+    detail: '~~~bash\nprintf "ready\\n"\n~~~',
+  },
+}
+
 export const TodoHasNoAdditionalDetail: Story = {
   name: 'A to-do shows only its title when it has no detail',
   args: { detail: null },

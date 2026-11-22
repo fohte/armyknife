@@ -12,12 +12,17 @@ export function getSessionCloseCopy(session: Session): SessionCloseCopy {
     session.category === 'in_progress' &&
     session.activityStatus === 'working'
   ) {
+    const hasNoTerminalPane = session.canOpenInTerminal === false
+
     return {
       state: 'Working',
-      title: 'Stop and close this session?',
-      description:
-        'It is working now. Closing stops the work in progress and ends the session.',
-      confirmLabel: 'Stop and close',
+      title: hasNoTerminalPane
+        ? 'Close without stopping the work?'
+        : 'Stop and close this session?',
+      description: hasNoTerminalPane
+        ? 'This session has no terminal pane to stop. Closing marks it ended, but the work in progress may continue.'
+        : 'It is working now. Closing stops the work in progress and ends the session.',
+      confirmLabel: hasNoTerminalPane ? 'Close session' : 'Stop and close',
     }
   }
 

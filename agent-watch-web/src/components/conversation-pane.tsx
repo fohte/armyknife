@@ -8,6 +8,7 @@ import {
   useState,
 } from 'react'
 
+import { commandResultMatchesCommands } from '#components/command-result-message'
 import { ConversationPaneView } from '#components/conversation-pane-view'
 import { MarkdownSessionLinksProvider } from '#components/markdown-message'
 import type { PendingPermissionActions } from '#components/permission-card'
@@ -180,9 +181,24 @@ export function ConversationPane({
     },
     [clearErrors, setError],
   )
-  const onCommandExecuted = useCallback(() => {
-    void refresh()
-  }, [refresh])
+  const onCommandStarted = useCallback(
+    () =>
+      conversationRef.current.start + conversationRef.current.messages.length,
+    [conversationRef],
+  )
+  const onCommandExecuted = useCallback(
+    async (commands: readonly string[], startIndex: number | null) => {
+      await refresh()
+      const current = conversationRef.current
+      const index = current.messages.findLastIndex(
+        (message, localIndex) =>
+          (startIndex === null || current.start + localIndex >= startIndex) &&
+          commandResultMatchesCommands(message, commands),
+      )
+      return index < 0 ? null : current.start + index
+    },
+    [conversationRef, refresh],
+  )
 
   useEffect(() => {
     setOpenInTerminalStatus(null)
@@ -375,7 +391,7 @@ export function ConversationPane({
       onTabChange={onTabChange}
       onClose={onCloseStatusPanel}
       sessionTitle={session.title}
-      mobilePresentation={isMobile}
+      size={isMobile ? 'phone' : 'desktop'}
     />
   ) : null
 
@@ -412,6 +428,7 @@ export function ConversationPane({
       }}
       onAction={onAction}
       onCommandExecuted={onCommandExecuted}
+      onCommandStarted={onCommandStarted}
       onRewind={onRewind}
       onOpenInTerminal={onOpenInTerminal}
       onSelectSession={selectLinkedSession}

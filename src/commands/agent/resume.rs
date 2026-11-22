@@ -197,6 +197,7 @@ fn run_codex_resume_with_status_in(
         }
         return Err(error);
     }
+    store::clear_session_closed_from(sessions_dir, session_id)?;
     Ok(())
 }
 
@@ -772,6 +773,8 @@ mod tests {
         fn successful_resume_stores_current_tmux_info(temp_dir: TempDir) {
             let original = session(Engine::Codex, SessionStatus::Ended);
             store::save_session_to(temp_dir.path(), &original).expect("save should succeed");
+            store::mark_session_closed_from(temp_dir.path(), "resume-target")
+                .expect("close marker should be saved");
             let current_tmux_info = Some(TmuxInfo {
                 session_name: "resumed-session".to_string(),
                 window_name: "resumed-window".to_string(),
@@ -797,8 +800,17 @@ mod tests {
                     reloaded.read_at,
                     reloaded.tmux_info,
                     reloaded.launched_with_vibe,
+                    store::closed_session_ids_from(temp_dir.path())
+                        .expect("close markers should load"),
                 ),
-                (true, SessionStatus::Stopped, None, current_tmux_info, true)
+                (
+                    true,
+                    SessionStatus::Stopped,
+                    None,
+                    current_tmux_info,
+                    true,
+                    std::collections::HashSet::new(),
+                )
             );
         }
 

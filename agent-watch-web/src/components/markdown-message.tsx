@@ -12,6 +12,10 @@ import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
 import { BangCommandActions } from '#components/bang-command'
+import type {
+  CommandOutputRefresh,
+  CommandOutputStart,
+} from '#components/command-result-message'
 import { ImageLightbox } from '#components/image-lightbox'
 import {
   InlineMarkdownAnchor,
@@ -212,11 +216,11 @@ function remarkTrimNonAsciiAutolinks() {
 type MarkdownMessageProps = {
   children: string
   className?: string
-  copyableCodeBlocks?: boolean
   inline?: boolean
   mobile?: boolean
   sessionId?: string
-  onCommandExecuted?: () => void
+  onCommandExecuted?: CommandOutputRefresh
+  onCommandStarted?: CommandOutputStart
 }
 
 function textContent(value: ReactNode): string | undefined {
@@ -257,13 +261,9 @@ function unwrapTaggedMessage(value: string): string {
 
 const MarkdownCode: NonNullable<Components['code']> = ({ node, ...props }) => {
   const isCodeBlock = useContext(CodeBlockContext)
-  const {
-    sessionsById,
-    onSelectSession,
-    commandContext,
-    copyableCodeBlocks,
-    mobile,
-  } = useContext(MarkdownComponentContext)
+  const { sessionsById, onSelectSession, commandContext, mobile } = useContext(
+    MarkdownComponentContext,
+  )
   if (node?.tagName !== 'code') return props.children
   const { className, children, ...codeProps } = props
   const text = typeof children === 'string' ? children : null
@@ -313,7 +313,7 @@ const MarkdownCode: NonNullable<Components['code']> = ({ node, ...props }) => {
         code={text}
         language={language ?? 'text'}
         links={links}
-        copyable={copyableCodeBlocks}
+        copyable
       >
         <>{codeChildren}</>
       </SyntaxCodeBlock>
@@ -331,10 +331,14 @@ const MarkdownCode: NonNullable<Components['code']> = ({ node, ...props }) => {
       <BangCommandActions
         commands={[command]}
         messageText={commandContext.messageText}
+        sessionTitle={commandContext.sessionTitle}
         {...(mobile === undefined ? {} : { mobile })}
         {...(commandContext.onCommandExecuted === undefined
           ? {}
           : { onCommandExecuted: commandContext.onCommandExecuted })}
+        {...(commandContext.onCommandStarted === undefined
+          ? {}
+          : { onCommandStarted: commandContext.onCommandStarted })}
         sessionId={commandContext.sessionId}
       />
     </span>
@@ -358,10 +362,14 @@ const MarkdownPre: NonNullable<Components['pre']> = ({ children }) => {
       <BangCommandActions
         commands={commands}
         messageText={commandContext.messageText}
+        sessionTitle={commandContext.sessionTitle}
         {...(mobile === undefined ? {} : { mobile })}
         {...(commandContext.onCommandExecuted === undefined
           ? {}
           : { onCommandExecuted: commandContext.onCommandExecuted })}
+        {...(commandContext.onCommandStarted === undefined
+          ? {}
+          : { onCommandStarted: commandContext.onCommandStarted })}
         sessionId={commandContext.sessionId}
       />
     </div>
@@ -400,17 +408,20 @@ const inlineMarkdownComponents: Components = {
 export const MarkdownMessage = memo(function MarkdownMessage({
   children,
   className,
-  copyableCodeBlocks = false,
   inline = false,
   mobile = false,
   sessionId,
   onCommandExecuted,
+  onCommandStarted,
 }: MarkdownMessageProps) {
   const sessionLinks = useMarkdownSessionLinks()
   const inheritedCommandContext = useMarkdownCommandContext()
   const commandSessionId = sessionId ?? inheritedCommandContext?.sessionId
+  const commandSessionTitle = inheritedCommandContext?.sessionTitle ?? 'Session'
   const commandExecutedCallback =
     onCommandExecuted ?? inheritedCommandContext?.onCommandExecuted
+  const commandStartedCallback =
+    onCommandStarted ?? inheritedCommandContext?.onCommandStarted
   const rootClassName =
     className === undefined
       ? 'markdown-message'
@@ -422,7 +433,6 @@ export const MarkdownMessage = memo(function MarkdownMessage({
   const markdownSource = inline ? children : unwrapTaggedMessage(children)
   const componentContext: MarkdownComponentContextValue = {
     sessionsById,
-    copyableCodeBlocks,
     webUis: sessionLinks.webUis ?? [],
     mobile,
     ...(sessionLinks.onSelectSession === undefined
@@ -437,9 +447,13 @@ export const MarkdownMessage = memo(function MarkdownMessage({
           commandContext: {
             messageText: children,
             sessionId: commandSessionId,
+            sessionTitle: commandSessionTitle,
             ...(commandExecutedCallback === undefined
               ? {}
               : { onCommandExecuted: commandExecutedCallback }),
+            ...(commandStartedCallback === undefined
+              ? {}
+              : { onCommandStarted: commandStartedCallback }),
           },
         }),
   }

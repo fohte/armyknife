@@ -263,3 +263,51 @@ it('closes empty Activity with Escape on desktop', async () => {
     buttonExpanded: 'false',
   })
 })
+
+it('counts a running command in Activity', async () => {
+  function RunningCommandHarness() {
+    const startAsyncAction = useAsyncActionStarter(() => undefined)
+    return (
+      <>
+        <button
+          type="button"
+          onClick={() => {
+            startAsyncAction({
+              kind: 'command',
+              sessionId: 'sample-session',
+              sessionTitle: 'Sample session',
+              command: 'printf sample',
+              run: () => new Promise<AsyncActionOutcome>(() => undefined),
+            })
+          }}
+        >
+          Run command
+        </button>
+        <ActivityButton />
+      </>
+    )
+  }
+
+  root = createRoot(container)
+  await act(async () => {
+    root?.render(
+      <AsyncActionFeedbackProvider>
+        <RunningCommandHarness />
+      </AsyncActionFeedbackProvider>,
+    )
+    await Promise.resolve()
+  })
+  const runButton = container.querySelector<HTMLButtonElement>('button')
+  if (runButton === null) throw new Error('The Run command button is missing')
+  await act(async () => userEvent.click(runButton))
+
+  const activityButton = container.querySelector<HTMLButtonElement>(
+    '.async-action-activity-button',
+  )
+  const snapshot = () => ({
+    ariaLabel: activityButton?.getAttribute('aria-label'),
+    count: activityButton?.querySelector('.async-action-activity-state')
+      ?.textContent,
+  })
+  expect(snapshot()).toEqual({ ariaLabel: 'Activity, 1 running', count: '1' })
+})

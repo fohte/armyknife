@@ -2,7 +2,7 @@ import '#components/async-action-feedback-host.css'
 
 import { type RefObject, useEffect } from 'react'
 
-import type { AsyncAction } from '#async-action-feedback'
+import { type AsyncAction, formatAsyncActionTime } from '#async-action-feedback'
 import { AsyncActionItem } from '#components/async-action-item'
 
 type AsyncActionFeedbackHostProps = {
@@ -20,11 +20,7 @@ type AsyncActionFeedbackHostProps = {
   closeActivity: () => void
   closeWithWorktree: (id: number) => void
   openInTerminal: (id: number) => void
-}
-
-function timeLabel(timestamp: number) {
-  const date = new Date(timestamp)
-  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+  showCommandOutput: (id: number) => void
 }
 
 export function AsyncActionFeedbackHost({
@@ -42,6 +38,7 @@ export function AsyncActionFeedbackHost({
   closeActivity,
   closeWithWorktree,
   openInTerminal,
+  showCommandOutput,
 }: AsyncActionFeedbackHostProps) {
   const ordered = [...actions].sort(
     (left, right) => right.createdAt - left.createdAt,
@@ -101,6 +98,9 @@ export function AsyncActionFeedbackHost({
               onCloseKeepWorktree={() => {
                 closeWithWorktree(id)
               }}
+              onShowOutput={() => {
+                showCommandOutput(id)
+              }}
             />
           )
         })}
@@ -138,7 +138,7 @@ export function AsyncActionFeedbackHost({
             {ordered.length === 0 ? (
               <div className="async-action-empty">
                 <p>No recent activity.</p>
-                <p>Merge and Close results appear here.</p>
+                <p>Merge, Close and command results appear here.</p>
               </div>
             ) : null}
             <div className="async-action-activity-list">
@@ -152,7 +152,7 @@ export function AsyncActionFeedbackHost({
                   <AsyncActionItem
                     action={action}
                     form="row"
-                    time={timeLabel(action.createdAt)}
+                    time={formatAsyncActionTime(action.createdAt)}
                     onRetry={() => {
                       closeActivity()
                       retry(action.id)
@@ -166,6 +166,10 @@ export function AsyncActionFeedbackHost({
                     onOpenInTerminal={() => {
                       closeActivity()
                       openInTerminal(action.id)
+                    }}
+                    onShowOutput={() => {
+                      closeActivity()
+                      showCommandOutput(action.id)
                     }}
                   />
                 </div>

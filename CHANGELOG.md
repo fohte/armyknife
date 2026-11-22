@@ -1,5 +1,54 @@
 # Changelog
 
+## [0.1.857](https://github.com/fohte/armyknife/compare/v0.1.856...v0.1.857) (2026-11-22)
+
+
+### Bug Fixes
+
+* **agent:** detect unreported stops after replies ([#2106](https://github.com/fohte/armyknife/issues/2106)) ([4b27883](https://github.com/fohte/armyknife/commit/4b27883004cd7ec984718718da3f4d3a99a3ecc8))
+
+## [0.1.856](https://github.com/fohte/armyknife/compare/v0.1.855...v0.1.856) (2026-11-22)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** anchor desktop toast left ([#2104](https://github.com/fohte/armyknife/issues/2104)) ([127bbb0](https://github.com/fohte/armyknife/commit/127bbb0c133a8c63f2dd4870a48ccca9272f7086))
+
+## [0.1.855](https://github.com/fohte/armyknife/compare/v0.1.854...v0.1.855) (2026-11-22)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** align session status views ([#2099](https://github.com/fohte/armyknife/issues/2099)) ([b3c01a6](https://github.com/fohte/armyknife/commit/b3c01a61ad0254033a2ad89897467426ea6aa6af))
+
+## [0.1.854](https://github.com/fohte/armyknife/compare/v0.1.853...v0.1.854) (2026-11-22)
+
+
+### Bug Fixes
+
+* **agent-close:** end sessions without panes ([#2094](https://github.com/fohte/armyknife/issues/2094)) ([cc16fc3](https://github.com/fohte/armyknife/commit/cc16fc33c40a27c22bcbf6785c3553863f94d712))
+
+## [0.1.853](https://github.com/fohte/armyknife/compare/v0.1.852...v0.1.853) (2026-11-22)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show Copy on all code blocks ([#2095](https://github.com/fohte/armyknife/issues/2095)) ([7476ce6](https://github.com/fohte/armyknife/commit/7476ce664038b7634ab5e7607db493597de8dc25))
+
+## [0.1.852](https://github.com/fohte/armyknife/compare/v0.1.851...v0.1.852) (2026-11-22)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show command status in chat ([#2097](https://github.com/fohte/armyknife/issues/2097)) ([99253b3](https://github.com/fohte/armyknife/commit/99253b38d88d10ba9324697a0bced91c37595a1a))
+
+## [0.1.851](https://github.com/fohte/armyknife/compare/v0.1.850...v0.1.851) (2026-11-22)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** hide closed inbox sessions ([#2096](https://github.com/fohte/armyknife/issues/2096)) ([c31530a](https://github.com/fohte/armyknife/commit/c31530a10b4ddd121b9b963d636d15a5b05f5e79))
+
 ## [0.1.850](https://github.com/fohte/armyknife/compare/v0.1.849...v0.1.850) (2026-11-22)
 
 

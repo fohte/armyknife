@@ -3,6 +3,11 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { userEvent } from 'vitest/browser'
 
+import {
+  AsyncActionFeedbackProvider,
+  useAsyncActionStarter,
+  useOptionalAsyncActionFeedback,
+} from '#async-action-feedback'
 import { getCommandPaletteShortcut } from '#command-palette-shortcut'
 import { renderConversationMessage } from '#components/conversation-message'
 import { ConversationMessageRow } from '#components/conversation-message-row'
@@ -281,6 +286,10 @@ async function waitForState(condition: () => boolean) {
     }
   })
   return condition()
+}
+
+function normalizeAsyncActionLineTime(text: string | null | undefined) {
+  return text?.replace(/ · \d{2}:\d{2}$/, ' · <time>') ?? null
 }
 
 function terminalFeedback() {
@@ -1380,108 +1389,370 @@ it('posts a message when randomUUID is unavailable', async () => {
   })
 })
 
-it('executes a bang command from a todo card in the conversation', async () => {
-  const markdown = 'Check `! printf safe`.'
-  const todo: ChatItem = {
-    type: 'todo',
-    seq: 1,
-    title: 'Review the command result',
-    detail: markdown,
-    completed: false,
-    resolution: null,
-    comment: null,
-  }
-  const commandRequests: Array<{ url: string; body: unknown }> = []
-  let messageFetchCount = 0
-  const fetcher = vi.fn<typeof fetch>((input, init) => {
-    const url = requestUrl(input)
-    if (url.includes('/messages?')) {
-      messageFetchCount += 1
-      return Promise.resolve(jsonResponse(messagesResponse([todo])))
+it.each([
+  {
+    name: 'success',
+    response: { exitCode: 0, succeeded: true, timedOut: false },
+    buttonLabel: 'Succeeded',
+    toast: 'Ran commandprintf safe',
+    conversationLine: 'Ran command · <time>',
+  },
+  {
+    name: 'nonzero exit',
+    response: { exitCode: 1, succeeded: false, timedOut: false },
+    buttonLabel: 'Failed',
+    toast: 'Command failed · exit 1printf safeShow output',
+    conversationLine: 'Command failed (exit 1) · <time>',
+  },
+  {
+    name: 'timeout',
+    response: { exitCode: 124, succeeded: false, timedOut: true },
+    buttonLabel: 'Failed',
+    toast: 'Command timed outprintf safeStopped after 30 s.Show output',
+    conversationLine: 'Command timed out · <time>',
+  },
+])(
+  'executes a bang command from a todo card and reports $name',
+  async ({ response, buttonLabel, toast, conversationLine }) => {
+    const markdown = 'Check `! printf safe`.'
+    const todo: ChatItem = {
+      type: 'todo',
+      seq: 1,
+      title: 'Review the command result',
+      detail: markdown,
+      completed: false,
+      resolution: null,
+      comment: null,
     }
-    if (url.endsWith('/actions')) {
-      return Promise.resolve(jsonResponse(actions))
+    const commandRequests: Array<{ url: string; body: unknown }> = []
+    let messageFetchCount = 0
+    let commandOutputAvailable = false
+    const commandResult: ChatItem = {
+      type: 'user',
+      timestamp: '2026-06-01T12:00:01Z',
+      text: `${response.timedOut ? 'Command timed out after 30 seconds' : `Command exited with code ${String(response.exitCode)}`} in /workspace/example.
+
+Command:
+\`\`\`text
+$ printf safe
+\`\`\`
+
+stdout:
+\`\`\`text
+(empty)
+\`\`\`
+
+stderr:
+\`\`\`text
+(empty)
+\`\`\``,
     }
-    if (url.endsWith('/commands/preview')) {
-      const body = typeof init?.body === 'string' ? init.body : '{}'
-      commandRequests.push({
-        url,
-        body: JSON.parse(body),
-      })
-      return Promise.resolve(jsonResponse({ cwd: '/workspace/example' }))
+    let finishExecute: (response: Response) => void = () => {
+      throw new Error('Command execution did not start')
     }
-    if (url.endsWith('/commands/execute')) {
-      const body = typeof init?.body === 'string' ? init.body : '{}'
-      commandRequests.push({
-        url,
-        body: JSON.parse(body),
-      })
-      return Promise.resolve(
-        jsonResponse({ exitCode: 0, succeeded: true, timedOut: false }),
+    const fetcher = vi.fn<typeof fetch>((input, init) => {
+      const url = requestUrl(input)
+      if (url.includes('/messages?')) {
+        messageFetchCount += 1
+        return Promise.resolve(
+          jsonResponse(
+            messagesResponse(
+              commandOutputAvailable ? [todo, commandResult] : [todo],
+            ),
+          ),
+        )
+      }
+      if (url.endsWith('/actions')) {
+        return Promise.resolve(jsonResponse(actions))
+      }
+      if (url.endsWith('/commands/preview')) {
+        const body = typeof init?.body === 'string' ? init.body : '{}'
+        commandRequests.push({
+          url,
+          body: JSON.parse(body),
+        })
+        return Promise.resolve(jsonResponse({ cwd: '/workspace/example' }))
+      }
+      if (url.endsWith('/commands/execute')) {
+        const body = typeof init?.body === 'string' ? init.body : '{}'
+        commandRequests.push({
+          url,
+          body: JSON.parse(body),
+        })
+        return new Promise((resolve) => {
+          finishExecute = resolve
+        })
+      }
+      return Promise.resolve(jsonResponse({}))
+    })
+    vi.stubGlobal('fetch', fetcher)
+    root = createRoot(container)
+    act(() => {
+      root?.render(
+        <AsyncActionFeedbackProvider>
+          <ConversationPane
+            session={session}
+            refreshKey={0}
+            sessionTreeRefreshKey={0}
+            onSelectSession={() => undefined}
+          />
+        </AsyncActionFeedbackProvider>,
+      )
+    })
+
+    const runButton = requireElement(
+      (await waitForState(() =>
+        Boolean(container.querySelector('.chat-todo-detail button')),
+      ))
+        ? container.querySelector<HTMLButtonElement>('.chat-todo-detail button')
+        : null,
+    )
+    const messageFetchCountBeforeCommand = messageFetchCount
+    await act(async () => userEvent.click(runButton))
+    const dialog = requireElement(
+      (await waitForState(() =>
+        Boolean(document.body.querySelector('[role="dialog"]')),
+      ))
+        ? document.body.querySelector<HTMLElement>('[role="dialog"]')
+        : null,
+    )
+    const confirmButton = Array.from(dialog.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Run command',
+    )
+    if (!(confirmButton instanceof HTMLButtonElement)) {
+      throw new Error('Expected the confirmation button')
+    }
+    await act(async () => userEvent.click(confirmButton))
+    const commandStarted = await waitForState(
+      () =>
+        document.body.querySelector('[role="dialog"]') === null &&
+        Boolean(document.body.querySelector('.async-action-item--running')),
+    )
+    const runningState = {
+      dialogOpen: document.body.querySelector('[role="dialog"]') !== null,
+      toast: document.body.querySelector('.async-action-toast-stack')
+        ?.textContent,
+      conversationLine: normalizeAsyncActionLineTime(
+        container.querySelector('.async-action-item--line')?.textContent,
+      ),
+    }
+    await act(async () => {
+      commandOutputAvailable = true
+      finishExecute(jsonResponse(response))
+      await Promise.resolve()
+    })
+    const completed = await waitForState(
+      () =>
+        runButton.textContent === buttonLabel &&
+        messageFetchCount > messageFetchCountBeforeCommand &&
+        document.body.querySelector('.async-action-toast-stack')
+          ?.textContent === toast,
+    )
+    const finalState = {
+      button: runButton.textContent,
+      toast: document.body.querySelector('.async-action-toast-stack')
+        ?.textContent,
+      conversationLine: normalizeAsyncActionLineTime(
+        container.querySelector('.async-action-item--line')?.textContent,
+      ),
+      conversationLineButtons: container
+        .querySelector('.async-action-item--line')
+        ?.querySelectorAll('button').length,
+    }
+    if (!response.succeeded) {
+      const showOutputButton = requireElement(
+        Array.from(
+          document.body.querySelectorAll<HTMLButtonElement>('button'),
+        ).find((button) => button.textContent === 'Show output') ?? null,
+      )
+      await act(async () => userEvent.click(showOutputButton))
+      await waitForState(
+        () =>
+          container
+            .querySelector('.chat-user-group[data-command-result="true"]')
+            ?.getAttribute('data-command-output-highlighted') === 'true',
       )
     }
-    return Promise.resolve(jsonResponse({}))
+    const outputNavigation = {
+      highlighted:
+        container
+          .querySelector('.chat-user-group[data-command-result="true"]')
+          ?.getAttribute('data-command-output-highlighted') ?? null,
+      toastVisible:
+        document.body.querySelector('.async-action-item--toast') !== null,
+    }
+
+    const getActual = () => ({
+      commandStarted,
+      runningState,
+      commandCompleted: completed,
+      conversationRefreshed: messageFetchCount > messageFetchCountBeforeCommand,
+      finalState,
+      outputNavigation,
+      commandRequests,
+    })
+    expect(getActual()).toEqual({
+      commandStarted: true,
+      runningState: {
+        dialogOpen: false,
+        toast: 'Running commandprintf safe',
+        conversationLine: 'Running command… · <time>',
+      },
+      commandCompleted: true,
+      conversationRefreshed: true,
+      finalState: {
+        button: buttonLabel,
+        toast,
+        conversationLine,
+        conversationLineButtons: 0,
+      },
+      outputNavigation: {
+        highlighted: response.succeeded ? null : 'true',
+        toastVisible: response.succeeded,
+      },
+      commandRequests: [
+        {
+          url: '/api/sessions/sample-session/commands/preview',
+          body: { messageText: markdown, commands: ['printf safe'] },
+        },
+        {
+          url: '/api/sessions/sample-session/commands/execute',
+          body: { messageText: markdown, commands: ['printf safe'] },
+        },
+      ],
+    })
+  },
+)
+
+it('shows the selected command result instead of a later identical result', async () => {
+  const commandResult = (second: string): ChatItem => ({
+    type: 'user',
+    timestamp: `2026-06-01T12:00:${second}Z`,
+    text: `Command exited with code 1 in /workspace/example.
+
+Command:
+\`\`\`text
+$ printf 'sample output'
+\`\`\`
+
+stdout:
+\`\`\`text
+(empty)
+\`\`\`
+
+stderr:
+\`\`\`text
+(empty)
+\`\`\``,
   })
-  vi.stubGlobal('fetch', fetcher)
+  const messages = [
+    commandResult('01'),
+    commandResult('02'),
+    commandResult('03'),
+  ]
+  const scrollIntoView = vi.spyOn(HTMLElement.prototype, 'scrollIntoView')
+
+  function CommandOutputActionHarness() {
+    const startAsyncAction = useAsyncActionStarter(() => undefined)
+    const feedback = useOptionalAsyncActionFeedback()
+    return (
+      <>
+        <button
+          type="button"
+          onClick={() => {
+            startAsyncAction({
+              kind: 'command',
+              sessionId: session.id,
+              sessionTitle: session.title,
+              command: "printf 'sample output'",
+              run: () =>
+                Promise.resolve({
+                  status: 'commandFailed',
+                  exitCode: 1,
+                  commandOutputIndex: 12,
+                }),
+            })
+          }}
+        >
+          Create failed command result
+        </button>
+        <output
+          data-command-output-count={String(
+            feedback?.pendingCommandOutputActionIds.length ?? 0,
+          )}
+        />
+        <ConversationPaneView
+          session={session}
+          messages={messages}
+          start={11}
+          actions={actions}
+          loading={false}
+          error={null}
+          onAction={() => Promise.resolve(true)}
+          onSelectSession={() => undefined}
+        />
+      </>
+    )
+  }
+
   root = createRoot(container)
   act(() => {
     root?.render(
-      <ConversationPane
-        session={session}
-        refreshKey={0}
-        sessionTreeRefreshKey={0}
-        onSelectSession={() => undefined}
-      />,
+      <AsyncActionFeedbackProvider>
+        <CommandOutputActionHarness />
+      </AsyncActionFeedbackProvider>,
     )
   })
 
-  const runButton = requireElement(
+  const createActionButton = requireElement(
+    container.querySelector<HTMLButtonElement>('button'),
+  )
+  await act(async () => userEvent.click(createActionButton))
+  const showOutputButton = requireElement(
     (await waitForState(() =>
-      Boolean(container.querySelector('.chat-todo-detail button')),
+      Array.from(document.body.querySelectorAll('button')).some(
+        (button) => button.textContent === 'Show output',
+      ),
     ))
-      ? container.querySelector<HTMLButtonElement>('.chat-todo-detail button')
+      ? (Array.from(
+          document.body.querySelectorAll<HTMLButtonElement>('button'),
+        ).find((button) => button.textContent === 'Show output') ?? null)
       : null,
   )
-  const messageFetchCountBeforeCommand = messageFetchCount
-  await act(async () => userEvent.click(runButton))
-  const dialog = requireElement(
-    (await waitForState(() =>
-      Boolean(document.body.querySelector('[role="dialog"]')),
-    ))
-      ? document.body.querySelector<HTMLElement>('[role="dialog"]')
-      : null,
-  )
-  const confirmButton = Array.from(dialog.querySelectorAll('button')).find(
-    (button) => button.textContent === 'Run command',
-  )
-  if (!(confirmButton instanceof HTMLButtonElement)) {
-    throw new Error('Expected the confirmation button')
-  }
-  await act(async () => userEvent.click(confirmButton))
-  const completed = await waitForState(
+  await act(async () => userEvent.click(showOutputButton))
+  await waitForState(
     () =>
-      runButton.textContent === 'Succeeded' &&
-      messageFetchCount > messageFetchCountBeforeCommand,
+      container
+        .querySelector('.chat-user-group[data-conversation-index="12"]')
+        ?.getAttribute('data-command-output-highlighted') === 'true',
   )
 
-  const getActual = () => ({
-    commandCompleted: completed,
-    conversationRefreshed: messageFetchCount > messageFetchCountBeforeCommand,
-    commandRequests,
+  const results = Array.from(
+    container.querySelectorAll<HTMLElement>('[data-command-result="true"]'),
+  )
+  const snapshot = () => ({
+    indices: results.map((result) => result.dataset['conversationIndex']),
+    highlighted: results.map(
+      (result) => result.dataset['commandOutputHighlighted'] ?? null,
+    ),
+    pendingOutputCount: container
+      .querySelector('output')
+      ?.getAttribute('data-command-output-count'),
+    scrollTargets: scrollIntoView.mock.contexts.map((target) =>
+      target instanceof HTMLElement
+        ? target.dataset['conversationIndex']
+        : null,
+    ),
+    lineButtons: container
+      .querySelector('.async-action-item--line')
+      ?.querySelectorAll('button').length,
   })
-  expect(getActual()).toEqual({
-    commandCompleted: true,
-    conversationRefreshed: true,
-    commandRequests: [
-      {
-        url: '/api/sessions/sample-session/commands/preview',
-        body: { messageText: markdown, commands: ['printf safe'] },
-      },
-      {
-        url: '/api/sessions/sample-session/commands/execute',
-        body: { messageText: markdown, commands: ['printf safe'] },
-      },
-    ],
+  expect(snapshot()).toEqual({
+    indices: ['11', '12', '13'],
+    highlighted: [null, 'true', null],
+    pendingOutputCount: '0',
+    scrollTargets: ['12'],
+    lineButtons: 0,
   })
 })
 
@@ -2452,12 +2723,16 @@ it('sends a selected answer with its request ID', async () => {
   const onAction = vi.fn(() => Promise.resolve(true))
   renderView(onAction, session, undefined, [question])
 
+  const choiceRow = Array.from(
+    container.querySelectorAll<HTMLElement>('.chat-question-choice-row'),
+  ).find(
+    (row) =>
+      row
+        .querySelector('.chat-question-choice-text')
+        ?.textContent.includes('Window B') === true,
+  )
   const choice = requireElement(
-    Array.from(
-      container.querySelectorAll<HTMLButtonElement>(
-        '.chat-question-choices button',
-      ),
-    ).find((button) => button.textContent.includes('Window B')) ?? null,
+    choiceRow?.querySelector<HTMLButtonElement>('button') ?? null,
   )
   act(() => {
     choice.click()
@@ -2720,14 +2995,19 @@ it('shows a selected answer, dims other choices, and renders Markdown', () => {
       ?.textContent,
     answer: card.querySelector('.chat-question-answer')?.textContent,
     choices: Array.from(
-      card.querySelectorAll<HTMLButtonElement>('.chat-question-choices button'),
-      (button) => ({
-        label: button.querySelector('.chat-question-choice-text')?.textContent,
-        disabled: button.disabled,
-        selected: button.classList.contains('is-selected'),
-        dimmed: button.classList.contains('is-unselected'),
-        check: button.querySelector('.chat-question-choice-check')?.textContent,
-      }),
+      card.querySelectorAll<HTMLElement>('.chat-question-choice-row'),
+      (row) => {
+        const button = requireElement(
+          row.querySelector<HTMLButtonElement>('button'),
+        )
+        return {
+          label: row.querySelector('.chat-question-choice-text')?.textContent,
+          disabled: button.disabled,
+          selected: button.classList.contains('is-selected'),
+          dimmed: button.classList.contains('is-unselected'),
+          check: row.querySelector('.chat-question-choice-check')?.textContent,
+        }
+      },
     ),
     actionCalls: onAction.mock.calls,
   })
@@ -4708,7 +4988,7 @@ it('shows running tasks in the desktop status panel and counts them in the heade
     sections: ['SUBAGENTS', 'BACKGROUND TASKS'],
     tasks: [
       '◐FixtureExplorerInspect the fictional module2h 0m',
-      '▶cargo test -p fictional-crateOutput2h 0m',
+      '▶cargo test -p fictional-crate2h 0mOutput',
     ],
     panelToggle: '2',
     workingStatus: 'Waiting',
@@ -5437,7 +5717,7 @@ it('shows the unreviewed count instead of the total on the Decisions tab', () =>
   })
   expect(snapshot()).toEqual({
     tab: 'Decisions1',
-    decisions: ['unreviewed'],
+    decisions: ['unreviewed', 'ok'],
     progress: '1 / 2 reviewed',
   })
 })
@@ -5942,6 +6222,9 @@ it('opens and closes the existing status panel over the mobile conversation', as
 
   const opened = {
     overlay: container.querySelector('.mobile-session-status-overlay') !== null,
+    dialogFocused:
+      document.activeElement ===
+      container.querySelector('.mobile-session-status-overlay [role="dialog"]'),
     selectedTab: container.querySelector('[role="tab"][aria-selected="true"]')
       ?.textContent,
     decisionHeading: container.querySelector('.decisions-panel-header h2')
@@ -5967,9 +6250,10 @@ it('opens and closes the existing status panel over the mobile conversation', as
   expect(snapshot()).toEqual({
     opened: {
       overlay: true,
+      dialogFocused: true,
       selectedTab: 'Decisions1',
       decisionHeading: 'Decisions in this session',
-      backButtonFocused: true,
+      backButtonFocused: false,
     },
     closed: { overlay: false, conversation: true, focusRestored: true },
   })

@@ -43,25 +43,25 @@ export const CanvasPageFillsTheScreen: Story = {
   },
 }
 
-export const MobileCanvasPageHasCloseButton: Story = {
-  name: 'A mobile canvas page shows its URL and close button',
+export const PhoneCanvasPageHasCloseButton: Story = {
+  name: 'A phone canvas page shows its URL and close button',
   args: {
     name: 'Canvas editor',
     url: 'http://localhost:43123/studio/pages/sample#page-fakehash',
     targetUrlOverride:
       'http://localhost:43123/studio/pages/sample#page-fakehash',
     defaultFullscreen: true,
-    mobilePresentation: true,
+    size: 'phone',
   },
 }
 
-export const MobileWebUiTabShowsCompactHeader: Story = {
-  name: 'The phone status web UI tab shows a compact header',
+export const PhoneWebUiTabShowsItsUrlAndControls: Story = {
+  name: 'The phone status web UI tab shows its URL and controls',
   args: {
     name: 'Preview',
     url: 'https://example.test/dashboard',
     targetUrlOverride: 'https://example.test/dashboard',
-    mobileTabPresentation: true,
+    size: 'phone',
     previewMessage: 'The web interface is shown here.',
   },
   decorators: [
@@ -73,13 +73,13 @@ export const MobileWebUiTabShowsCompactHeader: Story = {
   ],
 }
 
-export const MobileWebUiTabFillsTheScreen: Story = {
-  name: 'The phone status web UI tab fills the screen',
+export const PhoneWebUiPageFillsTheScreen: Story = {
+  name: 'The phone status web UI page fills the screen',
   args: {
     name: 'Preview',
     url: 'https://example.test/dashboard',
     targetUrlOverride: 'https://example.test/dashboard',
-    mobileTabPresentation: true,
+    size: 'phone',
     defaultFullscreen: true,
     previewMessage: 'The web interface fills the screen.',
   },

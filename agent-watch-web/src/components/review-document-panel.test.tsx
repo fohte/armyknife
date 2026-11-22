@@ -30,22 +30,30 @@ function ReviewDocumentHarness({
     retry: { limit: 2, notify: false },
   })
   const [body, setBody] = useState('## Summary\n\nFixture body.')
-  const [mobileView, setMobileView] = useState<'edit' | 'preview'>('edit')
+  const [view, setView] = useState<'edit' | 'preview'>('edit')
 
   return (
-    <ReviewDocumentPanel
-      frontmatter={frontmatter}
-      body={body}
-      status={status}
-      mobileView={mobileView}
-      onFrontmatterChange={setFrontmatter}
-      onBodyChange={setBody}
-      onMobileViewChange={setMobileView}
-      onSave={() => actionSnapshots.push({ action: 'save', frontmatter, body })}
-      onFinish={() =>
-        actionSnapshots.push({ action: 'finish', frontmatter, body })
-      }
-    />
+    <div
+      className="session-status-panel"
+      data-size="phone"
+      style={{ width: '390px', height: '844px', display: 'flex' }}
+    >
+      <ReviewDocumentPanel
+        frontmatter={frontmatter}
+        body={body}
+        status={status}
+        view={view}
+        onFrontmatterChange={setFrontmatter}
+        onBodyChange={setBody}
+        onViewChange={setView}
+        onSave={() =>
+          actionSnapshots.push({ action: 'save', frontmatter, body })
+        }
+        onFinish={() =>
+          actionSnapshots.push({ action: 'finish', frontmatter, body })
+        }
+      />
+    </div>
   )
 }
 
@@ -119,9 +127,9 @@ it('edits typed fields and the mobile Markdown editor before saving or finishing
 
   const snapshot = () => ({
     snapshots: actionSnapshots,
-    mobileView: container
+    view: container
       .querySelector('.review-document-panel')
-      ?.getAttribute('data-mobile-view'),
+      ?.getAttribute('data-view'),
     contentEditable: container
       .querySelector('.review-document-editor .cm-content')
       ?.getAttribute('contenteditable'),
@@ -159,7 +167,7 @@ it('edits typed fields and the mobile Markdown editor before saving or finishing
         body: markdownBody,
       },
     ],
-    mobileView: 'preview',
+    view: 'preview',
     contentEditable: 'true',
     mobileColumns: ['none', 'block'],
     mobileInputSize: '16px',
@@ -221,7 +229,7 @@ it('keeps the mobile Markdown editor usable when metadata fills the viewport', a
         activeTabId="review-document"
         onTabChange={() => undefined}
         onClose={() => undefined}
-        mobilePresentation
+        size="phone"
       />,
     ),
   )
@@ -229,20 +237,20 @@ it('keeps the mobile Markdown editor usable when metadata fills the viewport', a
   const bodyEditor = container.querySelector<HTMLElement>(
     '.review-document-body-editor',
   )
-  const content = container.querySelector<HTMLElement>(
-    '.review-document-content',
+  const metadata = container.querySelector<HTMLElement>(
+    '.review-document-frontmatter',
   )
   const editorColumn = container.querySelector<HTMLElement>(
     '.review-document-edit-column',
   )
-  if (bodyEditor === null || content === null || editorColumn === null) {
+  if (bodyEditor === null || metadata === null || editorColumn === null) {
     throw new Error('The mobile review editor layout was not rendered.')
   }
 
   const snapshot = () => ({
     bodyEditorHasRoom: bodyEditor.getBoundingClientRect().height >= 320,
     editorColumnHasRoom: editorColumn.getBoundingClientRect().height >= 240,
-    metadataCanScroll: content.scrollHeight > content.clientHeight,
+    metadataCanScroll: metadata.scrollHeight > metadata.clientHeight,
   })
   expect(snapshot()).toEqual({
     bodyEditorHasRoom: true,
@@ -260,32 +268,37 @@ it.each([
     await page.viewport(width, 844)
     container.style.width = `${String(width)}px`
     container.style.height = '360px'
+    container.style.display = 'flex'
     root = createRoot(container)
     act(() =>
       root?.render(
-        <ReviewDocumentPanel
-          frontmatter={Object.fromEntries(
-            Array.from({ length: 20 }, (_, index) => [
-              `field-${String(index + 1)}`,
-              `value-${String(index + 1)}`,
-            ]),
-          )}
-          body={Array.from(
-            { length: 80 },
-            (_, index) => `Document line ${String(index + 1)}`,
-          ).join('\n')}
-        />,
+        <div
+          className="session-status-panel"
+          data-size={width === 390 ? 'phone' : 'desktop'}
+          style={{ width: '100%', height: '100%', display: 'flex' }}
+        >
+          <ReviewDocumentPanel
+            frontmatter={Object.fromEntries(
+              Array.from({ length: 20 }, (_, index) => [
+                `field-${String(index + 1)}`,
+                `value-${String(index + 1)}`,
+              ]),
+            )}
+            body={Array.from(
+              { length: 80 },
+              (_, index) => `Document line ${String(index + 1)}`,
+            ).join('\n')}
+          />
+        </div>,
       ),
     )
 
     const panel = container.querySelector<HTMLElement>('.review-document-panel')
-    const content = container.querySelector<HTMLElement>(
-      '.review-document-content',
-    )
+    const scroller = container.querySelector<HTMLElement>('.cm-scroller')
     const footer = container.querySelector<HTMLElement>(
       '.review-document-actions',
     )
-    if (panel === null || content === null || footer === null) {
+    if (panel === null || scroller === null || footer === null) {
       throw new Error('Review document layout elements were not rendered.')
     }
 
@@ -313,15 +326,15 @@ it.each([
 
     const boundsAtStart = readActionBounds()
     act(() => {
-      content.scrollTop = content.scrollHeight
+      scroller.scrollTop = scroller.scrollHeight
     })
     const boundsAtEnd = readActionBounds()
-    const maxScrollTop = content.scrollHeight - content.clientHeight
+    const maxScrollTop = scroller.scrollHeight - scroller.clientHeight
 
     const snapshot = () => ({
-      contentOverflowY: getComputedStyle(content).overflowY,
+      editorOverflowY: getComputedStyle(scroller).overflowY,
       contentCanScroll: maxScrollTop > 0,
-      contentReachedEnd: content.scrollTop >= maxScrollTop,
+      contentReachedEnd: scroller.scrollTop >= maxScrollTop,
       footerWithinPanelAtStart: boundsAtStart.footerWithinPanel,
       footerWithinPanelAtEnd: boundsAtEnd.footerWithinPanel,
       actionButtonsWithinPanelAtStart: boundsAtStart.buttons.map(
@@ -346,7 +359,7 @@ it.each([
     })
 
     expect(snapshot()).toEqual({
-      contentOverflowY: 'auto',
+      editorOverflowY: 'auto',
       contentCanScroll: true,
       contentReachedEnd: true,
       footerWithinPanelAtStart: true,

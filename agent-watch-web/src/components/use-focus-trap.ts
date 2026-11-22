@@ -38,11 +38,16 @@ export function useFocusTrap<T extends HTMLElement>({
       const focusIsOutsideContainer = !container.contains(
         document.activeElement,
       )
+      const focusIsOnContainer = document.activeElement === container
       if (
         (event.shiftKey &&
-          (document.activeElement === first || focusIsOutsideContainer)) ||
+          (document.activeElement === first ||
+            focusIsOutsideContainer ||
+            focusIsOnContainer)) ||
         (!event.shiftKey &&
-          (document.activeElement === last || focusIsOutsideContainer))
+          (document.activeElement === last ||
+            focusIsOutsideContainer ||
+            focusIsOnContainer))
       ) {
         event.preventDefault()
         const focusTarget = event.shiftKey ? last : first

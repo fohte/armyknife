@@ -1,3 +1,5 @@
+import '#index.css'
+
 import type { ComponentProps } from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
@@ -32,6 +34,8 @@ const singleChoiceQuestions: Props['questions'] = [
 
 let container: HTMLDivElement
 let root: Root | null = null
+let clipboardDescriptor: PropertyDescriptor | undefined
+let execCommandDescriptor: PropertyDescriptor | undefined
 
 function props(overrides: Partial<Props> = {}): Props {
   return {
@@ -95,13 +99,29 @@ function requireElement<T extends Element>(element: T | null): T {
 }
 
 function choiceButton(label: string): HTMLButtonElement {
-  return requireElement(
-    Array.from(
-      container.querySelectorAll<HTMLButtonElement>(
-        '.chat-question-choices button',
-      ),
-    ).find((button) => button.textContent.includes(label)) ?? null,
+  const row = Array.from(
+    container.querySelectorAll<HTMLElement>('.chat-question-choice-row'),
+  ).find((choiceRow) => {
+    const choiceText = choiceRow.querySelector('.chat-question-choice-text')
+    return choiceText !== null && choiceText.textContent.includes(label)
+  })
+  return requireElement(row?.querySelector<HTMLButtonElement>('button') ?? null)
+}
+
+function stubClipboard() {
+  const writeText = vi.fn<(text: string) => Promise<void>>(() =>
+    Promise.resolve(),
   )
+  const execCommand = vi.fn(() => true)
+  Object.defineProperty(navigator, 'clipboard', {
+    configurable: true,
+    value: { writeText },
+  })
+  Object.defineProperty(document, 'execCommand', {
+    configurable: true,
+    value: execCommand,
+  })
+  return { execCommand, writeText }
 }
 
 function dispatchKey(target: EventTarget, key: string) {
@@ -118,6 +138,11 @@ function dispatchKey(target: EventTarget, key: string) {
 
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
+  execCommandDescriptor = Object.getOwnPropertyDescriptor(
+    document,
+    'execCommand',
+  )
   onSelectSession.mockReset()
   container = document.createElement('div')
   document.body.append(container)
@@ -127,6 +152,18 @@ afterEach(() => {
   if (root !== null) act(() => root?.unmount())
   root = null
   container.remove()
+  if (clipboardDescriptor === undefined) {
+    Reflect.deleteProperty(navigator, 'clipboard')
+  } else {
+    Object.defineProperty(navigator, 'clipboard', clipboardDescriptor)
+  }
+  clipboardDescriptor = undefined
+  if (execCommandDescriptor === undefined) {
+    Reflect.deleteProperty(document, 'execCommand')
+  } else {
+    Object.defineProperty(document, 'execCommand', execCommandDescriptor)
+  }
+  execCommandDescriptor = undefined
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
@@ -267,9 +304,165 @@ it('sends a single-choice answer as soon as an option is selected', async () => 
   })
 })
 
-it('does not render copy controls in a single-choice option description', () => {
+it('selects a single-choice option when its description is clicked', async () => {
+  const onAnswer = vi.fn(() => Promise.resolve(true))
   renderQuestion(
     props({
+      onAnswer,
+      questions: [
+        {
+          header: 'Direction',
+          question: 'Which direction should be used?',
+          choices: [{ label: 'North', description: 'Follow the north path.' }],
+          multi_select: false,
+          answer: null,
+        },
+      ],
+    }),
+  )
+
+  const description = requireElement(
+    container.querySelector<HTMLElement>('.chat-question-choice-description'),
+  )
+  await act(async () => {
+    description.click()
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+  const getActual = () => ({
+    answerCalls: onAnswer.mock.calls,
+    selected: choiceButton('North').getAttribute('aria-pressed'),
+  })
+  expect(getActual()).toEqual({
+    answerCalls: [[{ 'Which direction should be used?': 'North' }]],
+    selected: 'true',
+  })
+})
+
+it('toggles a multi-select option when its description is clicked', async () => {
+  const onAnswer = vi.fn(() => Promise.resolve(true))
+  renderQuestion(
+    props({
+      onAnswer,
+      questions: [
+        {
+          header: 'Direction',
+          question: 'Which directions should be used?',
+          choices: [{ label: 'North', description: 'Follow the north path.' }],
+          multi_select: true,
+          answer: null,
+        },
+      ],
+    }),
+  )
+
+  const description = requireElement(
+    container.querySelector<HTMLElement>('.chat-question-choice-description'),
+  )
+  await act(async () => userEvent.click(description))
+
+  const getActual = () => ({
+    answerCalls: onAnswer.mock.calls,
+    selected: choiceButton('North').getAttribute('aria-pressed'),
+  })
+  expect(getActual()).toEqual({
+    answerCalls: [],
+    selected: 'true',
+  })
+})
+
+it('describes a single-choice answer button with its description', () => {
+  renderQuestion(
+    props({
+      questions: [
+        {
+          header: 'Direction',
+          question: 'Which direction should be used?',
+          choices: [{ label: 'North', description: 'Follow the north path.' }],
+          multi_select: false,
+          answer: null,
+        },
+      ],
+    }),
+  )
+
+  const button = choiceButton('North')
+  const title = requireElement(
+    container.querySelector<HTMLElement>('.chat-question-choice-content'),
+  )
+  const description = requireElement(
+    container.querySelector<HTMLElement>('.chat-question-choice-description'),
+  )
+  const getActual = () => ({
+    buttonDescribesChoice:
+      button.getAttribute('aria-describedby') === description.id,
+    buttonNamesChoice: button.getAttribute('aria-labelledby') === title.id,
+    descriptionHasId: description.id.length > 0,
+    titleHasId: title.id.length > 0,
+  })
+  expect(getActual()).toEqual({
+    buttonDescribesChoice: true,
+    buttonNamesChoice: true,
+    descriptionHasId: true,
+    titleHasId: true,
+  })
+})
+
+it('does not answer a single-choice question when copying code from its label', async () => {
+  const { execCommand, writeText } = stubClipboard()
+  const onAnswer = vi.fn(() => Promise.resolve(true))
+  renderQuestion(
+    props({
+      onAnswer,
+      questions: [
+        {
+          header: 'Direction',
+          question: 'Which direction should be used?',
+          choices: [{ label: 'North\n\n```text\nnorth\n```' }],
+          multi_select: false,
+          answer: null,
+        },
+      ],
+    }),
+  )
+
+  const copyButton = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      '.chat-question-choice-content .syntax-code-block-copy-button',
+    ),
+  )
+  await act(async () => {
+    await userEvent.click(copyButton)
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+  const getActual = () => ({
+    answerCalls: onAnswer.mock.calls,
+    clipboardCalls: writeText.mock.calls.length,
+    copyCommandCalls: execCommand.mock.calls.length,
+    copyButtonNestedInChoice: choiceButton('North').contains(copyButton),
+    selected: choiceButton('North').getAttribute('aria-pressed'),
+    copied: copyButton.textContent,
+  })
+  expect(getActual()).toEqual({
+    answerCalls: [],
+    clipboardCalls: 1,
+    copyCommandCalls: 0,
+    copyButtonNestedInChoice: false,
+    selected: 'false',
+    copied: '✓ Copied',
+  })
+})
+
+it('copies code in a single-choice description without answering the question', async () => {
+  const { execCommand, writeText } = stubClipboard()
+  const onAnswer = vi.fn(() => Promise.resolve(true))
+  renderQuestion(
+    props({
+      onAnswer,
       questions: [
         {
           header: 'Direction',
@@ -291,9 +484,212 @@ it('does not render copy controls in a single-choice option description', () => 
   const snapshot = () => ({
     copyButtonRendered:
       container.querySelector('.syntax-code-block-copy-button') !== null,
+    copyButtonNestedInChoice:
+      choiceButton('North').querySelector('.syntax-code-block-copy-button') !==
+      null,
+    selected: choiceButton('North').getAttribute('aria-pressed'),
   })
   expect(snapshot()).toEqual({
-    copyButtonRendered: false,
+    copyButtonRendered: true,
+    copyButtonNestedInChoice: false,
+    selected: 'false',
+  })
+
+  const copyButton = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      '.chat-question-choice-description .syntax-code-block-copy-button',
+    ),
+  )
+  await act(async () => {
+    await userEvent.click(copyButton)
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+  const getActual = () => ({
+    answerCalls: onAnswer.mock.calls,
+    clipboardCalls: writeText.mock.calls.length,
+    copyCommandCalls: execCommand.mock.calls.length,
+    copied: copyButton.textContent,
+    selected: choiceButton('North').getAttribute('aria-pressed'),
+  })
+  expect(getActual()).toEqual({
+    answerCalls: [],
+    clipboardCalls: 1,
+    copyCommandCalls: 0,
+    copied: '✓ Copied',
+    selected: 'false',
+  })
+})
+
+it('frames a recorded choice with its description without doubling dividers', () => {
+  renderQuestion(
+    props({
+      canAnswer: false,
+      questions: [
+        {
+          header: 'Retry limit',
+          question: 'How many attempts should run?',
+          choices: [
+            {
+              label: 'Three attempts',
+              description: 'Stop after three failures.',
+            },
+            { label: 'Five attempts', description: 'Continue for longer.' },
+          ],
+          multi_select: false,
+          answer: 'Three attempts',
+        },
+      ],
+    }),
+  )
+
+  const selectedRow = requireElement(
+    container.querySelector<HTMLElement>(
+      '.chat-question-choice-row.is-selected',
+    ),
+  )
+  const choices = requireElement(
+    container.querySelector<HTMLElement>('.chat-question-choices'),
+  )
+  const unselectedRow = requireElement(
+    choices.querySelector<HTMLElement>(
+      '.chat-question-choice-row:not(.is-selected)',
+    ),
+  )
+  const selectedButton = requireElement(
+    selectedRow.querySelector<HTMLButtonElement>('button'),
+  )
+  const description = requireElement(
+    selectedRow.querySelector<HTMLElement>('.chat-question-choice-description'),
+  )
+  const descriptionParagraph = requireElement(
+    description.querySelector<HTMLParagraphElement>('p'),
+  )
+  const choiceContent = requireElement(
+    selectedRow.querySelector<HTMLElement>('.chat-question-choice-content'),
+  )
+  const rowStyle = getComputedStyle(selectedRow)
+  const choicesStyle = getComputedStyle(choices)
+  const unselectedRowStyle = getComputedStyle(unselectedRow)
+  const buttonStyle = getComputedStyle(selectedButton)
+  const choiceContentStyle = getComputedStyle(choiceContent)
+  const paragraphStyle = getComputedStyle(descriptionParagraph)
+
+  const getActual = () => ({
+    rowBorder: [
+      rowStyle.borderTopWidth,
+      rowStyle.borderRightWidth,
+      rowStyle.borderBottomWidth,
+      rowStyle.borderLeftWidth,
+    ],
+    rowBackground: rowStyle.backgroundColor,
+    choicesBorderTop: choicesStyle.borderTopWidth,
+    unselectedRowBorderTop: unselectedRowStyle.borderTopWidth,
+    buttonBorder: [
+      buttonStyle.borderTopWidth,
+      buttonStyle.borderRightWidth,
+      buttonStyle.borderBottomWidth,
+      buttonStyle.borderLeftWidth,
+    ],
+    buttonBackground: buttonStyle.backgroundColor,
+    buttonMinHeight: buttonStyle.minHeight,
+    choiceContentPaddingBottom: choiceContentStyle.paddingBottom,
+    descriptionParagraph: {
+      margin: paragraphStyle.margin,
+      color: paragraphStyle.color,
+      fontSize: paragraphStyle.fontSize,
+    },
+    descriptionInsideSelectedRow: description.parentElement === selectedRow,
+  })
+  expect(getActual()).toEqual({
+    rowBorder: ['1px', '1px', '1px', '1px'],
+    rowBackground: 'rgb(20, 20, 20)',
+    choicesBorderTop: '0px',
+    unselectedRowBorderTop: '0px',
+    buttonBorder: ['0px', '0px', '0px', '0px'],
+    buttonBackground: 'rgba(0, 0, 0, 0)',
+    buttonMinHeight: '0px',
+    choiceContentPaddingBottom: '0px',
+    descriptionParagraph: {
+      margin: '0px',
+      color: 'rgb(161, 161, 170)',
+      fontSize: '11.5px',
+    },
+    descriptionInsideSelectedRow: true,
+  })
+})
+
+it('keeps descriptions compact on unanswered choices', () => {
+  renderQuestion(
+    props({
+      questions: [
+        {
+          header: 'Retry limit',
+          question: 'How many attempts should run?',
+          choices: [
+            {
+              label: 'Three attempts',
+              description: 'Stop after three failures.',
+            },
+            { label: 'Five attempts' },
+          ],
+          multi_select: false,
+          answer: null,
+        },
+      ],
+    }),
+  )
+
+  const row = requireElement(
+    container.querySelector<HTMLElement>(
+      '.chat-question-choice-row.has-description.has-shortcut:not(.is-selected)',
+    ),
+  )
+  const button = requireElement(row.querySelector<HTMLButtonElement>('button'))
+  const descriptionParagraph = requireElement(
+    row.querySelector<HTMLParagraphElement>(
+      '.chat-question-choice-description p',
+    ),
+  )
+  const choiceTitle = requireElement(
+    row.querySelector<HTMLElement>('.chat-question-choice-text'),
+  )
+  const choiceContent = requireElement(
+    row.querySelector<HTMLElement>('.chat-question-choice-content'),
+  )
+  const buttonStyle = getComputedStyle(button)
+  const choiceContentStyle = getComputedStyle(choiceContent)
+  const paragraphStyle = getComputedStyle(descriptionParagraph)
+  const choiceTitleRect = choiceTitle.getBoundingClientRect()
+  const descriptionRect = descriptionParagraph.getBoundingClientRect()
+
+  const getActual = () => ({
+    answerState: button.getAttribute('aria-pressed'),
+    buttonMinHeight: buttonStyle.minHeight,
+    contentAlignItems: choiceContentStyle.alignItems,
+    choiceContentPaddingBottom: choiceContentStyle.paddingBottom,
+    alignmentOffset: Number(
+      (descriptionRect.left - choiceTitleRect.left).toFixed(2),
+    ),
+    descriptionParagraph: {
+      margin: paragraphStyle.margin,
+      color: paragraphStyle.color,
+      fontSize: paragraphStyle.fontSize,
+    },
+  })
+  expect(getActual()).toEqual({
+    answerState: 'false',
+    buttonMinHeight: '0px',
+    contentAlignItems: 'baseline',
+    choiceContentPaddingBottom: '0px',
+    alignmentOffset: 0,
+    descriptionParagraph: {
+      margin: '0px',
+      color: 'rgb(161, 161, 170)',
+      fontSize: '11.5px',
+    },
   })
 })
 
@@ -845,6 +1241,52 @@ it('closes a question image lightbox with Escape without skipping the question',
     skipCalls: [],
     lightboxOpen: false,
     questionPresent: true,
+  })
+})
+
+it('opens a choice image lightbox without selecting or answering the choice', async () => {
+  const onAnswer = vi.fn(() => Promise.resolve(true))
+  renderQuestion(
+    props({
+      onAnswer,
+      questions: [
+        {
+          header: 'Review the image',
+          question: 'Which image should be used?',
+          choices: [
+            { label: '![Fixture option](/fixture-option.png)' },
+            { label: 'Use the existing image' },
+          ],
+          multi_select: false,
+          answer: null,
+        },
+      ],
+    }),
+  )
+
+  const imageTrigger = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Enlarge Fixture option"]',
+    ),
+  )
+  const imageChoiceRow = requireElement(
+    container.querySelector<HTMLElement>('.chat-question-choice-row'),
+  )
+  const imageChoiceButton = requireElement(
+    imageChoiceRow.querySelector<HTMLButtonElement>('button'),
+  )
+  await act(async () => userEvent.click(imageTrigger))
+
+  const getActual = () => ({
+    answerCalls: onAnswer.mock.calls,
+    lightboxOpen:
+      document.body.querySelector('.image-lightbox-dialog') !== null,
+    selected: imageChoiceButton.getAttribute('aria-pressed'),
+  })
+  expect(getActual()).toEqual({
+    answerCalls: [],
+    lightboxOpen: true,
+    selected: 'false',
   })
 })
 

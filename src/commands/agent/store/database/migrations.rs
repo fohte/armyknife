@@ -24,7 +24,7 @@ CREATE TRIGGER agent_file_delete_session
         DELETE FROM agent_file WHERE session_id = OLD.session_id;
     END;";
 
-static MIGRATION_ENTRIES: [M<'static>; 29] = [
+static MIGRATION_ENTRIES: [M<'static>; 30] = [
     M::up(
         "CREATE TABLE sessions (
             session_id TEXT PRIMARY KEY,
@@ -283,6 +283,16 @@ static MIGRATION_ENTRIES: [M<'static>; 29] = [
     M::up(
         "ALTER TABLE agent_todo ADD COLUMN folded INTEGER NOT NULL DEFAULT 0;
          ALTER TABLE agent_todo ADD COLUMN added_folded INTEGER NOT NULL DEFAULT 0;",
+    ),
+    M::up(
+        "CREATE TABLE agent_session_close (
+            session_id TEXT PRIMARY KEY
+        );
+        CREATE TRIGGER agent_session_close_delete_session
+            AFTER DELETE ON sessions
+            BEGIN
+                DELETE FROM agent_session_close WHERE session_id = OLD.session_id;
+            END;",
     ),
 ];
 

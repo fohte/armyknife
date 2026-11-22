@@ -1,4 +1,5 @@
 .web-ui-pane {
+  --web-ui-control-size: 28px;
   display: flex;
   min-width: 300px;
   min-height: 0;
@@ -7,8 +8,8 @@
   border-left: 1px solid var(--aw-border-row);
   background: var(--aw-bg-nav);
 }
-.web-ui-pane.is-fullscreen,
-.web-ui-pane.is-mobile-fullscreen {
+
+.web-ui-pane.is-fullscreen {
   position: fixed;
   z-index: 100;
   inset: 0;
@@ -18,30 +19,36 @@
   min-width: 0;
 }
 
-.web-ui-pane.is-mobile-fullscreen .web-ui-pane-header {
-  padding-top: env(safe-area-inset-top, 0px);
-}
-
 .web-ui-pane-header {
+  box-sizing: border-box;
   display: flex;
-  min-height: 56px;
-  flex: 0 0 56px;
+  min-height: 36px;
+  flex: 0 0 auto;
   align-items: center;
-  gap: 10px;
-  padding: 0 12px;
-  border-bottom: 1px solid var(--aw-border-row);
+  gap: 4px;
+  padding: 4px 4px 4px var(--status-horizontal-padding, 18px);
+  border-bottom: 1px solid var(--aw-border);
   background: var(--aw-bg-surface);
 }
 
-.web-ui-pane-title {
-  color: var(--aw-text-primary);
-  font-weight: 700;
+.web-ui-pane-heading {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
 }
 
-.web-ui-pane-header > a:not(.web-ui-pane-open-new-tab),
-.web-ui-pane-header > span {
+.web-ui-pane-title {
   overflow: hidden;
-  flex: 1;
+  color: var(--aw-text-primary);
+  font-size: var(--status-font-size, 13px);
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.web-ui-pane-url {
+  overflow: hidden;
   color: var(--aw-text-muted);
   font-family: var(--font-mono);
   font-size: 10.5px;
@@ -49,99 +56,26 @@
   white-space: nowrap;
 }
 
-.web-ui-pane-header.is-mobile-fullscreen {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  column-gap: 4px;
-  min-height: 56px;
-  flex: 0 0 56px;
-  padding: 6px calc(4px + env(safe-area-inset-right, 0px)) 6px
-    calc(16px + env(safe-area-inset-left, 0px));
-}
-
-.web-ui-pane-header.is-mobile-tab {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  column-gap: 4px;
-  min-height: 52px;
-  flex: 0 0 52px;
-  padding: 4px 4px 4px 16px;
-  border-bottom: 1px solid var(--aw-border);
-  background: var(--aw-bg-surface);
-}
-
-.web-ui-pane-mobile-heading {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-}
-
-.web-ui-pane-mobile-heading .web-ui-pane-title {
-  display: block;
-  overflow: hidden;
-  color: var(--aw-text-primary);
-  font-family: inherit;
-  font-size: 15px;
-  font-weight: 700;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.web-ui-pane-mobile-url {
-  display: block;
-  overflow: hidden;
-  color: var(--aw-text-muted);
-  font-family: var(--font-mono);
-  font-size: 11.5px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .web-ui-pane-open-new-tab {
+  box-sizing: border-box;
   display: grid;
-  width: 44px;
-  height: 44px;
-  flex: none;
+  width: var(--web-ui-control-size);
+  height: var(--web-ui-control-size);
+  flex: 0 0 var(--web-ui-control-size);
   place-items: center;
   color: var(--aw-text-muted);
 }
 
-.web-ui-pane-mobile-actions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.web-ui-pane-header.is-mobile-tab .web-ui-pane-mobile-actions {
-  gap: 0;
-}
-
-.web-ui-pane-unavailable {
-  margin: auto;
-  padding: 24px;
-  color: var(--aw-text-muted);
-  font-size: 13px;
-  text-align: center;
-}
-
 .web-ui-pane-header [data-slot='button'] {
-  min-width: 28px;
-  min-height: 28px;
-  padding: 0 7px;
-  color: var(--aw-text-body);
-  font-size: 16px;
-}
-
-.web-ui-pane-header.is-mobile-fullscreen [data-slot='button'] {
-  width: 44px;
-  height: 44px;
-  min-width: 44px;
-  min-height: 44px;
+  box-sizing: border-box;
+  width: var(--web-ui-control-size);
+  min-width: var(--web-ui-control-size);
+  height: var(--web-ui-control-size);
+  min-height: var(--web-ui-control-size);
+  flex: 0 0 var(--web-ui-control-size);
+  justify-content: center;
   padding: 0;
-}
-
-.web-ui-pane-header [data-slot='button'][aria-label*='fullscreen'] {
-  font-size: 14px;
+  color: var(--aw-text-muted);
 }
 
 .web-ui-pane iframe {
@@ -159,17 +93,49 @@
   place-items: center;
   background: var(--aw-bg-app);
   color: var(--aw-text-disabled);
-  font-size: 13px;
+  font-size: var(--status-font-size, 13px);
 }
 
-.session-status-panel--mobile .web-ui-pane {
+.web-ui-pane-unavailable {
+  margin: auto;
+  padding: 24px;
+  color: var(--aw-text-muted);
+  font-size: var(--status-font-size, 13px);
+  text-align: center;
+}
+
+.web-ui-pane[data-size='phone'] {
+  --web-ui-control-size: 44px;
+  min-width: 0;
   border-left: 0;
 }
 
-.web-ui-pane-header.is-mobile-tab [data-slot='button'] {
-  width: 44px;
-  height: 44px;
-  min-width: 44px;
-  min-height: 44px;
-  padding: 0;
+.web-ui-pane[data-size='phone'] .web-ui-pane-header {
+  min-height: 52px;
+  padding-left: 16px;
+  padding-right: 4px;
+}
+
+.web-ui-pane[data-size='phone'].is-fullscreen .web-ui-pane-header {
+  min-height: 56px;
+  padding-top: max(4px, env(safe-area-inset-top, 0px));
+  padding-right: calc(4px + env(safe-area-inset-right, 0px));
+  padding-left: calc(16px + env(safe-area-inset-left, 0px));
+}
+
+.web-ui-pane[data-size='phone'] .web-ui-pane-title {
+  font-size: 15px;
+}
+
+.web-ui-pane[data-size='phone'] .web-ui-pane-url {
+  font-size: 11.5px;
+}
+
+.web-ui-pane[data-size='phone'] .web-ui-pane-open-new-tab,
+.web-ui-pane[data-size='phone'] .web-ui-pane-header [data-slot='button'] {
+  color: var(--aw-text-body);
+}
+
+.web-ui-pane[data-size='phone'] .web-ui-pane-unavailable {
+  font-size: 15px;
 }

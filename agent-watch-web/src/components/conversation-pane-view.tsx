@@ -6,7 +6,10 @@ import { type ReactNode, useCallback, useMemo, useRef, useState } from 'react'
 
 import { useOptionalAsyncActionFeedback } from '#async-action-feedback'
 import { useAgentUsageContext } from '#components/agent-usage-context'
-import { AsyncActionItem } from '#components/async-action-item'
+import type {
+  CommandOutputRefresh,
+  CommandOutputStart,
+} from '#components/command-result-message'
 import { ConversationPaneHeader } from '#components/conversation-pane-header'
 import { ConversationSelectionReply } from '#components/conversation-selection-reply'
 import { ConversationStatusBand } from '#components/conversation-status-band'
@@ -19,9 +22,11 @@ import type {
   PendingPermissionActions,
   PermissionRequestIdentity,
 } from '#components/permission-card'
+import { renderConversationAsyncActionItems } from '#components/render-conversation-async-action-items'
 import { scrollToConversationStatusCard } from '#components/scroll-to-conversation-status-card'
 import { SessionLinkElapsedSecondsContext } from '#components/session-link-elapsed-seconds'
 import { SessionUsageRow } from '#components/session-usage-row'
+import { useConversationCommandOutputHighlight } from '#components/use-conversation-command-output-highlight'
 import { useConversationMessageElements } from '#components/use-conversation-message-elements'
 import { useConversationPaneComposer } from '#components/use-conversation-pane-composer'
 import { useConversationPaneInput } from '#components/use-conversation-pane-input'
@@ -73,7 +78,8 @@ type ConversationPaneViewProps = {
     payload?: Record<string, unknown>,
     permissionIdentity?: PermissionRequestIdentity,
   ) => Promise<boolean>
-  onCommandExecuted?: () => void
+  onCommandExecuted?: CommandOutputRefresh
+  onCommandStarted?: CommandOutputStart
   onRewind?: (
     messageId: string,
     mode: RewindMode,
@@ -133,6 +139,7 @@ export function ConversationPaneView({
   onClearError = () => undefined,
   onAction,
   onCommandExecuted,
+  onCommandStarted,
   onRewind,
   onOpenInTerminal,
   onSelectSession,
@@ -221,6 +228,12 @@ export function ConversationPaneView({
     onDecisionJumpComplete,
     onDecisionJumpSucceeded,
   })
+  useConversationCommandOutputHighlight({
+    loading,
+    messages,
+    scrollRef: conversationScrollRef,
+    sessionId: session.id,
+  })
   const sessionLinkTargets = useSessionLinkTargets(
     sessions,
     providedSessionLinkTargets,
@@ -257,6 +270,7 @@ export function ConversationPaneView({
     hasUnansweredProposal,
   } = useConversationMessageElements({
     messages,
+    start,
     ...(decisions === undefined ? {} : { decisions }),
     ...(responseHasUnansweredProposal === undefined
       ? {}
@@ -272,6 +286,7 @@ export function ConversationPaneView({
     onSelectDecision,
     onAction,
     ...(onCommandExecuted === undefined ? {} : { onCommandExecuted }),
+    ...(onCommandStarted === undefined ? {} : { onCommandStarted }),
     onOpenInTerminal: openInTerminal,
     openInTerminalStatus,
     onSelectSession: selectLinkedSession,
@@ -381,25 +396,16 @@ export function ConversationPaneView({
         ) : null}
         <MarkdownCommandContextProvider
           sessionId={session.id}
+          sessionTitle={session.title}
           {...(onCommandExecuted === undefined ? {} : { onCommandExecuted })}
+          {...(onCommandStarted === undefined ? {} : { onCommandStarted })}
         >
           {conversationMessageElements}
         </MarkdownCommandContextProvider>
-        {actionFeedback?.actions
-          .filter((action) => action.sessionId === session.id)
-          .map((action) => (
-            <AsyncActionItem
-              action={action}
-              form="line"
-              key={action.id}
-              onCloseKeepWorktree={() => {
-                actionFeedback.closeWithWorktree(action.id)
-              }}
-              onRetry={() => {
-                actionFeedback.retry(action.id)
-              }}
-            />
-          ))}
+        {renderConversationAsyncActionItems({
+          feedback: actionFeedback,
+          sessionId: session.id,
+        })}
       </div>
 
       <div className="conversation-merge-band-slot" ref={setMergeBandTarget} />

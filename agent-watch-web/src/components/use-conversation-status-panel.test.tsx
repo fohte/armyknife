@@ -64,18 +64,22 @@ function requestUrl(input: RequestInfo | URL): string {
 }
 
 async function waitForState(condition: () => boolean) {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
     if (condition()) return
     await act(async () => {
-      await new Promise((resolve) => window.setTimeout(resolve, 0))
+      await new Promise((resolve) => window.setTimeout(resolve, 10))
     })
   }
+  if (condition()) return
   throw new Error('The expected review document state did not appear')
 }
 
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   container = document.createElement('div')
+  container.style.display = 'flex'
+  container.style.width = '480px'
+  container.style.height = '720px'
   document.body.append(container)
   root = createRoot(container)
 })
@@ -456,11 +460,25 @@ it('saves the edited document and sends the same edits before finishing review',
 
   await act(async () => {
     await page.getByRole('textbox', { name: 'title' }).fill('Edited title')
+  })
+  await act(async () => {
     await page.getByRole('checkbox', { name: 'enabled' }).click()
+  })
+  await act(async () => {
     await page
       .getByRole('textbox', { name: 'Markdown body' })
       .fill('Edited body.')
   })
+  await waitForState(
+    () =>
+      container.querySelector('.review-document-editor .cm-content')
+        ?.textContent === 'Edited body.',
+  )
+  await waitForState(
+    () =>
+      container.querySelector('.review-document-body')?.textContent ===
+      'Edited body.',
+  )
   expect(container.querySelector('.review-document-status')?.textContent).toBe(
     'Unsaved changes',
   )
@@ -557,6 +575,13 @@ it('keeps edits after a save error and retries the same document', async () => {
     await page
       .getByRole('textbox', { name: 'Markdown body' })
       .fill('Edited body.')
+  })
+  await waitForState(
+    () =>
+      container.querySelector('.review-document-body')?.textContent ===
+      'Edited body.',
+  )
+  await act(async () => {
     await page.getByRole('button', { name: 'Save' }).click()
   })
   await waitForState(() => container.querySelector('[role="alert"]') !== null)
