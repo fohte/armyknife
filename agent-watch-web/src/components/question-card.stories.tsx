@@ -155,6 +155,28 @@ export const ChoiceDescriptionShowsCodeBlock: Story = {
   },
 }
 
+export const ChoiceDescriptionAfterAnswer: Story = {
+  name: 'An answered question keeps its selected choice and description',
+  args: {
+    canAnswer: false,
+    questions: [
+      {
+        header: 'Retry limit',
+        question: 'How many attempts should run?',
+        choices: [
+          {
+            label: 'Three attempts',
+            description: 'Stop after three failures.',
+          },
+          { label: 'Five attempts', description: 'Continue for longer.' },
+        ],
+        multi_select: false,
+        answer: 'Three attempts',
+      },
+    ],
+  },
+}
+
 export const ShowingAnswers: Story = {
   name: 'A completed question group shows every recorded answer',
   args: {
