@@ -1,8 +1,8 @@
 import '#components/async-action-feedback-host.css'
 
-import type { RefObject } from 'react'
+import { type RefObject, useEffect } from 'react'
 
-import type { AsyncAction } from '#async-action-feedback'
+import { type AsyncAction, formatAsyncActionTime } from '#async-action-feedback'
 import { AsyncActionItem } from '#components/async-action-item'
 
 type AsyncActionFeedbackHostProps = {
@@ -10,6 +10,7 @@ type AsyncActionFeedbackHostProps = {
   toastIds: readonly number[]
   toastRef?: RefObject<HTMLDivElement | null>
   activityOpen: boolean
+  activityPosition?: { left: number; bottom: number } | null
   toastBottomOffset: number | null
   selectedActionId: number | null
   retry: (id: number) => void
@@ -19,11 +20,7 @@ type AsyncActionFeedbackHostProps = {
   closeActivity: () => void
   closeWithWorktree: (id: number) => void
   openInTerminal: (id: number) => void
-}
-
-function timeLabel(timestamp: number) {
-  const date = new Date(timestamp)
-  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+  showCommandOutput: (id: number) => void
 }
 
 export function AsyncActionFeedbackHost({
@@ -31,6 +28,7 @@ export function AsyncActionFeedbackHost({
   toastIds,
   toastRef,
   activityOpen,
+  activityPosition = null,
   toastBottomOffset,
   selectedActionId,
   retry,
@@ -40,6 +38,7 @@ export function AsyncActionFeedbackHost({
   closeActivity,
   closeWithWorktree,
   openInTerminal,
+  showCommandOutput,
 }: AsyncActionFeedbackHostProps) {
   const ordered = [...actions].sort(
     (left, right) => right.createdAt - left.createdAt,
@@ -48,6 +47,23 @@ export function AsyncActionFeedbackHost({
     selectedActionId === null
       ? null
       : (actions.find((action) => action.id === selectedActionId) ?? null)
+
+  useEffect(() => {
+    if (!activityOpen) return
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      event.stopPropagation()
+      closeActivity()
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [activityOpen, closeActivity])
+
   return (
     <>
       <div
@@ -82,32 +98,48 @@ export function AsyncActionFeedbackHost({
               onCloseKeepWorktree={() => {
                 closeWithWorktree(id)
               }}
+              onShowOutput={() => {
+                showCommandOutput(id)
+              }}
             />
           )
         })}
       </div>
       {activityOpen ? (
         <div
-          className="async-action-activity-backdrop"
+          className={`async-action-activity-backdrop${activityPosition === null ? '' : ' is-anchored'}`}
           onMouseDown={closeActivity}
         >
           <section
             aria-label="Activity"
             aria-modal="true"
-            className="async-action-activity"
+            className={`async-action-activity${activityPosition === null ? '' : ' is-anchored'}`}
             role="dialog"
+            style={
+              activityPosition === null
+                ? undefined
+                : {
+                    left: `${String(activityPosition.left)}px`,
+                    bottom: `${String(activityPosition.bottom)}px`,
+                  }
+            }
             onMouseDown={(event) => {
               event.stopPropagation()
             }}
           >
             <header>
               <h2>Activity</h2>
-              <button type="button" onClick={clearFinished}>
-                Clear finished
-              </button>
+              {ordered.length > 0 ? (
+                <button type="button" onClick={clearFinished}>
+                  Clear finished
+                </button>
+              ) : null}
             </header>
             {ordered.length === 0 ? (
-              <p className="async-action-empty">No recent activity.</p>
+              <div className="async-action-empty">
+                <p>No recent activity.</p>
+                <p>Merge, Close and command results appear here.</p>
+              </div>
             ) : null}
             <div className="async-action-activity-list">
               {ordered.map((action) => (
@@ -120,6 +152,7 @@ export function AsyncActionFeedbackHost({
                   <AsyncActionItem
                     action={action}
                     form="row"
+                    time={formatAsyncActionTime(action.createdAt)}
                     onRetry={() => {
                       closeActivity()
                       retry(action.id)
@@ -134,8 +167,11 @@ export function AsyncActionFeedbackHost({
                       closeActivity()
                       openInTerminal(action.id)
                     }}
+                    onShowOutput={() => {
+                      closeActivity()
+                      showCommandOutput(action.id)
+                    }}
                   />
-                  <time>{timeLabel(action.createdAt)}</time>
                 </div>
               ))}
             </div>

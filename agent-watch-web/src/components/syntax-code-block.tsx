@@ -3,12 +3,16 @@ import '#components/syntax-code-block.css'
 import { Fragment, type ReactNode, useEffect, useState } from 'react'
 import type { TokensResult } from 'shiki/types'
 
+import { CodeBlockCopyButton } from '#components/code-block-copy-button'
+import { useCopyToClipboard } from '#components/use-copy-to-clipboard'
+
 type SyntaxCodeBlockProps = {
   code: string
   language: string
   className?: string
   children?: ReactNode
   links?: SyntaxCodeBlockLink[]
+  copyable?: boolean
 }
 
 export type SyntaxCodeBlockLink = {
@@ -121,7 +125,9 @@ export function SyntaxCodeBlock({
   className,
   children,
   links = [],
+  copyable = false,
 }: SyntaxCodeBlockProps) {
+  const { status, copy } = useCopyToClipboard(code)
   const [highlightedCode, setHighlightedCode] =
     useState<HighlightedCode | null>(null)
   const highlighted =
@@ -156,7 +162,7 @@ export function SyntaxCodeBlock({
     }
   }, [code, language])
 
-  return (
+  const pre = (
     <pre
       className={['syntax-code-block', className].filter(Boolean).join(' ')}
       data-language={language}
@@ -165,5 +171,17 @@ export function SyntaxCodeBlock({
         {highlightedContent ?? children ?? code}
       </code>
     </pre>
+  )
+
+  if (!copyable) return pre
+
+  return (
+    <div className="syntax-code-block-container">
+      <div className="syntax-code-block-toolbar">
+        <span className="syntax-code-block-language">{language}</span>
+        <CodeBlockCopyButton onCopy={copy} status={status} />
+      </div>
+      {pre}
+    </div>
   )
 }

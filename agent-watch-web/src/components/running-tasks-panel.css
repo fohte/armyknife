@@ -144,3 +144,68 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+.session-status-panel--mobile .running-tasks-panel {
+  padding-top: 8px;
+}
+
+.session-status-panel--mobile .running-tasks-group h2 {
+  height: 32px;
+  padding: 0 16px;
+  font-size: 12px;
+}
+
+.session-status-panel--mobile .running-tasks-group + .running-tasks-group h2 {
+  margin-top: 8px;
+  border-top: 0;
+}
+
+.session-status-panel--mobile .running-tasks-group ul {
+  padding: 0 16px;
+}
+
+.session-status-panel--mobile .running-task {
+  grid-template-columns: 16px minmax(0, 1fr);
+  padding: 8px 0;
+}
+
+.session-status-panel--mobile .running-task-content {
+  display: grid;
+  grid-template-columns: max-content max-content minmax(0, 1fr);
+  gap: 0 10px;
+}
+
+.session-status-panel--mobile .running-task-heading {
+  display: contents;
+}
+
+.session-status-panel--mobile .running-task-description--command {
+  grid-column: 1 / -1;
+  font-size: 14px;
+}
+
+.session-status-panel--mobile .running-task-elapsed {
+  grid-column: 1;
+  grid-row: 2;
+  align-self: center;
+  font-size: 13px;
+}
+
+.session-status-panel--mobile .running-task-output-button {
+  grid-column: 2;
+  grid-row: 2;
+  min-height: 32px;
+  padding: 0 12px;
+  font-size: 12.5px;
+}
+
+.session-status-panel--mobile .running-task-output {
+  grid-column: 1 / -1;
+  max-height: 280px;
+  margin-top: 4px;
+  border: 0;
+  border-radius: 0;
+  padding: 8px 10px;
+  background: var(--aw-bg-surface);
+  font-size: 12px;
+}

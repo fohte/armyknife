@@ -4,17 +4,27 @@ import { ActivityButton } from '#components/activity-button'
 
 const meta = {
   component: ActivityButton,
-  args: { activityCount: 2, onOpenActivity: () => undefined },
+  args: {
+    drawer: true,
+    activityCount: 2,
+    onOpenActivity: () => undefined,
+  },
 } satisfies Meta<typeof ActivityButton>
 
 export default meta
 type Story = StoryObj<typeof meta>
 
-export const NavigationButtonShowsRunningActions: Story = {
-  name: 'The navigation entry shows two recent actions.',
+export const PhoneDrawerShowsRunningActions: Story = {
+  name: 'The phone drawer shows two results with one action running.',
+  args: { isRunning: true },
 }
 
-export const MobileDrawerShowsFailedActivity: Story = {
+export const NavigationKeepsActivityVisibleWhenEmpty: Story = {
+  name: 'The phone drawer keeps Activity muted before any actions run.',
+  args: { activityCount: 0, isRunning: false },
+}
+
+export const PhoneDrawerShowsFailedActivity: Story = {
   name: 'The mobile navigation drawer shows failed Activity results.',
-  args: { drawer: true, failed: true },
+  args: { failed: true },
 }

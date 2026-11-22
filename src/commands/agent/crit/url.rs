@@ -1,4 +1,22 @@
+use std::net::{IpAddr, Ipv4Addr};
+
 use anyhow::{Context, Result};
+
+pub(in crate::commands::agent) fn local_crit_ip(host: &str) -> Option<IpAddr> {
+    if host.eq_ignore_ascii_case("localhost") || host.ends_with(".localhost") {
+        return Some(IpAddr::V4(Ipv4Addr::LOCALHOST));
+    }
+
+    let host = host
+        .strip_prefix('[')
+        .and_then(|host| host.strip_suffix(']'))
+        .unwrap_or(host);
+    match host.parse::<IpAddr>().ok()? {
+        IpAddr::V4(address) if address.is_loopback() => Some(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+        IpAddr::V6(address) if address.is_loopback() => Some(IpAddr::V6(address)),
+        _ => None,
+    }
+}
 
 pub(in crate::commands::agent) fn add_url(crit_urls: &mut Vec<String>, url: &str) {
     if let Ok(new_url) = reqwest::Url::parse(url)

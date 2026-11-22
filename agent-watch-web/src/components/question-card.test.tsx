@@ -267,6 +267,36 @@ it('sends a single-choice answer as soon as an option is selected', async () => 
   })
 })
 
+it('does not render copy controls in a single-choice option description', () => {
+  renderQuestion(
+    props({
+      questions: [
+        {
+          header: 'Direction',
+          question: 'Which direction should be used?',
+          choices: [
+            {
+              label: 'North',
+              description: '```text\nnorth\n```',
+            },
+          ],
+          multi_select: false,
+          answer: null,
+        },
+      ],
+      isMobile: true,
+    }),
+  )
+
+  const snapshot = () => ({
+    copyButtonRendered:
+      container.querySelector('.syntax-code-block-copy-button') !== null,
+  })
+  expect(snapshot()).toEqual({
+    copyButtonRendered: false,
+  })
+})
+
 it('answers a desktop single-choice question with its number shortcut', async () => {
   const onAnswer = vi.fn(() => Promise.resolve(true))
   renderQuestion(props({ questions: singleChoiceQuestions, onAnswer }))

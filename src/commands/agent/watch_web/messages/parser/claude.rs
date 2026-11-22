@@ -786,6 +786,8 @@ mod tests {
             seq: 1,
             title: "Review the sample report".to_string(),
             detail: Some("Open the sample summary.".to_string()),
+            folded: false,
+            added_folded: false,
             created_at,
             completed_at: is_completed.then(|| created_at + chrono::Duration::minutes(1)),
             resolution: is_completed.then_some(TodoResolution::Completed),
@@ -815,6 +817,8 @@ mod tests {
             seq: 1,
             title: "Review the sample report".to_string(),
             detail: Some("Open the sample summary.".to_string()),
+            folded: false,
+            added_folded: false,
             completed: is_completed,
             resolution: is_completed.then_some(TodoResolution::Completed),
             comment: is_completed.then(|| "The sample is ready.".to_string()),
@@ -2493,6 +2497,18 @@ mod tests {
         vec![question_group_with_cancelled(vec![question_prompt(
             "Should the report include a chart?",
             vec![question_choice("Yes"), question_choice("No")],
+            false,
+            None,
+        )], true)]
+    )]
+    #[case::failed_without_answer_is_cancelled(
+        indoc! {r#"
+            {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-question-failed","name":"AskUserQuestion","input":{"questions":[{"question":"Which fixture option should be used?","options":[{"label":"First option"},{"label":"Second option"}]}]}}]}}
+            {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-question-failed","content":"Fixture tool request failed.","is_error":true}]},"toolUseResult":"Fixture request rejected"}
+        "#},
+        vec![question_group_with_cancelled(vec![question_prompt(
+            "Which fixture option should be used?",
+            vec![question_choice("First option"), question_choice("Second option")],
             false,
             None,
         )], true)]

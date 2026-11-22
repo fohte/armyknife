@@ -3,6 +3,11 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { userEvent } from 'vitest/browser'
 
+import {
+  AsyncActionFeedbackProvider,
+  useAsyncActionStarter,
+  useOptionalAsyncActionFeedback,
+} from '#async-action-feedback'
 import { getCommandPaletteShortcut } from '#command-palette-shortcut'
 import { renderConversationMessage } from '#components/conversation-message'
 import { ConversationMessageRow } from '#components/conversation-message-row'
@@ -13,6 +18,7 @@ import { MarkdownSessionLinksProvider } from '#components/markdown-message'
 import { formatMessageTime } from '#components/message-time'
 import { SessionConversationCacheProvider } from '#components/session-conversation-cache'
 import { SessionStatusPanel } from '#components/session-status-panel'
+import { clearSessionAttachments } from '#components/use-composer-message'
 import { useConversationStatusPanel } from '#components/use-conversation-status-panel'
 import { useSessionLinkTargets } from '#session-link-targets'
 import type {
@@ -199,6 +205,17 @@ function messagesResponse(
   }
 }
 
+function normalizeQueuedMessagePostBody(body: BodyInit | null | undefined) {
+  if (typeof body !== 'string') return body
+  const parsed: unknown = JSON.parse(body)
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    return body
+  }
+  const messageId: unknown = Reflect.get(parsed, 'messageId')
+  if (typeof messageId !== 'string') return body
+  return JSON.stringify({ ...parsed, messageId: '<message-id>' })
+}
+
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -238,6 +255,7 @@ const permissionDenied: ChatItem = {
 }
 let container: HTMLDivElement
 let root: Root | null = null
+const renderedSessionIds = new Set<string>()
 const originalExecCommand = Object.getOwnPropertyDescriptor(
   document,
   'execCommand',
@@ -268,6 +286,10 @@ async function waitForState(condition: () => boolean) {
     }
   })
   return condition()
+}
+
+function normalizeAsyncActionLineTime(text: string | null | undefined) {
+  return text?.replace(/ · \d{2}:\d{2}$/, ' · <time>') ?? null
 }
 
 function terminalFeedback() {
@@ -329,6 +351,7 @@ function renderView(
     draft: string,
   ) => Promise<boolean>,
 ) {
+  renderedSessionIds.add(viewSession.id)
   root ??= createRoot(container)
   act(() => {
     root?.render(
@@ -636,6 +659,7 @@ function treeNode(
     elapsedSeconds: 0,
     task: null,
     repo: session.repo,
+    vibeMode: { mode: 'disabled' },
     decisionCount: 0,
     pullRequest: null,
   }
@@ -1279,44 +1303,26 @@ it('provides session links to cards through the conversation pane context', asyn
   })
 })
 
-it('executes a bang command from a todo card in the conversation', async () => {
-  const markdown = 'Check `! printf safe`.'
-  const todo: ChatItem = {
-    type: 'todo',
-    seq: 1,
-    title: 'Review the command result',
-    detail: markdown,
-    completed: false,
-    resolution: null,
-    comment: null,
-  }
-  const commandRequests: Array<{ url: string; body: unknown }> = []
-  let messageFetchCount = 0
+it('posts a message when randomUUID is unavailable', async () => {
+  vi.stubGlobal('crypto', {
+    getRandomValues: (bytes: Uint8Array) => bytes.fill(0),
+  })
   const fetcher = vi.fn<typeof fetch>((input, init) => {
     const url = requestUrl(input)
     if (url.includes('/messages?')) {
-      messageFetchCount += 1
-      return Promise.resolve(jsonResponse(messagesResponse([todo])))
+      return Promise.resolve(jsonResponse(messagesResponse([])))
+    }
+    if (url.endsWith('/messages?from=0')) {
+      return Promise.resolve(jsonResponse(messagesResponse([])))
     }
     if (url.endsWith('/actions')) {
       return Promise.resolve(jsonResponse(actions))
     }
-    if (url.endsWith('/commands/preview')) {
-      const body = typeof init?.body === 'string' ? init.body : '{}'
-      commandRequests.push({
-        url,
-        body: JSON.parse(body),
-      })
-      return Promise.resolve(jsonResponse({ cwd: '/workspace/example' }))
-    }
-    if (url.endsWith('/commands/execute')) {
-      const body = typeof init?.body === 'string' ? init.body : '{}'
-      commandRequests.push({
-        url,
-        body: JSON.parse(body),
-      })
+    if (url.endsWith('/messages') && init?.method === 'POST') {
       return Promise.resolve(
-        jsonResponse({ exitCode: 0, succeeded: true, timedOut: false }),
+        jsonResponse({
+          queuedPromptId: '00000000-0000-4000-8000-000000000000',
+        }),
       )
     }
     return Promise.resolve(jsonResponse({}))
@@ -1334,53 +1340,419 @@ it('executes a bang command from a todo card in the conversation', async () => {
     )
   })
 
-  const runButton = requireElement(
-    (await waitForState(() =>
-      Boolean(container.querySelector('.chat-todo-detail button')),
-    ))
-      ? container.querySelector<HTMLButtonElement>('.chat-todo-detail button')
-      : null,
-  )
-  const messageFetchCountBeforeCommand = messageFetchCount
-  await act(async () => userEvent.click(runButton))
-  const dialog = requireElement(
-    (await waitForState(() =>
-      Boolean(document.body.querySelector('[role="dialog"]')),
-    ))
-      ? document.body.querySelector<HTMLElement>('[role="dialog"]')
-      : null,
-  )
-  const confirmButton = Array.from(dialog.querySelectorAll('button')).find(
-    (button) => button.textContent === 'Run command',
-  )
-  if (!(confirmButton instanceof HTMLButtonElement)) {
-    throw new Error('Expected the confirmation button')
-  }
-  await act(async () => userEvent.click(confirmButton))
-  const completed = await waitForState(
+  const composerReady = await waitForState(
     () =>
-      runButton.textContent === 'Succeeded' &&
-      messageFetchCount > messageFetchCountBeforeCommand,
+      container.querySelector<HTMLTextAreaElement>('textarea')?.disabled ===
+      false,
   )
-
-  const getActual = () => ({
-    commandCompleted: completed,
-    conversationRefreshed: messageFetchCount > messageFetchCountBeforeCommand,
-    commandRequests,
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  setTextareaValue(textarea, 'Send without randomUUID')
+  act(() => {
+    dispatchKey(textarea, 'Enter')
   })
-  expect(getActual()).toEqual({
-    commandCompleted: true,
-    conversationRefreshed: true,
-    commandRequests: [
+  const requestWasSent = await waitForState(() =>
+    fetcher.mock.calls.some(
+      ([input, init]) =>
+        requestUrl(input).endsWith('/messages') && init?.method === 'POST',
+    ),
+  )
+  const postRequest = fetcher.mock.calls
+    .filter(
+      ([input, init]) =>
+        requestUrl(input).endsWith('/messages') && init?.method === 'POST',
+    )
+    .map(([input, init]) => ({
+      url: requestUrl(input),
+      body: typeof init?.body === 'string' ? init.body : null,
+    }))
+  const snapshot = () => ({
+    composerReady,
+    requestWasSent,
+    postRequest,
+    alert: container.querySelector('[role="alert"]')?.textContent ?? null,
+  })
+  expect(snapshot()).toEqual({
+    composerReady: true,
+    requestWasSent: true,
+    postRequest: [
       {
-        url: '/api/sessions/sample-session/commands/preview',
-        body: { messageText: markdown, commands: ['printf safe'] },
-      },
-      {
-        url: '/api/sessions/sample-session/commands/execute',
-        body: { messageText: markdown, commands: ['printf safe'] },
+        url: '/api/sessions/sample-session/messages',
+        body: JSON.stringify({
+          content: 'Send without randomUUID',
+          messageId: '00000000-0000-4000-8000-000000000000',
+        }),
       },
     ],
+    alert: null,
+  })
+})
+
+it.each([
+  {
+    name: 'success',
+    response: { exitCode: 0, succeeded: true, timedOut: false },
+    buttonLabel: 'Succeeded',
+    toast: 'Ran commandprintf safe',
+    conversationLine: 'Ran command · <time>',
+  },
+  {
+    name: 'nonzero exit',
+    response: { exitCode: 1, succeeded: false, timedOut: false },
+    buttonLabel: 'Failed',
+    toast: 'Command failed · exit 1printf safeShow output',
+    conversationLine: 'Command failed (exit 1) · <time>',
+  },
+  {
+    name: 'timeout',
+    response: { exitCode: 124, succeeded: false, timedOut: true },
+    buttonLabel: 'Failed',
+    toast: 'Command timed outprintf safeStopped after 30 s.Show output',
+    conversationLine: 'Command timed out · <time>',
+  },
+])(
+  'executes a bang command from a todo card and reports $name',
+  async ({ response, buttonLabel, toast, conversationLine }) => {
+    const markdown = 'Check `! printf safe`.'
+    const todo: ChatItem = {
+      type: 'todo',
+      seq: 1,
+      title: 'Review the command result',
+      detail: markdown,
+      completed: false,
+      resolution: null,
+      comment: null,
+    }
+    const commandRequests: Array<{ url: string; body: unknown }> = []
+    let messageFetchCount = 0
+    let commandOutputAvailable = false
+    const commandResult: ChatItem = {
+      type: 'user',
+      timestamp: '2026-06-01T12:00:01Z',
+      text: `${response.timedOut ? 'Command timed out after 30 seconds' : `Command exited with code ${String(response.exitCode)}`} in /workspace/example.
+
+Command:
+\`\`\`text
+$ printf safe
+\`\`\`
+
+stdout:
+\`\`\`text
+(empty)
+\`\`\`
+
+stderr:
+\`\`\`text
+(empty)
+\`\`\``,
+    }
+    let finishExecute: (response: Response) => void = () => {
+      throw new Error('Command execution did not start')
+    }
+    const fetcher = vi.fn<typeof fetch>((input, init) => {
+      const url = requestUrl(input)
+      if (url.includes('/messages?')) {
+        messageFetchCount += 1
+        return Promise.resolve(
+          jsonResponse(
+            messagesResponse(
+              commandOutputAvailable ? [todo, commandResult] : [todo],
+            ),
+          ),
+        )
+      }
+      if (url.endsWith('/actions')) {
+        return Promise.resolve(jsonResponse(actions))
+      }
+      if (url.endsWith('/commands/preview')) {
+        const body = typeof init?.body === 'string' ? init.body : '{}'
+        commandRequests.push({
+          url,
+          body: JSON.parse(body),
+        })
+        return Promise.resolve(jsonResponse({ cwd: '/workspace/example' }))
+      }
+      if (url.endsWith('/commands/execute')) {
+        const body = typeof init?.body === 'string' ? init.body : '{}'
+        commandRequests.push({
+          url,
+          body: JSON.parse(body),
+        })
+        return new Promise((resolve) => {
+          finishExecute = resolve
+        })
+      }
+      return Promise.resolve(jsonResponse({}))
+    })
+    vi.stubGlobal('fetch', fetcher)
+    root = createRoot(container)
+    act(() => {
+      root?.render(
+        <AsyncActionFeedbackProvider>
+          <ConversationPane
+            session={session}
+            refreshKey={0}
+            sessionTreeRefreshKey={0}
+            onSelectSession={() => undefined}
+          />
+        </AsyncActionFeedbackProvider>,
+      )
+    })
+
+    const runButton = requireElement(
+      (await waitForState(() =>
+        Boolean(container.querySelector('.chat-todo-detail button')),
+      ))
+        ? container.querySelector<HTMLButtonElement>('.chat-todo-detail button')
+        : null,
+    )
+    const messageFetchCountBeforeCommand = messageFetchCount
+    await act(async () => userEvent.click(runButton))
+    const dialog = requireElement(
+      (await waitForState(() =>
+        Boolean(document.body.querySelector('[role="dialog"]')),
+      ))
+        ? document.body.querySelector<HTMLElement>('[role="dialog"]')
+        : null,
+    )
+    const confirmButton = Array.from(dialog.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Run command',
+    )
+    if (!(confirmButton instanceof HTMLButtonElement)) {
+      throw new Error('Expected the confirmation button')
+    }
+    await act(async () => userEvent.click(confirmButton))
+    const commandStarted = await waitForState(
+      () =>
+        document.body.querySelector('[role="dialog"]') === null &&
+        Boolean(document.body.querySelector('.async-action-item--running')),
+    )
+    const runningState = {
+      dialogOpen: document.body.querySelector('[role="dialog"]') !== null,
+      toast: document.body.querySelector('.async-action-toast-stack')
+        ?.textContent,
+      conversationLine: normalizeAsyncActionLineTime(
+        container.querySelector('.async-action-item--line')?.textContent,
+      ),
+    }
+    await act(async () => {
+      commandOutputAvailable = true
+      finishExecute(jsonResponse(response))
+      await Promise.resolve()
+    })
+    const completed = await waitForState(
+      () =>
+        runButton.textContent === buttonLabel &&
+        messageFetchCount > messageFetchCountBeforeCommand &&
+        document.body.querySelector('.async-action-toast-stack')
+          ?.textContent === toast,
+    )
+    const finalState = {
+      button: runButton.textContent,
+      toast: document.body.querySelector('.async-action-toast-stack')
+        ?.textContent,
+      conversationLine: normalizeAsyncActionLineTime(
+        container.querySelector('.async-action-item--line')?.textContent,
+      ),
+      conversationLineButtons: container
+        .querySelector('.async-action-item--line')
+        ?.querySelectorAll('button').length,
+    }
+    if (!response.succeeded) {
+      const showOutputButton = requireElement(
+        Array.from(
+          document.body.querySelectorAll<HTMLButtonElement>('button'),
+        ).find((button) => button.textContent === 'Show output') ?? null,
+      )
+      await act(async () => userEvent.click(showOutputButton))
+      await waitForState(
+        () =>
+          container
+            .querySelector('.chat-user-group[data-command-result="true"]')
+            ?.getAttribute('data-command-output-highlighted') === 'true',
+      )
+    }
+    const outputNavigation = {
+      highlighted:
+        container
+          .querySelector('.chat-user-group[data-command-result="true"]')
+          ?.getAttribute('data-command-output-highlighted') ?? null,
+      toastVisible:
+        document.body.querySelector('.async-action-item--toast') !== null,
+    }
+
+    const getActual = () => ({
+      commandStarted,
+      runningState,
+      commandCompleted: completed,
+      conversationRefreshed: messageFetchCount > messageFetchCountBeforeCommand,
+      finalState,
+      outputNavigation,
+      commandRequests,
+    })
+    expect(getActual()).toEqual({
+      commandStarted: true,
+      runningState: {
+        dialogOpen: false,
+        toast: 'Running commandprintf safe',
+        conversationLine: 'Running command… · <time>',
+      },
+      commandCompleted: true,
+      conversationRefreshed: true,
+      finalState: {
+        button: buttonLabel,
+        toast,
+        conversationLine,
+        conversationLineButtons: 0,
+      },
+      outputNavigation: {
+        highlighted: response.succeeded ? null : 'true',
+        toastVisible: response.succeeded,
+      },
+      commandRequests: [
+        {
+          url: '/api/sessions/sample-session/commands/preview',
+          body: { messageText: markdown, commands: ['printf safe'] },
+        },
+        {
+          url: '/api/sessions/sample-session/commands/execute',
+          body: { messageText: markdown, commands: ['printf safe'] },
+        },
+      ],
+    })
+  },
+)
+
+it('shows the selected command result instead of a later identical result', async () => {
+  const commandResult = (second: string): ChatItem => ({
+    type: 'user',
+    timestamp: `2026-06-01T12:00:${second}Z`,
+    text: `Command exited with code 1 in /workspace/example.
+
+Command:
+\`\`\`text
+$ printf 'sample output'
+\`\`\`
+
+stdout:
+\`\`\`text
+(empty)
+\`\`\`
+
+stderr:
+\`\`\`text
+(empty)
+\`\`\``,
+  })
+  const messages = [
+    commandResult('01'),
+    commandResult('02'),
+    commandResult('03'),
+  ]
+  const scrollIntoView = vi.spyOn(HTMLElement.prototype, 'scrollIntoView')
+
+  function CommandOutputActionHarness() {
+    const startAsyncAction = useAsyncActionStarter(() => undefined)
+    const feedback = useOptionalAsyncActionFeedback()
+    return (
+      <>
+        <button
+          type="button"
+          onClick={() => {
+            startAsyncAction({
+              kind: 'command',
+              sessionId: session.id,
+              sessionTitle: session.title,
+              command: "printf 'sample output'",
+              run: () =>
+                Promise.resolve({
+                  status: 'commandFailed',
+                  exitCode: 1,
+                  commandOutputIndex: 12,
+                }),
+            })
+          }}
+        >
+          Create failed command result
+        </button>
+        <output
+          data-command-output-count={String(
+            feedback?.pendingCommandOutputActionIds.length ?? 0,
+          )}
+        />
+        <ConversationPaneView
+          session={session}
+          messages={messages}
+          start={11}
+          actions={actions}
+          loading={false}
+          error={null}
+          onAction={() => Promise.resolve(true)}
+          onSelectSession={() => undefined}
+        />
+      </>
+    )
+  }
+
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <AsyncActionFeedbackProvider>
+        <CommandOutputActionHarness />
+      </AsyncActionFeedbackProvider>,
+    )
+  })
+
+  const createActionButton = requireElement(
+    container.querySelector<HTMLButtonElement>('button'),
+  )
+  await act(async () => userEvent.click(createActionButton))
+  const showOutputButton = requireElement(
+    (await waitForState(() =>
+      Array.from(document.body.querySelectorAll('button')).some(
+        (button) => button.textContent === 'Show output',
+      ),
+    ))
+      ? (Array.from(
+          document.body.querySelectorAll<HTMLButtonElement>('button'),
+        ).find((button) => button.textContent === 'Show output') ?? null)
+      : null,
+  )
+  await act(async () => userEvent.click(showOutputButton))
+  await waitForState(
+    () =>
+      container
+        .querySelector('.chat-user-group[data-conversation-index="12"]')
+        ?.getAttribute('data-command-output-highlighted') === 'true',
+  )
+
+  const results = Array.from(
+    container.querySelectorAll<HTMLElement>('[data-command-result="true"]'),
+  )
+  const snapshot = () => ({
+    indices: results.map((result) => result.dataset['conversationIndex']),
+    highlighted: results.map(
+      (result) => result.dataset['commandOutputHighlighted'] ?? null,
+    ),
+    pendingOutputCount: container
+      .querySelector('output')
+      ?.getAttribute('data-command-output-count'),
+    scrollTargets: scrollIntoView.mock.contexts.map((target) =>
+      target instanceof HTMLElement
+        ? target.dataset['conversationIndex']
+        : null,
+    ),
+    lineButtons: container
+      .querySelector('.async-action-item--line')
+      ?.querySelectorAll('button').length,
+  })
+  expect(snapshot()).toEqual({
+    indices: ['11', '12', '13'],
+    highlighted: [null, 'true', null],
+    pendingOutputCount: '0',
+    scrollTargets: ['12'],
+    lineButtons: 0,
   })
 })
 
@@ -1398,6 +1770,7 @@ it('loads and shows the session tree from the tree endpoint', async () => {
       elapsedSeconds: 20,
       task: null,
       repo: session.repo,
+      vibeMode: { mode: 'disabled' },
       decisionCount: 0,
       pullRequest: null,
     },
@@ -1412,6 +1785,7 @@ it('loads and shows the session tree from the tree endpoint', async () => {
       elapsedSeconds: 8,
       task: null,
       repo: session.repo,
+      vibeMode: { mode: 'disabled' },
       decisionCount: 0,
       pullRequest: null,
     },
@@ -1538,6 +1912,7 @@ it('shows an error when the returned tree omits the selected session', async () 
               elapsedSeconds: 0,
               task: null,
               repo: session.repo,
+              vibeMode: { mode: 'disabled' },
               decisionCount: 0,
               pullRequest: null,
             },
@@ -1552,6 +1927,7 @@ it('shows an error when the returned tree omits the selected session', async () 
               elapsedSeconds: 0,
               task: null,
               repo: session.repo,
+              vibeMode: { mode: 'disabled' },
               decisionCount: 0,
               pullRequest: null,
             },
@@ -1987,6 +2363,10 @@ it('loads a different tree after navigating away from a cached tree', async () =
 afterEach(() => {
   if (root !== null) act(() => root?.unmount())
   root = null
+  for (const sessionId of renderedSessionIds) {
+    clearSessionAttachments(sessionId)
+  }
+  renderedSessionIds.clear()
   container.remove()
   vi.useRealTimers()
   vi.restoreAllMocks()
@@ -2494,6 +2874,38 @@ it('shows terminal guidance for an unanswered question without a request ID', ()
     choicesDisabled: [true, true],
     terminalMessage: 'Answer in terminal to continue.',
     submitButton: null,
+    actionCalls: [],
+  })
+})
+
+it('does not show terminal guidance for a cancelled question', () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  const cancelledQuestion: ChatItem = {
+    type: 'question',
+    cancelled: true,
+    questions: [questionPrompt],
+  }
+  renderView(onAction, session, undefined, [cancelledQuestion])
+
+  const snapshot = () => ({
+    unansweredQuestionCount: container.querySelectorAll(
+      '.chat-question-card[data-has-unanswered-question="true"]',
+    ).length,
+    terminalMessage: container.querySelector(
+      '.conversation-terminal-fallback span',
+    )?.textContent,
+    choiceButtons: Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '.chat-question-choices button',
+      ),
+      (button) => button.disabled,
+    ),
+    actionCalls: onAction.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    unansweredQuestionCount: 0,
+    terminalMessage: undefined,
+    choiceButtons: [true, true],
     actionCalls: [],
   })
 })
@@ -4667,6 +5079,470 @@ it('keeps the Decisions tab active when running tasks appear', async () => {
   })
 })
 
+it('jumps from a mobile Decisions tab to the selected conversation message', async () => {
+  const decision: ChatItem = {
+    type: 'decision',
+    seq: 12,
+    title: 'Keep retry limits predictable',
+    why: 'A fixed limit prevents repeated delivery attempts.',
+    considered: ['Retry until the request succeeds'],
+    easyToChange: 'Update one worker setting.',
+    review: null,
+    createdAt: '2026-11-11T03:25:59Z',
+  }
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.endsWith('/messages?limit=100')) {
+      return Promise.resolve(jsonResponse(messagesResponse([decision])))
+    }
+    if (url.endsWith('/actions')) {
+      return Promise.resolve(jsonResponse(actions))
+    }
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  function MobileConversationHarness() {
+    const [statusPanelOpen, setStatusPanelOpen] = useState(true)
+    return (
+      <ConversationPane
+        session={{ ...session, decisionCount: 1, unreviewedDecisionCount: 1 }}
+        shouldSkipSessionTreeFetch
+        initialSessionTree={[]}
+        refreshKey={0}
+        sessionTreeRefreshKey={0}
+        onSelectSession={() => undefined}
+        isMobile
+        statusPanelOpen={statusPanelOpen}
+        onCloseStatusPanel={() => {
+          setStatusPanelOpen(false)
+        }}
+      />
+    )
+  }
+
+  root = createRoot(container)
+  act(() => root?.render(<MobileConversationHarness />))
+  await waitForState(
+    () => container.querySelector('.decision-card--panel') !== null,
+  )
+  const decisionRow = requireElement(
+    container.querySelector<HTMLElement>('#decision-row-12'),
+  )
+  const scrollIntoView = vi.spyOn(decisionRow, 'scrollIntoView')
+  await act(async () => {
+    await userEvent.click(
+      requireElement(
+        container.querySelector<HTMLButtonElement>(
+          '.decision-card--panel .decision-panel-card-heading',
+        ),
+      ),
+    )
+  })
+
+  const snapshot = () => ({
+    statusPanelVisible:
+      container.querySelector('.mobile-session-status-overlay') !== null,
+    selected: decisionRow.getAttribute('data-selected'),
+    scrollCalls: scrollIntoView.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    statusPanelVisible: false,
+    selected: 'true',
+    scrollCalls: [[{ block: 'center' }]],
+  })
+})
+
+it('loads older messages before jumping to a pruned mobile decision', async () => {
+  const decision: ChatItem = {
+    type: 'decision',
+    seq: 12,
+    title: 'Keep retry limits predictable',
+    why: 'A fixed limit prevents repeated delivery attempts.',
+    considered: ['Retry until the request succeeds'],
+    easyToChange: 'Update one worker setting.',
+    review: null,
+    createdAt: '2026-11-11T03:25:59Z',
+  }
+  const assistantMessage = (index: number): ChatItem => ({
+    type: 'assistant',
+    text: `Message ${String(index)}.`,
+  })
+  const latestPage = Array.from({ length: 100 }, (_, index) =>
+    assistantMessage(index + 200),
+  )
+  const middlePage = Array.from({ length: 100 }, (_, index) =>
+    assistantMessage(index + 100),
+  )
+  const oldestPage = Array.from({ length: 100 }, (_, index) =>
+    assistantMessage(index),
+  )
+  oldestPage[99] = decision
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.endsWith('/messages?before=200&limit=100')) {
+      return Promise.resolve(
+        jsonResponse(
+          messagesResponse(middlePage, [], {
+            start: 100,
+            total: 300,
+            decisions: [decision],
+          }),
+        ),
+      )
+    }
+    if (url.endsWith('/messages?before=100&limit=100')) {
+      return Promise.resolve(
+        jsonResponse(
+          messagesResponse(oldestPage, [], {
+            start: 0,
+            total: 300,
+            decisions: [decision],
+          }),
+        ),
+      )
+    }
+    if (url.endsWith('/messages?limit=100')) {
+      return Promise.resolve(
+        jsonResponse(
+          messagesResponse(latestPage, [], {
+            start: 200,
+            total: 300,
+            decisions: [decision],
+          }),
+        ),
+      )
+    }
+    if (url.endsWith('/actions')) {
+      return Promise.resolve(jsonResponse(actions))
+    }
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  function MobileConversationHarness() {
+    const [statusPanelOpen, setStatusPanelOpen] = useState(true)
+    return (
+      <ConversationPane
+        session={{ ...session, decisionCount: 1, unreviewedDecisionCount: 1 }}
+        shouldSkipSessionTreeFetch
+        initialSessionTree={[]}
+        refreshKey={0}
+        sessionTreeRefreshKey={0}
+        onSelectSession={() => undefined}
+        isMobile
+        statusPanelOpen={statusPanelOpen}
+        onCloseStatusPanel={() => {
+          setStatusPanelOpen(false)
+        }}
+      />
+    )
+  }
+
+  root = createRoot(container)
+  act(() => root?.render(<MobileConversationHarness />))
+  await waitForState(
+    () => container.querySelector('.decision-card--panel') !== null,
+  )
+  await act(async () => {
+    await userEvent.click(
+      requireElement(
+        container.querySelector<HTMLButtonElement>(
+          '.decision-card--panel .decision-panel-card-heading',
+        ),
+      ),
+    )
+  })
+  await waitForState(() => container.querySelector('#decision-row-12') !== null)
+
+  const snapshot = () => ({
+    statusPanelVisible:
+      container.querySelector('.mobile-session-status-overlay') !== null,
+    decisionVisible: container.querySelector('#decision-row-12') !== null,
+    olderRequests: fetcher.mock.calls
+      .map(([input]) => requestUrl(input))
+      .filter((url) => url.includes('/messages?before=')),
+  })
+  expect(snapshot()).toEqual({
+    statusPanelVisible: false,
+    decisionVisible: true,
+    olderRequests: [
+      '/api/sessions/sample-session/messages?before=200&limit=100',
+      '/api/sessions/sample-session/messages?before=100&limit=100',
+    ],
+  })
+})
+
+it('clears a mobile decision jump when no older messages remain', async () => {
+  const decision: ChatItem = {
+    type: 'decision',
+    seq: 12,
+    title: 'Keep retry limits predictable',
+    why: 'A fixed limit prevents repeated delivery attempts.',
+    considered: ['Retry until the request succeeds'],
+    easyToChange: 'Update one worker setting.',
+    review: null,
+    createdAt: '2026-11-11T03:25:59Z',
+  }
+  const message: ChatItem = { type: 'assistant', text: 'A current message.' }
+  let showDecisionInConversation = false
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.endsWith('/messages?limit=100')) {
+      return Promise.resolve(
+        jsonResponse(
+          messagesResponse(
+            showDecisionInConversation ? [message, decision] : [message],
+            [],
+            { start: 0, total: 2, decisions: [decision] },
+          ),
+        ),
+      )
+    }
+    if (url.includes('/messages?from=0')) {
+      showDecisionInConversation = true
+      return Promise.resolve(
+        jsonResponse(
+          messagesResponse([message, decision], [], {
+            start: 0,
+            total: 2,
+            decisions: [decision],
+          }),
+        ),
+      )
+    }
+    if (url.endsWith('/actions')) {
+      return Promise.resolve(jsonResponse(actions))
+    }
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+  const scrollIntoView = vi.spyOn(HTMLElement.prototype, 'scrollIntoView')
+
+  function MobileConversationHarness() {
+    const [statusPanelOpen, setStatusPanelOpen] = useState(true)
+    const [refreshKey, setRefreshKey] = useState(0)
+    return (
+      <>
+        <button
+          type="button"
+          aria-label="Refresh conversation"
+          onClick={() => {
+            setRefreshKey((current) => current + 1)
+          }}
+        />
+        <ConversationPane
+          session={{ ...session, decisionCount: 1, unreviewedDecisionCount: 1 }}
+          shouldSkipSessionTreeFetch
+          initialSessionTree={[]}
+          refreshKey={refreshKey}
+          sessionTreeRefreshKey={0}
+          onSelectSession={() => undefined}
+          isMobile
+          statusPanelOpen={statusPanelOpen}
+          onCloseStatusPanel={() => {
+            setStatusPanelOpen(false)
+          }}
+        />
+      </>
+    )
+  }
+
+  root = createRoot(container)
+  act(() => root?.render(<MobileConversationHarness />))
+  await waitForState(
+    () => container.querySelector('.decision-card--panel') !== null,
+  )
+  await act(async () => {
+    await userEvent.click(
+      requireElement(
+        container.querySelector<HTMLButtonElement>(
+          '.decision-card--panel .decision-panel-card-heading',
+        ),
+      ),
+    )
+  })
+  await act(async () => {
+    await userEvent.click(
+      requireElement(
+        container.querySelector<HTMLButtonElement>(
+          'button[aria-label="Refresh conversation"]',
+        ),
+      ),
+    )
+  })
+  await waitForState(() => container.querySelector('#decision-row-12') !== null)
+
+  const snapshot = () => ({
+    statusPanelVisible:
+      container.querySelector('.mobile-session-status-overlay') !== null,
+    decisionVisible: container.querySelector('#decision-row-12') !== null,
+    scrollCalls: scrollIntoView.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    statusPanelVisible: true,
+    decisionVisible: true,
+    scrollCalls: [],
+  })
+})
+
+it('does not retry a mobile decision jump after older history fails', async () => {
+  const decision: ChatItem = {
+    type: 'decision',
+    seq: 12,
+    title: 'Keep retry limits predictable',
+    why: 'A fixed limit prevents repeated delivery attempts.',
+    considered: ['Retry until the request succeeds'],
+    easyToChange: 'Update one worker setting.',
+    review: null,
+    createdAt: '2026-11-11T03:25:59Z',
+  }
+  const message: ChatItem = { type: 'assistant', text: 'A current message.' }
+  let olderRequestCount = 0
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.endsWith('/messages?before=100&limit=100')) {
+      olderRequestCount += 1
+      if (olderRequestCount === 1) {
+        return Promise.reject(new Error('History unavailable'))
+      }
+      return Promise.resolve(
+        jsonResponse(
+          messagesResponse([], [], {
+            start: 0,
+            total: 101,
+            decisions: [decision],
+          }),
+        ),
+      )
+    }
+    if (url.endsWith('/messages?limit=100')) {
+      return Promise.resolve(
+        jsonResponse(
+          messagesResponse([message], [], {
+            start: 100,
+            total: 101,
+            decisions: [decision],
+          }),
+        ),
+      )
+    }
+    if (url.includes('/messages?from=')) {
+      return Promise.resolve(
+        jsonResponse(
+          messagesResponse([message, decision], [], {
+            start: 100,
+            total: 102,
+            decisions: [decision],
+          }),
+        ),
+      )
+    }
+    if (url.endsWith('/actions')) {
+      return Promise.resolve(jsonResponse(actions))
+    }
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+  const scrollIntoView = vi.spyOn(HTMLElement.prototype, 'scrollIntoView')
+
+  function MobileConversationHarness() {
+    const [statusPanelOpen, setStatusPanelOpen] = useState(true)
+    const [refreshKey, setRefreshKey] = useState(0)
+    return (
+      <>
+        <button
+          type="button"
+          aria-label="Refresh conversation"
+          onClick={() => {
+            setRefreshKey((current) => current + 1)
+          }}
+        />
+        <ConversationPane
+          session={{ ...session, decisionCount: 1, unreviewedDecisionCount: 1 }}
+          shouldSkipSessionTreeFetch
+          initialSessionTree={[]}
+          refreshKey={refreshKey}
+          sessionTreeRefreshKey={0}
+          onSelectSession={() => undefined}
+          isMobile
+          statusPanelOpen={statusPanelOpen}
+          onCloseStatusPanel={() => {
+            setStatusPanelOpen(false)
+          }}
+        />
+      </>
+    )
+  }
+
+  root = createRoot(container)
+  act(() => root?.render(<MobileConversationHarness />))
+  await waitForState(
+    () => container.querySelector('.decision-card--panel') !== null,
+  )
+  await act(async () => {
+    await userEvent.click(
+      requireElement(
+        container.querySelector<HTMLButtonElement>(
+          '.decision-card--panel .decision-panel-card-heading',
+        ),
+      ),
+    )
+  })
+  await waitForState(() => {
+    const loadOlderButton = container.querySelector<HTMLButtonElement>(
+      '.conversation-load-older',
+    )
+    return (
+      loadOlderButton !== null &&
+      !loadOlderButton.disabled &&
+      loadOlderButton.textContent === 'Load older messages' &&
+      container.querySelector('[role="alert"]')?.textContent ===
+        'History unavailable'
+    )
+  })
+  const afterFailure = {
+    statusPanelVisible:
+      container.querySelector('.mobile-session-status-overlay') !== null,
+    olderRequestCount,
+    loadOlderButton: container.querySelector('.conversation-load-older')
+      ?.textContent,
+  }
+  await act(async () => {
+    await userEvent.click(
+      requireElement(
+        container.querySelector<HTMLButtonElement>(
+          'button[aria-label="Refresh conversation"]',
+        ),
+      ),
+    )
+  })
+  await waitForState(() => container.querySelector('#decision-row-12') !== null)
+
+  const afterRefresh = {
+    statusPanelVisible:
+      container.querySelector('.mobile-session-status-overlay') !== null,
+    decisionVisible: container.querySelector('#decision-row-12') !== null,
+    olderRequestCount,
+    scrollCalls: scrollIntoView.mock.calls,
+  }
+  const expected = {
+    afterFailure: {
+      statusPanelVisible: true,
+      olderRequestCount: 1,
+      loadOlderButton: 'Load older messages',
+    },
+    afterRefresh: {
+      statusPanelVisible: true,
+      decisionVisible: true,
+      olderRequestCount: 1,
+      scrollCalls: [],
+    },
+  }
+  const snapshot = () => ({ afterFailure, afterRefresh })
+  expect(snapshot()).toEqual(expected)
+})
+
 it('selects Running by default and switches to Decisions from its tab', () => {
   const decision: ChatItem = {
     type: 'decision',
@@ -5325,12 +6201,14 @@ it('opens and closes the existing status panel over the mobile conversation', as
   await act(async () => {
     for (let index = 0; index < 12; index += 1) await Promise.resolve()
   })
+  const toggle = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      '.mobile-conversation-status-toggle',
+    ),
+  )
+  toggle.focus()
   act(() => {
-    requireElement(
-      container.querySelector<HTMLButtonElement>(
-        '.mobile-conversation-status-toggle',
-      ),
-    ).click()
+    toggle.click()
   })
 
   const opened = {
@@ -5339,17 +6217,21 @@ it('opens and closes the existing status panel over the mobile conversation', as
       ?.textContent,
     decisionHeading: container.querySelector('.decisions-panel-header h2')
       ?.textContent,
+    backButtonFocused:
+      document.activeElement ===
+      container.querySelector('.session-status-panel-back'),
   }
   act(() => {
     requireElement(
       container.querySelector<HTMLButtonElement>(
-        '.mobile-session-status-overlay .session-status-panel-close',
+        '.mobile-session-status-overlay .session-status-panel-back',
       ),
     ).click()
   })
   const closed = {
     overlay: container.querySelector('.mobile-session-status-overlay') !== null,
     conversation: container.querySelector('.conversation-pane') !== null,
+    focusRestored: document.activeElement === toggle,
   }
 
   const snapshot = () => ({ opened, closed })
@@ -5358,8 +6240,9 @@ it('opens and closes the existing status panel over the mobile conversation', as
       overlay: true,
       selectedTab: 'Decisions1',
       decisionHeading: 'Decisions in this session',
+      backButtonFocused: true,
     },
-    closed: { overlay: false, conversation: true },
+    closed: { overlay: false, conversation: true, focusRestored: true },
   })
 })
 
@@ -5941,6 +6824,103 @@ it('sends pasted file data with the message and keeps it when sending fails', as
   })
 })
 
+it('warns before leaving after its conversation pane unmounts', async () => {
+  const sessionId = crypto.randomUUID()
+  renderView(
+    vi.fn(() => Promise.resolve(false)),
+    {
+      ...session,
+      id: sessionId,
+    },
+  )
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  const pasteEvent = new Event('paste', { bubbles: true, cancelable: true })
+  Object.defineProperty(pasteEvent, 'clipboardData', {
+    value: {
+      files: [
+        new File(['payload'], 'fixture-attachment.bin', {
+          type: 'application/octet-stream',
+        }),
+      ],
+    },
+  })
+  act(() => {
+    textarea.dispatchEvent(pasteEvent)
+  })
+  expect(
+    await waitForState(
+      () => container.querySelector('.attachment-preview-item') !== null,
+    ),
+  ).toBe(true)
+  const event = new Event('beforeunload', { cancelable: true })
+
+  act(() => {
+    root?.unmount()
+    root = null
+    window.dispatchEvent(event)
+  })
+
+  expect(event.defaultPrevented).toBe(true)
+})
+
+it('warns before leaving while an attachment is being processed', async () => {
+  let resolveOptimization: ((file: File) => void) | undefined
+  optimizeImageAttachmentMock.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        resolveOptimization = resolve
+      }),
+  )
+  renderView(
+    vi.fn(() => Promise.resolve(false)),
+    {
+      ...session,
+      id: crypto.randomUUID(),
+    },
+  )
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  const file = new File(['payload'], 'fixture-pending.bin', {
+    type: 'application/octet-stream',
+  })
+  const pasteEvent = new Event('paste', { bubbles: true, cancelable: true })
+  Object.defineProperty(pasteEvent, 'clipboardData', {
+    value: { files: [file] },
+  })
+  act(() => {
+    textarea.dispatchEvent(pasteEvent)
+  })
+  await waitForState(() => resolveOptimization !== undefined)
+
+  const duringProcessing = new Event('beforeunload', { cancelable: true })
+  act(() => {
+    window.dispatchEvent(duringProcessing)
+  })
+  await act(async () => {
+    if (resolveOptimization === undefined) {
+      throw new Error('Expected attachment optimization to start')
+    }
+    resolveOptimization(file)
+    await Promise.resolve()
+  })
+  await waitForState(
+    () => container.querySelector('.attachment-preview-item') !== null,
+  )
+  const whileQueued = new Event('beforeunload', { cancelable: true })
+  act(() => {
+    window.dispatchEvent(whileQueued)
+  })
+
+  const snapshot = () => ({
+    duringProcessing: duringProcessing.defaultPrevented,
+    whileQueued: whileQueued.defaultPrevented,
+  })
+  expect(snapshot()).toEqual({ duringProcessing: true, whileQueued: true })
+})
+
 it('attaches dropped files through the composer and sends their data', async () => {
   const onAction = vi.fn(() => Promise.resolve(true))
   renderView(onAction, { ...session, id: crypto.randomUUID() })
@@ -6026,7 +7006,9 @@ it('attaches files dropped on a proposal comment without activating the conversa
   const comment = requireElement(
     container.querySelector<HTMLTextAreaElement>('.chat-proposal-comment'),
   )
-  const dispatchFileEvent = (type: 'dragenter' | 'dragover' | 'drop') => {
+  const dispatchFileEvent = (
+    type: 'dragenter' | 'dragleave' | 'dragover' | 'drop',
+  ) => {
     const event = new Event(type, { bubbles: true, cancelable: true })
     Object.defineProperty(event, 'dataTransfer', { value: dataTransfer })
     act(() => {
@@ -6037,11 +7019,16 @@ it('attaches files dropped on a proposal comment without activating the conversa
 
   const dragEnter = dispatchFileEvent('dragenter')
   const targetAfterDragEnter = container.querySelector(
-    '.conversation-drop-target',
+    '.chat-proposal-card .file-drop-indicator',
   )
+  const dragLeave = dispatchFileEvent('dragleave')
+  const targetAfterDragLeave = container.querySelector(
+    '.chat-proposal-card .file-drop-indicator',
+  )
+  dispatchFileEvent('dragenter')
   const dragOver = dispatchFileEvent('dragover')
   const targetAfterDragOver = container.querySelector(
-    '.conversation-drop-target',
+    '.chat-proposal-card .file-drop-indicator',
   )
   const drop = dispatchFileEvent('drop')
   expect(
@@ -6055,9 +7042,11 @@ it('attaches files dropped on a proposal comment without activating the conversa
 
   const snapshot = () => ({
     dragEnterPrevented: dragEnter.defaultPrevented,
+    dragLeavePrevented: dragLeave.defaultPrevented,
     dragOverPrevented: dragOver.defaultPrevented,
     dropPrevented: drop.defaultPrevented,
     targetAfterDragEnter: targetAfterDragEnter?.textContent ?? null,
+    targetAfterDragLeave: targetAfterDragLeave?.textContent ?? null,
     targetAfterDragOver: targetAfterDragOver?.textContent ?? null,
     targetAfterDrop:
       container.querySelector('.conversation-drop-target')?.textContent ?? null,
@@ -6077,10 +7066,12 @@ it('attaches files dropped on a proposal comment without activating the conversa
   })
   expect(snapshot()).toEqual({
     dragEnterPrevented: true,
+    dragLeavePrevented: false,
     dragOverPrevented: true,
     dropPrevented: true,
-    targetAfterDragEnter: null,
-    targetAfterDragOver: null,
+    targetAfterDragEnter: 'Drop files to attach',
+    targetAfterDragLeave: null,
+    targetAfterDragOver: 'Drop files to attach',
     targetAfterDrop: null,
     commentAttachmentNames: ['dropped.png'],
     composerAttachmentNames: [],
@@ -6384,13 +7375,14 @@ it('shows a server attachment validation error and retains the rejected attachme
     error: container.querySelector('[role="alert"]')?.textContent ?? null,
     attachmentName: container.querySelector('.attachment-preview-item span')
       ?.textContent,
-    postBody: fetcher.mock.calls[2]?.[1]?.body,
+    postBody: normalizeQueuedMessagePostBody(fetcher.mock.calls[2]?.[1]?.body),
   })
   expect(snapshot()).toEqual({
     error: 'file attachment data is invalid',
     attachmentName: 'document.pdf',
     postBody: JSON.stringify({
       content: '',
+      messageId: '<message-id>',
       attachments: [
         {
           name: 'document.pdf',
@@ -6497,9 +7489,10 @@ it('waits for pasted image optimization and sends the optimized attachment', asy
   ).toBe(true)
 
   const sentBody = () => fetcher.mock.calls[2]?.[1]?.body
-  expect(sentBody()).toEqual(
+  expect(normalizeQueuedMessagePostBody(sentBody())).toEqual(
     JSON.stringify({
       content: 'Inspect this photo.',
+      messageId: '<message-id>',
       attachments: [
         {
           name: 'photo.jpg',
@@ -6657,16 +7650,22 @@ it('keeps the composer usable when browser storage is unavailable', () => {
     container.querySelector<HTMLTextAreaElement>('textarea'),
   )
   setTextareaValue(textarea, 'Keep editing in memory')
+  const beforeUnload = new Event('beforeunload', { cancelable: true })
+  act(() => {
+    window.dispatchEvent(beforeUnload)
+  })
 
   const snapshot = () => ({
     draft: textarea.value,
     composerVisible: textarea.isConnected,
+    unloadPrevented: beforeUnload.defaultPrevented,
     storageNotice: container.querySelector('.conversation-error[role="status"]')
       ?.textContent,
   })
   expect(snapshot()).toEqual({
     draft: 'Keep editing in memory',
     composerVisible: true,
+    unloadPrevented: true,
     storageNotice:
       'Browser storage is unavailable. Drafts may not survive a page reload.',
   })

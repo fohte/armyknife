@@ -23,6 +23,7 @@ mod usage;
 pub(crate) use archive::{ArchiveLogContext, archive_codex_thread_before_delete_with};
 pub(crate) use database::AgentFile;
 pub(crate) use database::ProposalResolution;
+pub(crate) use database::check_unreported_stop;
 pub(crate) use database::set_watch_web_compacting;
 pub(crate) use database::{
     AgentDecision, AgentDecisionCounts, AgentProposal, PermissionDeniedOperation,
@@ -33,6 +34,7 @@ pub(crate) use database::{
     resolve_permission_request, resolve_permission_request_with_answers, serialize_session,
 };
 pub(crate) use database::{AgentTodo, TodoResolution};
+pub(crate) use peer_out_messages::insert_watch_web_peer_out_message_from;
 pub(crate) use peer_out_messages::{
     insert_watch_web_peer_out_message, mark_watch_web_peer_out_message_delivered,
     watch_web_peer_out_messages_from,
@@ -40,7 +42,8 @@ pub(crate) use peer_out_messages::{
 pub(crate) use queued_prompts::{
     delete_watch_web_queued_prompts_from, ensure_watch_web_user_marker_from,
     insert_watch_web_queued_prompt_from, mark_watch_web_queued_prompts_resolved,
-    mark_watch_web_queued_prompts_resolved_from, watch_web_queued_prompts_from,
+    mark_watch_web_queued_prompts_resolved_from, watch_web_queued_prompt_message_id_exists_from,
+    watch_web_queued_prompts_from,
 };
 pub(crate) use usage::{engine_quotas_from, record_usage_from, usage_snapshots_from};
 
@@ -491,6 +494,18 @@ pub(crate) fn session_store_revision() -> Result<i64> {
     session_store_revision_from(&sessions_dir()?)
 }
 
+pub(crate) fn mark_session_closed_from(sessions_dir: &Path, session_id: &str) -> Result<()> {
+    database::mark_session_closed(sessions_dir, session_id)
+}
+
+pub(crate) fn clear_session_closed_from(sessions_dir: &Path, session_id: &str) -> Result<()> {
+    database::clear_session_closed(sessions_dir, session_id)
+}
+
+pub(crate) fn closed_session_ids_from(sessions_dir: &Path) -> Result<HashSet<String>> {
+    database::closed_session_ids(sessions_dir)
+}
+
 pub(crate) fn session_store_revision_from(sessions_dir: &Path) -> Result<i64> {
     database::session_store_revision(sessions_dir)
 }
@@ -639,8 +654,9 @@ pub(crate) fn add_agent_todo_in(
     session_id: &str,
     title: &str,
     detail: Option<&str>,
+    folded: bool,
 ) -> Result<i64> {
-    database::add_agent_todo(sessions_dir, session_id, title, detail)
+    database::add_agent_todo(sessions_dir, session_id, title, detail, folded)
 }
 
 pub(crate) fn agent_todos_from(sessions_dir: &Path, session_id: &str) -> Result<Vec<AgentTodo>> {
@@ -678,8 +694,21 @@ pub(crate) fn agent_file_from(
 pub(crate) fn incomplete_agent_todo_titles_from(
     sessions_dir: &Path,
     session_ids: &[String],
-) -> Result<Vec<(String, String)>> {
+) -> Result<Vec<(String, String, bool)>> {
     database::incomplete_agent_todo_titles(sessions_dir, session_ids)
+}
+
+pub(crate) fn set_agent_todo_folded_from(
+    sessions_dir: &Path,
+    session_id: &str,
+    seq: i64,
+    folded: bool,
+) -> Result<bool> {
+    database::set_agent_todo_folded(sessions_dir, session_id, seq, folded)
+}
+
+pub(crate) fn set_agent_todo_folded(session_id: &str, seq: i64, folded: bool) -> Result<bool> {
+    set_agent_todo_folded_from(&sessions_dir()?, session_id, seq, folded)
 }
 
 pub(crate) fn resolve_agent_todo_from(
@@ -972,6 +1001,7 @@ mod tests {
             launched_with_vibe: false,
             child_launch: Default::default(),
             crit_urls: Vec::new(),
+            crit_not_waiting_urls: Default::default(),
             web_uis: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: PathBuf::from("/tmp/test"),
@@ -2930,6 +2960,7 @@ mod tests {
                 launched_with_vibe: false,
                 child_launch: Default::default(),
                 crit_urls: Vec::new(),
+                crit_not_waiting_urls: Default::default(),
                 web_uis: Vec::new(),
                 pending_human_review_ids: Default::default(),
                 cwd: PathBuf::from("/tmp/test"),

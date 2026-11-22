@@ -197,6 +197,10 @@
   font-weight: 400;
 }
 
+.decision-card-target-note {
+  display: none;
+}
+
 .decision-card-change-form {
   display: grid;
   gap: 7px;
@@ -215,6 +219,129 @@
   background: var(--aw-bg-app);
   color: var(--aw-text-primary);
   font: inherit;
+}
+
+.session-status-panel--mobile .decision-card--panel {
+  border-color: var(--aw-border-control);
+  padding: 12px 14px 14px;
+  font-size: 14px;
+}
+
+.session-status-panel--mobile .decision-card--panel[data-review='ok'] {
+  border-color: transparent;
+  background: var(--aw-bg-surface);
+  padding: 12px 14px;
+  opacity: 0.64;
+}
+
+.session-status-panel--mobile
+  .decision-card--panel[data-review='ok']
+  .decision-panel-card-kicker,
+.session-status-panel--mobile
+  .decision-card--panel[data-review='ok']
+  .decision-card-title,
+.session-status-panel--mobile
+  .decision-card--panel[data-review='ok']
+  .decision-panel-card-collapsed-considered {
+  color: var(--aw-text-muted);
+}
+
+.session-status-panel--mobile
+  .decision-card--panel[data-review='ok']
+  .decision-panel-card-collapsed-considered {
+  display: none;
+}
+
+.session-status-panel--mobile
+  .decision-card--panel
+  .decision-panel-card-heading {
+  gap: 8px;
+  padding: 0;
+}
+
+.session-status-panel--mobile
+  .decision-card--panel
+  .decision-panel-card-kicker {
+  font-size: 12.5px;
+}
+
+.session-status-panel--mobile .decision-card--panel .decision-card-details {
+  padding: 8px 0 0;
+}
+
+.session-status-panel--mobile .decision-card--panel .decision-panel-card-title {
+  margin-bottom: 8px;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.55;
+}
+
+.session-status-panel--mobile
+  .decision-card--panel
+  .decision-card-detail-field {
+  font-size: 14px;
+  line-height: 1.55;
+  margin-bottom: 8px;
+}
+
+.session-status-panel--mobile
+  .decision-card--panel
+  .decision-card-detail-field:last-of-type {
+  margin-bottom: 8px;
+}
+
+.session-status-panel--mobile
+  .decision-card--panel
+  .decision-card-detail-field
+  .markdown-message {
+  display: inline;
+}
+
+.session-status-panel--mobile
+  .decision-card--panel
+  .decision-card-detail-field
+  .markdown-message
+  > p {
+  display: inline;
+}
+
+.session-status-panel--mobile .decision-card--panel .decision-card-considered {
+  display: inline;
+}
+
+.session-status-panel--mobile .decision-card--panel .decision-card-buttons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.session-status-panel--mobile
+  .decision-card--panel
+  .decision-card-buttons
+  [data-slot='button'] {
+  min-height: 48px;
+  justify-content: center;
+  font-size: 14px;
+}
+
+.session-status-panel--mobile .decision-card--panel .decision-card-actions {
+  display: block;
+}
+
+.session-status-panel--mobile .decision-card--panel .decision-card-target-name {
+  display: none;
+}
+
+.session-status-panel--mobile .decision-card--panel .decision-card-target-note {
+  display: block;
+  margin-top: 8px;
+  color: var(--aw-text-secondary);
+  font-size: 12.5px;
+}
+
+.session-status-panel--mobile .decision-card--panel .decision-card-buttons kbd {
+  display: none;
 }
 
 .conversation-pane[data-mobile='true'] .decision-card {

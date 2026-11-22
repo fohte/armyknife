@@ -1,23 +1,28 @@
 import '#components/todo-card.css'
 
 import { Button } from '@fohte/ui/button'
+import { ChevronDown, ChevronUp } from 'lucide-react'
 import { useId, useMemo, useState } from 'react'
 
 import {
   AttachmentPreviewList,
-  createAttachmentInputHandlers,
+  handleAttachmentPaste,
 } from '#components/attachment-preview-list'
 import { CollapsibleText } from '#components/collapsible-text'
+import { FileDropIndicator } from '#components/file-drop-indicator'
 import { MarkdownMessage } from '#components/markdown-message'
 import type { EncodedAttachment } from '#components/use-attachments'
 import { useAttachments } from '#components/use-attachments'
 import { cardDraftStorageKey, useDraft } from '#components/use-composer-draft'
+import { useFileDrop } from '#components/use-file-drop'
 
 type TodoCardProps = {
   seq?: number
   sessionId?: string
   title: string
   detail: string | null
+  folded?: boolean
+  addedFolded?: boolean
   resolution: 'completed' | 'rejected' | 'withdrawn' | null
   defaultComment?: string
   onResolve: (
@@ -25,6 +30,7 @@ type TodoCardProps = {
     comment: string | null,
     attachments?: readonly EncodedAttachment[],
   ) => Promise<boolean>
+  onFold: (folded: boolean) => Promise<boolean>
 }
 
 export function TodoCard({
@@ -32,9 +38,12 @@ export function TodoCard({
   sessionId,
   title,
   detail,
+  folded = false,
+  addedFolded = false,
   resolution,
   defaultComment = '',
   onResolve,
+  onFold,
 }: TodoCardProps) {
   const [draftSessionId] = useState(() => sessionId ?? crypto.randomUUID())
   const commentId = useId()
@@ -59,6 +68,12 @@ export function TodoCard({
     null,
   )
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [isFoldPending, setIsFoldPending] = useState(false)
+  const { isFileDragActive, ...fileDropHandlers } = useFileDrop(
+    attachmentState.onPasteFiles,
+    !isSubmitting,
+    true,
+  )
   const currentResolution = resolution ?? resolutionLocally
   const isResolved = currentResolution !== null
 
@@ -99,6 +114,16 @@ export function TodoCard({
     }
   }
 
+  const foldTodo = async (nextFolded: boolean) => {
+    if (isFoldPending) return
+    setIsFoldPending(true)
+    try {
+      await onFold(nextFolded)
+    } finally {
+      setIsFoldPending(false)
+    }
+  }
+
   if (isResolved) {
     const completionComment =
       resolution !== null
@@ -131,14 +156,63 @@ export function TodoCard({
     )
   }
 
+  if (folded) {
+    return (
+      <article
+        className="chat-todo-card chat-todo-card--folded"
+        aria-label="User task, folded"
+        data-resolution="pending"
+        data-folded="true"
+      >
+        <Button
+          type="button"
+          variant="plain"
+          className="chat-todo-folded-row cursor-pointer"
+          aria-expanded={false}
+          disabled={isFoldPending}
+          onClick={() => {
+            void foldTodo(false)
+          }}
+        >
+          <span className="chat-todo-folded-label">
+            <span>To-do · later</span>
+            {addedFolded ? <span> · added folded</span> : null}
+          </span>
+          <span className="chat-todo-folded-title-row">
+            <strong className="chat-todo-folded-title">{title}</strong>
+            <ChevronDown aria-hidden="true" className="chat-todo-chevron" />
+          </span>
+        </Button>
+      </article>
+    )
+  }
+
   return (
     <article
       className="chat-todo-card"
       aria-label="User task"
-      aria-busy={isSubmitting || attachmentState.isProcessingAttachments}
+      aria-busy={
+        isSubmitting || isFoldPending || attachmentState.isProcessingAttachments
+      }
       data-resolution="pending"
     >
-      <h2>To-do · pending</h2>
+      <header className="chat-todo-heading">
+        <h2>To-do · pending</h2>
+        <Button
+          type="button"
+          variant="plain"
+          className="chat-todo-fold-button cursor-pointer"
+          aria-label="Fold this to-do"
+          title="Fold"
+          aria-expanded={true}
+          disabled={isFoldPending}
+          onClick={() => {
+            void foldTodo(true)
+          }}
+        >
+          <ChevronUp aria-hidden="true" />
+        </Button>
+      </header>
       <h3>{title}</h3>
       {detailContent !== null ? (
         <CollapsibleText
@@ -157,20 +231,23 @@ export function TodoCard({
           Browser storage is unavailable. Drafts may not survive a page reload.
         </p>
       ) : null}
-      <textarea
-        id={commentId}
-        className="chat-todo-comment"
-        rows={2}
-        value={comment}
-        disabled={isSubmitting}
-        {...createAttachmentInputHandlers(
-          attachmentState.onPasteFiles,
-          !isSubmitting,
-        )}
-        onChange={(event) => {
-          updateDraft(event.currentTarget.value)
-        }}
-      />
+      <div className="chat-card-comment-drop-zone">
+        {isFileDragActive ? <FileDropIndicator /> : null}
+        <textarea
+          id={commentId}
+          className="chat-todo-comment"
+          rows={2}
+          value={comment}
+          disabled={isSubmitting}
+          onPaste={(event) => {
+            handleAttachmentPaste(event, attachmentState.onPasteFiles)
+          }}
+          {...fileDropHandlers}
+          onChange={(event) => {
+            updateDraft(event.currentTarget.value)
+          }}
+        />
+      </div>
       <AttachmentPreviewList
         attachments={attachmentState.attachments}
         {...(isSubmitting

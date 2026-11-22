@@ -10,6 +10,7 @@ import type { Session, SessionsResponse } from '#types'
 const capturedFeed = vi.hoisted(() => ({
   onSessions: null as
     ((response: unknown, changedSessionIds: readonly string[]) => void) | null,
+  onUpdateAvailable: null as ((version: string | null) => void) | null,
 }))
 
 vi.mock('#session-feed', () => ({
@@ -18,10 +19,14 @@ vi.mock('#session-feed', () => ({
       response: unknown,
       changedSessionIds: readonly string[],
     ) => void,
+    _onError: (message: string | null) => void,
+    dependencies?: { onUpdateAvailable?: (version: string | null) => void },
   ) => {
     capturedFeed.onSessions = onSessions
+    capturedFeed.onUpdateAvailable = dependencies?.onUpdateAvailable ?? null
     return () => {
       capturedFeed.onSessions = null
+      capturedFeed.onUpdateAvailable = null
     }
   },
 }))
@@ -705,6 +710,195 @@ function renderMobileApp(view: 'Inbox' | 'Board' = 'Inbox') {
   }
 }
 
+function swipeMobileInboxRow() {
+  const row = container.querySelector<HTMLButtonElement>(
+    '.needs-action-section [data-session-row]',
+  )
+  if (row === null) throw new Error('Expected the inbox row')
+  act(() => {
+    row.dispatchEvent(
+      new PointerEvent('pointerdown', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: 260,
+        clientY: 20,
+      }),
+    )
+    row.dispatchEvent(
+      new PointerEvent('pointermove', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: 120,
+        clientY: 20,
+      }),
+    )
+    row.dispatchEvent(
+      new PointerEvent('pointerup', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: 120,
+        clientY: 20,
+      }),
+    )
+  })
+}
+
+it('opens the mobile Later sheet from an inbox row', async () => {
+  renderMobileApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-later', 'Defer the sample request')],
+  })
+  swipeMobileInboxRow()
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>(
+        '[aria-label="Later: Defer the sample request"]',
+      )
+      ?.click()
+  })
+  await act(async () => {
+    await flushAsyncState()
+  })
+  const laterMenu = container.querySelector<HTMLElement>('.later-menu--mobile')
+  const laterSheet = {
+    role: laterMenu?.getAttribute('role'),
+    label: laterMenu?.getAttribute('aria-label'),
+    focusInside: laterMenu?.contains(document.activeElement),
+  }
+  act(() => {
+    container.querySelector<HTMLButtonElement>('.later-menu-cancel')?.click()
+  })
+  const snapshot = () => ({
+    laterSheet,
+    closedAfterCancel: container.querySelector('.later-menu--mobile') === null,
+  })
+  expect(snapshot()).toEqual({
+    laterSheet: { role: 'dialog', label: 'Later', focusInside: true },
+    closedAfterCancel: true,
+  })
+})
+
+it('opens the mobile Close confirmation from an inbox row', () => {
+  const fetchMock = vi
+    .fn<typeof fetch>()
+    .mockImplementation(mockSessionActionFetch)
+  vi.stubGlobal('fetch', fetchMock)
+  renderMobileApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-close', 'Review the sample response')],
+  })
+  swipeMobileInboxRow()
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>(
+        '[aria-label="Close: Review the sample response"]',
+      )
+      ?.click()
+  })
+  const closeConfirmation = {
+    role: document
+      .querySelector('.session-close-confirmation')
+      ?.getAttribute('role'),
+    modal: document
+      .querySelector('.session-close-confirmation')
+      ?.getAttribute('aria-modal'),
+    confirmFocused:
+      document.activeElement ===
+      document.querySelector(
+        '.session-close-confirmation .confirm-dialog-confirm',
+      ),
+    closeRequests: fetchMock.mock.calls.filter(([request]) =>
+      requestUrl(request).endsWith('/close'),
+    ).length,
+  }
+  act(() => {
+    document
+      .querySelector<HTMLButtonElement>('.confirm-dialog-actions button')
+      ?.click()
+  })
+
+  const snapshot = () => ({
+    closeConfirmation,
+    confirmationClosed:
+      document.querySelector('.session-close-confirmation') === null,
+  })
+  expect(snapshot()).toEqual({
+    closeConfirmation: {
+      role: 'alertdialog',
+      modal: 'true',
+      confirmFocused: true,
+      closeRequests: 0,
+    },
+    confirmationClosed: true,
+  })
+})
+
+it('saves the active filter from the mobile Save view sheet', async () => {
+  renderMobileApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session(
+        'session-sample',
+        'Sample project response',
+        'needs_action',
+        8,
+        'sample project',
+      ),
+      session(
+        'session-other',
+        'Another project response',
+        'needs_action',
+        8,
+        'another project',
+      ),
+    ],
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('.inbox-filter-open')?.click()
+  })
+  const filterInput = container.querySelector<HTMLInputElement>(
+    '[aria-label="Inbox filter query"]',
+  )
+  if (filterInput === null) throw new Error('Expected the filter input')
+  await act(async () => {
+    await userEvent.fill(filterInput, 'project:another project')
+    await userEvent.keyboard('{Enter}')
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('.inbox-save-view')?.click()
+  })
+  const nameInput = container.querySelector<HTMLInputElement>(
+    '.inbox-save-view-sheet [aria-label="Saved view name"]',
+  )
+  if (nameInput === null) throw new Error('Expected the mobile view name input')
+  const nameFocusedOnOpen = document.activeElement === nameInput
+  await act(async () => {
+    await userEvent.fill(nameInput, 'Another project')
+    await userEvent.keyboard('{Enter}')
+  })
+
+  const snapshot = () => ({
+    nameFocusedOnOpen,
+    views: readSavedInboxViews().views.map(({ name, query }) => ({
+      name,
+      query,
+    })),
+  })
+  expect(snapshot()).toEqual({
+    nameFocusedOnOpen: true,
+    views: [{ name: 'Another project', query: 'project:"another project"' }],
+  })
+})
+
 it('prevents file drags anywhere in the app from navigating away', () => {
   renderApp()
   const dispatchFileEvent = (type: 'dragover' | 'drop') => {
@@ -1028,6 +1222,7 @@ beforeEach(() => {
   container = document.createElement('div')
   document.body.append(container)
   capturedFeed.onSessions = null
+  capturedFeed.onUpdateAvailable = null
 })
 
 afterEach(() => {
@@ -1044,6 +1239,134 @@ afterEach(() => {
   vi.useRealTimers()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
+})
+
+it.each([
+  {
+    screen: 'Inbox',
+    viewSelector: '.inbox-view',
+    headerSelector: '.mobile-inbox-brand',
+  },
+  {
+    screen: 'Board',
+    viewSelector: '.board-view',
+    headerSelector: '.board-header',
+  },
+  {
+    screen: 'conversation',
+    viewSelector: '.conversation-pane',
+    headerSelector: '.conversation-header',
+  },
+  {
+    screen: 'new session',
+    viewSelector: '.new-session-view',
+    headerSelector: '.new-session-header',
+  },
+] as const)(
+  'places the phone update after the $screen header',
+  async ({ screen, viewSelector, headerSelector }) => {
+    if (screen === 'new session') {
+      vi.stubGlobal(
+        'fetch',
+        createSessionLaunchFetcher(
+          jsonResponse({ launchId: 'launch-fixture' }),
+        ),
+      )
+    }
+    renderMobileApp(screen === 'Board' ? 'Board' : 'Inbox')
+    if (screen === 'conversation') {
+      publishSessions({
+        revision: 1,
+        sessions: [session('session-phone', 'A sample conversation')],
+      })
+      act(() => {
+        container
+          .querySelector<HTMLButtonElement>('[data-session-row]')
+          ?.click()
+      })
+    }
+    if (screen === 'new session') {
+      clickButton('[aria-label="New session"]')
+      await waitForDirectoryResults()
+    }
+    act(() => {
+      capturedFeed.onUpdateAvailable?.('fixture-version-next')
+    })
+
+    const view = container.querySelector(viewSelector)
+    const header = view?.querySelector(headerSelector) ?? null
+    const notice = view?.querySelector('.update-notice') ?? null
+    const snapshot = () => ({
+      noticeVisible: notice !== null,
+      followsHeader:
+        header !== null &&
+        notice !== null &&
+        (header.compareDocumentPosition(notice) &
+          Node.DOCUMENT_POSITION_FOLLOWING) !==
+          0,
+      text: notice?.textContent ?? null,
+    })
+
+    expect(snapshot()).toEqual({
+      noticeVisible: true,
+      followsHeader: true,
+      text: 'New version vfixture-version-next is ready.Reload',
+    })
+  },
+)
+
+it('hides the phone update until the server reports a different version', () => {
+  vi.useFakeTimers()
+  setMobileViewport(true)
+  renderApp()
+  act(() => {
+    capturedFeed.onUpdateAvailable?.('fixture-version-next')
+  })
+  const noticeBeforeDismiss = container.querySelector('.update-notice')
+  const mobileHeader = container.querySelector('.mobile-inbox-brand')
+  if (noticeBeforeDismiss === null || mobileHeader === null) {
+    throw new Error('Update notice not found')
+  }
+  clickButton('.update-notice-dismiss')
+  act(() => {
+    capturedFeed.onUpdateAvailable?.('fixture-version-next')
+  })
+  const noticeAfterDismiss = container.querySelector('.update-notice')
+  act(() => {
+    capturedFeed.onUpdateAvailable?.('fixture-version-newer')
+  })
+  const snapshot = () => ({
+    noticeBeforeDismiss: noticeBeforeDismiss.textContent,
+    noticeFollowsHeader:
+      (mobileHeader.compareDocumentPosition(noticeBeforeDismiss) &
+        Node.DOCUMENT_POSITION_FOLLOWING) !==
+      0,
+    noticeAfterDismiss: noticeAfterDismiss?.textContent ?? null,
+    noticeForNextVersion:
+      container.querySelector('.update-notice')?.textContent ?? null,
+  })
+  expect(snapshot()).toEqual({
+    noticeBeforeDismiss: 'New version vfixture-version-next is ready.Reload',
+    noticeFollowsHeader: true,
+    noticeAfterDismiss: null,
+    noticeForNextVersion: 'New version vfixture-version-newer is ready.Reload',
+  })
+})
+
+it('keeps the phone page mounted when an update becomes available', () => {
+  renderMobileApp()
+  act(() => {
+    capturedFeed.onUpdateAvailable?.('fixture-version-next')
+  })
+
+  const snapshot = () => ({
+    pageMounted: container.querySelector('.agent-watch-shell') !== null,
+    noticeText: container.querySelector('.update-notice')?.textContent ?? null,
+  })
+  expect(snapshot()).toEqual({
+    pageMounted: true,
+    noticeText: 'New version vfixture-version-next is ready.Reload',
+  })
 })
 
 it('saves a filtered view, restores it, and opens it from navigation', async () => {
@@ -1810,7 +2133,9 @@ it('ignores desktop keyboard shortcuts at the mobile breakpoint', () => {
 
   const snapshot = () => ({
     selectedTitle: readSelectedTitle(),
-    laterMenuCount: container.querySelectorAll('.later-menu').length,
+    laterMenuCount: container.querySelectorAll(
+      '.later-menu, .later-menu--mobile',
+    ).length,
     boardViewCount: container.querySelectorAll('.board-view').length,
   })
   expect(snapshot()).toEqual({
@@ -1941,18 +2266,23 @@ it('opens Later for the session shown in a mobile conversation', async () => {
 
   const snapshot = () => ({
     initialConversationState,
-    menuTitle: container.querySelector('.later-menu-title')?.textContent,
+    menuTitle: container.querySelector('.later-menu-mobile-session-title')
+      ?.textContent,
     menuLabel: container
-      .querySelector('.later-menu')
+      .querySelector('.later-menu--mobile')
       ?.getAttribute('aria-label'),
+    menuRole: container
+      .querySelector('.later-menu--mobile')
+      ?.getAttribute('role'),
   })
   expect(snapshot()).toEqual({
     initialConversationState: {
       screen: 'conversation',
       url: '?session=session-mobile&screen=conversation',
     },
-    menuTitle: 'Later: Reply to the question',
-    menuLabel: 'Later: Reply to the question',
+    menuTitle: 'Reply to the question',
+    menuLabel: 'Later',
+    menuRole: 'dialog',
   })
 })
 
@@ -1982,7 +2312,7 @@ it('closes the mobile Later menu with Escape', async () => {
   })
 
   const snapshot = () => ({
-    menuCount: container.querySelectorAll('.later-menu').length,
+    menuCount: container.querySelectorAll('.later-menu--mobile').length,
     escapePrevented: escapeEvent?.defaultPrevented,
   })
   expect(snapshot()).toEqual({ menuCount: 0, escapePrevented: true })
@@ -2429,18 +2759,20 @@ it.each(['Inbox', 'Board'] as const)(
   },
 )
 
-it('opens the command palette from the mobile navigation and closes the drawer', () => {
+it('omits the command palette action from the mobile navigation', () => {
   renderMobileApp()
   clickButton('[aria-label="Open navigation"]')
-  clickButton('.mobile-nav-drawer [aria-label="Open command palette"]')
 
   const snapshot = () => ({
-    paletteOpen: container.querySelector('[aria-label="Jump to"]') !== null,
+    paletteActionVisible:
+      container.querySelector(
+        '.mobile-nav-drawer [aria-label="Open command palette"]',
+      ) !== null,
     drawerOpen:
       container.querySelector<HTMLDialogElement>('.mobile-nav-drawer')?.open ??
       false,
   })
-  expect(snapshot()).toEqual({ paletteOpen: true, drawerOpen: false })
+  expect(snapshot()).toEqual({ paletteActionVisible: false, drawerOpen: true })
 })
 
 it('closes the mobile navigation after switching to Board', () => {
@@ -3524,22 +3856,35 @@ it('shows every close check in Activity and opens the failed worktree in a termi
     await flushAsyncState()
   })
 
-  const activity = container.querySelector(
+  const activity = container.querySelector<HTMLElement>(
     '.async-action-activity-list .async-action-item',
   )
   const conversationLine = container.querySelector(
     '.conversation-pane .async-action-item--line',
   )
-  const activitySnapshot = () => ({
-    text: activity?.textContent,
-    buttons: Array.from(
-      activity?.querySelectorAll('button') ?? [],
-      (button) => button.textContent,
-    ),
-    conversationLine: conversationLine?.textContent,
-  })
+  const activitySnapshot = () => {
+    const normalizedActivity = activity?.cloneNode(true)
+    let normalizedTime: string | null = null
+    let buttons: (string | null)[] = []
+    if (normalizedActivity instanceof HTMLElement) {
+      const time = normalizedActivity.querySelector('time')
+      time?.replaceChildren('<time>')
+      normalizedTime = time?.textContent ?? null
+      buttons = Array.from(
+        normalizedActivity.querySelectorAll<HTMLButtonElement>('button'),
+        (button) => button.textContent,
+      )
+    }
+    return {
+      text: normalizedActivity?.textContent,
+      time: normalizedTime,
+      buttons,
+      conversationLine: conversationLine?.textContent,
+    }
+  }
   expect(activitySnapshot()).toEqual({
-    text: 'Close failedExample sessionUncommitted changessrc/example.ts · src/example.test.ts2 filesBranch feature/example-workThe example pull request is still open.Not mergedRunning processes12345 example-server · 23456 example-watcher2 running/worktrees/example-projectClose and keep worktreeRetryOpen in terminal',
+    text: 'Close failedExample sessionUncommitted changessrc/example.ts · src/example.test.ts2 filesBranch feature/example-workThe example pull request is still open.Not mergedRunning processes12345 example-server · 23456 example-watcher2 running/worktrees/example-projectClose and keep worktreeRetryOpen in terminal<time>',
+    time: '<time>',
     buttons: ['Close and keep worktree', 'Retry', 'Open in terminal'],
     conversationLine:
       'Close failedLeft in the worktree: 2 uncommitted files, branch not merged, 2 running processesClose and keep worktreeRetry',

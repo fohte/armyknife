@@ -103,6 +103,44 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+it('keeps the code language label out of selectable assistant text', () => {
+  render([
+    {
+      type: 'assistant',
+      text: 'Review this value:\n\n```typescript\nconst value = 1\n```',
+    },
+  ])
+
+  const toolbar = requireElement(
+    container.querySelector('.syntax-code-block-toolbar'),
+  )
+  const style = getComputedStyle(toolbar)
+
+  const snapshot = () => ({
+    userSelect: style.userSelect,
+    webkitUserSelect: style.getPropertyValue('-webkit-user-select'),
+  })
+  expect(snapshot()).toEqual({
+    userSelect: 'none',
+    webkitUserSelect: 'none',
+  })
+})
+
+it('shows a copy button for assistant code blocks', () => {
+  render([
+    {
+      type: 'assistant',
+      text: '```typescript\nconst value = 1\n```',
+    },
+  ])
+
+  expect(
+    container
+      .querySelector('.chat-assistant-message .syntax-code-block-copy-button')
+      ?.getAttribute('aria-label') ?? null,
+  ).toBe('Copy code')
+})
+
 it.each([
   {
     name: 'existing draft',
@@ -387,4 +425,38 @@ it.each([
       container.querySelector('.conversation-selection-reply') !== null,
   })
   expect(snapshot()).toEqual({ menuVisible: false })
+})
+
+it('quotes selected narration text into the composer', () => {
+  render([{ type: 'narration', text: 'A fictional narrated sentence.' }])
+  selectText(
+    requireElement(container.querySelector('.chat-narration-message p')),
+  )
+
+  act(() => {
+    requireElement(
+      container.querySelector<HTMLButtonElement>(
+        '.conversation-selection-reply button',
+      ),
+    ).click()
+  })
+
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  const snapshot = () => ({
+    draft: textarea.value,
+    focused: document.activeElement === textarea,
+    selectionStart: textarea.selectionStart,
+    selectionEnd: textarea.selectionEnd,
+    menuVisible:
+      container.querySelector('.conversation-selection-reply') !== null,
+  })
+  expect(snapshot()).toEqual({
+    draft: '> A fictional narrated sentence.\n\n',
+    focused: true,
+    selectionStart: 34,
+    selectionEnd: 34,
+    menuVisible: false,
+  })
 })

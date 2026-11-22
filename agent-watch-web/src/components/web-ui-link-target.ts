@@ -4,6 +4,7 @@ import { webUiTargetUrl } from '#components/web-ui-target-url'
 type WebUiLinkMatch = {
   webUi: WebUiLinkTarget
   registeredUrl: URL
+  isCritPreviewRootAlias: boolean
 }
 
 function parseHttpUrl(value: string): URL | null {
@@ -47,15 +48,21 @@ export function findWebUiLink(
     for (const candidate of [webUi.url, webUi.exposedUrl]) {
       if (candidate == null || candidate.trim() === '') continue
       const registeredUrl = parseHttpUrl(candidate)
+      const isCritPreviewRootAlias =
+        registeredUrl !== null &&
+        webUi.name === 'crit' &&
+        normalizedPathname(linkUrl.pathname) === '' &&
+        normalizedPathname(registeredUrl.pathname) === '/preview'
       if (
         registeredUrl !== null &&
         hostMatches(linkUrl, registeredUrl) &&
-        pathMatches(linkUrl.pathname, registeredUrl.pathname)
+        (pathMatches(linkUrl.pathname, registeredUrl.pathname) ||
+          isCritPreviewRootAlias)
       ) {
         const pathLength = normalizedPathname(registeredUrl.pathname).length
         if (bestMatch === null || pathLength > bestMatch.pathLength) {
           bestMatch = {
-            match: { webUi, registeredUrl },
+            match: { webUi, registeredUrl, isCritPreviewRootAlias },
             pathLength,
           }
         }
@@ -83,7 +90,9 @@ export function webUiLinkTargetUrl(
 
   const basePath = normalizedPathname(match.registeredUrl.pathname)
   const targetBasePath = normalizedPathname(targetUrl.pathname)
-  const suffix = requestedUrl.pathname.slice(basePath.length)
+  const suffix = match.isCritPreviewRootAlias
+    ? ''
+    : requestedUrl.pathname.slice(basePath.length)
   targetUrl.pathname = `${targetBasePath}${suffix}`
   const requestedKeys = new Set(requestedUrl.searchParams.keys())
   requestedKeys.forEach((key) => {

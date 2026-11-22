@@ -119,6 +119,7 @@ fn router_with_state(state: ActionState) -> Router {
             post(todos::resolve_todo)
                 .layer(DefaultBodyLimit::max(messages::MAX_MESSAGE_BODY_BYTES)),
         )
+        .route("/sessions/{id}/todos/{seq}/fold", post(todos::fold_todo))
         .route("/sessions/{id}/title", post(title::set_title))
         .route(
             "/sessions/{id}/answer",
@@ -1037,6 +1038,7 @@ mod tests {
             pr_context: None,
             created_pr_urls: Vec::new(),
             crit_urls: Vec::new(),
+            crit_not_waiting_urls: Default::default(),
             web_uis: Vec::new(),
             pending_human_review_ids: BTreeSet::new(),
             cwd: PathBuf::from("/tmp/example"),

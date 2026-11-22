@@ -100,6 +100,117 @@ fn adds_one_time_permission_approvals_to_version_twenty_five_database(
 }
 
 #[rstest]
+fn adds_queued_prompt_message_id_index_to_version_twenty_six_database(
+    database_fixture: DatabaseFixture,
+) {
+    let DatabaseFixture {
+        temp_dir,
+        mut connection,
+    } = database_fixture;
+    Migrations::from_slice(&MIGRATION_ENTRIES[..26])
+        .to_latest(&mut connection)
+        .expect("version twenty six schema should be created");
+    drop(connection);
+
+    let connection = super::super::open_connection(temp_dir.path())
+        .expect("version twenty six database should migrate to the queued prompt index");
+    let actual = connection
+        .query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM sqlite_master
+                WHERE type = 'index'
+                    AND name = 'watch_web_queued_prompt_session_message_id'
+            )",
+            [],
+            |row| row.get::<_, bool>(0),
+        )
+        .expect("queued prompt message ID index should be queryable");
+    let actual_user_version: i64 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .expect("database migration version should be readable");
+
+    assert_eq!((actual, actual_user_version), (true, current_version()));
+}
+
+#[rstest]
+fn adds_unreported_stop_peer_cursor_to_version_twenty_seven_database(
+    database_fixture: DatabaseFixture,
+) {
+    let DatabaseFixture {
+        temp_dir,
+        mut connection,
+    } = database_fixture;
+    Migrations::from_slice(&MIGRATION_ENTRIES[..27])
+        .to_latest(&mut connection)
+        .expect("version twenty seven schema should be created");
+    drop(connection);
+
+    let connection = super::super::open_connection(temp_dir.path())
+        .expect("version twenty seven database should migrate to the unreported stop schema");
+    let actual_schema = connection
+        .query_row(
+            indoc! {"
+                SELECT
+                EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'watch_web_queued_prompt_session_message_id'),
+                EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'agent_unreported_stop_check'),
+                EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'agent_unreported_stop_peer_cursor'),
+                EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = 'agent_unreported_stop_peer_cursor_delete_session')
+            "},
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .expect("cursor migration schema should be queryable");
+    let actual_user_version: i64 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .expect("database migration version should be readable");
+
+    assert_eq!(
+        (actual_schema, actual_user_version),
+        ((true, false, true, true), current_version()),
+    );
+}
+
+#[rstest]
+fn adds_folded_todo_columns_to_version_twenty_eight_database(database_fixture: DatabaseFixture) {
+    let DatabaseFixture {
+        temp_dir,
+        mut connection,
+    } = database_fixture;
+    Migrations::from_slice(&MIGRATION_ENTRIES[..28])
+        .to_latest(&mut connection)
+        .expect("version twenty eight schema should be created");
+    connection
+        .execute(
+            "INSERT INTO agent_todo (session_id, seq, title, created_at)
+             VALUES ('fixture-session-maple', 1, 'Review a sample update', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .expect("existing todo should be inserted");
+    drop(connection);
+
+    let connection = super::super::open_connection(temp_dir.path())
+        .expect("version twenty eight database should migrate to folded todo columns");
+    let actual = connection
+        .query_row(
+            "SELECT title, folded, added_folded FROM agent_todo WHERE session_id = 'fixture-session-maple'",
+            [],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, bool>(1)?, row.get::<_, bool>(2)?)),
+        )
+        .expect("existing todo and folded defaults should be queryable");
+    let actual_user_version: i64 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .expect("database migration version should be readable");
+
+    assert_eq!(
+        (actual, actual_user_version),
+        (
+            ("Review a sample update".to_owned(), false, false),
+            current_version()
+        )
+    );
+}
+
+#[rstest]
 fn adds_permission_request_mailbox_to_version_nine_database(database_fixture: DatabaseFixture) {
     let DatabaseFixture {
         temp_dir,
@@ -414,6 +525,8 @@ fn adds_todo_resolution_to_master_version_fourteen_database(database_fixture: Da
             seq: 1,
             title: "Task".to_string(),
             detail: None,
+            folded: false,
+            added_folded: false,
             created_at: chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
                 .unwrap()
                 .to_utc(),

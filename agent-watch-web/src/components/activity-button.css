@@ -36,3 +36,6 @@
   padding: 0 4px;
   font-size: 14px;
 }
+.async-action-activity-button.is-empty {
+  color: var(--aw-text-secondary);
+}

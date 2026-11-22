@@ -24,7 +24,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-it('opens the new session form from the Inbox header', async () => {
+it('opens new session from the Inbox header without an Activity entry', async () => {
   const onNewSession = vi.fn()
   const args: ComponentProps<typeof MobileNavigationActions> = {
     onOpenNavigation: () => undefined,
@@ -47,11 +47,10 @@ it('opens the new session form from the Inbox header', async () => {
 
   const snapshot = () => ({
     newSessionCalls: onNewSession.mock.calls,
-    activityButtonVisible:
-      container.querySelector('.async-action-activity-button') !== null,
+    activityButton: container.querySelector('.async-action-activity-button'),
   })
   expect(snapshot()).toEqual({
     newSessionCalls: [[]],
-    activityButtonVisible: false,
+    activityButton: null,
   })
 })

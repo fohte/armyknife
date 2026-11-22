@@ -47,6 +47,11 @@ export const EditingTheReviewDocument: Story = {
   name: 'The review document is ready to edit and preview',
 }
 
+export const UnsavedChangesAreVisible: Story = {
+  name: 'The review document shows its unsaved change status',
+  args: { unsavedChanges: true },
+}
+
 export const MobileEditing: Story = {
   name: 'The mobile review document shows its editor',
   parameters: { viewport: { defaultViewport: 'mobile1' } },

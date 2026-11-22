@@ -13,6 +13,7 @@ import { NewSessionForm } from '#components/new-session-form'
 import { NewSessionPicker } from '#components/new-session-picker'
 import { ResizableColumns } from '#components/resizable-columns'
 import { SessionCloseConfirmation } from '#components/session-close-confirmation'
+import { UpdateNotice } from '#components/update-notice'
 import type { useSessionHistory } from '#session-history'
 import type { LaterPreset, LaterPresetTimes } from '#session-navigation'
 import type { SessionOperation } from '#session-operations'
@@ -105,11 +106,13 @@ type AppWorkspaceActions = {
   ) => unknown
   navigate: ReturnType<typeof useSessionHistory>['navigate']
   closeMobileNav: () => void
+  dismissUpdateNotice: (version: string) => void
 }
 
 type AppWorkspaceProps = {
   state: AppWorkspaceState
   actions: AppWorkspaceActions
+  updateNoticeVersion: string | null
   savedViews: ReturnType<typeof useSavedInboxViews>
   newSession: ReturnType<typeof useNewSession>
   paletteShortcut: CommandPaletteShortcut
@@ -118,12 +121,26 @@ type AppWorkspaceProps = {
 export function AppWorkspace({
   state,
   actions,
+  updateNoticeVersion,
   savedViews,
   newSession,
   paletteShortcut,
 }: AppWorkspaceProps) {
   const laterSession = state.laterSession
   const closeConfirmationSession = state.closeConfirmationSession
+  const mobileUpdateNotice =
+    state.isMobile && updateNoticeVersion !== null ? (
+      <UpdateNotice
+        isMobile
+        onDismiss={() => {
+          actions.dismissUpdateNotice(updateNoticeVersion)
+        }}
+        onReload={() => {
+          window.location.reload()
+        }}
+        version={updateNoticeVersion}
+      />
+    ) : undefined
   const inboxProps = {
     error: state.error ?? savedViews.storageError,
     connectionError: state.error,
@@ -153,6 +170,8 @@ export function AppWorkspace({
       }
       actions.openConversation(id)
     },
+    onLater: actions.onLater,
+    onCloseSession: actions.requestCloseSession,
     laterExpanded: state.laterExpanded,
     onToggleLater: () => {
       actions.setLaterExpanded((expanded) => !expanded)
@@ -227,6 +246,7 @@ export function AppWorkspace({
               <NewSessionForm
                 isMobile={state.isMobile}
                 launchPending={state.pendingLaunchId !== null}
+                mobileUpdateNotice={mobileUpdateNotice}
                 onClose={actions.closeNewSession}
                 onLaunched={actions.setPendingLaunchId}
                 state={newSession}
@@ -249,6 +269,7 @@ export function AppWorkspace({
           }}
           composerFocusRequest={state.composerFocusRequest}
           onComposerFocusRequestHandled={actions.onComposerFocusRequestHandled}
+          mobileUpdateNotice={mobileUpdateNotice}
         />
       ) : (
         <BoardView
@@ -263,6 +284,7 @@ export function AppWorkspace({
           projects={state.projects}
           focusedProjectName={state.focusedProjectName}
           isMobile={state.isMobile}
+          mobileUpdateNotice={mobileUpdateNotice}
           onOpenNavigation={() => {
             actions.setMobileNavOpen(true)
           }}
@@ -274,123 +296,145 @@ export function AppWorkspace({
 
   return (
     <div
-      className="agent-watch-shell"
+      className="agent-watch-app"
       data-layout={state.isMobile ? 'mobile' : 'desktop'}
-      data-mobile-screen={
-        state.showMobileConversation || state.newSessionMode === 'form'
-          ? 'conversation'
-          : 'inbox'
-      }
     >
-      {state.isMobile ? (
-        main
-      ) : (
-        <ResizableColumns
-          first={navigation}
-          second={main}
-          storageKey="agent-watch:navigation-width"
-          firstSize={240}
-          firstMinSize={160}
-          secondMinSize={508}
-          label="Resize navigation and content"
-        />
-      )}
-      {state.isMobile && !state.showMobileConversation ? (
-        <MobileNavDrawer
-          onClose={actions.closeMobileNav}
-          open={state.mobileNavOpen}
-        >
-          {navigation}
-        </MobileNavDrawer>
-      ) : null}
-      {laterSession !== undefined ? (
-        <LaterMenu
-          sessionTitle={laterSession.title}
-          isLater={laterSession.category === 'later'}
-          laterTimes={state.laterTimes}
-          laterTimesError={state.laterTimesError}
-          isSubmitting={state.laterMutationPending}
-          onClose={() => {
-            if (!actions.laterSubmissionInFlight.current) {
-              actions.closeLater()
-            }
+      {!state.isMobile && updateNoticeVersion !== null ? (
+        <UpdateNotice
+          isMobile={false}
+          onDismiss={() => {
+            actions.dismissUpdateNotice(updateNoticeVersion)
           }}
-          onBackNow={() => {
-            actions.submitBackNow(laterSession.id)
+          onReload={() => {
+            window.location.reload()
           }}
-          onSelect={(preset) => {
-            actions.submitLater(laterSession.id, preset)
-          }}
+          version={updateNoticeVersion}
         />
       ) : null}
-      {state.commandPaletteOpen ? (
-        <CommandPalette
-          onClose={() => {
-            actions.setCommandPaletteOpen(false)
-          }}
-          onLater={(id) => {
-            actions.setCommandPaletteOpen(false)
-            actions.onLater(id)
-          }}
-          onCloseSession={(id) => {
-            actions.setCommandPaletteOpen(false)
-            actions.requestCloseSession(id)
-          }}
-          onOpenInTerminal={(id) => {
-            void actions.focusSession(id)
-          }}
-          onOpenProject={(project) => {
-            actions.setCommandPaletteOpen(false)
-            actions.setFocusedProjectName(project)
-            actions.navigate((current) => ({
-              ...current,
-              selectedId: null,
-              view: 'board',
-              conversationOpen: false,
-            }))
-          }}
-          onOpenSession={(id) => {
-            actions.setCommandPaletteOpen(false)
-            actions.openSessionInInbox(id)
-          }}
-          onOpenSessionBeside={(id) => {
-            const query = new URLSearchParams({ session: id })
-            if (state.isMobile) query.set('screen', 'conversation')
-            window.open(`?${query.toString()}`, '_blank', 'noopener,noreferrer')
-            actions.setCommandPaletteOpen(false)
-          }}
-          onRunCommand={(command) => {
-            if (command.id === 'new-session') {
-              actions.openNewSession('palette')
-              return
-            }
-            void actions.runPaletteCommand(command)
-          }}
-          recentSessionIds={state.recentSessionIds}
-          sessions={state.sessions}
-          workTypeNavLabels={state.workTypeNavLabels}
-          pendingFocusSessionId={state.pendingFocusSessionId}
-        />
-      ) : null}
-      {state.newSessionMode === 'palette' ? (
-        <NewSessionPicker
-          isMobile={state.isMobile}
-          launchPending={state.pendingLaunchId !== null}
-          onClose={actions.closeNewSession}
-          onLaunched={actions.setPendingLaunchId}
-          state={newSession}
-        />
-      ) : null}
-      {closeConfirmationSession === undefined ? null : (
-        <SessionCloseConfirmation
-          session={closeConfirmationSession}
-          mobile={state.isMobile}
-          onCancel={actions.cancelCloseConfirmation}
-          onConfirm={() => {
-            actions.confirmCloseSession(closeConfirmationSession.id)
-          }}
-        />
-      )}
+      <div
+        className="agent-watch-shell"
+        data-layout={state.isMobile ? 'mobile' : 'desktop'}
+        data-mobile-screen={
+          state.showMobileConversation || state.newSessionMode === 'form'
+            ? 'conversation'
+            : 'inbox'
+        }
+      >
+        {state.isMobile ? (
+          main
+        ) : (
+          <ResizableColumns
+            first={navigation}
+            second={main}
+            storageKey="agent-watch:navigation-width"
+            firstSize={240}
+            firstMinSize={160}
+            secondMinSize={508}
+            label="Resize navigation and content"
+          />
+        )}
+        {state.isMobile && !state.showMobileConversation ? (
+          <MobileNavDrawer
+            onClose={actions.closeMobileNav}
+            open={state.mobileNavOpen}
+          >
+            {navigation}
+          </MobileNavDrawer>
+        ) : null}
+        {laterSession !== undefined ? (
+          <LaterMenu
+            sessionTitle={laterSession.title}
+            isLater={laterSession.category === 'later'}
+            laterTimes={state.laterTimes}
+            laterTimesError={state.laterTimesError}
+            isSubmitting={state.laterMutationPending}
+            isMobile={state.isMobile}
+            onClose={() => {
+              if (!actions.laterSubmissionInFlight.current) {
+                actions.closeLater()
+              }
+            }}
+            onBackNow={() => {
+              actions.submitBackNow(laterSession.id)
+            }}
+            onSelect={(preset) => {
+              actions.submitLater(laterSession.id, preset)
+            }}
+          />
+        ) : null}
+        {state.commandPaletteOpen ? (
+          <CommandPalette
+            onClose={() => {
+              actions.setCommandPaletteOpen(false)
+            }}
+            onLater={(id) => {
+              actions.setCommandPaletteOpen(false)
+              actions.onLater(id)
+            }}
+            onCloseSession={(id) => {
+              actions.setCommandPaletteOpen(false)
+              actions.requestCloseSession(id)
+            }}
+            onOpenInTerminal={(id) => {
+              void actions.focusSession(id)
+            }}
+            onOpenProject={(project) => {
+              actions.setCommandPaletteOpen(false)
+              actions.setFocusedProjectName(project)
+              actions.navigate((current) => ({
+                ...current,
+                selectedId: null,
+                view: 'board',
+                conversationOpen: false,
+              }))
+            }}
+            onOpenSession={(id) => {
+              actions.setCommandPaletteOpen(false)
+              actions.openSessionInInbox(id)
+            }}
+            onOpenSessionBeside={(id) => {
+              const query = new URLSearchParams({ session: id })
+              if (state.isMobile) query.set('screen', 'conversation')
+              window.open(
+                `?${query.toString()}`,
+                '_blank',
+                'noopener,noreferrer',
+              )
+              actions.setCommandPaletteOpen(false)
+            }}
+            onRunCommand={(command) => {
+              if (command.id === 'new-session') {
+                actions.openNewSession('palette')
+                return
+              }
+              void actions.runPaletteCommand(command)
+            }}
+            recentSessionIds={state.recentSessionIds}
+            sessions={state.sessions}
+            workTypeNavLabels={state.workTypeNavLabels}
+            pendingFocusSessionId={state.pendingFocusSessionId}
+          />
+        ) : null}
+        {state.newSessionMode === 'palette' ? (
+          <NewSessionPicker
+            isMobile={state.isMobile}
+            launchPending={state.pendingLaunchId !== null}
+            onClose={actions.closeNewSession}
+            onLaunched={actions.setPendingLaunchId}
+            state={newSession}
+          />
+        ) : null}
+        {closeConfirmationSession === undefined ? null : (
+          <SessionCloseConfirmation
+            session={closeConfirmationSession}
+            mobile={state.isMobile}
+            onCancel={actions.cancelCloseConfirmation}
+            onConfirm={() => {
+              actions.confirmCloseSession(closeConfirmationSession.id)
+            }}
+          />
+        )}
+      </div>
     </div>
   )
 }

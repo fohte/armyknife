@@ -15,6 +15,7 @@ type SessionTreePanelProps = {
   sessions: readonly SessionTreeNode[]
   selectedSessionId: string
   onSelectSession: (id: string) => void
+  mobilePresentation?: boolean
   viewState?: SessionTreeViewState | null
   onViewStateChange?: (state: SessionTreeViewState) => void
 }
@@ -23,6 +24,7 @@ export function SessionTreePanel({
   sessions,
   selectedSessionId,
   onSelectSession,
+  mobilePresentation = false,
   viewState: controlledViewState,
   onViewStateChange,
 }: SessionTreePanelProps) {
@@ -152,7 +154,9 @@ export function SessionTreePanel({
   }
 
   return (
-    <div className="session-tree-panel">
+    <div
+      className={`session-tree-panel${mobilePresentation ? ' session-tree-panel--mobile' : ''}`}
+    >
       <div
         ref={treeRef}
         className="session-tree-list"
@@ -188,7 +192,9 @@ export function SessionTreePanel({
               aria-level={row.depth + 1}
               aria-expanded={row.hasChildren ? row.isExpanded : undefined}
               aria-selected={session.id === selectedSessionId}
-              style={{ paddingLeft: `${String(row.depth * 18 + 12)}px` }}
+              style={{
+                paddingLeft: `${String(row.depth * 18 + 12)}px`,
+              }}
               onClick={() => {
                 updateFocus(session.id)
                 if (session.isActive) onSelectSession(session.id)

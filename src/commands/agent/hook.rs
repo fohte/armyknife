@@ -22,9 +22,13 @@ use super::types::{
     ChildLaunchPermission, Engine, HookEvent, HookInput, MAIN_THREAD_AGENT_KEY, Session,
     SessionPrContext, SessionStatus, TmuxInfo,
 };
+#[cfg(not(test))]
+use super::unreported_stop_notification;
 use crate::infra::notification::{Notification, NotificationAction};
 use crate::infra::tmux;
 use crate::shared::cache;
+#[cfg(test)]
+use crate::shared::config::AgentConfig;
 use crate::shared::config::{self, Config};
 use crate::shared::env_var::{EnvVars, parse_ancestor_session_ids};
 use crate::shared::log::short_run_id;
@@ -41,6 +45,7 @@ mod session_start;
 mod side_effects;
 mod stop;
 mod title_generation;
+mod unreported_stop;
 mod vibe;
 mod work_type;
 
@@ -304,6 +309,7 @@ fn new_session_record(
         vibe_enabled: false,
         launched_with_vibe: env.session_vibe_launch,
         crit_urls: Vec::new(),
+        crit_not_waiting_urls: Default::default(),
         web_uis: Vec::new(),
         pending_human_review_ids: Default::default(),
         cwd: input.cwd.clone(),
@@ -437,6 +443,46 @@ fn process_hook_event_impl_with_env(
     side_effects: &SideEffects,
     stop_hook_instruction: Option<&str>,
     env: EnvVars,
+) -> Result<ProcessResult> {
+    #[cfg(not(test))]
+    let session_id = input.session_id.clone();
+
+    process_hook_event_impl_with_env_and_unreported_stop(
+        event,
+        input,
+        sessions_dir,
+        side_effects,
+        stop_hook_instruction,
+        env,
+        move |session, input, sessions_dir| {
+            #[cfg(test)]
+            let agent_config = AgentConfig::default();
+            #[cfg(not(test))]
+            let agent_config = config::load_config_or_default().agent;
+            unreported_stop::notify_if_unreported(
+                session,
+                input,
+                sessions_dir,
+                &agent_config,
+                |recipient, message| {
+                    #[cfg(test)]
+                    let _ = (recipient, message);
+                    #[cfg(not(test))]
+                    unreported_stop_notification::spawn(&session_id, recipient, message);
+                },
+            )
+        },
+    )
+}
+
+fn process_hook_event_impl_with_env_and_unreported_stop(
+    event: HookEvent,
+    input: HookInput,
+    sessions_dir: &Path,
+    side_effects: &SideEffects,
+    stop_hook_instruction: Option<&str>,
+    env: EnvVars,
+    mut notify_unreported_stop: impl FnMut(&Session, &HookInput, &Path) -> Result<()>,
 ) -> Result<ProcessResult> {
     // Claude's SessionEnd confirms termination; Codex's hook does not because
     // the app-server also fires it during daemon shutdown.
@@ -958,6 +1004,10 @@ fn process_hook_event_impl_with_env(
     }
     drop(session_lock);
 
+    if event == HookEvent::SessionStart && input.source.as_deref() == Some("resume") {
+        store::clear_session_closed_from(sessions_dir, &session.session_id)?;
+    }
+
     if event == HookEvent::PermissionDenied && input.engine == Engine::Claude {
         let tool_input = input
             .tool_input
@@ -1105,7 +1155,14 @@ fn process_hook_event_impl_with_env(
         }
     }
 
-    if stop_block_reason.is_none() && event == HookEvent::Stop {
+    if unreported_stop::can_check_stop(event, stop_block_reason.is_some()) {
+        if let Err(error) = notify_unreported_stop(&session, &input, sessions_dir) {
+            tracing::warn!(
+                event = "agent.hook.unreported_stop.failed",
+                session = %session.session_id,
+                error = %error,
+            );
+        }
         title_generation::maybe_generate(&session, sessions_dir, side_effects);
     }
 
@@ -3029,6 +3086,7 @@ mod tests {
             launched_with_vibe: false,
             child_launch: Default::default(),
             crit_urls: Vec::new(),
+            crit_not_waiting_urls: Default::default(),
             web_uis: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: "/tmp/test".into(),
@@ -3524,6 +3582,7 @@ mod tests {
             launched_with_vibe: false,
             child_launch: Default::default(),
             crit_urls: Vec::new(),
+            crit_not_waiting_urls: Default::default(),
             web_uis: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: "/tmp/test".into(),
@@ -4252,6 +4311,7 @@ mod tests {
             launched_with_vibe: false,
             child_launch: Default::default(),
             crit_urls: Vec::new(),
+            crit_not_waiting_urls: Default::default(),
             web_uis: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: "/tmp/test".into(),
@@ -4287,6 +4347,36 @@ mod tests {
         session.session_id = session_id.to_string();
         mutate(&mut session);
         store::save_session_to(sessions_dir, &session).expect("save");
+    }
+
+    #[test]
+    fn resuming_a_claude_session_clears_its_close_marker() {
+        let temp_dir = tempfile::TempDir::new().expect("temp directory should be created");
+        let sessions_dir = temp_dir.path();
+        save_test_session(sessions_dir, "test-123", |session| {
+            session.status = SessionStatus::Ended;
+        });
+        store::mark_session_closed_from(sessions_dir, "test-123")
+            .expect("close marker should be saved");
+
+        process_hook_event_impl(
+            HookEvent::SessionStart,
+            create_test_input_with_session_and_source("test-123", None, Some("resume")),
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("resume hook should save the session");
+
+        assert_eq!(
+            (
+                store::load_session_from(sessions_dir, "test-123")
+                    .expect("session should load")
+                    .expect("session should exist")
+                    .status,
+                store::closed_session_ids_from(sessions_dir).expect("close markers should load"),
+            ),
+            (SessionStatus::Stopped, std::collections::HashSet::new()),
+        );
     }
 
     #[test]
@@ -4409,8 +4499,14 @@ mod tests {
                     .expect("proposal should save");
             }
             StopReason::IncompleteTodo => {
-                store::add_agent_todo_in(sessions_dir, "test-123", "Check the deployment", None)
-                    .expect("todo should save");
+                store::add_agent_todo_in(
+                    sessions_dir,
+                    "test-123",
+                    "Check the deployment",
+                    None,
+                    false,
+                )
+                .expect("todo should save");
             }
             _ => {}
         }
@@ -4486,6 +4582,7 @@ mod tests {
                     request_session_id,
                     "fixture-todo-lilac",
                     None,
+                    false,
                 )
                 .expect("todo should save");
                 store::resolve_agent_todo_from(
@@ -4511,6 +4608,7 @@ mod tests {
                     request_session_id,
                     "fixture-todo-lilac",
                     None,
+                    false,
                 )
                 .expect("todo should save");
             }
@@ -6475,6 +6573,7 @@ mod tests {
                 launched_with_vibe: false,
                 child_launch: Default::default(),
                 crit_urls: Vec::new(),
+                crit_not_waiting_urls: Default::default(),
                 web_uis: Vec::new(),
                 pending_human_review_ids: Default::default(),
                 cwd: std::path::PathBuf::from("/tmp/test"),

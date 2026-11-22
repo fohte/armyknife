@@ -1,5 +1,9 @@
 import { createElement, useMemo } from 'react'
 
+import type {
+  CommandOutputRefresh,
+  CommandOutputStart,
+} from '#components/command-result-message'
 import { ConversationMessageRow } from '#components/conversation-message-row'
 import type {
   PendingPermissionActions,
@@ -17,6 +21,7 @@ import type {
 
 type UseConversationMessageElementsOptions = {
   messages: readonly ChatItem[]
+  start: number
   decisions?: readonly Extract<ChatItem, { type: 'decision' }>[]
   hasUnansweredProposal?: boolean
   sessionCategory: Session['category']
@@ -32,7 +37,8 @@ type UseConversationMessageElementsOptions = {
     action: string,
     payload?: Record<string, unknown>,
   ) => Promise<boolean>
-  onCommandExecuted?: () => void
+  onCommandExecuted?: CommandOutputRefresh
+  onCommandStarted?: CommandOutputStart
   onOpenInTerminal: () => void
   openInTerminalStatus: OpenInTerminalStatus
   onSelectSession: (id: string) => void
@@ -158,6 +164,7 @@ function getConversationMessageIdentity(message: ChatItem): string {
 
 export function useConversationMessageElements({
   messages,
+  start,
   decisions: allDecisions,
   hasUnansweredProposal: proposalPending,
   sessionCategory,
@@ -171,6 +178,7 @@ export function useConversationMessageElements({
   onSelectDecision,
   onAction,
   onCommandExecuted,
+  onCommandStarted,
   onOpenInTerminal,
   openInTerminalStatus,
   onSelectSession,
@@ -183,16 +191,16 @@ export function useConversationMessageElements({
     const activeTool = messages.findLast(
       (message) => message.type === 'tool_in_progress',
     )
-    const conversationMessages = messages.filter(
-      (message) =>
-        message.type !== 'tool_in_progress' ||
-        (sessionCategory !== 'in_progress' && !isCompacting),
+    const conversationMessages = messages.flatMap((message, index) =>
+      message.type !== 'tool_in_progress' ||
+      (sessionCategory !== 'in_progress' && !isCompacting)
+        ? [{ message, index }]
+        : [],
     )
     const decisions =
       allDecisions ??
-      conversationMessages.filter(
-        (message): message is Extract<ChatItem, { type: 'decision' }> =>
-          message.type === 'decision',
+      conversationMessages.flatMap(({ message }) =>
+        message.type === 'decision' ? [message] : [],
       )
     const decisionPositions = new Map(
       decisions.map((decision, index) => [decision.seq, index + 1]),
@@ -203,7 +211,7 @@ export function useConversationMessageElements({
         (message) => message.type === 'proposal' && isPendingProposal(message),
       )
     const keyOccurrences = new Map<string, number>()
-    const rows = conversationMessages.map((message) => {
+    const rows = conversationMessages.map(({ message, index }) => {
       const messagePendingAction: PendingPermissionActionState =
         message.type === 'permission' && message.requestId !== undefined
           ? (pendingActions[message.requestId] ?? null)
@@ -232,6 +240,8 @@ export function useConversationMessageElements({
           message,
           onAction,
           ...(onCommandExecuted === undefined ? {} : { onCommandExecuted }),
+          ...(onCommandStarted === undefined ? {} : { onCommandStarted }),
+          conversationIndex: start + index,
           onOpenInTerminal,
           onSelectSession,
           ...(onRewind === undefined ? {} : { onRewind }),
@@ -258,9 +268,11 @@ export function useConversationMessageElements({
     isCompacting,
     isMobile,
     messages,
+    start,
     now,
     onAction,
     onCommandExecuted,
+    onCommandStarted,
     onOpenInTerminal,
     onSelectDecision,
     onSelectSession,

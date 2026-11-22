@@ -17,6 +17,91 @@
   border-color: var(--aw-border-control);
 }
 
+.chat-todo-card--folded {
+  padding: 0;
+}
+
+.chat-todo-folded-row {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  min-height: 40px;
+  align-items: center;
+  gap: 10px;
+  padding: 0 14px;
+  color: var(--aw-text-primary);
+  text-align: left;
+}
+
+.chat-todo-folded-label {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  color: var(--aw-text-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.chat-todo-folded-label span + span {
+  font-weight: 400;
+}
+
+.chat-todo-folded-title-row {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-todo-folded-title {
+  min-width: 0;
+  overflow: hidden;
+  flex: 1;
+  font-size: 14px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-todo-chevron {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  margin-left: auto;
+  color: var(--aw-text-muted);
+}
+
+.chat-todo-heading {
+  display: flex;
+  min-height: 28px;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 7px;
+}
+
+.chat-todo-heading h2 {
+  margin: 0;
+}
+
+.chat-todo-fold-button {
+  display: grid;
+  width: 28px;
+  height: 26px;
+  flex: none;
+  place-items: center;
+  margin-left: auto;
+  padding: 0;
+  border: 1px solid var(--aw-border-control);
+  color: var(--aw-text-body);
+}
+
+.chat-todo-fold-button svg {
+  width: 15px;
+  height: 15px;
+}
+
 .chat-todo-card h2 {
   margin: 0 0 7px;
   color: var(--aw-text-muted);
@@ -84,4 +169,44 @@
   color: var(--aw-text-muted);
   font-size: 13px;
   white-space: pre-wrap;
+}
+
+@media (max-width: 600px) {
+  .chat-todo-folded-row {
+    min-height: 48px;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: center;
+    gap: 1px;
+    padding: 6px 14px;
+  }
+
+  .chat-todo-folded-label {
+    gap: 6px;
+    font-size: 12.5px;
+  }
+
+  .chat-todo-folded-title-row {
+    width: 100%;
+  }
+
+  .chat-todo-folded-title {
+    font-size: 15px;
+  }
+
+  .chat-todo-heading {
+    min-height: 24px;
+  }
+
+  .chat-todo-fold-button {
+    width: 44px;
+    height: 44px;
+    margin: -10px -10px -10px auto;
+    border: 0;
+  }
+
+  .chat-todo-fold-button svg {
+    width: 20px;
+    height: 20px;
+  }
 }

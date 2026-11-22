@@ -1,4 +1,5 @@
 import {
+  type ReactNode,
   useCallback,
   useEffect,
   useMemo,
@@ -7,6 +8,7 @@ import {
   useState,
 } from 'react'
 
+import { commandResultMatchesCommands } from '#components/command-result-message'
 import { ConversationPaneView } from '#components/conversation-pane-view'
 import { MarkdownSessionLinksProvider } from '#components/markdown-message'
 import type { PendingPermissionActions } from '#components/permission-card'
@@ -19,6 +21,7 @@ import {
   type SessionTreeCallbacks,
   useSessionTree,
 } from '#components/use-session-tree'
+import { createQueuedPromptId } from '#queued-prompt-id'
 import { useSessionLinkTargets } from '#session-link-targets'
 import { useSessionOperations } from '#session-operation-context'
 import {
@@ -57,6 +60,7 @@ type ConversationPaneProps = {
   onToggleToday?: (isToday: boolean) => void
   composerFocusRequestId?: number | null
   onComposerFocusRequestHandled?: (requestId: number) => void
+  mobileUpdateNotice?: ReactNode
 } & SessionTreeCallbacks
 
 export function ConversationPane({
@@ -85,6 +89,7 @@ export function ConversationPane({
   onToggleToday = () => undefined,
   composerFocusRequestId = null,
   onComposerFocusRequestHandled = () => undefined,
+  mobileUpdateNotice,
 }: ConversationPaneProps) {
   const sessionLinkTargets = useSessionLinkTargets(sessions)
   const onSelectSessionRef = useRef(onSelectSession)
@@ -176,9 +181,24 @@ export function ConversationPane({
     },
     [clearErrors, setError],
   )
-  const onCommandExecuted = useCallback(() => {
-    void refresh()
-  }, [refresh])
+  const onCommandStarted = useCallback(
+    () =>
+      conversationRef.current.start + conversationRef.current.messages.length,
+    [conversationRef],
+  )
+  const onCommandExecuted = useCallback(
+    async (commands: readonly string[], startIndex: number | null) => {
+      await refresh()
+      const current = conversationRef.current
+      const index = current.messages.findLastIndex(
+        (message, localIndex) =>
+          (startIndex === null || current.start + localIndex >= startIndex) &&
+          commandResultMatchesCommands(message, commands),
+      )
+      return index < 0 ? null : current.start + index
+    },
+    [conversationRef, refresh],
+  )
 
   useEffect(() => {
     setOpenInTerminalStatus(null)
@@ -240,6 +260,7 @@ export function ConversationPane({
         action === 'messages'
           ? {
               ...payload,
+              _queuedPromptId: createQueuedPromptId(),
               _messageCountBefore: messageCountBefore,
             }
           : payload,
@@ -340,7 +361,10 @@ export function ConversationPane({
     onOpenCritInFullscreen,
     onOpenWebUiInFullscreen,
     mobileWebUi,
+    onDecisionJumpComplete,
+    onDecisionJumpSucceeded,
     onSelectDecision,
+    decisionJump,
     onTabChange,
     selectedDecisionSeq,
     tabs: panelTabs,
@@ -366,6 +390,8 @@ export function ConversationPane({
       activeTabId={activeTabId}
       onTabChange={onTabChange}
       onClose={onCloseStatusPanel}
+      sessionTitle={session.title}
+      mobilePresentation={isMobile}
     />
   ) : null
 
@@ -391,6 +417,7 @@ export function ConversationPane({
       actionsSettled={actionsSettled}
       composerFocusRequestId={composerFocusRequestId}
       onComposerFocusRequestHandled={onComposerFocusRequestHandled}
+      mobileUpdateNotice={isMobile ? mobileUpdateNotice : undefined}
       pendingPermissionActions={pendingPermissionActions}
       openInTerminalStatus={displayOpenInTerminalStatus}
       interruptPending={interruptPending}
@@ -401,6 +428,7 @@ export function ConversationPane({
       }}
       onAction={onAction}
       onCommandExecuted={onCommandExecuted}
+      onCommandStarted={onCommandStarted}
       onRewind={onRewind}
       onOpenInTerminal={onOpenInTerminal}
       onSelectSession={selectLinkedSession}
@@ -415,6 +443,9 @@ export function ConversationPane({
       isMobile={isMobile}
       statusPanelOpen={statusPanelOpen}
       selectedDecisionSeq={selectedDecisionSeq}
+      decisionJump={decisionJump}
+      onDecisionJumpComplete={onDecisionJumpComplete}
+      onDecisionJumpSucceeded={onDecisionJumpSucceeded}
       onToggleStatusPanel={onToggleStatusPanel}
       onSelectDecision={onSelectDecision}
       mobileStatusPanel={statusPanel}

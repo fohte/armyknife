@@ -119,6 +119,71 @@ it('labels a queued prompt as You and keeps the user bubble style', () => {
   ])
 })
 
+it('marks server command results for the output navigation target', () => {
+  render({
+    type: 'user',
+    text: `Command exited with code 1 in /workspace/example.
+
+Command:
+\`\`\`text
+$ printf 'sample output'
+\`\`\`
+
+stdout:
+\`\`\`text
+(empty)
+\`\`\`
+
+stderr:
+\`\`\`text
+(empty)
+\`\`\``,
+  })
+
+  expect(
+    container
+      .querySelector<HTMLElement>('.chat-user-group')
+      ?.getAttribute('data-command-result') ?? null,
+  ).toEqual('true')
+})
+
+it('marks the command result as highlighted after Show output is selected', () => {
+  render(
+    {
+      type: 'user',
+      text: `Command exited with code 1 in /workspace/example.
+
+Command:
+\`\`\`text
+$ printf sample
+\`\`\`
+
+stdout:
+\`\`\`text
+(empty)
+\`\`\`
+
+stderr:
+\`\`\`text
+(empty)
+\`\`\``,
+    },
+    { commandOutputHighlighted: true },
+  )
+
+  const actual = () => ({
+    isCommandResult:
+      container
+        .querySelector('.chat-user-group')
+        ?.getAttribute('data-command-result') ?? null,
+    isHighlighted:
+      container
+        .querySelector('.chat-user-group')
+        ?.getAttribute('data-command-output-highlighted') ?? null,
+  })
+  expect(actual()).toEqual({ isCommandResult: 'true', isHighlighted: 'true' })
+})
+
 it('shows the local send time above a user message', () => {
   const timestamp = '2026-06-01T12:00:00Z'
   const localTime = formatMessageTime(timestamp, now) ?? 'invalid timestamp'
@@ -140,6 +205,33 @@ it('shows the local send time above a user message', () => {
       source: null,
     },
   ])
+})
+
+it('shows a copy toolbar inside a user message code block', () => {
+  render({
+    type: 'user',
+    text: '```bash\nprintf example\n```',
+    timestamp: '2026-06-01T12:00:00Z',
+  })
+
+  const message = container.querySelector('.chat-user-message')
+  const snapshot = () => ({
+    className: message?.className ?? null,
+    language:
+      message?.querySelector('.syntax-code-block-language')?.textContent ??
+      null,
+    copyLabel:
+      message
+        ?.querySelector('.syntax-code-block-copy-button')
+        ?.getAttribute('aria-label') ?? null,
+    code: message?.querySelector('pre')?.textContent ?? null,
+  })
+  expect(snapshot()).toEqual({
+    className: 'markdown-message chat-user-message',
+    language: 'bash',
+    copyLabel: 'Copy code',
+    code: 'printf example\n',
+  })
 })
 
 it('explains when an image fails to load', () => {

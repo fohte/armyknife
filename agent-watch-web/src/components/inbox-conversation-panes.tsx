@@ -89,6 +89,7 @@ type InboxConversationPanesProps = {
   onSelectSession: (id: string) => void
   composerFocusRequest?: { sessionId: string; requestId: number } | null
   onComposerFocusRequestHandled?: (requestId: number) => void
+  mobileUpdateNotice?: ReactNode
   newSessionPane?: ReactNode
   showMobileNewSession?: boolean
 }
@@ -111,6 +112,7 @@ export function InboxConversationPanes({
   onSelectSession,
   composerFocusRequest = null,
   onComposerFocusRequestHandled = () => undefined,
+  mobileUpdateNotice,
   newSessionPane,
   showMobileNewSession = false,
 }: InboxConversationPanesProps) {
@@ -276,7 +278,13 @@ export function InboxConversationPanes({
     },
     [],
   )
-  const inboxView = <InboxView {...inboxProps} isMobile={isMobile} />
+  const inboxView = (
+    <InboxView
+      {...inboxProps}
+      isMobile={isMobile}
+      mobileUpdateNotice={isMobile ? mobileUpdateNotice : undefined}
+    />
+  )
   const selectedTreeCache =
     selectedSession == null ? undefined : sessionTrees.get(selectedSession.id)
   const selectedTreeRefreshKey =
@@ -334,6 +342,7 @@ export function InboxConversationPanes({
         onSessionTreeViewStateChange={updateTreeViewState}
         refreshKey={sessionRefreshRevisions.get(selectedSession.id) ?? 0}
         isMobile={isMobile}
+        mobileUpdateNotice={isMobile ? mobileUpdateNotice : undefined}
         statusPanelOpen={statusPanelOpen}
         onToggleStatusPanel={onToggleStatusPanel}
         onCloseStatusPanel={onCloseStatusPanel}

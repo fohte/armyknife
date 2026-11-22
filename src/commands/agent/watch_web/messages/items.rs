@@ -145,6 +145,10 @@ pub(super) enum ChatItem {
         seq: i64,
         title: String,
         detail: Option<String>,
+        #[serde(default, skip_serializing_if = "is_false")]
+        folded: bool,
+        #[serde(rename = "addedFolded", default, skip_serializing_if = "is_false")]
+        added_folded: bool,
         completed: bool,
         resolution: Option<TodoResolution>,
         comment: Option<String>,

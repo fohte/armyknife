@@ -22,6 +22,7 @@ const meta = {
         elapsedSeconds: 300,
         task: null,
         repo: 'sample/repo',
+        vibeMode: { mode: 'enabled' },
         decisionCount: 0,
         pullRequest: null,
       },
@@ -38,6 +39,7 @@ const meta = {
         elapsedSeconds: 45,
         task: null,
         repo: 'sample/repo',
+        vibeMode: { mode: 'inherited', ancestorSessionId: 'root-session' },
         decisionCount: 0,
         pullRequest: null,
       },
@@ -59,6 +61,7 @@ const meta = {
           priority: null,
         },
         repo: 'sample/other-repo',
+        vibeMode: { mode: 'disabled' },
         decisionCount: 0,
         pullRequest: null,
       },
@@ -71,4 +74,16 @@ type Story = StoryObj<typeof meta>
 
 export const SelectedSessionWithPendingChild: Story = {
   name: 'The selected session shows its pending child.',
+}
+
+export const PhoneStatusTreePresentation: Story = {
+  name: 'The phone status tree shows the selected session and its descendants.',
+  args: { mobilePresentation: true },
+  decorators: [
+    (Story) => (
+      <div style={{ width: '390px', height: '844px', display: 'flex' }}>
+        <Story />
+      </div>
+    ),
+  ],
 }

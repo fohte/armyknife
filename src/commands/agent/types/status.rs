@@ -39,16 +39,16 @@ impl Session {
     }
 
     /// Presentation status for this session. A stopped main loop with pending
-    /// background work is `WaitingInput` when a crit review is linked or a
-    /// Human-in-the-Loop review is pending, and `Background` otherwise. Codex
-    /// hooks do not report background task IDs, so its review markers also
-    /// qualify for this display state.
+    /// background work is `WaitingInput` when the Crit client is waiting for a
+    /// review or a Human-in-the-Loop review is pending, and `Background`
+    /// otherwise. Codex hooks do not report background task IDs, so its review
+    /// markers also qualify for this display state.
     /// Notifications, `auto_pause`, `auto_compact`, and `sweep` read persisted
     /// status or `has_pending_bg_tasks` directly and must not switch to this.
     pub fn display_status(&self) -> DisplayStatus {
         let has_pending_bg_tasks = self.has_pending_bg_tasks();
         let has_review_wait_marker =
-            !self.crit_urls.is_empty() || !self.pending_human_review_ids.is_empty();
+            self.is_waiting_for_crit_review() || !self.pending_human_review_ids.is_empty();
         let codex_review_wait = self.engine == Engine::Codex && has_review_wait_marker;
 
         if self.status == SessionStatus::Stopped && (has_pending_bg_tasks || codex_review_wait) {
@@ -158,6 +158,7 @@ mod tests {
             launched_with_vibe: false,
             child_launch: Default::default(),
             crit_urls: Vec::new(),
+            crit_not_waiting_urls: Default::default(),
             web_uis: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: PathBuf::from("/tmp/test"),
@@ -336,6 +337,28 @@ mod tests {
             (session.has_pending_bg_tasks(), session.display_status()),
             (expected_pending, expected_status)
         );
+    }
+
+    #[rstest]
+    #[case::codex_stopped(Engine::Codex, false, DisplayStatus::Stopped)]
+    #[case::claude_background(Engine::Claude, true, DisplayStatus::Background)]
+    fn finished_crit_review_does_not_keep_a_stopped_session_waiting(
+        #[case] engine: Engine,
+        #[case] has_background_task: bool,
+        #[case] expected_status: DisplayStatus,
+    ) {
+        let mut session = session(SessionStatus::Stopped, Some(Utc::now()));
+        session.engine = engine;
+        let url = "https://example.test/review";
+        session.crit_urls.push(url.to_string());
+        session.crit_not_waiting_urls.insert(url.to_string());
+        if has_background_task {
+            session
+                .pending_bg_task_ids
+                .insert("fixture-task".to_string());
+        }
+
+        assert_eq!(session.display_status(), expected_status);
     }
 
     #[rstest]

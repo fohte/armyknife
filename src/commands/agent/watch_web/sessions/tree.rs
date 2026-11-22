@@ -8,19 +8,10 @@ use super::*;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct TreeSessionView {
-    id: String,
+    #[serde(flatten)]
+    row: SessionRowView,
     parent_id: Option<String>,
-    engine: Engine,
-    work_type: Option<String>,
-    category: SessionCategory,
     is_active: bool,
-    kind: Option<SessionKind>,
-    title: String,
-    preview: Option<String>,
-    elapsed_seconds: u64,
-    task: Option<TqTaskView>,
-    repo: String,
-    decision_count: i64,
     pull_request: Option<PullRequestView>,
     pull_requests: Vec<PullRequestView>,
 }
@@ -155,10 +146,10 @@ pub(super) async fn session_tree<S: SessionSource>(
             resolve_repos_for_sessions(&sessions_to_resolve, &all_sessions_for_repos, resolve_repo),
         )
     });
-    let (task_metadata, pull_requests) = tokio::join!(
-        source.fetch_task_metadata(&tree_sessions),
-        source.fetch_pull_requests(&tree_sessions),
-    );
+    let task_metadata = source.fetch_task_metadata(&tree_sessions).await;
+    let pull_requests = source
+        .fetch_pull_requests(&tree_sessions, &task_metadata)
+        .await;
     let (interrupted_session_ids, missing_repo_by_id) = session_metadata
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -168,6 +159,7 @@ pub(super) async fn session_tree<S: SessionSource>(
             .into_iter()
             .filter(|(session_id, _)| missing_repo_ids.contains(session_id)),
     );
+    let vibe_modes = super::session_vibe_modes(&snapshot, &tree_sessions, &repo_by_id).await?;
     let turns = user_turns(tree_sessions.iter(), &snapshot.agent_config)
         .into_iter()
         .map(|turn| (turn.session.session_id.as_str(), turn.kind))
@@ -180,7 +172,8 @@ pub(super) async fn session_tree<S: SessionSource>(
     let now = source.now();
     let sessions = tree_sessions
         .iter()
-        .map(|session| {
+        .zip(vibe_modes)
+        .map(|(session, vibe_mode)| {
             let task = task_metadata
                 .links
                 .get(&session.session_id)
@@ -203,6 +196,9 @@ pub(super) async fn session_tree<S: SessionSource>(
                 .unanswered_proposal_titles
                 .contains_key(&session.session_id);
             let todo_title = snapshot.unanswered_todo_titles.get(&session.session_id);
+            let has_folded_todo = snapshot
+                .folded_todo_summaries
+                .contains_key(&session.session_id);
             let needs_action = interrupted_session_ids.contains(&session.session_id)
                 || has_unanswered_proposal
                 || todo_title.is_some();
@@ -211,57 +207,73 @@ pub(super) async fn session_tree<S: SessionSource>(
                 .agent_status
                 .as_ref()
                 .map(|status| snapshot.agent_config.status_state(&status.kind));
-            let category = if todo_title.is_some() {
-                SessionCategory::NeedsAction
-            } else {
-                category_for_with_later(
-                    session,
+            let (category, _) = categories_for_with_todo_later(
+                session,
+                TodoLaterCategoryContext {
                     turn,
                     needs_action,
+                    has_unanswered_todo: todo_title.is_some(),
+                    has_folded_todo,
                     has_running_background_task,
                     agent_status_state,
-                    state_by_id.get(session.session_id.as_str()).copied(),
+                    state: state_by_id.get(session.session_id.as_str()).copied(),
                     now,
-                )
-            };
+                },
+            );
+            let kind = kind_for_with_todo(
+                session,
+                turn,
+                has_unanswered_proposal,
+                todo_title.is_some(),
+                has_folded_todo,
+                has_running_background_task,
+            );
+            let title = snapshot
+                .title_by_id
+                .get(&session.session_id)
+                .cloned()
+                .unwrap_or_default();
+            let preview = snapshot
+                .unanswered_proposal_titles
+                .get(&session.session_id)
+                .cloned()
+                .or_else(|| todo_title.cloned())
+                .or_else(|| {
+                    snapshot
+                        .folded_todo_summaries
+                        .get(&session.session_id)
+                        .and_then(|summary| summary.first_title.clone())
+                })
+                .or_else(|| session.last_message.clone());
+            let elapsed_seconds = now
+                .signed_duration_since(session.updated_at)
+                .num_seconds()
+                .max(0) as u64;
+            let repo = repo_by_id
+                .get(&session.session_id)
+                .cloned()
+                .unwrap_or_default();
+            let decision_count = snapshot
+                .decision_counts
+                .get(&session.session_id)
+                .map_or(0, |counts| counts.total);
             TreeSessionView {
-                id: session.session_id.clone(),
-                parent_id: parent_ids.get(&session.session_id).cloned().flatten(),
-                engine: session.engine,
-                work_type: session.work_type.clone(),
-                category,
-                is_active: session.status != SessionStatus::Ended,
-                kind: kind_for_with_todo(
+                row: SessionRowView::new(
                     session,
-                    turn,
-                    has_unanswered_proposal,
-                    todo_title.is_some(),
-                    has_running_background_task,
+                    SessionRowDetails {
+                        category,
+                        kind,
+                        title,
+                        preview,
+                        elapsed_seconds,
+                        task,
+                        repo,
+                        vibe_mode,
+                        decision_count,
+                    },
                 ),
-                title: snapshot
-                    .title_by_id
-                    .get(&session.session_id)
-                    .cloned()
-                    .unwrap_or_default(),
-                preview: snapshot
-                    .unanswered_proposal_titles
-                    .get(&session.session_id)
-                    .cloned()
-                    .or_else(|| todo_title.cloned())
-                    .or_else(|| session.last_message.clone()),
-                elapsed_seconds: now
-                    .signed_duration_since(session.updated_at)
-                    .num_seconds()
-                    .max(0) as u64,
-                task,
-                repo: repo_by_id
-                    .get(&session.session_id)
-                    .cloned()
-                    .unwrap_or_default(),
-                decision_count: snapshot
-                    .decision_counts
-                    .get(&session.session_id)
-                    .map_or(0, |counts| counts.total),
+                parent_id: parent_ids.get(&session.session_id).cloned().flatten(),
+                is_active: session.status != SessionStatus::Ended,
                 pull_request: pull_requests
                     .get(&session.session_id)
                     .and_then(|pull_requests| current_branch_pull_request(pull_requests))

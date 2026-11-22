@@ -193,10 +193,17 @@ const requests: {
       type: 'message',
       sessionId: 'test-session',
       content: 'A message',
+      queuedPromptId: '11111111-1111-4111-8111-111111111111',
     },
     path: 'messages',
-    body: { content: 'A message' },
-    response: { ok: true, queuedPromptId: 'fixture-message-id' },
+    body: {
+      content: 'A message',
+      messageId: '11111111-1111-4111-8111-111111111111',
+    },
+    response: {
+      ok: true,
+      queuedPromptId: '11111111-1111-4111-8111-111111111111',
+    },
   },
   {
     name: 'preview agent commands',
@@ -368,6 +375,17 @@ const requests: {
     body: { resolution: 'rejected', comment: 'Not needed' },
   },
   {
+    name: 'fold todo',
+    operation: {
+      type: 'todo_fold',
+      sessionId: 'test-session',
+      seq: 4,
+      folded: true,
+    },
+    path: 'todos/4/fold',
+    body: { folded: true },
+  },
+  {
     name: 'approve permission',
     operation: {
       type: 'permission',
@@ -530,6 +548,7 @@ const operationFactories: [
     'messages',
     {
       content: 'A message',
+      _queuedPromptId: '11111111-1111-4111-8111-111111111111',
       _messageCountBefore: 2,
       _operationId: 'message-fixture',
     },
@@ -538,6 +557,7 @@ const operationFactories: [
       sessionId: session.id,
       operationId: 'message-fixture',
       content: 'A message',
+      queuedPromptId: '11111111-1111-4111-8111-111111111111',
       messageCountBefore: 2,
     },
   ],
@@ -639,6 +659,17 @@ const operationFactories: [
       seq: 4,
       resolution: 'rejected',
       comment: null,
+    },
+  ],
+  [
+    'todo fold',
+    'todos/4/fold',
+    { folded: true },
+    {
+      type: 'todo_fold',
+      sessionId: session.id,
+      seq: 4,
+      folded: true,
     },
   ],
   [
@@ -761,6 +792,13 @@ it('keeps confirmation waiters distinct for different target values', () => {
     ...completedTodo,
     resolution: 'rejected',
   }
+  const foldedTodo: SessionOperation = {
+    type: 'todo_fold',
+    sessionId: session.id,
+    seq: 4,
+    folded: true,
+  }
+  const unfoldedTodo: SessionOperation = { ...foldedTodo, folded: false }
   const previewA: SessionOperation = {
     type: 'command_preview',
     sessionId: session.id,
@@ -778,6 +816,8 @@ it('keeps confirmation waiters distinct for different target values', () => {
     sessionOperationKey(titleB),
     sessionOperationKey(completedTodo),
     sessionOperationKey(rejectedTodo),
+    sessionOperationKey(foldedTodo),
+    sessionOperationKey(unfoldedTodo),
     sessionOperationKey(previewA),
     sessionOperationKey(previewB),
   ]
@@ -789,6 +829,8 @@ it('keeps confirmation waiters distinct for different target values', () => {
     'test-session:title:Title B',
     'test-session:todo_resolve:4:completed:',
     'test-session:todo_resolve:4:rejected:',
+    'test-session:todo_fold:4:true',
+    'test-session:todo_fold:4:false',
     'test-session:command_preview:["Run `! printf a`.",["printf a"]]',
     'test-session:command_preview:["Run `! printf a`.",["printf b"]]',
   ])
@@ -1152,6 +1194,26 @@ const conversationReducerCases: [
     },
   ],
   [
+    'folds a todo',
+    {
+      type: 'todo_fold',
+      sessionId: session.id,
+      seq: 4,
+      folded: true,
+    },
+    {
+      ...conversation,
+      messages: [
+        questionMessage,
+        decisionMessage,
+        proposalMessage,
+        { ...todoMessage, folded: true },
+        deniedMessage,
+      ],
+      decisions: decisionList,
+    },
+  ],
+  [
     'resolves a denied action retry',
     { type: 'permission_retry', sessionId: session.id, seq: 5 },
     {
@@ -1191,6 +1253,43 @@ it.each(conversationReducerCases)(
     )
   },
 )
+
+it('confirms a todo fold after the server returns its saved state', () => {
+  const operation: SessionOperation = {
+    type: 'todo_fold',
+    sessionId: session.id,
+    seq: 4,
+    folded: true,
+  }
+  const serverConversation = {
+    ...conversation,
+    messages: conversation.messages.map((message) =>
+      message.type === 'todo' ? { ...message, folded: true } : message,
+    ),
+  }
+
+  expect(readTodoFoldConfirmationState(operation, serverConversation)).toEqual({
+    optimisticTodo: { ...todoMessage, folded: true },
+    confirmed: true,
+    requiresConfirmation: true,
+  })
+})
+
+function readTodoFoldConfirmationState(
+  operation: SessionOperation,
+  serverConversation: ConversationResponse,
+) {
+  return {
+    optimisticTodo: applyConversationOperation(conversation, operation)
+      .messages[3],
+    confirmed: isConversationOperationConfirmed(
+      serverConversation,
+      operation,
+      null,
+    ),
+    requiresConfirmation: requiresStateConfirmation(operation),
+  }
+}
 
 it('replaces an optimistic message when the server returns it', () => {
   const operation: SessionOperation = {
@@ -1252,6 +1351,61 @@ it('reconciles a queued message ID before trailing todo and permission items', (
   expect(
     isConversationOperationConfirmed(serverConversation, operation, null),
   ).toBe(true)
+})
+
+const operationWithReservedMessageId: SessionOperation = {
+  type: 'message',
+  sessionId: session.id,
+  content: 'A message',
+  queuedPromptId: 'fixture-message-id',
+  messageCountBefore: 1,
+}
+const conversationWithInProgressTool: ConversationResponse = {
+  ...conversation,
+  messages: [{ type: 'tool_in_progress', tool: 'exec' }],
+  total: 1,
+  decisions: [],
+  hasUnansweredProposal: false,
+  activeQuestionIndex: null,
+}
+const conversationAfterMessageDelivery: ConversationResponse = {
+  ...conversationWithInProgressTool,
+  messages: [
+    { type: 'user', text: 'A message', queuedPromptId: 'fixture-message-id' },
+    { type: 'tool_in_progress', tool: 'exec' },
+  ],
+  total: 2,
+}
+
+it('shows the queued message before delivery while a tool is in progress', () => {
+  expect(
+    applyConversationOperation(
+      conversationWithInProgressTool,
+      operationWithReservedMessageId,
+    ),
+  ).toEqual({
+    ...conversationWithInProgressTool,
+    messages: [
+      { type: 'tool_in_progress', tool: 'exec' },
+      {
+        type: 'queued_user',
+        content: [{ type: 'text', text: 'A message' }],
+      },
+    ],
+    total: 2,
+    decisions: [],
+    hasUnansweredProposal: false,
+    activeQuestionIndex: null,
+  })
+})
+
+it('reconciles a delivered message inserted before an in-progress tool', () => {
+  expect(
+    applyConversationOperation(
+      conversationAfterMessageDelivery,
+      operationWithReservedMessageId,
+    ),
+  ).toEqual(conversationAfterMessageDelivery)
 })
 
 it('reconciles an unresolved queued user by its prompt ID', () => {

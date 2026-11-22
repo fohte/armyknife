@@ -19,6 +19,7 @@ const meta = {
       'Open the preview on a small screen and confirm the action stays visible.',
     resolution: null,
     onResolve: () => Promise.resolve(true),
+    onFold: () => Promise.resolve(true),
   },
 } satisfies Meta<typeof TodoCard>
 
@@ -27,6 +28,22 @@ type Story = StoryObj<typeof meta>
 
 export const TodoWaitsForTheUser: Story = {
   name: 'A to-do waits for the user to finish it',
+}
+
+export const TodoIsFoldedForLater: Story = {
+  name: 'A folded to-do shows only its title',
+  args: { folded: true },
+}
+
+export const TodoWasAddedFolded: Story = {
+  name: 'A to-do added folded is marked for a later check',
+  args: { folded: true, addedFolded: true },
+}
+
+export const TodoWasAddedFoldedOnPhone: Story = {
+  name: 'A phone shows an added-folded to-do in two rows',
+  args: { folded: true, addedFolded: true },
+  parameters: { viewport: { defaultViewport: 'mobile1' } },
 }
 
 export const TodoShowsMarkdownDetail: Story = {

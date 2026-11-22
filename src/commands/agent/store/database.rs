@@ -23,7 +23,9 @@ mod proposals;
 mod queued_prompts;
 mod replacements;
 mod resolution_lock;
+mod session_closures;
 mod todos;
+mod unreported_stop_checks;
 mod vibe_setting_revision;
 mod wake;
 mod web_state;
@@ -61,16 +63,19 @@ pub(crate) use proposals::{
 pub(crate) use queued_prompts::{WatchWebQueuedAttachment, WatchWebQueuedPrompt};
 pub(crate) use queued_prompts::{
     delete_watch_web_queued_prompts, insert_watch_web_queued_prompt,
-    mark_watch_web_queued_prompts_resolved, watch_web_queued_prompts,
+    mark_watch_web_queued_prompts_resolved, watch_web_queued_prompt_message_id_exists,
+    watch_web_queued_prompts,
 };
 pub(crate) use replacements::{
     all_unreplaced_sessions, resolve_current_session_id, save_rewind_sessions,
 };
+pub(crate) use session_closures::{clear_session_closed, closed_session_ids, mark_session_closed};
 pub(crate) use todos::{AgentTodo, TodoResolution};
 pub(crate) use todos::{
     add_agent_todo, agent_todos, incomplete_agent_todo_titles, lock_agent_todo_resolution,
-    resolve_agent_todo,
+    resolve_agent_todo, set_agent_todo_folded,
 };
+pub(crate) use unreported_stop_checks::check_unreported_stop;
 pub(crate) use web_state::WatchWebSessionState;
 pub(crate) use web_state::set_watch_web_compacting;
 pub(super) use web_state::{

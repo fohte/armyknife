@@ -2,6 +2,10 @@ import '#components/conversation-message.css'
 
 import type { ReactNode } from 'react'
 
+import type {
+  CommandOutputRefresh,
+  CommandOutputStart,
+} from '#components/command-result-message'
 import { DecisionCard } from '#components/decision-card'
 import { FileAttachmentCard } from '#components/file-attachment-card'
 import { MarkdownMessage } from '#components/markdown-message'
@@ -43,7 +47,9 @@ export type ConversationMessageRowProps = {
     payload?: Record<string, unknown>,
     permissionIdentity?: PermissionRequestIdentity,
   ) => Promise<boolean>
-  onCommandExecuted?: () => void
+  onCommandExecuted?: CommandOutputRefresh
+  onCommandStarted?: CommandOutputStart
+  conversationIndex?: number
   onOpenInTerminal: () => void
   onSelectSession: (id: string) => void
   onRewind?: (
@@ -65,10 +71,12 @@ export function renderConversationMessage({
   decisionPosition,
   onSelectDecision,
   message,
+  conversationIndex,
   pendingAction,
   openInTerminalStatus,
   onAction,
   onCommandExecuted,
+  onCommandStarted,
   onOpenInTerminal,
   onSelectSession,
   onRewind = () => Promise.resolve(false),
@@ -96,6 +104,7 @@ export function renderConversationMessage({
         canRewind={actions?.rewind === true}
         sessionEngine={sessionEngine}
         onRewind={onRewind}
+        {...(conversationIndex === undefined ? {} : { conversationIndex })}
         {...(now === undefined ? {} : { now })}
       />
     )
@@ -134,23 +143,22 @@ export function renderConversationMessage({
       </div>
     )
   }
-  if (message.type === 'assistant') {
+  if (message.type === 'assistant' || message.type === 'narration') {
+    const className =
+      message.type === 'narration'
+        ? 'chat-assistant-message chat-narration-message'
+        : 'chat-assistant-message'
     return (
-      <article className="chat-assistant-message">
+      <article className={className}>
         <MarkdownMessage
+          copyableCodeBlocks
           {...(sessionId === undefined ? {} : { sessionId })}
           {...(onCommandExecuted === undefined ? {} : { onCommandExecuted })}
+          {...(onCommandStarted === undefined ? {} : { onCommandStarted })}
           mobile={isMobile}
         >
           {message.text}
         </MarkdownMessage>
-      </article>
-    )
-  }
-  if (message.type === 'narration') {
-    return (
-      <article className="chat-narration-message">
-        <MarkdownMessage>{message.text}</MarkdownMessage>
       </article>
     )
   }
@@ -205,7 +213,9 @@ export function renderConversationMessage({
         cancelled={message.cancelled === true}
         canAnswer={canAnswer}
         isMobile={isMobile}
-        showTerminalFallback={unanswered && actionsReady && !canAnswer}
+        showTerminalFallback={
+          message.cancelled !== true && unanswered && actionsReady && !canAnswer
+        }
         canOpenInTerminal={actions?.openInTerminal === true}
         openInTerminalStatus={openInTerminalStatus}
         onAnswer={(answers) =>
@@ -268,6 +278,8 @@ export function renderConversationMessage({
         {...(sessionId === undefined ? {} : { sessionId })}
         title={message.title}
         detail={message.detail}
+        folded={message.folded ?? false}
+        addedFolded={message.addedFolded ?? false}
         resolution={message.resolution}
         defaultComment={message.comment ?? ''}
         onResolve={(resolution, comment, attachments) =>
@@ -276,6 +288,9 @@ export function renderConversationMessage({
             comment,
             ...(attachments === undefined ? {} : { attachments }),
           })
+        }
+        onFold={(folded) =>
+          onAction(`todos/${String(message.seq)}/fold`, { folded })
         }
       />
     )

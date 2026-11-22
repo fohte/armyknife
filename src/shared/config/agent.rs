@@ -78,6 +78,11 @@ pub struct AgentConfig {
     #[serde(default)]
     pub merge_notification: Option<String>,
 
+    /// Message template sent to the delegator when a delegate stops without reporting.
+    /// Supports `{session_id}` and `{last_message}`. When unset, no notification is sent.
+    #[serde(default)]
+    pub unreported_stop_notification: Option<String>,
+
     /// Instruction returned by the Stop hook when it blocks a session.
     /// At least one status must be configured.
     #[serde(default)]

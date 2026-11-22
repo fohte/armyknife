@@ -1,10 +1,10 @@
 import '#components/running-tasks-panel.css'
 
-import { useEffect, useId, useState } from 'react'
+import { useEffect, useState } from 'react'
 
 import { requestText } from '#components/conversation-requests'
 import { formatElapsedTime } from '#components/format-elapsed-time'
-import { BackgroundTaskOutput } from '#components/running-task-output'
+import { BackgroundTaskRowView } from '#components/running-task-row-view'
 import type { BackgroundTask } from '#types'
 
 type RunningTasksPanelProps = {
@@ -61,12 +61,11 @@ export function RunningTasksPanel({
           <h2>BACKGROUND TASKS</h2>
           <ul>
             {backgroundTasks.map((task) => (
-              <li className="running-task" key={task.id}>
-                <span className="running-task-icon" aria-hidden="true">
-                  ▶
-                </span>
-                <BackgroundTaskRow sessionId={sessionId} task={task} />
-              </li>
+              <BackgroundTaskRowContainer
+                key={task.id}
+                sessionId={sessionId}
+                task={task}
+              />
             ))}
           </ul>
         </section>
@@ -75,14 +74,13 @@ export function RunningTasksPanel({
   )
 }
 
-function BackgroundTaskRow({
+function BackgroundTaskRowContainer({
   sessionId,
   task,
 }: {
   sessionId: string
   task: BackgroundTask
 }) {
-  const outputId = useId()
   const [isOpen, setIsOpen] = useState(false)
   const [output, setOutput] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -121,32 +119,14 @@ function BackgroundTaskRow({
   }, [isOpen, sessionId, task.id])
 
   return (
-    <div className="running-task-content">
-      <div className="running-task-heading">
-        <span
-          className="running-task-description running-task-description--command"
-          title={task.description}
-        >
-          {task.description}
-        </span>
-        <button
-          aria-controls={outputId}
-          aria-expanded={isOpen}
-          className="running-task-output-button"
-          onClick={() => {
-            setIsOpen((current) => !current)
-          }}
-          type="button"
-        >
-          Output
-        </button>
-      </div>
-      <span className="running-task-elapsed">
-        {formatElapsedTime(task.elapsedSeconds)}
-      </span>
-      {isOpen ? (
-        <BackgroundTaskOutput id={outputId} output={output} error={error} />
-      ) : null}
-    </div>
+    <BackgroundTaskRowView
+      task={task}
+      isOpen={isOpen}
+      output={output}
+      error={error}
+      onToggle={() => {
+        setIsOpen((current) => !current)
+      }}
+    />
   )
 }

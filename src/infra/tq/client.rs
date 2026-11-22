@@ -16,22 +16,10 @@ use crate::infra::external_tool::ExternalTool;
 use crate::infra::process;
 
 mod checklist;
+mod task_query;
 
 pub use checklist::{TqChecklist, TqChecklistItem, TqGithubLink};
 
-const SESSION_LIST_ARGS: &[&str] = &["session", "list", "--limit", "unlimited"];
-const TASK_LIST_ARGS: &[&str] = &[
-    "task",
-    "list",
-    "--context",
-    "all",
-    "--status",
-    "all",
-    "--limit",
-    "unlimited",
-    "--sort-by",
-    "priority",
-];
 const PROJECT_LIST_ARGS: &[&str] = &["project", "list", "--context", "all", "--status", "all"];
 const SESSION_ARCHIVE_ARGS: &[&str] = &["session", "archive"];
 
@@ -145,9 +133,15 @@ impl TqClient {
         &self,
         session_ids: &HashSet<String>,
     ) -> Result<Vec<SessionTasks>> {
-        let ids: Vec<String> = session_ids.iter().cloned().collect();
-        let args = build_session_list_args(&ids);
-        let join_result = tokio::task::spawn_blocking(move || run_session_list(&ids)).await;
+        if session_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut ids: Vec<String> = session_ids.iter().cloned().collect();
+        ids.sort_unstable();
+        let args = task_query::build_session_list_args(&ids);
+        let join_result =
+            tokio::task::spawn_blocking(move || task_query::run_session_list(&ids)).await;
         match join_result {
             Ok(result) => result,
             Err(e) => Err(TqError::command_failed(
@@ -164,9 +158,11 @@ impl TqClient {
             return Ok(Vec::new());
         }
 
-        let ids = task_ids.iter().cloned().collect::<Vec<_>>();
-        let args = build_task_list_args(&ids);
-        let join_result = tokio::task::spawn_blocking(move || run_task_list(&ids)).await;
+        let mut ids = task_ids.iter().cloned().collect::<Vec<_>>();
+        ids.sort_unstable();
+        let args = task_query::build_task_list_args(&ids);
+        let join_result =
+            tokio::task::spawn_blocking(move || task_query::run_task_list(&ids)).await;
         match join_result {
             Ok(result) => result,
             Err(e) => Err(TqError::command_failed(
@@ -255,39 +251,6 @@ fn run_tq_command(args: &[String]) -> Result<std::process::Output> {
     }
 
     Ok(output)
-}
-
-/// Runs `tq session list --limit unlimited --session-id <id> ...` (one flag
-/// per id in `session_ids`) to completion and parses its stdout. Blocking, so
-/// callers must run it via [`tokio::task::spawn_blocking`].
-fn run_session_list(session_ids: &[String]) -> Result<Vec<SessionTasks>> {
-    let args = build_session_list_args(session_ids);
-    let output = run_tq_command(&args)?;
-    parse_session_list(&String::from_utf8_lossy(&output.stdout))
-}
-
-/// Builds the argv for [`run_session_list`]. Isolated from the process spawn
-/// so it can be unit tested without invoking the real `tq` binary.
-fn build_session_list_args(session_ids: &[String]) -> Vec<String> {
-    let mut args: Vec<String> = SESSION_LIST_ARGS.iter().map(|s| s.to_string()).collect();
-    for id in session_ids {
-        args.push("--session-id".to_string());
-        args.push(id.clone());
-    }
-    args
-}
-
-fn build_task_list_args(task_ids: &[String]) -> Vec<String> {
-    let mut args: Vec<String> = TASK_LIST_ARGS.iter().map(|s| s.to_string()).collect();
-    args.push("--ids".to_string());
-    args.push(task_ids.join(","));
-    args
-}
-
-fn run_task_list(task_ids: &[String]) -> Result<Vec<TqTaskSummary>> {
-    let args = build_task_list_args(task_ids);
-    let output = run_tq_command(&args)?;
-    parse_task_list(&String::from_utf8_lossy(&output.stdout))
 }
 
 fn parse_task_list(stdout: &str) -> Result<Vec<TqTaskSummary>> {
@@ -622,45 +585,6 @@ mod tests {
         let result = parse_session_list("not json");
 
         assert!(result.is_err());
-    }
-
-    #[rstest]
-    #[case::no_ids(&[], vec!["session", "list", "--limit", "unlimited"])]
-    #[case::single_id(
-        &["session-1".to_string()],
-        vec!["session", "list", "--limit", "unlimited", "--session-id", "session-1"],
-    )]
-    #[case::multiple_ids(
-        &["session-1".to_string(), "session-2".to_string()],
-        vec![
-            "session", "list", "--limit", "unlimited",
-            "--session-id", "session-1",
-            "--session-id", "session-2",
-        ],
-    )]
-    fn build_session_list_args_cases(#[case] session_ids: &[String], #[case] expected: Vec<&str>) {
-        assert_eq!(build_session_list_args(session_ids), expected);
-    }
-
-    #[test]
-    fn build_task_list_args_uses_all_statuses_unlimited_and_tq_priority_order() {
-        assert_eq!(
-            build_task_list_args(&["task-one".to_string(), "task-two".to_string()]),
-            vec![
-                "task",
-                "list",
-                "--context",
-                "all",
-                "--status",
-                "all",
-                "--limit",
-                "unlimited",
-                "--sort-by",
-                "priority",
-                "--ids",
-                "task-one,task-two"
-            ]
-        );
     }
 
     #[test]

@@ -12,6 +12,7 @@ use crate::commands::agent::types::{Engine, Session, SessionStatus};
 use crate::infra::tmux;
 mod worktree;
 pub(crate) use worktree::check_process_guard;
+pub(crate) use worktree::cleanup_worktree_by_name_with_before_delete;
 pub use worktree::{
     WorktreeCleanupResult, WorktreeProcessGuardError, cleanup_worktree_by_name,
     cleanup_worktree_resources, cleanup_worktree_resources_with_post_delete,
@@ -408,6 +409,7 @@ mod tests {
             created_pr_urls: Vec::new(),
             session_id: session_id.to_string(),
             crit_urls: Vec::new(),
+            crit_not_waiting_urls: Default::default(),
             web_uis: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: cwd.to_path_buf(),
@@ -491,6 +493,7 @@ mod tests {
             &session.session_id,
             "A finished task",
             None,
+            false,
         )
         .expect("completed todo should be recorded");
         store::resolve_agent_todo_from(
@@ -506,6 +509,7 @@ mod tests {
             &session.session_id,
             "A pending task",
             None,
+            false,
         )
         .expect("pending todo should be recorded");
 

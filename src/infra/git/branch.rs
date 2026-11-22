@@ -33,6 +33,7 @@ pub async fn find_base_branch<C: crate::infra::github::RepoClient>(
 pub enum MergeStatus {
     Merged { reason: String },
     Closed { reason: String },
+    NoUniqueCommits { reason: String },
     NotMerged { reason: String },
 }
 
@@ -43,13 +44,16 @@ impl MergeStatus {
 
     /// Whether this worktree should be cleaned up (deleted).
     ///
-    /// Returns true for both `Merged` and `Closed` statuses:
+    /// Returns true for `Merged`, `Closed`, and `NoUniqueCommits` statuses:
     /// - Merged: PR was merged, worktree is no longer needed
     /// - Closed: PR was closed without merging, worktree is no longer needed
+    /// - NoUniqueCommits: the branch has no commits beyond the origin default branch
     pub fn should_cleanup(&self) -> bool {
         matches!(
             self,
-            MergeStatus::Merged { .. } | MergeStatus::Closed { .. }
+            MergeStatus::Merged { .. }
+                | MergeStatus::Closed { .. }
+                | MergeStatus::NoUniqueCommits { .. }
         )
     }
 
@@ -57,6 +61,7 @@ impl MergeStatus {
         match self {
             MergeStatus::Merged { reason }
             | MergeStatus::Closed { reason }
+            | MergeStatus::NoUniqueCommits { reason }
             | MergeStatus::NotMerged { reason } => reason,
         }
     }
@@ -225,9 +230,19 @@ mod tests {
     #[rstest]
     #[case::merged(MergeStatus::Merged { reason: "test".to_string() }, true)]
     #[case::closed(MergeStatus::Closed { reason: "test".to_string() }, true)]
+    #[case::no_unique_commits(MergeStatus::NoUniqueCommits { reason: "test".to_string() }, true)]
     #[case::not_merged(MergeStatus::NotMerged { reason: "test".to_string() }, false)]
     fn test_merge_status_should_cleanup(#[case] status: MergeStatus, #[case] expected: bool) {
         assert_eq!(status.should_cleanup(), expected);
+    }
+
+    #[test]
+    fn no_unique_commits_can_be_cleaned_without_being_marked_merged() {
+        let status = MergeStatus::NoUniqueCommits {
+            reason: "No commits unique to branch".to_string(),
+        };
+
+        assert_eq!((status.is_merged(), status.should_cleanup()), (false, true));
     }
 
     #[test]

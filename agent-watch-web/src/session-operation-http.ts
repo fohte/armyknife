@@ -89,6 +89,9 @@ function requestFor(operation: SessionOperation) {
         path: 'messages',
         body: {
           content: operation.content,
+          ...(operation.queuedPromptId === undefined
+            ? {}
+            : { messageId: operation.queuedPromptId }),
           ...(operation.attachments === undefined
             ? {}
             : { attachments: operation.attachments }),
@@ -144,6 +147,11 @@ function requestFor(operation: SessionOperation) {
             ? {}
             : { attachments: operation.attachments }),
         },
+      }
+    case 'todo_fold':
+      return {
+        path: `todos/${String(operation.seq)}/fold`,
+        body: { folded: operation.folded },
       }
     case 'permission':
       return {
@@ -314,6 +322,9 @@ export function createSessionOperation(
               requiredString('_operationId') ??
               `message-${String(++nextMessageOperationId)}`,
             content: payload['content'],
+            ...(typeof payload['_queuedPromptId'] === 'string'
+              ? { queuedPromptId: payload['_queuedPromptId'] }
+              : {}),
             ...(Array.isArray(payload['attachments'])
               ? { attachments: payload['attachments'] }
               : {}),
@@ -419,6 +430,15 @@ export function createSessionOperation(
           ...(Array.isArray(payload['attachments'])
             ? { attachments: payload['attachments'] }
             : {}),
+        })
+      }
+      const foldedTodo = sequenceFromPath('todos', 'fold')
+      if (foldedTodo !== null && typeof payload['folded'] === 'boolean') {
+        return ok<SessionOperation, Error>({
+          type: 'todo_fold',
+          sessionId,
+          seq: foldedTodo,
+          folded: payload['folded'],
         })
       }
       const retry = sequenceFromPath('permission-denials', 'retry')

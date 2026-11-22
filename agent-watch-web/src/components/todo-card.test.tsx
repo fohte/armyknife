@@ -37,8 +37,122 @@ function props(overrides: Partial<Props> = {}): Props {
     detail: 'Confirm the action stays visible on a small screen.',
     resolution: null,
     onResolve: vi.fn(() => Promise.resolve(true)),
+    onFold: vi.fn(() => Promise.resolve(true)),
     ...overrides,
   }
+}
+
+it('opens a folded to-do and preserves its added-folded marker', async () => {
+  const onFold = vi.fn<(folded: boolean) => Promise<boolean>>(() =>
+    Promise.resolve(true),
+  )
+  renderCard(props({ folded: true, addedFolded: true, onFold }))
+
+  await clickAndFlushFold(
+    requireElement(
+      container.querySelector<HTMLButtonElement>('.chat-todo-folded-row'),
+    ),
+  )
+
+  expect(readFoldedTodoCardState(onFold.mock.calls)).toEqual({
+    label: 'To-do · later · added folded',
+    title: 'Check the updated layout on a phone',
+    expanded: 'false',
+    call: [[false]],
+  })
+})
+
+function readFoldedTodoCardState(calls: [boolean][]) {
+  return {
+    label: container.querySelector('.chat-todo-folded-label')?.textContent,
+    title: container.querySelector('.chat-todo-folded-title')?.textContent,
+    expanded: container
+      .querySelector('.chat-todo-folded-row')
+      ?.getAttribute('aria-expanded'),
+    call: calls,
+  }
+}
+
+it('folds a pending to-do from its heading', async () => {
+  const onFold = vi.fn<(folded: boolean) => Promise<boolean>>(() =>
+    Promise.resolve(true),
+  )
+  renderCard(props({ onFold }))
+
+  await clickAndFlushFold(
+    requireElement(
+      container.querySelector<HTMLButtonElement>('.chat-todo-fold-button'),
+    ),
+  )
+
+  expect(onFold.mock.calls).toEqual([[true]])
+})
+
+it('disables fold controls until the update settles', async () => {
+  let resolveFold: (succeeded: boolean) => void = () => {}
+  const pendingFold = new Promise<boolean>((resolve) => {
+    resolveFold = resolve
+  })
+  const onFold = vi.fn<(folded: boolean) => Promise<boolean>>(() => pendingFold)
+  renderCard(props({ onFold }))
+
+  const unfoldedControl = requireElement(
+    container.querySelector<HTMLButtonElement>('.chat-todo-fold-button'),
+  )
+  await act(async () => {
+    await userEvent.click(unfoldedControl)
+  })
+  const unfoldedControlDisabled = unfoldedControl.disabled
+
+  renderCard(props({ folded: true, onFold }))
+  const foldedControl = requireElement(
+    container.querySelector<HTMLButtonElement>('.chat-todo-folded-row'),
+  )
+  const foldedControlDisabled = foldedControl.disabled
+  const callsDuringRequest = onFold.mock.calls
+
+  await act(async () => {
+    resolveFold(true)
+    await pendingFold
+  })
+  const foldedControlDisabledAfter = requireElement(
+    container.querySelector<HTMLButtonElement>('.chat-todo-folded-row'),
+  ).disabled
+
+  expect(
+    foldControlState(
+      unfoldedControlDisabled,
+      foldedControlDisabled,
+      callsDuringRequest,
+      foldedControlDisabledAfter,
+    ),
+  ).toEqual({
+    unfoldedControlDisabled: true,
+    foldedControlDisabled: true,
+    callsDuringRequest: [[true]],
+    foldedControlDisabledAfter: false,
+  })
+})
+
+function foldControlState(
+  unfoldedControlDisabled: boolean,
+  foldedControlDisabled: boolean,
+  callsDuringRequest: [boolean][],
+  foldedControlDisabledAfter: boolean,
+) {
+  return {
+    unfoldedControlDisabled,
+    foldedControlDisabled,
+    callsDuringRequest,
+    foldedControlDisabledAfter,
+  }
+}
+
+async function clickAndFlushFold(button: HTMLButtonElement) {
+  await act(async () => {
+    await userEvent.click(button)
+    await Promise.resolve()
+  })
 }
 
 function renderCard(cardProps: Props) {
@@ -96,6 +210,20 @@ async function dropImage(textarea: HTMLTextAreaElement, file: File) {
   return event
 }
 
+function dispatchFileDragEvent(
+  textarea: HTMLTextAreaElement,
+  type: 'dragenter' | 'dragleave',
+) {
+  const event = new Event(type, { bubbles: true, cancelable: true })
+  Object.defineProperty(event, 'dataTransfer', {
+    value: { types: ['Files'], files: [] },
+  })
+  act(() => {
+    textarea.dispatchEvent(event)
+  })
+  return event
+}
+
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   onSelectSession.mockReset()
@@ -143,6 +271,35 @@ it('shows a pending task with optional detail and a completion action', () => {
       { text: 'Mark done', disabled: false },
       { text: 'Reject', disabled: false },
     ],
+  })
+})
+
+it('shows the comment drop target while files are dragged over the comment', () => {
+  renderCard(props())
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('.chat-todo-comment'),
+  )
+
+  const dragEnter = dispatchFileDragEvent(textarea, 'dragenter')
+  const targetAfterEnter =
+    container.querySelector('.chat-card-comment-drop-zone .file-drop-indicator')
+      ?.textContent ?? null
+  const dragLeave = dispatchFileDragEvent(textarea, 'dragleave')
+  const targetAfterLeave =
+    container.querySelector('.chat-card-comment-drop-zone .file-drop-indicator')
+      ?.textContent ?? null
+
+  const snapshot = () => ({
+    dragEnterPrevented: dragEnter.defaultPrevented,
+    dragLeavePrevented: dragLeave.defaultPrevented,
+    targetAfterEnter,
+    targetAfterLeave,
+  })
+  expect(snapshot()).toEqual({
+    dragEnterPrevented: true,
+    dragLeavePrevented: false,
+    targetAfterEnter: 'Drop files to attach',
+    targetAfterLeave: null,
   })
 })
 
@@ -560,6 +717,10 @@ it('lets the conversation handle drops while the task is submitting', async () =
   const comment = requireElement(
     container.querySelector<HTMLTextAreaElement>('.chat-todo-comment'),
   )
+  const dragEnter = dispatchFileDragEvent(comment, 'dragenter')
+  const indicatorDuringSubmit =
+    container.querySelector('.chat-card-comment-drop-zone .file-drop-indicator')
+      ?.textContent ?? null
   const conversationDrops: string[] = []
   const onConversationDrop = () => conversationDrops.push('drop')
   document.body.addEventListener('drop', onConversationDrop)
@@ -575,11 +736,15 @@ it('lets the conversation handle drops while the task is submitting', async () =
 
   const snapshot = () => ({
     commentDisabled: comment.disabled,
+    dragEnterPrevented: dragEnter.defaultPrevented,
+    indicatorDuringSubmit,
     dropPrevented: drop.defaultPrevented,
     conversationDrops,
   })
   expect(snapshot()).toEqual({
     commentDisabled: true,
+    dragEnterPrevented: false,
+    indicatorDuringSubmit: null,
     dropPrevented: false,
     conversationDrops: ['drop'],
   })

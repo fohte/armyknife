@@ -37,6 +37,25 @@ const EMPTY_STATE: AttachmentState = {
 const attachmentStates = new Map<string, AttachmentState>()
 const attachmentListeners = new Map<string, Set<() => void>>()
 const pasteQueues = new Map<string, Promise<void>>()
+let beforeUnloadWarningRegistered = false
+
+function warnBeforeUnload(event: BeforeUnloadEvent) {
+  event.preventDefault()
+}
+
+function syncBeforeUnloadWarning() {
+  if (typeof window === 'undefined') return
+  const shouldWarn = [...attachmentStates.values()].some(
+    (state) => state.attachments.length > 0 || state.pendingFileCount > 0,
+  )
+  if (shouldWarn === beforeUnloadWarningRegistered) return
+  beforeUnloadWarningRegistered = shouldWarn
+  if (shouldWarn) {
+    window.addEventListener('beforeunload', warnBeforeUnload)
+  } else {
+    window.removeEventListener('beforeunload', warnBeforeUnload)
+  }
+}
 
 function getState(scopeId: string) {
   return attachmentStates.get(scopeId) ?? EMPTY_STATE
@@ -62,6 +81,7 @@ function updateState(
   } else {
     attachmentStates.set(scopeId, next)
   }
+  syncBeforeUnloadWarning()
   notify(scopeId)
 }
 

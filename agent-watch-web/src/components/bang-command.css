@@ -12,10 +12,6 @@
   gap: 0.4rem;
 }
 
-.markdown-code-block > pre {
-  margin: 0;
-}
-
 .bang-command-button,
 .bang-command-dialog .confirm-dialog-actions button {
   min-height: 2rem;

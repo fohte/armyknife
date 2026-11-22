@@ -376,6 +376,7 @@ export const IPhoneConversationShowsTheStatusPanel: Story = {
         activeTabId="tree"
         onTabChange={() => undefined}
         onClose={() => undefined}
+        mobilePresentation
       />
     ),
   },
@@ -1001,4 +1002,20 @@ export const EndedMobileSessionIsResuming: Story = {
     isResuming: true,
   },
   decorators: [iPhoneViewportDecorator],
+}
+
+export const NarrationAndAssistantAppearTogether: Story = {
+  name: 'Narration and assistant text share the same conversation style',
+  args: {
+    messages: [
+      {
+        type: 'narration',
+        text: 'Checking the fictional request before replying.',
+      },
+      {
+        type: 'assistant',
+        text: 'The example response is ready.',
+      },
+    ],
+  },
 }

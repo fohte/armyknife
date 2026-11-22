@@ -1,8 +1,10 @@
 import '#components/inbox-filter.css'
+import '#components/inbox-filter-mobile.css'
 
 import { Button } from '@fohte/ui/button'
 import { Filter } from 'lucide-react'
 
+import { InboxSaveViewSheet } from '#components/inbox-save-view-sheet'
 import {
   formatInboxFilterQuery,
   INBOX_FILTER_FIELDS,
@@ -21,6 +23,8 @@ type InboxFilterBarProps = {
   onSaveViewOpenChange?: ((open: boolean) => void) | undefined
   onSaveViewNameChange?: ((name: string) => void) | undefined
   onSaveView?: ((name: string) => void) | undefined
+  isMobile?: boolean
+  query?: string
 }
 
 export function InboxFilterBar({
@@ -34,6 +38,8 @@ export function InboxFilterBar({
   onSaveViewOpenChange,
   onSaveViewNameChange,
   onSaveView,
+  isMobile = false,
+  query = '',
 }: InboxFilterBarProps) {
   const removeFilter = (key: InboxFilterKey) => {
     onFilterQueryChange(
@@ -50,7 +56,7 @@ export function InboxFilterBar({
           className="inbox-filter-open cursor-pointer"
           onClick={onOpenFilterDialog}
         >
-          <Filter aria-hidden="true" size={14} />
+          <Filter aria-hidden="true" size={isMobile ? 16 : 14} />
           <span>Filter by project, kind, tq task, repo</span>
           <kbd>/</kbd>
         </Button>
@@ -99,9 +105,19 @@ export function InboxFilterBar({
           <span className="inbox-filter-result-count">
             {matchingNeedsActionCount} of {totalNeedsActionCount}
           </span>
+          <Button
+            type="button"
+            variant="plain"
+            className="inbox-filter-clear cursor-pointer"
+            onClick={() => {
+              onFilterQueryChange('')
+            }}
+          >
+            Clear
+          </Button>
           {onSaveView !== undefined ? (
             <div>
-              {saveViewOpen ? (
+              {saveViewOpen && !isMobile ? (
                 <form
                   className="inbox-save-view-form"
                   onSubmit={(event) => {
@@ -138,7 +154,7 @@ export function InboxFilterBar({
                     Cancel
                   </Button>
                 </form>
-              ) : (
+              ) : !saveViewOpen ? (
                 <Button
                   type="button"
                   variant="plain"
@@ -149,11 +165,20 @@ export function InboxFilterBar({
                 >
                   Save view
                 </Button>
-              )}
+              ) : null}
             </div>
           ) : null}
         </>
       )}
+      {saveViewOpen && isMobile && onSaveView !== undefined ? (
+        <InboxSaveViewSheet
+          query={query}
+          name={saveViewName}
+          onNameChange={(name) => onSaveViewNameChange?.(name)}
+          onSave={onSaveView}
+          onCancel={() => onSaveViewOpenChange?.(false)}
+        />
+      ) : null}
     </div>
   )
 }

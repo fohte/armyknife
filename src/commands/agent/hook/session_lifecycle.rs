@@ -93,6 +93,7 @@ pub(super) fn mark_session_ended_after_close_in(
     if current_session.engine == Engine::Claude {
         store::set_watch_web_compacting(sessions_dir, session_id, false)?;
     }
+    store::mark_session_closed_from(sessions_dir, session_id)?;
 
     let mut ended_session = None;
     store::update_session_in(sessions_dir, session_id, |session| {
@@ -313,6 +314,7 @@ mod tests {
             launched_with_vibe: false,
             child_launch: Default::default(),
             crit_urls: Vec::new(),
+            crit_not_waiting_urls: Default::default(),
             web_uis: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: "/tmp/test".into(),
@@ -519,6 +521,7 @@ mod tests {
                 updated.status,
                 updated.sweep_signaled,
                 updated.archived_at,
+                store::closed_session_ids_from(temp_dir.path()).expect("load closed session ids"),
                 compacting_state(temp_dir.path(), "thread-one"),
                 retained_sessions,
                 sinks.removed.lock().expect("removed lock").clone(),
@@ -529,6 +532,7 @@ mod tests {
                 SessionStatus::Ended,
                 false,
                 None,
+                std::collections::HashSet::from(["thread-one".to_string()]),
                 (engine == Engine::Claude).then_some(false),
                 vec![(
                     "thread-one".to_string(),

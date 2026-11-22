@@ -117,6 +117,13 @@
   white-space: nowrap;
 }
 
+.inbox-filter-clear {
+  flex: 0 0 auto;
+  padding: 0 10px;
+  color: var(--aw-text-muted);
+  font-size: 12px;
+}
+
 .inbox-save-view,
 .inbox-save-view-submit,
 .inbox-save-view-cancel {
@@ -465,34 +472,5 @@
   .inbox-filter-dialog {
     width: min(500px, calc(100vw - 28px));
     box-shadow: 0 18px 60px var(--aw-bg-scrim);
-  }
-}
-
-@media (max-width: 600px) {
-  .inbox-filter-bar {
-    min-height: 38px;
-    gap: 6px;
-    padding: 4px 10px;
-  }
-
-  .inbox-filter-open {
-    width: 100%;
-    justify-content: flex-start;
-    padding: 0 5px;
-    font-size: 10.5px;
-  }
-
-  .inbox-filter-open span {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .inbox-filter-picker {
-    grid-template-columns: 132px minmax(0, 1fr);
-  }
-
-  .inbox-filter-key-help {
-    font-size: 9px;
   }
 }

@@ -27,6 +27,46 @@
   overflow-x: auto;
   overflow-y: hidden;
   padding-left: 18px;
+  scrollbar-width: none;
+}
+
+.session-status-panel-tablist::-webkit-scrollbar {
+  display: none;
+}
+
+.session-status-panel-tablist-wrap {
+  position: relative;
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+.session-status-panel-tablist-wrap::before,
+.session-status-panel-tablist-wrap::after {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  bottom: 0;
+  width: 40px;
+  opacity: 0;
+  pointer-events: none;
+  content: '';
+  transition: opacity 120ms ease;
+}
+
+.session-status-panel-tablist-wrap::before {
+  left: 0;
+  background: linear-gradient(90deg, var(--aw-bg-nav), transparent);
+}
+
+.session-status-panel-tablist-wrap::after {
+  right: 0;
+  background: linear-gradient(270deg, var(--aw-bg-nav), transparent);
+}
+
+.session-status-panel-tablist-wrap.has-hidden-tabs-left::before,
+.session-status-panel-tablist-wrap.has-hidden-tabs-right::after {
+  opacity: 1;
 }
 
 .session-status-panel-tab {
@@ -73,6 +113,7 @@
 }
 
 .session-status-panel-count {
+  flex: 0 0 auto;
   color: var(--aw-text-secondary);
   font-family: var(--font-mono);
   font-size: 11.5px;
@@ -105,6 +146,91 @@
   place-items: center;
   color: var(--aw-text-secondary);
   font-size: 12px;
+}
+
+.session-status-panel--mobile {
+  width: 100%;
+}
+
+.session-status-panel-mobile-header {
+  box-sizing: border-box;
+  display: flex;
+  height: 56px;
+  min-height: 56px;
+  flex: 0 0 56px;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 16px 6px 0;
+}
+
+.session-status-panel-mobile-heading {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.session-status-panel-mobile-heading h1 {
+  margin: 0;
+  color: var(--aw-text-primary);
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.session-status-panel-mobile-heading > span {
+  overflow: hidden;
+  color: var(--aw-text-muted);
+  font-size: 12.5px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-status-panel-back {
+  box-sizing: border-box;
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
+  flex: 0 0 44px;
+  justify-content: center;
+  padding: 0;
+  color: var(--aw-text-body);
+}
+
+.session-status-panel--mobile .session-status-panel-tabs {
+  height: 44px;
+  min-height: 44px;
+  flex: 0 0 44px;
+  margin-top: 0;
+  padding: 0;
+}
+
+.session-status-panel--mobile .session-status-panel-tablist {
+  gap: 22px;
+  padding: 0 16px;
+}
+
+.session-status-panel--mobile .session-status-panel-tab {
+  height: 44px;
+  font-size: 14px;
+  gap: 6px;
+}
+
+.session-status-panel--mobile .session-status-panel-count {
+  font-size: 12.5px;
+}
+
+.session-status-panel--mobile .session-status-panel-tablist-wrap::before {
+  background: linear-gradient(90deg, transparent, var(--aw-bg-nav));
+}
+
+.session-status-panel--mobile .session-status-panel-tablist-wrap::after {
+  width: 40px;
+}
+
+.session-status-panel--mobile .session-status-panel-content {
+  padding-top: 0;
 }
 
 .session-tree-feedback {

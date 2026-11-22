@@ -47,10 +47,20 @@ mod tests {
             priority_order,
         });
         SessionView {
-            id: id.to_string(),
-            engine: Engine::Claude,
-            work_type: None,
-            category,
+            row: super::super::SessionRowView {
+                id: id.to_string(),
+                engine: Engine::Claude,
+                work_type: None,
+                category,
+                kind: None,
+                title: id.to_string(),
+                preview: None,
+                elapsed_seconds: 0,
+                task: task.clone(),
+                repo: String::new(),
+                vibe_mode: crate::commands::agent::vibe::VibeState::RepoDisabled,
+                decision_count: 0,
+            },
             is_paused: false,
             activity_status: if category == SessionCategory::InProgress {
                 SessionActivityStatus::Working
@@ -60,17 +70,10 @@ mod tests {
             waiting_reason: None,
             waiting_for_background_tasks: false,
             category_when_not_later: category,
-            kind: None,
-            title: id.to_string(),
-            preview: None,
             updated_at: chrono::Utc.timestamp_opt(updated_at, 0).unwrap(),
             last_prompted_at: None,
-            elapsed_seconds: 0,
             unread: false,
-            task: task.clone(),
             tasks: task.into_iter().collect(),
-            repo: String::new(),
-            vibe_mode: crate::commands::agent::vibe::VibeState::RepoDisabled,
             branch: None,
             can_open_in_terminal: false,
             project: "Unsorted".to_string(),
@@ -86,8 +89,9 @@ mod tests {
             later_until: None,
             is_today: false,
             is_compacting: false,
-            decision_count: 0,
             unreviewed_decision_count: 0,
+            todo_later_count: 0,
+            todo_later_title: None,
             review_document_id: None,
         }
     }
@@ -163,7 +167,7 @@ mod tests {
 
         assert_eq!(
             rows.into_iter()
-                .map(|session| session.id)
+                .map(|session| session.row.id)
                 .collect::<Vec<_>>(),
             expected_ids
         );

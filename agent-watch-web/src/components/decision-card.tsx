@@ -149,7 +149,7 @@ export function DecisionCard({
           }}
         >
           <span className="decision-panel-card-kicker">
-            ◇ Decided ·{' '}
+            {decision.review === 'ok' ? '✓ OK · ' : '◇ Decided · '}
             <time dateTime={decision.createdAt}>
               {formatRelativeTime(decision.createdAt, relativeTimeReference)}
             </time>
@@ -262,6 +262,11 @@ export function DecisionCard({
                     )}
                   </Button>
                 </div>
+                {variant === 'panel' ? (
+                  <span className="decision-card-target-note">
+                    Change… sends to {targetName ?? 'this session'}
+                  </span>
+                ) : null}
                 {variant === 'conversation' ? (
                   <span className="decision-card-not-blocking">
                     Not blocking · keeps working

@@ -1,5 +1,194 @@
 # Changelog
 
+## [0.1.852](https://github.com/fohte/armyknife/compare/v0.1.851...v0.1.852) (2026-11-22)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show command status in chat ([#2097](https://github.com/fohte/armyknife/issues/2097)) ([99253b3](https://github.com/fohte/armyknife/commit/99253b38d88d10ba9324697a0bced91c37595a1a))
+
+## [0.1.851](https://github.com/fohte/armyknife/compare/v0.1.850...v0.1.851) (2026-11-22)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** hide closed inbox sessions ([#2096](https://github.com/fohte/armyknife/issues/2096)) ([c31530a](https://github.com/fohte/armyknife/commit/c31530a10b4ddd121b9b963d636d15a5b05f5e79))
+
+## [0.1.850](https://github.com/fohte/armyknife/compare/v0.1.849...v0.1.850) (2026-11-22)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** align desktop Activity UI ([#2092](https://github.com/fohte/armyknife/issues/2092)) ([09fbbc3](https://github.com/fohte/armyknife/commit/09fbbc3ecaf2ee35df42930d05a64ffc54f45be0))
+
+## [0.1.849](https://github.com/fohte/armyknife/compare/v0.1.848...v0.1.849) (2026-11-22)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** align iPhone Session status ([#2088](https://github.com/fohte/armyknife/issues/2088)) ([97cf699](https://github.com/fohte/armyknife/commit/97cf699a0579e76d4c624982ab6c889b1c4a5cd4))
+
+## [0.1.848](https://github.com/fohte/armyknife/compare/v0.1.847...v0.1.848) (2026-11-22)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** align iPhone Inbox layout ([#2089](https://github.com/fohte/armyknife/issues/2089)) ([6144f44](https://github.com/fohte/armyknife/commit/6144f44b21b9b38ed8a7c9a5a08087c28d7be93e))
+
+## [0.1.847](https://github.com/fohte/armyknife/compare/v0.1.846...v0.1.847) (2026-11-22)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** align iPhone Activity UI ([#2086](https://github.com/fohte/armyknife/issues/2086)) ([b26914e](https://github.com/fohte/armyknife/commit/b26914ef06be32d524c2e4a051fc2ae45103cf39))
+
+## [0.1.846](https://github.com/fohte/armyknife/compare/v0.1.845...v0.1.846) (2026-11-22)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** clip actions to swipe width ([#2084](https://github.com/fohte/armyknife/issues/2084)) ([4af7dd5](https://github.com/fohte/armyknife/commit/4af7dd5947b568c61eed7571c7098d89f162593f))
+
+## [0.1.845](https://github.com/fohte/armyknife/compare/v0.1.844...v0.1.845) (2026-11-22)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** quote narration in replies ([#2082](https://github.com/fohte/armyknife/issues/2082)) ([ec8da91](https://github.com/fohte/armyknife/commit/ec8da91b5668e41708e8f699c0e9f2fa8d923dc5))
+
+## [0.1.844](https://github.com/fohte/armyknife/compare/v0.1.843...v0.1.844) (2026-11-22)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** hide swipe actions at rest ([#2080](https://github.com/fohte/armyknife/issues/2080)) ([0148a29](https://github.com/fohte/armyknife/commit/0148a296870c4288ea524b667eedee6659e7a8bd))
+
+## [0.1.843](https://github.com/fohte/armyknife/compare/v0.1.842...v0.1.843) (2026-11-21)
+
+
+### Bug Fixes
+
+* **worktree:** report worktree deletion conflicts ([#2078](https://github.com/fohte/armyknife/issues/2078)) ([c75e65b](https://github.com/fohte/armyknife/commit/c75e65b99344eb0a0e489764abc754d6db6347bc))
+
+## [0.1.842](https://github.com/fohte/armyknife/compare/v0.1.841...v0.1.842) (2026-11-21)
+
+
+### Bug Fixes
+
+* **tq:** avoid URI failures for large ID lists ([#2071](https://github.com/fohte/armyknife/issues/2071)) ([54426bc](https://github.com/fohte/armyknife/commit/54426bcd1e566a30a2a7cada6f2841c9c8fd0232))
+
+## [0.1.841](https://github.com/fohte/armyknife/compare/v0.1.840...v0.1.841) (2026-11-21)
+
+
+### Features
+
+* **agent-watch-web:** support folding todos ([#2055](https://github.com/fohte/armyknife/issues/2055)) ([c72d23e](https://github.com/fohte/armyknife/commit/c72d23e00d2606db9212a68343480368a6df5dc9))
+
+## [0.1.840](https://github.com/fohte/armyknife/compare/v0.1.839...v0.1.840) (2026-11-21)
+
+
+### Features
+
+* **agent-watch-web:** add iPhone Inbox actions ([#2073](https://github.com/fohte/armyknife/issues/2073)) ([24f38c6](https://github.com/fohte/armyknife/commit/24f38c62b001cea7e4d30e8ce4f0b90d67718cc3))
+
+## [0.1.839](https://github.com/fohte/armyknife/compare/v0.1.838...v0.1.839) (2026-11-21)
+
+
+### Features
+
+* **agent:** notify on unreported delegate stops ([#2069](https://github.com/fohte/armyknife/issues/2069)) ([053f7fb](https://github.com/fohte/armyknife/commit/053f7fbe93aff28a3dddc8cad8765dee8d7bd95f))
+
+## [0.1.838](https://github.com/fohte/armyknife/compare/v0.1.837...v0.1.838) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show update banner ([#2064](https://github.com/fohte/armyknife/issues/2064)) ([e1b9f19](https://github.com/fohte/armyknife/commit/e1b9f19a5c6be58a9ae6f09b887a0b63562f832f))
+
+## [0.1.837](https://github.com/fohte/armyknife/compare/v0.1.836...v0.1.837) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent-crit:** stop review status after Finish ([#2056](https://github.com/fohte/armyknife/issues/2056)) ([36acd70](https://github.com/fohte/armyknife/commit/36acd70fd15857c2b50cfd1aeeecbcd30f1061a6))
+
+## [0.1.836](https://github.com/fohte/armyknife/compare/v0.1.835...v0.1.836) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show Activity when empty ([#2061](https://github.com/fohte/armyknife/issues/2061)) ([2a97041](https://github.com/fohte/armyknife/commit/2a97041398cc99cff5f1131f4bcc429f0b36692a))
+
+## [0.1.835](https://github.com/fohte/armyknife/compare/v0.1.834...v0.1.835) (2026-11-21)
+
+
+### Features
+
+* **agent-watch-web:** allow copying code blocks ([#2045](https://github.com/fohte/armyknife/issues/2045)) ([e6ba1d0](https://github.com/fohte/armyknife/commit/e6ba1d0ddc601fcd87f689769cca23dd9216e275))
+
+## [0.1.834](https://github.com/fohte/armyknife/compare/v0.1.833...v0.1.834) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent/crit:** open the rendered preview page ([#2051](https://github.com/fohte/armyknife/issues/2051)) ([bffb179](https://github.com/fohte/armyknife/commit/bffb1793e4b9555bbe4fdf766b0d938f09df7d8b))
+
+## [0.1.833](https://github.com/fohte/armyknife/compare/v0.1.832...v0.1.833) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent/close:** skip prompt for clean branches ([#2048](https://github.com/fohte/armyknife/issues/2048)) ([3046bfa](https://github.com/fohte/armyknife/commit/3046bfa5b2cbd8d5d14083cfbf9ba4fe19b70fe3))
+
+## [0.1.832](https://github.com/fohte/armyknife/compare/v0.1.831...v0.1.832) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show task-linked PRs ([#2052](https://github.com/fohte/armyknife/issues/2052)) ([53b7cce](https://github.com/fohte/armyknife/commit/53b7cce023d7a26ac25f4e40c5b49a6e59b5e722))
+
+## [0.1.831](https://github.com/fohte/armyknife/compare/v0.1.830...v0.1.831) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** add vibeMode to tree story ([#2057](https://github.com/fohte/armyknife/issues/2057)) ([d26ae92](https://github.com/fohte/armyknife/commit/d26ae9294c591678c2a3c7552d32bcb6dc2ea0d8))
+
+## [0.1.830](https://github.com/fohte/armyknife/compare/v0.1.829...v0.1.830) (2026-11-21)
+
+
+### Features
+
+* **agent-watch-web:** add iPhone status page ([#2032](https://github.com/fohte/armyknife/issues/2032)) ([4e7b62f](https://github.com/fohte/armyknife/commit/4e7b62fc5e204214b2e997d06d07f474bcf5412b))
+
+## [0.1.829](https://github.com/fohte/armyknife/compare/v0.1.828...v0.1.829) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show vibe mode icons in tree ([#2046](https://github.com/fohte/armyknife/issues/2046)) ([bfb28bb](https://github.com/fohte/armyknife/commit/bfb28bb8126b2a16988edcae4d8865d1cb13ed3a))
+
+## [0.1.828](https://github.com/fohte/armyknife/compare/v0.1.827...v0.1.828) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show Crit wait reason ([#2043](https://github.com/fohte/armyknife/issues/2043)) ([2d35472](https://github.com/fohte/armyknife/commit/2d35472a26bde8f1e5dc9c6da8dbcda3b6cc013c))
+
+## [0.1.827](https://github.com/fohte/armyknife/compare/v0.1.826...v0.1.827) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** cancel failed prompts ([#2044](https://github.com/fohte/armyknife/issues/2044)) ([5855cae](https://github.com/fohte/armyknife/commit/5855cae5dfd46f91c1cb2d7d3b9635be80c55c04))
+
+## [0.1.826](https://github.com/fohte/armyknife/compare/v0.1.825...v0.1.826) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** clear stale queued status ([#2036](https://github.com/fohte/armyknife/issues/2036)) ([0bffcb2](https://github.com/fohte/armyknife/commit/0bffcb2fc2517a11d2c7008a34b43b8131b5e916))
+
 ## [0.1.825](https://github.com/fohte/armyknife/compare/v0.1.824...v0.1.825) (2026-11-21)
 
 

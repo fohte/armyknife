@@ -41,6 +41,7 @@ pub(super) fn metadata(session_ids: HashSet<String>) -> SessionTaskMetadata {
         priorities: HashMap::new(),
         priority_order: HashMap::new(),
         task_projects: HashMap::new(),
+        github_links: HashMap::new(),
     }
 }
 
@@ -63,6 +64,7 @@ pub(super) fn session(session_id: &str, pr_context: Option<SessionPrContext>) ->
         pr_context,
         created_pr_urls: Vec::new(),
         crit_urls: Vec::new(),
+        crit_not_waiting_urls: Default::default(),
         web_uis: Vec::new(),
         pending_human_review_ids: Default::default(),
         cwd: PathBuf::from("/workspace/example"),

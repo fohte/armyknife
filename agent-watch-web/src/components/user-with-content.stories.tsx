@@ -66,6 +66,36 @@ export const NavigationTargetIsHighlighted: Story = {
   },
 }
 
+export const CommandOutputIsHighlightedAfterShowOutput: Story = {
+  name: 'The command result is outlined after Show output is selected.',
+  args: {
+    message: {
+      type: 'user',
+      timestamp: '2030-09-12T03:03:00.000Z',
+      text: `Command exited with code 1 in /workspace/example.
+
+Command:
+\`\`\`text
+$ printf 'sample output'
+\`\`\`
+
+stdout:
+\`\`\`text
+(empty)
+\`\`\`
+
+stderr:
+\`\`\`text
+(empty)
+\`\`\``,
+    },
+    commandOutputHighlighted: true,
+  },
+  render: (args) => (
+    <UserWithContent {...args} now={new Date('2030-09-12T03:03:00.000Z')} />
+  ),
+}
+
 export const RewindMenuShowsEngineOptions: Story = {
   name: 'The Claude user message shows all rewind options',
   args: {

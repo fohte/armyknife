@@ -24,6 +24,12 @@
   padding: 64px 24px 24px;
   background: rgb(0 0 0 / 25%);
 }
+.async-action-activity-backdrop.is-anchored {
+  align-items: stretch;
+  justify-content: initial;
+  padding: 0;
+  background: transparent;
+}
 .async-action-activity {
   box-sizing: border-box;
   display: flex;
@@ -31,14 +37,19 @@
   max-height: min(600px, 100%);
   flex-direction: column;
   border: 1px solid var(--aw-border-control);
-  background: var(--aw-bg-app);
+  background: var(--aw-bg-popover);
   box-shadow: 0 12px 36px rgb(0 0 0 / 30%);
   color: var(--aw-text-body);
+}
+.async-action-activity.is-anchored {
+  position: fixed;
+  right: auto;
+  max-height: min(600px, calc(100dvh - 172px));
 }
 .async-action-activity > header {
   display: flex;
   align-items: center;
-  padding: 8px 14px;
+  padding: 4px 6px 6px 14px;
 }
 .async-action-activity h2 {
   margin: 0;
@@ -47,7 +58,7 @@
 }
 .async-action-activity > header button,
 .async-action-activity-close {
-  min-height: 28px;
+  min-height: 24px;
   border: 0;
   padding: 0 8px;
   background: transparent;
@@ -80,7 +91,17 @@
   padding-right: 62px;
 }
 .async-action-empty {
-  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 14px 16px;
+}
+.async-action-empty p {
+  margin: 0;
+  color: var(--aw-text-body);
+  font-size: 13px;
+}
+.async-action-empty p + p {
   color: var(--aw-text-secondary);
   font-size: 12px;
 }
@@ -93,22 +114,98 @@
     bottom: 112px;
     max-height: calc(100dvh - 128px);
   }
+}
+
+@media (max-width: 760px) {
   .async-action-activity-backdrop {
     align-items: flex-end;
     padding: 0;
+    background: rgb(0 0 0 / 55%);
+  }
+  .async-action-activity-backdrop.is-anchored {
+    align-items: flex-end;
+    padding: 0;
+    background: rgb(0 0 0 / 55%);
   }
   .async-action-activity {
+    position: static;
     width: 100%;
+    height: auto;
     max-height: 85dvh;
     border-width: 1px 0 0;
-    padding-bottom: max(16px, env(safe-area-inset-bottom));
+    padding: 16px 0 max(30px, env(safe-area-inset-bottom));
+    box-shadow: 0 -12px 36px rgb(0 0 0 / 30%);
+  }
+  .async-action-activity.is-anchored {
+    position: static;
+    right: auto;
+    bottom: auto;
+    left: auto;
+    max-height: 85dvh;
   }
   .async-action-activity > header {
-    padding: 8px 16px;
+    padding: 0 8px 6px 16px;
+  }
+  .async-action-activity h2 {
+    font-size: 15px;
+  }
+  .async-action-activity > header button {
+    min-height: 44px;
+    font-size: 13px;
+  }
+  .async-action-empty {
+    padding: 18px 16px 22px;
+  }
+  .async-action-empty p {
+    font-size: 14px;
+  }
+  .async-action-empty p + p {
+    font-size: 13px;
   }
   .async-action-activity-close {
     display: block;
+    min-height: 44px;
     margin: 10px 16px 0;
     border: 1px solid var(--aw-border-control);
+    color: var(--aw-text-primary);
+  }
+  .async-action-activity-list .async-action-item--row {
+    grid-template-columns: 16px minmax(0, 1fr) auto;
+    column-gap: 12px;
+    padding-right: 16px;
+  }
+  .async-action-activity-list {
+    min-height: 0;
+  }
+  .async-action-activity-list .async-action-item--row > time {
+    position: static;
+    color: var(--aw-text-muted);
+    font-size: 12px;
+  }
+  .async-action-activity-list
+    .async-action-item--row
+    .async-action-item-content
+    strong {
+    font-size: 14px;
+  }
+  .async-action-activity-list .async-action-item--row .async-action-controls {
+    display: flex;
+    align-self: flex-start;
+    flex-wrap: wrap;
+  }
+  .async-action-activity-list .async-action-item--row .async-action-session,
+  .async-action-activity-list
+    .async-action-item--row
+    .async-action-item-content
+    > span {
+    font-size: 13px;
+  }
+  .async-action-activity-list .async-action-item--row .async-action-session {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .async-action-activity-list .async-action-item--row .async-action-error {
+    color: var(--aw-text-body) !important;
   }
 }

@@ -1,4 +1,4 @@
-import type { Meta, StoryObj } from '@storybook/react-vite'
+import type { Decorator, Meta, StoryObj } from '@storybook/react-vite'
 
 import { InboxView } from '#components/inbox-view'
 import type { Session } from '#types'
@@ -190,6 +190,21 @@ const sessions: Session[] = [
   ),
 ]
 
+const iPhoneViewportDecorator: Decorator = (Story) => (
+  <div
+    className="story-mobile-layout"
+    data-layout="mobile"
+    style={{
+      width: '390px',
+      height: '844px',
+      display: 'flex',
+      position: 'relative',
+    }}
+  >
+    <Story />
+  </div>
+)
+
 const meta = {
   component: InboxView,
   args: {
@@ -222,8 +237,13 @@ const meta = {
   decorators: [
     (Story, context) => (
       <div
-        className="story-inbox-container"
+        className={
+          context.args.isMobile
+            ? 'story-inbox-container story-mobile-layout'
+            : 'story-inbox-container'
+        }
         data-layout={context.args.isMobile ? 'mobile' : 'desktop'}
+        style={context.args.isMobile ? { width: '100%' } : undefined}
       >
         <Story />
       </div>
@@ -241,6 +261,63 @@ export const InboxHasSessionsAcrossStatuses: Story = {
 export const InboxHasNoFilters: Story = {
   name: 'The inbox shows the filter shortcut before any filters are set',
   args: { filterQuery: '' },
+}
+
+export const InboxShowsFoldedTodosBelowNeedsAction: Story = {
+  name: 'The inbox groups folded to-dos below Needs action',
+  args: {
+    sessions: [
+      ...sessions,
+      sampleSession(
+        'sample-todo-later',
+        'in_progress',
+        'Check the alert on a phone',
+        {
+          todoLaterCount: 2,
+          todoLaterTitle: 'Check the alert on a phone',
+        },
+      ),
+    ],
+  },
+}
+
+export const InboxShowsFoldedTodosBelowNeedsActionOnPhone: Story = {
+  name: 'A phone shows the folded to-do row below Needs action',
+  args: {
+    isMobile: true,
+    sessions: [
+      ...sessions,
+      sampleSession(
+        'sample-todo-later',
+        'in_progress',
+        'Check the alert on a phone',
+        {
+          todoLaterCount: 2,
+          todoLaterTitle: 'Check the alert on a phone',
+        },
+      ),
+    ],
+  },
+  parameters: { viewport: { defaultViewport: 'mobile1' } },
+}
+
+export const InboxSummarizesFoldedTodosAcrossSessions: Story = {
+  name: 'The inbox summarizes folded to-dos across sessions',
+  args: {
+    sessions: [
+      ...sessions,
+      sampleSession('sample-folded-alert', 'done', 'Review a phone alert', {
+        kind: 'Todo',
+        todoLaterCount: 2,
+        todoLaterTitle: 'Check the alert sound',
+      }),
+      sampleSession('sample-folded-delivery', 'done', 'Verify a delivery', {
+        kind: 'Todo',
+        todoLaterCount: 1,
+        todoLaterTitle: 'Check the delivery status',
+      }),
+    ],
+  },
 }
 
 export const InboxFiltersSessionsByProjectAndKind: Story = {
@@ -265,6 +342,41 @@ export const InboxNamesASavedView: Story = {
 export const InboxFilterDialogIsOpen: Story = {
   name: 'The filter dialog shows available session values and counts',
   args: { filterQuery: 'project:sample project', filterDialogOpen: true },
+}
+
+export const IPhoneFilterIsOpen: Story = {
+  name: 'The iPhone shows the full-screen filter with the available values',
+  parameters: {
+    overflowCheck: { ignoreSelectors: ['.inbox-filter-fields'] },
+  },
+  args: {
+    isMobile: true,
+    filterQuery: 'kind:question,review',
+    filterDialogOpen: true,
+  },
+  decorators: [iPhoneViewportDecorator],
+}
+
+export const IPhoneInboxShowsFilteredSessions: Story = {
+  name: 'The iPhone shows matching sessions with removable filter chips',
+  args: {
+    isMobile: true,
+    filterQuery: 'project:sample project kind:question,review',
+    selectedId: null,
+  },
+  decorators: [iPhoneViewportDecorator],
+}
+
+export const IPhoneInboxSavesTheFilteredView: Story = {
+  name: 'The iPhone shows the Save view sheet for its active filters',
+  args: {
+    isMobile: true,
+    filterQuery: 'project:sample project kind:question,review',
+    saveViewOpen: true,
+    saveViewName: 'Sample service reviews',
+    selectedId: null,
+  },
+  decorators: [iPhoneViewportDecorator],
 }
 
 export const InboxIsLoading: Story = {
@@ -298,7 +410,8 @@ export const InboxFitsAnIPhone: Story = {
     selectedId: null,
     laterExpanded: false,
     todaySessions: sessions.filter(
-      (session) => session.id === 'sample-question',
+      (session) =>
+        session.id === 'sample-question' || session.id === 'sample-done',
     ),
   },
   decorators: [
