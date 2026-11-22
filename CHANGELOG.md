@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.853](https://github.com/fohte/armyknife/compare/v0.1.852...v0.1.853) (2026-11-22)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show Copy on all code blocks ([#2095](https://github.com/fohte/armyknife/issues/2095)) ([7476ce6](https://github.com/fohte/armyknife/commit/7476ce664038b7634ab5e7607db493597de8dc25))
+
 ## [0.1.852](https://github.com/fohte/armyknife/compare/v0.1.851...v0.1.852) (2026-11-22)
 
 
