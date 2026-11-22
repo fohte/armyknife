@@ -12,6 +12,10 @@ import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
 import { BangCommandActions } from '#components/bang-command'
+import type {
+  CommandOutputRefresh,
+  CommandOutputStart,
+} from '#components/command-result-message'
 import { ImageLightbox } from '#components/image-lightbox'
 import {
   InlineMarkdownAnchor,
@@ -216,7 +220,8 @@ type MarkdownMessageProps = {
   inline?: boolean
   mobile?: boolean
   sessionId?: string
-  onCommandExecuted?: () => void
+  onCommandExecuted?: CommandOutputRefresh
+  onCommandStarted?: CommandOutputStart
 }
 
 function textContent(value: ReactNode): string | undefined {
@@ -336,6 +341,9 @@ const MarkdownCode: NonNullable<Components['code']> = ({ node, ...props }) => {
         {...(commandContext.onCommandExecuted === undefined
           ? {}
           : { onCommandExecuted: commandContext.onCommandExecuted })}
+        {...(commandContext.onCommandStarted === undefined
+          ? {}
+          : { onCommandStarted: commandContext.onCommandStarted })}
         sessionId={commandContext.sessionId}
       />
     </span>
@@ -364,6 +372,9 @@ const MarkdownPre: NonNullable<Components['pre']> = ({ children }) => {
         {...(commandContext.onCommandExecuted === undefined
           ? {}
           : { onCommandExecuted: commandContext.onCommandExecuted })}
+        {...(commandContext.onCommandStarted === undefined
+          ? {}
+          : { onCommandStarted: commandContext.onCommandStarted })}
         sessionId={commandContext.sessionId}
       />
     </div>
@@ -407,6 +418,7 @@ export const MarkdownMessage = memo(function MarkdownMessage({
   mobile = false,
   sessionId,
   onCommandExecuted,
+  onCommandStarted,
 }: MarkdownMessageProps) {
   const sessionLinks = useMarkdownSessionLinks()
   const inheritedCommandContext = useMarkdownCommandContext()
@@ -414,6 +426,8 @@ export const MarkdownMessage = memo(function MarkdownMessage({
   const commandSessionTitle = inheritedCommandContext?.sessionTitle ?? 'Session'
   const commandExecutedCallback =
     onCommandExecuted ?? inheritedCommandContext?.onCommandExecuted
+  const commandStartedCallback =
+    onCommandStarted ?? inheritedCommandContext?.onCommandStarted
   const rootClassName =
     className === undefined
       ? 'markdown-message'
@@ -444,6 +458,9 @@ export const MarkdownMessage = memo(function MarkdownMessage({
             ...(commandExecutedCallback === undefined
               ? {}
               : { onCommandExecuted: commandExecutedCallback }),
+            ...(commandStartedCallback === undefined
+              ? {}
+              : { onCommandStarted: commandStartedCallback }),
           },
         }),
   }

@@ -48,6 +48,7 @@ export type AsyncAction = {
   kind: 'merge' | 'close' | 'command'
   status: AsyncActionStatus
   command?: string
+  commandOutputIndex?: number
   exitCode?: number
   pullRequestNumber?: number
   pullRequestOwner?: string
@@ -60,9 +61,16 @@ export type AsyncAction = {
 }
 
 export type AsyncActionOutcome =
-  | { status: 'ranCommand' }
-  | { status: 'commandFailed'; exitCode?: number; error?: string }
-  | { status: 'commandTimedOut' }
+  | {
+      status: 'ranCommand' | 'commandTimedOut'
+      commandOutputIndex?: number
+    }
+  | {
+      status: 'commandFailed'
+      exitCode?: number
+      error?: string
+      commandOutputIndex?: number
+    }
   | { status: 'merged' | 'alreadyMerged' | 'queued'; message?: string }
   | { status: 'closed' }
   | {
@@ -209,6 +217,11 @@ export function AsyncActionFeedbackProvider({
             next.exitCode = outcome.exitCode
           } else {
             delete next.exitCode
+          }
+          if ('commandOutputIndex' in outcome) {
+            next.commandOutputIndex = outcome.commandOutputIndex
+          } else {
+            delete next.commandOutputIndex
           }
           return next
         }),

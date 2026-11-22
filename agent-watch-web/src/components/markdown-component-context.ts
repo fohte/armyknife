@@ -1,5 +1,9 @@
 import { createContext } from 'react'
 
+import type {
+  CommandOutputRefresh,
+  CommandOutputStart,
+} from '#components/command-result-message'
 import type { WebUiLinkTarget } from '#components/markdown-session-links'
 import type { SessionLinkTarget } from '#types'
 
@@ -14,7 +18,8 @@ export type MarkdownComponentContextValue = {
     messageText: string
     sessionId: string
     sessionTitle: string
-    onCommandExecuted?: () => void
+    onCommandExecuted?: CommandOutputRefresh
+    onCommandStarted?: CommandOutputStart
   }
 }
 

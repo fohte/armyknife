@@ -6,6 +6,10 @@ import {
   type CommandStatus,
 } from '#components/bang-command-button'
 import { BangCommandDialog } from '#components/bang-command-dialog'
+import type {
+  CommandOutputRefresh,
+  CommandOutputStart,
+} from '#components/command-result-message'
 import { useSessionOperations } from '#session-operation-context'
 import { createSessionOperation } from '#session-operations'
 
@@ -15,7 +19,8 @@ type BangCommandActionsProps = {
   sessionTitle: string
   sessionId: string
   mobile?: boolean
-  onCommandExecuted?: () => void
+  onCommandExecuted?: CommandOutputRefresh
+  onCommandStarted?: CommandOutputStart
 }
 
 type CommandPreview = { cwd: string }
@@ -54,6 +59,7 @@ export function BangCommandActions({
   sessionId,
   mobile = false,
   onCommandExecuted,
+  onCommandStarted,
 }: BangCommandActionsProps) {
   const { run } = useSessionOperations()
   const startAsyncAction = useAsyncActionStarter(() => undefined)
@@ -61,6 +67,7 @@ export function BangCommandActions({
   const [selectedCommands, setSelectedCommands] = useState<string[]>([])
   const [cwd, setCwd] = useState('')
   const [previewing, setPreviewing] = useState(false)
+  const [executing, setExecuting] = useState(false)
   const [statuses, setStatuses] = useState<Record<string, CommandStatus>>({})
   const [messages, setMessages] = useState<Record<string, string>>({})
   const onFailure = (key: string, error: Error) => {
@@ -108,60 +115,85 @@ export function BangCommandActions({
   }
 
   const confirm = () => {
-    if (activeKey === null) return
+    if (activeKey === null || executing) return
     const key = activeKey
     setStatuses((current) => ({ ...current, [key]: 'running' }))
     const commands = [...selectedCommands]
+    const outputStartIndex = onCommandStarted?.() ?? null
+    setExecuting(true)
     startAsyncAction({
       kind: 'command',
       sessionId,
       sessionTitle,
       command: commands.join('\n'),
       run: async () => {
-        const operation = createSessionOperation(
-          sessionId,
-          'commands/execute',
-          {
-            messageText,
-            commands,
-          },
-        )
-        if (operation.isErr()) {
-          onFailure(key, operation.error)
-          return { status: 'commandFailed', error: operation.error.message }
-        }
-        const result = await run(operation.value)
-        return result.match(
-          (response) => {
-            if (!isCommandExecution(response)) {
-              const error = new Error('The server returned an invalid response')
+        try {
+          const operation = createSessionOperation(
+            sessionId,
+            'commands/execute',
+            {
+              messageText,
+              commands,
+            },
+          )
+          if (operation.isErr()) {
+            onFailure(key, operation.error)
+            return { status: 'commandFailed', error: operation.error.message }
+          }
+          const result = await run(operation.value)
+          return await result.match(
+            async (response) => {
+              if (!isCommandExecution(response)) {
+                const error = new Error(
+                  'The server returned an invalid response',
+                )
+                onFailure(key, error)
+                return { status: 'commandFailed', error: error.message }
+              }
+              const commandOutputIndex =
+                (await onCommandExecuted?.(commands, outputStartIndex)) ?? null
+              setStatuses((current) => ({
+                ...current,
+                [key]: response.succeeded ? 'succeeded' : 'failed',
+              }))
+              setMessages((current) => ({
+                ...current,
+                [key]: response.timedOut
+                  ? 'Timed out'
+                  : response.succeeded
+                    ? 'Completed'
+                    : `Failed (exit code ${String(response.exitCode)})`,
+              }))
+              return response.timedOut
+                ? {
+                    status: 'commandTimedOut',
+                    ...(commandOutputIndex === null
+                      ? {}
+                      : { commandOutputIndex }),
+                  }
+                : response.succeeded
+                  ? {
+                      status: 'ranCommand',
+                      ...(commandOutputIndex === null
+                        ? {}
+                        : { commandOutputIndex }),
+                    }
+                  : {
+                      status: 'commandFailed',
+                      exitCode: response.exitCode,
+                      ...(commandOutputIndex === null
+                        ? {}
+                        : { commandOutputIndex }),
+                    }
+            },
+            (error) => {
               onFailure(key, error)
               return { status: 'commandFailed', error: error.message }
-            }
-            onCommandExecuted?.()
-            setStatuses((current) => ({
-              ...current,
-              [key]: response.succeeded ? 'succeeded' : 'failed',
-            }))
-            setMessages((current) => ({
-              ...current,
-              [key]: response.timedOut
-                ? 'Timed out'
-                : response.succeeded
-                  ? 'Completed'
-                  : `Failed (exit code ${String(response.exitCode)})`,
-            }))
-            return response.timedOut
-              ? { status: 'commandTimedOut' }
-              : response.succeeded
-                ? { status: 'ranCommand' }
-                : { status: 'commandFailed', exitCode: response.exitCode }
-          },
-          (error) => {
-            onFailure(key, error)
-            return { status: 'commandFailed', error: error.message }
-          },
-        )
+            },
+          )
+        } finally {
+          setExecuting(false)
+        }
       },
     })
     setActiveKey(null)
@@ -177,7 +209,7 @@ export function BangCommandActions({
         : label
   }
 
-  const busy = previewing
+  const busy = previewing || executing
   return (
     <span className="bang-command-actions">
       {commands.map((command, index) => {

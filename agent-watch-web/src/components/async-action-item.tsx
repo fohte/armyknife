@@ -49,64 +49,59 @@ function copy(action: AsyncAction) {
     action.pullRequestNumber === undefined
       ? ''
       : `PR #${String(action.pullRequestNumber)}`
-  const title = (() => {
+  const labels = (() => {
     switch (action.status) {
       case 'merging':
-        return action.kind === 'merge' ? `Merging ${pr}` : ''
+        return action.kind === 'merge'
+          ? { title: `Merging ${pr}`, line: `Merging ${pr}…` }
+          : { title: '', line: '' }
       case 'merged':
-        return action.kind === 'merge' ? `Merged ${pr}` : ''
+        return action.kind === 'merge'
+          ? { title: `Merged ${pr}`, line: `Merged ${pr}` }
+          : { title: '', line: '' }
       case 'alreadyMerged':
-        return action.kind === 'merge' ? `${pr} was already merged` : ''
+        return action.kind === 'merge'
+          ? {
+              title: `${pr} was already merged`,
+              line: `${pr} was already merged`,
+            }
+          : { title: '', line: '' }
       case 'queued':
-        return action.kind === 'merge' ? `Added ${pr} to the merge queue` : ''
+        return action.kind === 'merge'
+          ? {
+              title: `Added ${pr} to the merge queue`,
+              line: `Added ${pr} to the merge queue`,
+            }
+          : { title: '', line: '' }
       case 'mergeFailed':
-        return action.kind === 'merge' ? `Merge failed · ${pr}` : ''
+        return action.kind === 'merge'
+          ? { title: `Merge failed · ${pr}`, line: `Merge of ${pr} failed` }
+          : { title: '', line: '' }
       case 'closing':
-        return action.kind === 'close' ? 'Closing session' : ''
+        return action.kind === 'close'
+          ? { title: 'Closing session', line: 'Closing session…' }
+          : { title: '', line: '' }
       case 'closed':
-        return action.kind === 'close' ? 'Closed session' : ''
+        return action.kind === 'close'
+          ? { title: 'Closed session', line: 'Closed session' }
+          : { title: '', line: '' }
       case 'closeFailed':
-        return action.kind === 'close' ? 'Close failed' : ''
+        return action.kind === 'close'
+          ? { title: 'Close failed', line: 'Close failed' }
+          : { title: '', line: '' }
       case 'runningCommand':
-        return 'Running command'
+        return { title: 'Running command', line: 'Running command…' }
       case 'ranCommand':
-        return 'Ran command'
+        return { title: 'Ran command', line: 'Ran command' }
       case 'commandFailed':
         return action.exitCode === undefined
-          ? 'Command failed'
-          : `Command failed · exit ${String(action.exitCode)}`
+          ? { title: 'Command failed', line: 'Command failed' }
+          : {
+              title: `Command failed · exit ${String(action.exitCode)}`,
+              line: `Command failed (exit ${String(action.exitCode)})`,
+            }
       case 'commandTimedOut':
-        return 'Command timed out'
-    }
-  })()
-  const line = (() => {
-    switch (action.status) {
-      case 'merging':
-        return action.kind === 'merge' ? `Merging ${pr}…` : ''
-      case 'merged':
-        return action.kind === 'merge' ? `Merged ${pr}` : ''
-      case 'alreadyMerged':
-        return action.kind === 'merge' ? `${pr} was already merged` : ''
-      case 'queued':
-        return action.kind === 'merge' ? `Added ${pr} to the merge queue` : ''
-      case 'mergeFailed':
-        return action.kind === 'merge' ? `Merge of ${pr} failed` : ''
-      case 'closing':
-        return action.kind === 'close' ? 'Closing session…' : ''
-      case 'closed':
-        return action.kind === 'close' ? 'Closed session' : ''
-      case 'closeFailed':
-        return action.kind === 'close' ? 'Close failed' : ''
-      case 'runningCommand':
-        return 'Running command…'
-      case 'ranCommand':
-        return 'Ran command'
-      case 'commandFailed':
-        return action.exitCode === undefined
-          ? 'Command failed'
-          : `Command failed (exit ${String(action.exitCode)})`
-      case 'commandTimedOut':
-        return 'Command timed out'
+        return { title: 'Command timed out', line: 'Command timed out' }
     }
   })()
   const icon =
@@ -123,7 +118,7 @@ function copy(action: AsyncAction) {
           : isAsyncActionFailureStatus(action.status)
             ? 'failure'
             : 'neutral'
-  return { title, line, icon }
+  return { ...labels, icon }
 }
 
 export function AsyncActionItem({
@@ -252,7 +247,7 @@ export function AsyncActionItem({
             ) : null}
           </div>
         ) : null}
-        {isFailure && form === 'line' ? (
+        {isFailure && !canShowCommandOutput && form === 'line' ? (
           <div className="async-action-controls">
             {hasCloseChecks ? (
               <button type="button" onClick={onCloseKeepWorktree}>

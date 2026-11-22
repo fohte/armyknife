@@ -122,7 +122,22 @@ it('labels a queued prompt as You and keeps the user bubble style', () => {
 it('marks server command results for the output navigation target', () => {
   render({
     type: 'user',
-    text: "Command exited with code 1 in /workspace/example.\n\nCommand:\n```text\n$ printf 'sample output'\n```\n\nstdout:\n```text\n(empty)\n```\n\nstderr:\n```text\n(empty)\n```",
+    text: `Command exited with code 1 in /workspace/example.
+
+Command:
+\`\`\`text
+$ printf 'sample output'
+\`\`\`
+
+stdout:
+\`\`\`text
+(empty)
+\`\`\`
+
+stderr:
+\`\`\`text
+(empty)
+\`\`\``,
   })
 
   expect(

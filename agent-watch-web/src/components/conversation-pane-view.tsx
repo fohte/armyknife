@@ -14,6 +14,10 @@ import {
 import { useOptionalAsyncActionFeedback } from '#async-action-feedback'
 import { useAgentUsageContext } from '#components/agent-usage-context'
 import { AsyncActionItem } from '#components/async-action-item'
+import type {
+  CommandOutputRefresh,
+  CommandOutputStart,
+} from '#components/command-result-message'
 import { ConversationPaneHeader } from '#components/conversation-pane-header'
 import { ConversationSelectionReply } from '#components/conversation-selection-reply'
 import { ConversationStatusBand } from '#components/conversation-status-band'
@@ -83,7 +87,8 @@ type ConversationPaneViewProps = {
     payload?: Record<string, unknown>,
     permissionIdentity?: PermissionRequestIdentity,
   ) => Promise<boolean>
-  onCommandExecuted?: () => void
+  onCommandExecuted?: CommandOutputRefresh
+  onCommandStarted?: CommandOutputStart
   onRewind?: (
     messageId: string,
     mode: RewindMode,
@@ -143,6 +148,7 @@ export function ConversationPaneView({
   onClearError = () => undefined,
   onAction,
   onCommandExecuted,
+  onCommandStarted,
   onRewind,
   onOpenInTerminal,
   onSelectSession,
@@ -243,21 +249,17 @@ export function ConversationPaneView({
     [],
   )
   useEffect(() => {
-    if (loading || commandOutputAction === undefined) return
-    const commands = commandOutputAction.command?.split('\n') ?? []
-    if (commands.length === 0) return
-    const target = Array.from(
-      conversationScrollRef.current?.querySelectorAll<HTMLElement>(
-        '[data-command-result="true"]',
-      ) ?? [],
+    if (
+      loading ||
+      commandOutputAction === undefined ||
+      commandOutputAction.commandOutputIndex === undefined
+    ) {
+      return
+    }
+    const target = conversationScrollRef.current?.querySelector<HTMLElement>(
+      `[data-command-result="true"][data-conversation-index="${String(commandOutputAction.commandOutputIndex)}"]`,
     )
-      .filter((message) =>
-        commands.every((command) =>
-          message.textContent.includes(`$ ${command}`),
-        ),
-      )
-      .at(-1)
-    if (target === undefined) return
+    if (target === undefined || target === null) return
 
     target.dataset['commandOutputHighlighted'] = 'true'
     target.scrollIntoView({ behavior: 'smooth', block: 'center' })
@@ -327,6 +329,7 @@ export function ConversationPaneView({
     hasUnansweredProposal,
   } = useConversationMessageElements({
     messages,
+    start,
     ...(decisions === undefined ? {} : { decisions }),
     ...(responseHasUnansweredProposal === undefined
       ? {}
@@ -342,6 +345,7 @@ export function ConversationPaneView({
     onSelectDecision,
     onAction,
     ...(onCommandExecuted === undefined ? {} : { onCommandExecuted }),
+    ...(onCommandStarted === undefined ? {} : { onCommandStarted }),
     onOpenInTerminal: openInTerminal,
     openInTerminalStatus,
     onSelectSession: selectLinkedSession,
@@ -463,6 +467,7 @@ export function ConversationPaneView({
           sessionId={session.id}
           sessionTitle={session.title}
           {...(onCommandExecuted === undefined ? {} : { onCommandExecuted })}
+          {...(onCommandStarted === undefined ? {} : { onCommandStarted })}
         >
           {conversationMessageElements}
         </MarkdownCommandContextProvider>

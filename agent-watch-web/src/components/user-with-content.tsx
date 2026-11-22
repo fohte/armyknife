@@ -2,6 +2,7 @@ import '#components/user-with-content.css'
 
 import { useEffect, useState } from 'react'
 
+import { isCommandResultText } from '#components/command-result-message'
 import { ImageLightbox } from '#components/image-lightbox'
 import { MarkdownMessage } from '#components/markdown-message'
 import { formatMessageTime } from '#components/message-time'
@@ -51,6 +52,7 @@ export function UserWithContent({
   onRewind = () => Promise.resolve(false),
   rewindMenuOpen = false,
   navigationHighlighted = false,
+  conversationIndex,
 }: {
   message: UserMessage
   now?: Date
@@ -63,22 +65,20 @@ export function UserWithContent({
   ) => Promise<boolean>
   rewindMenuOpen?: boolean
   navigationHighlighted?: boolean
+  conversationIndex?: number
 }) {
   const content: UserContentPart[] =
     message.type === 'user'
       ? [{ type: 'text', text: message.text }]
       : message.content
-  const messageText = content
+  const draftText = content
     .filter(
       (part): part is Extract<UserContentPart, { type: 'text' }> =>
         part.type === 'text',
     )
     .map((part) => part.text)
     .join('\n')
-  const isCommandResultMessage =
-    /^Command (?:exited with code \d+|timed out after \d+ seconds) in /.test(
-      messageText,
-    ) && messageText.includes('\nCommand:\n')
+  const isCommandResultMessage = isCommandResultText(draftText)
   const queued = message.type === 'queued_user'
   const isOwnMessage = queued || message.from == null || message.from === ''
   const time = formatMessageTime(message.timestamp, now)
@@ -91,17 +91,10 @@ export function UserWithContent({
     message.type === 'user' || message.type === 'user_with_content'
       ? message.rewindId
       : undefined
-  const draftText = content
-    .filter(
-      (part): part is Extract<UserContentPart, { type: 'text' }> =>
-        part.type === 'text',
-    )
-    .map((part) => part.text)
-    .join('\n')
-
   return (
     <article
       className="chat-user-group"
+      data-conversation-index={conversationIndex}
       data-command-result={isCommandResultMessage ? 'true' : undefined}
       data-own-message={isOwnMessage ? 'true' : undefined}
       data-own-message-highlighted={navigationHighlighted ? 'true' : undefined}
