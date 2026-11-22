@@ -44,6 +44,22 @@ export function WebUiPane({
         )
       : targetUrlOverride
 
+  const fullscreenButton = (
+    <Button
+      type="button"
+      variant="plain"
+      aria-label={
+        isFullscreen ? `Exit ${name} fullscreen` : `Show ${name} fullscreen`
+      }
+      aria-pressed={isFullscreen}
+      onClick={() => {
+        setIsFullscreen((current) => !current)
+      }}
+    >
+      {isFullscreen ? '↙' : '⛶'}
+    </Button>
+  )
+
   useEffect(() => {
     if (previousFullscreenRequest.current === fullscreenRequest) return
     previousFullscreenRequest.current = fullscreenRequest
@@ -69,21 +85,7 @@ export function WebUiPane({
             </div>
             <div className="web-ui-pane-mobile-actions">
               {mobileTabPresentation ? (
-                <Button
-                  type="button"
-                  variant="plain"
-                  aria-label={
-                    isFullscreen
-                      ? `Exit ${name} fullscreen`
-                      : `Show ${name} fullscreen`
-                  }
-                  aria-pressed={isFullscreen}
-                  onClick={() => {
-                    setIsFullscreen((current) => !current)
-                  }}
-                >
-                  {isFullscreen ? '↙' : '⛶'}
-                </Button>
+                fullscreenButton
               ) : targetUrl !== null ? (
                 <a
                   className="web-ui-pane-open-new-tab"
@@ -146,21 +148,7 @@ export function WebUiPane({
         )}
         {mobilePresentation || mobileTabPresentation ? null : (
           <>
-            <Button
-              type="button"
-              variant="plain"
-              aria-label={
-                isFullscreen
-                  ? `Exit ${name} fullscreen`
-                  : `Show ${name} fullscreen`
-              }
-              aria-pressed={isFullscreen}
-              onClick={() => {
-                setIsFullscreen((current) => !current)
-              }}
-            >
-              {isFullscreen ? '↙' : '⛶'}
-            </Button>
+            {fullscreenButton}
             <Button
               type="button"
               variant="plain"
