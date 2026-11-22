@@ -951,3 +951,51 @@ it('marks Inbox when an async action in Activity fails', async () => {
     backdropColor: 'rgba(0, 0, 0, 0.55)',
   })
 })
+
+it('opens Activity as a sheet throughout the mobile layout breakpoint', async () => {
+  await page.viewport(710, 844)
+  const onCloseNavigation = vi.fn()
+  root = createRoot(container)
+  await act(() => {
+    root?.render(
+      <AsyncActionFeedbackProvider>
+        <MobileNavigationWithActivity onCloseNavigation={onCloseNavigation} />
+      </AsyncActionFeedbackProvider>,
+    )
+    return Promise.resolve()
+  })
+
+  const activityButton = container.querySelector<HTMLButtonElement>(
+    '.async-action-activity-button',
+  )
+  if (activityButton === null) {
+    throw new Error('The Activity button is missing')
+  }
+  await act(async () => {
+    await userEvent.click(activityButton)
+  })
+
+  const dialog = container.querySelector<HTMLElement>('.async-action-activity')
+  const backdrop = container.querySelector<HTMLElement>(
+    '.async-action-activity-backdrop',
+  )
+  if (dialog === null || backdrop === null) {
+    throw new Error('The Activity sheet is missing')
+  }
+
+  const dialogRect = dialog.getBoundingClientRect()
+  const snapshot = () => ({
+    dialogPosition: getComputedStyle(dialog).position,
+    dialogWidth: dialogRect.width,
+    dialogRightGap: window.innerWidth - dialogRect.right,
+    dialogBottomGap: window.innerHeight - dialogRect.bottom,
+    backdropColor: getComputedStyle(backdrop).backgroundColor,
+  })
+  expect(snapshot()).toEqual({
+    dialogPosition: 'static',
+    dialogWidth: 710,
+    dialogRightGap: 0,
+    dialogBottomGap: 0,
+    backdropColor: 'rgba(0, 0, 0, 0.55)',
+  })
+})

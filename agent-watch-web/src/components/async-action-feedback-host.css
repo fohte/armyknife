@@ -114,6 +114,9 @@
     bottom: 112px;
     max-height: calc(100dvh - 128px);
   }
+}
+
+@media (max-width: 760px) {
   .async-action-activity-backdrop {
     align-items: flex-end;
     padding: 0;
