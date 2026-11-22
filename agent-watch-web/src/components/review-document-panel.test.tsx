@@ -6,6 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { page } from 'vitest/browser'
 
 import { ReviewDocumentPanel } from '#components/review-document-panel'
+import { SessionStatusPanel } from '#components/session-status-panel'
 import type { JsonValue } from '#types'
 
 let container: HTMLDivElement
@@ -186,6 +187,68 @@ it('shows the unsaved state before the review actions', () => {
   expect(container.querySelector('.review-document-status')?.textContent).toBe(
     'Unsaved changes',
   )
+})
+
+it('keeps the mobile Markdown editor usable when metadata fills the viewport', async () => {
+  await page.viewport(390, 844)
+  container.style.width = '390px'
+  container.style.height = '844px'
+  container.style.display = 'flex'
+  root = createRoot(container)
+  act(() =>
+    root?.render(
+      <SessionStatusPanel
+        tabs={[
+          {
+            id: 'review-document',
+            label: 'Review',
+            count: 0,
+            visible: true,
+            showCount: false,
+            content: (
+              <ReviewDocumentPanel
+                frontmatter={Object.fromEntries(
+                  Array.from({ length: 20 }, (_, index) => [
+                    `field-${String(index + 1)}`,
+                    `value-${String(index + 1)}`,
+                  ]),
+                )}
+                body="A review document with a long body."
+              />
+            ),
+          },
+        ]}
+        activeTabId="review-document"
+        onTabChange={() => undefined}
+        onClose={() => undefined}
+        mobilePresentation
+      />,
+    ),
+  )
+
+  const bodyEditor = container.querySelector<HTMLElement>(
+    '.review-document-body-editor',
+  )
+  const content = container.querySelector<HTMLElement>(
+    '.review-document-content',
+  )
+  const editorColumn = container.querySelector<HTMLElement>(
+    '.review-document-edit-column',
+  )
+  if (bodyEditor === null || content === null || editorColumn === null) {
+    throw new Error('The mobile review editor layout was not rendered.')
+  }
+
+  const snapshot = () => ({
+    bodyEditorHasRoom: bodyEditor.getBoundingClientRect().height >= 320,
+    editorColumnHasRoom: editorColumn.getBoundingClientRect().height >= 240,
+    metadataCanScroll: content.scrollHeight > content.clientHeight,
+  })
+  expect(snapshot()).toEqual({
+    bodyEditorHasRoom: true,
+    editorColumnHasRoom: true,
+    metadataCanScroll: true,
+  })
 })
 
 it.each([
