@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.858](https://github.com/fohte/armyknife/compare/v0.1.857...v0.1.858) (2026-11-22)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** restore compact row padding ([#2108](https://github.com/fohte/armyknife/issues/2108)) ([3c1f42f](https://github.com/fohte/armyknife/commit/3c1f42f667605276ec9f9c7a9bcac7d18899dd8f))
+
 ## [0.1.857](https://github.com/fohte/armyknife/compare/v0.1.856...v0.1.857) (2026-11-22)
 
 
