@@ -62,6 +62,9 @@
 .async-action-error {
   color: var(--aw-color-error) !important;
 }
+.async-action-item--row .async-action-error {
+  color: var(--aw-text-body) !important;
+}
 .async-action-controls {
   display: flex;
   gap: 8px;
@@ -87,6 +90,10 @@
 .async-action-item--toast.has-close-worktree .async-action-controls {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.async-action-item--row:not(.has-close-worktree) .async-action-controls {
+  display: flex;
+  flex-wrap: wrap;
 }
 .async-action-item--row .async-action-controls button:first-child,
 .async-action-item--toast.has-close-worktree
@@ -129,6 +136,26 @@
   color: var(--aw-text-muted);
   cursor: pointer;
 }
+
+@media (min-width: 701px) {
+  .async-action-item--row.has-close-worktree .async-action-controls {
+    display: grid;
+    grid-template-columns: max-content max-content;
+    justify-content: start;
+  }
+  .async-action-item--row.has-close-worktree
+    .async-action-controls
+    button:first-child {
+    grid-column: auto;
+  }
+  .async-action-item--row.has-close-worktree
+    .async-action-controls
+    .async-action-open-terminal {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+}
+
 .async-action-timer {
   position: absolute;
   right: 0;
@@ -204,6 +231,11 @@
   }
   .async-action-item--row .async-action-controls {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .async-action-item--row:not(.has-close-worktree)
+    .async-action-controls
+    button {
+    min-width: 88px;
   }
   .async-action-item--line .async-action-controls {
     width: 100%;

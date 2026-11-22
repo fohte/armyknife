@@ -765,7 +765,111 @@ it('fills the phone drawer and pins Activity and quota below its scroll list', a
   })
 })
 
+it('opens desktop Activity beside its row below the navigation list', async () => {
+  await page.viewport(1440, 900)
+  container.style.display = 'flex'
+  container.style.width = '240px'
+  container.style.height = '900px'
+  container.style.overflow = 'hidden'
+  root = createRoot(container)
+  await act(async () => {
+    root?.render(
+      <AsyncActionFeedbackProvider>
+        <AgentWatchNav
+          activeView="inbox"
+          paletteShortcut={{
+            modifier: 'metaKey',
+            label: '⌘K',
+            ariaLabel: 'Command K',
+          }}
+          needsActionCount={0}
+          savedViews={[]}
+          selectedSavedViewId={null}
+          workTypeNavGroups={[]}
+          onViewChange={() => undefined}
+          onSelectSavedView={() => undefined}
+          onDeleteSavedView={() => undefined}
+          todaySessions={[]}
+          onSelectToday={() => undefined}
+          onSelectSession={() => undefined}
+          onOpenPalette={() => undefined}
+        />
+      </AsyncActionFeedbackProvider>,
+    )
+    return Promise.resolve()
+  })
+
+  const nav = container.querySelector<HTMLElement>('.agent-watch-nav')
+  const scroll = container.querySelector<HTMLElement>('.agent-watch-nav-scroll')
+  const activity = container.querySelector<HTMLElement>(
+    '.agent-watch-nav-activity',
+  )
+  const activityButton = container.querySelector<HTMLButtonElement>(
+    '.async-action-activity-button',
+  )
+  const quota = container.querySelector<HTMLElement>('.quota-panel')
+  if (
+    nav === null ||
+    scroll === null ||
+    activity === null ||
+    activityButton === null ||
+    quota === null
+  ) {
+    throw new Error('Desktop navigation Activity is missing')
+  }
+
+  quota.style.height = '200px'
+  const anchor = activityButton.getBoundingClientRect()
+  await act(async () => {
+    await userEvent.click(activityButton)
+  })
+
+  const dialog = container.querySelector<HTMLElement>('.async-action-activity')
+  const backdrop = container.querySelector<HTMLElement>(
+    '.async-action-activity-backdrop',
+  )
+  if (dialog === null || backdrop === null) {
+    throw new Error('The desktop Activity dialog is missing')
+  }
+
+  const snapshot = () => {
+    const navRect = nav.getBoundingClientRect()
+    const scrollRect = scroll.getBoundingClientRect()
+    const activityRect = activity.getBoundingClientRect()
+    const dialogRect = dialog.getBoundingClientRect()
+    const quotaRect = quota.getBoundingClientRect()
+    return {
+      navigationFooter: Array.from(
+        nav.children,
+        (element) => element.className,
+      ),
+      activityButtonClass: activityButton.className,
+      scrollToActivityGap: activityRect.top - scrollRect.bottom,
+      activityToQuotaGap: quotaRect.top - activityRect.bottom,
+      quotaBottomGap: navRect.bottom - quotaRect.bottom,
+      dialogLeftGap: dialogRect.left - anchor.right,
+      dialogToActivityBottomGap: dialogRect.bottom - anchor.bottom,
+      backdropColor: getComputedStyle(backdrop).backgroundColor,
+    }
+  }
+  expect(snapshot()).toEqual({
+    navigationFooter: [
+      'agent-watch-nav-scroll',
+      'agent-watch-nav-activity',
+      'quota-panel',
+    ],
+    activityButtonClass: 'async-action-activity-button is-empty is-open',
+    scrollToActivityGap: 8,
+    activityToQuotaGap: 4,
+    quotaBottomGap: 0,
+    dialogLeftGap: 16,
+    dialogToActivityBottomGap: 0,
+    backdropColor: 'rgba(0, 0, 0, 0)',
+  })
+})
+
 it('marks Inbox when an async action in Activity fails', async () => {
+  await page.viewport(390, 844)
   const onCloseNavigation = vi.fn()
   root = createRoot(container)
   await act(() => {
@@ -817,5 +921,81 @@ it('marks Inbox when an async action in Activity fails', async () => {
     closeNavigationCalls: [[]],
     activityDialogVisible: true,
     navigationDialogOpen: false,
+  })
+
+  const activityDialog = container.querySelector<HTMLElement>(
+    '.async-action-activity',
+  )
+  const backdrop = container.querySelector<HTMLElement>(
+    '.async-action-activity-backdrop',
+  )
+  if (activityDialog === null || backdrop === null) {
+    throw new Error('The phone Activity sheet is missing')
+  }
+
+  const sheetSnapshot = () => ({
+    dialogClass: activityDialog.className,
+    dialogPosition: getComputedStyle(activityDialog).position,
+    dialogWidth: activityDialog.getBoundingClientRect().width,
+    dialogBottomGap:
+      window.innerHeight - activityDialog.getBoundingClientRect().bottom,
+    backdropClass: backdrop.className,
+    backdropColor: getComputedStyle(backdrop).backgroundColor,
+  })
+  expect(sheetSnapshot()).toEqual({
+    dialogClass: 'async-action-activity is-anchored',
+    dialogPosition: 'static',
+    dialogWidth: 390,
+    dialogBottomGap: 0,
+    backdropClass: 'async-action-activity-backdrop is-anchored',
+    backdropColor: 'rgba(0, 0, 0, 0.55)',
+  })
+})
+
+it('opens Activity as a sheet throughout the mobile layout breakpoint', async () => {
+  await page.viewport(710, 844)
+  const onCloseNavigation = vi.fn()
+  root = createRoot(container)
+  await act(() => {
+    root?.render(
+      <AsyncActionFeedbackProvider>
+        <MobileNavigationWithActivity onCloseNavigation={onCloseNavigation} />
+      </AsyncActionFeedbackProvider>,
+    )
+    return Promise.resolve()
+  })
+
+  const activityButton = container.querySelector<HTMLButtonElement>(
+    '.async-action-activity-button',
+  )
+  if (activityButton === null) {
+    throw new Error('The Activity button is missing')
+  }
+  await act(async () => {
+    await userEvent.click(activityButton)
+  })
+
+  const dialog = container.querySelector<HTMLElement>('.async-action-activity')
+  const backdrop = container.querySelector<HTMLElement>(
+    '.async-action-activity-backdrop',
+  )
+  if (dialog === null || backdrop === null) {
+    throw new Error('The Activity sheet is missing')
+  }
+
+  const dialogRect = dialog.getBoundingClientRect()
+  const snapshot = () => ({
+    dialogPosition: getComputedStyle(dialog).position,
+    dialogWidth: dialogRect.width,
+    dialogRightGap: window.innerWidth - dialogRect.right,
+    dialogBottomGap: window.innerHeight - dialogRect.bottom,
+    backdropColor: getComputedStyle(backdrop).backgroundColor,
+  })
+  expect(snapshot()).toEqual({
+    dialogPosition: 'static',
+    dialogWidth: 710,
+    dialogRightGap: 0,
+    dialogBottomGap: 0,
+    backdropColor: 'rgba(0, 0, 0, 0.55)',
   })
 })

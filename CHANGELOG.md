@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.851](https://github.com/fohte/armyknife/compare/v0.1.850...v0.1.851) (2026-11-22)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** hide closed inbox sessions ([#2096](https://github.com/fohte/armyknife/issues/2096)) ([c31530a](https://github.com/fohte/armyknife/commit/c31530a10b4ddd121b9b963d636d15a5b05f5e79))
+
+## [0.1.850](https://github.com/fohte/armyknife/compare/v0.1.849...v0.1.850) (2026-11-22)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** align desktop Activity UI ([#2092](https://github.com/fohte/armyknife/issues/2092)) ([09fbbc3](https://github.com/fohte/armyknife/commit/09fbbc3ecaf2ee35df42930d05a64ffc54f45be0))
+
 ## [0.1.849](https://github.com/fohte/armyknife/compare/v0.1.848...v0.1.849) (2026-11-22)
 
 

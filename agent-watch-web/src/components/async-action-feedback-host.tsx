@@ -10,6 +10,7 @@ type AsyncActionFeedbackHostProps = {
   toastIds: readonly number[]
   toastRef?: RefObject<HTMLDivElement | null>
   activityOpen: boolean
+  activityPosition?: { left: number; bottom: number } | null
   toastBottomOffset: number | null
   selectedActionId: number | null
   retry: (id: number) => void
@@ -27,6 +28,7 @@ export function AsyncActionFeedbackHost({
   toastIds,
   toastRef,
   activityOpen,
+  activityPosition = null,
   toastBottomOffset,
   selectedActionId,
   retry,
@@ -105,14 +107,22 @@ export function AsyncActionFeedbackHost({
       </div>
       {activityOpen ? (
         <div
-          className="async-action-activity-backdrop"
+          className={`async-action-activity-backdrop${activityPosition === null ? '' : ' is-anchored'}`}
           onMouseDown={closeActivity}
         >
           <section
             aria-label="Activity"
             aria-modal="true"
-            className="async-action-activity"
+            className={`async-action-activity${activityPosition === null ? '' : ' is-anchored'}`}
             role="dialog"
+            style={
+              activityPosition === null
+                ? undefined
+                : {
+                    left: `${String(activityPosition.left)}px`,
+                    bottom: `${String(activityPosition.bottom)}px`,
+                  }
+            }
             onMouseDown={(event) => {
               event.stopPropagation()
             }}
