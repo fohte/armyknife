@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.852](https://github.com/fohte/armyknife/compare/v0.1.851...v0.1.852) (2026-11-22)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show command status in chat ([#2097](https://github.com/fohte/armyknife/issues/2097)) ([99253b3](https://github.com/fohte/armyknife/commit/99253b38d88d10ba9324697a0bced91c37595a1a))
+
 ## [0.1.851](https://github.com/fohte/armyknife/compare/v0.1.850...v0.1.851) (2026-11-22)
 
 
