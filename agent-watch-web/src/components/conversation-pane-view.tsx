@@ -98,6 +98,7 @@ type ConversationPaneViewProps = {
   mobileUpdateNotice?: ReactNode
   selectedDecisionSeq?: number | null
   decisionJump?: { seq: number } | null
+  onDecisionJumpComplete?: () => void
   onToggleStatusPanel?: () => void
   onOpenTasks?: () => void
   onSelectDecision?: (seq: number) => void
@@ -151,6 +152,7 @@ export function ConversationPaneView({
   mobileUpdateNotice,
   selectedDecisionSeq = null,
   decisionJump = null,
+  onDecisionJumpComplete = () => undefined,
   onToggleStatusPanel = () => undefined,
   onOpenTasks = () => undefined,
   onSelectDecision = () => undefined,
@@ -228,10 +230,24 @@ export function ConversationPaneView({
   })
   useEffect(() => {
     if (decisionJump === null) return
-    document
-      .getElementById(`decision-row-${String(decisionJump.seq)}`)
-      ?.scrollIntoView({ block: 'center' })
-  }, [decisionJump])
+    const decisionRow = document.getElementById(
+      `decision-row-${String(decisionJump.seq)}`,
+    )
+    if (decisionRow !== null) {
+      decisionRow.scrollIntoView({ block: 'center' })
+      onDecisionJumpComplete()
+      return
+    }
+    if (start > 0 || (epoch !== undefined && olderCursor != null)) loadOlder()
+  }, [
+    decisionJump,
+    epoch,
+    loadOlder,
+    messages,
+    olderCursor,
+    onDecisionJumpComplete,
+    start,
+  ])
   const sessionLinkTargets = useSessionLinkTargets(
     sessions,
     providedSessionLinkTargets,

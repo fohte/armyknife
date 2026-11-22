@@ -1,6 +1,7 @@
 import {
   type Dispatch,
   type SetStateAction,
+  useCallback,
   useEffect,
   useRef,
   useState,
@@ -148,6 +149,10 @@ export function useConversationStatusPanel({
     null,
   )
   const [decisionJump, setDecisionJump] = useState<{ seq: number } | null>(null)
+  const onDecisionJumpComplete = useCallback(() => {
+    setDecisionJump(null)
+    if (isMobile) onCloseStatusPanel()
+  }, [isMobile, onCloseStatusPanel])
   const [reviewDocumentState, setReviewDocumentState] =
     useState<ReviewDocumentState | null>(null)
   const reviewDocumentStateRef = useRef<ReviewDocumentState | null>(null)
@@ -468,7 +473,6 @@ export function useConversationStatusPanel({
                 onSelect={(seq) => {
                   setSelectedDecisionSeq(seq)
                   setDecisionJump({ seq })
-                  if (isMobile) onCloseStatusPanel()
                 }}
                 onOk={(seq) => onAction(`decisions/${String(seq)}/ok`)}
                 onChange={(seq, comment) =>
@@ -522,6 +526,7 @@ export function useConversationStatusPanel({
     onOpenWebUiInFullscreen,
     fullscreenWebUi,
     mobileWebUi,
+    onDecisionJumpComplete,
     onSelectDecision: setSelectedDecisionSeq,
     decisionJump,
     onTabChange: setActivePanelTabId,

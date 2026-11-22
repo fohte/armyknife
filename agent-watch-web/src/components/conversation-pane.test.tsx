@@ -4882,6 +4882,126 @@ it('jumps from a mobile Decisions tab to the selected conversation message', asy
   })
 })
 
+it('loads older messages before jumping to a pruned mobile decision', async () => {
+  const decision: ChatItem = {
+    type: 'decision',
+    seq: 12,
+    title: 'Keep retry limits predictable',
+    why: 'A fixed limit prevents repeated delivery attempts.',
+    considered: ['Retry until the request succeeds'],
+    easyToChange: 'Update one worker setting.',
+    review: null,
+    createdAt: '2026-11-11T03:25:59Z',
+  }
+  const assistantMessage = (index: number): ChatItem => ({
+    type: 'assistant',
+    text: `Message ${String(index)}.`,
+  })
+  const latestPage = Array.from({ length: 100 }, (_, index) =>
+    assistantMessage(index + 200),
+  )
+  const middlePage = Array.from({ length: 100 }, (_, index) =>
+    assistantMessage(index + 100),
+  )
+  const oldestPage = Array.from({ length: 100 }, (_, index) =>
+    assistantMessage(index),
+  )
+  oldestPage[99] = decision
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.endsWith('/messages?before=200&limit=100')) {
+      return Promise.resolve(
+        jsonResponse(
+          messagesResponse(middlePage, [], {
+            start: 100,
+            total: 300,
+            decisions: [decision],
+          }),
+        ),
+      )
+    }
+    if (url.endsWith('/messages?before=100&limit=100')) {
+      return Promise.resolve(
+        jsonResponse(
+          messagesResponse(oldestPage, [], {
+            start: 0,
+            total: 300,
+            decisions: [decision],
+          }),
+        ),
+      )
+    }
+    if (url.endsWith('/messages?limit=100')) {
+      return Promise.resolve(
+        jsonResponse(
+          messagesResponse(latestPage, [], {
+            start: 200,
+            total: 300,
+            decisions: [decision],
+          }),
+        ),
+      )
+    }
+    if (url.endsWith('/actions')) {
+      return Promise.resolve(jsonResponse(actions))
+    }
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  function MobileConversationHarness() {
+    const [statusPanelOpen, setStatusPanelOpen] = useState(true)
+    return (
+      <ConversationPane
+        session={{ ...session, decisionCount: 1, unreviewedDecisionCount: 1 }}
+        shouldSkipSessionTreeFetch
+        initialSessionTree={[]}
+        refreshKey={0}
+        sessionTreeRefreshKey={0}
+        onSelectSession={() => undefined}
+        isMobile
+        statusPanelOpen={statusPanelOpen}
+        onCloseStatusPanel={() => {
+          setStatusPanelOpen(false)
+        }}
+      />
+    )
+  }
+
+  root = createRoot(container)
+  act(() => root?.render(<MobileConversationHarness />))
+  await waitForState(
+    () => container.querySelector('.decision-card--panel') !== null,
+  )
+  await act(async () => {
+    await userEvent.click(
+      requireElement(
+        container.querySelector<HTMLButtonElement>(
+          '.decision-card--panel .decision-panel-card-heading',
+        ),
+      ),
+    )
+  })
+  await waitForState(() => container.querySelector('#decision-row-12') !== null)
+
+  const snapshot = () => ({
+    statusPanelVisible:
+      container.querySelector('.mobile-session-status-overlay') !== null,
+    decisionVisible: container.querySelector('#decision-row-12') !== null,
+    olderRequests: fetcher.mock.calls
+      .map(([input]) => requestUrl(input))
+      .filter((url) => url.includes('/messages?before=')),
+  })
+  expect(snapshot()).toEqual({
+    statusPanelVisible: false,
+    decisionVisible: true,
+    olderRequests: [
+      '/api/sessions/sample-session/messages?before=200&limit=100',
+      '/api/sessions/sample-session/messages?before=100&limit=100',
+    ],
+  })
+})
+
 it('selects Running by default and switches to Decisions from its tab', () => {
   const decision: ChatItem = {
     type: 'decision',
