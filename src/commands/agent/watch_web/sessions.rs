@@ -243,6 +243,7 @@ pub(super) struct SessionSnapshot {
     revision: i64,
     sessions: Vec<Session>,
     all_sessions: Vec<Session>,
+    closed_session_ids: HashSet<String>,
     web_states: Vec<store::WatchWebSessionState>,
     title_by_id: HashMap<String, String>,
     repo_by_id: HashMap<String, String>,
@@ -426,13 +427,13 @@ async fn list_sessions<S: SessionSource>(
             .iter()
             .filter(|session| {
                 session.status == SessionStatus::Ended
-                    && snapshot
+                    && !snapshot.closed_session_ids.contains(&session.session_id)
+                    && (snapshot
                         .unanswered_todo_titles
                         .contains_key(&session.session_id)
-                    || session.status == SessionStatus::Ended
-                        && snapshot
+                        || snapshot
                             .folded_todo_summaries
-                            .contains_key(&session.session_id)
+                            .contains_key(&session.session_id))
             })
             .filter(|session| response_session_ids.insert(session.session_id.clone()))
             .cloned(),
@@ -777,6 +778,7 @@ fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
     let (unanswered_todo_titles, folded_todo_summaries) = summarize_todos(
         store::incomplete_agent_todo_titles_from(&sessions_dir, &visible_session_ids)?,
     );
+    let closed_session_ids = store::closed_session_ids_from(&sessions_dir)?;
 
     let mut config = config::load_config_or_default();
     let agent_config = std::mem::take(&mut config.agent);
@@ -785,6 +787,7 @@ fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
         revision,
         sessions,
         all_sessions,
+        closed_session_ids,
         web_states: store::watch_web_session_states_from(&store::sessions_dir()?)?,
         title_by_id,
         repo_by_id,
@@ -886,6 +889,7 @@ mod tests {
         revision: i64,
         sessions: Vec<Session>,
         all_sessions: Vec<Session>,
+        closed_session_ids: HashSet<String>,
         archived_ancestors: HashMap<String, Session>,
         web_states: Vec<store::WatchWebSessionState>,
         title_by_id: HashMap<String, String>,
@@ -916,6 +920,7 @@ mod tests {
                 revision: self.revision,
                 sessions: self.sessions.clone(),
                 all_sessions: self.all_sessions.clone(),
+                closed_session_ids: self.closed_session_ids.clone(),
                 web_states: self.web_states.clone(),
                 title_by_id: self.title_by_id.clone(),
                 repo_by_id: self.repo_by_id.clone(),
@@ -1095,6 +1100,7 @@ mod tests {
             revision: 7,
             sessions: vec![child_session.clone()],
             all_sessions: vec![child_session, parent],
+            closed_session_ids: HashSet::new(),
             archived_ancestors: HashMap::new(),
             web_states: vec![store::WatchWebSessionState {
                 session_id: "child-session".to_string(),
@@ -2907,6 +2913,34 @@ mod tests {
         expected["sessions"][0]["preview"] = serde_json::json!("Check the page");
 
         assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn explicit_close_keeps_an_ended_session_with_an_unanswered_todo_out_of_the_feed(
+        mut source: TestSessionSource,
+    ) {
+        source.sessions.clear();
+        source.all_sessions.truncate(1);
+        source.all_sessions[0].status = SessionStatus::Ended;
+        source
+            .closed_session_ids
+            .insert("child-session".to_string());
+        source
+            .unanswered_todo_titles
+            .insert("child-session".to_string(), "Check the page".to_string());
+
+        assert_eq!(
+            sessions_response(source).await,
+            (
+                StatusCode::OK,
+                serde_json::json!({
+                    "revision": 7,
+                    "workTypeNavLabels": {},
+                    "sessions": [],
+                }),
+            ),
+        );
     }
 
     #[rstest]
