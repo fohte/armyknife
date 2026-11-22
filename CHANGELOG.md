@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.859](https://github.com/fohte/armyknife/compare/v0.1.858...v0.1.859) (2026-11-22)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** align tabs and task rows ([#2110](https://github.com/fohte/armyknife/issues/2110)) ([cdd43cb](https://github.com/fohte/armyknife/commit/cdd43cbe1a012321de84ba9249f26513eb6d530a))
+
 ## [0.1.858](https://github.com/fohte/armyknife/compare/v0.1.857...v0.1.858) (2026-11-22)
 
 
