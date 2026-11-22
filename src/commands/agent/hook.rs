@@ -875,7 +875,14 @@ fn process_hook_event_impl_with_env(
     let keep_failed_after_idle_prompt = session.status == SessionStatus::Failed
         && event == HookEvent::Notification
         && input.notification_type.as_deref() == Some("idle_prompt");
-    if !keep_paused && !keep_failed_after_idle_prompt {
+    // Codex's SessionEnd can run during daemon shutdown, so a pane-less close
+    // must not be undone by later hooks from that still-running process.
+    let explicitly_reactivated = event == HookEvent::UserPromptSubmit
+        || (event == HookEvent::SessionStart && input.source.as_deref() != Some("compact"));
+    let keep_ended = session.engine == Engine::Codex
+        && session.status == SessionStatus::Ended
+        && !explicitly_reactivated;
+    if !keep_paused && !keep_failed_after_idle_prompt && !keep_ended {
         if let Some(status) = status {
             session.status = status;
         } else if event != HookEvent::PermissionDenied
@@ -6024,6 +6031,45 @@ mod tests {
                 (session.agent_status, session.agent_status_clear_pending),
                 (Some(expected), true)
             );
+        }
+
+        #[rstest]
+        #[case::stop(HookEvent::Stop, None, SessionStatus::Ended)]
+        #[case::post_tool_use(HookEvent::PostToolUse, None, SessionStatus::Ended)]
+        #[case::user_prompt_submit(HookEvent::UserPromptSubmit, None, SessionStatus::Running)]
+        #[case::session_resume(HookEvent::SessionStart, Some("resume"), SessionStatus::Stopped)]
+        fn ended_codex_session_reopens_only_after_explicit_activity(
+            #[case] event: HookEvent,
+            #[case] source: Option<&str>,
+            #[case] expected_status: SessionStatus,
+        ) {
+            let temp_dir = create_temp_sessions_dir();
+            let mut existing = create_test_session(None);
+            existing.engine = Engine::Codex;
+            store::save_session_to(temp_dir.path(), &existing).expect("session should save");
+            session_lifecycle::mark_session_ended_after_close_in(
+                "test-123",
+                temp_dir.path(),
+                &SideEffects::none(),
+            )
+            .expect("close should end the session");
+
+            let mut input = create_test_input_with_source(None, source);
+            input.engine = Engine::Codex;
+            temp_env::with_vars([("TMUX_PANE", None::<&str>)], || {
+                process_hook_event_without_instruction(
+                    event,
+                    input,
+                    temp_dir.path(),
+                    &SideEffects::none(),
+                )
+                .expect("hook should succeed");
+            });
+
+            let session = store::load_session_from(temp_dir.path(), "test-123")
+                .expect("session should load")
+                .expect("session should exist");
+            assert_eq!(session.status, expected_status);
         }
 
         #[rstest]
