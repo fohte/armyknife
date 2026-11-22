@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.846](https://github.com/fohte/armyknife/compare/v0.1.845...v0.1.846) (2026-11-22)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** clip actions to swipe width ([#2084](https://github.com/fohte/armyknife/issues/2084)) ([4af7dd5](https://github.com/fohte/armyknife/commit/4af7dd5947b568c61eed7571c7098d89f162593f))
+
 ## [0.1.845](https://github.com/fohte/armyknife/compare/v0.1.844...v0.1.845) (2026-11-22)
 
 
