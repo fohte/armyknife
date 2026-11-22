@@ -75,19 +75,24 @@ pub fn run(args: &RedeliverDetachedArgs) -> Result<()> {
         RETRY_WINDOW,
         |session_id, message| notify::notify(session_id, message, None, None),
         |session_id, notification| {
-            if let Some(peer_out_message_id) = notification.peer_out_message_id
-                && let Err(error) =
-                    crate::commands::agent::store::mark_watch_web_peer_out_message_delivered(
-                        peer_out_message_id,
-                        chrono::Utc::now(),
-                    )
-            {
-                tracing::warn!(
-                    event = "agent.peer.notify.record_failed",
-                    session = %session_id,
-                    task = %notification.task_id,
-                    error = %format!("{error:#}"),
+            if let Some(peer_out_message_id) = notification.peer_out_message_id {
+                let result = crate::commands::agent::store::sessions_dir().and_then(
+                    |sessions_dir| {
+                        crate::commands::agent::store::mark_watch_web_peer_out_message_delivered_from(
+                            &sessions_dir,
+                            peer_out_message_id,
+                            chrono::Utc::now(),
+                        )
+                    },
                 );
+                if let Err(error) = result {
+                    tracing::warn!(
+                        event = "agent.peer.notify.record_failed",
+                        session = %session_id,
+                        task = %notification.task_id,
+                        error = %format!("{error:#}"),
+                    );
+                }
             }
             if let Err(error) = undelivered::remove(session_id, &notification.task_id) {
                 tracing::warn!(

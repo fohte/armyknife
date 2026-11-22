@@ -36,7 +36,7 @@ pub(crate) use database::{
 pub(crate) use database::{AgentTodo, TodoResolution};
 pub(crate) use peer_out_messages::insert_watch_web_peer_out_message_from;
 pub(crate) use peer_out_messages::{
-    insert_watch_web_peer_out_message, mark_watch_web_peer_out_message_delivered,
+    insert_watch_web_peer_out_message, mark_watch_web_peer_out_message_delivered_from,
     watch_web_peer_out_messages_from,
 };
 pub(crate) use queued_prompts::{
