@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.847](https://github.com/fohte/armyknife/compare/v0.1.846...v0.1.847) (2026-11-22)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** align iPhone Activity UI ([#2086](https://github.com/fohte/armyknife/issues/2086)) ([b26914e](https://github.com/fohte/armyknife/commit/b26914ef06be32d524c2e4a051fc2ae45103cf39))
+
 ## [0.1.846](https://github.com/fohte/armyknife/compare/v0.1.845...v0.1.846) (2026-11-22)
 
 
