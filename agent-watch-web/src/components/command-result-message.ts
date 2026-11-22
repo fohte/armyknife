@@ -19,7 +19,7 @@ type UserMessage = Extract<
   { type: 'user' | 'queued_user' | 'user_with_content' }
 >
 
-export function commandResultText(message: ChatItem): string | null {
+function commandResultText(message: ChatItem): string | null {
   if (
     message.type !== 'user' &&
     message.type !== 'queued_user' &&
