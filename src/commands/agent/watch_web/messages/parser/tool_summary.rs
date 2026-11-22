@@ -403,6 +403,27 @@ mod tests {
     }
 
     #[test]
+    fn tool_failure_count_uses_operation_flags_instead_of_command_text() {
+        let mut summary = ToolSummary::default();
+        summary.record("Bash", Some(&json!({"command": "printf 'failed'"})), false);
+        let mut items = Vec::new();
+
+        summary.flush_into(&mut items);
+
+        assert_eq!(
+            items,
+            vec![ChatItem::ToolSummary {
+                summary: "Bash ×1".to_string(),
+                operations: vec![ToolOperation {
+                    tool: "Bash".to_string(),
+                    target: Some("printf 'failed'".to_string()),
+                    failed: false,
+                }],
+            }],
+        );
+    }
+
+    #[test]
     fn groups_standalone_thoughts_as_a_collapsible_tool_summary() {
         let mut summary = ToolSummary::default();
         summary.record_thinking("Review the first fixture.".to_string(), None);

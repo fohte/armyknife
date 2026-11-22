@@ -52,6 +52,18 @@ fn extract_peer_message_with_marker_policy(
         }
     }
 
+    let has_leading_user_marker = marker.is_some_and(|marker| body.starts_with(marker))
+        || (allow_unverified_marker
+            && body
+                .lines()
+                .next()
+                .is_some_and(|line| line.starts_with("⟦armyknife-user:") && line.ends_with('⟧')));
+    let (body, has_user_marker_prefix) = if has_leading_user_marker {
+        strip_watch_web_marker(body, marker, allow_unverified_marker)
+    } else {
+        (body, false)
+    };
+
     let mut sender_id = None;
     let mut trailing_text = "";
     let (body, has_user_marker, has_user_marker_in_body) =
@@ -66,13 +78,19 @@ fn extract_peer_message_with_marker_policy(
             is_peer_message = true;
             (
                 body,
-                has_user_marker_before_envelope || has_user_marker_in_body,
+                has_user_marker_prefix
+                    || has_user_marker_before_envelope
+                    || has_user_marker_in_body,
                 has_user_marker_in_body,
             )
         } else {
             let (body, has_user_marker) =
                 strip_watch_web_marker(body, marker, allow_unverified_marker);
-            (body, has_user_marker, has_user_marker)
+            (
+                body,
+                has_user_marker_prefix || has_user_marker,
+                has_user_marker_prefix || has_user_marker,
+            )
         };
     let without_notice = without_transport_notice(body);
     let had_transport_notice = without_notice != body;
@@ -166,7 +184,7 @@ pub(super) fn without_transport_notice(body: &str) -> &str {
 }
 
 fn peer_message_parts(message: &str) -> Option<(&str, &str, &str)> {
-    let (_, full_envelope) = message.split_once(PEER_MESSAGE_START_TAG)?;
+    let full_envelope = message.strip_prefix(PEER_MESSAGE_START_TAG)?;
     let end = full_envelope.rfind(PEER_MESSAGE_END_MARKER)?;
     let envelope = full_envelope[..end].strip_prefix('\n')?;
     let (header, body) = envelope.split_once(concat!("\n", "\n"))?;
@@ -272,6 +290,21 @@ mod tests {
                 has_user_marker_in_body: true,
             }),
         );
+    }
+
+    #[test]
+    fn does_not_extract_a_peer_envelope_after_leading_text() {
+        let message = indoc::indoc! {"
+            Synthetic preamble.
+            <peer-message>
+            - From session_id: fixture-peer-id
+
+            Fictional request.
+            </peer-message>
+        "}
+        .trim();
+
+        assert_eq!(extract_peer_message(message, None), None);
     }
 
     #[rstest]
