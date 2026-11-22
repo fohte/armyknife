@@ -24,6 +24,12 @@
   padding: 64px 24px 24px;
   background: rgb(0 0 0 / 25%);
 }
+.async-action-activity-backdrop.is-anchored {
+  align-items: stretch;
+  justify-content: initial;
+  padding: 0;
+  background: transparent;
+}
 .async-action-activity {
   box-sizing: border-box;
   display: flex;
@@ -34,6 +40,11 @@
   background: var(--aw-bg-popover);
   box-shadow: 0 12px 36px rgb(0 0 0 / 30%);
   color: var(--aw-text-body);
+}
+.async-action-activity.is-anchored {
+  position: fixed;
+  right: auto;
+  max-height: min(600px, calc(100dvh - 172px));
 }
 .async-action-activity > header {
   display: flex;
@@ -103,18 +114,34 @@
     bottom: 112px;
     max-height: calc(100dvh - 128px);
   }
+}
+
+@media (max-width: 760px) {
   .async-action-activity-backdrop {
     align-items: flex-end;
     padding: 0;
     background: rgb(0 0 0 / 55%);
   }
+  .async-action-activity-backdrop.is-anchored {
+    align-items: flex-end;
+    padding: 0;
+    background: rgb(0 0 0 / 55%);
+  }
   .async-action-activity {
+    position: static;
     width: 100%;
     height: auto;
     max-height: 85dvh;
     border-width: 1px 0 0;
     padding: 16px 0 max(30px, env(safe-area-inset-bottom));
     box-shadow: 0 -12px 36px rgb(0 0 0 / 30%);
+  }
+  .async-action-activity.is-anchored {
+    position: static;
+    right: auto;
+    bottom: auto;
+    left: auto;
+    max-height: 85dvh;
   }
   .async-action-activity > header {
     padding: 0 8px 6px 16px;

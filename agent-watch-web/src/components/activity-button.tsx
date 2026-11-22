@@ -13,7 +13,7 @@ type ActivityButtonProps = {
   isRunning?: boolean
   failed?: boolean
   active?: boolean
-  onOpenActivity?: () => void
+  onOpenActivity?: (anchor: HTMLButtonElement) => void
 }
 
 export function ActivityButton({
@@ -26,27 +26,26 @@ export function ActivityButton({
 }: ActivityButtonProps) {
   const feedback = useOptionalAsyncActionFeedback()
   const actions = feedback?.actions ?? []
-  const count = activityCount ?? actions.length
   const activityOpen = active ?? feedback?.activityOpen ?? false
-  const openActivity = onOpenActivity ?? (() => feedback?.openActivity())
+  const failedCount = actions.filter((action) =>
+    isAsyncActionFailureStatus(action.status),
+  ).length
+  const runningCount = actions.filter(
+    (action) => action.status === 'merging' || action.status === 'closing',
+  ).length
   const running =
-    runningOverride === undefined
-      ? actions.filter(
-          (action) =>
-            action.status === 'merging' || action.status === 'closing',
-        ).length
-      : runningOverride
-        ? 1
-        : 0
+    runningOverride === undefined ? runningCount : runningOverride ? 1 : 0
+  const count =
+    activityCount ??
+    (failedCount > 0 ? failedCount : running > 0 ? running : actions.length)
   const failed =
     failedOverride ??
     actions.some((action) => isAsyncActionFailureStatus(action.status))
-  const label =
-    running > 0
+  const label = failed
+    ? 'failed actions'
+    : running > 0
       ? `${String(running)} running`
-      : failed
-        ? 'failed actions'
-        : 'results available'
+      : 'results available'
   return (
     <button
       aria-expanded={activityOpen}
@@ -54,8 +53,12 @@ export function ActivityButton({
       aria-label={`Activity, ${count === 0 ? 'no actions yet' : label}`}
       className={`async-action-activity-button${drawer ? ' is-drawer' : ''}${count === 0 ? ' is-empty' : ''}${activityOpen ? ' is-open' : ''}`}
       type="button"
-      onClick={() => {
-        openActivity()
+      onClick={(event) => {
+        if (onOpenActivity !== undefined) {
+          onOpenActivity(event.currentTarget)
+        } else {
+          feedback?.openActivity(undefined, event.currentTarget)
+        }
       }}
     >
       <Activity aria-hidden="true" size={drawer ? 16 : 14} />

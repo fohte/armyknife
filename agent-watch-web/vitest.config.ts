@@ -39,6 +39,7 @@ const appTestFiles = [
   'src/components/mobile-sheet.browser.test.tsx',
   'src/components/inbox-filter-dialog.browser.test.tsx',
   'src/components/activity-button.browser.test.tsx',
+  'src/components/async-action-item.browser.test.tsx',
   'src/components/agent-watch-nav.test.tsx',
   'src/components/command-palette.test.tsx',
   'src/command-palette-controller.browser.test.tsx',
