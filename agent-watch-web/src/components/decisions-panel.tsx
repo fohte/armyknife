@@ -81,9 +81,10 @@ export function DecisionsPanel({
   const approveDecision = useCallback(
     async (seq: number) => {
       const success = await onOk(seq)
-      if (!success) return
+      if (!success) return false
       const nextDecision = pendingSeqs.find((decision) => decision.seq !== seq)
       if (nextDecision !== undefined) onSelect(nextDecision.seq)
+      return true
     },
     [onOk, onSelect, pendingSeqs],
   )
