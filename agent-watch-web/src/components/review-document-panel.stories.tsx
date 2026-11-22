@@ -95,7 +95,7 @@ export const SaveRejectedBecauseDocumentChanged: Story = {
   args: {
     status: 'error',
     error:
-      'This draft changed since you opened it. Reload the page to see the latest version.',
+      'This draft changed since you opened it. Your edits are still here; copy them before reloading to see the latest version.',
   },
   decorators: [desktopViewport],
 }

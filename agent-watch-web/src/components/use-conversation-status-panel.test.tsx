@@ -600,11 +600,11 @@ it.each([
 
     expect(snapshot()).toEqual({
       alert:
-        'This draft changed since you opened it. Reload the page to see the latest version.',
+        'This draft changed since you opened it. Your edits are still here; copy them before reloading to see the latest version.',
       title: 'Edited title',
       body: 'Edited body.',
       status:
-        'This draft changed since you opened it. Reload the page to see the latest version.',
+        'This draft changed since you opened it. Your edits are still here; copy them before reloading to see the latest version.',
       requests: [
         {
           url: '/api/sessions/fixture-session/review-document',

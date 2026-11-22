@@ -486,7 +486,7 @@ export function submitSessionOperation(operation: SessionOperation) {
         ) {
           return err<unknown, SessionOperationError>(
             new Error(
-              'This draft changed since you opened it. Reload the page to see the latest version.',
+              'This draft changed since you opened it. Your edits are still here; copy them before reloading to see the latest version.',
             ),
           )
         }
