@@ -2,8 +2,6 @@ import '#components/mobile-navigation-actions.css'
 
 import { Menu, Plus, Search } from 'lucide-react'
 
-import { ActivityButton } from '#components/activity-button'
-
 type MobileNavigationActionsProps = {
   onOpenNavigation: () => void
   onOpenPalette: () => void
@@ -35,7 +33,6 @@ export function MobileNavigationActions({
       >
         <Plus aria-hidden="true" size={18} />
       </button>
-      <ActivityButton iconOnly />
       <button
         aria-label="Open command palette"
         className="mobile-nav-action"

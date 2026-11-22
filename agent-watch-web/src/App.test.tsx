@@ -2759,18 +2759,20 @@ it.each(['Inbox', 'Board'] as const)(
   },
 )
 
-it('opens the command palette from the mobile navigation and closes the drawer', () => {
+it('omits the command palette action from the mobile navigation', () => {
   renderMobileApp()
   clickButton('[aria-label="Open navigation"]')
-  clickButton('.mobile-nav-drawer [aria-label="Open command palette"]')
 
   const snapshot = () => ({
-    paletteOpen: container.querySelector('[aria-label="Jump to"]') !== null,
+    paletteActionVisible:
+      container.querySelector(
+        '.mobile-nav-drawer [aria-label="Open command palette"]',
+      ) !== null,
     drawerOpen:
       container.querySelector<HTMLDialogElement>('.mobile-nav-drawer')?.open ??
       false,
   })
-  expect(snapshot()).toEqual({ paletteOpen: true, drawerOpen: false })
+  expect(snapshot()).toEqual({ paletteActionVisible: false, drawerOpen: true })
 })
 
 it('closes the mobile navigation after switching to Board', () => {
@@ -3854,22 +3856,35 @@ it('shows every close check in Activity and opens the failed worktree in a termi
     await flushAsyncState()
   })
 
-  const activity = container.querySelector(
+  const activity = container.querySelector<HTMLElement>(
     '.async-action-activity-list .async-action-item',
   )
   const conversationLine = container.querySelector(
     '.conversation-pane .async-action-item--line',
   )
-  const activitySnapshot = () => ({
-    text: activity?.textContent,
-    buttons: Array.from(
-      activity?.querySelectorAll('button') ?? [],
-      (button) => button.textContent,
-    ),
-    conversationLine: conversationLine?.textContent,
-  })
+  const activitySnapshot = () => {
+    const normalizedActivity = activity?.cloneNode(true)
+    let normalizedTime: string | null = null
+    let buttons: (string | null)[] = []
+    if (normalizedActivity instanceof HTMLElement) {
+      const time = normalizedActivity.querySelector('time')
+      time?.replaceChildren('<time>')
+      normalizedTime = time?.textContent ?? null
+      buttons = Array.from(
+        normalizedActivity.querySelectorAll<HTMLButtonElement>('button'),
+        (button) => button.textContent,
+      )
+    }
+    return {
+      text: normalizedActivity?.textContent,
+      time: normalizedTime,
+      buttons,
+      conversationLine: conversationLine?.textContent,
+    }
+  }
   expect(activitySnapshot()).toEqual({
-    text: 'Close failedExample sessionUncommitted changessrc/example.ts · src/example.test.ts2 filesBranch feature/example-workThe example pull request is still open.Not mergedRunning processes12345 example-server · 23456 example-watcher2 running/worktrees/example-projectClose and keep worktreeRetryOpen in terminal',
+    text: 'Close failedExample sessionUncommitted changessrc/example.ts · src/example.test.ts2 filesBranch feature/example-workThe example pull request is still open.Not mergedRunning processes12345 example-server · 23456 example-watcher2 running/worktrees/example-projectClose and keep worktreeRetryOpen in terminal<time>',
+    time: '<time>',
     buttons: ['Close and keep worktree', 'Retry', 'Open in terminal'],
     conversationLine:
       'Close failedLeft in the worktree: 2 uncommitted files, branch not merged, 2 running processesClose and keep worktreeRetry',

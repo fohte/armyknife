@@ -1,4 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
+import type { ComponentType } from 'react'
 
 import { AgentWatchNav } from '#components/agent-watch-nav'
 import type { Session } from '#types'
@@ -95,6 +96,20 @@ const meta = {
 export default meta
 type Story = StoryObj<typeof meta>
 
+const withFullHeightPhoneDrawer = (StoryComponent: ComponentType) => (
+  <div
+    style={{
+      display: 'flex',
+      width: 320,
+      height: 844,
+      overflow: 'hidden',
+      background: 'var(--aw-bg-app)',
+    }}
+  >
+    <StoryComponent />
+  </div>
+)
+
 export const InboxIsSelected: Story = {
   name: 'Inbox is selected in the main navigation',
 }
@@ -156,26 +171,36 @@ export const RecentSessionsAppearOnMobile: Story = {
   },
 }
 
-export const MobileNavigationShowsFailedActivity: Story = {
-  name: 'The mobile navigation marks Inbox while Activity has a failure',
+export const PhoneDrawerShowsActivityBeforeAnyAction: Story = {
+  name: 'The phone drawer shows muted Activity before any actions run.',
+  args: { isMobile: true, activityCount: 0 },
+  parameters: { layout: 'fullscreen' },
+  decorators: [withFullHeightPhoneDrawer],
+}
+
+export const PhoneDrawerShowsRecentActivity: Story = {
+  name: 'The phone drawer shows the count of recent results.',
+  args: { isMobile: true, activityCount: 3 },
+  parameters: { layout: 'fullscreen' },
+  decorators: [withFullHeightPhoneDrawer],
+}
+
+export const PhoneDrawerShowsRunningActivity: Story = {
+  name: 'The phone drawer marks Activity while an action is running.',
+  args: { isMobile: true, activityCount: 1, activityRunning: true },
+  parameters: { layout: 'fullscreen' },
+  decorators: [withFullHeightPhoneDrawer],
+}
+
+export const PhoneDrawerShowsFailedActivity: Story = {
+  name: 'The phone drawer marks Inbox and Activity after a failure.',
   args: {
     isMobile: true,
     activityCount: 2,
     activityFailed: true,
   },
-  decorators: [
-    (StoryComponent) => (
-      <div
-        style={{
-          width: '320px',
-          height: '844px',
-          background: 'var(--aw-bg-app)',
-        }}
-      >
-        <StoryComponent />
-      </div>
-    ),
-  ],
+  parameters: { layout: 'fullscreen' },
+  decorators: [withFullHeightPhoneDrawer],
 }
 
 export const InboxIsCollapsed: Story = {

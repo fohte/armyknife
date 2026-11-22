@@ -52,6 +52,7 @@ type AgentWatchNavProps = {
   onToggleInbox?: () => void
   onCloseNavigation?: () => void
   activityCount?: number
+  activityRunning?: boolean
   activityFailed?: boolean
 }
 
@@ -76,6 +77,7 @@ export function AgentWatchNav({
   onToggleInbox = () => undefined,
   onCloseNavigation,
   activityCount,
+  activityRunning,
   activityFailed,
 }: AgentWatchNavProps) {
   const { usage, error } = useAgentUsageContext()
@@ -114,19 +116,17 @@ export function AgentWatchNav({
               <Plus aria-hidden="true" size={15} />
             </button>
           ) : null}
-          <button
-            aria-label={
-              isMobile
-                ? 'Open command palette'
-                : `Jump to with ${paletteShortcut.ariaLabel}`
-            }
-            className="agent-watch-command agent-watch-command-key"
-            onClick={onOpenPalette}
-            type="button"
-          >
-            <Search aria-hidden="true" size={13} />
-            {!isMobile ? <span>{paletteShortcut.label}</span> : null}
-          </button>
+          {!isMobile ? (
+            <button
+              aria-label={`Jump to with ${paletteShortcut.ariaLabel}`}
+              className="agent-watch-command agent-watch-command-key"
+              onClick={onOpenPalette}
+              type="button"
+            >
+              <Search aria-hidden="true" size={13} />
+              <span>{paletteShortcut.label}</span>
+            </button>
+          ) : null}
           {!isMobile ? (
             <button
               aria-label={inboxCollapsed ? 'Show Inbox' : 'Hide Inbox'}
@@ -307,15 +307,22 @@ export function AgentWatchNav({
         ))}
       </div>
       {isMobile ? (
-        <ActivityButton
-          drawer
-          onOpenActivity={() => {
-            onCloseNavigation?.()
-            actionFeedback?.openActivity()
-          }}
-          {...(activityCount === undefined ? {} : { activityCount })}
-          {...(activityFailed === undefined ? {} : { failed: activityFailed })}
-        />
+        <div className="agent-watch-nav-activity">
+          <ActivityButton
+            drawer
+            {...(activityRunning === undefined
+              ? {}
+              : { isRunning: activityRunning })}
+            onOpenActivity={() => {
+              onCloseNavigation?.()
+              actionFeedback?.openActivity()
+            }}
+            {...(activityCount === undefined ? {} : { activityCount })}
+            {...(activityFailed === undefined
+              ? {}
+              : { failed: activityFailed })}
+          />
+        </div>
       ) : null}
       <QuotaPanel
         error={error}
