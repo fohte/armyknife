@@ -77,7 +77,8 @@
 }
 
 .chat-question-choice-content .syntax-code-block-toolbar,
-.chat-question-choice-content a {
+.chat-question-choice-content a,
+.chat-question-choice-content .image-lightbox-trigger {
   pointer-events: auto;
 }
 

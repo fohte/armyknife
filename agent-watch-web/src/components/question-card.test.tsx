@@ -34,6 +34,8 @@ const singleChoiceQuestions: Props['questions'] = [
 
 let container: HTMLDivElement
 let root: Root | null = null
+let clipboardDescriptor: PropertyDescriptor | undefined
+let execCommandDescriptor: PropertyDescriptor | undefined
 
 function props(overrides: Partial<Props> = {}): Props {
   return {
@@ -106,6 +108,22 @@ function choiceButton(label: string): HTMLButtonElement {
   return requireElement(row?.querySelector<HTMLButtonElement>('button') ?? null)
 }
 
+function stubClipboard() {
+  const writeText = vi.fn<(text: string) => Promise<void>>(() =>
+    Promise.resolve(),
+  )
+  const execCommand = vi.fn(() => true)
+  Object.defineProperty(navigator, 'clipboard', {
+    configurable: true,
+    value: { writeText },
+  })
+  Object.defineProperty(document, 'execCommand', {
+    configurable: true,
+    value: execCommand,
+  })
+  return { execCommand, writeText }
+}
+
 function dispatchKey(target: EventTarget, key: string) {
   const event = new KeyboardEvent('keydown', {
     key,
@@ -120,6 +138,11 @@ function dispatchKey(target: EventTarget, key: string) {
 
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
+  execCommandDescriptor = Object.getOwnPropertyDescriptor(
+    document,
+    'execCommand',
+  )
   onSelectSession.mockReset()
   container = document.createElement('div')
   document.body.append(container)
@@ -129,6 +152,18 @@ afterEach(() => {
   if (root !== null) act(() => root?.unmount())
   root = null
   container.remove()
+  if (clipboardDescriptor === undefined) {
+    Reflect.deleteProperty(navigator, 'clipboard')
+  } else {
+    Object.defineProperty(navigator, 'clipboard', clipboardDescriptor)
+  }
+  clipboardDescriptor = undefined
+  if (execCommandDescriptor === undefined) {
+    Reflect.deleteProperty(document, 'execCommand')
+  } else {
+    Object.defineProperty(document, 'execCommand', execCommandDescriptor)
+  }
+  execCommandDescriptor = undefined
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
@@ -305,6 +340,38 @@ it('selects a single-choice option when its description is clicked', async () =>
   })
 })
 
+it('toggles a multi-select option when its description is clicked', async () => {
+  const onAnswer = vi.fn(() => Promise.resolve(true))
+  renderQuestion(
+    props({
+      onAnswer,
+      questions: [
+        {
+          header: 'Direction',
+          question: 'Which directions should be used?',
+          choices: [{ label: 'North', description: 'Follow the north path.' }],
+          multi_select: true,
+          answer: null,
+        },
+      ],
+    }),
+  )
+
+  const description = requireElement(
+    container.querySelector<HTMLElement>('.chat-question-choice-description'),
+  )
+  await act(async () => userEvent.click(description))
+
+  const getActual = () => ({
+    answerCalls: onAnswer.mock.calls,
+    selected: choiceButton('North').getAttribute('aria-pressed'),
+  })
+  expect(getActual()).toEqual({
+    answerCalls: [],
+    selected: 'true',
+  })
+})
+
 it('describes a single-choice answer button with its description', () => {
   renderQuestion(
     props({
@@ -343,6 +410,7 @@ it('describes a single-choice answer button with its description', () => {
 })
 
 it('does not answer a single-choice question when copying code from its label', async () => {
+  const { execCommand, writeText } = stubClipboard()
   const onAnswer = vi.fn(() => Promise.resolve(true))
   renderQuestion(
     props({
@@ -365,9 +433,7 @@ it('does not answer a single-choice question when copying code from its label', 
     ),
   )
   await act(async () => {
-    copyButton.dispatchEvent(
-      new MouseEvent('click', { bubbles: true, cancelable: true }),
-    )
+    await userEvent.click(copyButton)
     await Promise.resolve()
     await Promise.resolve()
     await Promise.resolve()
@@ -375,19 +441,28 @@ it('does not answer a single-choice question when copying code from its label', 
 
   const getActual = () => ({
     answerCalls: onAnswer.mock.calls,
+    clipboardCalls: writeText.mock.calls.length,
+    copyCommandCalls: execCommand.mock.calls.length,
     copyButtonNestedInChoice: choiceButton('North').contains(copyButton),
     selected: choiceButton('North').getAttribute('aria-pressed'),
+    copied: copyButton.textContent,
   })
   expect(getActual()).toEqual({
     answerCalls: [],
+    clipboardCalls: 1,
+    copyCommandCalls: 0,
     copyButtonNestedInChoice: false,
     selected: 'false',
+    copied: '✓ Copied',
   })
 })
 
-it('renders copy controls outside a single-choice option description button', () => {
+it('copies code in a single-choice description without answering the question', async () => {
+  const { execCommand, writeText } = stubClipboard()
+  const onAnswer = vi.fn(() => Promise.resolve(true))
   renderQuestion(
     props({
+      onAnswer,
       questions: [
         {
           header: 'Direction',
@@ -412,10 +487,39 @@ it('renders copy controls outside a single-choice option description button', ()
     copyButtonNestedInChoice:
       choiceButton('North').querySelector('.syntax-code-block-copy-button') !==
       null,
+    selected: choiceButton('North').getAttribute('aria-pressed'),
   })
   expect(snapshot()).toEqual({
     copyButtonRendered: true,
     copyButtonNestedInChoice: false,
+    selected: 'false',
+  })
+
+  const copyButton = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      '.chat-question-choice-description .syntax-code-block-copy-button',
+    ),
+  )
+  await act(async () => {
+    await userEvent.click(copyButton)
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+  const getActual = () => ({
+    answerCalls: onAnswer.mock.calls,
+    clipboardCalls: writeText.mock.calls.length,
+    copyCommandCalls: execCommand.mock.calls.length,
+    copied: copyButton.textContent,
+    selected: choiceButton('North').getAttribute('aria-pressed'),
+  })
+  expect(getActual()).toEqual({
+    answerCalls: [],
+    clipboardCalls: 1,
+    copyCommandCalls: 0,
+    copied: '✓ Copied',
+    selected: 'false',
   })
 })
 
@@ -1137,6 +1241,52 @@ it('closes a question image lightbox with Escape without skipping the question',
     skipCalls: [],
     lightboxOpen: false,
     questionPresent: true,
+  })
+})
+
+it('opens a choice image lightbox without selecting or answering the choice', async () => {
+  const onAnswer = vi.fn(() => Promise.resolve(true))
+  renderQuestion(
+    props({
+      onAnswer,
+      questions: [
+        {
+          header: 'Review the image',
+          question: 'Which image should be used?',
+          choices: [
+            { label: '![Fixture option](/fixture-option.png)' },
+            { label: 'Use the existing image' },
+          ],
+          multi_select: false,
+          answer: null,
+        },
+      ],
+    }),
+  )
+
+  const imageTrigger = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Enlarge Fixture option"]',
+    ),
+  )
+  const imageChoiceRow = requireElement(
+    container.querySelector<HTMLElement>('.chat-question-choice-row'),
+  )
+  const imageChoiceButton = requireElement(
+    imageChoiceRow.querySelector<HTMLButtonElement>('button'),
+  )
+  await act(async () => userEvent.click(imageTrigger))
+
+  const getActual = () => ({
+    answerCalls: onAnswer.mock.calls,
+    lightboxOpen:
+      document.body.querySelector('.image-lightbox-dialog') !== null,
+    selected: imageChoiceButton.getAttribute('aria-pressed'),
+  })
+  expect(getActual()).toEqual({
+    answerCalls: [],
+    lightboxOpen: true,
+    selected: 'false',
   })
 })
 

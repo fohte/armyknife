@@ -6091,12 +6091,18 @@ it('answers an Inbox question with its request ID and selected answer', async ()
     for (let index = 0; index < 12; index += 1) await Promise.resolve()
   })
 
-  const choice = Array.from(
-    container.querySelectorAll<HTMLButtonElement>(
-      '.chat-question-choices button',
-    ),
-  ).find((button) => button.textContent.includes('Window B'))
-  if (choice === undefined) throw new Error('Expected an answer choice')
+  const choiceRow = Array.from(
+    container.querySelectorAll<HTMLElement>('.chat-question-choice-row'),
+  ).find(
+    (row) =>
+      row
+        .querySelector('.chat-question-choice-text')
+        ?.textContent.includes('Window B') === true,
+  )
+  const choice = choiceRow?.querySelector<HTMLButtonElement>('button')
+  if (choice === null || choice === undefined) {
+    throw new Error('Expected an answer choice')
+  }
   await act(async () => {
     choice.click()
     for (let index = 0; index < 12; index += 1) await Promise.resolve()
