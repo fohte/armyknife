@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.856](https://github.com/fohte/armyknife/compare/v0.1.855...v0.1.856) (2026-11-22)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** anchor desktop toast left ([#2104](https://github.com/fohte/armyknife/issues/2104)) ([127bbb0](https://github.com/fohte/armyknife/commit/127bbb0c133a8c63f2dd4870a48ccca9272f7086))
+
 ## [0.1.855](https://github.com/fohte/armyknife/compare/v0.1.854...v0.1.855) (2026-11-22)
 
 
