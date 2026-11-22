@@ -153,13 +153,13 @@ export function DecisionsPanel({
 
   return (
     <section className="decisions-panel" aria-label="Decisions in this session">
-      <header className="decisions-panel-header">
-        <h2>Decisions in this session</h2>
-        <span>
-          {String(reviewedCount)} / {String(decisions.length)} reviewed
-        </span>
-      </header>
       <div className="decisions-panel-list">
+        <header className="decisions-panel-header">
+          <h2>Decisions in this session</h2>
+          <span>
+            {String(reviewedCount)} / {String(decisions.length)} reviewed
+          </span>
+        </header>
         {orderedDecisions.length === 0 && decisions.length > 0 ? (
           <p className="decisions-panel-empty">All decisions are approved.</p>
         ) : (
@@ -193,22 +193,18 @@ export function DecisionsPanel({
             )
           })
         )}
-        {showReviewed ? (
-          <p className="decisions-panel-jump-hint">
-            Tap a decision to jump to it in the conversation.
-          </p>
-        ) : null}
       </div>
-      {showReviewed ? null : (
-        <footer
-          className="decisions-panel-footer"
-          aria-label="Decision shortcuts"
-        >
-          <span>Y OK and next</span>
-          <span>C Change</span>
-          <span>↵ Jump to it in the conversation</span>
-        </footer>
-      )}
+      <footer
+        className="decisions-panel-footer"
+        aria-label="Decision shortcuts"
+      >
+        <p className="decisions-panel-jump-hint">
+          Tap a decision to jump to it in the conversation.
+        </p>
+        <span className="decisions-panel-keyboard-hint">
+          Y OK and next · C Change · ↵ Jump to it in the conversation
+        </span>
+      </footer>
     </section>
   )
 }

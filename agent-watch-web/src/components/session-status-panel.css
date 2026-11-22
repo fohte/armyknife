@@ -1,4 +1,21 @@
 .session-status-panel {
+  --status-font-size: 13px;
+  --status-small-font-size: 12px;
+  --status-xs-font-size: 11.5px;
+  --status-heading-font-size: 11.5px;
+  --status-heading-height: 30px;
+  --status-horizontal-padding: 18px;
+  --status-action-height: 30px;
+  --status-action-font-size: 12px;
+  --status-card-title-size: 14px;
+  --status-card-body-size: 12.5px;
+  --status-input-font-size: 12.5px;
+  --status-icon-size: 14px;
+  --status-task-row-height: 0;
+  --status-task-id-font-size: 12px;
+  --status-mono-font-size: 13px;
+  --status-output-font-size: 11px;
+  --status-actions-bottom-padding: 10px;
   display: flex;
   min-width: 300px;
   min-height: 0;
@@ -110,6 +127,7 @@
   padding: 0;
   color: var(--aw-text-muted);
   font-size: 16px;
+  transform: translateY(-16px);
 }
 
 .session-status-panel-count {
@@ -132,7 +150,7 @@
   min-height: 0;
   flex: 1 1 auto;
   overflow: hidden;
-  padding-top: 6px;
+  padding-top: 0;
 }
 
 .session-status-panel-content > * {
@@ -148,8 +166,29 @@
   font-size: 12px;
 }
 
-.session-status-panel--mobile {
+.session-status-panel[data-size='phone'] {
+  --status-font-size: 15px;
+  --status-small-font-size: 13px;
+  --status-xs-font-size: 12.5px;
+  --status-heading-font-size: 12px;
+  --status-heading-height: 32px;
+  --status-horizontal-padding: 16px;
+  --status-action-height: 44px;
+  --status-action-font-size: 14px;
+  --status-card-title-size: 15px;
+  --status-card-body-size: 14px;
+  --status-input-font-size: 16px;
+  --status-icon-size: 16px;
+  --status-task-row-height: 56px;
+  --status-task-id-font-size: 13.5px;
+  --status-mono-font-size: 14px;
+  --status-output-font-size: 12px;
+  --status-actions-bottom-padding: max(16px, env(safe-area-inset-bottom, 0px));
   width: 100%;
+}
+
+.session-status-panel[data-size='phone']:focus {
+  outline: none;
 }
 
 .session-status-panel-mobile-header {
@@ -198,7 +237,7 @@
   color: var(--aw-text-body);
 }
 
-.session-status-panel--mobile .session-status-panel-tabs {
+.session-status-panel[data-size='phone'] .session-status-panel-tabs {
   height: 44px;
   min-height: 44px;
   flex: 0 0 44px;
@@ -206,31 +245,29 @@
   padding: 0;
 }
 
-.session-status-panel--mobile .session-status-panel-tablist {
+.session-status-panel[data-size='phone'] .session-status-panel-tablist {
   gap: 22px;
   padding: 0 16px;
 }
 
-.session-status-panel--mobile .session-status-panel-tab {
+.session-status-panel[data-size='phone'] .session-status-panel-tab {
   height: 44px;
   font-size: 14px;
   gap: 6px;
 }
 
-.session-status-panel--mobile .session-status-panel-count {
+.session-status-panel[data-size='phone'] .session-status-panel-count {
   font-size: 12.5px;
 }
 
-.session-status-panel--mobile .session-status-panel-tablist-wrap::before {
+.session-status-panel[data-size='phone']
+  .session-status-panel-tablist-wrap::before {
   background: linear-gradient(90deg, transparent, var(--aw-bg-nav));
 }
 
-.session-status-panel--mobile .session-status-panel-tablist-wrap::after {
+.session-status-panel[data-size='phone']
+  .session-status-panel-tablist-wrap::after {
   width: 40px;
-}
-
-.session-status-panel--mobile .session-status-panel-content {
-  padding-top: 0;
 }
 
 .session-tree-feedback {

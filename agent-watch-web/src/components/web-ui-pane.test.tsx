@@ -96,6 +96,45 @@ it('toggles the review between its column and fullscreen layouts', () => {
   })
 })
 
+it('shows the URL as text beside the desktop web UI controls', () => {
+  const targetUrl = 'https://review.example.test/review/sample'
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <WebUiPane
+        name="Review"
+        url={targetUrl}
+        targetUrlOverride={targetUrl}
+        onClose={() => undefined}
+      />,
+    )
+  })
+
+  const headerState = () => ({
+    name: container.querySelector('.web-ui-pane-title')?.textContent,
+    url: container.querySelector('.web-ui-pane-url')?.textContent,
+    externalLink: container
+      .querySelector<HTMLAnchorElement>('a[aria-label="Open in a new tab"]')
+      ?.getAttribute('href'),
+    fullscreenButton: container
+      .querySelector<HTMLButtonElement>(
+        'button[aria-label="Show Review fullscreen"]',
+      )
+      ?.getAttribute('aria-label'),
+    closeButton: container
+      .querySelector<HTMLButtonElement>('button[aria-label="Close web UI"]')
+      ?.getAttribute('aria-label'),
+  })
+
+  expect(headerState()).toEqual({
+    name: 'Review',
+    url: targetUrl,
+    externalLink: targetUrl,
+    fullscreenButton: 'Show Review fullscreen',
+    closeButton: 'Close web UI',
+  })
+})
+
 it.each([
   {
     name: 'matches localhost to a 127.0.0.1 watch-web host',
@@ -186,7 +225,7 @@ it('shows the local URL when no remote URL is available', () => {
   })
 })
 
-it('shows the mobile web UI URL and closes it from the header', () => {
+it('shows the phone web UI URL, external link, and close action', () => {
   const targetUrl = 'http://localhost:43123/studio/pages/sample#page-fakehash'
   const onClose = vi.fn()
   root = createRoot(container)
@@ -198,7 +237,7 @@ it('shows the mobile web UI URL and closes it from the header', () => {
         targetUrlOverride={targetUrl}
         onClose={onClose}
         defaultFullscreen
-        mobilePresentation
+        size="phone"
       />,
     )
   })
@@ -211,14 +250,11 @@ it('shows the mobile web UI URL and closes it from the header', () => {
       .querySelector<HTMLButtonElement>('button[aria-label="Close web UI"]')
       ?.click()
   })
-  function mobileHeaderState() {
+  function phoneHeaderState() {
     return {
-      hasBackButton:
-        container.querySelector(
-          'button[aria-label="Back to the conversation"]',
-        ) !== null,
+      role: container.querySelector('aside')?.getAttribute('role'),
       name: container.querySelector('.web-ui-pane-title')?.textContent,
-      url: container.querySelector('.web-ui-pane-mobile-url')?.textContent,
+      url: container.querySelector('.web-ui-pane-url')?.textContent,
       externalLink: {
         href: externalLink?.getAttribute('href'),
         label: externalLink?.getAttribute('aria-label'),
@@ -229,10 +265,13 @@ it('shows the mobile web UI URL and closes it from the header', () => {
         .querySelector<HTMLButtonElement>('button[aria-label="Close web UI"]')
         ?.getAttribute('aria-label'),
       closeCalled: onClose.mock.calls.length,
+      fullscreenButton: container.querySelector(
+        'button[aria-label*="fullscreen"]',
+      ),
     }
   }
-  expect(mobileHeaderState()).toEqual({
-    hasBackButton: false,
+  expect(phoneHeaderState()).toEqual({
+    role: 'dialog',
     name: 'Canvas editor',
     url: targetUrl,
     externalLink: {
@@ -243,10 +282,11 @@ it('shows the mobile web UI URL and closes it from the header', () => {
     },
     closeButtonLabel: 'Close web UI',
     closeCalled: 1,
+    fullscreenButton: null,
   })
 })
 
-it('expands a mobile status web UI tab without opening another browser tab', () => {
+it('shows the external link without fullscreen controls in a phone status tab', () => {
   root = createRoot(container)
   act(() => {
     root?.render(
@@ -255,40 +295,33 @@ it('expands a mobile status web UI tab without opening another browser tab', () 
         url="https://example.test/design/"
         targetUrlOverride="https://example.test/design/"
         previewMessage="The embedded design page is shown here."
-        mobileTabPresentation
+        size="phone"
         onClose={() => undefined}
       />,
     )
   })
 
-  const fullscreenButton = container.querySelector<HTMLButtonElement>(
-    'button[aria-label="Show Canvas editor fullscreen"]',
-  )
-  if (fullscreenButton !== null)
-    act(() => {
-      fullscreenButton.click()
-    })
-
   const snapshot = () => ({
+    role: container.querySelector('aside')?.getAttribute('role'),
     fullscreen: container
       .querySelector('.web-ui-pane')
       ?.classList.contains('is-fullscreen'),
-    fullscreenPressed: container
-      .querySelector<HTMLButtonElement>(
-        'button[aria-label="Exit Canvas editor fullscreen"]',
-      )
-      ?.getAttribute('aria-pressed'),
-    externalLink:
-      container.querySelector('a[aria-label="Open in a new tab"]') !== null,
+    externalLink: container
+      .querySelector<HTMLAnchorElement>('a[aria-label="Open in a new tab"]')
+      ?.getAttribute('href'),
+    fullscreenButton: container.querySelector(
+      'button[aria-label*="fullscreen"]',
+    ),
   })
   expect(snapshot()).toEqual({
-    fullscreen: true,
-    fullscreenPressed: 'true',
-    externalLink: false,
+    role: null,
+    fullscreen: false,
+    externalLink: 'https://example.test/design/',
+    fullscreenButton: null,
   })
 })
 
-it('closes the mobile web UI when its target URL is unavailable', () => {
+it('closes the phone web UI when its target URL is unavailable', () => {
   const onClose = vi.fn()
   root = createRoot(container)
   act(() => {
@@ -299,7 +332,7 @@ it('closes the mobile web UI when its target URL is unavailable', () => {
         hostname="watch.example.test"
         onClose={onClose}
         defaultFullscreen
-        mobilePresentation
+        size="phone"
       />,
     )
   })
@@ -314,7 +347,7 @@ it('closes the mobile web UI when its target URL is unavailable', () => {
     return {
       iframe: container.querySelector('iframe')?.getAttribute('src') ?? null,
       status: container.querySelector('[role="status"]')?.textContent,
-      url: container.querySelector('.web-ui-pane-mobile-url')?.textContent,
+      url: container.querySelector('.web-ui-pane-url')?.textContent,
       externalLink: container.querySelector('a'),
       closeButtonLabel: container
         .querySelector<HTMLButtonElement>('button[aria-label="Close web UI"]')

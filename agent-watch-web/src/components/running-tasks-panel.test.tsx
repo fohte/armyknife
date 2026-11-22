@@ -68,14 +68,22 @@ it('shows and refreshes output only for a background task', async () => {
     if (outputButton !== null) await userEvent.click(outputButton)
     await new Promise((resolve) => window.setTimeout(resolve, 0))
   })
-  const opened = () => ({
-    expanded: container.querySelector('button')?.getAttribute('aria-expanded'),
-    output: container.querySelector('pre')?.textContent,
-    urls,
-  })
+  const opened = () => {
+    const output = container.querySelector<HTMLElement>('pre')
+    return {
+      expanded: container
+        .querySelector('button')
+        ?.getAttribute('aria-expanded'),
+      output: output?.textContent,
+      outputBorderWidth:
+        output === null ? null : getComputedStyle(output).borderTopWidth,
+      urls,
+    }
+  }
   expect(opened()).toEqual({
     expanded: 'true',
     output: 'output 1',
+    outputBorderWidth: '0px',
     urls: [
       '/api/sessions/fixture-session/background-tasks/fixture-background-task/output',
     ],
@@ -87,6 +95,7 @@ it('shows and refreshes output only for a background task', async () => {
   expect(opened()).toEqual({
     expanded: 'true',
     output: 'output 2',
+    outputBorderWidth: '0px',
     urls: [
       '/api/sessions/fixture-session/background-tasks/fixture-background-task/output',
       '/api/sessions/fixture-session/background-tasks/fixture-background-task/output',

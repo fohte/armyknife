@@ -217,37 +217,91 @@ it('shows unreviewed decisions before change requests', () => {
   })
 })
 
-it('shows reviewed decisions in the mobile session status panel', () => {
+it('shows the phone hint and reviewed decisions for the phone status panel', () => {
   root = createRoot(container)
   act(() => {
     root?.render(
-      <DecisionsPanel
-        decisions={decisions.map((decision, index) =>
-          index === 1 ? { ...decision, review: 'ok' } : decision,
-        )}
-        session={session}
-        selectedSeq={1}
-        showReviewed
-        onSelect={vi.fn()}
-        onOk={vi.fn(() => Promise.resolve(true))}
-        onChange={vi.fn(() => Promise.resolve(true))}
-      />,
+      <div className="session-status-panel" data-size="phone">
+        <DecisionsPanel
+          decisions={decisions.map((decision, index) =>
+            index === 1 ? { ...decision, review: 'ok' } : decision,
+          )}
+          session={session}
+          selectedSeq={1}
+          showReviewed
+          onSelect={vi.fn()}
+          onOk={vi.fn(() => Promise.resolve(true))}
+          onChange={vi.fn(() => Promise.resolve(true))}
+        />
+      </div>,
     )
   })
 
+  const jumpHint = container.querySelector('.decisions-panel-jump-hint')
+  const shortcuts = container.querySelector('.decisions-panel-footer')
+  const keyboardHint = container.querySelector('.decisions-panel-keyboard-hint')
   const snapshot = () => ({
     reviews: Array.from(
       container.querySelectorAll('.decision-card--panel'),
       (card) => card.getAttribute('data-review'),
     ),
-    jumpHint: container.querySelector('.decisions-panel-jump-hint')
-      ?.textContent,
-    shortcuts: container.querySelector('.decisions-panel-footer')?.textContent,
+    jumpHint: jumpHint?.textContent,
+    jumpHintDisplay:
+      jumpHint === null ? null : getComputedStyle(jumpHint).display,
+    hintInFooter: jumpHint?.parentElement === shortcuts,
+    keyboardHint: keyboardHint?.textContent,
+    keyboardHintDisplay:
+      keyboardHint === null ? null : getComputedStyle(keyboardHint).display,
   })
   expect(snapshot()).toEqual({
     reviews: ['unreviewed', 'ok'],
     jumpHint: 'Tap a decision to jump to it in the conversation.',
-    shortcuts: undefined,
+    jumpHintDisplay: 'block',
+    hintInFooter: true,
+    keyboardHint: 'Y OK and next · C Change · ↵ Jump to it in the conversation',
+    keyboardHintDisplay: 'none',
+  })
+})
+
+it('shows desktop shortcuts while keeping reviewed decisions in the list', () => {
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <div className="session-status-panel" data-size="desktop">
+        <DecisionsPanel
+          decisions={decisions.map((decision, index) =>
+            index === 1 ? { ...decision, review: 'ok' } : decision,
+          )}
+          session={session}
+          selectedSeq={1}
+          showReviewed
+          onSelect={vi.fn()}
+          onOk={vi.fn(() => Promise.resolve(true))}
+          onChange={vi.fn(() => Promise.resolve(true))}
+        />
+      </div>,
+    )
+  })
+
+  const jumpHint = container.querySelector('.decisions-panel-jump-hint')
+  const shortcuts = container.querySelector('.decisions-panel-footer')
+  const keyboardHint = container.querySelector('.decisions-panel-keyboard-hint')
+  const getActual = () => ({
+    reviewedCount: container.querySelectorAll('.decision-card--panel').length,
+    jumpHintDisplay:
+      jumpHint === null ? null : getComputedStyle(jumpHint).display,
+    shortcutsDisplay:
+      shortcuts === null ? null : getComputedStyle(shortcuts).display,
+    keyboardHint: keyboardHint?.textContent,
+    keyboardHintDisplay:
+      keyboardHint === null ? null : getComputedStyle(keyboardHint).display,
+  })
+  expect(getActual()).toEqual({
+    reviewedCount: 2,
+    jumpHintDisplay: 'none',
+    shortcutsDisplay: 'flex',
+    keyboardHint: 'Y OK and next · C Change · ↵ Jump to it in the conversation',
+    keyboardHintDisplay: 'block',
   })
 })
 

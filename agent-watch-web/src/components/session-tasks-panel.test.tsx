@@ -140,6 +140,61 @@ it('groups open and completed linked tasks and reveals the remaining completed t
   })
 })
 
+it('keeps each completed task title and age on separate lines', () => {
+  act(() => {
+    root?.render(
+      <SessionTasksPanel
+        tasks={tasks}
+        repo="example/service"
+        primaryTaskId="example-open-task"
+      />,
+    )
+  })
+
+  const completedTaskLines = Array.from(
+    container.querySelectorAll('.session-tasks-panel-item--completed'),
+    (task) =>
+      Array.from(
+        task.querySelectorAll('.session-tasks-panel-copy > *'),
+        (line) => line.className,
+      ),
+  )
+
+  expect(completedTaskLines).toEqual([
+    ['session-tasks-panel-title', 'session-tasks-panel-age'],
+    ['session-tasks-panel-title', 'session-tasks-panel-age'],
+    ['session-tasks-panel-title', 'session-tasks-panel-age'],
+    ['session-tasks-panel-title', 'session-tasks-panel-age'],
+  ])
+})
+
+it('reserves a trailing column for the fully visible primary label', () => {
+  act(() => {
+    root?.render(
+      <SessionTasksPanel
+        tasks={tasks}
+        repo="example/service"
+        primaryTaskId="example-open-task"
+        onMakePrimary={() => Promise.resolve(true)}
+      />,
+    )
+  })
+
+  const row = container.querySelector('.session-tasks-panel-list > li')
+  const primaryLabel = container.querySelector('.session-tasks-panel-primary')
+  const snapshot = () => ({
+    rowDisplay: row === null ? null : getComputedStyle(row).display,
+    primaryLabel: primaryLabel?.textContent,
+    primaryLabelRightMargin:
+      primaryLabel === null ? null : getComputedStyle(primaryLabel).marginRight,
+  })
+  expect(snapshot()).toEqual({
+    rowDisplay: 'grid',
+    primaryLabel: 'Primary',
+    primaryLabelRightMargin: '16px',
+  })
+})
+
 it('formats completed task ages in minutes and days', () => {
   const now = Date.parse('2026-11-17T00:00:00.000Z')
   vi.spyOn(Date, 'now').mockReturnValue(now)

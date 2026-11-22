@@ -38,7 +38,7 @@ type SessionRowData = Pick<
 
 type SessionRowProps = {
   session: SessionRowData
-  density?: 'full' | 'compact'
+  density?: 'full' | 'compact' | 'compact-phone'
   isMobile?: boolean
   branch?: string | null
 }
@@ -107,8 +107,8 @@ export function SessionRow({
   const task = session.task
   const repo = session.repo.trim() || '—'
   const trimmedBranch = branch?.trim() ?? ''
-  const linkedTaskCount =
-    density === 'compact' ? formatLinkedTaskCount(session.tasks) : ''
+  const isCompact = density !== 'full'
+  const linkedTaskCount = isCompact ? formatLinkedTaskCount(session.tasks) : ''
   const decisionLabel = formatSessionDecisionCount(session)
   const decisionPreview =
     session.category === 'done' && (session.unreviewedDecisionCount ?? 0) > 0
@@ -194,7 +194,7 @@ export function SessionRow({
               </>
             )}
           </span>
-          {density === 'full' ? (
+          {!isCompact ? (
             <>
               <span className="session-repo-separator" aria-hidden="true">
                 ·
@@ -202,11 +202,11 @@ export function SessionRow({
               <span className="session-repo">{repo}</span>
             </>
           ) : null}
-          {density === 'compact' && decisionLabel !== null ? (
+          {isCompact && decisionLabel !== null ? (
             <span className="session-decision-count">{decisionLabel}</span>
           ) : null}
         </span>
-        {density === 'compact' ? (
+        {isCompact ? (
           <span className="session-repo-line">
             <span className="session-repo">{repo}</span>
             {trimmedBranch.length > 0 ? (

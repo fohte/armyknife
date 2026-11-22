@@ -336,7 +336,7 @@ it('keeps the conversation summary on one row at mobile widths', async () => {
   })
 })
 
-it('keeps panel actions within the card when the target name is long', () => {
+it('keeps the change target note below the panel actions when the name is long', () => {
   container.style.width = '280px'
   renderCard({
     variant: 'panel',
@@ -351,26 +351,29 @@ it('keeps panel actions within the card when the target name is long', () => {
       '.decision-card-buttons [data-slot="button"]:last-child',
     ),
   )
-  const targetName = requireElement(
-    changeButton.querySelector('.decision-card-target-name'),
+  const targetNote = requireElement(
+    container.querySelector('.decision-card-target-note'),
   )
   const shortcut = requireElement(changeButton.querySelector('kbd'))
   const cardBounds = card.getBoundingClientRect()
   const changeButtonBounds = changeButton.getBoundingClientRect()
   const shortcutBounds = shortcut.getBoundingClientRect()
-  expect(
-    JSON.stringify({
-      changeButtonFitsCard: changeButtonBounds.right <= cardBounds.right,
-      targetNameIsEllipsized:
-        getComputedStyle(targetName).textOverflow === 'ellipsis' &&
-        targetName.scrollWidth > targetName.clientWidth,
-      shortcutFitsButton:
-        shortcutBounds.width > 0 &&
-        shortcutBounds.right <= changeButtonBounds.right,
-    }),
-  ).toBe(
-    '{"changeButtonFitsCard":true,"targetNameIsEllipsized":true,"shortcutFitsButton":true}',
-  )
+  const getActual = () => ({
+    changeButtonFitsCard: changeButtonBounds.right <= cardBounds.right,
+    targetNoteText: targetNote.textContent,
+    targetNoteFitsCard:
+      targetNote.getBoundingClientRect().right <= cardBounds.right,
+    shortcutFitsButton:
+      shortcutBounds.width > 0 &&
+      shortcutBounds.right <= changeButtonBounds.right,
+  })
+  expect(getActual()).toEqual({
+    changeButtonFitsCard: true,
+    targetNoteText:
+      'Change… sends to a long target session name for an asynchronous refactoring run',
+    targetNoteFitsCard: true,
+    shortcutFitsButton: true,
+  })
 })
 
 it.each([
