@@ -292,6 +292,7 @@ it('shows the mobile page heading and focuses its back action', () => {
         activeTabId="running"
         onTabChange={vi.fn()}
         onClose={() => undefined}
+        sessionTitle="Sample session title"
         mobilePresentation
       />,
     )
@@ -302,6 +303,9 @@ it('shows the mobile page heading and focuses its back action', () => {
   )
   const snapshot = () => ({
     heading: container.querySelector('h1')?.textContent,
+    sessionTitle: container.querySelector(
+      '.session-status-panel-mobile-heading > span',
+    )?.textContent,
     dialog: container
       .querySelector('[role="dialog"]')
       ?.getAttribute('aria-modal'),
@@ -313,6 +317,7 @@ it('shows the mobile page heading and focuses its back action', () => {
   })
   expect(snapshot()).toEqual({
     heading: 'Session status',
+    sessionTitle: 'Sample session title',
     dialog: 'true',
     tabLabel: 'Running1',
     backButtonVisible: true,

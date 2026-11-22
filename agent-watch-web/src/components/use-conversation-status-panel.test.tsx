@@ -460,6 +460,11 @@ it('saves the edited document and sends the same edits before finishing review',
     await page
       .getByRole('textbox', { name: 'Markdown body' })
       .fill('Edited body.')
+  })
+  expect(container.querySelector('.review-document-status')?.textContent).toBe(
+    'Unsaved changes',
+  )
+  await act(async () => {
     await page.getByRole('button', { name: 'Save' }).click()
   })
   await waitForState(

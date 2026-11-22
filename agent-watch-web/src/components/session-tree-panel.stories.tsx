@@ -75,3 +75,15 @@ type Story = StoryObj<typeof meta>
 export const SelectedSessionWithPendingChild: Story = {
   name: 'The selected session shows its pending child.',
 }
+
+export const PhoneStatusTreePresentation: Story = {
+  name: 'The phone status tree shows the selected session and its descendants.',
+  args: { mobilePresentation: true },
+  decorators: [
+    (Story) => (
+      <div style={{ width: '390px', height: '844px', display: 'flex' }}>
+        <Story />
+      </div>
+    ),
+  ],
+}

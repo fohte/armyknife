@@ -22,6 +22,7 @@ type SessionStatusPanelProps = {
   activeTabId: string | null
   onTabChange: (id: string) => void
   onClose: () => void
+  sessionTitle?: string
   mobilePresentation?: boolean
 }
 
@@ -30,6 +31,7 @@ export function SessionStatusPanel({
   activeTabId,
   onTabChange,
   onClose,
+  sessionTitle,
   mobilePresentation = false,
 }: SessionStatusPanelProps) {
   const visibleTabs = tabs.filter((tab) => tab.visible ?? tab.count > 0)
@@ -75,8 +77,8 @@ export function SessionStatusPanel({
 
     if (activeTabBounds.left < visibleLeft) {
       tabList.scrollBy({ left: activeTabBounds.left - visibleLeft })
-    } else if (activeTabBounds.right > visibleRight) {
-      tabList.scrollBy({ left: activeTabBounds.right - visibleRight })
+    } else if (activeTabBounds.right > visibleRight - 40) {
+      tabList.scrollBy({ left: activeTabBounds.right - visibleRight + 40 })
     }
     updateHiddenTabs()
   }, [activeTabId, updateHiddenTabs])
@@ -124,9 +126,19 @@ export function SessionStatusPanel({
               onClose()
             }}
           >
-            <ChevronLeft aria-hidden="true" size={30} strokeWidth={2.5} />
+            <ChevronLeft
+              aria-hidden="true"
+              size={30}
+              strokeWidth={2.5}
+              style={{ width: '30px', height: '30px' }}
+            />
           </Button>
-          <h1 id="session-status-panel-title">Session status</h1>
+          <div className="session-status-panel-mobile-heading">
+            <h1 id="session-status-panel-title">Session status</h1>
+            {sessionTitle === undefined ? null : (
+              <span title={sessionTitle}>{sessionTitle}</span>
+            )}
+          </div>
         </header>
       ) : null}
       <div className="session-status-panel-tabs">

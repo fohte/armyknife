@@ -345,7 +345,10 @@ export function ConversationPane({
     onOpenCritInFullscreen,
     onOpenWebUiInFullscreen,
     mobileWebUi,
+    onDecisionJumpComplete,
+    onDecisionJumpSucceeded,
     onSelectDecision,
+    decisionJump,
     onTabChange,
     selectedDecisionSeq,
     tabs: panelTabs,
@@ -371,6 +374,7 @@ export function ConversationPane({
       activeTabId={activeTabId}
       onTabChange={onTabChange}
       onClose={onCloseStatusPanel}
+      sessionTitle={session.title}
       mobilePresentation={isMobile}
     />
   ) : null
@@ -422,6 +426,9 @@ export function ConversationPane({
       isMobile={isMobile}
       statusPanelOpen={statusPanelOpen}
       selectedDecisionSeq={selectedDecisionSeq}
+      decisionJump={decisionJump}
+      onDecisionJumpComplete={onDecisionJumpComplete}
+      onDecisionJumpSucceeded={onDecisionJumpSucceeded}
       onToggleStatusPanel={onToggleStatusPanel}
       onSelectDecision={onSelectDecision}
       mobileStatusPanel={statusPanel}

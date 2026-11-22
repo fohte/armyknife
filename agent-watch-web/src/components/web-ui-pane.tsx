@@ -15,6 +15,8 @@ type WebUiPaneProps = {
   fullscreenRequest?: number
   targetUrlOverride?: string | null
   mobilePresentation?: boolean
+  mobileTabPresentation?: boolean
+  previewMessage?: string
 }
 
 export function WebUiPane({
@@ -27,6 +29,8 @@ export function WebUiPane({
   fullscreenRequest = 0,
   targetUrlOverride,
   mobilePresentation = false,
+  mobileTabPresentation = false,
+  previewMessage,
 }: WebUiPaneProps) {
   const [isFullscreen, setIsFullscreen] = useState(
     defaultFullscreen || fullscreenRequest > 0,
@@ -40,6 +44,22 @@ export function WebUiPane({
         )
       : targetUrlOverride
 
+  const fullscreenButton = (
+    <Button
+      type="button"
+      variant="plain"
+      aria-label={
+        isFullscreen ? `Exit ${name} fullscreen` : `Show ${name} fullscreen`
+      }
+      aria-pressed={isFullscreen}
+      onClick={() => {
+        setIsFullscreen((current) => !current)
+      }}
+    >
+      {isFullscreen ? '↙' : '⛶'}
+    </Button>
+  )
+
   useEffect(() => {
     if (previousFullscreenRequest.current === fullscreenRequest) return
     previousFullscreenRequest.current = fullscreenRequest
@@ -48,23 +68,25 @@ export function WebUiPane({
 
   return (
     <aside
-      className={`web-ui-pane${isFullscreen ? ' is-fullscreen' : ''}${mobilePresentation ? ' is-mobile-fullscreen' : ''}`}
+      className={`web-ui-pane${isFullscreen ? ' is-fullscreen' : ''}${mobilePresentation || (mobileTabPresentation && isFullscreen) ? ' is-mobile-fullscreen' : ''}`}
       aria-label={name}
       role={mobilePresentation ? 'dialog' : undefined}
       aria-modal={mobilePresentation || undefined}
       id="web-ui-pane"
     >
       <header
-        className={`web-ui-pane-header${mobilePresentation ? ' is-mobile-fullscreen' : ''}`}
+        className={`web-ui-pane-header${mobilePresentation ? ' is-mobile-fullscreen' : ''}${mobileTabPresentation ? ' is-mobile-tab' : ''}`}
       >
-        {mobilePresentation ? (
+        {mobilePresentation || mobileTabPresentation ? (
           <>
             <div className="web-ui-pane-mobile-heading">
               <span className="web-ui-pane-title">{name}</span>
               <span className="web-ui-pane-mobile-url">{targetUrl ?? url}</span>
             </div>
             <div className="web-ui-pane-mobile-actions">
-              {targetUrl !== null ? (
+              {mobileTabPresentation ? (
+                fullscreenButton
+              ) : targetUrl !== null ? (
                 <a
                   className="web-ui-pane-open-new-tab"
                   href={targetUrl}
@@ -124,23 +146,9 @@ export function WebUiPane({
             )}
           </>
         )}
-        {mobilePresentation ? null : (
+        {mobilePresentation || mobileTabPresentation ? null : (
           <>
-            <Button
-              type="button"
-              variant="plain"
-              aria-label={
-                isFullscreen
-                  ? `Exit ${name} fullscreen`
-                  : `Show ${name} fullscreen`
-              }
-              aria-pressed={isFullscreen}
-              onClick={() => {
-                setIsFullscreen((current) => !current)
-              }}
-            >
-              {isFullscreen ? '↙' : '⛶'}
-            </Button>
+            {fullscreenButton}
             <Button
               type="button"
               variant="plain"
@@ -152,7 +160,9 @@ export function WebUiPane({
           </>
         )}
       </header>
-      {targetUrl !== null ? (
+      {previewMessage !== undefined ? (
+        <div className="web-ui-pane-preview">{previewMessage}</div>
+      ) : targetUrl !== null ? (
         <iframe
           key={fullscreenRequest}
           title={`${name} web interface`}

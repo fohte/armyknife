@@ -8,12 +8,15 @@ import { RunningTasksPanel } from '#components/running-tasks-panel'
 import { SessionStatusPanel } from '#components/session-status-panel'
 import { SessionTasksPanel } from '#components/session-tasks-panel'
 import { SessionTreePanel } from '#components/session-tree-panel'
+import { WebUiPane } from '#components/web-ui-pane'
 import type {
   BackgroundTask,
   Session,
   SessionTask,
   SessionTreeNode,
 } from '#types'
+
+const phoneStatusTimeReference = Date.now()
 
 const meta = {
   component: SessionStatusPanel,
@@ -144,6 +147,37 @@ export const NoTabsAreAvailable: Story = {
   },
 }
 
+const phoneStatusTasks = (openCount: number, completedCount: number) => [
+  ...Array.from({ length: openCount }, (_, index) => ({
+    id: `phone-open-task-${String(index + 1)}`,
+    number: 7301 + index,
+    title:
+      [
+        'Improve delivery reliability',
+        'Add retry metrics',
+        'Document queue behavior',
+        'Review alert thresholds',
+      ][index] ?? 'Refine the delivery workflow',
+    priority: index === 0 ? 1 : 2,
+  })),
+  ...Array.from({ length: completedCount }, (_, index) => ({
+    id: `phone-closed-task-${String(index + 1)}`,
+    number: 7201 + index,
+    title:
+      [
+        'Add request tracing',
+        'Document retry limits',
+        'Separate delivery queues',
+        'Cover the timeout path',
+      ][index % 4] ?? 'Improve service diagnostics',
+    priority: index % 3 === 0 ? 1 : null,
+    isClosed: true,
+    updatedAt: new Date(
+      Date.now() - ([1, 2, 24, 48][index % 4] ?? 1) * 60 * 60 * 1_000,
+    ).toISOString(),
+  })),
+]
+
 const phoneStatusTabs = [
   {
     id: 'running',
@@ -156,15 +190,15 @@ const phoneStatusTabs = [
           [
             {
               id: 'fixture-agent-task',
-              description: 'Inspect the fictional module structure',
-              elapsedSeconds: 72,
+              description: 'Inspect retry behavior',
+              elapsedSeconds: 42,
               kind: 'subagent',
-              agentType: 'FixtureExplorer',
+              agentType: 'Research',
             },
             {
               id: 'fixture-shell-task',
               description: 'cargo test -p fictional-crate',
-              elapsedSeconds: 31,
+              elapsedSeconds: 65,
               kind: 'background_task',
             },
           ] satisfies BackgroundTask[]
@@ -175,31 +209,14 @@ const phoneStatusTabs = [
   {
     id: 'tasks',
     label: 'Tasks',
-    count: 2,
+    count: 13,
     showCount: true,
     content: (
       <SessionTasksPanel
         repo="example/service"
-        primaryTaskId="example-open-task"
+        primaryTaskId="phone-open-task-1"
         onMakePrimary={() => Promise.resolve(true)}
-        tasks={
-          [
-            {
-              id: 'example-open-task',
-              number: 2048,
-              title: 'Improve request reliability',
-              priority: 1,
-            },
-            {
-              id: 'example-completed-task',
-              number: 2047,
-              title: 'Document request behavior',
-              priority: null,
-              isClosed: true,
-              updatedAt: '2026-11-21T12:00:00Z',
-            },
-          ] satisfies SessionTask[]
-        }
+        tasks={phoneStatusTasks(1, 12) satisfies SessionTask[]}
       />
     ),
   },
@@ -208,8 +225,10 @@ const phoneStatusTabs = [
     label: 'Tree',
     count: 1,
     showCount: true,
+    countTone: 'warning' as const,
     content: (
       <SessionTreePanel
+        mobilePresentation
         selectedSessionId="selected-session"
         onSelectSession={() => undefined}
         sessions={
@@ -222,48 +241,104 @@ const phoneStatusTabs = [
               category: 'in_progress',
               isActive: true,
               kind: null,
-              title: 'Root session',
+              title: 'Delivery workflow',
               preview: 'Coordinating the task',
-              elapsedSeconds: 300,
-              task: null,
+              elapsedSeconds: 720,
+              task: {
+                id: 'phone-tree-task-1',
+                number: 7301,
+                title: 'Improve delivery reliability',
+                priority: 1,
+              },
               repo: 'example/service',
-              vibeMode: { mode: 'enabled' },
+              vibeMode: { mode: 'disabled' },
               decisionCount: 0,
               pullRequest: null,
             },
             {
               id: 'selected-session',
               parentId: 'root-session',
+              engine: 'claude',
+              workType: 'development',
+              category: 'needs_action',
+              isActive: true,
+              kind: 'Question',
+              title: 'Review delivery retries',
+              preview: 'Check the retry behavior',
+              elapsedSeconds: 8,
+              task: {
+                id: 'phone-tree-task-2',
+                number: 7302,
+                title: 'Review retry behavior',
+                priority: 2,
+              },
+              repo: 'example/service',
+              vibeMode: { mode: 'disabled' },
+              decisionCount: 0,
+              pullRequest: null,
+            },
+            {
+              id: 'record-session',
+              parentId: 'selected-session',
               engine: 'codex',
               workType: 'development',
               category: 'in_progress',
               isActive: true,
               kind: null,
-              title: 'Selected session',
-              preview: 'Implementing the interface',
-              elapsedSeconds: 45,
-              task: null,
-              repo: 'example/service',
-              vibeMode: {
-                mode: 'inherited',
-                ancestorSessionId: 'root-session',
+              title: 'Record retry attempts',
+              preview: 'Add delivery metrics',
+              elapsedSeconds: 60,
+              task: {
+                id: 'phone-tree-task-3',
+                number: 7303,
+                title: 'Add retry metrics',
+                priority: 1,
               },
+              repo: 'example/service',
+              vibeMode: { mode: 'disabled' },
               decisionCount: 0,
               pullRequest: null,
             },
             {
-              id: 'pending-session',
-              parentId: 'selected-session',
-              engine: 'claude',
+              id: 'checks-session',
+              parentId: 'root-session',
+              engine: 'codex',
               workType: 'research',
               category: 'needs_action',
               isActive: true,
-              kind: 'Question',
-              title: 'Pending child',
-              preview: 'Waiting for an answer',
-              elapsedSeconds: 8,
-              task: null,
-              repo: 'example/other-service',
+              kind: 'Review',
+              title: 'Review rollout checks',
+              preview: 'Confirm the release checks',
+              elapsedSeconds: 120,
+              task: {
+                id: 'phone-tree-task-4',
+                number: 7304,
+                title: 'Check release process',
+                priority: 2,
+              },
+              repo: 'example/service',
+              vibeMode: { mode: 'disabled' },
+              decisionCount: 0,
+              pullRequest: null,
+            },
+            {
+              id: 'queue-session',
+              parentId: 'root-session',
+              engine: 'claude',
+              workType: 'development',
+              category: 'done',
+              isActive: false,
+              kind: null,
+              title: 'Separate delivery queues',
+              preview: 'The queue change is complete',
+              elapsedSeconds: 7200,
+              task: {
+                id: 'phone-tree-task-5',
+                number: 7305,
+                title: 'Separate delivery queues',
+                priority: 1,
+              },
+              repo: 'example/service',
               vibeMode: { mode: 'disabled' },
               decisionCount: 0,
               pullRequest: null,
@@ -281,8 +356,11 @@ const phoneStatusTabs = [
     showCount: false,
     content: (
       <ReviewDocumentPanel
-        frontmatter={{ title: 'Review the retry policy', enabled: true }}
-        body={'## Summary\n\nReview the retry behavior.'}
+        frontmatter={{ title: 'Review the delivery policy', status: 'draft' }}
+        body={
+          '## Policy\n\nUse longer delays after failures\nStop after three attempts.'
+        }
+        unsavedChanges
       />
     ),
   },
@@ -300,11 +378,26 @@ const phoneStatusTabs = [
               type: 'decision',
               seq: 1,
               title: 'Use a fixed retry limit',
-              why: 'The current service has no reliable timing data.',
+              why: 'A capped retry budget prevents repeated deliveries from overloading the receiving service.',
               considered: ['Retry using the latest duration'],
-              easyToChange: 'One configuration value in the CI workflow.',
+              easyToChange:
+                'The retry interval comes from one worker configuration setting.',
               review: null,
-              createdAt: '2026-11-21T12:00:00Z',
+              createdAt: new Date(
+                phoneStatusTimeReference - 34 * 60 * 1_000,
+              ).toISOString(),
+            },
+            {
+              type: 'decision',
+              seq: 2,
+              title: 'Keep delivery history in one table',
+              why: 'The first release only needs a short audit trail.',
+              considered: ['Split records by delivery channel'],
+              easyToChange: 'The persistence adapter owns the table mapping.',
+              review: 'ok',
+              createdAt: new Date(
+                phoneStatusTimeReference - 60 * 60 * 1_000,
+              ).toISOString(),
             },
           ] satisfies Decision[]
         }
@@ -326,6 +419,8 @@ const phoneStatusTabs = [
             pullRequest: null,
           } satisfies Session
         }
+        relativeTimeReference={phoneStatusTimeReference}
+        showReviewed
         selectedSeq={1}
         onSelect={() => undefined}
         onOk={() => Promise.resolve(true)}
@@ -334,17 +429,38 @@ const phoneStatusTabs = [
     ),
   },
   {
-    id: 'preview',
-    label: 'crit',
+    id: 'web-ui-preview',
+    label: 'Preview',
     count: 1,
     content: (
-      <div className="session-status-preview">
-        <strong>Web UI preview</strong>
-        <p>A registered session interface fills this panel.</p>
-      </div>
+      <WebUiPane
+        name="Preview"
+        url="https://example.test/dashboard"
+        targetUrlOverride="https://example.test/dashboard"
+        previewMessage="The web interface is shown here."
+        mobileTabPresentation
+        onClose={() => undefined}
+      />
     ),
   },
 ]
+
+const phoneStatusManyTabs = phoneStatusTabs.map((tab) =>
+  tab.id === 'tasks'
+    ? {
+        ...tab,
+        count: 16,
+        content: (
+          <SessionTasksPanel
+            repo="example/service"
+            primaryTaskId="phone-open-task-1"
+            onMakePrimary={() => Promise.resolve(true)}
+            tasks={phoneStatusTasks(4, 12) satisfies SessionTask[]}
+          />
+        ),
+      }
+    : tab,
+)
 
 const phoneStatusViewport = (Story: ComponentType) => (
   <div
@@ -365,6 +481,7 @@ export const PhoneStatusRunning: Story = {
   name: 'The phone status page shows running tasks',
   args: {
     mobilePresentation: true,
+    sessionTitle: 'Improve delivery reliability',
     tabs: phoneStatusTabs,
     activeTabId: 'running',
   },
@@ -376,7 +493,20 @@ export const PhoneStatusTasks: Story = {
   name: 'The phone status page shows linked tasks',
   args: {
     mobilePresentation: true,
+    sessionTitle: 'Improve delivery reliability',
     tabs: phoneStatusTabs,
+    activeTabId: 'tasks',
+  },
+  decorators: [phoneStatusViewport],
+  parameters: phoneStatusStoryParameters,
+}
+
+export const PhoneStatusTasksMany: Story = {
+  name: 'The phone status page shows several linked tasks',
+  args: {
+    mobilePresentation: true,
+    sessionTitle: 'Improve delivery reliability',
+    tabs: phoneStatusManyTabs,
     activeTabId: 'tasks',
   },
   decorators: [phoneStatusViewport],
@@ -387,6 +517,7 @@ export const PhoneStatusTree: Story = {
   name: 'The phone status page shows the session tree',
   args: {
     mobilePresentation: true,
+    sessionTitle: 'Improve delivery reliability',
     tabs: phoneStatusTabs,
     activeTabId: 'tree',
   },
@@ -398,6 +529,7 @@ export const PhoneStatusReview: Story = {
   name: 'The phone status page shows the Review tab',
   args: {
     mobilePresentation: true,
+    sessionTitle: 'Improve delivery reliability',
     tabs: phoneStatusTabs,
     activeTabId: 'review-document',
   },
@@ -409,6 +541,7 @@ export const PhoneStatusDecisions: Story = {
   name: 'The phone status page shows pending decisions',
   args: {
     mobilePresentation: true,
+    sessionTitle: 'Improve delivery reliability',
     tabs: phoneStatusTabs,
     activeTabId: 'decisions',
   },
@@ -420,8 +553,9 @@ export const PhoneStatusWebUi: Story = {
   name: 'The phone status page shows a Web UI tab',
   args: {
     mobilePresentation: true,
+    sessionTitle: 'Improve delivery reliability',
     tabs: phoneStatusTabs,
-    activeTabId: 'preview',
+    activeTabId: 'web-ui-preview',
   },
   decorators: [phoneStatusViewport],
   parameters: phoneStatusStoryParameters,

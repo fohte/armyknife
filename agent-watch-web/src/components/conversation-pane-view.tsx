@@ -23,6 +23,7 @@ import { SessionLinkElapsedSecondsContext } from '#components/session-link-elaps
 import { SessionUsageRow } from '#components/session-usage-row'
 import { useComposerDraft } from '#components/use-composer-draft'
 import { useComposerMessage } from '#components/use-composer-message'
+import { useConversationDecisionJump } from '#components/use-conversation-decision-jump'
 import { useConversationMessageElements } from '#components/use-conversation-message-elements'
 import { useConversationPaneKeyboard } from '#components/use-conversation-pane-keyboard'
 import { useConversationScroll } from '#components/use-conversation-scroll'
@@ -90,6 +91,9 @@ type ConversationPaneViewProps = {
   mobileWebUi?: ReactNode
   mobileUpdateNotice?: ReactNode
   selectedDecisionSeq?: number | null
+  decisionJump?: { seq: number } | null
+  onDecisionJumpComplete?: () => void
+  onDecisionJumpSucceeded?: () => void
   onToggleStatusPanel?: () => void
   onOpenTasks?: () => void
   onSelectDecision?: (seq: number) => void
@@ -142,6 +146,9 @@ export function ConversationPaneView({
   mobileWebUi = null,
   mobileUpdateNotice,
   selectedDecisionSeq = null,
+  decisionJump = null,
+  onDecisionJumpComplete = () => undefined,
+  onDecisionJumpSucceeded = () => undefined,
   onToggleStatusPanel = () => undefined,
   onOpenTasks = () => undefined,
   onSelectDecision = () => undefined,
@@ -212,6 +219,17 @@ export function ConversationPaneView({
     start,
     epoch,
     olderCursor,
+  })
+  useConversationDecisionJump({
+    decisionJump,
+    epoch,
+    loadingOlder,
+    loadOlder,
+    messages,
+    olderCursor,
+    onComplete: onDecisionJumpComplete,
+    onSucceeded: onDecisionJumpSucceeded,
+    start,
   })
   useOwnMessageKeyboardNavigation({
     isMobile,
