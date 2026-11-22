@@ -1135,6 +1135,61 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[rstest]
+    #[tokio::test]
+    async fn finish_returns_gateway_timeout_when_review_process_does_not_acknowledge(
+        active_review_document: ActiveReviewDocument,
+    ) {
+        use std::io::Read;
+        use std::os::unix::fs::OpenOptionsExt;
+
+        let document_path = active_review_document.document_path;
+        let mut finish_reader = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(finish_request_fifo_path(&document_path))
+            .expect("finish request FIFO reader should be opened");
+        let session = active_review_document.session;
+        let app = router_with_session_loader(move |_| Ok(Some(session.clone())));
+        let response = app
+            .oneshot(
+                Request::post("/sessions/fixture-session/review-document/finish")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "id": "fixture-review",
+                            "revision": current_revision(&document_path),
+                            "frontmatter": null,
+                            "body": "Saved without a finish acknowledgement.",
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should be valid"),
+            )
+            .await
+            .expect("request should complete");
+        let mut finish_signal = [0_u8; 1];
+        let finish_bytes_read = finish_reader
+            .read(&mut finish_signal)
+            .expect("finish request FIFO should be readable");
+
+        assert_eq!(
+            (
+                response.status(),
+                finish_bytes_read,
+                finish_signal,
+                std::fs::read_to_string(&document_path).expect("saved document should be readable"),
+            ),
+            (
+                StatusCode::GATEWAY_TIMEOUT,
+                1,
+                *b"0",
+                "Saved without a finish acknowledgement.".to_string(),
+            ),
+        );
+    }
+
     #[rstest]
     #[tokio::test]
     async fn finish_rejects_without_saving_after_review_closes_finish_fifo(
