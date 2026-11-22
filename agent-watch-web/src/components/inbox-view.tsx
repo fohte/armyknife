@@ -181,7 +181,7 @@ export function InboxView({
         <span className="brand-mark" aria-hidden="true">
           &gt;
         </span>
-        <span>agent watch</span>
+        <span className="mobile-inbox-brand-title">agent watch</span>
         <span className="mobile-inbox-connection">
           <span
             className={`mobile-inbox-connection-dot${connected ? '' : ' is-disconnected'}`}

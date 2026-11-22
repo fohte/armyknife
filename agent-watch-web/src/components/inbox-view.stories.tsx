@@ -410,7 +410,8 @@ export const InboxFitsAnIPhone: Story = {
     selectedId: null,
     laterExpanded: false,
     todaySessions: sessions.filter(
-      (session) => session.id === 'sample-question',
+      (session) =>
+        session.id === 'sample-question' || session.id === 'sample-done',
     ),
   },
   decorators: [
