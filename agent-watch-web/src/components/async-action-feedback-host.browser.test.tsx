@@ -3,7 +3,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { page } from 'vitest/browser'
 
-import type { AsyncAction } from '#async-action-feedback'
+import { type AsyncAction, formatAsyncActionTime } from '#async-action-feedback'
 import { AsyncActionFeedbackHost } from '#components/async-action-feedback-host'
 
 const failedMerge: AsyncAction = {
@@ -157,8 +157,7 @@ it('shows command output as the only command failure action', () => {
   })
   expect(snapshot()).toEqual({
     beforeClick: {
-      actionText:
-        "Command timed outprintf 'sample output'Stopped after 30 s.Show output17:00",
+      actionText: `Command timed outprintf 'sample output'Stopped after 30 s.Show output${formatAsyncActionTime(action.createdAt)}`,
       buttons: ['Show output'],
       commandTag: "printf 'sample output'",
     },
