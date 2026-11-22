@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.855](https://github.com/fohte/armyknife/compare/v0.1.854...v0.1.855) (2026-11-22)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** align session status views ([#2099](https://github.com/fohte/armyknife/issues/2099)) ([b3c01a6](https://github.com/fohte/armyknife/commit/b3c01a61ad0254033a2ad89897467426ea6aa6af))
+
 ## [0.1.854](https://github.com/fohte/armyknife/compare/v0.1.853...v0.1.854) (2026-11-22)
 
 
