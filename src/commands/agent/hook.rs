@@ -878,7 +878,8 @@ fn process_hook_event_impl_with_env(
     // Codex's SessionEnd can run during daemon shutdown, so a pane-less close
     // must not be undone by later hooks from that still-running process.
     let explicitly_reactivated = event == HookEvent::UserPromptSubmit
-        || (event == HookEvent::SessionStart && input.source.as_deref() != Some("compact"));
+        || (event == HookEvent::SessionStart
+            && matches!(input.source.as_deref(), Some("resume" | "clear" | "fork")));
     let keep_ended = session.engine == Engine::Codex
         && session.status == SessionStatus::Ended
         && !explicitly_reactivated;
@@ -6038,6 +6039,10 @@ mod tests {
         #[case::post_tool_use(HookEvent::PostToolUse, None, SessionStatus::Ended)]
         #[case::user_prompt_submit(HookEvent::UserPromptSubmit, None, SessionStatus::Running)]
         #[case::session_resume(HookEvent::SessionStart, Some("resume"), SessionStatus::Stopped)]
+        #[case::session_startup(HookEvent::SessionStart, Some("startup"), SessionStatus::Ended)]
+        #[case::session_clear(HookEvent::SessionStart, Some("clear"), SessionStatus::Running)]
+        #[case::session_compact(HookEvent::SessionStart, Some("compact"), SessionStatus::Ended)]
+        #[case::session_fork(HookEvent::SessionStart, Some("fork"), SessionStatus::Running)]
         fn ended_codex_session_reopens_only_after_explicit_activity(
             #[case] event: HookEvent,
             #[case] source: Option<&str>,
