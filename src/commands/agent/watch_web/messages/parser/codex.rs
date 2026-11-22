@@ -1019,6 +1019,31 @@ mod tests {
     }
 
     #[test]
+    fn codex_peer_message_preserves_its_transport_notice_suffix() {
+        let transcript = indoc! {r#"
+            {"type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","content":"<peer-message>\n- From session_id: fixture-peer-id\n\nFictional request.\n\nThis came from another Claude session — synthetic transport notice.\n</peer-message>"}}}
+        "#};
+
+        assert_eq!(
+            parse(Cursor::new(transcript), None).unwrap(),
+            vec![ChatItem::Peer {
+                direction: PeerDirection::From,
+                session_id: "fixture-peer-id".to_string(),
+                session_title: None,
+                content: vec![UserContentPart::Text {
+                    text: indoc! {"
+                        Fictional request.
+
+                        This came from another Claude session — synthetic transport notice."}
+                    .to_string(),
+                }],
+                timestamp: None,
+                failed: false,
+            }],
+        );
+    }
+
+    #[test]
     fn parses_the_latest_injected_skill_listing() {
         let transcript = indoc! {r###"
             {"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"<skills_instructions>\n## Skills\n### Available skills\n- old-tool: Old description.\n</skills_instructions>"}]}}
@@ -1136,36 +1161,28 @@ mod tests {
         );
     }
 
-    #[test]
-    fn renders_marked_todo_completions_as_armyknife_events() {
-        let transcript = indoc! {r#"
-            {"type":"event_msg","timestamp":"2026-06-01T12:05:00Z","payload":{"type":"item_completed","item":{"type":"UserMessage","content":"<armyknife-todo-completed>Fixture action text.</armyknife-todo-completed>\n<!-- armyknife-queued-prompt-id:armyknife-action:fixture-message-gold -->"}}}
-        "#};
+    #[rstest]
+    #[case::completion("armyknife-todo-completed", "Fixture action text.")]
+    #[case::rejection("armyknife-todo-rejected", "Fixture rejection text.")]
+    fn renders_tagged_todo_messages_as_armyknife_events(#[case] tag: &str, #[case] body: &str) {
+        let queued_prompt_marker =
+            "<!-- armyknife-queued-prompt-id:armyknife-action:fixture-message-gold -->";
+        let content = format!("<{tag}>{body}</{tag}>\n{queued_prompt_marker}");
+        let transcript = serde_json::json!({
+            "type": "event_msg",
+            "timestamp": "2026-06-01T12:05:00Z",
+            "payload": {
+                "type": "item_completed",
+                "item": {"type": "UserMessage", "content": content.clone()},
+            },
+        })
+        .to_string();
 
         assert_eq!(
             parse(Cursor::new(transcript), None).unwrap(),
             vec![ChatItem::Event {
                 kind: EventKind::Armyknife,
-                text: "Fixture action text.\n<!-- armyknife-queued-prompt-id:armyknife-action:fixture-message-gold -->"
-                    .to_string(),
-                failed: false,
-                timestamp: Some("2026-06-01T12:05:00+00:00".to_string()),
-            }],
-        );
-    }
-
-    #[test]
-    fn renders_marked_todo_rejections_as_armyknife_events() {
-        let transcript = indoc! {r#"
-            {"type":"event_msg","timestamp":"2026-06-01T12:05:00Z","payload":{"type":"item_completed","item":{"type":"UserMessage","content":"<armyknife-todo-rejected>Fixture rejection text.</armyknife-todo-rejected>\n<!-- armyknife-queued-prompt-id:armyknife-action:fixture-message-gold -->"}}}
-        "#};
-
-        assert_eq!(
-            parse(Cursor::new(transcript), None).unwrap(),
-            vec![ChatItem::Event {
-                kind: EventKind::Armyknife,
-                text: "Fixture rejection text.\n<!-- armyknife-queued-prompt-id:armyknife-action:fixture-message-gold -->"
-                    .to_string(),
+                text: format!("{body}\n{queued_prompt_marker}"),
                 failed: false,
                 timestamp: Some("2026-06-01T12:05:00+00:00".to_string()),
             }],
@@ -1280,7 +1297,7 @@ mod tests {
         let queued_prompts = [WatchWebQueuedPrompt {
             id: 7,
             message_id: Some(message_id.to_owned()),
-            content: user_message,
+            content: user_message.clone(),
             attachments: Vec::<WatchWebQueuedAttachment>::new(),
             resolved: false,
             sent_at: Utc::now(),

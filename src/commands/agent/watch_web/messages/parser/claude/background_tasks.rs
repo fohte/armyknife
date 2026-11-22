@@ -325,7 +325,7 @@ mod tests {
 
     #[rstest]
     #[case::completed("completed", Vec::new(), true, false)]
-    #[case::failed("failed", Vec::new(), true, true)]
+    #[case::failed_status_field_marks_event_failed("failed", Vec::new(), true, true)]
     #[case::killed("killed", Vec::new(), true, false)]
     #[case::stopped("stopped", Vec::new(), true, false)]
     #[case::still_running("running", vec![BackgroundTask {

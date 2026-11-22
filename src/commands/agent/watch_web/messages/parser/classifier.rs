@@ -1,6 +1,8 @@
 use serde_json::Value;
 
-use crate::commands::agent::peer_message::{extract_peer_message, task_notification_envelope};
+use crate::commands::agent::peer_message::{
+    ExtractedPeerMessage, extract_peer_message, task_notification_envelope,
+};
 
 use super::super::action_event;
 use super::super::tagged_message::{tagged_action_body, tagged_body};
@@ -119,7 +121,7 @@ pub(super) fn classify_inbound(
             let text = one_line(text);
             return MessageKind::Event {
                 kind,
-                failed: is_failure(record, origin_kind, &text),
+                failed: is_failure(record),
                 text,
             };
         }
@@ -224,9 +226,14 @@ fn event(tag: &str, body: &str, record: &Value) -> MessageKind {
     };
     MessageKind::Event {
         kind,
-        failed: is_failure(record, tag, &text),
+        failed: is_failure(record)
+            || (tag == "task-notification" && task_notification_failed(body)),
         text,
     }
+}
+
+fn task_notification_failed(notification_body: &str) -> bool {
+    nested_tag_value(notification_body, "status") == Some("failed")
 }
 
 fn task_notification_reminder(record: &Value, text: &str) -> Option<MessageKind> {
@@ -245,7 +252,7 @@ fn task_notification_reminder(record: &Value, text: &str) -> Option<MessageKind>
 
     let reminder_body = strip_stop_hook_error_prefix(reminder_body);
     let text = one_line(&format!("{summary}: {reminder_body}"));
-    let failed = has_explicit_failure(record);
+    let failed = has_explicit_failure(record) || task_notification_failed(notification_body);
     Some(MessageKind::Event {
         kind: EventKind::System,
         text,
@@ -273,18 +280,8 @@ fn strip_stop_hook_error_prefix(text: &str) -> &str {
         .map_or(text, |(_, message)| message)
 }
 
-fn is_failure(record: &Value, label: &str, text: &str) -> bool {
+fn is_failure(record: &Value) -> bool {
     has_explicit_failure(record)
-        || [label, text].into_iter().any(|value| {
-            value
-                .split(|character: char| !character.is_ascii_alphanumeric())
-                .any(|word| {
-                    matches!(
-                        word.to_ascii_lowercase().as_str(),
-                        "fail" | "failed" | "failure" | "blocked"
-                    )
-                })
-        })
 }
 
 fn has_explicit_failure(record: &Value) -> bool {
@@ -295,6 +292,10 @@ fn has_explicit_failure(record: &Value) -> bool {
             .get("exit_code")
             .and_then(Value::as_i64)
             .is_some_and(|exit_code| exit_code != 0)
+        || record
+            .get("hookErrors")
+            .and_then(Value::as_array)
+            .is_some_and(|errors| !errors.is_empty())
 }
 
 pub(super) fn one_line(text: &str) -> String {
@@ -344,12 +345,16 @@ fn marked_or_peer_message(text: &str, marker: Option<&str>) -> Option<MessageKin
     if message.has_user_marker_in_body || (message.sender_id.is_none() && message.has_user_marker) {
         return Some(marked_user_message_body(message.body));
     }
+    let text = peer_message_text(&message);
     let session_id = message.sender_id?;
-    let text = message.transport_notice_suffix.map_or_else(
+    Some(MessageKind::PeerIn { session_id, text })
+}
+
+fn peer_message_text(message: &ExtractedPeerMessage) -> String {
+    message.transport_notice_suffix.as_deref().map_or_else(
         || message.body.clone(),
         |notice| format!("{}{}", message.body, notice),
-    );
-    Some(MessageKind::PeerIn { session_id, text })
+    )
 }
 
 fn marked_user_message_body(body: String) -> MessageKind {
@@ -652,19 +657,37 @@ mod tests {
         );
     }
 
-    #[test]
-    fn marks_failed_events() {
-        assert_eq!(
-            classify_inbound(
-                &json!({"type":"system","subtype":"task","exit_code":1}),
-                "",
-                None,
-            ),
-            MessageKind::Event {
-                kind: EventKind::System,
-                text: "task".to_owned(),
-                failed: true,
-            },
-        );
+    #[rstest]
+    #[case::nonzero_exit_code(
+        json!({"type":"system","subtype":"task","exit_code":1}),
+        "",
+        MessageKind::Event { kind: EventKind::System, text: "task".to_owned(), failed: true }
+    )]
+    #[case::explicit_error_flag(
+        json!({"type":"user","origin":{"kind":"system"},"isError":true}),
+        "",
+        MessageKind::Event { kind: EventKind::System, text: "".to_owned(), failed: true }
+    )]
+    #[case::hook_errors(
+        json!({"type":"system","subtype":"stop_hook_summary","hookErrors":[{"error":"Synthetic issue."}]}),
+        "",
+        MessageKind::Event { kind: EventKind::System, text: "Stop hook summary: Synthetic issue.".to_owned(), failed: true }
+    )]
+    #[case::failure_words_in_text_are_prose(
+        json!({"type":"user","origin":{"kind":"system"}}),
+        "This fictional task failed but is not a failure; it is blocked.",
+        MessageKind::Event { kind: EventKind::System, text: "This fictional task failed but is not a failure; it is blocked.".to_owned(), failed: false }
+    )]
+    #[case::failure_words_in_label_are_prose(
+        json!({"type":"user","origin":{"kind":"blocked"}}),
+        "Synthetic event text.",
+        MessageKind::Event { kind: EventKind::System, text: "Synthetic event text.".to_owned(), failed: false }
+    )]
+    fn marks_failed_events(
+        #[case] record: serde_json::Value,
+        #[case] text: &str,
+        #[case] expected: MessageKind,
+    ) {
+        assert_eq!(classify_inbound(&record, text, None), expected);
     }
 }

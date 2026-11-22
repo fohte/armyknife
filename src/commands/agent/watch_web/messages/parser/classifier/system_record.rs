@@ -47,7 +47,7 @@ pub(super) fn classify(record: &Value, raw_text: &str) -> MessageKind {
     };
     MessageKind::Event {
         kind,
-        failed: is_failure(record, subtype, &text),
+        failed: is_failure(record),
         text,
     }
 }
