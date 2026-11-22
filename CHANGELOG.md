@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.860](https://github.com/fohte/armyknife/compare/v0.1.859...v0.1.860) (2026-11-22)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** reject stale review saves ([#2112](https://github.com/fohte/armyknife/issues/2112)) ([a7c1e44](https://github.com/fohte/armyknife/commit/a7c1e44b9e0e2b48914f8876db76fc638f2044d9))
+
 ## [0.1.859](https://github.com/fohte/armyknife/compare/v0.1.858...v0.1.859) (2026-11-22)
 
 
