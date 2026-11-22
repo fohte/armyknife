@@ -203,13 +203,6 @@ const phoneStatusTabs = [
             },
           ] satisfies BackgroundTask[]
         }
-        initialOutputByTaskId={{
-          'fixture-shell-task': [
-            'running 24 tests',
-            'test retry::stops_after_limit ... ok',
-            'test retry::backs_off ... ok',
-          ].join('\n'),
-        }}
       />
     ),
   },
