@@ -1,6 +1,8 @@
 use serde_json::Value;
 
-use crate::commands::agent::peer_message::{extract_peer_message, task_notification_envelope};
+use crate::commands::agent::peer_message::{
+    ExtractedPeerMessage, extract_peer_message, task_notification_envelope,
+};
 
 use super::super::action_event;
 use super::super::tagged_message::{tagged_action_body, tagged_body};
@@ -302,16 +304,16 @@ pub(super) fn classify_codex_user_message(text: &str) -> MessageKind {
             text: text.to_owned(),
         };
     };
-    let Some(session_id) = message.sender_id else {
+    let Some(session_id) = message.sender_id.as_ref() else {
         return MessageKind::User {
             text: text.to_owned(),
         };
     };
-    let text = message.transport_notice_suffix.map_or_else(
-        || message.body.clone(),
-        |notice| format!("{}{}", message.body, notice),
-    );
-    MessageKind::PeerIn { session_id, text }
+    let text = peer_message_text(&message);
+    MessageKind::PeerIn {
+        session_id: session_id.clone(),
+        text,
+    }
 }
 
 pub(super) fn one_line(text: &str) -> String {
@@ -361,12 +363,16 @@ fn marked_or_peer_message(text: &str, marker: Option<&str>) -> Option<MessageKin
     if message.has_user_marker_in_body || (message.sender_id.is_none() && message.has_user_marker) {
         return Some(marked_user_message_body(message.body));
     }
+    let text = peer_message_text(&message);
     let session_id = message.sender_id?;
-    let text = message.transport_notice_suffix.map_or_else(
+    Some(MessageKind::PeerIn { session_id, text })
+}
+
+fn peer_message_text(message: &ExtractedPeerMessage) -> String {
+    message.transport_notice_suffix.as_deref().map_or_else(
         || message.body.clone(),
         |notice| format!("{}{}", message.body, notice),
-    );
-    Some(MessageKind::PeerIn { session_id, text })
+    )
 }
 
 fn marked_user_message_body(body: String) -> MessageKind {

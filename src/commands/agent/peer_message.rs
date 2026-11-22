@@ -84,8 +84,11 @@ fn extract_peer_message_with_marker_policy(
                 has_user_marker_in_body,
             )
         } else {
-            let (body, has_user_marker) =
-                strip_watch_web_marker(body, marker, allow_unverified_marker);
+            let (body, has_user_marker) = if has_user_marker_prefix {
+                (body, false)
+            } else {
+                strip_watch_web_marker(body, marker, allow_unverified_marker)
+            };
             (
                 body,
                 has_user_marker_prefix || has_user_marker,
@@ -305,6 +308,33 @@ mod tests {
         .trim();
 
         assert_eq!(extract_peer_message(message, None), None);
+    }
+
+    #[test]
+    fn keeps_repeated_marker_text_after_removing_the_leading_marker() {
+        let marker = "⟦armyknife-user:fixture-marker-cobalt⟧";
+        let message = indoc::formatdoc! {"
+            {marker}
+            First paragraph.
+            {marker}
+            Second paragraph.
+        "};
+
+        assert_eq!(
+            extract_peer_message(&message, Some(marker)),
+            Some(ExtractedPeerMessage {
+                sender_id: None,
+                body: indoc::formatdoc! {"
+                    First paragraph.
+                    {marker}
+                    Second paragraph.
+                "},
+                transport_notice_suffix: None,
+                trailing_text: String::new(),
+                has_user_marker: true,
+                has_user_marker_in_body: true,
+            }),
+        );
     }
 
     #[rstest]
