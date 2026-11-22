@@ -112,7 +112,7 @@ export const CritReviewWaitKeepsPendingTodoPreview: Story = {
 }
 
 export const CompactSessionRow: Story = {
-  name: 'A compact row places the repository below the task details',
+  name: 'A compact row keeps space around its status and details',
   args: { density: 'compact' },
 }
 
