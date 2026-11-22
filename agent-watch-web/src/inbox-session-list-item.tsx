@@ -21,6 +21,7 @@ export function InboxSessionListItem({
   onCloseSession,
   onOpenActions,
   defaultSwiped = false,
+  defaultDragOffset = 0,
 }: {
   session: Session
   selectedId: string | null
@@ -30,13 +31,18 @@ export function InboxSessionListItem({
   onCloseSession?: ((id: string) => void) | undefined
   onOpenActions?: ((session: Session) => void) | undefined
   defaultSwiped?: boolean
+  defaultDragOffset?: number
 }) {
   const showLaterAction = onLater !== undefined
   const showCloseAction =
     onCloseSession !== undefined && session.category !== 'done'
   const swipeWidth = (showLaterAction ? 88 : 0) + (showCloseAction ? 88 : 0)
   const [swiped, setSwiped] = useState(defaultSwiped)
-  const [dragOffset, setDragOffset] = useState(defaultSwiped ? -swipeWidth : 0)
+  const [dragOffset, setDragOffset] = useState(
+    defaultSwiped
+      ? -swipeWidth
+      : Math.max(-swipeWidth, Math.min(0, defaultDragOffset)),
+  )
   const pointerStart = useRef<{
     pointerId: number
     x: number
@@ -156,7 +162,13 @@ export function InboxSessionListItem({
   return (
     <li className={`session-list-item${swiped ? ' is-swiped' : ''}`}>
       {canShowActions ? (
-        <div className="inbox-row-swipe-actions" aria-hidden={!swiped}>
+        <div
+          className="inbox-row-swipe-actions"
+          aria-hidden={!swiped}
+          style={{
+            clipPath: `inset(0 0 0 ${String(swipeWidth + dragOffset)}px)`,
+          }}
+        >
           {!swipeActionsVisible || !showLaterAction ? null : (
             <Button
               type="button"

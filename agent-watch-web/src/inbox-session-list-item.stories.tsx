@@ -50,6 +50,11 @@ export const PhoneRowIsSwiped: Story = {
   args: { defaultSwiped: true },
 }
 
+export const PhoneRowIsPartiallySwiped: Story = {
+  name: 'The phone row reveals actions within the swiped distance',
+  args: { defaultDragOffset: -56 },
+}
+
 export const SelectedPhoneRowAtRest: Story = {
   name: 'The selected phone row hides Later and Close at rest',
   args: { selectedId: session.id },
