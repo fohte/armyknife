@@ -494,6 +494,14 @@ pub(crate) fn session_store_revision() -> Result<i64> {
     session_store_revision_from(&sessions_dir()?)
 }
 
+pub(crate) fn mark_session_closed_from(sessions_dir: &Path, session_id: &str) -> Result<()> {
+    database::mark_session_closed(sessions_dir, session_id)
+}
+
+pub(crate) fn closed_session_ids_from(sessions_dir: &Path) -> Result<HashSet<String>> {
+    database::closed_session_ids(sessions_dir)
+}
+
 pub(crate) fn session_store_revision_from(sessions_dir: &Path) -> Result<i64> {
     database::session_store_revision(sessions_dir)
 }
