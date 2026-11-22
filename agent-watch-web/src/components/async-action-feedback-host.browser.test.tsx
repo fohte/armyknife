@@ -167,6 +167,60 @@ it('shows command output as the only command failure action', () => {
   })
 })
 
+it('uses the full toast width for the Show output button on an iPhone', async () => {
+  await page.viewport(390, 844)
+  const action: AsyncAction = {
+    id: 10,
+    sessionId: 'example-session',
+    sessionTitle: 'Example session',
+    kind: 'command',
+    command: "printf 'sample output'",
+    status: 'commandFailed',
+    exitCode: 1,
+    createdAt: 1_800_000_000_004,
+  }
+  container = document.createElement('div')
+  document.body.append(container)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <AsyncActionFeedbackHost
+        actions={[action]}
+        toastIds={[action.id]}
+        activityOpen={false}
+        toastBottomOffset={null}
+        selectedActionId={null}
+        retry={() => undefined}
+        dismissToast={() => undefined}
+        clearFinished={() => undefined}
+        openActivity={() => undefined}
+        closeActivity={() => undefined}
+        closeWithWorktree={() => undefined}
+        openInTerminal={() => undefined}
+        showCommandOutput={() => undefined}
+      />,
+    )
+  })
+
+  const controls = container.querySelector<HTMLElement>(
+    '.async-action-toast-stack .async-action-controls--command-output',
+  )
+  const button = controls?.querySelector<HTMLButtonElement>('button')
+  if (controls === null || button === null || button === undefined) {
+    throw new Error('The phone command toast output action is missing')
+  }
+  const controlsRect = controls.getBoundingClientRect()
+  const buttonRect = button.getBoundingClientRect()
+  const snapshot = () => ({
+    buttonFillsControls: buttonRect.width === controlsRect.width,
+    buttonStartsWithControls: buttonRect.left === controlsRect.left,
+  })
+  expect(snapshot()).toEqual({
+    buttonFillsControls: true,
+    buttonStartsWithControls: true,
+  })
+})
+
 it('fits the empty phone sheet to its content and shows the dimmed backdrop', async () => {
   await page.viewport(390, 844)
   container = document.createElement('div')

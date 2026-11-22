@@ -288,6 +288,10 @@ async function waitForState(condition: () => boolean) {
   return condition()
 }
 
+function normalizeAsyncActionLineTime(text: string | null | undefined) {
+  return text?.replace(/ · \d{2}:\d{2}$/, ' · <time>') ?? null
+}
+
 function terminalFeedback() {
   return Array.from(
     container.querySelectorAll('.conversation-terminal-action-status'),
@@ -1391,21 +1395,21 @@ it.each([
     response: { exitCode: 0, succeeded: true, timedOut: false },
     buttonLabel: 'Succeeded',
     toast: 'Ran commandprintf safe',
-    conversationLine: 'Ran command',
+    conversationLine: 'Ran command · <time>',
   },
   {
     name: 'nonzero exit',
     response: { exitCode: 1, succeeded: false, timedOut: false },
     buttonLabel: 'Failed',
     toast: 'Command failed · exit 1printf safeShow output',
-    conversationLine: 'Command failed (exit 1)',
+    conversationLine: 'Command failed (exit 1) · <time>',
   },
   {
     name: 'timeout',
     response: { exitCode: 124, succeeded: false, timedOut: true },
     buttonLabel: 'Failed',
     toast: 'Command timed outprintf safeStopped after 30 s.Show output',
-    conversationLine: 'Command timed out',
+    conversationLine: 'Command timed out · <time>',
   },
 ])(
   'executes a bang command from a todo card and reports $name',
@@ -1528,8 +1532,9 @@ stderr:
       dialogOpen: document.body.querySelector('[role="dialog"]') !== null,
       toast: document.body.querySelector('.async-action-toast-stack')
         ?.textContent,
-      conversationLine: container.querySelector('.async-action-item--line')
-        ?.textContent,
+      conversationLine: normalizeAsyncActionLineTime(
+        container.querySelector('.async-action-item--line')?.textContent,
+      ),
     }
     await act(async () => {
       commandOutputAvailable = true
@@ -1547,8 +1552,9 @@ stderr:
       button: runButton.textContent,
       toast: document.body.querySelector('.async-action-toast-stack')
         ?.textContent,
-      conversationLine: container.querySelector('.async-action-item--line')
-        ?.textContent,
+      conversationLine: normalizeAsyncActionLineTime(
+        container.querySelector('.async-action-item--line')?.textContent,
+      ),
       conversationLineButtons: container
         .querySelector('.async-action-item--line')
         ?.querySelectorAll('button').length,
@@ -1590,7 +1596,7 @@ stderr:
       runningState: {
         dialogOpen: false,
         toast: 'Running commandprintf safe',
-        conversationLine: 'Running command…',
+        conversationLine: 'Running command… · <time>',
       },
       commandCompleted: true,
       conversationRefreshed: true,

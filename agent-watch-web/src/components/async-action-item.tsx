@@ -196,7 +196,7 @@ export function AsyncActionItem({
           <CloseChecksList checks={action.checks} />
         ) : null}
         {canShowCommandOutput && form === 'toast' ? (
-          <div className="async-action-controls">
+          <div className="async-action-controls async-action-controls--command-output">
             <button type="button" onClick={onShowOutput}>
               Show output
             </button>
@@ -220,7 +220,7 @@ export function AsyncActionItem({
           </div>
         ) : null}
         {canShowCommandOutput && form === 'row' ? (
-          <div className="async-action-controls">
+          <div className="async-action-controls async-action-controls--command-output">
             <button type="button" onClick={onShowOutput}>
               Show output
             </button>
@@ -277,8 +277,10 @@ export function AsyncActionItem({
       {isQueue ? (
         <span className="async-action-timer" aria-hidden="true" />
       ) : null}
-      {form === 'row' && time !== undefined ? (
-        <time className="async-action-item-time">{time}</time>
+      {(form === 'row' || form === 'line') && time !== undefined ? (
+        <time className="async-action-item-time">
+          {form === 'line' ? ` · ${time}` : time}
+        </time>
       ) : null}
     </div>
   )

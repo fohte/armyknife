@@ -41,6 +41,11 @@ export function isAsyncActionRunningStatus(status: AsyncActionStatus) {
   )
 }
 
+export function formatAsyncActionTime(timestamp: number) {
+  const date = new Date(timestamp)
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+}
+
 export type AsyncAction = {
   id: number
   sessionId: string

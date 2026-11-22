@@ -2,7 +2,7 @@ import '#components/async-action-feedback-host.css'
 
 import { type RefObject, useEffect } from 'react'
 
-import type { AsyncAction } from '#async-action-feedback'
+import { type AsyncAction, formatAsyncActionTime } from '#async-action-feedback'
 import { AsyncActionItem } from '#components/async-action-item'
 
 type AsyncActionFeedbackHostProps = {
@@ -20,11 +20,6 @@ type AsyncActionFeedbackHostProps = {
   closeWithWorktree: (id: number) => void
   openInTerminal: (id: number) => void
   showCommandOutput: (id: number) => void
-}
-
-function timeLabel(timestamp: number) {
-  const date = new Date(timestamp)
-  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
 }
 
 export function AsyncActionFeedbackHost({
@@ -147,7 +142,7 @@ export function AsyncActionFeedbackHost({
                   <AsyncActionItem
                     action={action}
                     form="row"
-                    time={timeLabel(action.createdAt)}
+                    time={formatAsyncActionTime(action.createdAt)}
                     onRetry={() => {
                       closeActivity()
                       retry(action.id)

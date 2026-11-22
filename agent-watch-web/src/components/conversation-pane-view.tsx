@@ -11,7 +11,10 @@ import {
   useState,
 } from 'react'
 
-import { useOptionalAsyncActionFeedback } from '#async-action-feedback'
+import {
+  formatAsyncActionTime,
+  useOptionalAsyncActionFeedback,
+} from '#async-action-feedback'
 import { useAgentUsageContext } from '#components/agent-usage-context'
 import { AsyncActionItem } from '#components/async-action-item'
 import type {
@@ -478,6 +481,9 @@ export function ConversationPaneView({
               action={action}
               form="line"
               key={action.id}
+              {...(action.kind === 'command'
+                ? { time: formatAsyncActionTime(action.createdAt) }
+                : {})}
               onCloseKeepWorktree={() => {
                 actionFeedback.closeWithWorktree(action.id)
               }}

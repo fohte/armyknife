@@ -2,7 +2,11 @@ import '#components/async-action-feedback-host.css'
 
 import type { Meta, StoryObj } from '@storybook/react-vite'
 
+import type { AsyncAction } from '#async-action-feedback'
 import { AsyncActionItem } from '#components/async-action-item'
+import { BangCommandButton } from '#components/bang-command-button'
+import { UserWithContent } from '#components/user-with-content'
+import type { ChatItem } from '#types'
 
 const meta = {
   component: AsyncActionItem,
@@ -351,6 +355,188 @@ const commandAction = {
   createdAt: 1_800_000_000_000,
 }
 
+type RunCommandSceneState = 'running' | 'succeeded' | 'failed' | 'timedOut'
+
+function RunCommandFeedbackScene({
+  state,
+  mobile,
+  outputHighlighted = false,
+}: {
+  state: RunCommandSceneState
+  mobile: boolean
+  outputHighlighted?: boolean
+}) {
+  const commandStatus =
+    state === 'running'
+      ? 'running'
+      : state === 'succeeded'
+        ? 'succeeded'
+        : 'failed'
+  const commandButtonLabel =
+    state === 'succeeded'
+      ? 'Succeeded'
+      : state === 'failed' || state === 'timedOut'
+        ? 'Failed'
+        : 'Run command'
+  const commandMessage =
+    state === 'succeeded'
+      ? 'Completed'
+      : state === 'failed'
+        ? 'Failed (exit code 1)'
+        : state === 'timedOut'
+          ? 'Timed out'
+          : undefined
+  const action: AsyncAction = {
+    ...commandAction,
+    createdAt: new Date('2030-09-12T03:03:00.000Z').getTime(),
+    status:
+      state === 'running'
+        ? 'runningCommand'
+        : state === 'succeeded'
+          ? 'ranCommand'
+          : state === 'failed'
+            ? 'commandFailed'
+            : 'commandTimedOut',
+    ...(state === 'failed' ? { exitCode: 1 } : {}),
+  }
+  const resultMessage: Extract<ChatItem, { type: 'user' }> | null =
+    state === 'running'
+      ? null
+      : {
+          type: 'user',
+          timestamp: '2030-09-12T03:03:00.000Z',
+          text: `${state === 'timedOut' ? 'Command timed out after 30 seconds' : `Command exited with code ${state === 'succeeded' ? '0' : '1'}`} in /workspace/example.
+
+Command:
+\`\`\`text
+$ printf 'sample output'
+\`\`\`
+
+stdout:
+\`\`\`text
+${state === 'succeeded' ? 'sample output' : '(empty)'}
+\`\`\`
+
+stderr:
+\`\`\`text
+${state === 'failed' ? 'sample error' : '(empty)'}
+\`\`\``,
+        }
+  const time = '12:03'
+
+  return (
+    <div
+      style={{
+        boxSizing: 'border-box',
+        minHeight: '100vh',
+        padding: mobile ? '20px 16px 140px' : '48px 32px 160px',
+        background: '#0a0a0a',
+        color: 'var(--aw-text-body)',
+      }}
+    >
+      <main
+        style={{
+          boxSizing: 'border-box',
+          display: 'flex',
+          width: '100%',
+          maxWidth: 760,
+          minHeight: mobile ? 'calc(100vh - 160px)' : 'calc(100vh - 208px)',
+          flexDirection: 'column',
+          gap: 18,
+          margin: '0 auto',
+          padding: mobile ? 0 : 24,
+          border: mobile ? '0' : '1px solid var(--aw-border-control)',
+          background: '#0f0f0f',
+        }}
+      >
+        <header
+          style={{
+            borderBottom: '1px solid var(--aw-border-control)',
+            paddingBottom: 12,
+            color: 'var(--aw-text-primary)',
+            fontSize: 13,
+          }}
+        >
+          example/web-app · Review the command output
+        </header>
+        <section
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 10,
+            padding: mobile ? 12 : 16,
+            border: '1px solid var(--aw-border-control)',
+            background: 'var(--aw-bg-popover)',
+          }}
+        >
+          <p style={{ margin: 0, color: 'var(--aw-text-body)', fontSize: 13 }}>
+            Run the command to check the example output.
+          </p>
+          <pre
+            style={{
+              margin: 0,
+              padding: 12,
+              overflowWrap: 'anywhere',
+              background: 'var(--aw-bg-palette-muted)',
+              color: 'var(--aw-text-primary)',
+              fontFamily: 'var(--font-mono, monospace)',
+              fontSize: 12,
+              whiteSpace: 'pre-wrap',
+            }}
+          >
+            ! printf 'sample output'
+          </pre>
+          <div
+            className="conversation-pane"
+            data-mobile={mobile ? 'true' : undefined}
+          >
+            <BangCommandButton
+              label={commandButtonLabel}
+              status={commandStatus}
+              {...(commandMessage === undefined
+                ? {}
+                : { message: commandMessage })}
+              busy={state === 'running'}
+              onClick={() => undefined}
+            />
+          </div>
+        </section>
+        {resultMessage !== null ? (
+          <UserWithContent
+            message={resultMessage}
+            now={new Date('2030-09-12T03:03:00.000Z')}
+            commandOutputHighlighted={outputHighlighted}
+          />
+        ) : null}
+        <div style={{ marginTop: 'auto', paddingTop: 4 }}>
+          <AsyncActionItem action={action} form="line" time={time} />
+        </div>
+        <div
+          style={{
+            minHeight: 42,
+            border: '1px solid var(--aw-border-control)',
+            padding: '12px 14px',
+            color: 'var(--aw-text-muted)',
+            fontSize: 12,
+          }}
+        >
+          Message the session
+        </div>
+      </main>
+      {!outputHighlighted ? (
+        <div className="async-action-toast-stack">
+          <AsyncActionItem
+            action={action}
+            form="toast"
+            onDismiss={() => undefined}
+            onShowOutput={() => undefined}
+          />
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 export const RunCommandIsRunning: Story = {
   name: 'A running command appears in a toast.',
   args: { form: 'toast', action: commandAction },
@@ -414,7 +600,7 @@ export const TimedOutRunCommandInActivity: Story = {
 
 export const RunCommandIsRunningInConversation: Story = {
   name: 'The conversation shows a running command.',
-  args: { form: 'line', action: commandAction },
+  args: { form: 'line', action: commandAction, time: '12:03' },
 }
 
 export const RunCommandSucceededInConversation: Story = {
@@ -422,6 +608,7 @@ export const RunCommandSucceededInConversation: Story = {
   args: {
     form: 'line',
     action: { ...commandAction, status: 'ranCommand' },
+    time: '12:03',
   },
 }
 
@@ -430,6 +617,7 @@ export const RunCommandFailedInConversation: Story = {
   args: {
     form: 'line',
     action: { ...commandAction, status: 'commandFailed', exitCode: 1 },
+    time: '12:03',
   },
 }
 
@@ -438,5 +626,86 @@ export const RunCommandTimedOutInConversation: Story = {
   args: {
     form: 'line',
     action: { ...commandAction, status: 'commandTimedOut' },
+    time: '12:03',
   },
+}
+
+function commandSceneStory(
+  state: RunCommandSceneState,
+  mobile: boolean,
+  outputHighlighted = false,
+): Story {
+  return {
+    args: { form: 'row' },
+    ...(mobile
+      ? { parameters: { viewport: { defaultViewport: 'mobile2' } } }
+      : {}),
+    render: () => (
+      <RunCommandFeedbackScene
+        state={state}
+        mobile={mobile}
+        outputHighlighted={outputHighlighted}
+      />
+    ),
+  }
+}
+
+export const RunCommandRunningSceneOnPc: Story = {
+  name: 'The PC conversation shows a running command and its toast.',
+  ...commandSceneStory('running', false),
+}
+
+export const RunCommandRunningSceneOnIPhone: Story = {
+  name: 'The iPhone conversation shows a running command and its toast.',
+  ...commandSceneStory('running', true),
+}
+
+export const RunCommandSucceededSceneOnPc: Story = {
+  name: 'The PC conversation shows a successful command and its toast.',
+  ...commandSceneStory('succeeded', false),
+}
+
+export const RunCommandSucceededSceneOnIPhone: Story = {
+  name: 'The iPhone conversation shows a successful command and its toast.',
+  ...commandSceneStory('succeeded', true),
+}
+
+export const RunCommandFailedSceneOnPc: Story = {
+  name: 'The PC conversation shows a failed command and its toast.',
+  ...commandSceneStory('failed', false),
+}
+
+export const RunCommandFailedSceneOnIPhone: Story = {
+  name: 'The iPhone conversation shows a failed command and its toast.',
+  ...commandSceneStory('failed', true),
+}
+
+export const RunCommandTimedOutSceneOnPc: Story = {
+  name: 'The PC conversation shows a timed out command and its toast.',
+  ...commandSceneStory('timedOut', false),
+}
+
+export const RunCommandTimedOutSceneOnIPhone: Story = {
+  name: 'The iPhone conversation shows a timed out command and its toast.',
+  ...commandSceneStory('timedOut', true),
+}
+
+export const FailedCommandOutputIsHighlightedOnPc: Story = {
+  name: 'The PC conversation highlights a failed result after Show output.',
+  ...commandSceneStory('failed', false, true),
+}
+
+export const FailedCommandOutputIsHighlightedOnIPhone: Story = {
+  name: 'The iPhone conversation highlights a failed result after Show output.',
+  ...commandSceneStory('failed', true, true),
+}
+
+export const TimedOutCommandOutputIsHighlightedOnPc: Story = {
+  name: 'The PC conversation highlights a timed out result after Show output.',
+  ...commandSceneStory('timedOut', false, true),
+}
+
+export const TimedOutCommandOutputIsHighlightedOnIPhone: Story = {
+  name: 'The iPhone conversation highlights a timed out result after Show output.',
+  ...commandSceneStory('timedOut', true, true),
 }

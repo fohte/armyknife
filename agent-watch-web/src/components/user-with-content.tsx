@@ -52,6 +52,7 @@ export function UserWithContent({
   onRewind = () => Promise.resolve(false),
   rewindMenuOpen = false,
   navigationHighlighted = false,
+  commandOutputHighlighted = false,
   conversationIndex,
 }: {
   message: UserMessage
@@ -65,6 +66,7 @@ export function UserWithContent({
   ) => Promise<boolean>
   rewindMenuOpen?: boolean
   navigationHighlighted?: boolean
+  commandOutputHighlighted?: boolean
   conversationIndex?: number
 }) {
   const content: UserContentPart[] =
@@ -96,6 +98,9 @@ export function UserWithContent({
       className="chat-user-group"
       data-conversation-index={conversationIndex}
       data-command-result={isCommandResultMessage ? 'true' : undefined}
+      data-command-output-highlighted={
+        commandOutputHighlighted ? 'true' : undefined
+      }
       data-own-message={isOwnMessage ? 'true' : undefined}
       data-own-message-highlighted={navigationHighlighted ? 'true' : undefined}
     >

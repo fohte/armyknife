@@ -147,6 +147,43 @@ stderr:
   ).toEqual('true')
 })
 
+it('marks the command result as highlighted after Show output is selected', () => {
+  render(
+    {
+      type: 'user',
+      text: `Command exited with code 1 in /workspace/example.
+
+Command:
+\`\`\`text
+$ printf sample
+\`\`\`
+
+stdout:
+\`\`\`text
+(empty)
+\`\`\`
+
+stderr:
+\`\`\`text
+(empty)
+\`\`\``,
+    },
+    { commandOutputHighlighted: true },
+  )
+
+  const actual = () => ({
+    isCommandResult:
+      container
+        .querySelector('.chat-user-group')
+        ?.getAttribute('data-command-result') ?? null,
+    isHighlighted:
+      container
+        .querySelector('.chat-user-group')
+        ?.getAttribute('data-command-output-highlighted') ?? null,
+  })
+  expect(actual()).toEqual({ isCommandResult: 'true', isHighlighted: 'true' })
+})
+
 it('shows the local send time above a user message', () => {
   const timestamp = '2026-06-01T12:00:00Z'
   const localTime = formatMessageTime(timestamp, now) ?? 'invalid timestamp'

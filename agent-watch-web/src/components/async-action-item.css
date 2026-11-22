@@ -183,6 +183,10 @@
   strong {
   color: var(--aw-color-error);
 }
+.async-action-item--line .async-action-item-time {
+  color: var(--aw-text-muted);
+  font-size: 11px;
+}
 
 @media (max-width: 700px) {
   .async-action-item--toast {
@@ -202,6 +206,12 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .async-action-item--line .async-action-controls {
+    width: 100%;
+  }
+  .async-action-item--toast .async-action-controls--command-output {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .async-action-item--toast .async-action-controls--command-output button {
     width: 100%;
   }
   .async-action-item--line.has-close-worktree
