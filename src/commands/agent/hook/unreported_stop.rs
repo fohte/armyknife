@@ -235,6 +235,84 @@ mod tests {
     }
 
     #[rstest]
+    fn notifies_after_a_parent_instruction_and_deferred_stop_without_a_new_report(
+        sessions_dir: TempDir,
+    ) {
+        let mut session = delegate_session(Engine::Claude, "fixture-delegate", "fixture-parent");
+        insert_watch_web_peer_out_message_from(
+            sessions_dir.path(),
+            &session.session_id,
+            "fixture-parent",
+            "A fictional report.",
+            at(11, 0),
+            false,
+        )
+        .unwrap();
+        let first_check = check_unreported_stop(
+            sessions_dir.path(),
+            &session.session_id,
+            "fixture-parent",
+            session.created_at,
+        )
+        .unwrap();
+        insert_watch_web_peer_out_message_from(
+            sessions_dir.path(),
+            "fixture-parent",
+            &session.session_id,
+            "A fictional follow-up instruction.",
+            at(12, 0),
+            true,
+        )
+        .unwrap();
+
+        session
+            .pending_bg_task_ids
+            .insert("fixture-task".to_string());
+        notify_if_unreported(
+            &session,
+            &stop_input(Engine::Claude),
+            sessions_dir.path(),
+            &config(Some(TEMPLATE)),
+            |_, _| {},
+        )
+        .unwrap();
+        session.pending_bg_task_ids.clear();
+
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let calls_for_notify = Arc::clone(&calls);
+        notify_if_unreported(
+            &session,
+            &stop_input(Engine::Claude),
+            sessions_dir.path(),
+            &config(Some(TEMPLATE)),
+            move |recipient, message| {
+                calls_for_notify
+                    .lock()
+                    .unwrap()
+                    .push((recipient.to_string(), message.to_string()));
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            (first_check, calls.lock().unwrap().clone()),
+            (
+                true,
+                vec![(
+                    "fixture-parent".to_string(),
+                    indoc! {"
+                        <delegation-update>
+                        Session: fixture-delegate
+                        Last message: I finished sample change.
+                        </delegation-update>"
+                    }
+                    .to_string(),
+                )],
+            ),
+        );
+    }
+
+    #[rstest]
     fn counts_a_report_sent_before_a_deferred_stop_and_ignores_the_previous_turn(
         sessions_dir: TempDir,
     ) {

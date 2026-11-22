@@ -35,12 +35,19 @@ pub(crate) fn check_unreported_stop(
             session_created_at,
         )?,
     };
+    let latest_parent_message_id = transaction.query_row(
+        "SELECT COALESCE(MAX(id), 0) FROM watch_web_peer_out_message
+         WHERE from_session_id = ?1 AND to_session_id = ?2",
+        params![parent_session_id, session_id],
+        |row| row.get::<_, i64>(0),
+    )?;
+    let report_boundary = previous_message_id.max(latest_parent_message_id);
     let has_reported = transaction.query_row(
         "SELECT EXISTS(
              SELECT 1 FROM watch_web_peer_out_message
              WHERE from_session_id = ?1 AND to_session_id = ?2 AND id > ?3
          )",
-        params![session_id, parent_session_id, previous_message_id],
+        params![session_id, parent_session_id, report_boundary],
         |row| row.get::<_, bool>(0),
     )?;
     let last_message_id = transaction.query_row(
