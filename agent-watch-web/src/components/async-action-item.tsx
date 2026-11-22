@@ -18,6 +18,7 @@ type AsyncActionItemProps = {
   onDismiss?: () => void
   onCloseKeepWorktree?: () => void
   onOpenInTerminal?: () => void
+  onShowOutput?: () => void
 }
 
 function closeFailureSummary(checks: CloseWorktreeChecks) {
@@ -48,54 +49,74 @@ function copy(action: AsyncAction) {
     action.pullRequestNumber === undefined
       ? ''
       : `PR #${String(action.pullRequestNumber)}`
-  const title =
-    action.kind === 'merge'
-      ? {
-          merging: `Merging ${pr}`,
-          merged: `Merged ${pr}`,
-          alreadyMerged: `${pr} was already merged`,
-          queued: `Added ${pr} to the merge queue`,
-          mergeFailed: `Merge failed · ${pr}`,
-          closing: '',
-          closed: '',
-          closeFailed: '',
-        }[action.status]
-      : {
-          merging: '',
-          merged: '',
-          alreadyMerged: '',
-          queued: '',
-          mergeFailed: '',
-          closing: 'Closing session',
-          closed: 'Closed session',
-          closeFailed: 'Close failed',
-        }[action.status]
-  const line =
-    action.kind === 'merge'
-      ? {
-          merging: `Merging ${pr}…`,
-          merged: `Merged ${pr}`,
-          alreadyMerged: `${pr} was already merged`,
-          queued: `Added ${pr} to the merge queue`,
-          mergeFailed: `Merge of ${pr} failed`,
-          closing: '',
-          closed: '',
-          closeFailed: '',
-        }[action.status]
-      : {
-          merging: '',
-          merged: '',
-          alreadyMerged: '',
-          queued: '',
-          mergeFailed: '',
-          closing: 'Closing session…',
-          closed: 'Closed session',
-          closeFailed: 'Close failed',
-        }[action.status]
+  const title = (() => {
+    switch (action.status) {
+      case 'merging':
+        return action.kind === 'merge' ? `Merging ${pr}` : ''
+      case 'merged':
+        return action.kind === 'merge' ? `Merged ${pr}` : ''
+      case 'alreadyMerged':
+        return action.kind === 'merge' ? `${pr} was already merged` : ''
+      case 'queued':
+        return action.kind === 'merge' ? `Added ${pr} to the merge queue` : ''
+      case 'mergeFailed':
+        return action.kind === 'merge' ? `Merge failed · ${pr}` : ''
+      case 'closing':
+        return action.kind === 'close' ? 'Closing session' : ''
+      case 'closed':
+        return action.kind === 'close' ? 'Closed session' : ''
+      case 'closeFailed':
+        return action.kind === 'close' ? 'Close failed' : ''
+      case 'runningCommand':
+        return 'Running command'
+      case 'ranCommand':
+        return 'Ran command'
+      case 'commandFailed':
+        return action.exitCode === undefined
+          ? 'Command failed'
+          : `Command failed · exit ${String(action.exitCode)}`
+      case 'commandTimedOut':
+        return 'Command timed out'
+    }
+  })()
+  const line = (() => {
+    switch (action.status) {
+      case 'merging':
+        return action.kind === 'merge' ? `Merging ${pr}…` : ''
+      case 'merged':
+        return action.kind === 'merge' ? `Merged ${pr}` : ''
+      case 'alreadyMerged':
+        return action.kind === 'merge' ? `${pr} was already merged` : ''
+      case 'queued':
+        return action.kind === 'merge' ? `Added ${pr} to the merge queue` : ''
+      case 'mergeFailed':
+        return action.kind === 'merge' ? `Merge of ${pr} failed` : ''
+      case 'closing':
+        return action.kind === 'close' ? 'Closing session…' : ''
+      case 'closed':
+        return action.kind === 'close' ? 'Closed session' : ''
+      case 'closeFailed':
+        return action.kind === 'close' ? 'Close failed' : ''
+      case 'runningCommand':
+        return 'Running command…'
+      case 'ranCommand':
+        return 'Ran command'
+      case 'commandFailed':
+        return action.exitCode === undefined
+          ? 'Command failed'
+          : `Command failed (exit ${String(action.exitCode)})`
+      case 'commandTimedOut':
+        return 'Command timed out'
+    }
+  })()
   const icon =
-    action.status === 'merging' || action.status === 'closing'
+    action.status === 'merging' ||
+    action.status === 'closing' ||
+    action.status === 'runningCommand'
       ? 'running'
-      : action.status === 'merged' || action.status === 'closed'
+      : action.status === 'merged' ||
+          action.status === 'closed' ||
+          action.status === 'ranCommand'
         ? 'success'
         : action.status === 'queued'
           ? 'queued'
@@ -114,23 +135,29 @@ export function AsyncActionItem({
   onDismiss,
   onCloseKeepWorktree,
   onOpenInTerminal,
+  onShowOutput,
 }: AsyncActionItemProps) {
   const text = copy(action)
   const Icon =
-    text.icon === 'running'
-      ? LoaderCircle
-      : text.icon === 'success'
-        ? Check
-        : text.icon === 'queued'
-          ? Clock3
-          : text.icon === 'failure'
-            ? AlertCircle
-            : Check
+    action.status === 'commandTimedOut'
+      ? Clock3
+      : text.icon === 'running'
+        ? LoaderCircle
+        : text.icon === 'success'
+          ? Check
+          : text.icon === 'queued'
+            ? Clock3
+            : text.icon === 'failure'
+              ? AlertCircle
+              : Check
   const isFailure = text.icon === 'failure'
   const isRunning = text.icon === 'running'
   const isQueue = text.icon === 'queued'
   const label = form === 'line' ? text.line : text.title
   const hasCloseChecks = action.kind === 'close' && action.checks !== undefined
+  const canShowCommandOutput =
+    action.kind === 'command' &&
+    (action.status === 'commandFailed' || action.status === 'commandTimedOut')
   const closeSummary =
     action.kind === 'close' && action.checks !== undefined
       ? closeFailureSummary(action.checks)
@@ -153,8 +180,16 @@ export function AsyncActionItem({
       />
       <div className="async-action-item-content">
         <strong>{label}</strong>
-        {form !== 'line' ? (
+        {form !== 'line' && action.kind !== 'command' ? (
           <span className="async-action-session">{action.sessionTitle}</span>
+        ) : null}
+        {action.kind === 'command' && form !== 'line' ? (
+          <code className="async-action-command">{action.command}</code>
+        ) : null}
+        {action.status === 'commandTimedOut' && form !== 'line' ? (
+          <span className="async-action-command-timeout">
+            Stopped after 30 s.
+          </span>
         ) : null}
         {action.message !== undefined ? <span>{action.message}</span> : null}
         {closeSummary !== undefined && form !== 'row' ? (
@@ -165,7 +200,14 @@ export function AsyncActionItem({
         {form === 'row' && action.checks !== undefined ? (
           <CloseChecksList checks={action.checks} />
         ) : null}
-        {isFailure && form === 'toast' ? (
+        {canShowCommandOutput && form === 'toast' ? (
+          <div className="async-action-controls">
+            <button type="button" onClick={onShowOutput}>
+              Show output
+            </button>
+          </div>
+        ) : null}
+        {isFailure && !canShowCommandOutput && form === 'toast' ? (
           <div className="async-action-controls">
             {hasCloseChecks ? (
               <button type="button" onClick={onCloseKeepWorktree}>
@@ -182,7 +224,14 @@ export function AsyncActionItem({
             ) : null}
           </div>
         ) : null}
-        {isFailure && form === 'row' ? (
+        {canShowCommandOutput && form === 'row' ? (
+          <div className="async-action-controls">
+            <button type="button" onClick={onShowOutput}>
+              Show output
+            </button>
+          </div>
+        ) : null}
+        {isFailure && !canShowCommandOutput && form === 'row' ? (
           <div className="async-action-controls">
             {hasCloseChecks ? (
               <button type="button" onClick={onCloseKeepWorktree}>

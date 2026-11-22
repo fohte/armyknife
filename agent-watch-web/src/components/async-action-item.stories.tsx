@@ -1,3 +1,5 @@
+import '#components/async-action-feedback-host.css'
+
 import type { Meta, StoryObj } from '@storybook/react-vite'
 
 import { AsyncActionItem } from '#components/async-action-item'
@@ -16,6 +18,16 @@ const meta = {
     },
     form: 'toast',
   },
+  decorators: [
+    (Story, context) =>
+      context.args.form === 'toast' ? (
+        <div className="async-action-toast-stack">
+          <Story />
+        </div>
+      ) : (
+        <Story />
+      ),
+  ],
 } satisfies Meta<typeof AsyncActionItem>
 
 export default meta
@@ -326,5 +338,105 @@ export const ProcessCheckIsUnavailable: Story = {
         processInspectionUnavailable: true,
       },
     },
+  },
+}
+
+const commandAction = {
+  id: 4,
+  sessionId: 'example-session',
+  sessionTitle: 'Review the example output',
+  kind: 'command' as const,
+  command: "printf 'sample output'",
+  status: 'runningCommand' as const,
+  createdAt: 1_800_000_000_000,
+}
+
+export const RunCommandIsRunning: Story = {
+  name: 'A running command appears in a toast.',
+  args: { form: 'toast', action: commandAction },
+}
+
+export const RunningRunCommandInActivity: Story = {
+  name: 'Activity lists a running command.',
+  args: {
+    form: 'row',
+    action: commandAction,
+  },
+}
+
+export const RunCommandSucceeded: Story = {
+  name: 'A successful command appears in a toast.',
+  args: {
+    form: 'toast',
+    action: { ...commandAction, status: 'ranCommand' },
+  },
+}
+
+export const SuccessfulRunCommandInActivity: Story = {
+  name: 'Activity keeps a successful command result.',
+  args: {
+    form: 'row',
+    action: { ...commandAction, status: 'ranCommand' },
+  },
+}
+
+export const RunCommandFailed: Story = {
+  name: 'A failed command offers its output in a toast.',
+  args: {
+    form: 'toast',
+    action: { ...commandAction, status: 'commandFailed', exitCode: 1 },
+  },
+}
+
+export const FailedRunCommandInActivity: Story = {
+  name: 'Activity offers output for a failed command.',
+  args: {
+    form: 'row',
+    action: { ...commandAction, status: 'commandFailed', exitCode: 1 },
+  },
+}
+
+export const RunCommandTimedOut: Story = {
+  name: 'A timed out command explains when it stopped.',
+  args: {
+    form: 'toast',
+    action: { ...commandAction, status: 'commandTimedOut' },
+  },
+}
+
+export const TimedOutRunCommandInActivity: Story = {
+  name: 'Activity explains when a command timed out.',
+  args: {
+    form: 'row',
+    action: { ...commandAction, status: 'commandTimedOut' },
+  },
+}
+
+export const RunCommandIsRunningInConversation: Story = {
+  name: 'The conversation shows a running command.',
+  args: { form: 'line', action: commandAction },
+}
+
+export const RunCommandSucceededInConversation: Story = {
+  name: 'The conversation marks the command as successful.',
+  args: {
+    form: 'line',
+    action: { ...commandAction, status: 'ranCommand' },
+  },
+}
+
+export const RunCommandFailedInConversation: Story = {
+  name: 'The conversation shows the failed command result.',
+  args: {
+    form: 'line',
+    action: { ...commandAction, status: 'commandFailed', exitCode: 1 },
+  },
+}
+
+export const RunCommandTimedOutInConversation: Story = {
+  name: 'The conversation shows the timed out command result.',
+  args: {
+    form: 'line',
+    action: { ...commandAction, status: 'commandTimedOut' },
   },
 }

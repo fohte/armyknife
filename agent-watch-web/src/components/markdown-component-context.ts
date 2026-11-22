@@ -13,6 +13,7 @@ export type MarkdownComponentContextValue = {
   commandContext?: {
     messageText: string
     sessionId: string
+    sessionTitle: string
     onCommandExecuted?: () => void
   }
 }

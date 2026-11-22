@@ -49,6 +49,16 @@
   font-size: 12px;
   overflow-wrap: anywhere;
 }
+.async-action-command {
+  color: var(--aw-text-secondary);
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.async-action-command-timeout {
+  color: var(--aw-color-error);
+}
 .async-action-error {
   color: var(--aw-color-error) !important;
 }

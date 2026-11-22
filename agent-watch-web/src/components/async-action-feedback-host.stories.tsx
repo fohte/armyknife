@@ -114,6 +114,7 @@ const meta = {
     closeActivity: () => undefined,
     closeWithWorktree: () => undefined,
     openInTerminal: () => undefined,
+    showCommandOutput: () => undefined,
   },
 } satisfies Meta<typeof AsyncActionFeedbackHost>
 
@@ -130,12 +131,12 @@ export const ActivityKeepsTheResult: Story = {
 }
 
 export const ActivityShowsEmptyState: Story = {
-  name: 'Activity explains where merge and close results will appear.',
+  name: 'Activity explains where merge, close, and command results will appear.',
   args: { actions: [], toastIds: [], activityOpen: true },
 }
 
 export const PhoneShowsEmptyActivity: Story = {
-  name: 'The phone sheet explains where merge and close results appear.',
+  name: 'The phone sheet explains where merge, close, and command results appear.',
   parameters: {
     layout: 'fullscreen',
     viewport: { defaultViewport: 'mobile2' },

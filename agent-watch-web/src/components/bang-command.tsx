@@ -1,5 +1,6 @@
 import { useState } from 'react'
 
+import { useAsyncActionStarter } from '#async-action-feedback'
 import {
   BangCommandButton,
   type CommandStatus,
@@ -11,6 +12,7 @@ import { createSessionOperation } from '#session-operations'
 type BangCommandActionsProps = {
   commands: readonly string[]
   messageText: string
+  sessionTitle: string
   sessionId: string
   mobile?: boolean
   onCommandExecuted?: () => void
@@ -48,21 +50,21 @@ function isCommandExecution(value: unknown): value is CommandExecution {
 export function BangCommandActions({
   commands,
   messageText,
+  sessionTitle,
   sessionId,
   mobile = false,
   onCommandExecuted,
 }: BangCommandActionsProps) {
   const { run } = useSessionOperations()
+  const startAsyncAction = useAsyncActionStarter(() => undefined)
   const [activeKey, setActiveKey] = useState<string | null>(null)
   const [selectedCommands, setSelectedCommands] = useState<string[]>([])
   const [cwd, setCwd] = useState('')
   const [previewing, setPreviewing] = useState(false)
   const [statuses, setStatuses] = useState<Record<string, CommandStatus>>({})
   const [messages, setMessages] = useState<Record<string, string>>({})
-  const [executing, setExecuting] = useState(false)
   const onFailure = (key: string, error: Error) => {
     setPreviewing(false)
-    setExecuting(false)
     setActiveKey(null)
     setStatuses((current) => ({ ...current, [key]: 'failed' }))
     setMessages((current) => ({ ...current, [key]: error.message }))
@@ -106,52 +108,63 @@ export function BangCommandActions({
   }
 
   const confirm = () => {
-    if (activeKey === null || executing) return
+    if (activeKey === null) return
     const key = activeKey
-    setExecuting(true)
     setStatuses((current) => ({ ...current, [key]: 'running' }))
-    const operation = createSessionOperation(sessionId, 'commands/execute', {
-      messageText,
-      commands: selectedCommands,
-    })
-    operation.match(
-      (value) => {
-        void run(value).then((result) => {
-          result.match(
-            (response) => {
-              if (!isCommandExecution(response)) {
-                onFailure(
-                  key,
-                  new Error('The server returned an invalid response'),
-                )
-                return
-              }
-              onCommandExecuted?.()
-              setExecuting(false)
-              setActiveKey(null)
-              setStatuses((current) => ({
-                ...current,
-                [key]: response.succeeded ? 'succeeded' : 'failed',
-              }))
-              setMessages((current) => ({
-                ...current,
-                [key]: response.timedOut
-                  ? 'Timed out'
-                  : response.succeeded
-                    ? 'Completed'
-                    : `Failed (exit code ${String(response.exitCode)})`,
-              }))
-            },
-            (error) => {
+    const commands = [...selectedCommands]
+    startAsyncAction({
+      kind: 'command',
+      sessionId,
+      sessionTitle,
+      command: commands.join('\n'),
+      run: async () => {
+        const operation = createSessionOperation(
+          sessionId,
+          'commands/execute',
+          {
+            messageText,
+            commands,
+          },
+        )
+        if (operation.isErr()) {
+          onFailure(key, operation.error)
+          return { status: 'commandFailed', error: operation.error.message }
+        }
+        const result = await run(operation.value)
+        return result.match(
+          (response) => {
+            if (!isCommandExecution(response)) {
+              const error = new Error('The server returned an invalid response')
               onFailure(key, error)
-            },
-          )
-        })
+              return { status: 'commandFailed', error: error.message }
+            }
+            onCommandExecuted?.()
+            setStatuses((current) => ({
+              ...current,
+              [key]: response.succeeded ? 'succeeded' : 'failed',
+            }))
+            setMessages((current) => ({
+              ...current,
+              [key]: response.timedOut
+                ? 'Timed out'
+                : response.succeeded
+                  ? 'Completed'
+                  : `Failed (exit code ${String(response.exitCode)})`,
+            }))
+            return response.timedOut
+              ? { status: 'commandTimedOut' }
+              : response.succeeded
+                ? { status: 'ranCommand' }
+                : { status: 'commandFailed', exitCode: response.exitCode }
+          },
+          (error) => {
+            onFailure(key, error)
+            return { status: 'commandFailed', error: error.message }
+          },
+        )
       },
-      (error) => {
-        onFailure(key, error)
-      },
-    )
+    })
+    setActiveKey(null)
   }
 
   const statusFor = (key: string) => statuses[key] ?? 'idle'
@@ -164,7 +177,7 @@ export function BangCommandActions({
         : label
   }
 
-  const busy = previewing || executing
+  const busy = previewing
   return (
     <span className="bang-command-actions">
       {commands.map((command, index) => {
@@ -204,7 +217,6 @@ export function BangCommandActions({
         }}
         onConfirm={confirm}
         open={activeKey !== null && !previewing}
-        running={executing}
       />
     </span>
   )

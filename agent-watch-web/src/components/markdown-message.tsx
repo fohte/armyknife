@@ -331,6 +331,7 @@ const MarkdownCode: NonNullable<Components['code']> = ({ node, ...props }) => {
       <BangCommandActions
         commands={[command]}
         messageText={commandContext.messageText}
+        sessionTitle={commandContext.sessionTitle}
         {...(mobile === undefined ? {} : { mobile })}
         {...(commandContext.onCommandExecuted === undefined
           ? {}
@@ -358,6 +359,7 @@ const MarkdownPre: NonNullable<Components['pre']> = ({ children }) => {
       <BangCommandActions
         commands={commands}
         messageText={commandContext.messageText}
+        sessionTitle={commandContext.sessionTitle}
         {...(mobile === undefined ? {} : { mobile })}
         {...(commandContext.onCommandExecuted === undefined
           ? {}
@@ -409,6 +411,7 @@ export const MarkdownMessage = memo(function MarkdownMessage({
   const sessionLinks = useMarkdownSessionLinks()
   const inheritedCommandContext = useMarkdownCommandContext()
   const commandSessionId = sessionId ?? inheritedCommandContext?.sessionId
+  const commandSessionTitle = inheritedCommandContext?.sessionTitle ?? 'Session'
   const commandExecutedCallback =
     onCommandExecuted ?? inheritedCommandContext?.onCommandExecuted
   const rootClassName =
@@ -437,6 +440,7 @@ export const MarkdownMessage = memo(function MarkdownMessage({
           commandContext: {
             messageText: children,
             sessionId: commandSessionId,
+            sessionTitle: commandSessionTitle,
             ...(commandExecutedCallback === undefined
               ? {}
               : { onCommandExecuted: commandExecutedCallback }),

@@ -68,6 +68,17 @@ export function UserWithContent({
     message.type === 'user'
       ? [{ type: 'text', text: message.text }]
       : message.content
+  const messageText = content
+    .filter(
+      (part): part is Extract<UserContentPart, { type: 'text' }> =>
+        part.type === 'text',
+    )
+    .map((part) => part.text)
+    .join('\n')
+  const isCommandResultMessage =
+    /^Command (?:exited with code \d+|timed out after \d+ seconds) in /.test(
+      messageText,
+    ) && messageText.includes('\nCommand:\n')
   const queued = message.type === 'queued_user'
   const isOwnMessage = queued || message.from == null || message.from === ''
   const time = formatMessageTime(message.timestamp, now)
@@ -91,6 +102,7 @@ export function UserWithContent({
   return (
     <article
       className="chat-user-group"
+      data-command-result={isCommandResultMessage ? 'true' : undefined}
       data-own-message={isOwnMessage ? 'true' : undefined}
       data-own-message-highlighted={navigationHighlighted ? 'true' : undefined}
     >

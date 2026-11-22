@@ -19,6 +19,7 @@ type AsyncActionFeedbackHostProps = {
   closeActivity: () => void
   closeWithWorktree: (id: number) => void
   openInTerminal: (id: number) => void
+  showCommandOutput: (id: number) => void
 }
 
 function timeLabel(timestamp: number) {
@@ -40,6 +41,7 @@ export function AsyncActionFeedbackHost({
   closeActivity,
   closeWithWorktree,
   openInTerminal,
+  showCommandOutput,
 }: AsyncActionFeedbackHostProps) {
   const ordered = [...actions].sort(
     (left, right) => right.createdAt - left.createdAt,
@@ -99,6 +101,9 @@ export function AsyncActionFeedbackHost({
               onCloseKeepWorktree={() => {
                 closeWithWorktree(id)
               }}
+              onShowOutput={() => {
+                showCommandOutput(id)
+              }}
             />
           )
         })}
@@ -128,7 +133,7 @@ export function AsyncActionFeedbackHost({
             {ordered.length === 0 ? (
               <div className="async-action-empty">
                 <p>No recent activity.</p>
-                <p>Merge and Close results appear here.</p>
+                <p>Merge, Close and command results appear here.</p>
               </div>
             ) : null}
             <div className="async-action-activity-list">
@@ -156,6 +161,10 @@ export function AsyncActionFeedbackHost({
                     onOpenInTerminal={() => {
                       closeActivity()
                       openInTerminal(action.id)
+                    }}
+                    onShowOutput={() => {
+                      closeActivity()
+                      showCommandOutput(action.id)
                     }}
                   />
                 </div>

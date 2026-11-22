@@ -68,6 +68,9 @@ function ActivityHarness({
       }}
       closeWithWorktree={() => undefined}
       openInTerminal={() => undefined}
+      showCommandOutput={() => {
+        calls.push('show-output')
+      }}
     />
   )
 }
@@ -112,6 +115,58 @@ it('closes Activity before retrying a failed action', () => {
   })
 })
 
+it('shows command output as the only command failure action', () => {
+  const action: AsyncAction = {
+    id: 9,
+    sessionId: 'example-session',
+    sessionTitle: 'Example session',
+    kind: 'command',
+    command: "printf 'sample output'",
+    status: 'commandTimedOut',
+    createdAt: 1_800_000_000_004,
+  }
+  const calls: string[] = []
+  container = document.createElement('div')
+  document.body.append(container)
+  root = createRoot(container)
+  act(() => {
+    root?.render(<ActivityHarness actions={[action]} calls={calls} />)
+  })
+
+  const beforeClick = {
+    actionText: container.querySelector(
+      '.async-action-activity-list .async-action-item',
+    )?.textContent,
+    buttons: Array.from(
+      container.querySelectorAll('.async-action-activity-list button'),
+      (button) => button.textContent,
+    ),
+    commandTag: container.querySelector('.async-action-activity-list code')
+      ?.textContent,
+  }
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>('.async-action-activity-list button')
+      ?.click()
+  })
+
+  const snapshot = () => ({
+    beforeClick,
+    calls,
+    activityOpen: container.querySelector('[aria-label="Activity"]') !== null,
+  })
+  expect(snapshot()).toEqual({
+    beforeClick: {
+      actionText:
+        "Command timed outprintf 'sample output'Stopped after 30 s.Show output17:00",
+      buttons: ['Show output'],
+      commandTag: "printf 'sample output'",
+    },
+    calls: ['close', 'show-output'],
+    activityOpen: false,
+  })
+})
+
 it('fits the empty phone sheet to its content and shows the dimmed backdrop', async () => {
   await page.viewport(390, 844)
   container = document.createElement('div')
@@ -144,7 +199,7 @@ it('fits the empty phone sheet to its content and shows the dimmed backdrop', as
   expect(snapshot()).toEqual({
     emptyMessages: [
       'No recent activity.',
-      'Merge and Close results appear here.',
+      'Merge, Close and command results appear here.',
     ],
     contentSized: true,
     closeButtonHeight: 44,
@@ -222,6 +277,7 @@ it('positions the toast stack at the supplied screen offset', () => {
         closeActivity={() => undefined}
         closeWithWorktree={() => undefined}
         openInTerminal={() => undefined}
+        showCommandOutput={() => undefined}
       />,
     )
   })

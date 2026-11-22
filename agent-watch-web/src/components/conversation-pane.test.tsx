@@ -3,6 +3,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { userEvent } from 'vitest/browser'
 
+import { AsyncActionFeedbackProvider } from '#async-action-feedback'
 import { getCommandPaletteShortcut } from '#command-palette-shortcut'
 import { renderConversationMessage } from '#components/conversation-message'
 import { ConversationMessageRow } from '#components/conversation-message-row'
@@ -1393,6 +1394,9 @@ it('executes a bang command from a todo card in the conversation', async () => {
   }
   const commandRequests: Array<{ url: string; body: unknown }> = []
   let messageFetchCount = 0
+  let finishExecute: (response: Response) => void = () => {
+    throw new Error('Command execution did not start')
+  }
   const fetcher = vi.fn<typeof fetch>((input, init) => {
     const url = requestUrl(input)
     if (url.includes('/messages?')) {
@@ -1416,9 +1420,9 @@ it('executes a bang command from a todo card in the conversation', async () => {
         url,
         body: JSON.parse(body),
       })
-      return Promise.resolve(
-        jsonResponse({ exitCode: 0, succeeded: true, timedOut: false }),
-      )
+      return new Promise((resolve) => {
+        finishExecute = resolve
+      })
     }
     return Promise.resolve(jsonResponse({}))
   })
@@ -1426,12 +1430,14 @@ it('executes a bang command from a todo card in the conversation', async () => {
   root = createRoot(container)
   act(() => {
     root?.render(
-      <ConversationPane
-        session={session}
-        refreshKey={0}
-        sessionTreeRefreshKey={0}
-        onSelectSession={() => undefined}
-      />,
+      <AsyncActionFeedbackProvider>
+        <ConversationPane
+          session={session}
+          refreshKey={0}
+          sessionTreeRefreshKey={0}
+          onSelectSession={() => undefined}
+        />
+      </AsyncActionFeedbackProvider>,
     )
   })
 
@@ -1458,6 +1464,24 @@ it('executes a bang command from a todo card in the conversation', async () => {
     throw new Error('Expected the confirmation button')
   }
   await act(async () => userEvent.click(confirmButton))
+  const commandStarted = await waitForState(
+    () =>
+      document.body.querySelector('[role="dialog"]') === null &&
+      Boolean(document.body.querySelector('.async-action-item--running')),
+  )
+  const runningState = {
+    dialogOpen: document.body.querySelector('[role="dialog"]') !== null,
+    toast: document.body.querySelector('.async-action-toast-stack')
+      ?.textContent,
+    conversationLine: container.querySelector('.async-action-item--line')
+      ?.textContent,
+  }
+  await act(async () => {
+    finishExecute(
+      jsonResponse({ exitCode: 0, succeeded: true, timedOut: false }),
+    )
+    await Promise.resolve()
+  })
   const completed = await waitForState(
     () =>
       runButton.textContent === 'Succeeded' &&
@@ -1465,11 +1489,19 @@ it('executes a bang command from a todo card in the conversation', async () => {
   )
 
   const getActual = () => ({
+    commandStarted,
+    runningState,
     commandCompleted: completed,
     conversationRefreshed: messageFetchCount > messageFetchCountBeforeCommand,
     commandRequests,
   })
   expect(getActual()).toEqual({
+    commandStarted: true,
+    runningState: {
+      dialogOpen: false,
+      toast: 'Running commandprintf safe',
+      conversationLine: 'Running command…',
+    },
     commandCompleted: true,
     conversationRefreshed: true,
     commandRequests: [

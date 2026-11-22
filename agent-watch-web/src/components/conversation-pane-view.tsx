@@ -2,7 +2,14 @@ import '#components/conversation-pane.css'
 import '#components/conversation-pane-view.css'
 
 import { Button } from '@fohte/ui/button'
-import { type ReactNode, useCallback, useMemo, useRef, useState } from 'react'
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 
 import { useOptionalAsyncActionFeedback } from '#async-action-feedback'
 import { useAgentUsageContext } from '#components/agent-usage-context'
@@ -162,6 +169,13 @@ export function ConversationPaneView({
   onComposerFocusRequestHandled = () => undefined,
 }: ConversationPaneViewProps) {
   const actionFeedback = useOptionalAsyncActionFeedback()
+  const commandOutputHighlightTimer = useRef<number | null>(null)
+  const commandOutputAction = actionFeedback?.actions.find(
+    (action) =>
+      actionFeedback.pendingCommandOutputActionIds.includes(action.id) &&
+      action.kind === 'command' &&
+      action.sessionId === session.id,
+  )
   const { usage } = useAgentUsageContext()
   const sessionUsage =
     usage?.sessions.find((entry) => entry.sessionId === session.id) ?? null
@@ -220,6 +234,48 @@ export function ConversationPaneView({
     epoch,
     olderCursor,
   })
+  useEffect(
+    () => () => {
+      if (commandOutputHighlightTimer.current !== null) {
+        window.clearTimeout(commandOutputHighlightTimer.current)
+      }
+    },
+    [],
+  )
+  useEffect(() => {
+    if (loading || commandOutputAction === undefined) return
+    const commands = commandOutputAction.command?.split('\n') ?? []
+    if (commands.length === 0) return
+    const target = Array.from(
+      conversationScrollRef.current?.querySelectorAll<HTMLElement>(
+        '[data-command-result="true"]',
+      ) ?? [],
+    )
+      .filter((message) =>
+        commands.every((command) =>
+          message.textContent.includes(`$ ${command}`),
+        ),
+      )
+      .at(-1)
+    if (target === undefined) return
+
+    target.dataset['commandOutputHighlighted'] = 'true'
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    if (commandOutputHighlightTimer.current !== null) {
+      window.clearTimeout(commandOutputHighlightTimer.current)
+    }
+    commandOutputHighlightTimer.current = window.setTimeout(() => {
+      delete target.dataset['commandOutputHighlighted']
+      commandOutputHighlightTimer.current = null
+    }, 1_500)
+    actionFeedback?.consumeCommandOutput(commandOutputAction.id)
+  }, [
+    actionFeedback,
+    commandOutputAction,
+    conversationScrollRef,
+    loading,
+    messages,
+  ])
   useConversationDecisionJump({
     decisionJump,
     epoch,
@@ -405,6 +461,7 @@ export function ConversationPaneView({
         ) : null}
         <MarkdownCommandContextProvider
           sessionId={session.id}
+          sessionTitle={session.title}
           {...(onCommandExecuted === undefined ? {} : { onCommandExecuted })}
         >
           {conversationMessageElements}
