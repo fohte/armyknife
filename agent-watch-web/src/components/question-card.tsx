@@ -339,55 +339,57 @@ export function QuestionCard({
               {question.choices.map((choice, choiceIndex) => {
                 const isSelected = selectedLabels.includes(choice.label)
                 return (
-                  <Button
-                    type="button"
-                    variant="plain"
-                    className={
-                      isSelected
-                        ? 'is-selected'
-                        : hasRecordedAnswer
-                          ? 'is-unselected'
-                          : undefined
-                    }
-                    aria-pressed={isSelected}
+                  <div
+                    className={`chat-question-choice-row${isSelected ? ' is-selected' : hasRecordedAnswer ? ' is-unselected' : ''}`}
                     key={`${String(choiceIndex)}-${choice.label}`}
-                    disabled={!canAnswer || resolved || isSending}
-                    onClick={() => {
-                      if (singleChoiceQuestion !== undefined) {
-                        answerSingleChoice(question, choice.label)
-                      } else {
-                        toggleChoice(question, choice.label)
-                      }
-                    }}
                   >
-                    {showNumberShortcuts && choiceIndex < 9 ? (
-                      <kbd>{choiceIndex + 1}</kbd>
-                    ) : null}
-                    <span className="chat-question-choice-content">
-                      <MarkdownMessage
-                        className="chat-question-choice-text"
-                        inline
-                      >
-                        {choice.label}
-                      </MarkdownMessage>
-                      {choice.description !== undefined &&
-                      choice.description.length > 0 ? (
-                        <small className="chat-question-choice-description">
-                          <MarkdownMessage inline>
-                            {choice.description}
-                          </MarkdownMessage>
-                        </small>
+                    <Button
+                      type="button"
+                      variant="plain"
+                      className={
+                        isSelected
+                          ? 'is-selected'
+                          : hasRecordedAnswer
+                            ? 'is-unselected'
+                            : undefined
+                      }
+                      aria-pressed={isSelected}
+                      disabled={!canAnswer || resolved || isSending}
+                      onClick={() => {
+                        if (singleChoiceQuestion !== undefined) {
+                          answerSingleChoice(question, choice.label)
+                        } else {
+                          toggleChoice(question, choice.label)
+                        }
+                      }}
+                    >
+                      {showNumberShortcuts && choiceIndex < 9 ? (
+                        <kbd>{choiceIndex + 1}</kbd>
                       ) : null}
-                    </span>
-                    {isSelected ? (
-                      <span
-                        className="chat-question-choice-check"
-                        aria-hidden="true"
-                      >
-                        ✓
+                      <span className="chat-question-choice-content">
+                        <MarkdownMessage
+                          className="chat-question-choice-text"
+                          inline
+                        >
+                          {choice.label}
+                        </MarkdownMessage>
                       </span>
+                      {isSelected ? (
+                        <span
+                          className="chat-question-choice-check"
+                          aria-hidden="true"
+                        >
+                          ✓
+                        </span>
+                      ) : null}
+                    </Button>
+                    {choice.description !== undefined &&
+                    choice.description.length > 0 ? (
+                      <div className="chat-question-choice-description">
+                        <MarkdownMessage>{choice.description}</MarkdownMessage>
+                      </div>
                     ) : null}
-                  </Button>
+                  </div>
                 )
               })}
             </div>

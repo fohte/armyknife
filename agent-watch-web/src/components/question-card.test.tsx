@@ -267,7 +267,7 @@ it('sends a single-choice answer as soon as an option is selected', async () => 
   })
 })
 
-it('does not render copy controls in a single-choice option description', () => {
+it('renders copy controls outside a single-choice option description button', () => {
   renderQuestion(
     props({
       questions: [
@@ -291,9 +291,13 @@ it('does not render copy controls in a single-choice option description', () => 
   const snapshot = () => ({
     copyButtonRendered:
       container.querySelector('.syntax-code-block-copy-button') !== null,
+    copyButtonNestedInChoice:
+      choiceButton('North').querySelector('.syntax-code-block-copy-button') !==
+      null,
   })
   expect(snapshot()).toEqual({
-    copyButtonRendered: false,
+    copyButtonRendered: true,
+    copyButtonNestedInChoice: false,
   })
 })
 
