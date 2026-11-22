@@ -99,7 +99,7 @@ it('shows each merge state with a control only when it can be acted on', () => {
       action: {
         label: 'Merge',
         disabled: false,
-        ariaLabel: 'Merge PR #42',
+        ariaLabel: 'Merge PR #42 in example-org/example-service',
       },
     },
     {
@@ -150,7 +150,7 @@ it('sends the selected pull request to the matching action', () => {
 
   act(() => {
     container
-      .querySelector<HTMLButtonElement>('[aria-label="Merge PR #42"]')
+      .querySelector<HTMLButtonElement>('[aria-label^="Merge PR #42"]')
       ?.click()
     container
       .querySelector<HTMLButtonElement>('[aria-label="Retry merging PR #43"]')

@@ -96,6 +96,9 @@ function RetryNavigationHarness({
   departure: (typeof retryDepartures)[number]
 }) {
   const feedback = useOptionalAsyncActionFeedback()
+  const [mergeBandTarget, setMergeBandTarget] = useState<HTMLDivElement | null>(
+    null,
+  )
   const [route, setRoute] = useState({
     view: 'inbox' as 'inbox' | 'board',
     selectedId: session.id,
@@ -176,6 +179,7 @@ function RetryNavigationHarness({
           session={currentSession}
           actions={actions}
           isMobile
+          mergeBandTarget={mergeBandTarget}
           statusPanelOpen={false}
           backgroundTasks={[]}
           openInTerminalStatus={null}
@@ -186,6 +190,7 @@ function RetryNavigationHarness({
           onToggleStatusPanel={() => undefined}
         />
       )}
+      <div ref={setMergeBandTarget} />
     </>
   )
 }
@@ -235,14 +240,7 @@ it.each(retryDepartures)(
 
     act(() => {
       requireElement(
-        container.querySelector<HTMLButtonElement>('.session-pr-trigger'),
-      ).click()
-    })
-    act(() => {
-      requireElement(
-        container.querySelector<HTMLButtonElement>(
-          'button[aria-label="Merge PR #42"]',
-        ),
+        container.querySelector<HTMLButtonElement>('.merge-band-action'),
       ).click()
     })
     await act(async () => {

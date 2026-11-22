@@ -432,6 +432,7 @@ export function ConversationPaneHeader({
       {merge.mergeConfirmationOpen && merge.mergeTarget !== null ? (
         <PullRequestMergeConfirmation
           number={merge.mergeTarget.number}
+          repository={`${merge.mergeTarget.owner}/${merge.mergeTarget.repo}`}
           headSha={merge.mergeTarget.expectedHeadSha}
           merging={merge.isMerging(merge.mergeTarget)}
           mobile={isMobile}

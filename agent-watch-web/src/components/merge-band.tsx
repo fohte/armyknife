@@ -64,7 +64,7 @@ export function MergeBand({
               className="merge-band-action is-ready"
               type="button"
               variant="secondary"
-              aria-label={`Merge PR #${String(pullRequest.number)}`}
+              aria-label={`Merge PR #${String(pullRequest.number)}${pullRequest.owner === undefined || pullRequest.repo === undefined ? '' : ` in ${pullRequest.owner}/${pullRequest.repo}`}`}
               onClick={() => {
                 onMerge(pullRequest)
               }}

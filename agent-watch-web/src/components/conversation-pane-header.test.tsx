@@ -772,6 +772,8 @@ it('merges an open pull request when an earlier session PR is closed', async () 
   const confirmation = requireElement(
     container.querySelector<HTMLElement>('[role="alertdialog"]'),
   )
+  const confirmationDescription =
+    confirmation.querySelector('p')?.textContent ?? null
 
   await act(async () => {
     requireElement(
@@ -787,11 +789,14 @@ it('merges an open pull request when an earlier session PR is closed', async () 
   })
 
   const mergeState = () => ({
+    confirmationDescription,
     summary: trigger.getAttribute('aria-label'),
     request: fetchMock.mock.calls.map(([url]) => url),
     feedback: container.querySelector('[role="status"]')?.textContent,
   })
   expect(mergeState()).toEqual({
+    confirmationDescription:
+      'Merge PR #42 in example-org/example-repo using the confirmed head commit?',
     summary:
       'PR #42: Untitled pull request, merged, CI passed. 1 more PR from this session',
     request: ['/api/sessions/fixture-session/pull-requests/42/merge'],
@@ -841,7 +846,7 @@ it('merges a ready pull request from the merge band when several PRs exist', asy
   })
   const mergeButton = requireElement(
     container.querySelector<HTMLButtonElement>(
-      'button[aria-label="Merge PR #43"]',
+      'button[aria-label^="Merge PR #43"]',
     ),
   )
   act(() => {
@@ -926,7 +931,7 @@ it('shows merge feedback when a PR uses the session repository fallback', async 
   })
   const mergeButton = requireElement(
     container.querySelector<HTMLButtonElement>(
-      'button[aria-label="Merge PR #46"]',
+      'button[aria-label^="Merge PR #46"]',
     ),
   )
   act(() => {
@@ -1517,7 +1522,7 @@ it('shows the current CI reason without retry after checks stop passing', async 
   act(() => {
     requireElement(
       container.querySelector<HTMLButtonElement>(
-        'button[aria-label="Merge PR #42"]',
+        'button[aria-label^="Merge PR #42"]',
       ),
     ).click()
   })

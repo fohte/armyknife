@@ -121,9 +121,7 @@ function pullRequestRepo(pullRequest: PullRequest, fallbackRepo: string) {
   return fallbackRepo
 }
 
-export function getRepresentativePullRequest(
-  pullRequests: readonly PullRequest[],
-) {
+function getRepresentativePullRequest(pullRequests: readonly PullRequest[]) {
   return (
     pullRequests.find((pullRequest) => pullRequest.isCurrentBranch === true) ??
     pullRequests.find((pullRequest) => pullRequest.state === 'Open') ??
