@@ -83,6 +83,7 @@ mod tests {
     use super::*;
     use crate::commands::agent::store::{
         check_unreported_stop, insert_watch_web_peer_out_message_from,
+        mark_watch_web_peer_out_message_delivered_from,
     };
     use crate::commands::agent::types::{ChildLaunchPermission, Engine, SessionStatus};
 
@@ -235,11 +236,13 @@ mod tests {
     }
 
     #[rstest]
-    #[case::parent_instruction_delivered(false, false, true)]
-    #[case::parent_instruction_failed(true, false, true)]
-    #[case::report_after_parent_instruction(false, true, false)]
+    #[case::parent_instruction_delivered(false, false, false, true)]
+    #[case::parent_instruction_failed(true, false, false, false)]
+    #[case::failed_instruction_redelivered(true, true, false, true)]
+    #[case::report_after_parent_instruction(false, false, true, false)]
     fn reports_after_parent_instructions_define_the_stop_boundary(
         #[case] parent_instruction_failed: bool,
+        #[case] redeliver_parent_instruction: bool,
         #[case] report_after_parent_instruction: bool,
         #[case] expected_notification: bool,
         sessions_dir: TempDir,
@@ -261,7 +264,7 @@ mod tests {
             false,
         )
         .unwrap();
-        insert_watch_web_peer_out_message_from(
+        let parent_instruction_id = insert_watch_web_peer_out_message_from(
             sessions_dir.path(),
             "fixture-parent",
             &session.session_id,
@@ -294,6 +297,14 @@ mod tests {
         )
         .unwrap();
         session.pending_bg_task_ids.clear();
+        if redeliver_parent_instruction {
+            mark_watch_web_peer_out_message_delivered_from(
+                sessions_dir.path(),
+                parent_instruction_id,
+                at(14, 0),
+            )
+            .unwrap();
+        }
 
         let calls = Arc::new(Mutex::new(Vec::new()));
         let calls_for_notify = Arc::clone(&calls);

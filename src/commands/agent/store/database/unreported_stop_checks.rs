@@ -6,8 +6,8 @@ use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
 
 use super::open_connection;
 
-/// Checks peer reports after the previous completed Stop decision and advances
-/// the cursor in the same transaction so delayed rows cannot be skipped.
+/// Checks peer reports after both the previous completed Stop decision and the latest
+/// delivered direct-parent message, then advances the cursor in the same transaction.
 pub(crate) fn check_unreported_stop(
     sessions_dir: &Path,
     session_id: &str,
@@ -35,9 +35,10 @@ pub(crate) fn check_unreported_stop(
             session_created_at,
         )?,
     };
+    // Failed child reports still show activity, but an undelivered parent instruction cannot start a new reporting turn.
     let latest_parent_message_id = transaction.query_row(
         "SELECT COALESCE(MAX(id), 0) FROM watch_web_peer_out_message
-         WHERE from_session_id = ?1 AND to_session_id = ?2",
+         WHERE from_session_id = ?1 AND to_session_id = ?2 AND failed = 0",
         params![parent_session_id, session_id],
         |row| row.get::<_, i64>(0),
     )?;
