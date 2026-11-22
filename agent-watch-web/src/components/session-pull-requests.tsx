@@ -1,13 +1,12 @@
 import '#components/session-pull-requests.css'
 
-import { GitPullRequest } from 'lucide-react'
+import { AlertCircle, GitPullRequest, LoaderCircle } from 'lucide-react'
 import { useEffect, useRef } from 'react'
 
 import {
   type AsyncActionStatus,
   useOptionalAsyncActionFeedback,
 } from '#async-action-feedback'
-import { PullRequestMergeAction } from '#components/pull-request-merge-action'
 import { useDismissableLayer } from '#components/use-dismissable-layer'
 import type { PullRequest } from '#types'
 
@@ -16,11 +15,7 @@ type SessionPullRequestsProps = {
   repo: string
   isMobile: boolean
   open: boolean
-  onMerge: (pullRequest: PullRequest) => void
-  isMerging: (pullRequest: PullRequest) => boolean
-  isMergeSuccessful: (pullRequest: PullRequest) => boolean
   mergeStatus?: (pullRequest: PullRequest) => AsyncActionStatus | null
-  onRetryMerge?: (pullRequest: PullRequest) => void
   onOpenChange: (open: boolean) => void
 }
 
@@ -141,11 +136,7 @@ export function SessionPullRequests({
   repo,
   isMobile,
   open,
-  onMerge,
-  isMerging,
-  isMergeSuccessful,
   mergeStatus,
-  onRetryMerge,
   onOpenChange,
 }: SessionPullRequestsProps) {
   const triggerRef = useRef<HTMLButtonElement>(null)
@@ -154,14 +145,37 @@ export function SessionPullRequests({
   const currentPullRequest = getRepresentativePullRequest(pullRequests)
   const hasPullRequests =
     pullRequests.length > 0 && currentPullRequest !== undefined
-  const allMerged = pullRequests.every(
-    (pullRequest) => pullRequest.state === 'Merged',
+  const mergeStatusFor = (pullRequest: PullRequest) =>
+    pullRequest.state === 'Merged'
+      ? 'merged'
+      : pullRequest.state === 'Open'
+        ? (mergeStatus?.(pullRequest) ?? null)
+        : null
+  const currentMergeStatus =
+    currentPullRequest === undefined ? null : mergeStatusFor(currentPullRequest)
+  const hasMergeFailure = pullRequests.some(
+    (pullRequest) =>
+      pullRequest.state === 'Open' &&
+      mergeStatusFor(pullRequest) === 'mergeFailed',
   )
+  const hasMergeInProgress = pullRequests.some(
+    (pullRequest) =>
+      pullRequest.state === 'Open' &&
+      ['merging', 'queued'].includes(mergeStatusFor(pullRequest) ?? ''),
+  )
+  const allMerged = pullRequests.every(
+    (pullRequest) =>
+      ['merged', 'alreadyMerged'].includes(mergeStatusFor(pullRequest) ?? '') ||
+      pullRequest.state === 'Merged',
+  )
+  const currentPullRequestMerged =
+    currentPullRequest?.state === 'Merged' ||
+    ['merged', 'alreadyMerged'].includes(currentMergeStatus ?? '')
   const additionalCount = Math.max(pullRequests.length - 1, 0)
   const triggerLabel =
     currentPullRequest === undefined
       ? ''
-      : `${allMerged ? `All ${String(pullRequests.length)} pull requests are merged. ` : ''}PR #${String(currentPullRequest.number)}: ${currentPullRequest.title ?? 'Untitled pull request'}, ${currentPullRequest.state.toLowerCase()}, ${ciStateLabel(currentPullRequest.ciState)}${additionalCount > 0 ? `. ${String(additionalCount)} more PR${additionalCount === 1 ? '' : 's'} from this session` : ''}`
+      : `${allMerged ? `All ${String(pullRequests.length)} pull requests are merged. ` : ''}PR #${String(currentPullRequest.number)}: ${currentPullRequest.title ?? 'Untitled pull request'}, ${currentPullRequestMerged ? 'merged' : currentPullRequest.state.toLowerCase()}, ${ciStateLabel(currentPullRequest.ciState)}${hasMergeInProgress ? ', a pull request is merging' : ''}${hasMergeFailure ? ', a merge failed' : ''}${additionalCount > 0 ? `. ${String(additionalCount)} more PR${additionalCount === 1 ? '' : 's'} from this session` : ''}`
 
   useDismissableLayer(
     open,
@@ -255,46 +269,11 @@ export function SessionPullRequests({
                   </span>
                 </span>
               </a>
-              {isPullRequestMergeable(pullRequest) ? (
-                mergeStatus?.(pullRequest) === 'merged' ||
-                (mergeStatus?.(pullRequest) == null &&
-                  isMergeSuccessful(pullRequest)) ? (
-                  <span className="session-pr-row-state is-merged">
-                    ✓ Merged
-                  </span>
-                ) : mergeStatus?.(pullRequest) === 'alreadyMerged' ? (
-                  <span className="session-pr-row-state is-merged">
-                    Already merged
-                  </span>
-                ) : (
-                  <PullRequestMergeAction
-                    ariaLabel={`Merge PR #${String(pullRequest.number)}`}
-                    merging={isMerging(pullRequest)}
-                    result={
-                      mergeStatus?.(pullRequest) === 'queued'
-                        ? 'queued'
-                        : mergeStatus?.(pullRequest) === 'mergeFailed'
-                          ? 'failed'
-                          : null
-                    }
-                    onClick={() => {
-                      if (mergeStatus?.(pullRequest) === 'mergeFailed') {
-                        onRetryMerge?.(pullRequest)
-                      } else {
-                        onMerge(pullRequest)
-                      }
-                    }}
-                  />
-                )
-              ) : (
-                <span
-                  className={`session-pr-row-state${pullRequest.state === 'Open' ? ` ${ciStateClass(pullRequest.ciState)}` : ''}${pullRequest.state === 'Merged' ? ' is-merged' : ''}`}
-                >
-                  {pullRequest.state === 'Merged'
-                    ? '✓ Merged'
-                    : pullRequestMergeReason(pullRequest)}
-                </span>
-              )}
+              <span
+                className={`session-pr-row-state${rowStateClass(pullRequest, mergeStatusFor(pullRequest))}`}
+              >
+                {rowStateLabel(pullRequest, mergeStatusFor(pullRequest))}
+              </span>
             </div>
           ))}
         </div>
@@ -321,7 +300,7 @@ export function SessionPullRequests({
     >
       <button
         ref={triggerRef}
-        className={`session-pr-trigger${isMobile ? ' session-pr-trigger--mobile' : ''}${open ? ' is-open' : ''}${allMerged ? ' is-all-merged' : ''}`}
+        className={`session-pr-trigger${isMobile ? ' session-pr-trigger--mobile' : ''}${open ? ' is-open' : ''}${allMerged ? ' is-all-merged' : ''}${hasMergeFailure ? ' is-merge-failed' : ''}${hasMergeInProgress ? ' is-merge-in-progress' : ''}${!isMobile && (hasMergeFailure || hasMergeInProgress) ? ' is-merge-mark-inline' : ''}`}
         type="button"
         aria-haspopup="dialog"
         aria-expanded={open}
@@ -337,7 +316,21 @@ export function SessionPullRequests({
           size={isMobile ? 18 : 14}
           strokeWidth={1.7}
         />
-        {currentPullRequest.state === 'Merged' ? null : (
+        {hasMergeFailure ? (
+          <span
+            className={`session-pr-merge-mark${isMobile ? ' is-mobile' : ' is-inline'} is-failed`}
+            aria-hidden="true"
+          >
+            <AlertCircle size={15} />
+          </span>
+        ) : hasMergeInProgress ? (
+          <span
+            className={`session-pr-merge-mark${isMobile ? ' is-mobile' : ' is-inline'} is-merging`}
+            aria-hidden="true"
+          >
+            <LoaderCircle size={isMobile ? 15 : 13} />
+          </span>
+        ) : currentPullRequestMerged ? null : (
           <span
             className={`session-pr-trigger-ci-dot ${ciStateClass(currentPullRequest.ciState)}`}
             aria-hidden="true"
@@ -356,4 +349,36 @@ export function SessionPullRequests({
       ) : null}
     </div>
   )
+}
+
+function rowStateLabel(
+  pullRequest: PullRequest,
+  status: AsyncActionStatus | null | undefined,
+) {
+  if (pullRequest.state === 'Merged') return 'Merged'
+  if (status === 'mergeFailed') return 'Merge failed'
+  if (status === 'queued') return 'Queued'
+  if (status === 'merging') return 'Merging…'
+  if (status === 'alreadyMerged') return 'Already merged'
+  if (status === 'merged' || pullRequest.state === 'Merged') {
+    return 'Merged'
+  }
+  return isPullRequestMergeable(pullRequest)
+    ? ciStateLabel(pullRequest.ciState)
+    : pullRequestMergeReason(pullRequest)
+}
+
+function rowStateClass(
+  pullRequest: PullRequest,
+  status: AsyncActionStatus | null | undefined,
+) {
+  if (pullRequest.state === 'Merged') return ' is-merged'
+  if (status === 'merged') return ' is-merged-success'
+  if (status === 'mergeFailed') return ' is-failed'
+  if (status === 'merging') return ' is-merging'
+  if (status === 'queued') return ' is-queued'
+  if (status === 'alreadyMerged' || pullRequest.state === 'Merged') {
+    return ' is-merged'
+  }
+  return ''
 }

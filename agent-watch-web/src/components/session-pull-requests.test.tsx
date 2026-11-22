@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 import {
   AsyncActionFeedbackProvider,
+  type AsyncActionStatus,
   useAsyncActionStarter,
 } from '#async-action-feedback'
 import { LaterMenu } from '#components/later-menu'
@@ -82,15 +83,6 @@ function ToastOffsetHarness() {
         repo="example-org/example-repo"
         isMobile
         open={open}
-        onMerge={(pullRequest) => {
-          setSessionPullRequests((current) =>
-            current.filter(
-              (candidate) => candidate.number !== pullRequest.number,
-            ),
-          )
-        }}
-        isMerging={() => false}
-        isMergeSuccessful={() => false}
         onOpenChange={setOpen}
       />
     </AsyncActionFeedbackProvider>
@@ -136,9 +128,6 @@ function ToastDismissContents() {
         repo="example-org/example-repo"
         isMobile
         open={open}
-        onMerge={() => undefined}
-        isMerging={() => false}
-        isMergeSuccessful={() => false}
         onOpenChange={setOpen}
       />
       {laterMenuOpen ? (
@@ -202,13 +191,11 @@ function LaterFilterShortcutHarness({
 function PullRequestHarness({
   isMobile,
   pullRequests: sessionPullRequests = pullRequests,
-  merging = false,
-  onMerge = () => undefined,
+  mergeStatus = () => null,
 }: {
   isMobile: boolean
   pullRequests?: PullRequest[]
-  merging?: boolean
-  onMerge?: (pullRequest: PullRequest) => void
+  mergeStatus?: (pullRequest: PullRequest) => AsyncActionStatus | null
 }) {
   const [open, setOpen] = useState(false)
   return (
@@ -217,9 +204,7 @@ function PullRequestHarness({
       repo="example-org/example-repo"
       isMobile={isMobile}
       open={open}
-      onMerge={onMerge}
-      isMerging={() => merging}
-      isMergeSuccessful={() => false}
+      mergeStatus={mergeStatus}
       onOpenChange={setOpen}
     />
   )
@@ -228,47 +213,18 @@ function PullRequestHarness({
 function render(
   isMobile: boolean,
   sessionPullRequests: PullRequest[] = pullRequests,
-  merging = false,
-  onMerge: (pullRequest: PullRequest) => void = () => undefined,
+  mergeStatus: (pullRequest: PullRequest) => AsyncActionStatus | null = () =>
+    null,
 ) {
   act(() => {
     root?.render(
       <PullRequestHarness
         isMobile={isMobile}
         pullRequests={sessionPullRequests}
-        merging={merging}
-        onMerge={onMerge}
+        mergeStatus={mergeStatus}
       />,
     )
   })
-}
-
-function mergeButtonStyle(button: HTMLButtonElement, isMobile: boolean) {
-  const style = getComputedStyle(button)
-  return {
-    height: style.height,
-    minHeight: style.minHeight,
-    ...(isMobile ? { minWidth: style.minWidth } : {}),
-    paddingLeft: style.paddingLeft,
-    fontSize: style.fontSize,
-    borderTopColor: style.borderTopColor,
-    borderTopWidth: style.borderTopWidth,
-    backgroundColor: style.backgroundColor,
-    color: style.color,
-  }
-}
-
-function mergingButtonState(button: HTMLButtonElement) {
-  const style = getComputedStyle(button)
-  return {
-    label: button.textContent,
-    disabled: button.disabled,
-    borderTopColor: style.borderTopColor,
-    borderTopWidth: style.borderTopWidth,
-    backgroundColor: style.backgroundColor,
-    color: style.color,
-    opacity: style.opacity,
-  }
 }
 
 beforeEach(() => {
@@ -337,10 +293,7 @@ it.each([
           .trim(),
         repo: row.querySelector('.session-pr-row-repo')?.textContent ?? null,
         reason: row.querySelector('.session-pr-row-state')?.textContent ?? null,
-        mergeLabel:
-          row
-            .querySelector('button[aria-label^="Merge PR"]')
-            ?.getAttribute('aria-label') ?? null,
+        hasAction: row.querySelector('button') !== null,
         ciState:
           row
             .querySelector('.session-pr-ci-dot[role="img"]')
@@ -388,7 +341,7 @@ it.each([
           title: 'Show delivery status in the session header',
           repo: 'example-org/example-repo',
           reason: 'CI running',
-          mergeLabel: null,
+          hasAction: false,
           ciState: 'CI running',
           href: 'https://github.com/example-org/example-repo/pull/42',
         },
@@ -396,8 +349,8 @@ it.each([
           number: '#43',
           title: 'Add delivery retry settings',
           repo: 'example-org/example-infra',
-          reason: null,
-          mergeLabel: 'Merge PR #43',
+          reason: 'CI passed',
+          hasAction: false,
           ciState: 'CI passed',
           href: 'https://github.com/example-org/example-infra/pull/43',
         },
@@ -405,8 +358,8 @@ it.each([
           number: '#41',
           title: 'Record delivery attempts',
           repo: 'example-org/example-repo',
-          reason: '✓ Merged',
-          mergeLabel: null,
+          reason: 'Merged',
+          hasAction: false,
           ciState: 'CI status unknown',
           href: 'https://github.com/example-org/example-repo/pull/41',
         },
@@ -452,87 +405,164 @@ it.each([
   expect(snapshot()).toEqual({ expanded: 'false', popoverVisible: false })
 })
 
-it('keeps the pull request list open when merging a row', () => {
-  const onMerge = vi.fn()
-  render(false, pullRequests, false, onMerge)
+it('shows merge status as read-only text in the pull request list', () => {
+  render(false, pullRequests, (pullRequest) =>
+    pullRequest.number === 43 ? 'merging' : null,
+  )
   act(() => {
     container.querySelector<HTMLButtonElement>('.session-pr-trigger')?.click()
   })
-  const mergeButton = container.querySelector<HTMLButtonElement>(
-    '[aria-label="Merge PR #43"]',
+  const mergeableRow = Array.from(
+    container.querySelectorAll<HTMLElement>('.session-pr-row'),
+  ).find(
+    (row) => row.querySelector('.session-pr-number')?.textContent === '#43',
   )
-  if (mergeButton === null) throw new Error('Expected merge action')
-  act(() => {
-    mergeButton.dispatchEvent(
-      new PointerEvent('pointerdown', { bubbles: true }),
-    )
-    mergeButton.click()
-  })
 
   const snapshot = () => ({
-    calls: onMerge.mock.calls,
+    rowStatus: mergeableRow?.querySelector('.session-pr-row-state')
+      ?.textContent,
+    hasMergeAction: mergeableRow?.querySelector('button') !== null,
     expanded: container
       .querySelector('.session-pr-trigger')
       ?.getAttribute('aria-expanded'),
   })
   expect(snapshot()).toEqual({
-    calls: [[pullRequests[1]]],
+    rowStatus: 'Merging…',
+    hasMergeAction: false,
     expanded: 'true',
   })
 })
 
 it.each([
   {
-    viewport: 'desktop',
+    description:
+      'a merge in progress on another pull request in the desktop header',
     isMobile: false,
-    expected: {
-      height: '26px',
-      minHeight: '26px',
-      paddingLeft: '10px',
-      fontSize: '12px',
-      borderTopColor: 'rgb(63, 63, 70)',
-      borderTopWidth: '1px',
-      backgroundColor: 'rgba(0, 0, 0, 0)',
-      color: 'rgb(250, 250, 250)',
-    },
+    status: 'merging' as const,
+    expectedWidth: '46px',
+    expectedMark: 'session-pr-merge-mark is-inline is-merging',
+    expectedPosition: 'static',
+    expectedFailure: false,
   },
   {
-    viewport: 'mobile',
+    description: 'a failed merge on another pull request in the desktop header',
+    isMobile: false,
+    status: 'mergeFailed' as const,
+    expectedWidth: '48px',
+    expectedMark: 'session-pr-merge-mark is-inline is-failed',
+    expectedPosition: 'static',
+    expectedFailure: true,
+  },
+  {
+    description:
+      'a merge in progress on another pull request in the phone header',
     isMobile: true,
-    expected: {
-      height: '44px',
-      minHeight: '44px',
-      minWidth: '72px',
-      paddingLeft: '14px',
-      fontSize: '13px',
-      borderTopColor: 'rgb(63, 63, 70)',
-      borderTopWidth: '1px',
-      backgroundColor: 'rgba(0, 0, 0, 0)',
-      color: 'rgb(250, 250, 250)',
-    },
+    status: 'merging' as const,
+    expectedWidth: '44px',
+    expectedMark: 'session-pr-merge-mark is-mobile is-merging',
+    expectedPosition: 'absolute',
+    expectedFailure: false,
+  },
+  {
+    description: 'a failed merge on another pull request in the phone header',
+    isMobile: true,
+    status: 'mergeFailed' as const,
+    expectedWidth: '44px',
+    expectedMark: 'session-pr-merge-mark is-mobile is-failed',
+    expectedPosition: 'absolute',
+    expectedFailure: true,
   },
 ])(
-  'uses the designed dimensions for the $viewport Merge button',
-  ({ isMobile, expected }) => {
-    render(isMobile)
+  'marks the PR button for $description',
+  ({
+    isMobile,
+    status,
+    expectedMark,
+    expectedFailure,
+    expectedWidth,
+    expectedPosition,
+  }) => {
+    render(isMobile, pullRequests, (pullRequest) =>
+      pullRequest.number === 43 ? status : null,
+    )
+
     const trigger = container.querySelector<HTMLButtonElement>(
       '.session-pr-trigger',
     )
     if (trigger === null) throw new Error('Expected pull request trigger')
-    act(() => {
-      trigger.click()
-    })
 
-    const button = container.querySelector<HTMLButtonElement>(
-      '.session-pr-row .conversation-pr-merge-button',
-    )
-    if (button === null) throw new Error('Expected a mergeable pull request')
-    expect(mergeButtonStyle(button, isMobile)).toEqual(expected)
+    const snapshot = () => ({
+      triggerWidth: getComputedStyle(trigger).width,
+      hasInlineMergeMark: trigger.classList.contains('is-merge-mark-inline'),
+      isMobile: trigger.classList.contains('session-pr-trigger--mobile'),
+      hasFailureBorder: trigger.classList.contains('is-merge-failed'),
+      mergeMark:
+        trigger
+          .querySelector('.session-pr-merge-mark')
+          ?.getAttribute('class') ?? null,
+      mergeMarkPosition: getComputedStyle(
+        trigger.querySelector('.session-pr-merge-mark') ?? trigger,
+      ).position,
+    })
+    expect(snapshot()).toEqual({
+      triggerWidth: expectedWidth,
+      hasInlineMergeMark: !isMobile,
+      isMobile,
+      hasFailureBorder: expectedFailure,
+      mergeMark: expectedMark,
+      mergeMarkPosition: expectedPosition,
+    })
   },
 )
 
-it('keeps the Merge button outlined and readable while merging', () => {
-  render(false, pullRequests, true)
+it('hides the CI dot after the representative pull request merges', () => {
+  render(false, pullRequests, (pullRequest) =>
+    pullRequest.number === 42 ? 'merged' : null,
+  )
+
+  const trigger = container.querySelector<HTMLButtonElement>(
+    '.session-pr-trigger',
+  )
+  if (trigger === null) throw new Error('Expected pull request trigger')
+
+  const snapshot = () => ({
+    mergeMark: trigger.querySelector('.session-pr-merge-mark') !== null,
+    ciDot: trigger.querySelector('.session-pr-trigger-ci-dot') !== null,
+  })
+  expect(snapshot()).toEqual({ mergeMark: false, ciDot: false })
+})
+
+it('ignores stale merge feedback for non-open pull requests', () => {
+  const currentPullRequest = pullRequests.find(({ number }) => number === 42)
+  if (currentPullRequest === undefined) {
+    throw new Error('Expected current pull request')
+  }
+  const openElsewherePullRequest = pullRequests.find(
+    ({ number }) => number === 43,
+  )
+  if (openElsewherePullRequest === undefined) {
+    throw new Error('Expected pull request opened elsewhere')
+  }
+  const mergedPullRequest: PullRequest = {
+    ...currentPullRequest,
+    state: 'Merged',
+  }
+  const closedPullRequest: PullRequest = {
+    ...openElsewherePullRequest,
+    number: 44,
+    state: 'Closed',
+    isCurrentBranch: false,
+  }
+  render(
+    false,
+    [mergedPullRequest, ...pullRequests.slice(1), closedPullRequest],
+    (pullRequest) => {
+      if (pullRequest.number === mergedPullRequest.number) return 'mergeFailed'
+      if (pullRequest.number === closedPullRequest.number) return 'merging'
+      return null
+    },
+  )
+
   const trigger = container.querySelector<HTMLButtonElement>(
     '.session-pr-trigger',
   )
@@ -541,18 +571,20 @@ it('keeps the Merge button outlined and readable while merging', () => {
     trigger.click()
   })
 
-  const button = container.querySelector<HTMLButtonElement>(
-    '.session-pr-row .conversation-pr-merge-button',
-  )
-  if (button === null) throw new Error('Expected a mergeable pull request')
-  expect(mergingButtonState(button)).toEqual({
-    label: 'Merging…',
-    disabled: true,
-    borderTopColor: 'rgb(63, 63, 70)',
-    borderTopWidth: '1px',
-    backgroundColor: 'rgba(0, 0, 0, 0)',
-    color: 'rgb(113, 113, 122)',
-    opacity: '1',
+  const snapshot = () => ({
+    hasFailureBorder: trigger.classList.contains('is-merge-failed'),
+    mergeMark: trigger.querySelector('.session-pr-merge-mark') !== null,
+    ciDot: trigger.querySelector('.session-pr-trigger-ci-dot') !== null,
+    rows: Array.from(
+      container.querySelectorAll<HTMLElement>('.session-pr-row'),
+      (row) => row.querySelector('.session-pr-row-state')?.textContent ?? null,
+    ),
+  })
+  expect(snapshot()).toEqual({
+    hasFailureBorder: false,
+    mergeMark: false,
+    ciDot: false,
+    rows: ['CI passed', 'Closed', 'Merged', 'Merged'],
   })
 })
 
@@ -781,7 +813,7 @@ it('lists a merged current-branch pull request only in Merged', () => {
   })
 })
 
-it('shows the CI failure reason without a merge action', () => {
+it('shows the CI failure reason as read-only row status text', () => {
   render(false, [
     {
       number: 44,
@@ -806,13 +838,13 @@ it('shows the CI failure reason without a merge action', () => {
       ? null
       : {
           reason: row.querySelector('.session-pr-row-state')?.textContent,
-          mergeButton:
+          hasMergeAction:
             row.querySelector('button[aria-label^="Merge PR"]') !== null,
         },
-  ).toEqual({ reason: 'CI failed', mergeButton: false })
+  ).toEqual({ reason: 'CI failed', hasMergeAction: false })
 })
 
-it('shows the missing head SHA reason without a merge action', () => {
+it('shows the missing head SHA reason as read-only row status text', () => {
   render(false, [
     {
       number: 45,
@@ -837,10 +869,10 @@ it('shows the missing head SHA reason without a merge action', () => {
       ? null
       : {
           reason: row.querySelector('.session-pr-row-state')?.textContent,
-          mergeButton:
+          hasMergeAction:
             row.querySelector('button[aria-label^="Merge PR"]') !== null,
         },
-  ).toEqual({ reason: 'Head SHA unavailable', mergeButton: false })
+  ).toEqual({ reason: 'Head SHA unavailable', hasMergeAction: false })
 })
 
 it.each([

@@ -163,6 +163,9 @@ export function ConversationPaneView({
 }: ConversationPaneViewProps) {
   const actionFeedback = useOptionalAsyncActionFeedback()
   const { usage } = useAgentUsageContext()
+  const [mergeBandTarget, setMergeBandTarget] = useState<HTMLDivElement | null>(
+    null,
+  )
   const sessionUsage =
     usage?.sessions.find((entry) => entry.sessionId === session.id) ?? null
   const interruptInFlight = useRef(false)
@@ -353,6 +356,7 @@ export function ConversationPaneView({
       <ConversationPaneHeader
         key={session.id}
         session={session}
+        mergeBandTarget={mergeBandTarget}
         vibeMode={vibeMode}
         actions={actions}
         isMobile={isMobile}
@@ -426,6 +430,7 @@ export function ConversationPaneView({
           ))}
       </div>
 
+      <div className="conversation-merge-band-slot" ref={setMergeBandTarget} />
       {isEnded ? (
         <EndedSessionBanner
           endedAt={session.updatedAt}

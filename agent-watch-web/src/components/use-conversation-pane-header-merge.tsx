@@ -2,10 +2,7 @@ import { useEffect, useState } from 'react'
 
 import type { StartAsyncActionOptions } from '#async-action-feedback'
 import { useOptionalAsyncActionFeedback } from '#async-action-feedback'
-import {
-  getRepresentativePullRequest,
-  isPullRequestMergeable,
-} from '#components/session-pull-requests'
+import { isPullRequestMergeable } from '#components/session-pull-requests'
 import { useSessionOperations } from '#session-operation-context'
 import type { SessionOperation } from '#session-operations'
 import type { PullRequest, Session } from '#types'
@@ -84,11 +81,6 @@ export function useConversationPaneHeaderMerge({
       expectedHeadSha: target.headSha,
     }
   }
-  const pullRequest = getRepresentativePullRequest(pullRequests) ?? null
-  const headerMergeOperation =
-    pullRequest?.isCurrentBranch === true
-      ? mergeOperationFor(pullRequest)
-      : null
   const isMerging = (target: MergeFeedbackTarget) => {
     const identity = mergeIdentity(target)
     if (identity.owner === undefined || identity.repo === undefined)
@@ -121,12 +113,28 @@ export function useConversationPaneHeaderMerge({
           action.pullRequestHeadSha === targetHeadSha),
     )
   }
-  const isMergeSuccessful = (target: MergeFeedbackTarget) => {
-    const action = mergeFeedbackFor(target)
-    return action?.status === 'merged' || action?.status === 'alreadyMerged'
-  }
   const mergeActionFor = (target: MergeFeedbackTarget) =>
     mergeFeedbackFor(target)
+  const mergeStatusFor = (target: PullRequest) => {
+    if (target.state === 'Merged') return 'merged' as const
+    if (target.state !== 'Open') return null
+    const action = mergeFeedbackFor(target)
+    if (isMerging(target)) return 'merging' as const
+    if (action?.status === 'mergeFailed') return 'mergeFailed' as const
+    if (action?.status === 'queued') return 'queued' as const
+    if (action?.status === 'merged') return 'merged' as const
+    if (action?.status === 'alreadyMerged') return 'alreadyMerged' as const
+    return null
+  }
+  const mergeablePullRequests = pullRequests.filter((candidate) => {
+    if (candidate.state !== 'Open' || candidate.headSha == null) return false
+    return (
+      mergeOperationFor(candidate) !== null ||
+      ['merging', 'queued', 'mergeFailed'].includes(
+        mergeStatusFor(candidate) ?? '',
+      )
+    )
+  })
   const openMergeConfirmation = (target: PullRequest) => {
     const operation = mergeOperationFor(target)
     if (operation === null) return
@@ -249,13 +257,10 @@ export function useConversationPaneHeaderMerge({
 
   return {
     confirmMerge,
-    headerMergeOperation,
-    isMergeSuccessful,
     isMerging,
     mergeConfirmationOpen,
     mergeTarget,
     openMergeConfirmation,
-    showHeaderMergeAction: headerMergeOperation !== null,
     closeMergeConfirmation: () => {
       if (retryingActionId !== null) {
         actionFeedback?.finishMergeRetryConfirmation(retryingActionId)
@@ -265,6 +270,8 @@ export function useConversationPaneHeaderMerge({
     },
     mergeFeedbackFor,
     mergeActionFor,
+    mergeStatusFor,
+    mergeablePullRequests,
     retryMerge: (id: number) => actionFeedback?.retry(id),
   }
 }

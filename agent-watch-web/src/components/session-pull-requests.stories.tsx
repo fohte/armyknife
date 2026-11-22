@@ -81,9 +81,6 @@ const meta = {
     repo: 'example-org/example-repo',
     isMobile: false,
     open: false,
-    onMerge: () => undefined,
-    isMerging: (): boolean => false,
-    isMergeSuccessful: (): boolean => false,
     onOpenChange: () => undefined,
   },
   decorators: [
@@ -167,6 +164,76 @@ export const ChecksHavePassed: Story = {
   },
 }
 
+export const MergeIsInProgressOnThePrButton: Story = {
+  name: 'The PR button shows a spinner while a pull request is merging',
+  args: {
+    pullRequests: [mergeablePullRequest],
+    mergeStatus: () => 'merging',
+  },
+}
+
+export const PhoneMergeIsInProgressOnThePrButton: Story = {
+  name: 'The phone PR button places the merge spinner on its corner',
+  args: {
+    pullRequests: [mergeablePullRequest],
+    isMobile: true,
+    mergeStatus: () => 'merging',
+  },
+  decorators: [
+    (Story) => (
+      <div
+        className="conversation-pane"
+        data-mobile="true"
+        style={{
+          position: 'relative',
+          height: 120,
+          background: 'var(--aw-bg-app)',
+          color: 'var(--aw-text-primary)',
+        }}
+      >
+        <div className="mobile-conversation-header-actions">
+          <Story />
+        </div>
+      </div>
+    ),
+  ],
+}
+
+export const MergeFailedOnThePrButton: Story = {
+  name: 'The PR button marks a failed merge',
+  args: {
+    pullRequests: [mergeablePullRequest],
+    mergeStatus: () => 'mergeFailed',
+  },
+}
+
+export const PhoneMergeFailedOnThePrButton: Story = {
+  name: 'The phone PR button places the failed merge mark on its corner',
+  args: {
+    pullRequests: [mergeablePullRequest],
+    isMobile: true,
+    mergeStatus: () => 'mergeFailed',
+  },
+  decorators: [
+    (Story) => (
+      <div
+        className="conversation-pane"
+        data-mobile="true"
+        style={{
+          position: 'relative',
+          height: 120,
+          background: 'var(--aw-bg-app)',
+          color: 'var(--aw-text-primary)',
+        }}
+      >
+        <div className="mobile-conversation-header-actions">
+          <Story />
+        </div>
+      </div>
+    ),
+  ],
+}
+
 export const ChecksHaveFailed: Story = {
   name: 'The header uses a red dot when checks have failed',
   args: {
@@ -182,7 +249,7 @@ export const CheckStatusIsUnknown: Story = {
 }
 
 export const DesktopPullRequestListIsOpen: Story = {
-  name: 'The desktop list shows a reason beside an unmergeable pull request and Merge beside a ready pull request',
+  name: 'The desktop list shows status text beside each pull request',
   args: {
     pullRequests: [currentBranchPullRequest, ...otherPullRequests],
     open: true,
@@ -203,8 +270,8 @@ export const DesktopPullRequestListIsOpen: Story = {
   ],
 }
 
-export const DesktopMergeButtonIsOutlined: Story = {
-  name: 'The desktop list shows an outlined Merge button for a ready pull request.',
+export const ChecksHavePassedInTheDesktopList: Story = {
+  name: 'The desktop list shows CI passed for a mergeable pull request',
   args: {
     pullRequests: [mergeablePullRequest],
     open: true,
@@ -212,8 +279,8 @@ export const DesktopMergeButtonIsOutlined: Story = {
   decorators: [desktopMergeButtonDecorator],
 }
 
-export const MobileMergeButtonIsOutlined: Story = {
-  name: 'The mobile sheet shows a full-height outlined Merge button for a ready pull request.',
+export const ChecksHavePassedInTheMobileList: Story = {
+  name: 'The mobile sheet shows CI passed for a mergeable pull request',
   args: {
     pullRequests: [mergeablePullRequest],
     isMobile: true,
@@ -237,18 +304,18 @@ export const MobileMergeButtonIsOutlined: Story = {
   ],
 }
 
-export const MergeButtonIsDisabledWhileMerging: Story = {
-  name: 'The desktop list keeps the outlined button while a merge is in progress.',
+export const MergeIsInProgressInTheDesktopList: Story = {
+  name: 'The desktop list shows Merging while a pull request is being merged',
   args: {
     pullRequests: [mergeablePullRequest],
     open: true,
-    isMerging: () => true,
+    mergeStatus: () => 'merging',
   },
   decorators: [desktopMergeButtonDecorator],
 }
 
 export const MobilePullRequestSheetIsOpen: Story = {
-  name: 'The mobile sheet shows Merge on a ready pull request and Close at the bottom',
+  name: 'The mobile sheet shows status text and Close at the bottom',
   args: {
     pullRequests: [currentBranchPullRequest, ...otherPullRequests],
     isMobile: true,
@@ -327,7 +394,7 @@ export const PullRequestWasAlreadyMergedInTheList: Story = {
 }
 
 export const MergeIsQueuedInTheList: Story = {
-  name: 'The pull request row reports that the merge is queued.',
+  name: 'The pull request row reports that the merge is queued',
   args: {
     pullRequests: [mergeablePullRequest],
     open: true,
@@ -337,12 +404,11 @@ export const MergeIsQueuedInTheList: Story = {
 }
 
 export const MergeCanBeRetriedInTheList: Story = {
-  name: 'The pull request row offers retry after a merge failure.',
+  name: 'The pull request row reports a failed merge without an action',
   args: {
     pullRequests: [mergeablePullRequest],
     open: true,
     mergeStatus: (): AsyncActionStatus => 'mergeFailed',
-    onRetryMerge: () => undefined,
   },
   decorators: [desktopMergeButtonDecorator],
 }

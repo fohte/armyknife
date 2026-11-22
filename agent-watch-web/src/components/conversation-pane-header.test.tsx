@@ -1,4 +1,4 @@
-import { act } from 'react'
+import { act, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
@@ -56,6 +56,18 @@ function requireElement<T extends Element>(element: T | null): T {
   return element
 }
 
+function HeaderWithMergeBandTarget(
+  props: Parameters<typeof ConversationPaneHeader>[0],
+) {
+  const [target, setTarget] = useState<HTMLDivElement | null>(null)
+  return (
+    <>
+      <ConversationPaneHeader {...props} mergeBandTarget={target} />
+      <div ref={setTarget} />
+    </>
+  )
+}
+
 function renderHeader(
   isMobile: boolean,
   onAction: (
@@ -75,7 +87,7 @@ function renderHeader(
   act(() => {
     root?.render(
       <AsyncActionFeedbackProvider>
-        <ConversationPaneHeader
+        <HeaderWithMergeBandTarget
           key={currentSession.id}
           session={currentSession}
           actions={actions}
@@ -754,9 +766,7 @@ it('merges an open pull request when an earlier session PR is closed', async () 
   )
   act(() => {
     requireElement(
-      container.querySelector<HTMLButtonElement>(
-        '.conversation-pr-merge-button',
-      ),
+      container.querySelector<HTMLButtonElement>('.merge-band-action'),
     ).click()
   })
   const confirmation = requireElement(
@@ -783,13 +793,13 @@ it('merges an open pull request when an earlier session PR is closed', async () 
   })
   expect(mergeState()).toEqual({
     summary:
-      'PR #42: Untitled pull request, open, CI passed. 1 more PR from this session',
+      'PR #42: Untitled pull request, merged, CI passed. 1 more PR from this session',
     request: ['/api/sessions/fixture-session/pull-requests/42/merge'],
     feedback: 'Merged PR #42A fixture title',
   })
 })
 
-it('merges a ready pull request from its desktop list row', async () => {
+it('merges a ready pull request from the merge band when several PRs exist', async () => {
   const fetchMock = vi.fn<typeof fetch>(() =>
     Promise.resolve(Response.json({ result: 'merged' })),
   )
@@ -829,17 +839,10 @@ it('merges a ready pull request from its desktop list row', async () => {
       container.querySelector<HTMLButtonElement>('.session-pr-trigger'),
     ).click()
   })
-  const selectedRow = [
-    ...container.querySelectorAll<HTMLElement>('.session-pr-row'),
-  ].find(
-    (row) =>
-      row.querySelector('a')?.getAttribute('href') ===
-      'https://github.com/example-org/example-infra/pull/43',
-  )
   const mergeButton = requireElement(
-    selectedRow?.querySelector<HTMLButtonElement>(
+    container.querySelector<HTMLButtonElement>(
       'button[aria-label="Merge PR #43"]',
-    ) ?? null,
+    ),
   )
   act(() => {
     mergeButton.click()
@@ -1005,9 +1008,7 @@ it('keeps merge feedback scoped to the repository when PR numbers match', async 
 
   act(() => {
     requireElement(
-      container.querySelector<HTMLButtonElement>(
-        '.conversation-pr-merge-button',
-      ),
+      container.querySelector<HTMLButtonElement>('.merge-band-action'),
     ).click()
   })
   const confirmation = requireElement(
@@ -1042,15 +1043,14 @@ it('keeps merge feedback scoped to the repository when PR numbers match', async 
     summary: container
       .querySelector('.session-pr-trigger')
       ?.getAttribute('aria-label'),
-    mergeButton:
-      container.querySelector('.conversation-pr-merge-button') !== null,
+    mergeButton: container.querySelector('.merge-band-action') !== null,
     feedback:
       container.querySelector('.async-action-toast-stack')?.textContent ?? null,
   })
   expect(mergeState()).toEqual({
     summary:
       'PR #42: Untitled pull request, merged, CI passed. 1 more PR from this session',
-    mergeButton: false,
+    mergeButton: true,
     feedback: 'Merged PR #42A fixture title',
   })
 })
@@ -1102,17 +1102,9 @@ it('keeps pending merge progress scoped to the PR repository identity', async ()
       })
     }
     act(() => {
-      const row = [
-        ...container.querySelectorAll<HTMLElement>('.session-pr-row'),
-      ].find(
-        (candidate) =>
-          candidate.querySelector('a')?.getAttribute('href') ===
-          firstPullRequest.url,
-      )
+      const row = container.querySelector<HTMLElement>('.merge-band-row')
       requireElement(
-        row?.querySelector<HTMLButtonElement>(
-          '.conversation-pr-merge-button',
-        ) ?? null,
+        row?.querySelector<HTMLButtonElement>('.merge-band-action') ?? null,
       ).click()
     })
     const confirmation = requireElement(
@@ -1140,16 +1132,10 @@ it('keeps pending merge progress scoped to the PR repository identity', async ()
     Array.from(
       container.querySelectorAll<HTMLElement>('.session-pr-row'),
       (row) => {
-        const button = row.querySelector<HTMLButtonElement>(
-          '.conversation-pr-merge-button',
-        )
         return {
           href: row.querySelector('a')?.getAttribute('href'),
           action:
-            button === null
-              ? (row.querySelector('.session-pr-row-state')?.textContent ??
-                null)
-              : { text: button.textContent, disabled: button.disabled },
+            row.querySelector('.session-pr-row-state')?.textContent ?? null,
         }
       },
     )
@@ -1162,18 +1148,11 @@ it('keeps pending merge progress scoped to the PR repository identity', async ()
   const actionForFirstPullRequest = mergeActions().find(
     ({ href }) => href === firstPullRequest.url,
   )?.action
-  const secondRow = [
-    ...container.querySelectorAll<HTMLElement>('.session-pr-row'),
-  ].find(
-    (candidate) =>
-      candidate.querySelector('a')?.getAttribute('href') ===
-      secondPullRequest.url,
-  )
+  const secondRow =
+    container.querySelectorAll<HTMLElement>('.merge-band-row')[1]
   act(() => {
     requireElement(
-      secondRow?.querySelector<HTMLButtonElement>(
-        '.conversation-pr-merge-button',
-      ) ?? null,
+      secondRow?.querySelector<HTMLButtonElement>('.merge-band-action') ?? null,
     ).click()
   })
   const secondConfirmation = requireElement(
@@ -1220,26 +1199,26 @@ it('keeps pending merge progress scoped to the PR repository identity', async ()
     requestCount: fetchMock.mock.calls.length,
   })
   expect(mergeState()).toEqual({
-    actionForSecondPullRequest: { text: 'Merge', disabled: false },
-    actionForFirstPullRequest: { text: 'Merging…', disabled: true },
+    actionForSecondPullRequest: 'CI passed',
+    actionForFirstPullRequest: 'Merging…',
     actionWhileBothMergesArePending: [
       {
         href: 'https://github.com/example-org/example-repository/pull/42',
-        action: { text: 'Merging…', disabled: true },
+        action: 'Merging…',
       },
       {
         href: 'https://github.com/example-team/example-repository/pull/42',
-        action: { text: 'Merging…', disabled: true },
+        action: 'Merging…',
       },
     ],
     actionAfterFirstMergeCompletes: [
       {
         href: 'https://github.com/example-org/example-repository/pull/42',
-        action: '✓ Merged',
+        action: 'Merged',
       },
       {
         href: 'https://github.com/example-team/example-repository/pull/42',
-        action: { text: 'Merging…', disabled: true },
+        action: 'Merging…',
       },
     ],
     requestCount: 2,
@@ -1274,14 +1253,9 @@ it('shows mobile merge feedback after confirming from the pull request sheet', a
       container.querySelector<HTMLButtonElement>('.session-pr-trigger--mobile'),
     ).click()
   })
-  const sheet = requireElement(
-    container.querySelector<HTMLElement>('.session-pr-list--mobile'),
-  )
   act(() => {
     requireElement(
-      [...sheet.querySelectorAll<HTMLButtonElement>('button')].find(
-        (button) => button.textContent === 'Merge',
-      ) ?? null,
+      container.querySelector<HTMLButtonElement>('.merge-band-action'),
     ).click()
   })
   const confirmation = requireElement(
@@ -1371,14 +1345,15 @@ it('merges the session pull request after confirming its head SHA', async () => 
   const pendingMergeState = () => ({
     confirmationOpen: container.querySelector('[role="alertdialog"]') !== null,
     mergeButton: (() => {
-      const button = container.querySelector<HTMLButtonElement>(
-        '.conversation-pr-merge-button',
-      )
+      const button =
+        container.querySelector<HTMLButtonElement>('.merge-band-action')
       return button === null
         ? null
         : { text: button.textContent, disabled: button.disabled }
     })(),
-    feedback: container.querySelector('[role="status"]')?.textContent ?? null,
+    feedback:
+      container.querySelector('.async-action-toast-stack .async-action-item')
+        ?.textContent ?? null,
   })
 
   const pendingState = pendingMergeState()
@@ -1401,8 +1376,7 @@ it('merges the session pull request after confirming its head SHA', async () => 
       body: init?.body,
     })),
     confirmationOpen: container.querySelector('[role="alertdialog"]') !== null,
-    mergeButton:
-      container.querySelector('.conversation-pr-merge-button') !== null,
+    mergeButton: container.querySelector('.merge-band-action') !== null,
     feedback: container.querySelector(
       '.async-action-toast-stack .async-action-item',
     )?.textContent,
@@ -1426,7 +1400,7 @@ it('merges the session pull request after confirming its head SHA', async () => 
       },
     ],
     confirmationOpen: false,
-    mergeButton: true,
+    mergeButton: false,
     feedback: 'Merged PR #42A fixture title',
   })
 })
@@ -1485,9 +1459,10 @@ it('keeps the merge action available when the session pull request is queued', a
       body: init?.body,
     })),
     confirmationOpen: container.querySelector('[role="alertdialog"]') !== null,
-    mergeButton:
-      container.querySelector('.conversation-pr-merge-button') !== null,
-    feedback: container.querySelector('[role="status"]')?.textContent,
+    mergeButton: container.querySelector('.merge-band-action') !== null,
+    feedback: container.querySelector(
+      '.async-action-toast-stack .async-action-item',
+    )?.textContent,
   })
   expect(mergeState()).toEqual({
     request: [
@@ -1559,9 +1534,8 @@ it('re-enables merge after a queued pull request receives a new head', async () 
     },
   })
 
-  const mergeButton = container.querySelector<HTMLButtonElement>(
-    '.conversation-pr-merge-button',
-  )
+  const mergeButton =
+    container.querySelector<HTMLButtonElement>('.merge-band-action')
   const mergeState = () => ({
     requestCount: fetchMock.mock.calls.length,
     mergeButton:
@@ -1638,8 +1612,7 @@ it('keeps the merge action available after a stale-head merge failure', async ()
       body: init?.body,
     })),
     confirmationOpen: container.querySelector('[role="alertdialog"]') !== null,
-    mergeButton:
-      container.querySelector('.conversation-pr-merge-button') !== null,
+    mergeButton: container.querySelector('.merge-band-action') !== null,
     feedback: container.querySelector('[role="alert"]')?.textContent,
   })
   expect(mergeState()).toEqual({
@@ -1691,9 +1664,7 @@ async function startStaleMergeFailure() {
 
   act(() => {
     requireElement(
-      container.querySelector<HTMLButtonElement>(
-        '.conversation-pr-merge-button',
-      ),
+      container.querySelector<HTMLButtonElement>('.merge-band-action'),
     ).click()
   })
   await act(async () => {
@@ -1866,9 +1837,7 @@ it('preserves stale merge retries requested for different sessions', async () =>
     renderHeader(false, onAction, currentSession)
     act(() => {
       requireElement(
-        container.querySelector<HTMLButtonElement>(
-          '.conversation-pr-merge-button',
-        ),
+        container.querySelector<HTMLButtonElement>('.merge-band-action'),
       ).click()
     })
     await act(async () => {
@@ -2147,9 +2116,9 @@ it.each([
     description: 'checks passed for another branch',
     ciState: 'Successful' as const,
     isCurrentBranch: false,
-    expectedVisible: false,
+    expectedVisible: true,
   },
-])('shows desktop header Merge only when $description', (testCase) => {
+])('shows the merge band only when $description', (testCase) => {
   renderHeader(
     false,
     vi.fn(() => Promise.resolve(true)),
@@ -2167,10 +2136,17 @@ it.each([
     },
   )
 
-  const mergeButton = container.querySelector(
-    '.conversation-header-actions .conversation-pr-merge-button',
-  )
-  expect(mergeButton !== null).toBe(testCase.expectedVisible)
+  const snapshot = () => ({
+    inHeader:
+      container.querySelector(
+        '.conversation-header-actions .merge-band-action',
+      ) !== null,
+    inBand: container.querySelector('.merge-band-action') !== null,
+  })
+  expect(snapshot()).toEqual({
+    inHeader: false,
+    inBand: testCase.expectedVisible,
+  })
 })
 
 it('keeps Merge out of the mobile header when checks have passed', () => {
@@ -2193,7 +2169,10 @@ it('keeps Merge out of the mobile header when checks have passed', () => {
 
   expect(
     container.querySelector(
-      '.mobile-conversation-header-actions .conversation-pr-merge-button',
+      '.mobile-conversation-header-actions .merge-band-action',
     ),
   ).toBeNull()
+  expect(container.querySelector('.merge-band-action')?.textContent).toBe(
+    'Merge',
+  )
 })
