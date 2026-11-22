@@ -133,11 +133,19 @@ it('fits the empty phone sheet to its content and shows the dimmed backdrop', as
   }
 
   const snapshot = () => ({
+    emptyMessages: Array.from(
+      dialog.querySelectorAll('.async-action-empty p'),
+      (paragraph) => paragraph.textContent,
+    ),
     contentSized: dialog.getBoundingClientRect().height < 300,
     closeButtonHeight: close.getBoundingClientRect().height,
     backdropColor: getComputedStyle(backdrop).backgroundColor,
   })
   expect(snapshot()).toEqual({
+    emptyMessages: [
+      'No recent activity.',
+      'Merge and Close results appear here.',
+    ],
     contentSized: true,
     closeButtonHeight: 44,
     backdropColor: 'rgba(0, 0, 0, 0.55)',

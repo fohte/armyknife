@@ -15,7 +15,7 @@ export default meta
 type Story = StoryObj<typeof meta>
 
 export const PhoneDrawerShowsRunningActions: Story = {
-  name: 'The phone drawer marks two actions as running.',
+  name: 'The phone drawer shows two results with one action running.',
   args: { isRunning: true },
 }
 
