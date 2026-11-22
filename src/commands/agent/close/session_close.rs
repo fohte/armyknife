@@ -328,6 +328,7 @@ mod tests {
     use std::cell::RefCell;
     use std::path::{Path, PathBuf};
 
+    use chrono::Utc;
     use rstest::{fixture, rstest};
 
     use super::super::test_support::{
@@ -580,6 +581,49 @@ mod tests {
                 Err("Branch `feature` is not merged (pull request is still open); close the session while keeping its worktree to continue".to_string()),
                 vec![true],
             ),
+        );
+    }
+
+    #[rstest]
+    #[case::paused(false, SessionStatus::Paused, false)]
+    #[case::stop_and_close_skips_active_safety_checks(true, SessionStatus::Running, true)]
+    #[tokio::test]
+    async fn watch_web_closes_a_paneless_session_and_marks_it_ended(
+        #[case] stop_and_close: bool,
+        #[case] status: SessionStatus,
+        #[case] pending_task: bool,
+    ) {
+        let mut session = session();
+        session.tmux_info = None;
+        session.status = status;
+        session.updated_at = Utc::now();
+        if pending_task {
+            session.pending_bg_task_ids.insert("task-1".to_string());
+        }
+        let runtime = FakeRuntime::default();
+        let worktree_close_called = RefCell::new(false);
+
+        let result = close_session_value_from_watch_web_with_dependencies(
+            &session,
+            false,
+            stop_and_close,
+            None,
+            &runtime,
+            |_, _| {
+                *worktree_close_called.borrow_mut() = true;
+                async { Ok(()) }
+            },
+        )
+        .await;
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                runtime.ended_sessions.into_inner(),
+                runtime.calls.into_inner(),
+                worktree_close_called.into_inner(),
+            ),
+            (Ok(()), vec![session.session_id], vec![], false),
         );
     }
 

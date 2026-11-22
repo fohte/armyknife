@@ -34,6 +34,17 @@ it.each([
     },
   },
   {
+    name: 'working sessions without a terminal pane',
+    session: { ...session, canOpenInTerminal: false } satisfies Session,
+    expected: {
+      state: 'Working',
+      title: 'Close without stopping the work?',
+      description:
+        'This session has no terminal pane to stop. Closing marks it ended, but the work in progress may continue.',
+      confirmLabel: 'Close session',
+    },
+  },
+  {
     name: 'question sessions',
     session: {
       ...session,

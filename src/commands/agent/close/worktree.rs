@@ -1,11 +1,13 @@
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 
 use super::child;
-use super::{CloseArgs, CloseRuntime, EnvVars, LiveCloseRuntime, Session, SessionStatus};
+use super::{
+    CloseArgs, CloseRuntime, EnvVars, LiveCloseRuntime, Session, SessionStatus,
+    safety::validate_session_without_tmux_info,
+};
 use super::{prepare_close_session, worktree_delete};
 use crate::infra::git::GitRepo;
 
@@ -262,7 +264,9 @@ fn close_worktree_session_with_runtime<R: CloseRuntime>(
     stop_and_close: bool,
     runtime: &R,
 ) -> Result<()> {
-    if !should_gracefully_close_worktree_session(session, current_pane_id) {
+    if session.tmux_info.is_some()
+        && !should_gracefully_close_worktree_session(session, current_pane_id)
+    {
         return Ok(());
     }
     if stop_and_close {
@@ -281,9 +285,8 @@ fn validate_worktree_session(
     if needs_validation_without_tmux_info(session, force) {
         let mut session = session.clone();
         super::super::session_status::include_pending_status(&mut session);
-        return validate_worktree_session_without_tmux_info(&session, || {
-            runtime.unknown_draft_timeout()
-        });
+        return validate_session_without_tmux_info(&session, runtime.unknown_draft_timeout())
+            .map(|_| ());
     }
     if !should_gracefully_close_worktree_session(session, current_pane_id) {
         return Ok(());
@@ -320,15 +323,6 @@ fn is_caller_pane_session(session: &Session, current_pane_id: Option<&str>) -> b
         .is_some_and(|info| current_pane_id == Some(info.pane_id.as_str()))
 }
 
-fn validate_worktree_session_without_tmux_info(
-    session: &Session,
-    unknown_draft_timeout: impl FnOnce() -> Duration,
-) -> Result<()> {
-    super::ensure_session_is_idle(session, session.status)?;
-    super::check_unknown_draft_state(session, unknown_draft_timeout())?;
-    Ok(())
-}
-
 pub(super) fn linked_worktree_root(path: &Path) -> Option<PathBuf> {
     let repo = GitRepo::open_at(path).ok()?;
     repo.is_worktree().then(|| repo.workdir().to_path_buf())
@@ -353,6 +347,7 @@ fn select_worktree_sessions<'a>(sessions: &'a [Session], worktree_root: &Path) -
 mod tests {
     use std::cell::RefCell;
     use std::path::PathBuf;
+    use std::time::Duration;
 
     use rstest::rstest;
 
@@ -447,6 +442,25 @@ mod tests {
                 ],
                 vec![session.session_id],
             ),
+        );
+    }
+
+    #[test]
+    fn session_id_close_ends_a_worktree_session_without_a_tmux_pane() {
+        let mut session = session();
+        session.tmux_info = None;
+        session.status = SessionStatus::Paused;
+        let runtime = FakeRuntime::default();
+
+        let result = close_worktree_session_with_runtime(&session, false, None, false, &runtime);
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                runtime.ended_sessions.into_inner(),
+                runtime.calls.into_inner(),
+            ),
+            (Ok(()), vec![session.session_id], vec![]),
         );
     }
 
@@ -547,9 +561,9 @@ mod tests {
                 .insert("agent-task-1".to_string());
         }
 
-        let actual =
-            validate_worktree_session_without_tmux_info(&session, || Duration::from_secs(30 * 60))
-                .map_err(|error| error.to_string());
+        let actual = validate_session_without_tmux_info(&session, Duration::from_secs(30 * 60))
+            .map(|_| ())
+            .map_err(|error| error.to_string());
         let expected = expected_error.map_or_else(|| Ok(()), |error| Err(error.to_string()));
 
         assert_eq!(actual, expected);
@@ -869,9 +883,8 @@ mod tests {
                 calls
                     .borrow_mut()
                     .push(format!("validate {}", session.session_id));
-                validate_worktree_session_without_tmux_info(session, || {
-                    Duration::from_secs(30 * 60)
-                })
+                validate_session_without_tmux_info(session, Duration::from_secs(30 * 60))
+                    .map(|_| ())
             },
             |session_id| {
                 calls.borrow_mut().push(format!("load {session_id}"));
@@ -932,9 +945,8 @@ mod tests {
                 Ok::<(), anyhow::Error>(())
             },
             |session, _, _| {
-                validate_worktree_session_without_tmux_info(session, || {
-                    Duration::from_secs(30 * 60)
-                })
+                validate_session_without_tmux_info(session, Duration::from_secs(30 * 60))
+                    .map(|_| ())
             },
             |_| Ok(None),
             |_, _, _| {
