@@ -4,16 +4,23 @@
   --chat-question-shortcut-width: 7.2px;
 }
 
+.chat-question-choice-row {
+  position: relative;
+  min-height: 42px;
+}
+
 .chat-question-choice-row:first-child:not(.is-selected) {
   border-top: 1px solid var(--aw-border);
 }
 
 .chat-question-choices [data-slot='button'] {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
   width: 100%;
-  min-height: 42px;
+  min-height: 0;
   justify-content: flex-start;
-  gap: 12px;
-  padding: 0 16px;
+  padding: 0;
   border: 0;
   background: transparent;
   color: var(--aw-text-primary);
@@ -21,15 +28,12 @@
   text-align: left;
 }
 
-.chat-question-choice-row.has-description [data-slot='button'] {
-  min-height: 0;
-}
-
 .chat-question-choice-row.has-description .chat-question-choice-content {
   padding-bottom: 0;
 }
 
-.chat-question-choice-row.has-shortcut.has-description [data-slot='button'] {
+.chat-question-choice-row.has-shortcut.has-description
+  .chat-question-choice-content {
   align-items: baseline;
 }
 
@@ -47,9 +51,8 @@
   background: var(--aw-bg-surface);
 }
 
-.chat-question-choices [data-slot='button'].is-selected {
+.chat-question-choice-row.is-selected .chat-question-choice-content {
   color: var(--aw-text-body);
-  opacity: 1;
 }
 
 .chat-question-choice-row.is-selected + .chat-question-choice-row.is-selected {
@@ -63,8 +66,19 @@
 
 .chat-question-choice-content {
   display: flex;
-  flex-direction: column;
-  padding-block: 8px;
+  position: relative;
+  z-index: 1;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  color: var(--aw-text-primary);
+  font-size: 14px;
+  pointer-events: none;
+}
+
+.chat-question-choice-content .syntax-code-block-toolbar,
+.chat-question-choice-content a {
+  pointer-events: auto;
 }
 
 .chat-question-choices kbd {
@@ -76,6 +90,8 @@
 }
 
 .chat-question-choice-description {
+  position: relative;
+  z-index: 1;
   padding: 0 16px 8px;
   color: var(--aw-text-muted);
   font-size: 12px;
@@ -155,6 +171,10 @@
   color: var(--aw-color-neutral);
   font-size: 18px;
   font-weight: 700;
+}
+
+.conversation-pane[data-mobile='true'] .chat-question-choice-row {
+  min-height: 48px;
 }
 
 .chat-question-answer {

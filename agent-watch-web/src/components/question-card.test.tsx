@@ -97,13 +97,13 @@ function requireElement<T extends Element>(element: T | null): T {
 }
 
 function choiceButton(label: string): HTMLButtonElement {
-  return requireElement(
-    Array.from(
-      container.querySelectorAll<HTMLButtonElement>(
-        '.chat-question-choices button',
-      ),
-    ).find((button) => button.textContent.includes(label)) ?? null,
-  )
+  const row = Array.from(
+    container.querySelectorAll<HTMLElement>('.chat-question-choice-row'),
+  ).find((choiceRow) => {
+    const choiceText = choiceRow.querySelector('.chat-question-choice-text')
+    return choiceText !== null && choiceText.textContent.includes(label)
+  })
+  return requireElement(row?.querySelector<HTMLButtonElement>('button') ?? null)
 }
 
 function dispatchKey(target: EventTarget, key: string) {
@@ -269,6 +269,122 @@ it('sends a single-choice answer as soon as an option is selected', async () => 
   })
 })
 
+it('selects a single-choice option when its description is clicked', async () => {
+  const onAnswer = vi.fn(() => Promise.resolve(true))
+  renderQuestion(
+    props({
+      onAnswer,
+      questions: [
+        {
+          header: 'Direction',
+          question: 'Which direction should be used?',
+          choices: [{ label: 'North', description: 'Follow the north path.' }],
+          multi_select: false,
+          answer: null,
+        },
+      ],
+    }),
+  )
+
+  const description = requireElement(
+    container.querySelector<HTMLElement>('.chat-question-choice-description'),
+  )
+  await act(async () => {
+    description.click()
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+  const getActual = () => ({
+    answerCalls: onAnswer.mock.calls,
+    selected: choiceButton('North').getAttribute('aria-pressed'),
+  })
+  expect(getActual()).toEqual({
+    answerCalls: [[{ 'Which direction should be used?': 'North' }]],
+    selected: 'true',
+  })
+})
+
+it('describes a single-choice answer button with its description', () => {
+  renderQuestion(
+    props({
+      questions: [
+        {
+          header: 'Direction',
+          question: 'Which direction should be used?',
+          choices: [{ label: 'North', description: 'Follow the north path.' }],
+          multi_select: false,
+          answer: null,
+        },
+      ],
+    }),
+  )
+
+  const button = choiceButton('North')
+  const title = requireElement(
+    container.querySelector<HTMLElement>('.chat-question-choice-content'),
+  )
+  const description = requireElement(
+    container.querySelector<HTMLElement>('.chat-question-choice-description'),
+  )
+  const getActual = () => ({
+    buttonDescribesChoice:
+      button.getAttribute('aria-describedby') === description.id,
+    buttonNamesChoice: button.getAttribute('aria-labelledby') === title.id,
+    descriptionHasId: description.id.length > 0,
+    titleHasId: title.id.length > 0,
+  })
+  expect(getActual()).toEqual({
+    buttonDescribesChoice: true,
+    buttonNamesChoice: true,
+    descriptionHasId: true,
+    titleHasId: true,
+  })
+})
+
+it('does not answer a single-choice question when copying code from its label', async () => {
+  const onAnswer = vi.fn(() => Promise.resolve(true))
+  renderQuestion(
+    props({
+      onAnswer,
+      questions: [
+        {
+          header: 'Direction',
+          question: 'Which direction should be used?',
+          choices: [{ label: 'North\n\n```text\nnorth\n```' }],
+          multi_select: false,
+          answer: null,
+        },
+      ],
+    }),
+  )
+
+  const copyButton = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      '.chat-question-choice-content .syntax-code-block-copy-button',
+    ),
+  )
+  await act(async () => {
+    copyButton.dispatchEvent(
+      new MouseEvent('click', { bubbles: true, cancelable: true }),
+    )
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+  const getActual = () => ({
+    answerCalls: onAnswer.mock.calls,
+    copyButtonNestedInChoice: choiceButton('North').contains(copyButton),
+    selected: choiceButton('North').getAttribute('aria-pressed'),
+  })
+  expect(getActual()).toEqual({
+    answerCalls: [],
+    copyButtonNestedInChoice: false,
+    selected: 'false',
+  })
+})
+
 it('renders copy controls outside a single-choice option description button', () => {
   renderQuestion(
     props({
@@ -348,7 +464,7 @@ it('frames a recorded choice with its description without doubling dividers', ()
     description.querySelector<HTMLParagraphElement>('p'),
   )
   const choiceContent = requireElement(
-    selectedButton.querySelector<HTMLElement>('.chat-question-choice-content'),
+    selectedRow.querySelector<HTMLElement>('.chat-question-choice-content'),
   )
   const rowStyle = getComputedStyle(selectedRow)
   const choicesStyle = getComputedStyle(choices)
@@ -437,7 +553,7 @@ it('keeps descriptions compact on unanswered choices', () => {
     row.querySelector<HTMLElement>('.chat-question-choice-text'),
   )
   const choiceContent = requireElement(
-    button.querySelector<HTMLElement>('.chat-question-choice-content'),
+    row.querySelector<HTMLElement>('.chat-question-choice-content'),
   )
   const buttonStyle = getComputedStyle(button)
   const choiceContentStyle = getComputedStyle(choiceContent)
@@ -448,7 +564,7 @@ it('keeps descriptions compact on unanswered choices', () => {
   const getActual = () => ({
     answerState: button.getAttribute('aria-pressed'),
     buttonMinHeight: buttonStyle.minHeight,
-    buttonAlignItems: buttonStyle.alignItems,
+    contentAlignItems: choiceContentStyle.alignItems,
     choiceContentPaddingBottom: choiceContentStyle.paddingBottom,
     alignmentOffset: Number(
       (descriptionRect.left - choiceTitleRect.left).toFixed(2),
@@ -462,7 +578,7 @@ it('keeps descriptions compact on unanswered choices', () => {
   expect(getActual()).toEqual({
     answerState: 'false',
     buttonMinHeight: '0px',
-    buttonAlignItems: 'baseline',
+    contentAlignItems: 'baseline',
     choiceContentPaddingBottom: '0px',
     alignmentOffset: 0,
     descriptionParagraph: {
