@@ -59,7 +59,15 @@ function snapshot() {
     actionsVisible: actionLabels.length > 0,
     actionLabels,
     actionsClipPath:
-      actions === null ? null : window.getComputedStyle(actions).clipPath,
+      actions instanceof HTMLElement ? actions.style.clipPath : null,
+    actionsTransitionProperty:
+      actions === null
+        ? null
+        : window.getComputedStyle(actions).transitionProperty,
+    actionsTransitionDuration:
+      actions === null
+        ? null
+        : window.getComputedStyle(actions).transitionDuration,
     actionsHiddenFromAccessibility:
       actions?.getAttribute('aria-hidden') ?? null,
   }
@@ -105,6 +113,8 @@ it('hides swipe actions from a selected phone row at rest', () => {
     actionsVisible: false,
     actionLabels: [],
     actionsClipPath: 'inset(0px 0px 0px 176px)',
+    actionsTransitionProperty: 'clip-path',
+    actionsTransitionDuration: '0.16s',
     actionsHiddenFromAccessibility: 'true',
   })
 })
@@ -134,6 +144,8 @@ it('reveals swipe actions while dragging and keeps them after release', () => {
       actionsVisible: false,
       actionLabels: [],
       actionsClipPath: 'inset(0px 0px 0px 176px)',
+      actionsTransitionProperty: 'clip-path',
+      actionsTransitionDuration: '0.16s',
       actionsHiddenFromAccessibility: 'true',
     },
     {
@@ -145,6 +157,8 @@ it('reveals swipe actions while dragging and keeps them after release', () => {
         'Close: Review the sample service changes',
       ],
       actionsClipPath: 'inset(0px 0px 0px 116px)',
+      actionsTransitionProperty: 'clip-path',
+      actionsTransitionDuration: '0.16s',
       actionsHiddenFromAccessibility: 'true',
     },
     {
@@ -156,6 +170,8 @@ it('reveals swipe actions while dragging and keeps them after release', () => {
         'Close: Review the sample service changes',
       ],
       actionsClipPath: 'inset(0px)',
+      actionsTransitionProperty: 'clip-path',
+      actionsTransitionDuration: '0.16s',
       actionsHiddenFromAccessibility: 'false',
     },
   ])
