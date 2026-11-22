@@ -1,6 +1,9 @@
+import '#index.css'
+
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { userEvent } from 'vitest/browser'
 
 import { SessionTasksPanel } from '#components/session-tasks-panel'
 import type { SessionTask } from '#types'
@@ -312,7 +315,7 @@ it('formats completed task ages in minutes and days', () => {
   ])
 })
 
-it('marks completed task rows for full-row hover styling', () => {
+it('marks completed task rows for full-row hover styling', async () => {
   const completedTasks = tasks
     .filter((task) => task.isClosed === true)
     .slice(0, 1)
@@ -327,12 +330,25 @@ it('marks completed task rows for full-row hover styling', () => {
     )
   })
 
-  expect(
-    Array.from(
-      container.querySelectorAll('.session-tasks-panel-row'),
-      (row) => row.className,
-    ),
-  ).toEqual(['session-tasks-panel-row session-tasks-panel-row--completed'])
+  const row = container.querySelector<HTMLElement>(
+    '.session-tasks-panel-row--completed',
+  )
+  if (row === null) throw new Error('Expected a completed task row')
+
+  await userEvent.hover(row)
+  const snapshot = () => ({
+    rowClass: row.className,
+    rowDisplay: getComputedStyle(row).display,
+    rowBackground: getComputedStyle(row).backgroundColor,
+    titleIsInsideRow:
+      row.querySelector('.session-tasks-panel-item--completed') !== null,
+  })
+  expect(snapshot()).toEqual({
+    rowClass: 'session-tasks-panel-row session-tasks-panel-row--completed',
+    rowDisplay: 'grid',
+    rowBackground: 'rgb(38, 38, 38)',
+    titleIsInsideRow: true,
+  })
 })
 
 it('makes a completed secondary task primary from the Tasks tab', async () => {
