@@ -381,7 +381,7 @@ html[data-mobile-layout='true'] {
   color: var(--aw-text-body);
   text-align: left;
   font-size: 14px;
-  font-weight: 700;
+  font-weight: 400;
 }
 
 .agent-watch-shell[data-layout='mobile'] .mobile-collapse-row,
@@ -467,7 +467,7 @@ html[data-mobile-layout='true'] {
   color: inherit;
   text-align: left;
   font-size: 14px;
-  font-weight: 700;
+  font-weight: 400;
 }
 
 .mobile-done-row .mobile-close-all {

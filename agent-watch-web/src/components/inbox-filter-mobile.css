@@ -28,6 +28,7 @@
   border: 1px solid var(--aw-border);
   background: var(--aw-bg-surface);
   font-size: 15px;
+  text-align: left;
 }
 
 .story-mobile-layout .inbox-filter-open span {
@@ -71,6 +72,7 @@
     border: 1px solid var(--aw-border);
     background: var(--aw-bg-surface);
     font-size: 15px;
+    text-align: left;
   }
 
   .inbox-filter-bar:has(.inbox-filter-chips) {
