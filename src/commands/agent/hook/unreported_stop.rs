@@ -239,6 +239,13 @@ mod tests {
         sessions_dir: TempDir,
     ) {
         let mut session = delegate_session(Engine::Claude, "fixture-delegate", "fixture-parent");
+        let first_check = check_unreported_stop(
+            sessions_dir.path(),
+            &session.session_id,
+            "fixture-parent",
+            session.created_at,
+        )
+        .unwrap();
         insert_watch_web_peer_out_message_from(
             sessions_dir.path(),
             &session.session_id,
@@ -246,13 +253,6 @@ mod tests {
             "A fictional report.",
             at(11, 0),
             false,
-        )
-        .unwrap();
-        let first_check = check_unreported_stop(
-            sessions_dir.path(),
-            &session.session_id,
-            "fixture-parent",
-            session.created_at,
         )
         .unwrap();
         insert_watch_web_peer_out_message_from(
@@ -297,7 +297,7 @@ mod tests {
         assert_eq!(
             (first_check, calls.lock().unwrap().clone()),
             (
-                true,
+                false,
                 vec![(
                     "fixture-parent".to_string(),
                     indoc! {"

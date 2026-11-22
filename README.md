@@ -39,7 +39,7 @@ Unknown configuration keys fail parsing. Put worktree settings under `agent.work
 
 `agent.merge_notification` is an optional template sent to the delegator after a delegated PR merges. Use `{branch}` and `{pr_url}` where the branch name and PR URL should appear. When the key is omitted, no merge notification is sent.
 
-`agent.unreported_stop_notification` is an optional template sent to the direct parent when a delegate session stops without sending it a peer message since the previous completed Stop check. Use `{session_id}` and `{last_message}` where the delegate session ID and final assistant message should appear. Stops held by the Stop hook or with background work pending are checked later. When the key is omitted, no notification is sent.
+`agent.unreported_stop_notification` is an optional template sent to the direct parent when a delegate session stops without sending it a peer message newer than both the previous completed Stop check and the latest message from its direct parent. Use `{session_id}` and `{last_message}` where the delegate session ID and final assistant message should appear. Stops held by the Stop hook or with background work pending are checked later. When the key is omitted, no notification is sent.
 
 `agent.statuses` maps user-defined names to `user`, `waiting`, or `done` states. `user` status names appear as red labels on TASKS rows and in tmux's next action; `waiting` and `done` status names mark TASKS rows without signaling a user action. `a agent status set` accepts only names from this map. A stored name missing from the current map is treated as `user` so it remains visible.
 
