@@ -56,7 +56,7 @@ export function InboxFilterBar({
           className="inbox-filter-open cursor-pointer"
           onClick={onOpenFilterDialog}
         >
-          <Filter aria-hidden="true" size={14} />
+          <Filter aria-hidden="true" size={isMobile ? 16 : 14} />
           <span>Filter by project, kind, tq task, repo</span>
           <kbd>/</kbd>
         </Button>

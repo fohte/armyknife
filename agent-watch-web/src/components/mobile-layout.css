@@ -78,22 +78,33 @@ html[data-mobile-layout='true'] {
   display: flex;
 }
 
-.agent-watch-shell[data-layout='mobile'] .mobile-inbox-brand,
-.story-mobile-layout .mobile-inbox-brand {
+.agent-watch-shell[data-layout='mobile'] .inbox-view > .mobile-inbox-brand,
+.story-mobile-layout .inbox-view > .mobile-inbox-brand {
   display: flex;
   height: auto;
   flex: 0 0 auto;
   align-items: center;
-  padding: max(8px, env(safe-area-inset-top)) 16px 0;
+  gap: 4px;
+  padding: max(8px, env(safe-area-inset-top)) 8px 0 16px;
   font-family: var(--font-mono);
   font-size: 13px;
   font-weight: 700;
   line-height: 18px;
 }
 
+.mobile-inbox-brand-title {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.inbox-view .mobile-inbox-brand .brand-mark {
+  margin-right: 3px;
+}
+
 .mobile-inbox-connection {
   display: flex;
   min-width: 0;
+  flex: 0 1 auto;
   align-items: center;
   gap: 6px;
   margin-left: 10px;
@@ -127,15 +138,15 @@ html[data-mobile-layout='true'] {
   min-height: 0;
   flex: 0 0 auto;
   align-items: flex-start;
-  padding: 0 16px 8px;
+  padding: 0 16px;
   border-bottom: 0;
 }
 
 .agent-watch-shell[data-layout='mobile'] .view-header h1,
 .story-mobile-layout .view-header h1 {
-  margin: 10px 0 0;
+  margin: 4px 0 6px;
   font-size: 26px;
-  line-height: 1.2;
+  line-height: 1.55;
 }
 
 .agent-watch-shell[data-layout='mobile'] .sort-description,
@@ -146,24 +157,26 @@ html[data-mobile-layout='true'] {
 .agent-watch-shell[data-layout='mobile'] .mobile-today-strip,
 .story-mobile-layout .mobile-today-strip {
   display: flex;
-  min-height: 0;
+  height: 36px;
+  min-height: 36px;
   flex: 0 0 auto;
   align-items: center;
   gap: 6px;
   overflow-x: auto;
-  padding: 4px 16px 12px;
+  padding: 0 16px;
   border-bottom: 0;
 }
 
 .mobile-today-chip {
   min-width: max-content;
-  min-height: 36px;
+  min-height: 26px;
   gap: 6px;
-  padding: 0 12px;
+  padding: 0 10px;
   border: 0;
-  border-radius: var(--aw-radius);
+  border-radius: 0;
   background: var(--aw-bg-popover);
-  font-size: 13.5px;
+  color: var(--aw-text-primary);
+  font-size: 12.5px;
 }
 
 .mobile-today-chip .today-star {
@@ -172,7 +185,7 @@ html[data-mobile-layout='true'] {
 }
 
 .mobile-today-chip.is-needs-action {
-  font-weight: 700;
+  font-weight: 400;
 }
 
 .agent-watch-shell[data-layout='mobile'] .inbox-scroll-area,
@@ -190,7 +203,9 @@ html[data-mobile-layout='true'] {
 .agent-watch-shell[data-layout='mobile'] .needs-action-section .section-heading,
 .story-mobile-layout .needs-action-section .section-heading {
   height: auto;
-  padding: 8px 16px 6px;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 0 16px 6px;
   color: var(--aw-text-primary);
   font-size: 13px;
 }
