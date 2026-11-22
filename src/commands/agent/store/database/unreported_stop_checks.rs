@@ -7,7 +7,8 @@ use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
 use super::open_connection;
 
 /// Checks peer reports after both the previous completed Stop decision and the latest
-/// delivered direct-parent message, then advances the cursor in the same transaction.
+/// delivered direct-parent message, then advances the cursor in the same transaction
+/// so delayed rows cannot be skipped.
 pub(crate) fn check_unreported_stop(
     sessions_dir: &Path,
     session_id: &str,
