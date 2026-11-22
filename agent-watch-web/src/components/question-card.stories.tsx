@@ -134,6 +134,27 @@ export const QuestionLinksKnownSessionIds: Story = {
   },
 }
 
+export const ChoiceDescriptionShowsCodeBlock: Story = {
+  name: 'A choice description shows a copy toolbar for code',
+  args: {
+    questions: [
+      {
+        header: 'Command',
+        question: 'Which command should be used?',
+        choices: [
+          {
+            label: 'Use the sample command',
+            description: '~~~bash\nprintf "ready\\n"\n~~~',
+          },
+          { label: 'Skip the command' },
+        ],
+        multi_select: false,
+        answer: null,
+      },
+    ],
+  },
+}
+
 export const ShowingAnswers: Story = {
   name: 'A completed question group shows every recorded answer',
   args: {

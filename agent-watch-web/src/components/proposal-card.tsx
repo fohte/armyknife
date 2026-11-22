@@ -247,7 +247,7 @@ export function ProposalCard({
               if (
                 isDisabled ||
                 (event.target instanceof Element &&
-                  event.target.closest('a') !== null)
+                  event.target.closest('a, button') !== null)
               ) {
                 return
               }
