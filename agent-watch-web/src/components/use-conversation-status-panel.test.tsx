@@ -528,147 +528,103 @@ it('saves the edited document and sends the same edits before finishing review',
   ])
 })
 
-it('keeps edits after a save error and retries the same document', async () => {
-  const requests: { url: string; method: string; body: unknown }[] = []
-  let saveAttempts = 0
-  const fetcher = vi.fn<typeof fetch>((input, init) => {
-    const url = requestUrl(input)
-    const method = init?.method ?? 'GET'
-    const body =
-      typeof init?.body === 'string' ? (JSON.parse(init.body) as unknown) : null
-    requests.push({ url, method, body })
-    if (method === 'GET') {
-      return Promise.resolve(
-        new Response(
-          JSON.stringify({
-            id: 'fixture-review-a',
-            revision: 'fixture-revision-a',
-            frontmatter: { title: 'Fixture title' },
-            body: 'Fixture body.',
-          }),
-          { status: 200, headers: { 'Content-Type': 'application/json' } },
-        ),
-      )
-    }
-    saveAttempts += 1
-    return Promise.resolve(
-      saveAttempts === 1
-        ? new Response(null, { status: 409 })
-        : new Response(
+it.each([
+  { action: 'save', button: 'Save' },
+  { action: 'finish', button: 'Finish review' },
+])(
+  'shows the reload instruction and keeps edits after a $action conflict',
+  async ({ action, button }) => {
+    const requests: { url: string; method: string; body: unknown }[] = []
+    const fetcher = vi.fn<typeof fetch>((input, init) => {
+      const url = requestUrl(input)
+      const method = init?.method ?? 'GET'
+      const body =
+        typeof init?.body === 'string'
+          ? (JSON.parse(init.body) as unknown)
+          : null
+      requests.push({ url, method, body })
+      if (method === 'GET') {
+        return Promise.resolve(
+          new Response(
             JSON.stringify({
-              success: true,
-              revision: 'fixture-revision-b',
+              id: 'fixture-review-a',
+              revision: 'fixture-revision-a',
+              frontmatter: { title: 'Fixture title' },
+              body: 'Fixture body.',
             }),
-            {
-              status: 200,
-              headers: { 'Content-Type': 'application/json' },
-            },
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
           ),
+        )
+      }
+      return Promise.resolve(new Response(null, { status: 409 }))
+    })
+    vi.stubGlobal('fetch', fetcher)
+
+    act(() => {
+      root?.render(
+        <StatusPanelHarness
+          currentSession={{ ...session, reviewDocumentId: 'fixture-review-a' }}
+          statusPanelOpen
+        />,
+      )
+    })
+    await waitForState(
+      () => container.querySelector('.review-document-body') !== null,
     )
-  })
-  vi.stubGlobal('fetch', fetcher)
-
-  act(() => {
-    root?.render(
-      <StatusPanelHarness
-        currentSession={{ ...session, reviewDocumentId: 'fixture-review-a' }}
-        statusPanelOpen
-      />,
+    await act(async () => {
+      await page.getByRole('textbox', { name: 'title' }).fill('Edited title')
+      await page
+        .getByRole('textbox', { name: 'Markdown body' })
+        .fill('Edited body.')
+    })
+    await waitForState(
+      () =>
+        container.querySelector('.review-document-body')?.textContent ===
+        'Edited body.',
     )
-  })
-  await waitForState(
-    () => container.querySelector('.review-document-body') !== null,
-  )
-  await act(async () => {
-    await page.getByRole('textbox', { name: 'title' }).fill('Edited title')
-    await page
-      .getByRole('textbox', { name: 'Markdown body' })
-      .fill('Edited body.')
-  })
-  await waitForState(
-    () =>
-      container.querySelector('.review-document-body')?.textContent ===
-      'Edited body.',
-  )
-  await act(async () => {
-    await page.getByRole('button', { name: 'Save' }).click()
-  })
-  await waitForState(() => container.querySelector('[role="alert"]') !== null)
+    await act(async () => {
+      await page.getByRole('button', { name: button }).click()
+    })
+    await waitForState(() => container.querySelector('[role="alert"]') !== null)
 
-  const afterFailure = {
-    alert: container.querySelector('[role="alert"]')?.textContent,
-    title: container.querySelector<HTMLInputElement>(
-      '.review-document-frontmatter input',
-    )?.value,
-    body: container.querySelector('.review-document-editor .cm-content')
-      ?.textContent,
-  }
-  await act(async () => {
-    await page.getByRole('button', { name: 'Save' }).click()
-  })
-  await waitForState(
-    () =>
-      requests.length === 3 &&
-      container.querySelector('.review-document-status')?.textContent ===
-        'Saved',
-  )
-
-  const retrySnapshot = () => ({
-    afterFailure,
-    afterRetry: {
-      alert: container.querySelector('[role="alert"]')?.textContent ?? null,
+    const snapshot = () => ({
+      alert: container.querySelector('[role="alert"]')?.textContent,
       title: container.querySelector<HTMLInputElement>(
         '.review-document-frontmatter input',
       )?.value,
       body: container.querySelector('.review-document-editor .cm-content')
         ?.textContent,
       status: container.querySelector('.review-document-status')?.textContent,
-    },
-    requests,
-  })
+      requests,
+    })
 
-  expect(retrySnapshot()).toEqual({
-    afterFailure: {
+    expect(snapshot()).toEqual({
       alert:
         'This draft changed since you opened it. Reload the page to see the latest version.',
       title: 'Edited title',
       body: 'Edited body.',
-    },
-    afterRetry: {
-      alert: null,
-      title: 'Edited title',
-      body: 'Edited body.',
-      status: 'Saved',
-    },
-    requests: [
-      {
-        url: '/api/sessions/fixture-session/review-document',
-        method: 'GET',
-        body: null,
-      },
-      {
-        url: '/api/sessions/fixture-session/review-document/save',
-        method: 'POST',
-        body: {
-          id: 'fixture-review-a',
-          revision: 'fixture-revision-a',
-          frontmatter: { title: 'Edited title' },
-          body: 'Edited body.',
+      status:
+        'This draft changed since you opened it. Reload the page to see the latest version.',
+      requests: [
+        {
+          url: '/api/sessions/fixture-session/review-document',
+          method: 'GET',
+          body: null,
         },
-      },
-      {
-        url: '/api/sessions/fixture-session/review-document/save',
-        method: 'POST',
-        body: {
-          id: 'fixture-review-a',
-          revision: 'fixture-revision-a',
-          frontmatter: { title: 'Edited title' },
-          body: 'Edited body.',
+        {
+          url: `/api/sessions/fixture-session/review-document/${action}`,
+          method: 'POST',
+          body: {
+            id: 'fixture-review-a',
+            revision: 'fixture-revision-a',
+            frontmatter: { title: 'Edited title' },
+            body: 'Edited body.',
+          },
         },
-      },
-    ],
-  })
-})
+      ],
+    })
+  },
+)
 
 it('refetches the review document when its active ID changes', async () => {
   const fetcher = vi

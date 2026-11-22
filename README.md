@@ -1224,7 +1224,8 @@ By default, watch-web accepts loopback Host values. To access it through a proxy
 
 Files sent by an agent are served by `GET /api/sessions/{id}/files/{file_id}` only when recorded for that session, or by `GET /api/sessions/{id}/transcript-files/{tool_use_id}/{index}` only when the session transcript contains the matching file-send record and file index.
 
-- `POST /api/sessions/{id}/review-document/save` with `{"id":"review-id","frontmatter":{"approved":true},"body":"Updated Markdown."}` saves edits to the active review document path recorded by the server.
+- `GET /api/sessions/{id}/review-document` returns a `revision` with the active review document's frontmatter and Markdown body.
+- `POST /api/sessions/{id}/review-document/save` with `{"id":"review-id","revision":"revision-from-get","frontmatter":{"approved":true},"body":"Updated Markdown."}` saves edits to the active review document path recorded by the server. It returns `409` when the document changed since its revision was read.
 - `POST /api/sessions/{id}/review-document/finish` accepts the same payload, saves the edits, then asks the review process to close its editor and run the completion handler.
 - `POST /api/sessions` with `{"directory":"/workspace/example","engine":"claude","worktree":false,"initialMessage":"Inspect this project."}` starts a Claude Code or Codex session in an existing directory and returns `{"launchId":"..."}`. `engine` accepts `claude` or `codex`; `initialMessage`, `model`, and `reasoningEffort` are optional. When `model` or `reasoningEffort` is omitted, the agent profile and engine defaults apply.
 - `GET /api/model-options?engine=claude|codex` returns the engine's model choices, the effective default model and effort, and the effort levels supported by each model.

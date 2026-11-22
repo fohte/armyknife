@@ -235,7 +235,7 @@ async fn save_document_for_session(
         };
         let content = render_review_document(&marker.path, request.frontmatter, &request.body)?;
         let revision = review_document_revision(content.as_bytes());
-        overwrite_review_document(&marker.path, content.as_bytes())?;
+        overwrite_review_document(&marker.path, content.as_bytes(), &request.revision)?;
         if finishing {
             crate::shared::human_in_the_loop::try_signal_fifo(&fifo_path).map_err(|error| {
                 tracing::warn!(%error, "failed to signal review finish request");
@@ -248,7 +248,7 @@ async fn save_document_for_session(
                 wait_for_finish_ack(ack_reader, FINISH_ACK_TIMEOUT).map_err(|error| {
                     tracing::warn!(%error, "review process did not acknowledge finish request");
                     if error.kind() == std::io::ErrorKind::TimedOut {
-                        StatusCode::CONFLICT
+                        StatusCode::GATEWAY_TIMEOUT
                     } else {
                         StatusCode::INTERNAL_SERVER_ERROR
                     }
@@ -267,7 +267,11 @@ async fn save_document_for_session(
     })?
 }
 
-fn overwrite_review_document(path: &std::path::Path, content: &[u8]) -> Result<(), StatusCode> {
+fn overwrite_review_document(
+    path: &std::path::Path,
+    content: &[u8],
+    expected_revision: &str,
+) -> Result<(), StatusCode> {
     use std::fs;
     use std::io::Write;
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
@@ -307,6 +311,18 @@ fn overwrite_review_document(path: &std::path::Path, content: &[u8]) -> Result<(
             tracing::warn!(%error, "failed to sync review document staging file");
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
+
+        let current_content = fs::read(path).map_err(|error| {
+            tracing::warn!(%error, "failed to recheck active review document before saving");
+            if error.kind() == std::io::ErrorKind::NotFound {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
+        })?;
+        if review_document_revision(&current_content) != expected_revision {
+            return Err(StatusCode::CONFLICT);
+        }
 
         let current_metadata = fs::symlink_metadata(path).map_err(|error| {
             tracing::warn!(%error, "failed to recheck active review document before saving");
