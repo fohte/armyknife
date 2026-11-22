@@ -94,7 +94,7 @@
   max-width: 180px;
   flex: 0 0 auto;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   border: 0;
   border-bottom: 2px solid transparent;
   padding: 0;
@@ -103,7 +103,6 @@
   cursor: pointer;
   font: inherit;
   font-size: 12.5px;
-  gap: 6px;
   white-space: nowrap;
 }
 
