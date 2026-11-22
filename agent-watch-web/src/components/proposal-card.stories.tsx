@@ -73,6 +73,20 @@ export const ProposalFormatsItsAgentTextAsMarkdown: Story = {
   },
 }
 
+export const ProposalChoiceShowsCodeBlock: Story = {
+  name: 'A proposal option shows a code block with the copy toolbar',
+  args: {
+    options: options.map((option, index) =>
+      index === 0
+        ? {
+            ...option,
+            description: '~~~bash\nprintf "ready\\n"\n~~~',
+          }
+        : option,
+    ),
+  },
+}
+
 export const ProposalLinksKnownSessionIds: Story = {
   name: 'A known session ID links from the summary and option description',
   decorators: [

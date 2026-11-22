@@ -216,7 +216,6 @@ function remarkTrimNonAsciiAutolinks() {
 type MarkdownMessageProps = {
   children: string
   className?: string
-  copyableCodeBlocks?: boolean
   inline?: boolean
   mobile?: boolean
   sessionId?: string
@@ -262,13 +261,9 @@ function unwrapTaggedMessage(value: string): string {
 
 const MarkdownCode: NonNullable<Components['code']> = ({ node, ...props }) => {
   const isCodeBlock = useContext(CodeBlockContext)
-  const {
-    sessionsById,
-    onSelectSession,
-    commandContext,
-    copyableCodeBlocks,
-    mobile,
-  } = useContext(MarkdownComponentContext)
+  const { sessionsById, onSelectSession, commandContext, mobile } = useContext(
+    MarkdownComponentContext,
+  )
   if (node?.tagName !== 'code') return props.children
   const { className, children, ...codeProps } = props
   const text = typeof children === 'string' ? children : null
@@ -318,7 +313,7 @@ const MarkdownCode: NonNullable<Components['code']> = ({ node, ...props }) => {
         code={text}
         language={language ?? 'text'}
         links={links}
-        copyable={copyableCodeBlocks}
+        copyable
       >
         <>{codeChildren}</>
       </SyntaxCodeBlock>
@@ -413,7 +408,6 @@ const inlineMarkdownComponents: Components = {
 export const MarkdownMessage = memo(function MarkdownMessage({
   children,
   className,
-  copyableCodeBlocks = false,
   inline = false,
   mobile = false,
   sessionId,
@@ -439,7 +433,6 @@ export const MarkdownMessage = memo(function MarkdownMessage({
   const markdownSource = inline ? children : unwrapTaggedMessage(children)
   const componentContext: MarkdownComponentContextValue = {
     sessionsById,
-    copyableCodeBlocks,
     webUis: sessionLinks.webUis ?? [],
     mobile,
     ...(sessionLinks.onSelectSession === undefined

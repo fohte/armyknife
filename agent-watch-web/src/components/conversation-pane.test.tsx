@@ -2723,12 +2723,16 @@ it('sends a selected answer with its request ID', async () => {
   const onAction = vi.fn(() => Promise.resolve(true))
   renderView(onAction, session, undefined, [question])
 
+  const choiceRow = Array.from(
+    container.querySelectorAll<HTMLElement>('.chat-question-choice-row'),
+  ).find(
+    (row) =>
+      row
+        .querySelector('.chat-question-choice-text')
+        ?.textContent.includes('Window B') === true,
+  )
   const choice = requireElement(
-    Array.from(
-      container.querySelectorAll<HTMLButtonElement>(
-        '.chat-question-choices button',
-      ),
-    ).find((button) => button.textContent.includes('Window B')) ?? null,
+    choiceRow?.querySelector<HTMLButtonElement>('button') ?? null,
   )
   act(() => {
     choice.click()
@@ -2991,14 +2995,19 @@ it('shows a selected answer, dims other choices, and renders Markdown', () => {
       ?.textContent,
     answer: card.querySelector('.chat-question-answer')?.textContent,
     choices: Array.from(
-      card.querySelectorAll<HTMLButtonElement>('.chat-question-choices button'),
-      (button) => ({
-        label: button.querySelector('.chat-question-choice-text')?.textContent,
-        disabled: button.disabled,
-        selected: button.classList.contains('is-selected'),
-        dimmed: button.classList.contains('is-unselected'),
-        check: button.querySelector('.chat-question-choice-check')?.textContent,
-      }),
+      card.querySelectorAll<HTMLElement>('.chat-question-choice-row'),
+      (row) => {
+        const button = requireElement(
+          row.querySelector<HTMLButtonElement>('button'),
+        )
+        return {
+          label: row.querySelector('.chat-question-choice-text')?.textContent,
+          disabled: button.disabled,
+          selected: button.classList.contains('is-selected'),
+          dimmed: button.classList.contains('is-unselected'),
+          check: row.querySelector('.chat-question-choice-check')?.textContent,
+        }
+      },
     ),
     actionCalls: onAction.mock.calls,
   })

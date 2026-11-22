@@ -382,13 +382,14 @@ it('keeps option labels phrasing-only and links associated with their radios', (
   })
 })
 
-it('selects an option from its description but not from its links', () => {
+it('selects an option from its description but not from its links or copy button', () => {
   renderCard(
     props({
       options: [
         {
           label: 'Use the existing flow',
-          description: 'Read [the guide](https://example.test).',
+          description:
+            'Read [the guide](https://example.test).\n\n~~~text\nsample\n~~~',
           pros: [],
           cons: [],
           recommended: false,
@@ -417,6 +418,11 @@ it('selects an option from its description but not from its links', () => {
   const link = requireElement(
     container.querySelector<HTMLAnchorElement>(
       '.chat-proposal-option-description a',
+    ),
+  )
+  const copyButton = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      '.chat-proposal-option-description .syntax-code-block-copy-button',
     ),
   )
   link.addEventListener('click', (event) => {
@@ -448,17 +454,24 @@ it('selects an option from its description but not from its links', () => {
       new MouseEvent('click', { bubbles: true, cancelable: true }),
     )
   })
+  act(() => {
+    copyButton.dispatchEvent(
+      new MouseEvent('click', { bubbles: true, cancelable: true }),
+    )
+  })
 
   const snapshot = () => ({
     afterFirstDescriptionClick,
     afterSecondDescriptionClick,
     afterLinkClick: selected(),
+    afterCopyClick: selected(),
   })
 
   expect(snapshot()).toEqual({
     afterFirstDescriptionClick: [true, false],
     afterSecondDescriptionClick: [false, true],
     afterLinkClick: [false, true],
+    afterCopyClick: [false, true],
   })
 })
 

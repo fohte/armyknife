@@ -1,4 +1,4 @@
-import type { Meta, StoryObj } from '@storybook/react-vite'
+import type { Decorator, Meta, StoryObj } from '@storybook/react-vite'
 
 import { MarkdownSessionLinksProvider } from '#components/markdown-message'
 import { QuestionCard } from '#components/question-card'
@@ -62,6 +62,16 @@ const meta = {
 
 export default meta
 type Story = StoryObj<typeof meta>
+
+const choiceDescriptionFrameDecorator: Decorator = (Story, { args }) => (
+  <div
+    className={args['isMobile'] === true ? 'conversation-pane' : undefined}
+    data-mobile={args['isMobile'] === true ? 'true' : undefined}
+    style={{ width: 'min(672px, calc(100vw - 32px))', margin: '0 auto' }}
+  >
+    <Story />
+  </div>
+)
 
 export const WaitingForAllAnswers: Story = {
   name: 'A question group waits for an answer to every prompt',
@@ -129,6 +139,72 @@ export const QuestionLinksKnownSessionIds: Story = {
         ],
         multi_select: false,
         answer: null,
+      },
+    ],
+  },
+}
+
+export const ChoiceDescriptionShowsCodeBlock: Story = {
+  name: 'A choice description shows a copy toolbar for code',
+  args: {
+    questions: [
+      {
+        header: 'Command',
+        question: 'Which command should be used?',
+        choices: [
+          {
+            label: 'Use the sample command',
+            description: '~~~bash\nprintf "ready\\n"\n~~~',
+          },
+          { label: 'Skip the command' },
+        ],
+        multi_select: false,
+        answer: null,
+      },
+    ],
+  },
+}
+
+export const ChoiceDescriptionBeforeAnswer: Story = {
+  name: 'A question shows its choice description before an answer',
+  decorators: [choiceDescriptionFrameDecorator],
+  args: {
+    questions: [
+      {
+        header: 'Retry limit',
+        question: 'How many attempts should run?',
+        choices: [
+          {
+            label: 'Three attempts',
+            description: 'Stop after three failures.',
+          },
+          { label: 'Five attempts', description: 'Continue for longer.' },
+        ],
+        multi_select: false,
+        answer: null,
+      },
+    ],
+  },
+}
+
+export const ChoiceDescriptionAfterAnswer: Story = {
+  name: 'An answered question keeps its selected choice and description',
+  decorators: [choiceDescriptionFrameDecorator],
+  args: {
+    canAnswer: false,
+    questions: [
+      {
+        header: 'Retry limit',
+        question: 'How many attempts should run?',
+        choices: [
+          {
+            label: 'Three attempts',
+            description: 'Stop after three failures.',
+          },
+          { label: 'Five attempts', description: 'Continue for longer.' },
+        ],
+        multi_select: false,
+        answer: 'Three attempts',
       },
     ],
   },

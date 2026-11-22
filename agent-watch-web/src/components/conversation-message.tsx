@@ -151,7 +151,6 @@ export function renderConversationMessage({
     return (
       <article className={className}>
         <MarkdownMessage
-          copyableCodeBlocks
           {...(sessionId === undefined ? {} : { sessionId })}
           {...(onCommandExecuted === undefined ? {} : { onCommandExecuted })}
           {...(onCommandStarted === undefined ? {} : { onCommandStarted })}

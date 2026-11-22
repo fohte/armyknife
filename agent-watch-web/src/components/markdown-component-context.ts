@@ -10,7 +10,6 @@ import type { SessionLinkTarget } from '#types'
 export type MarkdownComponentContextValue = {
   sessionsById: ReadonlyMap<string, SessionLinkTarget>
   onSelectSession?: (id: string) => void
-  copyableCodeBlocks: boolean
   webUis: readonly WebUiLinkTarget[]
   onOpenWebUi?: (webUi: WebUiLinkTarget, url: string) => void
   mobile?: boolean
@@ -26,6 +25,5 @@ export type MarkdownComponentContextValue = {
 export const MarkdownComponentContext =
   createContext<MarkdownComponentContextValue>({
     sessionsById: new Map(),
-    copyableCodeBlocks: false,
     webUis: [],
   })
