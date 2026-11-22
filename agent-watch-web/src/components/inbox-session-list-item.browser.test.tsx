@@ -58,6 +58,8 @@ function snapshot() {
     actionsContainerPresent: actions !== null,
     actionsVisible: actionLabels.length > 0,
     actionLabels,
+    actionsClipPath:
+      actions === null ? null : window.getComputedStyle(actions).clipPath,
     actionsHiddenFromAccessibility:
       actions?.getAttribute('aria-hidden') ?? null,
   }
@@ -102,6 +104,7 @@ it('hides swipe actions from a selected phone row at rest', () => {
     actionsContainerPresent: true,
     actionsVisible: false,
     actionLabels: [],
+    actionsClipPath: 'inset(0px 0px 0px 176px)',
     actionsHiddenFromAccessibility: 'true',
   })
 })
@@ -116,7 +119,7 @@ it('reveals swipe actions while dragging and keeps them after release', () => {
     dispatchPointer(row, 'pointerdown', 100)
   })
   act(() => {
-    dispatchPointer(row, 'pointermove', 30)
+    dispatchPointer(row, 'pointermove', 40)
   })
   states.push(snapshot())
   act(() => {
@@ -130,6 +133,7 @@ it('reveals swipe actions while dragging and keeps them after release', () => {
       actionsContainerPresent: true,
       actionsVisible: false,
       actionLabels: [],
+      actionsClipPath: 'inset(0px 0px 0px 176px)',
       actionsHiddenFromAccessibility: 'true',
     },
     {
@@ -140,6 +144,7 @@ it('reveals swipe actions while dragging and keeps them after release', () => {
         'Later: Review the sample service changes',
         'Close: Review the sample service changes',
       ],
+      actionsClipPath: 'inset(0px 0px 0px 116px)',
       actionsHiddenFromAccessibility: 'true',
     },
     {
@@ -150,7 +155,46 @@ it('reveals swipe actions while dragging and keeps them after release', () => {
         'Later: Review the sample service changes',
         'Close: Review the sample service changes',
       ],
+      actionsClipPath: 'inset(0px)',
       actionsHiddenFromAccessibility: 'false',
     },
   ])
 })
+
+it.each([
+  { label: 'Later', action: 'later' },
+  { label: 'Close', action: 'close' },
+])(
+  'runs the $action callback after the row is fully swiped',
+  ({ label, action }) => {
+    const calls: string[] = []
+    root = createRoot(container)
+    act(() => {
+      root?.render(
+        <InboxSessionListItem
+          session={session}
+          selectedId={session.id}
+          onSelect={() => undefined}
+          isMobile
+          onLater={() => {
+            calls.push('later')
+          }}
+          onCloseSession={() => {
+            calls.push('close')
+          }}
+          defaultSwiped
+        />,
+      )
+    })
+    const button = container.querySelector<HTMLButtonElement>(
+      `.inbox-row-swipe-actions button[aria-label="${label}: ${session.title}"]`,
+    )
+    if (button === null) throw new Error(`The ${label} action is missing`)
+
+    act(() => {
+      button.click()
+    })
+
+    expect(calls).toEqual([action])
+  },
+)
