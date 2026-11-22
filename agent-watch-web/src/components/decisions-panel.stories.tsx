@@ -71,6 +71,11 @@ export const PendingDecisionIsSelected: Story = {
   name: 'The panel expands the selected decision and shows review progress',
 }
 
+export const PhoneStatusIncludesReviewedDecisions: Story = {
+  name: 'The phone status panel includes reviewed decisions in its list.',
+  args: { showReviewed: true },
+}
+
 export const UnreviewedDecisionsAppearFirst: Story = {
   name: 'Unreviewed decisions appear before change requests',
   args: {

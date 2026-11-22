@@ -51,3 +51,16 @@ export const OnlyBackgroundTasks: Story = {
     ],
   },
 }
+
+export const BackgroundTaskOutputIsOpen: Story = {
+  name: 'The running task shows output already loaded from the session',
+  args: {
+    initialOutputByTaskId: {
+      'fixture-shell-task': [
+        'running 24 tests',
+        'test retry::stops_after_limit ... ok',
+        'test retry::backs_off ... ok',
+      ].join('\n'),
+    },
+  },
+}

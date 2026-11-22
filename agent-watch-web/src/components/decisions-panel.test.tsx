@@ -217,6 +217,40 @@ it('shows unreviewed decisions before change requests', () => {
   })
 })
 
+it('shows reviewed decisions in the mobile session status panel', () => {
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <DecisionsPanel
+        decisions={decisions.map((decision, index) =>
+          index === 1 ? { ...decision, review: 'ok' } : decision,
+        )}
+        session={session}
+        selectedSeq={1}
+        showReviewed
+        onSelect={vi.fn()}
+        onOk={vi.fn(() => Promise.resolve(true))}
+        onChange={vi.fn(() => Promise.resolve(true))}
+      />,
+    )
+  })
+
+  const snapshot = () => ({
+    reviews: Array.from(
+      container.querySelectorAll('.decision-card--panel'),
+      (card) => card.getAttribute('data-review'),
+    ),
+    jumpHint: container.querySelector('.decisions-panel-jump-hint')
+      ?.textContent,
+    shortcuts: container.querySelector('.decisions-panel-footer')?.textContent,
+  })
+  expect(snapshot()).toEqual({
+    reviews: ['unreviewed', 'ok'],
+    jumpHint: 'Tap a decision to jump to it in the conversation.',
+    shortcuts: undefined,
+  })
+})
+
 it('keeps the selected decision when the Y action fails', async () => {
   const onOk = vi.fn(() => Promise.resolve(false))
   const onSelect = vi.fn()

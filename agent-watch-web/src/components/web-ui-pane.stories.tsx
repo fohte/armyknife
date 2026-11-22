@@ -55,6 +55,24 @@ export const MobileCanvasPageHasCloseButton: Story = {
   },
 }
 
+export const MobileWebUiTabShowsCompactHeader: Story = {
+  name: 'The phone status web UI tab shows a compact header',
+  args: {
+    name: 'Preview',
+    url: 'https://example.test/dashboard',
+    targetUrlOverride: 'https://example.test/dashboard',
+    mobileTabPresentation: true,
+    previewMessage: 'The web interface is shown here.',
+  },
+  decorators: [
+    (Story) => (
+      <div style={{ width: '390px', height: '844px', display: 'flex' }}>
+        <Story />
+      </div>
+    ),
+  ],
+}
+
 export const RemotePaneOpensTheExposedUrl: Story = {
   name: 'A remote pane opens the exposed URL',
   args: {

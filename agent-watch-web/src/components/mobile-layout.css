@@ -536,6 +536,7 @@ html[data-mobile-layout='true'] {
   display: flex;
   box-sizing: border-box;
   inset: 0;
+  padding-block: env(safe-area-inset-top, 0px) env(safe-area-inset-bottom, 0px);
   background: var(--aw-bg-nav);
 }
 
