@@ -48,3 +48,8 @@ type Story = StoryObj<typeof meta>
 export const BackgroundTaskOutputIsOpen: Story = {
   name: 'The background task shows its loaded output.',
 }
+
+export const BackgroundTaskOutputIsClosed: Story = {
+  name: 'The background task keeps its output collapsed.',
+  args: { isOpen: false, output: null, error: null },
+}
