@@ -141,6 +141,7 @@ it('groups open and completed linked tasks and reveals the remaining completed t
 })
 
 it('keeps each completed task title and age on separate lines', () => {
+  container.style.width = '390px'
   act(() => {
     root?.render(
       <SessionTasksPanel
@@ -151,24 +152,49 @@ it('keeps each completed task title and age on separate lines', () => {
     )
   })
 
-  const completedTaskLines = Array.from(
+  const completedTaskLayout = Array.from(
     container.querySelectorAll('.session-tasks-panel-item--completed'),
-    (task) =>
-      Array.from(
-        task.querySelectorAll('.session-tasks-panel-copy > *'),
-        (line) => line.className,
-      ),
+    (task) => {
+      const title = task.querySelector('.session-tasks-panel-title')
+      const age = task.querySelector('.session-tasks-panel-age')
+      return {
+        title: title?.textContent ?? null,
+        age: age?.textContent ?? null,
+        ageIsBelowTitle:
+          title !== null &&
+          age !== null &&
+          age.getBoundingClientRect().top >=
+            title.getBoundingClientRect().bottom,
+      }
+    },
   )
 
-  expect(completedTaskLines).toEqual([
-    ['session-tasks-panel-title', 'session-tasks-panel-age'],
-    ['session-tasks-panel-title', 'session-tasks-panel-age'],
-    ['session-tasks-panel-title', 'session-tasks-panel-age'],
-    ['session-tasks-panel-title', 'session-tasks-panel-age'],
+  expect(completedTaskLayout).toEqual([
+    {
+      title: '#2047 Document request behavior 1',
+      age: '1h',
+      ageIsBelowTitle: true,
+    },
+    {
+      title: '#2046 Document request behavior 2',
+      age: '2h',
+      ageIsBelowTitle: true,
+    },
+    {
+      title: '#2045 Document request behavior 3',
+      age: '3h',
+      ageIsBelowTitle: true,
+    },
+    {
+      title: '#2044 Document request behavior 4',
+      age: '4h',
+      ageIsBelowTitle: true,
+    },
   ])
 })
 
 it('reserves a trailing column for the fully visible primary label', () => {
+  container.style.width = '320px'
   act(() => {
     root?.render(
       <SessionTasksPanel
@@ -182,16 +208,36 @@ it('reserves a trailing column for the fully visible primary label', () => {
 
   const row = container.querySelector('.session-tasks-panel-list > li')
   const primaryLabel = container.querySelector('.session-tasks-panel-primary')
+  const primaryAction = container.querySelector(
+    '.session-tasks-panel-primary-action',
+  )
+  const getTextRight = (element: Element | null) => {
+    if (element === null) return null
+    const range = document.createRange()
+    range.selectNodeContents(element)
+    return Math.max(
+      ...Array.from(range.getClientRects(), (bounds) => bounds.right),
+    )
+  }
+  const primaryLabelTextRight = getTextRight(primaryLabel)
+  const primaryActionTextRight = getTextRight(primaryAction)
   const snapshot = () => ({
     rowDisplay: row === null ? null : getComputedStyle(row).display,
     primaryLabel: primaryLabel?.textContent,
-    primaryLabelRightMargin:
-      primaryLabel === null ? null : getComputedStyle(primaryLabel).marginRight,
+    primaryLabelFitsRow:
+      row !== null &&
+      primaryLabelTextRight !== null &&
+      primaryLabelTextRight <= row.getBoundingClientRect().right,
+    primaryLabelAlignsWithAction:
+      primaryLabelTextRight !== null &&
+      primaryActionTextRight !== null &&
+      Math.abs(primaryLabelTextRight - primaryActionTextRight) <= 1,
   })
   expect(snapshot()).toEqual({
     rowDisplay: 'grid',
     primaryLabel: 'Primary',
-    primaryLabelRightMargin: '16px',
+    primaryLabelFitsRow: true,
+    primaryLabelAlignsWithAction: true,
   })
 })
 

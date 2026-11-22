@@ -338,11 +338,11 @@ it('keeps the conversation summary on one row at mobile widths', async () => {
 
 it('keeps the change target note below the panel actions when the name is long', () => {
   container.style.width = '280px'
+  const targetName = 'unbroken'.repeat(12)
   renderCard({
     variant: 'panel',
     expanded: true,
-    targetName:
-      'a long target session name for an asynchronous refactoring run',
+    targetName,
   })
 
   const card = requireElement(container.querySelector('.decision-card'))
@@ -358,20 +358,25 @@ it('keeps the change target note below the panel actions when the name is long',
   const cardBounds = card.getBoundingClientRect()
   const changeButtonBounds = changeButton.getBoundingClientRect()
   const shortcutBounds = shortcut.getBoundingClientRect()
+  const targetNoteTextRange = document.createRange()
+  targetNoteTextRange.selectNodeContents(targetNote)
+  const targetNoteTextBounds = Array.from(targetNoteTextRange.getClientRects())
   const getActual = () => ({
     changeButtonFitsCard: changeButtonBounds.right <= cardBounds.right,
     targetNoteText: targetNote.textContent,
-    targetNoteFitsCard:
-      targetNote.getBoundingClientRect().right <= cardBounds.right,
+    targetNoteTextFitsCard: targetNoteTextBounds.every(
+      (bounds) => bounds.right <= cardBounds.right,
+    ),
+    targetNoteWraps: targetNoteTextBounds.length > 1,
     shortcutFitsButton:
       shortcutBounds.width > 0 &&
       shortcutBounds.right <= changeButtonBounds.right,
   })
   expect(getActual()).toEqual({
     changeButtonFitsCard: true,
-    targetNoteText:
-      'Change… sends to a long target session name for an asynchronous refactoring run',
-    targetNoteFitsCard: true,
+    targetNoteText: `Change… sends to ${targetName}`,
+    targetNoteTextFitsCard: true,
+    targetNoteWraps: true,
     shortcutFitsButton: true,
   })
 })
