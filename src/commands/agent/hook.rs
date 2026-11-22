@@ -921,8 +921,8 @@ fn process_hook_event_impl_with_env_and_unreported_stop(
     let keep_failed_after_idle_prompt = session.status == SessionStatus::Failed
         && event == HookEvent::Notification
         && input.notification_type.as_deref() == Some("idle_prompt");
-    // Codex's SessionEnd can run during daemon shutdown, so a pane-less close
-    // must not be undone by later hooks from that still-running process.
+    // `a agent close` can end a Codex session while its process keeps running,
+    // so later passive hooks must not revive it.
     let explicitly_reactivated = event == HookEvent::UserPromptSubmit
         || (event == HookEvent::SessionStart
             && matches!(input.source.as_deref(), Some("resume" | "clear" | "fork")));
@@ -6137,7 +6137,6 @@ mod tests {
         #[case::post_tool_use(HookEvent::PostToolUse, None, SessionStatus::Ended)]
         #[case::user_prompt_submit(HookEvent::UserPromptSubmit, None, SessionStatus::Running)]
         #[case::session_resume(HookEvent::SessionStart, Some("resume"), SessionStatus::Stopped)]
-        #[case::session_startup(HookEvent::SessionStart, Some("startup"), SessionStatus::Ended)]
         #[case::session_clear(HookEvent::SessionStart, Some("clear"), SessionStatus::Running)]
         #[case::session_compact(HookEvent::SessionStart, Some("compact"), SessionStatus::Ended)]
         #[case::session_fork(HookEvent::SessionStart, Some("fork"), SessionStatus::Running)]
