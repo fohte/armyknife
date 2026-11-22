@@ -1,3 +1,5 @@
+import '#components/session-tree-panel.css'
+
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -50,18 +52,39 @@ function renderRow(
   density: 'full' | 'compact' | 'compact-phone',
   viewSession: Session = session,
   isMobile = false,
+  inTree = false,
 ) {
   if (root !== null) act(() => root?.unmount())
   root = createRoot(container)
   act(() => {
     root?.render(
-      <SessionRow
-        session={viewSession}
-        density={density}
-        isMobile={isMobile}
-      />,
+      inTree ? (
+        <div className="session-tree-row">
+          <SessionRow
+            session={viewSession}
+            density={density}
+            isMobile={isMobile}
+          />
+        </div>
+      ) : (
+        <SessionRow
+          session={viewSession}
+          density={density}
+          isMobile={isMobile}
+        />
+      ),
     )
   })
+}
+
+function horizontalPaddingSnapshot() {
+  return Array.from(
+    container.querySelectorAll<HTMLElement>('[data-session-row-content]'),
+    (row) => {
+      const { paddingLeft, paddingRight } = getComputedStyle(row)
+      return { paddingLeft, paddingRight }
+    },
+  )
 }
 
 function snapshot() {
@@ -134,6 +157,34 @@ it('shows the full Inbox row with role, engine, task and repository', () => {
     expectedFullRow('Should retries stop after three attempts?'),
   )
 })
+
+it.each([
+  {
+    name: 'compact list rows retain horizontal padding',
+    density: 'compact' as const,
+    inTree: false,
+    expected: [{ paddingLeft: '12px', paddingRight: '12px' }],
+  },
+  {
+    name: 'desktop tree rows remain flush with their caret',
+    density: 'compact' as const,
+    inTree: true,
+    expected: [{ paddingLeft: '0px', paddingRight: '0px' }],
+  },
+  {
+    name: 'phone tree rows keep their existing horizontal spacing',
+    density: 'compact-phone' as const,
+    inTree: true,
+    expected: [{ paddingLeft: '0px', paddingRight: '0px' }],
+  },
+])(
+  'keeps the intended horizontal padding: $name',
+  ({ density, inTree, expected }) => {
+    renderRow(density, session, false, inTree)
+
+    expect(horizontalPaddingSnapshot()).toEqual(expected)
+  },
+)
 
 it.each([
   {
