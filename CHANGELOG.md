@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.845](https://github.com/fohte/armyknife/compare/v0.1.844...v0.1.845) (2026-11-22)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** quote narration in replies ([#2082](https://github.com/fohte/armyknife/issues/2082)) ([ec8da91](https://github.com/fohte/armyknife/commit/ec8da91b5668e41708e8f699c0e9f2fa8d923dc5))
+
 ## [0.1.844](https://github.com/fohte/armyknife/compare/v0.1.843...v0.1.844) (2026-11-22)
 
 
