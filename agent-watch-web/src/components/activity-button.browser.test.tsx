@@ -39,6 +39,12 @@ function StartFailedActionWithRecentResults() {
       pullRequestNumber: 48,
       run: () => Promise.resolve({ status: 'merged' }),
     })
+    start({
+      kind: 'close',
+      sessionId: 'example-running-session',
+      sessionTitle: 'Review the merge check',
+      run: () => new Promise<AsyncActionOutcome>(() => undefined),
+    })
   }, [start])
 
   return null
@@ -173,11 +179,13 @@ it('counts failed actions instead of all recent results', async () => {
     '.async-action-activity-button',
   )
   const snapshot = () => ({
+    ariaLabel: button?.getAttribute('aria-label'),
     badge: button?.querySelector('.async-action-activity-state')?.textContent,
     badgeClass: button?.querySelector('.async-action-activity-state')
       ?.className,
   })
   expect(snapshot()).toEqual({
+    ariaLabel: 'Activity, failed actions',
     badge: '1',
     badgeClass: 'async-action-activity-state is-error',
   })

@@ -41,12 +41,11 @@ export function ActivityButton({
   const failed =
     failedOverride ??
     actions.some((action) => isAsyncActionFailureStatus(action.status))
-  const label =
-    running > 0
+  const label = failed
+    ? 'failed actions'
+    : running > 0
       ? `${String(running)} running`
-      : failed
-        ? 'failed actions'
-        : 'results available'
+      : 'results available'
   return (
     <button
       aria-expanded={activityOpen}

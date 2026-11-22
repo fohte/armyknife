@@ -868,6 +868,7 @@ it('opens desktop Activity beside its row below the navigation list', async () =
 })
 
 it('marks Inbox when an async action in Activity fails', async () => {
+  await page.viewport(390, 844)
   const onCloseNavigation = vi.fn()
   root = createRoot(container)
   await act(() => {
@@ -919,5 +920,33 @@ it('marks Inbox when an async action in Activity fails', async () => {
     closeNavigationCalls: [[]],
     activityDialogVisible: true,
     navigationDialogOpen: false,
+  })
+
+  const activityDialog = container.querySelector<HTMLElement>(
+    '.async-action-activity',
+  )
+  const backdrop = container.querySelector<HTMLElement>(
+    '.async-action-activity-backdrop',
+  )
+  if (activityDialog === null || backdrop === null) {
+    throw new Error('The phone Activity sheet is missing')
+  }
+
+  const sheetSnapshot = () => ({
+    dialogClass: activityDialog.className,
+    dialogPosition: getComputedStyle(activityDialog).position,
+    dialogWidth: activityDialog.getBoundingClientRect().width,
+    dialogBottomGap:
+      window.innerHeight - activityDialog.getBoundingClientRect().bottom,
+    backdropClass: backdrop.className,
+    backdropColor: getComputedStyle(backdrop).backgroundColor,
+  })
+  expect(sheetSnapshot()).toEqual({
+    dialogClass: 'async-action-activity is-anchored',
+    dialogPosition: 'static',
+    dialogWidth: 390,
+    dialogBottomGap: 0,
+    backdropClass: 'async-action-activity-backdrop is-anchored',
+    backdropColor: 'rgba(0, 0, 0, 0.55)',
   })
 })
