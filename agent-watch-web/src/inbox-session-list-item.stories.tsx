@@ -49,3 +49,8 @@ export const PhoneRowIsSwiped: Story = {
   name: 'The phone row reveals Later and Close after a left swipe',
   args: { defaultSwiped: true },
 }
+
+export const SelectedPhoneRowAtRest: Story = {
+  name: 'The selected phone row hides Later and Close at rest',
+  args: { selectedId: session.id },
+}

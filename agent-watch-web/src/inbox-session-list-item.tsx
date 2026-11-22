@@ -57,6 +57,7 @@ export function InboxSessionListItem({
     (onLater !== undefined ||
       onCloseSession !== undefined ||
       onOpenActions !== undefined)
+  const swipeActionsVisible = swiped || dragOffset < 0
 
   useEffect(
     () => () => {
@@ -156,7 +157,7 @@ export function InboxSessionListItem({
     <li className={`session-list-item${swiped ? ' is-swiped' : ''}`}>
       {canShowActions ? (
         <div className="inbox-row-swipe-actions" aria-hidden={!swiped}>
-          {!showLaterAction ? null : (
+          {!swipeActionsVisible || !showLaterAction ? null : (
             <Button
               type="button"
               variant="plain"
@@ -172,7 +173,7 @@ export function InboxSessionListItem({
               Later
             </Button>
           )}
-          {!showCloseAction ? null : (
+          {!swipeActionsVisible || !showCloseAction ? null : (
             <Button
               type="button"
               variant="plain"
