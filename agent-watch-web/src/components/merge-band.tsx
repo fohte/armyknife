@@ -5,10 +5,11 @@ import { LoaderCircle } from 'lucide-react'
 
 import type { PullRequest } from '#types'
 
-export type MergeBandRow = {
+type MergeBandRow = {
   pullRequest: PullRequest
   status: 'ready' | 'merging' | 'queued' | 'mergeFailed'
   error?: string
+  canRetry?: boolean
 }
 
 type MergeBandProps = {
@@ -38,7 +39,7 @@ export function MergeBand({
       className={`merge-band${isMobile ? ' is-mobile' : ''}${rows.some(({ status }) => status === 'mergeFailed') ? ' is-failed' : ''}`}
       aria-label="Pull requests ready to merge"
     >
-      {rows.map(({ pullRequest, status, error }) => (
+      {rows.map(({ pullRequest, status, error, canRetry }) => (
         <div
           className={`merge-band-row is-${status}`}
           key={`${pullRequest.owner ?? ''}/${pullRequest.repo ?? ''}/${String(pullRequest.number)}`}
@@ -70,7 +71,7 @@ export function MergeBand({
             >
               Merge
             </Button>
-          ) : status === 'mergeFailed' ? (
+          ) : status === 'mergeFailed' && canRetry !== false ? (
             <Button
               className="merge-band-action is-failed"
               type="button"
@@ -82,7 +83,7 @@ export function MergeBand({
             >
               Retry
             </Button>
-          ) : (
+          ) : status === 'mergeFailed' ? null : (
             <Button
               className="merge-band-action is-pending"
               type="button"

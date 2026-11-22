@@ -1,7 +1,10 @@
 import type { Decorator, Meta, StoryObj } from '@storybook/react-vite'
+import type { ComponentProps } from 'react'
 
 import { EndedSessionBanner } from '#components/ended-session-banner'
-import { MergeBand, type MergeBandRow } from '#components/merge-band'
+import { MergeBand } from '#components/merge-band'
+
+type MergeBandRow = ComponentProps<typeof MergeBand>['rows'][number]
 
 const pullRequest = {
   number: 42,

@@ -68,7 +68,7 @@ export function isPullRequestMergeable(
   )
 }
 
-function pullRequestMergeReason(pullRequest: PullRequest) {
+export function pullRequestMergeReason(pullRequest: PullRequest) {
   if (pullRequest.state !== 'Open') return pullRequest.state
   if (pullRequest.ciState !== 'Successful') {
     return ciStateLabel(pullRequest.ciState)

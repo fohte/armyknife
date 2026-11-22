@@ -17,7 +17,10 @@ import { MobileConversationActionsMenu } from '#components/mobile-conversation-a
 import { OpenInTerminalAction } from '#components/open-in-terminal-action'
 import { PullRequestMergeConfirmation } from '#components/pull-request-merge-confirmation'
 import { SessionHeading } from '#components/session-heading'
-import { SessionPullRequests } from '#components/session-pull-requests'
+import {
+  pullRequestMergeReason,
+  SessionPullRequests,
+} from '#components/session-pull-requests'
 import { SessionTaskLinks } from '#components/session-task-links'
 import { StarredSessionToggle } from '#components/starred-session-toggle'
 import { useConversationPaneHeaderMerge } from '#components/use-conversation-pane-header-merge'
@@ -107,8 +110,13 @@ export function ConversationPaneHeader({
   const mergeRows = merge.mergeablePullRequests.flatMap((target) => {
     const status = merge.mergeStatusFor(target)
     if (status === 'merged' || status === 'alreadyMerged') return []
+    const canRetry = status === 'mergeFailed' && merge.isMergeable(target)
     const error =
-      status === 'mergeFailed' ? merge.mergeActionFor(target)?.error : undefined
+      status === 'mergeFailed'
+        ? canRetry
+          ? merge.mergeActionFor(target)?.error
+          : pullRequestMergeReason(target)
+        : undefined
     return [
       {
         pullRequest: target,
@@ -118,6 +126,7 @@ export function ConversationPaneHeader({
             : status === 'mergeFailed'
               ? ('mergeFailed' as const)
               : status,
+        ...(status === 'mergeFailed' ? { canRetry } : {}),
         ...(error === undefined ? {} : { error }),
       },
     ]

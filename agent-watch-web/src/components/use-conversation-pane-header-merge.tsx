@@ -81,6 +81,8 @@ export function useConversationPaneHeaderMerge({
       expectedHeadSha: target.headSha,
     }
   }
+  const isMergeable = (target: PullRequest) =>
+    mergeOperationFor(target) !== null
   const isMerging = (target: MergeFeedbackTarget) => {
     const identity = mergeIdentity(target)
     if (identity.owner === undefined || identity.repo === undefined)
@@ -271,6 +273,7 @@ export function useConversationPaneHeaderMerge({
     mergeFeedbackFor,
     mergeActionFor,
     mergeStatusFor,
+    isMergeable,
     mergeablePullRequests,
     retryMerge: (id: number) => actionFeedback?.retry(id),
   }

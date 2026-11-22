@@ -1,9 +1,12 @@
+import type { ComponentProps } from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
-import { MergeBand, type MergeBandRow } from '#components/merge-band'
+import { MergeBand } from '#components/merge-band'
 import type { PullRequest } from '#types'
+
+type MergeBandRow = ComponentProps<typeof MergeBand>['rows'][number]
 
 const pullRequest: PullRequest = {
   number: 42,
@@ -58,6 +61,16 @@ it('shows each merge state with a control only when it can be acted on', () => {
       status: 'mergeFailed',
       error: 'The base branch changed.',
     },
+    {
+      pullRequest: {
+        ...pullRequest,
+        number: 45,
+        ciState: 'Failed',
+      },
+      status: 'mergeFailed',
+      error: 'CI failed',
+      canRetry: false,
+    },
   ])
 
   const snapshot = () =>
@@ -106,6 +119,11 @@ it('shows each merge state with a control only when it can be acted on', () => {
         disabled: false,
         ariaLabel: 'Retry merging PR #44',
       },
+    },
+    {
+      status: 'Merge failed',
+      detail: '#45 CI failed',
+      action: null,
     },
   ])
 })

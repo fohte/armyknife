@@ -1459,7 +1459,13 @@ it('keeps the merge action available when the session pull request is queued', a
       body: init?.body,
     })),
     confirmationOpen: container.querySelector('[role="alertdialog"]') !== null,
-    mergeButton: container.querySelector('.merge-band-action') !== null,
+    mergeButton: (() => {
+      const button =
+        container.querySelector<HTMLButtonElement>('.merge-band-action')
+      return button === null
+        ? null
+        : { label: button.textContent, disabled: button.disabled }
+    })(),
     feedback: container.querySelector(
       '.async-action-toast-stack .async-action-item',
     )?.textContent,
@@ -1477,9 +1483,78 @@ it('keeps the merge action available when the session pull request is queued', a
       },
     ],
     confirmationOpen: false,
-    mergeButton: true,
+    mergeButton: { label: 'Queued', disabled: true },
     feedback:
       'Added PR #42 to the merge queueA fixture titleWaiting for checks.',
+  })
+})
+
+it('shows the current CI reason without retry after checks stop passing', async () => {
+  const fetchMock = vi.fn<typeof fetch>(() =>
+    Promise.resolve(
+      Response.json({ error: 'The merge failed.' }, { status: 409 }),
+    ),
+  )
+  vi.stubGlobal('fetch', fetchMock)
+  const pullRequest: NonNullable<Session['pullRequest']> = {
+    number: 42,
+    state: 'Open',
+    owner: 'example-org',
+    repo: 'example-repo',
+    headSha: 'sample-head-sha',
+    ciState: 'Successful',
+    isCurrentBranch: true,
+  }
+  renderHeader(
+    false,
+    vi.fn(() => Promise.resolve(true)),
+    {
+      ...session,
+      pullRequest,
+    },
+  )
+
+  act(() => {
+    requireElement(
+      container.querySelector<HTMLButtonElement>(
+        'button[aria-label="Merge PR #42"]',
+      ),
+    ).click()
+  })
+  const confirmation = requireElement(
+    container.querySelector<HTMLElement>('[role="alertdialog"]'),
+  )
+  await act(async () => {
+    requireElement(
+      [...confirmation.querySelectorAll<HTMLButtonElement>('button')].find(
+        (button) => button.textContent === 'Confirm merge',
+      ) ?? null,
+    ).click()
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      if (container.querySelector('.async-action-item--failure') !== null)
+        return
+      await new Promise((resolve) => window.setTimeout(resolve, 0))
+    }
+  })
+
+  renderHeader(
+    false,
+    vi.fn(() => Promise.resolve(true)),
+    {
+      ...session,
+      pullRequest: { ...pullRequest, ciState: 'Failed' },
+    },
+  )
+
+  const snapshot = () => ({
+    status: container.querySelector('.merge-band-heading strong')?.textContent,
+    detail: container.querySelector('.merge-band-detail')?.textContent,
+    retry: container.querySelector('.merge-band-action')?.textContent ?? null,
+  })
+  expect(snapshot()).toEqual({
+    status: 'Merge failed',
+    detail: '#42 CI failed',
+    retry: null,
   })
 })
 
@@ -2167,12 +2242,13 @@ it('keeps Merge out of the mobile header when checks have passed', () => {
     },
   )
 
-  expect(
-    container.querySelector(
-      '.mobile-conversation-header-actions .merge-band-action',
-    ),
-  ).toBeNull()
-  expect(container.querySelector('.merge-band-action')?.textContent).toBe(
-    'Merge',
-  )
+  const snapshot = () => ({
+    headerAction:
+      container.querySelector(
+        '.mobile-conversation-header-actions .merge-band-action',
+      )?.textContent ?? null,
+    bandAction:
+      container.querySelector('.merge-band-action')?.textContent ?? null,
+  })
+  expect(snapshot()).toEqual({ headerAction: null, bandAction: 'Merge' })
 })
