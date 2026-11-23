@@ -11,6 +11,7 @@ import {
   useSkillCompletion,
 } from '#components/skill-completion'
 import { useBeforeUnloadWarning } from '#components/use-beforeunload-warning'
+import { useConversationPaneKeyboard } from '#components/use-conversation-pane-keyboard'
 import { useDismissableLayer } from '#components/use-dismissable-layer'
 import type { NewSessionState } from '#use-new-session'
 
@@ -44,11 +45,24 @@ export function NewSessionForm({
   const directoryPopoverRef = useRef<HTMLDivElement>(null)
   const engineControlRef = useRef<HTMLDivElement>(null)
   const selectedDirectory = state.selectedDirectory
+  const handleMessageKeyDown = useConversationPaneKeyboard({
+    isMobile,
+    canInterrupt: false,
+    interruptPending: false,
+    interrupt: () => undefined,
+    updateDraft: state.setInitialMessage,
+    sendMessage: async () => {
+      if (selectedDirectory !== null && !launchPending) {
+        await state.start(onLaunched, state.engine)
+      }
+    },
+  })
   const skillCompletion = useSkillCompletion({
     draft: state.initialMessage,
     engine: state.engine,
     skills: state.skillSuggestions,
     onDraftChange: state.setInitialMessage,
+    onKeyDown: handleMessageKeyDown,
   })
   useBeforeUnloadWarning(state.initialMessage !== '' && !launchPending)
   useDismissableLayer(directoryPickerOpen, setDirectoryPickerOpen, [
@@ -166,6 +180,11 @@ export function NewSessionForm({
             </div>
           ) : null}
           <div className="new-session-composer-actions">
+            {!isMobile ? (
+              <span className="new-session-message-hint">
+                ↵ Start · ⇧↵ / ⌥↵ New line
+              </span>
+            ) : null}
             <div ref={engineControlRef} className="new-session-engine-control">
               <button
                 aria-expanded={engineMenuOpen}

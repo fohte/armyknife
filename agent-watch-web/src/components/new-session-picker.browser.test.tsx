@@ -45,6 +45,7 @@ function PickerHarness({
   >(initialSelectedDirectory)
   const [engine, setEngine] = useState<NewSessionState['engine']>('claude')
   const [worktree, setWorktree] = useState(false)
+  const [initialMessage, setInitialMessage] = useState('')
   const state: NewSessionState = {
     directoryQuery: '',
     directories: exampleSessionDirectories,
@@ -58,7 +59,7 @@ function PickerHarness({
     modelChangeNotice: null,
     activeModelOption,
     worktree,
-    initialMessage: '',
+    initialMessage,
     skillSuggestions: [],
     isLoadingDirectories: false,
     isStarting: false,
@@ -70,7 +71,7 @@ function PickerHarness({
     setSelectedEffort,
     undoEngineChange: () => undefined,
     setWorktree,
-    setInitialMessage: () => undefined,
+    setInitialMessage,
     start,
     reset: () => undefined,
   }
@@ -98,7 +99,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-it('launches Codex when Option+Enter is pressed after choosing a directory', async () => {
+it('uses the reply keyboard behavior for the first message', async () => {
   const start = vi.fn<NewSessionState['start']>(() => Promise.resolve())
   root = createRoot(container)
   act(() => {
@@ -111,16 +112,83 @@ it('launches Codex when Option+Enter is pressed after choosing a directory', asy
       ),
     )
   })
+  const firstMessage = container.querySelector<HTMLTextAreaElement>(
+    '[aria-label="First message"]',
+  )
+  if (firstMessage === null) {
+    throw new Error('First message input was not rendered')
+  }
   await act(async () => {
-    await userEvent.keyboard('{Alt>}{Enter}{/Alt}')
+    firstMessage.focus()
+    await userEvent.keyboard('{Shift>}{Enter}{/Shift}{Alt>}{Enter}{/Alt}')
+  })
+  const afterNewlines = {
+    message: firstMessage.value,
+    starts: start.mock.calls.length,
+  }
+  await act(async () => {
+    await userEvent.keyboard('{Enter}')
   })
 
-  const snapshot = () =>
-    start.mock.calls.map(([onLaunched, engine]) => ({
-      callbackType: typeof onLaunched,
-      engine,
-    }))
-  expect(snapshot()).toEqual([{ callbackType: 'function', engine: 'codex' }])
+  const snapshot = () => ({
+    afterNewlines,
+    starts: start.mock.calls.map(([, engine]) => engine),
+  })
+  expect(snapshot()).toEqual({
+    afterNewlines: { message: '\n\n', starts: 0 },
+    starts: ['claude'],
+  })
+})
+
+it('selects a directory with arrow keys and Enter', async () => {
+  const start = vi.fn<NewSessionState['start']>(() => Promise.resolve())
+  root = createRoot(container)
+  act(() => {
+    root?.render(<PickerHarness start={start} />)
+  })
+  await act(async () => {
+    await userEvent.keyboard('{ArrowDown}{Enter}')
+  })
+
+  const snapshot = () => ({
+    directory: container
+      .querySelector('.new-session-picker-directory')
+      ?.getAttribute('aria-label'),
+    messageField:
+      container.querySelector('[aria-label="First message"]') !== null,
+    startCalls: start.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    directory: 'Change directory, currently /Users/example/work/handbook',
+    messageField: true,
+    startCalls: [],
+  })
+})
+
+it('selects the engine and starts the session with arrow keys', async () => {
+  const start = vi.fn<NewSessionState['start']>(() => Promise.resolve())
+  root = createRoot(container)
+  act(() => {
+    root?.render(<PickerHarness start={start} />)
+  })
+  await act(async () => {
+    await userEvent.click(
+      requireButton(
+        '[aria-label="Select directory /Users/example/work/service"]',
+      ),
+    )
+  })
+  const picker = container.querySelector<HTMLElement>(
+    '[aria-label="New session"]',
+  )
+  if (picker === null) throw new Error('New-session picker was not rendered')
+  await act(async () => {
+    picker.focus()
+    await userEvent.keyboard('{ArrowDown}{Enter}')
+  })
+
+  const snapshot = () => start.mock.calls.map(([, engine]) => engine)
+  expect(snapshot()).toEqual(['codex'])
 })
 
 it.each([
@@ -142,7 +210,7 @@ it.each([
       )
     })
 
-    const firstMessage = container.querySelector<HTMLInputElement>(
+    const firstMessage = container.querySelector<HTMLTextAreaElement>(
       '[aria-label="First message"]',
     )
     if (firstMessage === null)
@@ -187,7 +255,7 @@ it('starts the selected engine from the desktop picker button', async () => {
   expect(snapshot()).toEqual([['function', 'claude']])
 })
 
-it('launches the focused engine option when Enter is pressed', async () => {
+it('launches the selected engine when Enter is pressed in the first message', async () => {
   const start = vi.fn<NewSessionState['start']>(() => Promise.resolve())
   root = createRoot(container)
   act(() => {
@@ -203,6 +271,15 @@ it('launches the focused engine option when Enter is pressed', async () => {
   const codexOption = requireButton('.new-session-picker-option:nth-of-type(2)')
   await act(async () => {
     await userEvent.click(codexOption)
+  })
+  const firstMessage = container.querySelector<HTMLTextAreaElement>(
+    '[aria-label="First message"]',
+  )
+  if (firstMessage === null) {
+    throw new Error('First message input was not rendered')
+  }
+  await act(async () => {
+    firstMessage.focus()
     await userEvent.keyboard('{Enter}')
   })
 

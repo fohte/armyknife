@@ -2555,6 +2555,41 @@ it('moves the selected App row with j and k and scrolls it into view', () => {
   })
 })
 
+it('opens a new-session form with c when no field has focus', async () => {
+  renderApp()
+
+  let shortcutEvent: KeyboardEvent | null = null
+  act(() => {
+    shortcutEvent = dispatchKey(window, 'c')
+  })
+  const opened = container.querySelector('.new-session-view') !== null
+  const textarea = container.querySelector<HTMLTextAreaElement>(
+    '[aria-label="First message"]',
+  )
+  if (textarea === null) throw new Error('First message field was not rendered')
+  await act(async () => {
+    await userEvent.type(textarea, 'fixture prompt')
+  })
+
+  let typingEvent: KeyboardEvent | null = null
+  act(() => {
+    typingEvent = dispatchKey(textarea, 'c')
+  })
+
+  const snapshot = () => ({
+    opened,
+    shortcutPrevented: shortcutEvent?.defaultPrevented,
+    prompt: textarea.value,
+    typingPrevented: typingEvent?.defaultPrevented,
+  })
+  expect(snapshot()).toEqual({
+    opened: true,
+    shortcutPrevented: true,
+    prompt: 'fixture prompt',
+    typingPrevented: false,
+  })
+})
+
 it('limits keyboard navigation to sessions matching the Inbox filters', () => {
   renderApp()
   publishSessions({
