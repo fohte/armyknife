@@ -33,6 +33,8 @@ type SessionRowData = Pick<
       | 'vibeMode'
       | 'isWaitingForCritReview'
       | 'waitingReason'
+      | 'todoLaterCount'
+      | 'todoLaterTitle'
     >
   >
 
@@ -120,7 +122,16 @@ export function SessionRow({
     (session.waitingReason?.trim().length ?? 0) > 0
       ? session.waitingReason
       : null
+  const todoLaterPreview =
+    (session.todoLaterCount ?? 0) > 0 && !isMobile
+      ? ['To-do · later', session.todoLaterTitle]
+          .filter(
+            (part) => part !== null && part !== undefined && part.length > 0,
+          )
+          .join(' · ')
+      : null
   const preview = critReviewReason ?? decisionPreview ?? session.preview
+  const rowPreview = todoLaterPreview ?? preview
 
   return (
     <div
@@ -155,11 +166,11 @@ export function SessionRow({
             {formatElapsedTime(session.elapsedSeconds)}
           </span>
         </span>
-        {density === 'full' && preview !== null && preview.length > 0 ? (
+        {density === 'full' && rowPreview !== null && rowPreview.length > 0 ? (
           <span
             className={`session-preview${decisionPreview === null ? '' : ' is-decision-preview'}`}
           >
-            {preview}
+            {rowPreview}
           </span>
         ) : null}
         <span className="session-meta-line">

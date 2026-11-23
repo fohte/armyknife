@@ -5,7 +5,6 @@ import { Filter, X } from 'lucide-react'
 import { type ReactNode, useCallback, useState } from 'react'
 
 import { InboxFilterBar } from '#components/inbox-filter-bar'
-import { InboxTodoLaterSection } from '#components/inbox-todo-later-section'
 import { InboxViewDialogLayers } from '#components/inbox-view-dialog-layers'
 import { MobileNavigationActions } from '#components/mobile-navigation-actions'
 import { filterInboxSessions, parseInboxFilterQuery } from '#inbox-filter'
@@ -118,17 +117,14 @@ export function InboxView({
     (session) => session.category === 'needs_action',
   )
   const inProgress = filteredSessions.filter(
-    (session) =>
-      session.category === 'in_progress' && (session.todoLaterCount ?? 0) === 0,
+    (session) => session.category === 'in_progress',
   )
-  const done = filteredSessions.filter(
-    (session) =>
-      session.category === 'done' && (session.todoLaterCount ?? 0) === 0,
+  const todoLaterCount = inProgress.reduce(
+    (count, session) => count + (session.todoLaterCount ?? 0),
+    0,
   )
-  const allDone = sessions.filter(
-    (session) =>
-      session.category === 'done' && (session.todoLaterCount ?? 0) === 0,
-  )
+  const done = filteredSessions.filter((session) => session.category === 'done')
+  const allDone = sessions.filter((session) => session.category === 'done')
   const unreviewedDoneCount = done.reduce(
     (count, session) => count + (session.unreviewedDecisionCount ?? 0),
     0,
@@ -136,8 +132,7 @@ export function InboxView({
   const connected = connectionError === null
   const lastUpdatedTime = formatMobileConnectionTime(lastUpdatedAt)
   const later = filteredSessions.filter(
-    (session) =>
-      session.category === 'later' && (session.todoLaterCount ?? 0) === 0,
+    (session) => session.category === 'later',
   )
   const setFilterQuery = useCallback(
     (query: string) => {
@@ -312,12 +307,6 @@ export function InboxView({
           onCloseSession,
           onOpenActions: setActionSheetSession,
         })}
-        <InboxTodoLaterSection
-          sessions={filteredSessions}
-          selectedId={selectedId}
-          onSelect={onSelect}
-          isMobile={isMobile}
-        />
         <Button
           type="button"
           variant="plain"
@@ -368,6 +357,11 @@ export function InboxView({
         >
           <span>In progress</span>
           <span className="mobile-collapse-count">{inProgress.length}</span>
+          {todoLaterCount > 0 ? (
+            <span className="mobile-in-progress-todo-later-count">
+              {todoLaterCount} to-do later
+            </span>
+          ) : null}
           <span className="mobile-collapse-chevron" aria-hidden="true">
             {inProgressExpanded ? '⌄' : '›'}
           </span>

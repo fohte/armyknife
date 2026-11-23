@@ -150,6 +150,31 @@ function connectionSnapshot() {
   }
 }
 
+function foldedTodoCategorySnapshot() {
+  return {
+    needsActionCount: container.querySelector(
+      '.needs-action-section .section-count',
+    )?.textContent,
+    inProgressTitles: Array.from(
+      container.querySelectorAll('.in-progress-section .session-title'),
+      (title) => title.textContent,
+    ),
+    inProgressTodoLaterCount: container.querySelector(
+      '.mobile-in-progress-todo-later-count',
+    )?.textContent,
+    laterCount: container.querySelector('.later-section-count')?.textContent,
+    laterTitles: Array.from(
+      container.querySelectorAll('.later-session-list .session-title'),
+      (title) => title.textContent,
+    ),
+    doneTitles: Array.from(
+      container.querySelectorAll('.done-section .session-title'),
+      (title) => title.textContent,
+    ),
+    todoLaterSectionExists: container.querySelector('.todo-later-row') !== null,
+  }
+}
+
 function doneRowSnapshot() {
   return {
     text: container.querySelector('.mobile-done-toggle')?.textContent,
@@ -263,8 +288,61 @@ it('filters each inbox section and updates the visible counts', () => {
   })
 })
 
-it('groups folded to-dos after Needs action and opens the first session', () => {
-  const onSelect = vi.fn<(id: string) => void>()
+it('shows folded to-dos in their session categories without adding Needs action count', () => {
+  const progressSession = sessions.at(2)
+  if (progressSession === undefined) {
+    throw new Error('Expected an in-progress session')
+  }
+  const laterSession = sessions.at(1)
+  if (laterSession === undefined) {
+    throw new Error('Expected a later session')
+  }
+  const doneSession = sessions.at(3)
+  if (doneSession === undefined) {
+    throw new Error('Expected a done session')
+  }
+  renderInbox({
+    sessions: [
+      ...sessions,
+      {
+        ...progressSession,
+        id: 'folded-todo-session',
+        category: 'in_progress',
+        title: 'Choose a notification sound',
+        todoLaterCount: 1,
+        todoLaterTitle: 'Check the alert sound',
+      },
+      {
+        ...laterSession,
+        id: 'folded-later-session',
+        todoLaterCount: 2,
+        todoLaterTitle: 'Check delivery status',
+      },
+      {
+        ...doneSession,
+        id: 'folded-done-session',
+        todoLaterCount: 1,
+        todoLaterTitle: 'Review the alert sound',
+      },
+    ],
+    isMobile: true,
+    inProgressExpanded: true,
+    laterExpanded: true,
+    doneExpanded: true,
+  })
+
+  expect(foldedTodoCategorySnapshot()).toEqual({
+    needsActionCount: '2',
+    inProgressTitles: ['Add request metrics', 'Choose a notification sound'],
+    inProgressTodoLaterCount: '1 to-do later',
+    laterCount: '2',
+    laterTitles: ['Review the changes', 'Review the changes'],
+    doneTitles: ['Document request limits', 'Document request limits'],
+    todoLaterSectionExists: false,
+  })
+})
+
+it('labels a folded to-do in the desktop session preview', () => {
   const progressSession = sessions.at(2)
   if (progressSession === undefined) {
     throw new Error('Expected an in-progress session')
@@ -275,132 +353,20 @@ it('groups folded to-dos after Needs action and opens the first session', () => 
       {
         ...progressSession,
         id: 'folded-todo-session',
-        category: 'in_progress',
-        title: 'Review a phone alert',
-        todoLaterCount: 2,
-        todoLaterTitle: 'Check the alert sound',
-      },
-    ],
-    onSelect,
-  })
-
-  const row = requireElement(
-    container.querySelector<HTMLButtonElement>('.todo-later-row'),
-  )
-  act(() => {
-    row.click()
-  })
-
-  expect(readTodoLaterState(row, onSelect.mock.calls)).toEqual({
-    label: 'To-do later',
-    count: '2',
-    title: 'Check the alert sound',
-    afterNeedsAction: true,
-    progressTitles: ['Add request metrics'],
-    selection: [['folded-todo-session']],
-  })
-})
-
-function readTodoLaterState(row: HTMLButtonElement, selection: [string][]) {
-  const needsAction = requireElement(
-    container.querySelector('.needs-action-section'),
-  )
-  return {
-    label: row.querySelector('.todo-later-label')?.textContent,
-    count: row.querySelector('.todo-later-count')?.textContent,
-    title: row.querySelector('.todo-later-title')?.textContent,
-    afterNeedsAction:
-      (needsAction.compareDocumentPosition(row) &
-        Node.DOCUMENT_POSITION_FOLLOWING) !==
-      0,
-    progressTitles: Array.from(
-      container.querySelectorAll('.in-progress-section .session-title'),
-      (title) => title.textContent,
-    ),
-    selection,
-  }
-}
-
-it('lets users open each session in a multi-session To-do later group', () => {
-  const onSelect = vi.fn<(id: string) => void>()
-  const progressSession = sessions.at(2)
-  if (progressSession === undefined) {
-    throw new Error('Expected an in-progress session')
-  }
-  renderInbox({
-    sessions: [
-      ...sessions,
-      {
-        ...progressSession,
-        id: 'first-folded-session',
-        category: 'done',
-        title: 'Check a phone alert',
-        todoLaterCount: 2,
-        todoLaterTitle: 'Check the alert sound',
-      },
-      {
-        ...progressSession,
-        id: 'second-folded-session',
-        category: 'done',
-        title: 'Verify a delivery',
         todoLaterCount: 1,
-        todoLaterTitle: 'Check the delivery status',
+        todoLaterTitle: 'Check the alert sound',
       },
     ],
-    onSelect,
-  })
-
-  const row = requireElement(
-    container.querySelector<HTMLButtonElement>('.todo-later-row'),
-  )
-  act(() => {
-    row.click()
-  })
-  const sessionRows = Array.from(
-    container.querySelectorAll<HTMLButtonElement>(
-      '.todo-later-session-list [data-session-row]',
-    ),
-  )
-  act(() => {
-    sessionRows.forEach((sessionRow) => {
-      sessionRow.click()
-    })
+    showAllInProgress: true,
   })
 
   expect(
-    readExpandedTodoLaterState(row, sessionRows, onSelect.mock.calls),
-  ).toEqual({
-    label: 'To-do later',
-    count: '3',
-    title: 'Check the alert sound',
-    expanded: 'true',
-    sessionTitles: ['Check a phone alert', 'Verify a delivery'],
-    selection: [['first-folded-session'], ['second-folded-session']],
-  })
-})
-
-function readExpandedTodoLaterState(
-  row: HTMLButtonElement,
-  sessionRows: HTMLButtonElement[],
-  selection: [string][],
-) {
-  return {
-    label: row.querySelector('.todo-later-label')?.textContent,
-    count: row.querySelector('.todo-later-count')?.textContent,
-    title: row.querySelector('.todo-later-title')?.textContent,
-    expanded: row.getAttribute('aria-expanded'),
-    sessionTitles: sessionRows.map(
-      (sessionRow) =>
-        sessionRow.querySelector('.session-title')?.textContent ?? null,
+    Array.from(
+      container.querySelectorAll('.in-progress-section .session-preview'),
+      (preview) => preview.textContent,
     ),
-    selection,
-  }
-}
-
-function requireElement<T extends Element>(element: T | null): T {
-  if (element === null) throw new Error('Expected element was not rendered')
-  return element
-}
+  ).toEqual(['To-do · later · Check the alert sound'])
+})
 
 it('labels the Starred session strip for assistive technology', () => {
   renderInbox({ isMobile: true })
