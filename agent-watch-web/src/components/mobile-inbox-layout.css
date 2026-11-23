@@ -323,9 +323,7 @@
   color: var(--aw-color-working);
 }
 
-.mobile-in-progress-todo-later-count,
-.mobile-later-todo-later-count,
-.mobile-done-todo-later-count {
+.mobile-todo-later-count {
   color: var(--aw-text-muted);
   font-size: 12.5px;
 }

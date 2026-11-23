@@ -160,18 +160,19 @@ function foldedTodoCategorySnapshot() {
       (title) => title.textContent,
     ),
     inProgressTodoLaterCount: container.querySelector(
-      '.mobile-in-progress-todo-later-count',
+      '.mobile-in-progress-row .mobile-todo-later-count',
     )?.textContent,
     laterCount: container.querySelector('.later-section-count')?.textContent,
     laterTodoLaterCount: container.querySelector(
-      '.mobile-later-todo-later-count',
+      '.later-collapsed-row .mobile-todo-later-count',
     )?.textContent,
     laterTitles: Array.from(
       container.querySelectorAll('.later-session-list .session-title'),
       (title) => title.textContent,
     ),
-    doneTodoLaterCount: container.querySelector('.mobile-done-todo-later-count')
-      ?.textContent,
+    doneTodoLaterCount: container.querySelector(
+      '.mobile-done-row .mobile-todo-later-count',
+    )?.textContent,
     doneTitles: Array.from(
       container.querySelectorAll('.done-section .session-title'),
       (title) => title.textContent,
@@ -344,10 +345,22 @@ it('shows folded to-dos in their session categories without adding Needs action 
         todoLaterTitle: 'Check delivery status',
       },
       {
+        ...laterSession,
+        id: 'folded-later-session-secondary',
+        todoLaterCount: 3,
+        todoLaterTitle: 'Check the backup route',
+      },
+      {
         ...doneSession,
         id: 'folded-done-session',
         todoLaterCount: 1,
         todoLaterTitle: 'Review the alert sound',
+      },
+      {
+        ...doneSession,
+        id: 'folded-done-session-secondary',
+        todoLaterCount: 2,
+        todoLaterTitle: 'Review the backup route',
       },
     ],
     isMobile: true,
@@ -364,11 +377,19 @@ it('shows folded to-dos in their session categories without adding Needs action 
       'Update the alert fallback',
     ],
     inProgressTodoLaterCount: '3 to-do later',
-    laterCount: '2',
-    laterTodoLaterCount: '2 to-do later',
-    laterTitles: ['Review the changes', 'Review the changes'],
-    doneTodoLaterCount: '1 to-do later',
-    doneTitles: ['Document request limits', 'Document request limits'],
+    laterCount: '3',
+    laterTodoLaterCount: '5 to-do later',
+    laterTitles: [
+      'Review the changes',
+      'Review the changes',
+      'Review the changes',
+    ],
+    doneTodoLaterCount: '3 to-do later',
+    doneTitles: [
+      'Document request limits',
+      'Document request limits',
+      'Document request limits',
+    ],
     todoLaterSectionExists: false,
   })
 })

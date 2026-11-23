@@ -7,9 +7,11 @@ import { type ReactNode, useCallback, useState } from 'react'
 import { InboxFilterBar } from '#components/inbox-filter-bar'
 import { InboxViewDialogLayers } from '#components/inbox-view-dialog-layers'
 import { MobileNavigationActions } from '#components/mobile-navigation-actions'
+import { MobileTodoLaterCount } from '#components/mobile-todo-later-count'
 import { filterInboxSessions, parseInboxFilterQuery } from '#inbox-filter'
 import { InboxSessionListItem } from '#inbox-session-list-item'
 import { renderInboxSessionSection } from '#inbox-session-section'
+import { sumTodoLaterCount } from '#inbox-todo-later-count'
 import { formatMobileConnectionTime, nextReturnLabel } from '#inbox-view-utils'
 import type { SavedInboxView } from '#saved-inbox-views'
 import type { Session } from '#types'
@@ -119,10 +121,7 @@ export function InboxView({
   const inProgress = filteredSessions.filter(
     (session) => session.category === 'in_progress',
   )
-  const todoLaterCount = inProgress.reduce(
-    (count, session) => count + (session.todoLaterCount ?? 0),
-    0,
-  )
+  const todoLaterCount = sumTodoLaterCount(inProgress)
   const done = filteredSessions.filter((session) => session.category === 'done')
   const allDone = sessions.filter(
     (session) =>
@@ -137,14 +136,8 @@ export function InboxView({
   const later = filteredSessions.filter(
     (session) => session.category === 'later',
   )
-  const laterTodoLaterCount = later.reduce(
-    (count, session) => count + (session.todoLaterCount ?? 0),
-    0,
-  )
-  const doneTodoLaterCount = done.reduce(
-    (count, session) => count + (session.todoLaterCount ?? 0),
-    0,
-  )
+  const laterTodoLaterCount = sumTodoLaterCount(later)
+  const doneTodoLaterCount = sumTodoLaterCount(done)
   const setFilterQuery = useCallback(
     (query: string) => {
       if (onFilterQueryChange !== undefined) {
@@ -327,10 +320,8 @@ export function InboxView({
         >
           <span>◷ Later</span>
           <span className="later-section-count">{later.length}</span>
-          {isMobile && laterTodoLaterCount > 0 ? (
-            <span className="mobile-later-todo-later-count">
-              {laterTodoLaterCount} to-do later
-            </span>
+          {isMobile ? (
+            <MobileTodoLaterCount count={laterTodoLaterCount} />
           ) : null}
           {later.length > 0 || isMobile ? (
             <span className="later-next-return">
@@ -373,11 +364,7 @@ export function InboxView({
         >
           <span>In progress</span>
           <span className="mobile-collapse-count">{inProgress.length}</span>
-          {todoLaterCount > 0 ? (
-            <span className="mobile-in-progress-todo-later-count">
-              {todoLaterCount} to-do later
-            </span>
-          ) : null}
+          <MobileTodoLaterCount count={todoLaterCount} />
           <span className="mobile-collapse-chevron" aria-hidden="true">
             {inProgressExpanded ? '⌄' : '›'}
           </span>
@@ -415,11 +402,7 @@ export function InboxView({
           >
             <span>Done</span>
             <span className="mobile-collapse-count">{done.length}</span>
-            {doneTodoLaterCount > 0 ? (
-              <span className="mobile-done-todo-later-count">
-                {doneTodoLaterCount} to-do later
-              </span>
-            ) : null}
+            <MobileTodoLaterCount count={doneTodoLaterCount} />
             {unreviewedDoneCount > 0 ? (
               <span className="mobile-done-review-count">
                 ◇ {String(unreviewedDoneCount)} to review
