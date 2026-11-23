@@ -150,14 +150,8 @@ fn review_document_marker_with(
     } else if first == "v2" {
         let started_at = fields.next().and_then(|value| value.parse::<u128>().ok())?;
         let path = fields.next()?;
-        if !LockGuard::is_locked(Path::new(path)) {
-            return None;
-        }
         (started_at, path, fields.next())
     } else {
-        if !LockGuard::is_locked(Path::new(first)) {
-            return None;
-        }
         (0, first, None)
     };
     if path.is_empty() {
@@ -214,7 +208,10 @@ mod tests {
     use crate::commands::agent::types::{Engine, Session, SessionStatus};
     use crate::shared::human_in_the_loop::{LockGuard, ReviewDocumentOperationLock};
 
-    use super::{PendingReviewGuard, review_document_marker, review_document_marker_with};
+    use super::{
+        PendingReviewGuard, ReviewDocumentMarker, review_document_marker,
+        review_document_marker_with,
+    };
 
     fn session(session_id: &str) -> Session {
         Session {
@@ -483,29 +480,32 @@ mod tests {
         );
     }
 
-    #[test]
-    fn v2_review_document_marker_stays_readable_while_its_lock_is_active() {
-        let temp_dir = TempDir::new().expect("temp dir creation should succeed");
-        let draft_path = temp_dir.path().join("fixture-draft.md");
-        let lock = LockGuard::acquire(&draft_path).expect("review lock should be acquired");
-        let review_id = [
-            "legacy-id",
-            "v2",
-            "123",
-            draft_path.to_str().expect("fixture path should be UTF-8"),
-            "queue",
-        ]
-        .join("\0");
-
+    #[rstest]
+    #[case::v2(
+        concat!("legacy-id\0v2\0", "123", "\0/fixture/draft.md\0queue"),
+        ReviewDocumentMarker {
+            id: "legacy-id".to_string(),
+            path: PathBuf::from("/fixture/draft.md"),
+            queue_key: Some("queue".to_string()),
+            started_at: 123,
+        }
+    )]
+    #[case::legacy(
+        "legacy-id\0/fixture/draft.md",
+        ReviewDocumentMarker {
+            id: "legacy-id".to_string(),
+            path: PathBuf::from("/fixture/draft.md"),
+            queue_key: None,
+            started_at: 0,
+        }
+    )]
+    fn older_review_document_markers_remain_readable_without_a_lock(
+        #[case] review_id: &str,
+        #[case] expected: ReviewDocumentMarker,
+    ) {
         assert_eq!(
-            review_document_marker(&review_id),
-            Some(super::ReviewDocumentMarker {
-                id: "legacy-id".to_string(),
-                path: draft_path,
-                queue_key: Some("queue".to_string()),
-                started_at: 123,
-            })
+            review_document_marker_with(review_id, |_, _| false),
+            Some(expected)
         );
-        drop(lock);
     }
 }
