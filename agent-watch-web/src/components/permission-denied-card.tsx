@@ -6,6 +6,7 @@ import { Button } from '@fohte/ui/button'
 import { useState } from 'react'
 
 import type { PendingPermissionActionState } from '#components/permission-card'
+import { formatPermissionCommand } from '#components/permission-command'
 import { SyntaxCodeBlock } from '#components/syntax-code-block'
 import type { ChatItem } from '#types'
 
@@ -120,7 +121,9 @@ function PermissionDeniedDetails({
         <SyntaxCodeBlock
           className="permission-command permission-denied-input"
           code={message.command}
+          displayCode={formatPermissionCommand(message.command)}
           language="bash"
+          copyable
         />
       )}
       {message.reason === null ? null : (

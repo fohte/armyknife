@@ -6,6 +6,7 @@ import {
   type PendingPermissionActionState,
   PermissionCard,
 } from '#components/permission-card'
+import { copyCommandFromCard } from '#components/permission-command-helpers.test'
 import type { ChatItem, SessionActions } from '#types'
 
 let container: HTMLDivElement
@@ -83,7 +84,7 @@ it('shows web approval and rejection for a Codex permission with capabilities', 
   })
 
   expect(renderedState()).toEqual({
-    buttons: ['Approve', 'Reject'],
+    buttons: ['Copy code', 'Approve', 'Reject'],
     terminalFallback: null,
   })
 })
@@ -114,7 +115,7 @@ it('keeps the terminal fallback for a Codex permission without web capabilities'
   })
 
   expect(renderedState()).toEqual({
-    buttons: ['Open in terminal'],
+    buttons: ['Copy code', 'Open in terminal'],
     fallback: 'Review this permission in terminal.',
   })
 })
@@ -189,6 +190,46 @@ it('highlights a multiline Bash permission without overflowing its card', async 
     hasColoredToken: true,
     cardOverflows: false,
     description: null,
+  })
+})
+
+it('formats separators for display while retaining the original permission command', () => {
+  const originalCommand = `printf '%s\\n' "keep && quoted" && printf '%s\\n' ./sample/long/path | sed 's/path/file/'`
+  const message: Extract<ChatItem, { type: 'permission' }> = {
+    type: 'permission',
+    requestId: 'permission-request-example',
+    tool: 'Bash',
+    description: '',
+    command: originalCommand,
+  }
+  renderPermissionCard(message)
+
+  const snapshot = () => ({
+    displayedCommand: container.querySelector('.permission-command code')
+      ?.textContent,
+    messageCommand: message.command,
+  })
+
+  expect(snapshot()).toEqual({
+    displayedCommand: `printf '%s\\n' "keep && quoted" &&\n  printf '%s\\n' ./sample/long/path |\n  sed 's/path/file/'`,
+    messageCommand: originalCommand,
+  })
+})
+
+it('copies the original permission command instead of its formatted preview', async () => {
+  const originalCommand = `printf '%s' "keep && quoted" && printf done`
+  const message: Extract<ChatItem, { type: 'permission' }> = {
+    type: 'permission',
+    requestId: 'permission-request-example',
+    tool: 'Bash',
+    description: '',
+    command: originalCommand,
+  }
+  renderPermissionCard(message)
+
+  expect(await copyCommandFromCard(container, originalCommand)).toEqual({
+    copyButtonLabel: 'Copy code',
+    copiedCommands: [[originalCommand]],
   })
 })
 

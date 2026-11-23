@@ -11,8 +11,7 @@ const deniedOperation: ChatItem = {
   toolUseId: 'tool-call-example',
   tool: 'Bash',
   inputSummary: 'A shell command was denied.',
-  command: `printf '%s\\n' 'Checking preview'
-git status --short`,
+  command: `printf '%s\\n' "Preparing preview with && kept inside quotes" && printf '%s\\n' ./sample/fixtures/generated/preview-output/long-path/example.json | sed 's/example/preview/' && printf '%s\\n' 'Preview completed'`,
   reason: '[Sensitive Operation]',
   retryable: true,
   resolved: false,
@@ -37,6 +36,21 @@ type Story = StoryObj<typeof meta>
 
 export const RetryAvailable: Story = {
   name: 'A classifier denial offers a one-time retry',
+}
+
+export const RetryAvailableOnIPhone: Story = {
+  name: 'A denied command wraps within an iPhone card',
+  decorators: [
+    (Story) => (
+      <div
+        className="conversation-pane"
+        data-mobile="true"
+        style={{ boxSizing: 'border-box', width: 390, padding: 16 }}
+      >
+        <Story />
+      </div>
+    ),
+  ],
 }
 
 export const RetryIsSending: Story = {

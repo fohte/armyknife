@@ -16,8 +16,12 @@
 }
 
 .chat-permission-denied-card--dismissed details > summary {
+  box-sizing: border-box;
+  max-width: 100%;
   min-height: 44px;
-  display: flex;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) max-content;
   align-items: center;
   gap: 4px;
   overflow: hidden;
@@ -33,6 +37,7 @@
 }
 
 .chat-permission-denied-card--dismissed details > summary code {
+  min-width: 0;
   overflow: hidden;
   color: inherit;
   text-overflow: ellipsis;
@@ -42,6 +47,14 @@
   details[open]
   .permission-denied-chevron {
   transform: rotate(90deg);
+}
+
+.permission-denied-chevron {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  line-height: 1;
 }
 
 .permission-denied-details {
