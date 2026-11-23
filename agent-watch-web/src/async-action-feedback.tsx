@@ -64,6 +64,7 @@ export type AsyncAction = {
   error?: string
   checks?: CloseWorktreeChecks
   createdAt: number
+  completedAt?: number
 }
 
 export type AsyncActionOutcome =
@@ -209,14 +210,20 @@ export function AsyncActionFeedbackProvider({
           delete next.error
           delete next.message
           delete next.checks
+          delete next.completedAt
           return next
         }),
       )
       const outcome = await run()
+      const completedAt = Date.now()
       setActions((current) =>
         current.map((action) => {
           if (action.id !== id) return action
-          const next: AsyncAction = { ...action, status: outcome.status }
+          const next: AsyncAction = {
+            ...action,
+            status: outcome.status,
+            completedAt,
+          }
           if ('message' in outcome) next.message = outcome.message
           if ('error' in outcome) next.error = outcome.error
           else delete next.error

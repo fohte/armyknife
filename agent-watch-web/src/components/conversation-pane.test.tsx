@@ -6414,11 +6414,11 @@ it('shows only the task and short repository name in the mobile context row', ()
 })
 
 it.each([
-  { layout: 'desktop', isMobile: false, expected: true },
-  { layout: 'mobile', isMobile: true, expected: false },
+  { layout: 'desktop', isMobile: false },
+  { layout: 'mobile', isMobile: true },
 ])(
-  'shows the conversation divider in the $layout pane as designed',
-  ({ isMobile, expected }) => {
+  'does not show a conversation divider in the $layout pane',
+  ({ isMobile }) => {
     renderView(
       vi.fn().mockResolvedValue(true),
       session,
@@ -6431,7 +6431,7 @@ it.each([
     const snapshot = () => ({
       visible: container.querySelector('.conversation-timeline') !== null,
     })
-    expect(snapshot()).toEqual({ visible: expected })
+    expect(snapshot()).toEqual({ visible: false })
   },
 )
 

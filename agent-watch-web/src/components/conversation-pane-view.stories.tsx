@@ -1,10 +1,5 @@
 import type { Decorator, Meta, StoryObj } from '@storybook/react-vite'
-import { type ReactNode, useEffect, useRef } from 'react'
 
-import {
-  AsyncActionFeedbackProvider,
-  useAsyncActionStarter,
-} from '#async-action-feedback'
 import { ConversationPaneView } from '#components/conversation-pane-view'
 import { SessionStatusPanel } from '#components/session-status-panel'
 import type { ChatItem, Session, SessionActions } from '#types'
@@ -107,36 +102,6 @@ const iPhoneViewportDecorator: Decorator = (Story) => (
   >
     <Story />
   </div>
-)
-
-function SeedMergeTimelineAction({ children }: { children: ReactNode }) {
-  const startAsyncAction = useAsyncActionStarter(() => undefined)
-  const hasStarted = useRef(false)
-  useEffect(() => {
-    if (hasStarted.current) return
-    hasStarted.current = true
-    startAsyncAction({
-      kind: 'merge',
-      sessionId: session.id,
-      sessionTitle: session.title,
-      pullRequestNumber: 7042,
-      timelineIndex: 2,
-      run: () =>
-        Promise.resolve({
-          status: 'mergeFailed',
-          error: 'The base branch changed after the merge was confirmed.',
-        }),
-    })
-  }, [startAsyncAction])
-  return children
-}
-
-const mergeTimelineDecorator: Decorator = (Story) => (
-  <AsyncActionFeedbackProvider>
-    <SeedMergeTimelineAction>
-      <Story />
-    </SeedMergeTimelineAction>
-  </AsyncActionFeedbackProvider>
 )
 
 export const QuestionWaitsForAnAnswer: Story = {
@@ -1085,41 +1050,4 @@ export const NarrationAndAssistantAppearTogether: Story = {
       },
     ],
   },
-}
-
-const mergeTimelineMessages: ChatItem[] = [
-  {
-    type: 'assistant',
-    text: 'PR #7042 is ready to merge.',
-  },
-  {
-    type: 'assistant',
-    text: 'The merge started here in the conversation.',
-  },
-  {
-    type: 'user',
-    text: 'Could you check the retry setting as well?',
-    timestamp: '2034-03-19T10:20:00.000Z',
-  },
-  {
-    type: 'assistant',
-    text: 'The retry setting is ready for review.',
-  },
-]
-
-export const MergeFailureFlowsWithDesktopConversation: Story = {
-  name: 'A failed merge stays before messages that arrived later',
-  args: {
-    messages: mergeTimelineMessages,
-  },
-  decorators: [mergeTimelineDecorator],
-}
-
-export const MergeFailureFlowsWithIPhoneConversation: Story = {
-  name: 'The iPhone conversation keeps a failed merge before later messages',
-  args: {
-    messages: mergeTimelineMessages,
-    isMobile: true,
-  },
-  decorators: [mergeTimelineDecorator, iPhoneViewportDecorator],
 }
