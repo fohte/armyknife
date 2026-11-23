@@ -227,8 +227,14 @@ impl DraftFile {
     /// Path format: /tmp/pr-body-draft/<owner>/<repo>/<branch>.md
     /// Note: branch names can contain "/" (e.g., "feature/foo"), resulting in nested paths.
     pub fn parse_path(path: &Path) -> Option<(String, String, String)> {
-        let draft_dir = Self::draft_dir();
-        let relative = path.strip_prefix(&draft_dir).ok()?;
+        Self::parse_path_under(path, &Self::draft_dir())
+    }
+
+    pub(crate) fn parse_path_under(
+        path: &Path,
+        draft_dir: &Path,
+    ) -> Option<(String, String, String)> {
+        let relative = path.strip_prefix(draft_dir).ok()?;
         let components: Vec<_> = relative.components().collect();
 
         // Need at least 3 components: owner, repo, and at least one branch segment
