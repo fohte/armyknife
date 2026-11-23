@@ -2,6 +2,7 @@ export type ReviewDocumentSummary = {
   id: string
   kind: 'pr_draft' | 'issue_comment' | 'issue_body' | 'review_replies' | 'draft'
   target: {
+    path?: string
     repository?: string
     branch?: string
     issueNumber?: number
@@ -9,12 +10,19 @@ export type ReviewDocumentSummary = {
     title?: string
     threadCount?: number
   }
+  startedAt?: number
   isEditor: boolean
+  canSave: boolean
+  canFinish: boolean
 }
 
 export type EditorReviewDocumentState =
   | { status: 'ready'; summary: ReviewDocumentSummary }
   | { status: 'unavailable' }
+
+export type ReviewDocumentSummariesState =
+  | { status: 'ready'; summaries: ReviewDocumentSummary[] }
+  | { status: 'unavailable'; error: string }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
@@ -35,6 +43,8 @@ export function isReviewDocumentSummaryList(
           item['kind'] === 'review_replies' ||
           item['kind'] === 'draft') &&
         isRecord(item['target']) &&
+        (item['target']['path'] === undefined ||
+          typeof item['target']['path'] === 'string') &&
         (item['target']['repository'] === undefined ||
           typeof item['target']['repository'] === 'string') &&
         (item['target']['branch'] === undefined ||
@@ -47,7 +57,13 @@ export function isReviewDocumentSummaryList(
           typeof item['target']['title'] === 'string') &&
         (item['target']['threadCount'] === undefined ||
           typeof item['target']['threadCount'] === 'number') &&
-        typeof item['isEditor'] === 'boolean',
+        (item['startedAt'] === undefined ||
+          (typeof item['startedAt'] === 'number' &&
+            Number.isSafeInteger(item['startedAt']) &&
+            item['startedAt'] >= 0)) &&
+        typeof item['isEditor'] === 'boolean' &&
+        typeof item['canSave'] === 'boolean' &&
+        typeof item['canFinish'] === 'boolean',
     )
   )
 }

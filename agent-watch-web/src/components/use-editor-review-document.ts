@@ -1,25 +1,34 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 
 import {
   type EditorReviewDocumentState,
   isReviewDocumentSummaryList,
 } from '#components/conversation-pane-response'
 import { requestJson } from '#components/conversation-requests'
+import type { ReviewDocumentSummariesState } from '#components/review-document-summary'
 import type { Session } from '#types'
 
 type EditorReviewDocument = {
   sessionId: string
-  id: string
+  reviewDocumentId: string | null
+  reviewDocumentCount: number
   state: EditorReviewDocumentState
+  summaries: ReviewDocumentSummariesState | null
 }
 
 export function useEditorReviewDocument(session: Session) {
   const [editorDocument, setEditorDocument] =
     useState<EditorReviewDocument | null>(null)
-  const reviewDocumentId = session.reviewDocumentId
+  const [summaryRequest, setSummaryRequest] = useState(0)
+  const reviewDocumentId = session.reviewDocumentId ?? null
+  const reviewDocumentCount =
+    session.reviewDocumentCount ?? Number(reviewDocumentId != null)
+  const retrySummaries = useCallback(() => {
+    setSummaryRequest((request) => request + 1)
+  }, [])
 
   useEffect(() => {
-    if (reviewDocumentId == null) {
+    if (reviewDocumentId == null && reviewDocumentCount === 0) {
       setEditorDocument(null)
       return
     }
@@ -37,20 +46,24 @@ export function useEditorReviewDocument(session: Session) {
           )
           setEditorDocument({
             sessionId: session.id,
-            id: reviewDocumentId,
+            reviewDocumentId,
+            reviewDocumentCount,
             state:
               summary === undefined
                 ? { status: 'unavailable' }
                 : { status: 'ready', summary },
+            summaries: { status: 'ready', summaries: documents },
           })
         }
       },
-      () => {
+      (error) => {
         if (current) {
           setEditorDocument({
             sessionId: session.id,
-            id: reviewDocumentId,
+            reviewDocumentId,
+            reviewDocumentCount,
             state: { status: 'unavailable' },
+            summaries: { status: 'unavailable', error: error.message },
           })
         }
       },
@@ -58,10 +71,15 @@ export function useEditorReviewDocument(session: Session) {
     return () => {
       current = false
     }
-  }, [reviewDocumentId, session.id])
+  }, [reviewDocumentCount, reviewDocumentId, session.id, summaryRequest])
 
-  return editorDocument?.sessionId === session.id &&
-    editorDocument.id === reviewDocumentId
-    ? editorDocument.state
-    : null
+  const currentEditorDocument =
+    editorDocument?.sessionId === session.id &&
+    editorDocument.reviewDocumentId === reviewDocumentId &&
+    editorDocument.reviewDocumentCount === reviewDocumentCount
+      ? editorDocument
+      : null
+  return currentEditorDocument === null
+    ? null
+    : { ...currentEditorDocument, retrySummaries }
 }

@@ -1,6 +1,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { page } from 'vitest/browser'
 
 import { useEditorReviewDocument } from '#components/use-editor-review-document'
 import type { Session } from '#types'
@@ -35,14 +36,23 @@ let root: Root | null = null
 
 function EditorDocumentView({ session }: { session: Session }) {
   const document = useEditorReviewDocument(session)
+  const editorState = document?.state ?? null
   return (
-    <output>
-      {document === null
-        ? 'Loading editor document'
-        : document.status === 'unavailable'
-          ? 'Draft details are unavailable'
-          : `${document.summary.kind} #${String(document.summary.target.issueNumber)}`}
-    </output>
+    <>
+      <output>
+        {editorState === null
+          ? 'Loading editor document'
+          : editorState.status === 'unavailable'
+            ? 'Draft details are unavailable'
+            : `${editorState.summary.kind} #${String(editorState.summary.target.issueNumber)}`}
+      </output>
+      {document?.summaries?.status === 'unavailable' ? (
+        <button type="button" onClick={document.retrySummaries}>
+          Retry draft list
+        </button>
+      ) : null}
+      <output>{document?.summaries?.status ?? 'loading'}</output>
+    </>
   )
 }
 
@@ -82,7 +92,7 @@ it('loads the summary for the editor document from the session endpoint', async 
   act(() => root?.render(<EditorDocumentView session={session} />))
   await act(async () => {
     for (let attempt = 0; attempt < 20; attempt += 1) {
-      if (container.textContent === 'issue_comment #1234') return
+      if (container.textContent === 'issue_comment #1234ready') return
       await new Promise((resolve) => window.setTimeout(resolve, 0))
     }
   })
@@ -93,15 +103,30 @@ it('loads the summary for the editor document from the session endpoint', async 
   })
   expect(snapshot()).toEqual({
     request: ['/api/sessions/fixture-session/review-documents'],
-    document: 'issue_comment #1234',
+    document: 'issue_comment #1234ready',
   })
 })
 
-it('shows when the editor document details could not be loaded', async () => {
+it('retries an unavailable draft list', async () => {
   const fetcher = vi
     .fn<typeof fetch>()
-    .mockResolvedValue(
+    .mockResolvedValueOnce(
       new Response('temporary server failure', { status: 500 }),
+    )
+    .mockResolvedValueOnce(
+      new Response(
+        JSON.stringify([
+          {
+            id: 'fixture-review-document',
+            kind: 'issue_comment',
+            target: { issueNumber: 1234 },
+            isEditor: true,
+            canSave: true,
+            canFinish: true,
+          },
+        ]),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
     )
   vi.stubGlobal('fetch', fetcher)
   root = createRoot(container)
@@ -110,6 +135,15 @@ it('shows when the editor document details could not be loaded', async () => {
   await act(async () => {
     for (let attempt = 0; attempt < 20; attempt += 1) {
       if (container.textContent === 'Draft details are unavailable') return
+      if (container.querySelector('button') !== null) return
+      await new Promise((resolve) => window.setTimeout(resolve, 0))
+    }
+  })
+
+  await act(async () => {
+    await page.getByRole('button', { name: 'Retry draft list' }).click()
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      if (container.textContent === 'issue_comment #1234ready') return
       await new Promise((resolve) => window.setTimeout(resolve, 0))
     }
   })
@@ -119,7 +153,10 @@ it('shows when the editor document details could not be loaded', async () => {
     document: container.textContent,
   })
   expect(snapshot()).toEqual({
-    request: ['/api/sessions/fixture-session/review-documents'],
-    document: 'Draft details are unavailable',
+    request: [
+      '/api/sessions/fixture-session/review-documents',
+      '/api/sessions/fixture-session/review-documents',
+    ],
+    document: 'issue_comment #1234ready',
   })
 })

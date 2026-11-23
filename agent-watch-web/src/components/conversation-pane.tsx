@@ -13,6 +13,7 @@ import { ConversationPaneView } from '#components/conversation-pane-view'
 import { MarkdownSessionLinksProvider } from '#components/markdown-message'
 import type { PendingPermissionActions } from '#components/permission-card'
 import { ResizableColumns } from '#components/resizable-columns'
+import { ReviewDocumentFocus } from '#components/review-document-focus'
 import { SessionStatusPanel } from '#components/session-status-panel'
 import { useConversationPaneActions } from '#components/use-conversation-pane-actions'
 import { useConversationPaneData } from '#components/use-conversation-pane-data'
@@ -361,6 +362,9 @@ export function ConversationPane({
   }))
   const {
     activeTabId,
+    isReviewFocusOpen,
+    reviewFocusBody,
+    onCloseReviewFocus,
     onOpenCritInFullscreen,
     onOpenWebUiInFullscreen,
     mobileWebUi,
@@ -373,6 +377,12 @@ export function ConversationPane({
     tabs: panelTabs,
   } = useConversationStatusPanel({
     session,
+    reviewDocumentSummaries: editorReviewDocument?.summaries ?? null,
+    ...(editorReviewDocument?.retrySummaries === undefined
+      ? {}
+      : {
+          onRetryReviewDocumentSummaries: editorReviewDocument.retrySummaries,
+        }),
     messages,
     allDecisions: displayedConversation.decisions,
     backgroundTasks: displayBackgroundTasks,
@@ -439,7 +449,7 @@ export function ConversationPane({
         onOpenCritInFullscreen()
         if (!statusPanelOpen) onToggleStatusPanel()
       }}
-      editorReviewDocument={editorReviewDocument}
+      editorReviewDocument={editorReviewDocument?.state ?? null}
       onOpenDrafts={() => {
         onTabChange('review-document')
         if (!statusPanelOpen) onToggleStatusPanel()
@@ -493,7 +503,15 @@ export function ConversationPane({
         if (!isMobile && !statusPanelOpen) onToggleStatusPanel()
       }}
     >
-      {conversationLayout}
+      {isReviewFocusOpen && reviewFocusBody !== null ? (
+        <ReviewDocumentFocus
+          sessionTitle={session.title}
+          body={reviewFocusBody}
+          onBack={onCloseReviewFocus}
+        />
+      ) : (
+        conversationLayout
+      )}
     </MarkdownSessionLinksProvider>
   )
 }

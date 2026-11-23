@@ -7,8 +7,9 @@ it('accepts a review document summary list with an editor document', () => {
     isReviewDocumentSummaryList([
       {
         id: 'fixture-review-document',
-        kind: 'issue_comment',
-        target: { issueNumber: 1234, title: 'Refresh the sample service' },
+        kind: 'draft',
+        target: { path: 'docs/retry-plan.md' },
+        startedAt: Date.now() - 180_000,
         isEditor: true,
         canSave: true,
         canFinish: true,
@@ -36,12 +37,35 @@ it.each([
     },
   },
   {
+    name: 'a non-string draft path',
+    item: {
+      id: 'fixture-review-document',
+      kind: 'draft',
+      target: { path: 1234 },
+      isEditor: true,
+      canSave: true,
+      canFinish: true,
+    },
+  },
+  {
     name: 'a non-boolean editor flag',
     item: {
       id: 'fixture-review-document',
       kind: 'issue_comment',
       target: {},
       isEditor: 'true',
+    },
+  },
+  {
+    name: 'an unsafe start timestamp',
+    item: {
+      id: 'fixture-review-document',
+      kind: 'issue_comment',
+      target: {},
+      startedAt: Number.MAX_SAFE_INTEGER + 1,
+      isEditor: true,
+      canSave: true,
+      canFinish: true,
     },
   },
 ])('rejects a review document summary with $name', ({ item }) => {

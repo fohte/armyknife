@@ -68,6 +68,8 @@ const editorIssueComment: ReviewDocumentSummary = {
   kind: 'issue_comment',
   target: { issueNumber: 1234 },
   isEditor: true,
+  canSave: true,
+  canFinish: true,
 }
 const editorIssueCommentState: EditorReviewDocumentState = {
   status: 'ready',

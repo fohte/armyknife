@@ -4,6 +4,7 @@ import type { ComponentType } from 'react'
 import type { Decision } from '#components/decision-card'
 import { DecisionsPanel } from '#components/decisions-panel'
 import { ReviewDocumentPanel } from '#components/review-document-panel'
+import type { ReviewDocumentSummary } from '#components/review-document-summary'
 import { BackgroundTaskRowView } from '#components/running-task-row-view'
 import { RunningTasksPanelView } from '#components/running-tasks-panel-view'
 import { SessionStatusPanel } from '#components/session-status-panel'
@@ -19,8 +20,85 @@ import type {
 
 const phoneStatusTimeReference = Date.now()
 
+const statusPrDraft: ReviewDocumentSummary = {
+  id: 'fixture-pr-draft',
+  kind: 'pr_draft',
+  target: { repository: 'example/web-app', branch: 'feature/retry-limit' },
+  startedAt: Date.now() - 120_000,
+  isEditor: true,
+  canSave: true,
+  canFinish: true,
+}
+
+const statusIssueComment: ReviewDocumentSummary = {
+  id: 'fixture-issue-comment',
+  kind: 'issue_comment',
+  target: {
+    repository: 'example/web-app',
+    issueNumber: 412,
+    title: '配信が 4 件目から届かない',
+  },
+  startedAt: Date.now() - 180_000,
+  isEditor: true,
+  canSave: true,
+  canFinish: true,
+}
+
+const statusWaitingPrDraft: ReviewDocumentSummary = {
+  ...statusPrDraft,
+  startedAt: Date.now() - 120_000,
+  isEditor: false,
+  canSave: false,
+  canFinish: false,
+}
+
+const statusWaitingReplies: ReviewDocumentSummary = {
+  id: 'fixture-review-replies',
+  kind: 'review_replies',
+  target: {
+    repository: 'example/web-app',
+    pullRequestNumber: 2049,
+    threadCount: 2,
+  },
+  startedAt: Date.now() - 60_000,
+  isEditor: false,
+  canSave: false,
+  canFinish: false,
+}
+
+const statusWaitingDraft: ReviewDocumentSummary = {
+  id: 'fixture-waiting-draft',
+  kind: 'draft',
+  target: { path: 'docs/retry-plan.md' },
+  startedAt: Date.now() - 60_000,
+  isEditor: false,
+  canSave: false,
+  canFinish: false,
+}
+
+const issueCommentBody = `再現手順を足します。
+
+1. 送信先を応答の遅いサーバーにする
+2. 通知を 10 件続けて送る
+3. 4 件目から届かない`
+
+const prDraftBody = `## Why
+
+再送の上限が 3 回で固定されていて、応答の遅い送信先では足りない。
+
+## What
+
+- 上限を \`RETRY_LIMIT\` で変えられるようにする
+- 既定値は 3 回のまま`
+
 const defaultStatusViewport = (Story: ComponentType) => (
   <div style={{ width: '420px', height: '600px', display: 'flex' }}>
+    <Story />
+  </div>
+)
+
+const reviewStatusViewport = (Story: ComponentType) => (
+  <div style={{ width: '640px', height: '900px', display: 'flex' }}>
     <Story />
   </div>
 )
@@ -51,24 +129,111 @@ export const CritIsTheActiveTab: Story = {
 }
 
 export const ReviewDocumentIsActive: Story = {
-  name: 'The panel shows an active Review tab with typed frontmatter',
-  decorators: [defaultStatusViewport],
+  name: 'One draft opens in Preview with editable frontmatter',
+  decorators: [reviewStatusViewport],
   args: {
     tabs: [
       {
         id: 'review-document',
         label: 'Review',
-        count: 0,
+        count: 1,
         visible: true,
-        showCount: false,
+        showCount: true,
         content: (
           <ReviewDocumentPanel
+            summary={statusIssueComment}
+            summaries={[statusIssueComment]}
             frontmatter={{
-              title: 'Review the retry policy',
-              enabled: true,
-              steps: { publish: false },
+              priority: 'normal',
+              needsFollowUp: true,
+              tags: ['service', 'reliability'],
             }}
-            body={'## Summary\n\nReview the retry behavior.'}
+            body={issueCommentBody}
+          />
+        ),
+      },
+    ],
+    activeTabId: 'review-document',
+  },
+}
+
+export const ReviewShowsMultipleDrafts: Story = {
+  name: 'Several drafts include one waiting for the editor',
+  decorators: [reviewStatusViewport],
+  args: {
+    tabs: [
+      {
+        id: 'review-document',
+        label: 'Review',
+        count: 4,
+        visible: true,
+        showCount: true,
+        content: (
+          <ReviewDocumentPanel
+            summary={statusIssueComment}
+            summaries={[
+              statusIssueComment,
+              statusWaitingPrDraft,
+              statusWaitingReplies,
+              statusWaitingDraft,
+            ]}
+            frontmatter={{ priority: 'normal', needsFollowUp: true }}
+            body={issueCommentBody}
+          />
+        ),
+      },
+    ],
+    activeTabId: 'review-document',
+  },
+}
+
+export const ReviewShowsPullRequestDraft: Story = {
+  name: 'The PR draft title appears in the heading with editable metadata',
+  decorators: [reviewStatusViewport],
+  args: {
+    tabs: [
+      {
+        id: 'review-document',
+        label: 'Review',
+        count: 1,
+        visible: true,
+        showCount: true,
+        content: (
+          <ReviewDocumentPanel
+            summary={statusPrDraft}
+            summaries={[statusPrDraft]}
+            frontmatter={{
+              title: '再送の上限を設定で変えられるようにする',
+              labels: ['reliability'],
+              ready: false,
+            }}
+            body={prDraftBody}
+          />
+        ),
+      },
+    ],
+    activeTabId: 'review-document',
+  },
+}
+
+export const ReviewShowsEditMode: Story = {
+  name: 'The active Review panel shows the raw draft in Edit mode',
+  decorators: [reviewStatusViewport],
+  args: {
+    tabs: [
+      {
+        id: 'review-document',
+        label: 'Review',
+        count: 1,
+        visible: true,
+        showCount: true,
+        content: (
+          <ReviewDocumentPanel
+            summary={statusIssueComment}
+            summaries={[statusIssueComment]}
+            frontmatter={{ priority: 'normal', needsFollowUp: true }}
+            body={issueCommentBody}
+            view="edit"
           />
         ),
       },

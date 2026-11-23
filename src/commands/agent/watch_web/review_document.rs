@@ -191,7 +191,7 @@ async fn get_review_documents(
         let editor_id = active_review_document(&session, queue.clone()).map(|marker| marker.id);
         let mut summaries = markers
             .iter()
-            .map(|marker| summary_for_editor(marker, editor_id.as_deref(), &roots))
+            .map(|marker| summary_for_editor(marker, editor_id.as_deref(), &roots, &session.cwd))
             .collect::<Vec<_>>();
         summaries.sort_by_key(|summary| std::cmp::Reverse(summary.is_editor));
         Ok(Some(summaries))
@@ -427,19 +427,25 @@ fn summary_for_marker(
 ) -> ReviewDocumentSummary {
     let is_editor =
         active_review_document(session, queue).is_some_and(|active| active.id == marker.id);
-    summary_for_editor(marker, is_editor.then_some(marker.id.as_str()), roots)
+    summary_for_editor(
+        marker,
+        is_editor.then_some(marker.id.as_str()),
+        roots,
+        &session.cwd,
+    )
 }
 
 fn summary_for_editor(
     marker: &ReviewDocumentMarker,
     editor_id: Option<&str>,
     roots: &ReviewDocumentRoots,
+    session_cwd: &std::path::Path,
 ) -> ReviewDocumentSummary {
     let is_editor = editor_id == Some(marker.id.as_str());
     let request_fifo = finish_request_fifo_path(&marker.path);
     let can_save = is_editor && save::is_fifo(&request_fifo);
     let can_finish = can_save && save::is_fifo(&finish_ack_fifo_path(&marker.path));
-    summarize(roots, marker, is_editor, can_save, can_finish)
+    summarize(roots, marker, session_cwd, is_editor, can_save, can_finish)
 }
 
 fn active_review_document(
@@ -690,7 +696,7 @@ mod tests {
                         Fixture body.
                     "},
                     "kind": "draft",
-                    "target": {},
+                    "target": { "path": "fixture-document.md" },
                     "isEditor": true,
                     "canSave": false,
                     "canFinish": false,
@@ -746,7 +752,7 @@ mod tests {
                     "frontmatter": null,
                     "body": "Visible body.",
                     "kind": "draft",
-                    "target": {},
+                    "target": { "path": "visible-document.md" },
                     "isEditor": true,
                     "canSave": false,
                     "canFinish": false,
@@ -799,7 +805,7 @@ mod tests {
                     "frontmatter": null,
                     "body": "Earlier body.",
                     "kind": "draft",
-                    "target": {},
+                    "target": { "path": "older-document.md" },
                     "isEditor": true,
                     "canSave": false,
                     "canFinish": false,
@@ -851,7 +857,7 @@ mod tests {
                     {
                         "id": "fixture-review",
                         "kind": "draft",
-                        "target": {},
+                        "target": { "path": "fixture-document.md" },
                         "isEditor": true,
                         "canSave": true,
                         "canFinish": true,
@@ -859,7 +865,7 @@ mod tests {
                     {
                         "id": "queued-review",
                         "kind": "draft",
-                        "target": {},
+                        "target": { "path": "queued-document.md" },
                         "isEditor": false,
                         "canSave": false,
                         "canFinish": false,
@@ -914,7 +920,7 @@ mod tests {
         let replies_path = roots
             .pr_review
             .join("sample-owner/sample-repo/8462/threads.md");
-        let generic_path = temp_dir.path().join("generic-draft.md");
+        let generic_path = temp_dir.path().join("docs/retry-plan.md");
         for (path, contents) in [
             (
                 pr_draft_path.as_path(),
@@ -999,6 +1005,7 @@ mod tests {
         }
 
         let mut session = session_with_review(&generic_path);
+        session.cwd = temp_dir.path().to_path_buf();
         session.pending_human_review_ids.clear();
         for (id, path, started_at) in [
             ("pr-draft", &pr_draft_path, 1),
@@ -1009,7 +1016,7 @@ mod tests {
             ("legacy-issue-comment", &legacy_comment_path, 6),
             ("new-issue", &new_issue_path, 7),
             ("review-replies", &replies_path, 8),
-            ("generic", &generic_path, 9),
+            ("generic", &generic_path, 1_800_000_123_456_000_000),
         ] {
             session
                 .pending_human_review_ids
@@ -1140,7 +1147,8 @@ mod tests {
                     {
                         "id": "generic",
                         "kind": "draft",
-                        "target": {},
+                        "target": { "path": "docs/retry-plan.md" },
+                        "startedAt": 1_800_000_123_456_u64,
                         "isEditor": false,
                         "canSave": false,
                         "canFinish": false,
@@ -1193,7 +1201,7 @@ mod tests {
                     "frontmatter": null,
                     "body": "Queued body.",
                     "kind": "draft",
-                    "target": {},
+                    "target": { "path": "queued-document.md" },
                     "isEditor": false,
                     "canSave": false,
                     "canFinish": false,

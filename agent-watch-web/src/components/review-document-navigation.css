@@ -1,0 +1,197 @@
+.review-document-header {
+  display: flex;
+  min-width: 0;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 18px;
+  border-bottom: 1px solid #1a1a1a;
+}
+
+.review-document-heading {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.review-document-heading-context {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.review-document-kind {
+  flex: 0 0 auto;
+  border: 1px solid #3f3f46;
+  padding: 0 6px;
+  color: #fafafa;
+  line-height: 1.6;
+}
+
+.review-document-target {
+  min-width: 0;
+  overflow: hidden;
+  color: #a1a1aa;
+  font-family: 'JetBrains Mono', monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-document-editor-status {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  color: #8b8b94;
+  white-space: nowrap;
+}
+
+.review-document-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  background: #71717a;
+}
+
+.review-document-dot--editor {
+  background: #fbbf24;
+}
+
+.review-document-title {
+  min-width: 0;
+  overflow: hidden;
+  margin: 0;
+  color: #fafafa;
+  font-size: 15px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-document-title-field {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.review-document-title-label {
+  color: #8b8b94;
+  font-size: 11px;
+}
+
+.review-document-title-label code {
+  color: #8b8b94;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.review-document-title-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 32px;
+  border: 1px solid #2a2a2a;
+  padding: 4px 8px;
+  color: #fafafa;
+  background: #0a0a0a;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.review-document-description {
+  overflow: hidden;
+  margin: 0;
+  color: #a1a1aa;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-document-tabs {
+  display: flex;
+  min-width: 0;
+  min-height: 46px;
+  flex: 0 0 auto;
+  overflow-x: auto;
+  border-bottom: 1px solid #2a2a2a;
+  background: #0c0c0c;
+  scrollbar-width: thin;
+}
+
+.review-document-tab {
+  box-sizing: border-box;
+  display: grid;
+  min-width: 0;
+  max-width: 180px;
+  min-height: 46px;
+  flex: 0 0 auto;
+  grid-template-columns: 6px minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  align-content: center;
+  align-items: center;
+  column-gap: 6px;
+  row-gap: 1px;
+  border: 0;
+  border-right: 1px solid #1a1a1a;
+  border-bottom: 2px solid transparent;
+  padding: 0 14px;
+  color: #a1a1aa;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.review-document-tab--selected {
+  border-bottom-color: #fafafa;
+  color: #fafafa;
+  background: #141414;
+  font-weight: 700;
+}
+
+.review-document-tab .review-document-dot {
+  width: 6px;
+  height: 6px;
+  grid-column: 1;
+  grid-row: 1;
+  flex: none;
+}
+
+.review-document-tab-kind,
+.review-document-tab-target {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-document-tab-kind {
+  grid-column: 2;
+  grid-row: 1;
+  font-size: 12px;
+}
+
+.review-document-tab-target {
+  grid-column: 2;
+  grid-row: 2;
+  color: #a1a1aa;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+}
+
+.session-status-panel[data-size='phone'] .review-document-header {
+  padding-inline: 16px;
+}
+
+.session-status-panel[data-size='phone'] .review-document-tabs {
+  min-height: 52px;
+}
+
+.session-status-panel[data-size='phone'] .review-document-tab {
+  max-width: 160px;
+  min-height: 52px;
+  padding-inline: 12px;
+}

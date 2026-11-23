@@ -1,0 +1,140 @@
+.review-document-focus {
+  box-sizing: border-box;
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  color: #fafafa;
+  background: #0a0a0a;
+  font-family:
+    'Helvetica Neue', Arial, 'Hiragino Kaku Gothic ProN', 'Hiragino Sans',
+    'Noto Sans JP', sans-serif;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.review-document-focus-header {
+  box-sizing: border-box;
+  display: flex;
+  min-width: 0;
+  height: 48px;
+  flex: 0 0 48px;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid #2a2a2a;
+  padding: 0 16px 0 8px;
+}
+
+.review-document-focus-back {
+  display: inline-flex;
+  height: 30px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  padding: 0 10px 0 4px;
+  color: #d4d4d8;
+  background: transparent;
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.review-document-focus-session {
+  min-width: 0;
+  overflow: hidden;
+  color: #a1a1aa;
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-document-focus-divider {
+  flex: 0 0 auto;
+  color: #71717a;
+}
+
+.review-document-focus-escape {
+  margin-left: auto;
+  color: #8b8b94;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.review-document-focus-escape kbd {
+  font: inherit;
+}
+
+.review-document-focus-columns {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.review-document-focus-column {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.review-document-focus-column h2 {
+  box-sizing: border-box;
+  display: flex;
+  height: 34px;
+  flex: 0 0 34px;
+  align-items: center;
+  margin: 0;
+  padding: 0 20px;
+  color: #8b8b94;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.review-document-focus-markdown {
+  border-right: 1px solid #1a1a1a;
+  background: #0a0a0a;
+}
+
+.review-document-focus-markdown pre {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  margin: 0;
+  padding: 4px 20px 20px;
+  color: #d4d4d8;
+  background: #0a0a0a;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.review-document-focus-preview {
+  background: #0c0c0c;
+}
+
+.review-document-focus-preview h2 {
+  padding-inline: 24px;
+}
+
+.review-document-focus-rendered {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  padding: 4px 24px 20px;
+  color: #d4d4d8;
+  font-size: 14px;
+}
