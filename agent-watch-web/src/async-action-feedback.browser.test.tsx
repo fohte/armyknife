@@ -310,7 +310,7 @@ it('records a merge while it runs, then keeps its result in Activity', async () 
   })
 })
 
-it('shows rewind failure in the action toast and Activity state', async () => {
+it('shows rewind failure in the action toast and status', async () => {
   const run = vi.fn(() =>
     Promise.resolve({
       status: 'rewindFailed' as const,
@@ -344,7 +344,7 @@ it('shows rewind failure in the action toast and Activity state', async () => {
   expect(snapshot()).toEqual({
     status: '["rewindFailed"]',
     toast:
-      'Rewind failedReview the example requestThe example session could not be rewound.Retry',
+      'Rewind failedReview the example requestThe example session could not be rewound.',
     failureRole: 'alert',
   })
 })

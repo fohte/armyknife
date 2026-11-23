@@ -143,12 +143,12 @@ export const RewindSucceededBesideClose: Story = {
 }
 
 export const RewindFailedBesideClose: Story = {
-  name: 'The failed rewind matches the failed close toast.',
+  name: 'The failed rewind avoids replaying an ambiguous operation.',
   render: () => <RewindCloseComparison state="failed" />,
 }
 
 export const RewindAndCloseFeedbackComparison: Story = {
-  name: 'Rewind and Close use the same feedback for each outcome.',
+  name: 'Rewind and Close feedback is compared across each outcome.',
   render: () => <RewindCloseAllStatesComparison />,
 }
 
