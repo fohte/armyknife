@@ -25,6 +25,7 @@ type SessionStatusPanelProps = {
   onClose: () => void
   sessionTitle?: string
   expanded?: boolean
+  showCollapseControl?: boolean
   onCollapse?: () => void
 }
 
@@ -36,6 +37,7 @@ export function SessionStatusPanel({
   onClose,
   sessionTitle,
   expanded = false,
+  showCollapseControl = true,
   onCollapse = () => undefined,
 }: SessionStatusPanelProps) {
   const isPhone = size === 'phone'
@@ -182,7 +184,7 @@ export function SessionStatusPanel({
         </div>
         {isPhone ? null : (
           <>
-            {expanded ? (
+            {expanded && showCollapseControl ? (
               <Button
                 className="session-status-panel-collapse"
                 type="button"

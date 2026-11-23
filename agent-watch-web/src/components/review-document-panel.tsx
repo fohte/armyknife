@@ -16,6 +16,7 @@ type ReviewDocumentPanelProps = {
   summary?: ReviewDocumentSummary
   summaries?: readonly ReviewDocumentSummary[]
   isMobile?: boolean
+  isExpanded?: boolean
   canSave?: boolean
   canFinish?: boolean
   onSelectDocument?: (id: string) => void
@@ -290,6 +291,7 @@ export function ReviewDocumentPanel({
   summary,
   summaries = [],
   isMobile = false,
+  isExpanded = false,
   canSave = true,
   canFinish = true,
   onSelectDocument = () => undefined,
@@ -313,12 +315,18 @@ export function ReviewDocumentPanel({
   ) => {
     onFrontmatterChange(updateAtPath(frontmatter, path, value))
   }
+  const frontmatterEntries = isJsonObject(frontmatter)
+    ? Object.entries(frontmatter).filter(
+        ([name]) => !(summary?.kind === 'pr_draft' && name === 'title'),
+      )
+    : null
 
   return (
     <article
       className="review-document-panel"
       data-view={view}
       data-status={status}
+      data-expanded={isExpanded}
     >
       <ReviewDocumentNavigation
         {...(summary === undefined ? {} : { summary })}
@@ -329,6 +337,7 @@ export function ReviewDocumentPanel({
             : ''
         }
         isMobile={isMobile}
+        isExpanded={isExpanded}
         canSave={canSave}
         busy={busy}
         onTitleChange={(title) => {
@@ -337,22 +346,18 @@ export function ReviewDocumentPanel({
           }
         }}
         onSelectDocument={onSelectDocument}
-        onExpand={onExpand}
+        onToggleExpanded={onExpand}
       />
       <div className="review-document-content">
-        <section
-          className="review-document-frontmatter"
-          aria-label="Document metadata"
-        >
-          <h2>Frontmatter</h2>
-          {isJsonObject(frontmatter) ? (
-            <dl className="review-document-fields">
-              {Object.entries(frontmatter)
-                .filter(
-                  ([name]) =>
-                    !(summary?.kind === 'pr_draft' && name === 'title'),
-                )
-                .map(([name, value]) => (
+        {frontmatterEntries === null || frontmatterEntries.length > 0 ? (
+          <section
+            className="review-document-frontmatter"
+            aria-label="Document metadata"
+          >
+            <h2>Frontmatter</h2>
+            {frontmatterEntries !== null ? (
+              <dl className="review-document-fields">
+                {frontmatterEntries.map(([name, value]) => (
                   <FieldEditor
                     key={name}
                     name={name}
@@ -362,49 +367,58 @@ export function ReviewDocumentPanel({
                     onChange={updateFrontmatter}
                   />
                 ))}
-            </dl>
-          ) : (
-            <FieldEditor
-              name="Frontmatter"
-              path={[]}
-              value={frontmatter}
-              disabled={!canSave || busy}
-              onChange={(path, value) => {
-                if (path.length === 0) onFrontmatterChange(value)
-              }}
-            />
-          )}
-        </section>
+              </dl>
+            ) : (
+              <FieldEditor
+                name="Frontmatter"
+                path={[]}
+                value={frontmatter}
+                disabled={!canSave || busy}
+                onChange={(path, value) => {
+                  if (path.length === 0) onFrontmatterChange(value)
+                }}
+              />
+            )}
+          </section>
+        ) : null}
 
         <section
           className="review-document-body-editor"
           aria-label="Document body"
         >
-          <div className="review-document-body-heading">
-            <h2>Body</h2>
-            <div className="review-document-view-toggle" aria-label="Body view">
-              <button
-                aria-pressed={view === 'edit'}
-                type="button"
-                onClick={() => {
-                  onViewChange('edit')
-                }}
+          {isExpanded ? null : (
+            <div className="review-document-body-heading">
+              <h2>Body</h2>
+              <div
+                className="review-document-view-toggle"
+                aria-label="Body view"
               >
-                Edit
-              </button>
-              <button
-                aria-pressed={view === 'preview'}
-                type="button"
-                onClick={() => {
-                  onViewChange('preview')
-                }}
-              >
-                Preview
-              </button>
+                <button
+                  aria-pressed={view === 'edit'}
+                  type="button"
+                  onClick={() => {
+                    onViewChange('edit')
+                  }}
+                >
+                  Edit
+                </button>
+                <button
+                  aria-pressed={view === 'preview'}
+                  type="button"
+                  onClick={() => {
+                    onViewChange('preview')
+                  }}
+                >
+                  Preview
+                </button>
+              </div>
             </div>
-          </div>
+          )}
           <div className="review-document-body-columns">
             <div className="review-document-edit-column">
+              {isExpanded ? (
+                <h3 className="review-document-column-heading">Markdown</h3>
+              ) : null}
               <MarkdownEditor
                 value={body}
                 disabled={!canSave || busy}
@@ -412,6 +426,9 @@ export function ReviewDocumentPanel({
               />
             </div>
             <div className="review-document-preview-column">
+              {isExpanded ? (
+                <h3 className="review-document-column-heading">Preview</h3>
+              ) : null}
               <MarkdownMessage className="review-document-body">
                 {body}
               </MarkdownMessage>

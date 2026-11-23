@@ -1,4 +1,4 @@
-import { Maximize2 } from 'lucide-react'
+import { Maximize2, Minimize2 } from 'lucide-react'
 
 import type { ReviewDocumentSummary } from '#components/review-document-summary'
 
@@ -7,11 +7,12 @@ type ReviewDocumentNavigationProps = {
   summaries?: readonly ReviewDocumentSummary[]
   title?: string
   isMobile?: boolean
+  isExpanded?: boolean
   canSave?: boolean
   busy?: boolean
   onTitleChange?: (title: string) => void
   onSelectDocument?: (id: string) => void
-  onExpand?: () => void
+  onToggleExpanded?: () => void
 }
 
 function kindLabel(kind: ReviewDocumentSummary['kind']) {
@@ -63,11 +64,12 @@ export function ReviewDocumentNavigation({
   summaries = [],
   title = '',
   isMobile = false,
+  isExpanded = false,
   canSave = true,
   busy = false,
   onTitleChange = () => undefined,
   onSelectDocument = () => undefined,
-  onExpand = () => undefined,
+  onToggleExpanded = () => undefined,
 }: ReviewDocumentNavigationProps) {
   return (
     <>
@@ -103,12 +105,19 @@ export function ReviewDocumentNavigation({
           </div>
           {isMobile ? null : (
             <button
-              aria-label="Open draft full width"
+              aria-label={
+                isExpanded ? 'Exit full width review' : 'Open draft full width'
+              }
+              aria-pressed={isExpanded}
               className="review-document-expand"
               type="button"
-              onClick={onExpand}
+              onClick={onToggleExpanded}
             >
-              <Maximize2 aria-hidden="true" size={16} />
+              {isExpanded ? (
+                <Minimize2 aria-hidden="true" size={16} />
+              ) : (
+                <Maximize2 aria-hidden="true" size={16} />
+              )}
             </button>
           )}
         </header>

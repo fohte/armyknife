@@ -361,6 +361,7 @@ export function ConversationPane({
   const {
     activeTabId,
     isReviewExpanded,
+    hasReviewDocumentPanel,
     onCollapseReview,
     onOpenCritInFullscreen,
     onOpenWebUiInFullscreen,
@@ -403,6 +404,9 @@ export function ConversationPane({
       sessionTitle={session.title}
       size={isMobile ? 'phone' : 'desktop'}
       expanded={isReviewExpanded}
+      showCollapseControl={
+        activeTabId !== 'review-document' || !hasReviewDocumentPanel
+      }
       onCollapse={onCollapseReview}
     />
   ) : null

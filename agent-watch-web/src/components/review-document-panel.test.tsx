@@ -57,6 +57,56 @@ function ReviewDocumentHarness({
   )
 }
 
+function ExpandedReviewHarness() {
+  const [expanded, setExpanded] = useState(true)
+  const summary = {
+    id: 'fixture-pr-draft',
+    kind: 'pr_draft' as const,
+    target: { repository: 'example/service', branch: 'retry-policy' },
+    isEditor: true,
+    canSave: true,
+    canFinish: true,
+  }
+
+  return (
+    <SessionStatusPanel
+      tabs={[
+        {
+          id: 'review-document',
+          label: 'Review',
+          count: 1,
+          visible: true,
+          showCount: true,
+          content: (
+            <ReviewDocumentPanel
+              summary={summary}
+              summaries={[summary]}
+              isExpanded={expanded}
+              frontmatter={{
+                title: 'Fixture title',
+                labels: ['reliability'],
+              }}
+              body="Fixture body."
+              view="edit"
+              onExpand={() => {
+                setExpanded((current) => !current)
+              }}
+            />
+          ),
+        },
+      ]}
+      activeTabId="review-document"
+      expanded={expanded}
+      showCollapseControl={false}
+      onTabChange={() => undefined}
+      onClose={() => undefined}
+      onCollapse={() => {
+        setExpanded(false)
+      }}
+    />
+  )
+}
+
 beforeEach(() => {
   actionSnapshots.length = 0
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
@@ -235,6 +285,135 @@ it('shows the only open draft in the draft tab row', () => {
   })
 })
 
+it('omits the frontmatter section when a PR draft has only its title', () => {
+  root = createRoot(container)
+  act(() =>
+    root?.render(
+      <ReviewDocumentPanel
+        summary={{
+          id: 'fixture-pr-draft',
+          kind: 'pr_draft',
+          target: { repository: 'example/service', branch: 'retry-policy' },
+          isEditor: true,
+          canSave: true,
+          canFinish: true,
+        }}
+        frontmatter={{ title: 'Fixture title' }}
+        body="Fixture body."
+      />,
+    ),
+  )
+
+  const snapshot = () => ({
+    frontmatterHeading: container.querySelector(
+      '.review-document-frontmatter h2',
+    )?.textContent,
+    title: container.querySelector<HTMLInputElement>(
+      'input[aria-label="Draft title"]',
+    )?.value,
+  })
+  expect(snapshot()).toEqual({
+    frontmatterHeading: undefined,
+    title: 'Fixture title',
+  })
+})
+
+it('shows both editable columns and one full width control when expanded', async () => {
+  await page.viewport(800, 900)
+  container.style.width = '800px'
+  container.style.height = '900px'
+  container.style.display = 'flex'
+  root = createRoot(container)
+  act(() => root?.render(<ExpandedReviewHarness />))
+
+  const panel = container.querySelector<HTMLElement>('.review-document-panel')
+  const columns = container.querySelector<HTMLElement>(
+    '.review-document-body-columns',
+  )
+  const editColumn = container.querySelector<HTMLElement>(
+    '.review-document-edit-column',
+  )
+  const previewColumn = container.querySelector<HTMLElement>(
+    '.review-document-preview-column',
+  )
+  const frontmatter = container.querySelector<HTMLElement>(
+    '.review-document-frontmatter',
+  )
+  if (
+    panel === null ||
+    columns === null ||
+    editColumn === null ||
+    previewColumn === null ||
+    frontmatter === null
+  ) {
+    throw new Error('The expanded review layout was not rendered.')
+  }
+
+  const snapshot = () => ({
+    expanded: panel.getAttribute('data-expanded'),
+    columns: getComputedStyle(columns).display,
+    editColumn: getComputedStyle(editColumn).display,
+    previewColumn: getComputedStyle(previewColumn).display,
+    frontmatter: getComputedStyle(frontmatter).display,
+    headings: Array.from(
+      container.querySelectorAll('.review-document-column-heading'),
+      (heading) => heading.textContent,
+    ),
+    fullWidthControls: Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '.review-document-expand, .session-status-panel-collapse',
+      ),
+      (button) => button.getAttribute('aria-label'),
+    ),
+    metadataValue: container.querySelector<HTMLInputElement>(
+      '.review-document-frontmatter input[aria-label="Item 1"]',
+    )?.value,
+  })
+
+  expect(snapshot()).toEqual({
+    expanded: 'true',
+    columns: 'grid',
+    editColumn: 'flex',
+    previewColumn: 'block',
+    frontmatter: 'flex',
+    headings: ['Markdown', 'Preview'],
+    fullWidthControls: ['Exit full width review'],
+    metadataValue: 'reliability',
+  })
+})
+
+it('collapses the expanded Review panel from its single header control', async () => {
+  await page.viewport(800, 900)
+  container.style.width = '800px'
+  container.style.height = '900px'
+  container.style.display = 'flex'
+  root = createRoot(container)
+  act(() => root?.render(<ExpandedReviewHarness />))
+
+  await act(async () => {
+    await page.getByRole('button', { name: 'Exit full width review' }).click()
+  })
+
+  const panel = container.querySelector('.review-document-panel')
+  const control = container.querySelector<HTMLButtonElement>(
+    '.review-document-expand',
+  )
+  const snapshot = () => ({
+    expanded: panel?.getAttribute('data-expanded'),
+    label: control?.getAttribute('aria-label'),
+    pressed: control?.getAttribute('aria-pressed'),
+    controlCount: container.querySelectorAll(
+      '.review-document-expand, .session-status-panel-collapse',
+    ).length,
+  })
+  expect(snapshot()).toEqual({
+    expanded: 'false',
+    label: 'Open draft full width',
+    pressed: 'false',
+    controlCount: 1,
+  })
+})
+
 it('keeps a queued draft readable while disabling editing and review actions', async () => {
   await page.viewport(390, 844)
   const summary = {
@@ -297,12 +476,23 @@ it('keeps a queued draft readable while disabling editing and review actions', a
       ?.click()
   })
 
+  const frontmatter = container.querySelector<HTMLElement>(
+    '.review-document-frontmatter',
+  )
   const snapshot = () => ({
     preview,
     edit: {
       view: container
         .querySelector('.review-document-panel')
         ?.getAttribute('data-view'),
+      frontmatterDisplay:
+        frontmatter === null ? null : getComputedStyle(frontmatter).display,
+      metadataInputsDisabled: Array.from(
+        container.querySelectorAll<HTMLInputElement>(
+          '.review-document-frontmatter input',
+        ),
+        (input) => input.disabled,
+      ),
       bodyEditorDisabled:
         container
           .querySelector('.review-document-editor .cm-content')
@@ -328,6 +518,8 @@ it('keeps a queued draft readable while disabling editing and review actions', a
     },
     edit: {
       view: 'edit',
+      frontmatterDisplay: 'flex',
+      metadataInputsDisabled: [true, true],
       bodyEditorDisabled: true,
       saveDisabled: true,
       finishDisabled: true,

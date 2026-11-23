@@ -29,10 +29,17 @@ const statusPrDraft: ReviewDocumentSummary = {
   canFinish: true,
 }
 
-const statusWaitingIssue: ReviewDocumentSummary = {
+const statusIssueComment: ReviewDocumentSummary = {
   id: 'fixture-issue-comment',
   kind: 'issue_comment',
   target: { issueNumber: 28, title: 'Improve retries' },
+  isEditor: true,
+  canSave: true,
+  canFinish: true,
+}
+
+const statusWaitingPrDraft: ReviewDocumentSummary = {
+  ...statusPrDraft,
   isEditor: false,
   canSave: false,
   canFinish: false,
@@ -47,8 +54,29 @@ const statusWaitingReplies: ReviewDocumentSummary = {
   canFinish: false,
 }
 
+const statusWaitingDraft: ReviewDocumentSummary = {
+  id: 'fixture-waiting-draft',
+  kind: 'draft',
+  target: {},
+  isEditor: false,
+  canSave: false,
+  canFinish: false,
+}
+
 const defaultStatusViewport = (Story: ComponentType) => (
   <div style={{ width: '420px', height: '600px', display: 'flex' }}>
+    <Story />
+  </div>
+)
+
+const reviewStatusViewport = (Story: ComponentType) => (
+  <div style={{ width: '640px', height: '900px', display: 'flex' }}>
+    <Story />
+  </div>
+)
+
+const expandedReviewViewport = (Story: ComponentType) => (
+  <div style={{ width: '800px', height: '900px', display: 'flex' }}>
     <Story />
   </div>
 )
@@ -79,8 +107,67 @@ export const CritIsTheActiveTab: Story = {
 }
 
 export const ReviewDocumentIsActive: Story = {
-  name: 'The panel shows an active Review tab with typed frontmatter',
-  decorators: [defaultStatusViewport],
+  name: 'One draft opens in Preview with editable frontmatter',
+  decorators: [reviewStatusViewport],
+  args: {
+    tabs: [
+      {
+        id: 'review-document',
+        label: 'Review',
+        count: 1,
+        visible: true,
+        showCount: true,
+        content: (
+          <ReviewDocumentPanel
+            summary={statusIssueComment}
+            summaries={[statusIssueComment]}
+            frontmatter={{
+              priority: 'normal',
+              needsFollowUp: true,
+              tags: ['service', 'reliability'],
+            }}
+            body={'## Summary\n\nReview the retry behavior.'}
+          />
+        ),
+      },
+    ],
+    activeTabId: 'review-document',
+  },
+}
+
+export const ReviewShowsMultipleDrafts: Story = {
+  name: 'Several drafts include one waiting for the editor',
+  decorators: [reviewStatusViewport],
+  args: {
+    tabs: [
+      {
+        id: 'review-document',
+        label: 'Review',
+        count: 4,
+        visible: true,
+        showCount: true,
+        content: (
+          <ReviewDocumentPanel
+            summary={statusIssueComment}
+            summaries={[
+              statusIssueComment,
+              statusWaitingPrDraft,
+              statusWaitingReplies,
+              statusWaitingDraft,
+            ]}
+            frontmatter={{ priority: 'normal', needsFollowUp: true }}
+            body={'## Summary\n\nReview the retry behavior.'}
+          />
+        ),
+      },
+    ],
+    activeTabId: 'review-document',
+  },
+}
+
+export const ReviewShowsPullRequestDraft: Story = {
+  name: 'The PR draft title appears in the heading with editable metadata',
+  decorators: [reviewStatusViewport],
   args: {
     tabs: [
       {
@@ -94,11 +181,37 @@ export const ReviewDocumentIsActive: Story = {
             summary={statusPrDraft}
             summaries={[statusPrDraft]}
             frontmatter={{
-              title: 'Review the retry policy',
-              enabled: true,
-              steps: { publish: false },
+              title: 'Improve retry handling',
+              labels: ['reliability'],
+              ready: false,
             }}
+            body={'## Summary\n\nRetry temporary failures safely.'}
+          />
+        ),
+      },
+    ],
+    activeTabId: 'review-document',
+  },
+}
+
+export const ReviewShowsEditMode: Story = {
+  name: 'The active Review panel shows the raw draft in Edit mode',
+  decorators: [reviewStatusViewport],
+  args: {
+    tabs: [
+      {
+        id: 'review-document',
+        label: 'Review',
+        count: 1,
+        visible: true,
+        showCount: true,
+        content: (
+          <ReviewDocumentPanel
+            summary={statusIssueComment}
+            summaries={[statusIssueComment]}
+            frontmatter={{ priority: 'normal', needsFollowUp: true }}
             body={'## Summary\n\nReview the retry behavior.'}
+            view="edit"
           />
         ),
       },
@@ -108,26 +221,28 @@ export const ReviewDocumentIsActive: Story = {
 }
 
 export const ReviewFillsTheDesktopViewport: Story = {
-  name: 'The active Review panel expands to the full desktop width',
-  decorators: [defaultStatusViewport],
+  name: 'The expanded Review panel shows Markdown beside Preview',
+  decorators: [expandedReviewViewport],
   args: {
     expanded: true,
+    showCollapseControl: false,
     tabs: [
       {
         id: 'review-document',
         label: 'Review',
-        count: 3,
+        count: 1,
         visible: true,
         showCount: true,
         content: (
           <ReviewDocumentPanel
             summary={statusPrDraft}
-            summaries={[
-              statusPrDraft,
-              statusWaitingIssue,
-              statusWaitingReplies,
-            ]}
-            frontmatter={{ title: 'Improve retry handling' }}
+            summaries={[statusPrDraft]}
+            isExpanded
+            frontmatter={{
+              title: 'Improve retry handling',
+              labels: ['reliability'],
+              ready: false,
+            }}
             body={'## Summary\n\nRetry temporary failures safely.'}
           />
         ),

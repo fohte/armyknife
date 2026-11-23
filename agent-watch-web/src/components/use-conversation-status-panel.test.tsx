@@ -83,6 +83,9 @@ function StatusPanelHarness({
       onTabChange={panel.onTabChange}
       onClose={() => undefined}
       expanded={panel.isReviewExpanded}
+      showCollapseControl={
+        panel.activeTabId !== 'review-document' || !panel.hasReviewDocumentPanel
+      }
       onCollapse={panel.onCollapseReview}
       size={isMobile ? 'phone' : 'desktop'}
     />
@@ -524,6 +527,87 @@ it('expands the Review panel on desktop and hides the control on phone', async (
     collapsedPanel: 'false',
     phoneExpandControls: 0,
   })
+})
+
+it('keeps one exit control when the selected draft fails to load', async () => {
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const reviewDocumentId = requestUrl(input).split('/').at(-1)
+    if (reviewDocumentId === 'fixture-review-b') {
+      return Promise.resolve(new Response('Unavailable', { status: 503 }))
+    }
+
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({
+          id: 'fixture-review-a',
+          revision: 'fixture-revision-a',
+          frontmatter: {},
+          body: 'Readable draft body',
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    )
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  act(() => {
+    root?.render(
+      <StatusPanelHarness
+        currentSession={{ ...session, reviewDocumentId: 'fixture-review-a' }}
+        reviewDocumentSummaries={[
+          {
+            id: 'fixture-review-a',
+            kind: 'draft',
+            target: {},
+            isEditor: true,
+            canSave: true,
+            canFinish: true,
+          },
+          {
+            id: 'fixture-review-b',
+            kind: 'draft',
+            target: {},
+            isEditor: true,
+            canSave: true,
+            canFinish: true,
+          },
+        ]}
+        statusPanelOpen
+      />,
+    )
+  })
+
+  await waitForState(
+    () => container.querySelector('.review-document-body') !== null,
+  )
+  await act(async () => {
+    await page.getByRole('button', { name: 'Open draft full width' }).click()
+    const tabs = container.querySelectorAll<HTMLButtonElement>(
+      '.review-document-tab',
+    )
+    const nextTab = tabs[1]
+    if (nextTab === undefined) {
+      throw new Error('The second draft tab was not rendered.')
+    }
+    nextTab.click()
+  })
+  await waitForState(
+    () =>
+      container.querySelector('.session-tree-feedback[role="alert"]') !== null,
+  )
+  await act(async () => {
+    await page.getByRole('button', { name: 'Exit full width review' }).click()
+  })
+
+  const snapshot = () => ({
+    expanded: container
+      .querySelector('.session-status-panel')
+      ?.getAttribute('data-expanded'),
+    fullWidthControlCount: container.querySelectorAll(
+      '.review-document-expand, .session-status-panel-collapse',
+    ).length,
+  })
+  expect(snapshot()).toEqual({ expanded: 'false', fullWidthControlCount: 0 })
 })
 
 it('preserves unsaved review edits when a preview link opens a web UI', async () => {
