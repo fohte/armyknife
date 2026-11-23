@@ -173,6 +173,7 @@ impl Launch {
                     .wait_for_thread_started(cwd)
                     .context("Failed to wait for Codex app-server thread/start")?;
                 if let Some(marker) = initial_prompt_marker
+                    && marker.should_mark_pending
                     && let Err(error) = (marker.mark_pending)(&thread_id)
                 {
                     tracing::warn!(
@@ -191,6 +192,7 @@ impl Launch {
                     }
                     Err(codex_steer::DeliveryError::NotDelivered(error)) => {
                         if let Some(marker) = initial_prompt_marker
+                            && marker.should_mark_pending
                             && let Err(clear_error) = (marker.clear_pending)(&thread_id)
                         {
                             tracing::warn!(
@@ -304,6 +306,7 @@ mod tests {
                 prompt_file: None,
                 pane_id: Some("%42"),
                 initial_prompt_marker: Some(super::super::InitialPromptMarker {
+                    should_mark_pending: true,
                     mark_pending: &mark_pending,
                     clear_pending: &clear_pending,
                     prefix_watch_web_message: None,
@@ -331,6 +334,66 @@ mod tests {
     }
 
     #[test]
+    fn watch_web_prompt_does_not_mark_pending_before_starting_the_turn() {
+        let marker_calls = Arc::new(Mutex::new(Vec::new()));
+        let mark_calls = marker_calls.clone();
+        let clear_calls = marker_calls.clone();
+        let mark_pending = move |session_id: &str| {
+            mark_calls
+                .lock()
+                .unwrap()
+                .push(format!("mark:{session_id}"));
+            Ok(())
+        };
+        let clear_pending = move |session_id: &str| {
+            clear_calls
+                .lock()
+                .unwrap()
+                .push(format!("clear:{session_id}"));
+            Ok(())
+        };
+        let launch = Launch::prepare_with(Engine::Codex, Some("prompt"), 1, || {
+            Ok((
+                Box::new(StubClient {
+                    thread: Ok("thread-example".to_string()),
+                    turn: Some(Ok(())),
+                }),
+                None,
+            ))
+        })
+        .expect("app-server client should be created");
+
+        let route = launch.finish_and_recover_with(
+            RecoverySpec {
+                cwd: Path::new("/workspace/project-a"),
+                effort: None,
+                prompt_file: None,
+                pane_id: Some("%42"),
+                initial_prompt_marker: Some(super::super::InitialPromptMarker {
+                    should_mark_pending: false,
+                    mark_pending: &mark_pending,
+                    clear_pending: &clear_pending,
+                    prefix_watch_web_message: None,
+                }),
+            },
+            |_, _| Ok(()),
+        );
+
+        assert_eq!(
+            (
+                route.map_err(|error| error.to_string()),
+                marker_calls.lock().unwrap().clone(),
+            ),
+            (
+                Ok(AgentLaunchRoute::CodexDaemon {
+                    thread_id: "thread-example".to_string(),
+                }),
+                Vec::<String>::new(),
+            ),
+        );
+    }
+
+    #[test]
     fn initial_prompt_marker_write_failure_does_not_block_starting_the_turn() {
         let calls = Arc::new(Mutex::new(Vec::new()));
         let mark_pending = |_session_id: &str| Err(anyhow::anyhow!("database unavailable"));
@@ -352,6 +415,7 @@ mod tests {
                 prompt_file: None,
                 pane_id: Some("%42"),
                 initial_prompt_marker: Some(super::super::InitialPromptMarker {
+                    should_mark_pending: true,
                     mark_pending: &mark_pending,
                     clear_pending: &clear_pending,
                     prefix_watch_web_message: None,
@@ -406,6 +470,7 @@ mod tests {
                 prompt_file: None,
                 pane_id: Some("%42"),
                 initial_prompt_marker: Some(super::super::InitialPromptMarker {
+                    should_mark_pending: true,
                     mark_pending: &mark_pending,
                     clear_pending: &clear_pending,
                     prefix_watch_web_message: None,
@@ -422,6 +487,66 @@ mod tests {
             (
                 Err("Codex pane %42 was created, but initial prompt delivery failed: Codex app-server rejected the initial turn/start request: rejected".to_string()),
                 vec!["thread-example".to_string()],
+            ),
+        );
+    }
+
+    #[test]
+    fn rejected_watch_web_prompt_does_not_clear_the_pending_marker() {
+        let marker_calls = Arc::new(Mutex::new(Vec::new()));
+        let mark_calls = marker_calls.clone();
+        let clear_calls = marker_calls.clone();
+        let mark_pending = move |session_id: &str| {
+            mark_calls
+                .lock()
+                .unwrap()
+                .push(format!("mark:{session_id}"));
+            Ok(())
+        };
+        let clear_pending = move |session_id: &str| {
+            clear_calls
+                .lock()
+                .unwrap()
+                .push(format!("clear:{session_id}"));
+            Ok(())
+        };
+        let launch = Launch::prepare_with(Engine::Codex, Some("prompt"), 1, || {
+            Ok((
+                Box::new(StubClient {
+                    thread: Ok("thread-example".to_string()),
+                    turn: Some(Err(codex_steer::DeliveryError::NotDelivered(
+                        anyhow::anyhow!("rejected"),
+                    ))),
+                }),
+                None,
+            ))
+        })
+        .expect("app-server client should be created");
+
+        let route = launch.finish_and_recover_with(
+            RecoverySpec {
+                cwd: Path::new("/workspace/project-a"),
+                effort: None,
+                prompt_file: None,
+                pane_id: Some("%42"),
+                initial_prompt_marker: Some(super::super::InitialPromptMarker {
+                    should_mark_pending: false,
+                    mark_pending: &mark_pending,
+                    clear_pending: &clear_pending,
+                    prefix_watch_web_message: None,
+                }),
+            },
+            |_, _| panic!("a rejected turn must not bind the pane"),
+        );
+
+        assert_eq!(
+            (
+                route.map_err(|error| format!("{error:#}")),
+                marker_calls.lock().unwrap().clone(),
+            ),
+            (
+                Err("Codex pane %42 was created, but initial prompt delivery failed: Codex app-server rejected the initial turn/start request: rejected".to_string()),
+                Vec::<String>::new(),
             ),
         );
     }

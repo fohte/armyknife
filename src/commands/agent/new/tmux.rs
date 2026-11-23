@@ -136,6 +136,7 @@ fn initial_prompt_marker(
     watch_web_launch: bool,
 ) -> Option<InitialPromptMarker<'static>> {
     prompt.map(|_| InitialPromptMarker {
+        should_mark_pending: !watch_web_launch,
         mark_pending: &crate::commands::agent::store::mark_pending_initial_prompt,
         clear_pending: &crate::commands::agent::store::clear_pending_initial_prompt,
         prefix_watch_web_message: watch_web_launch.then_some(&prefix_watch_web_initial_message),
@@ -149,18 +150,22 @@ mod tests {
     use super::*;
 
     #[rstest]
-    #[case::watch_web_prompt(Some("Inspect the example."), true, true)]
-    #[case::other_launch_prompt(Some("Inspect the example."), false, false)]
-    #[case::watch_web_without_prompt(None, true, false)]
-    fn watch_web_prefix_is_enabled_only_for_watch_web_prompts(
+    #[case::watch_web_prompt(Some("Inspect the example."), true, (true, false))]
+    #[case::other_launch_prompt(Some("Inspect the example."), false, (false, true))]
+    #[case::watch_web_without_prompt(None, true, (false, false))]
+    fn initial_prompt_markers_distinguish_watch_web_launches(
         #[case] prompt: Option<&str>,
         #[case] watch_web_launch: bool,
-        #[case] expected: bool,
+        #[case] expected: (bool, bool),
     ) {
-        let actual = initial_prompt_marker(prompt, watch_web_launch)
-            .and_then(|marker| marker.prefix_watch_web_message)
-            .is_some();
+        let marker = initial_prompt_marker(prompt, watch_web_launch);
+        let actual = marker.map(|marker| {
+            (
+                marker.prefix_watch_web_message.is_some(),
+                marker.should_mark_pending,
+            )
+        });
 
-        assert_eq!(actual, expected);
+        assert_eq!(actual, prompt.map(|_| expected));
     }
 }

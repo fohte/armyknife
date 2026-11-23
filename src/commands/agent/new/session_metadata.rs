@@ -173,6 +173,13 @@ fn record_in(
     if let Some(launch_id) = metadata.launch_id {
         session.launch_id = Some(launch_id.to_string());
     }
+    // A human-prompted watch-web session must remain visible in Recent when its first prompt is filtered as peer traffic.
+    if metadata.launch_id.is_some()
+        && metadata.has_initial_prompt == Some(true)
+        && session.last_prompted_at.is_none()
+    {
+        session.last_prompted_at = Some(now);
+    }
 
     session_lock.save(&session)
 }
@@ -247,6 +254,16 @@ mod tests {
         serde_json::to_value(session).expect("session should serialize")
     }
 
+    fn normalized_session_json(sessions_dir: &Path) -> Value {
+        let mut session = session_json(sessions_dir);
+        for field in ["created_at", "updated_at", "last_prompted_at"] {
+            if session.get(field).is_some() {
+                session[field] = json!("<timestamp>");
+            }
+        }
+        session
+    }
+
     #[rstest]
     #[case::without_initial_prompt("0", "stopped")]
     #[case::with_initial_prompt("1", "running")]
@@ -272,34 +289,33 @@ mod tests {
         )
         .unwrap();
 
-        let mut actual = session_json(sessions_dir.path());
-        actual["created_at"] = json!("<timestamp>");
-        actual["updated_at"] = json!("<timestamp>");
-        assert_eq!(
-            actual,
-            json!({
-                "session_id": "thread-a",
-                "launch_id": "launch-fixture",
-                "cwd": "/workspace/project",
-                "transcript_path": null,
-                "tty": null,
-                "tmux_info": null,
-                "status": expected_status,
-                "created_at": "<timestamp>",
-                "updated_at": "<timestamp>",
-                "last_message": null,
-                "current_tool": null,
-                "label": null,
-                "work_type": null,
-                "ancestor_session_ids": [],
-                "pending_bg_task_ids": [],
-                "pending_agent_task_ids": [],
-                "pending_permission_agent_ids": [],
-                "read_at": null,
-                "sweep_signaled": false,
-                "engine": "codex"
-            }),
-        );
+        let actual = normalized_session_json(sessions_dir.path());
+        let mut expected = json!({
+            "session_id": "thread-a",
+            "launch_id": "launch-fixture",
+            "cwd": "/workspace/project",
+            "transcript_path": null,
+            "tty": null,
+            "tmux_info": null,
+            "status": expected_status,
+            "created_at": "<timestamp>",
+            "updated_at": "<timestamp>",
+            "last_message": null,
+            "current_tool": null,
+            "label": null,
+            "work_type": null,
+            "ancestor_session_ids": [],
+            "pending_bg_task_ids": [],
+            "pending_agent_task_ids": [],
+            "pending_permission_agent_ids": [],
+            "read_at": null,
+            "sweep_signaled": false,
+            "engine": "codex"
+        });
+        if has_initial_prompt == "1" {
+            expected["last_prompted_at"] = json!("<timestamp>");
+        }
+        assert_eq!(actual, expected,);
     }
 
     #[rstest]
@@ -498,6 +514,36 @@ mod tests {
             expected["work_type_pinned"] = json!(true);
         }
         assert_eq!(session_json(sessions_dir.path()), expected);
+    }
+
+    #[rstest]
+    fn preserves_prompt_timestamp_when_recording_watch_web_launch_metadata(sessions_dir: TempDir) {
+        let mut existing = existing_session();
+        existing.last_prompted_at = Some(existing.created_at);
+        store::save_session_to(sessions_dir.path(), &existing).expect("save should succeed");
+
+        record_in(
+            sessions_dir.path(),
+            "thread-a",
+            Path::new("/workspace/project"),
+            None,
+            SessionMetadata {
+                label: None,
+                launch_id: Some("launch-fixture"),
+                has_initial_prompt: Some(true),
+                work_type: None,
+                child_launch: None,
+                launched_with_vibe: false,
+                ancestor_session_ids: Vec::new(),
+            },
+        )
+        .expect("record should succeed");
+
+        existing.launch_id = Some("launch-fixture".to_string());
+        assert_eq!(
+            session_json(sessions_dir.path()),
+            serde_json::to_value(existing).expect("session should serialize"),
+        );
     }
 
     #[rstest]

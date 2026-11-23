@@ -647,6 +647,9 @@ fn process_hook_event_impl_with_env_and_unreported_stop(
                     SessionStatus::Ended
                 },
             );
+            if env.session_has_initial_prompt == Some(true) {
+                session.last_prompted_at = Some(now);
+            }
             session.model = model;
             session.effort = effort;
             ensure_watch_web_user_marker(&session_lock, event, input.engine)?;
@@ -2191,11 +2194,10 @@ mod tests {
             .expect("session should load")
             .expect("session should exist");
         let mut actual = serde_json::to_value(session).expect("session should serialize");
-        actual["created_at"] = serde_json::json!("<timestamp>");
-        actual["updated_at"] = serde_json::json!("<timestamp>");
 
         let mut expected = create_test_session(None);
         expected.launch_id = Some("launch-fixture".to_string());
+        expected.last_prompted_at = (has_initial_prompt == Some(true)).then_some(Utc::now());
         expected.tmux_info = Some(TmuxInfo {
             session_name: "main".to_string(),
             window_name: "claude".to_string(),
@@ -2205,8 +2207,8 @@ mod tests {
         });
         expected.status = expected_status;
         let mut expected = serde_json::to_value(expected).expect("session should serialize");
-        expected["created_at"] = serde_json::json!("<timestamp>");
-        expected["updated_at"] = serde_json::json!("<timestamp>");
+        normalize_session_timestamps(&mut actual);
+        normalize_session_timestamps(&mut expected);
 
         assert_eq!(
             (
@@ -4407,6 +4409,14 @@ mod tests {
         }
     }
 
+    fn normalize_session_timestamps(snapshot: &mut serde_json::Value) {
+        snapshot["created_at"] = serde_json::json!("<timestamp>");
+        snapshot["updated_at"] = serde_json::json!("<timestamp>");
+        if !snapshot["last_prompted_at"].is_null() {
+            snapshot["last_prompted_at"] = serde_json::json!("<timestamp>");
+        }
+    }
+
     fn save_test_session(sessions_dir: &Path, session_id: &str, mutate: impl FnOnce(&mut Session)) {
         let mut session = create_test_session(None);
         session.session_id = session_id.to_string();
@@ -5640,13 +5650,21 @@ mod tests {
             );
         }
 
-        #[test]
-        fn user_prompt_submit_creates_session() {
+        #[rstest]
+        #[case::missing_prompt(Engine::Claude, None)]
+        #[case::claude_prompt(Engine::Claude, Some("Example user prompt"))]
+        #[case::codex_prompt(Engine::Codex, Some("Example user prompt"))]
+        fn user_prompt_submit_creates_session(
+            #[case] engine: Engine,
+            #[case] prompt: Option<&str>,
+        ) {
             let temp_dir = create_temp_sessions_dir();
 
             // Verify that user-prompt-submit creates a session (for new sessions that
             // skipped SessionStart due to source="startup")
-            let input = create_test_input(None);
+            let mut input = create_test_input(None);
+            input.engine = engine;
+            input.prompt = prompt.map(str::to_string);
 
             let result = process_hook_event_impl(
                 HookEvent::UserPromptSubmit,
@@ -5656,15 +5674,77 @@ mod tests {
             )
             .expect("should succeed");
 
-            assert_eq!(
-                result,
-                ProcessResult::SessionSaved,
-                "user-prompt-submit should create the session"
-            );
             let session = store::load_session_from(temp_dir.path(), "test-123")
                 .expect("session should load")
                 .expect("session should exist");
-            assert_eq!(session.last_prompted_at, Some(session.updated_at));
+            assert_eq!(
+                (result, session.last_prompted_at == Some(session.updated_at)),
+                (ProcessResult::SessionSaved, true),
+            );
+        }
+
+        #[test]
+        fn watch_web_peer_initial_prompt_uses_launch_timestamp() {
+            let temp_dir = create_temp_sessions_dir();
+            let env = EnvVars {
+                session_launch_id: Some("launch-fixture".to_string()),
+                session_has_initial_prompt: Some(true),
+                ..EnvVars::default()
+            };
+            let startup_result = process_hook_event_impl_with_env(
+                HookEvent::SessionStart,
+                create_test_input_with_source(None, Some("startup")),
+                temp_dir.path(),
+                &SideEffects::none(),
+                None,
+                env,
+            )
+            .expect("watch-web session should start");
+            let startup_session = store::load_session_from(temp_dir.path(), "test-123")
+                .expect("session should load after startup")
+                .expect("session should exist after startup");
+            let launch_prompt_at = startup_session.last_prompted_at;
+            let marker = store::watch_web_user_marker_from(temp_dir.path(), "test-123")
+                .expect("watch-web marker should load")
+                .expect("watch-web marker should exist");
+            let prefixed_message = crate::commands::agent::watch_web_user_marker::prefix_message(
+                &marker,
+                "Example user prompt",
+            );
+            let prompt = indoc::formatdoc! {"
+                Another Claude session sent a message:
+                {prefixed_message}
+            "};
+            let mut input = create_test_input(None);
+            input.prompt = Some(prompt.clone());
+
+            let result = process_hook_event_impl(
+                HookEvent::UserPromptSubmit,
+                input,
+                temp_dir.path(),
+                &SideEffects::none(),
+            )
+            .expect("watch-web initial prompt should succeed");
+            let session = store::load_session_from(temp_dir.path(), "test-123")
+                .expect("session should load")
+                .expect("session should exist");
+
+            assert_eq!(
+                (
+                    crate::commands::agent::peer_message::is_peer_message(Some(&prompt)),
+                    startup_result,
+                    launch_prompt_at == Some(startup_session.created_at),
+                    result,
+                    session.last_prompted_at == launch_prompt_at,
+                ),
+                (
+                    true,
+                    ProcessResult::SessionSaved,
+                    true,
+                    ProcessResult::SessionSaved,
+                    true,
+                ),
+            );
         }
 
         #[rstest]
