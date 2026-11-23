@@ -173,7 +173,7 @@ fn record_in(
     if let Some(launch_id) = metadata.launch_id {
         session.launch_id = Some(launch_id.to_string());
     }
-    // A watch-web initial prompt may reach the shared daemon as peer traffic.
+    // A human-prompted watch-web session must remain visible in Recent when its first prompt is filtered as peer traffic.
     if metadata.launch_id.is_some()
         && metadata.has_initial_prompt == Some(true)
         && session.last_prompted_at.is_none()
@@ -514,6 +514,36 @@ mod tests {
             expected["work_type_pinned"] = json!(true);
         }
         assert_eq!(session_json(sessions_dir.path()), expected);
+    }
+
+    #[rstest]
+    fn preserves_prompt_timestamp_when_recording_watch_web_launch_metadata(sessions_dir: TempDir) {
+        let mut existing = existing_session();
+        existing.last_prompted_at = Some(existing.created_at);
+        store::save_session_to(sessions_dir.path(), &existing).expect("save should succeed");
+
+        record_in(
+            sessions_dir.path(),
+            "thread-a",
+            Path::new("/workspace/project"),
+            None,
+            SessionMetadata {
+                label: None,
+                launch_id: Some("launch-fixture"),
+                has_initial_prompt: Some(true),
+                work_type: None,
+                child_launch: None,
+                launched_with_vibe: false,
+                ancestor_session_ids: Vec::new(),
+            },
+        )
+        .expect("record should succeed");
+
+        existing.launch_id = Some("launch-fixture".to_string());
+        assert_eq!(
+            session_json(sessions_dir.path()),
+            serde_json::to_value(existing).expect("session should serialize"),
+        );
     }
 
     #[rstest]
