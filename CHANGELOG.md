@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.877](https://github.com/fohte/armyknife/compare/v0.1.876...v0.1.877) (2026-11-23)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show rewind status ([#2146](https://github.com/fohte/armyknife/issues/2146)) ([ec3ff0b](https://github.com/fohte/armyknife/commit/ec3ff0b09b88cfa8bdf1951414bfeb63e1f40b5a))
+
 ## [0.1.876](https://github.com/fohte/armyknife/compare/v0.1.875...v0.1.876) (2026-11-23)
 
 
