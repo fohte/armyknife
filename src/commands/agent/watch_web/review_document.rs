@@ -21,7 +21,7 @@ use crate::shared::human_in_the_loop::{
 
 mod metadata;
 mod save;
-use metadata::{ReviewDocumentSummary, summarize};
+use metadata::{ReviewDocumentRoots, ReviewDocumentSummary, summarize};
 
 type SessionLoader = Arc<dyn Fn(&str) -> anyhow::Result<Option<Session>> + Send + Sync>;
 type ReviewQueueLoader = Arc<dyn Fn(&Session) -> ReviewDocumentQueue + Send + Sync>;
@@ -53,7 +53,11 @@ struct ReviewDocumentSaved {
 }
 
 pub(super) fn router() -> Router {
-    router_with_dependencies(store::load_session, review_document_queue)
+    router_with_dependencies(
+        store::load_session,
+        review_document_queue,
+        ReviewDocumentRoots::default(),
+    )
 }
 
 #[cfg(test)]
@@ -68,12 +72,26 @@ fn router_with_loaders(
     load_session: impl Fn(&str) -> anyhow::Result<Option<Session>> + Send + Sync + 'static,
     load_review_queue: impl Fn(&Session) -> ReviewDocumentQueue + Send + Sync + 'static,
 ) -> Router {
-    router_with_dependencies(load_session, load_review_queue)
+    router_with_dependencies(
+        load_session,
+        load_review_queue,
+        ReviewDocumentRoots::default(),
+    )
+}
+
+#[cfg(test)]
+fn router_with_path_roots(
+    load_session: impl Fn(&str) -> anyhow::Result<Option<Session>> + Send + Sync + 'static,
+    load_review_queue: impl Fn(&Session) -> ReviewDocumentQueue + Send + Sync + 'static,
+    roots: ReviewDocumentRoots,
+) -> Router {
+    router_with_dependencies(load_session, load_review_queue, roots)
 }
 
 fn router_with_dependencies(
     load_session: impl Fn(&str) -> anyhow::Result<Option<Session>> + Send + Sync + 'static,
     load_review_queue: impl Fn(&Session) -> ReviewDocumentQueue + Send + Sync + 'static,
+    roots: ReviewDocumentRoots,
 ) -> Router {
     Router::new()
         .route("/sessions/{id}/review-document", get(get_review_document))
@@ -103,14 +121,16 @@ fn router_with_dependencies(
             Arc::new(load_session) as SessionLoader,
             Arc::new(load_review_queue) as ReviewQueueLoader,
             Arc::new(tokio::sync::Mutex::new(())) as ReviewDocumentEditLock,
+            roots,
         ))
 }
 
 async fn get_review_document(
-    State((load_session, load_review_queue, _)): State<(
+    State((load_session, load_review_queue, _, roots)): State<(
         SessionLoader,
         ReviewQueueLoader,
         ReviewDocumentEditLock,
+        ReviewDocumentRoots,
     )>,
     RoutePath(session_id): RoutePath<String>,
 ) -> Result<Json<ReviewDocumentResponse>, StatusCode> {
@@ -130,7 +150,7 @@ async fn get_review_document(
         let Some(marker) = active_review_document(&session, queue.clone()) else {
             return Ok(None);
         };
-        let summary = summary_for_marker(&session, &marker, queue.clone());
+        let summary = summary_for_marker(&session, &marker, queue.clone(), &roots);
         match load_review_document(&marker, summary) {
             Ok(response) => Ok(Some(response)),
             Err(error) => {
@@ -149,10 +169,11 @@ async fn get_review_document(
 }
 
 async fn get_review_documents(
-    State((load_session, load_review_queue, _)): State<(
+    State((load_session, load_review_queue, _, roots)): State<(
         SessionLoader,
         ReviewQueueLoader,
         ReviewDocumentEditLock,
+        ReviewDocumentRoots,
     )>,
     RoutePath(session_id): RoutePath<String>,
 ) -> Result<Json<Vec<ReviewDocumentSummary>>, StatusCode> {
@@ -166,9 +187,11 @@ async fn get_review_documents(
             }
         };
         let queue = load_review_queue(&session);
-        let mut summaries = review_document_markers(&session)
+        let markers = review_document_markers(&session);
+        let editor_id = active_review_document(&session, queue.clone()).map(|marker| marker.id);
+        let mut summaries = markers
             .iter()
-            .map(|marker| summary_for_marker(&session, marker, queue.clone()))
+            .map(|marker| summary_for_editor(marker, editor_id.as_deref(), &roots))
             .collect::<Vec<_>>();
         summaries.sort_by_key(|summary| std::cmp::Reverse(summary.is_editor));
         Ok(Some(summaries))
@@ -183,10 +206,11 @@ async fn get_review_documents(
 }
 
 async fn get_review_document_by_id(
-    State((load_session, load_review_queue, _)): State<(
+    State((load_session, load_review_queue, _, roots)): State<(
         SessionLoader,
         ReviewQueueLoader,
         ReviewDocumentEditLock,
+        ReviewDocumentRoots,
     )>,
     RoutePath((session_id, document_id)): RoutePath<(String, String)>,
 ) -> Result<Json<ReviewDocumentResponse>, StatusCode> {
@@ -204,7 +228,7 @@ async fn get_review_document_by_id(
         else {
             return Err(StatusCode::NOT_FOUND);
         };
-        let summary = summary_for_marker(&session, &marker, queue.clone());
+        let summary = summary_for_marker(&session, &marker, queue.clone(), &roots);
         load_review_document(&marker, summary).map_err(|error| {
             tracing::warn!(%error, "failed to read review document");
             StatusCode::INTERNAL_SERVER_ERROR
@@ -220,10 +244,11 @@ async fn get_review_document_by_id(
 }
 
 async fn save_review_document(
-    State((load_session, load_review_queue, edit_lock)): State<(
+    State((load_session, load_review_queue, edit_lock, _)): State<(
         SessionLoader,
         ReviewQueueLoader,
         ReviewDocumentEditLock,
+        ReviewDocumentRoots,
     )>,
     RoutePath(session_id): RoutePath<String>,
     axum::Json(request): axum::Json<ReviewDocumentEditRequest>,
@@ -244,10 +269,11 @@ async fn save_review_document(
 }
 
 async fn finish_review_document(
-    State((load_session, load_review_queue, edit_lock)): State<(
+    State((load_session, load_review_queue, edit_lock, _)): State<(
         SessionLoader,
         ReviewQueueLoader,
         ReviewDocumentEditLock,
+        ReviewDocumentRoots,
     )>,
     RoutePath(session_id): RoutePath<String>,
     axum::Json(request): axum::Json<ReviewDocumentEditRequest>,
@@ -263,10 +289,11 @@ async fn finish_review_document(
 }
 
 async fn save_review_document_by_id(
-    State((load_session, load_review_queue, edit_lock)): State<(
+    State((load_session, load_review_queue, edit_lock, _)): State<(
         SessionLoader,
         ReviewQueueLoader,
         ReviewDocumentEditLock,
+        ReviewDocumentRoots,
     )>,
     RoutePath((session_id, document_id)): RoutePath<(String, String)>,
     axum::Json(request): axum::Json<ReviewDocumentEditRequest>,
@@ -284,10 +311,11 @@ async fn save_review_document_by_id(
 }
 
 async fn finish_review_document_by_id(
-    State((load_session, load_review_queue, edit_lock)): State<(
+    State((load_session, load_review_queue, edit_lock, _)): State<(
         SessionLoader,
         ReviewQueueLoader,
         ReviewDocumentEditLock,
+        ReviewDocumentRoots,
     )>,
     RoutePath((session_id, document_id)): RoutePath<(String, String)>,
     axum::Json(request): axum::Json<ReviewDocumentEditRequest>,
@@ -395,13 +423,23 @@ fn summary_for_marker(
     session: &Session,
     marker: &ReviewDocumentMarker,
     queue: ReviewDocumentQueue,
+    roots: &ReviewDocumentRoots,
 ) -> ReviewDocumentSummary {
     let is_editor =
         active_review_document(session, queue).is_some_and(|active| active.id == marker.id);
+    summary_for_editor(marker, is_editor.then_some(marker.id.as_str()), roots)
+}
+
+fn summary_for_editor(
+    marker: &ReviewDocumentMarker,
+    editor_id: Option<&str>,
+    roots: &ReviewDocumentRoots,
+) -> ReviewDocumentSummary {
+    let is_editor = editor_id == Some(marker.id.as_str());
     let request_fifo = finish_request_fifo_path(&marker.path);
     let can_save = is_editor && save::is_fifo(&request_fifo);
     let can_finish = can_save && save::is_fifo(&finish_ack_fifo_path(&marker.path));
-    summarize(marker, is_editor, can_save, can_finish)
+    summarize(roots, marker, is_editor, can_save, can_finish)
 }
 
 fn active_review_document(
@@ -416,26 +454,16 @@ fn select_review_document(
     session: &Session,
     queue: ReviewDocumentQueue,
 ) -> Option<ReviewDocumentMarker> {
-    let mut markers = session
-        .pending_human_review_ids
-        .iter()
-        .filter_map(|review_id| review_document_marker(review_id))
-        .collect::<Vec<_>>();
+    let markers = review_document_markers(session);
 
     match queue {
         ReviewDocumentQueue::Managed(Some(shown_key)) => markers
             .into_iter()
             .find(|marker| marker.queue_key.as_deref() == Some(shown_key.as_str())),
         ReviewDocumentQueue::Managed(None) | ReviewDocumentQueue::Unavailable => None,
-        ReviewDocumentQueue::Unmanaged => {
-            markers.retain(|marker| marker.queue_key.is_none());
-            markers.sort_by(|left, right| {
-                left.started_at
-                    .cmp(&right.started_at)
-                    .then_with(|| left.id.cmp(&right.id))
-            });
-            markers.into_iter().next()
-        }
+        ReviewDocumentQueue::Unmanaged => markers
+            .into_iter()
+            .find(|marker| marker.queue_key.is_none()),
     }
 }
 
@@ -485,8 +513,9 @@ mod tests {
     use crate::shared::human_in_the_loop::LockGuard;
 
     use super::{
-        ReviewDocumentOperationLock, finish_ack_fifo_path, finish_request_fifo_path,
-        review_document_revision, router_with_loaders, router_with_session_loader,
+        ReviewDocumentOperationLock, ReviewDocumentRoots, finish_ack_fifo_path,
+        finish_request_fifo_path, review_document_revision, router_with_loaders,
+        router_with_path_roots, router_with_session_loader,
     };
 
     fn current_revision(path: &Path) -> String {
@@ -840,6 +869,207 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn lists_typed_documents_with_their_targets_through_the_review_api() {
+        let temp_dir = TempDir::new().expect("fixture directory should be created");
+        let roots = ReviewDocumentRoots {
+            pr_draft: temp_dir.path().join("pr-body-draft"),
+            issue_agent: temp_dir.path().join("gh-issue-agent"),
+            pr_review: temp_dir.path().join("gh-pr-review"),
+        };
+        let pr_draft_path = roots
+            .pr_draft
+            .join("sample-owner/sample-repo/feature/example.md");
+        let issue_path = roots
+            .issue_agent
+            .join("sample-owner/sample-repo/42/issue.md");
+        let comment_path = roots
+            .issue_agent
+            .join("sample-owner/sample-repo/42/comments/new_reply.md");
+        let new_issue_path = roots
+            .issue_agent
+            .join("sample-owner/sample-repo/new/issue.md");
+        let replies_path = roots
+            .pr_review
+            .join("sample-owner/sample-repo/43/threads.md");
+        let generic_path = temp_dir.path().join("generic-draft.md");
+        for (path, contents) in [
+            (
+                pr_draft_path.as_path(),
+                indoc! {"
+                    ---
+                    title: Sample pull request
+                    ---
+                    Body.
+                "},
+            ),
+            (
+                issue_path.as_path(),
+                indoc! {"
+                    ---
+                    title: Sample issue
+                    readonly:
+                      number: 42
+                    ---
+                    Body.
+                "},
+            ),
+            (comment_path.as_path(), "Comment body."),
+            (
+                new_issue_path.as_path(),
+                indoc! {"
+                    ---
+                    title: New issue
+                    ---
+                    Body.
+                "},
+            ),
+            (
+                replies_path.as_path(),
+                indoc! {r#"
+                    ---
+                    pr: 43
+                    repo: sample-owner/sample-repo
+                    pulled_at: 2026-01-15T10:00:00Z
+                    ---
+
+                    <!-- reviews -->
+                    <!-- /reviews -->
+
+                    <!-- thread: RT_sample path: src/lib.rs:7 -->
+                    - [ ] resolve
+                    <!-- diff -->
+                    ```diff
+                    @@ -1 +1 @@
+                    -old
+                    +new
+                    ```
+                    <!-- /diff -->
+                    <!-- comment: @reviewer 2026-01-15T10:30:00Z -->
+                    Sample comment.
+                    <!-- /comment -->
+                "#},
+            ),
+            (generic_path.as_path(), "Generic body."),
+        ] {
+            std::fs::create_dir_all(path.parent().expect("fixture file should have a parent"))
+                .expect("fixture directory should be created");
+            std::fs::write(path, contents).expect("fixture document should be written");
+        }
+
+        let mut session = session_with_review(&generic_path);
+        session.pending_human_review_ids.clear();
+        for (id, path, started_at) in [
+            ("pr-draft", &pr_draft_path, 1),
+            ("issue-body", &issue_path, 2),
+            ("issue-comment", &comment_path, 3),
+            ("new-issue", &new_issue_path, 4),
+            ("review-replies", &replies_path, 5),
+            ("generic", &generic_path, 6),
+        ] {
+            session
+                .pending_human_review_ids
+                .insert(review_marker(id, path, started_at, None));
+        }
+        let app = router_with_path_roots(
+            move |_| Ok(Some(session.clone())),
+            |_| ReviewDocumentQueue::Unmanaged,
+            roots,
+        );
+        let response = app
+            .oneshot(
+                Request::get("/sessions/fixture-session/review-documents")
+                    .body(Body::empty())
+                    .expect("request should be valid"),
+            )
+            .await
+            .expect("request should complete");
+        let status = response.status();
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should be read");
+
+        assert_eq!(
+            (
+                status,
+                serde_json::from_slice::<serde_json::Value>(&body)
+                    .expect("response should be JSON"),
+            ),
+            (
+                StatusCode::OK,
+                serde_json::json!([
+                    {
+                        "id": "pr-draft",
+                        "kind": "pr_draft",
+                        "target": {
+                            "repository": "sample-owner/sample-repo",
+                            "branch": "feature/example",
+                            "title": "Sample pull request",
+                        },
+                        "isEditor": false,
+                        "canSave": false,
+                        "canFinish": false,
+                    },
+                    {
+                        "id": "issue-body",
+                        "kind": "issue_body",
+                        "target": {
+                            "repository": "sample-owner/sample-repo",
+                            "issueNumber": 42,
+                            "title": "Sample issue",
+                        },
+                        "isEditor": false,
+                        "canSave": false,
+                        "canFinish": false,
+                    },
+                    {
+                        "id": "issue-comment",
+                        "kind": "issue_comment",
+                        "target": {
+                            "repository": "sample-owner/sample-repo",
+                            "issueNumber": 42,
+                            "title": "Sample issue",
+                        },
+                        "isEditor": false,
+                        "canSave": false,
+                        "canFinish": false,
+                    },
+                    {
+                        "id": "new-issue",
+                        "kind": "draft",
+                        "target": {
+                            "repository": "sample-owner/sample-repo",
+                            "title": "New issue",
+                        },
+                        "isEditor": false,
+                        "canSave": false,
+                        "canFinish": false,
+                    },
+                    {
+                        "id": "review-replies",
+                        "kind": "review_replies",
+                        "target": {
+                            "repository": "sample-owner/sample-repo",
+                            "pullRequestNumber": 43,
+                            "threadCount": 1,
+                        },
+                        "isEditor": false,
+                        "canSave": false,
+                        "canFinish": false,
+                    },
+                    {
+                        "id": "generic",
+                        "kind": "draft",
+                        "target": {},
+                        "isEditor": false,
+                        "canSave": false,
+                        "canFinish": false,
+                    },
+                ]),
+            ),
+        );
+    }
+
     #[rstest]
     #[tokio::test]
     async fn gets_a_queued_document_by_id(active_review_document: ActiveReviewDocument) {
@@ -932,6 +1162,57 @@ mod tests {
                 std::fs::read_to_string(&queued_path).expect("queued document should be readable"),
             ),
             (StatusCode::CONFLICT, "Queued body.".to_string()),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn rejects_a_document_id_that_does_not_match_the_save_route(
+        active_review_document: ActiveReviewDocument,
+    ) {
+        let active_path = active_review_document.document_path;
+        let queued_path = active_review_document
+            .temp_dir
+            .path()
+            .join("queued-document.md");
+        std::fs::write(&queued_path, "Queued body.").expect("queued document should be written");
+        let mut session = active_review_document.session;
+        session.pending_human_review_ids.insert(review_marker(
+            "queued-review",
+            &queued_path,
+            2,
+            None,
+        ));
+        let app = router_with_session_loader(move |_| Ok(Some(session.clone())));
+        let response = app
+            .oneshot(
+                Request::post("/sessions/fixture-session/review-documents/queued-review/save")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "id": "fixture-review",
+                            "revision": current_revision(&active_path),
+                            "frontmatter": null,
+                            "body": "Must not overwrite the active document.",
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should be valid"),
+            )
+            .await
+            .expect("request should complete");
+
+        assert_eq!(
+            (
+                response.status(),
+                std::fs::read_to_string(&active_path).expect("active document should be readable"),
+                std::fs::read_to_string(&queued_path).expect("queued document should be readable"),
+            ),
+            (
+                StatusCode::CONFLICT,
+                "Original body.".to_string(),
+                "Queued body.".to_string(),
+            ),
         );
     }
 
