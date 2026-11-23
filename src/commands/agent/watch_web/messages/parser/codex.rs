@@ -1044,6 +1044,51 @@ mod tests {
     }
 
     #[test]
+    fn codex_initial_user_message_hides_trailing_session_context() {
+        let transcript = indoc! {r#"
+            {"type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","content":"Please inspect this fictional issue.\n\n<session-context>\n- Working directory: /fictional/project\n</session-context>"}}}
+        "#};
+
+        assert_eq!(
+            parse(Cursor::new(transcript), None).unwrap(),
+            vec![ChatItem::User {
+                rewind_id: None,
+                text: "Please inspect this fictional issue.".to_string(),
+                timestamp: None,
+                from: None,
+                queued_prompt_id: None,
+            }],
+        );
+    }
+
+    #[test]
+    fn codex_peer_message_keeps_session_context_visible() {
+        let transcript = indoc! {r#"
+            {"type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","content":"<peer-message>\n- From session_id: fixture-peer-id\n\nFictional request.\n\n<session-context>\n- Working directory: /fictional/peer\n</session-context>\n</peer-message>"}}}
+        "#};
+
+        assert_eq!(
+            parse(Cursor::new(transcript), None).unwrap(),
+            vec![ChatItem::Peer {
+                direction: PeerDirection::From,
+                session_id: "fixture-peer-id".to_string(),
+                session_title: None,
+                content: vec![UserContentPart::Text {
+                    text: indoc! {"
+                        Fictional request.
+
+                        <session-context>
+                        - Working directory: /fictional/peer
+                        </session-context>"}
+                    .to_string(),
+                }],
+                timestamp: None,
+                failed: false,
+            }],
+        );
+    }
+
+    #[test]
     fn parses_the_latest_injected_skill_listing() {
         let transcript = indoc! {r###"
             {"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"<skills_instructions>\n## Skills\n### Available skills\n- old-tool: Old description.\n</skills_instructions>"}]}}

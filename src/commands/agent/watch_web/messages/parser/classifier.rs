@@ -152,7 +152,7 @@ pub(super) fn classify_inbound(
     }
 }
 
-fn user_text_without_session_context(text: &str) -> String {
+pub(super) fn user_text_without_session_context(text: &str) -> String {
     let Some(context_end) = text.rfind("</session-context>") else {
         return text.to_owned();
     };
@@ -370,7 +370,9 @@ pub(super) fn marked_user_body(text: &str, marker: Option<&str>) -> Option<Strin
 fn marked_or_peer_message(text: &str, marker: Option<&str>) -> Option<MessageKind> {
     let message = extract_peer_message(text, marker)?;
     if message.has_user_marker_in_body || (message.sender_id.is_none() && message.has_user_marker) {
-        return Some(marked_user_message_body(message.body));
+        return Some(marked_user_message_body(user_text_without_session_context(
+            &message.body,
+        )));
     }
     let text = peer_message_text(&message);
     let session_id = message.sender_id?;
@@ -475,6 +477,22 @@ mod tests {
         Some("⟦armyknife-user:fixture-marker-violet⟧"),
         MessageKind::User {
             text: "Please inspect this marked fictional issue.".to_owned(),
+        },
+    )]
+    #[case::peer_origin_watch_web_marker_is_user_and_context_is_hidden(
+        json!({"type":"user","origin":{"kind":"peer","from":"fixture-sender-id"}}),
+        indoc! {"
+            ⟦armyknife-user:fixture-marker-violet⟧
+            This message was sent by the human user in armyknife watch-web, either as a message or an action notification.
+            Please inspect this peer-delivered fictional issue.
+
+            <session-context>
+            - Working directory: /fictional/project
+            </session-context>
+        "},
+        Some("⟦armyknife-user:fixture-marker-violet⟧"),
+        MessageKind::User {
+            text: "Please inspect this peer-delivered fictional issue.".to_owned(),
         },
     )]
     #[case::human_vibe_notice_is_an_event(

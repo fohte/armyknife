@@ -105,6 +105,12 @@ pub(in crate::commands::agent::watch_web::messages::parser) fn append_user_text_
     }
     let classification =
         classifier::classify_inbound(&serde_json::json!({"type":"user"}), &text, None);
+    let classification = match classification {
+        classifier::MessageKind::User { text } => classifier::MessageKind::User {
+            text: classifier::user_text_without_session_context(&text),
+        },
+        classification => classification,
+    };
     append_classification(
         items,
         classification,
