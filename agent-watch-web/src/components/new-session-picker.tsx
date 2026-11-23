@@ -136,7 +136,12 @@ export function NewSessionPicker({
             return
           }
           if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-            if (event.target instanceof HTMLTextAreaElement) return
+            if (
+              event.target instanceof HTMLTextAreaElement &&
+              event.target.value.includes('\n')
+            ) {
+              return
+            }
             event.preventDefault()
             if (selectedDirectory !== null) {
               state.setEngine(state.engine === 'claude' ? 'codex' : 'claude')

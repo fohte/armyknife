@@ -224,6 +224,72 @@ it('selects the engine and starts the session with arrow keys', async () => {
   expect(snapshot()).toEqual(['codex'])
 })
 
+it('changes the engine with arrow keys in a single-line first message', async () => {
+  const start = vi.fn<NewSessionState['start']>(() => Promise.resolve())
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <PickerHarness
+        selectedDirectory={exampleSessionDirectories[0] ?? null}
+        start={start}
+      />,
+    )
+  })
+  const firstMessage = container.querySelector<HTMLTextAreaElement>(
+    '[aria-label="First message"]',
+  )
+  if (firstMessage === null) {
+    throw new Error('First message input was not rendered')
+  }
+  await act(async () => {
+    firstMessage.focus()
+    await userEvent.keyboard('{ArrowDown}{Enter}')
+  })
+
+  const snapshot = () => start.mock.calls.map(([, engine]) => engine)
+  expect(snapshot()).toEqual(['codex'])
+})
+
+it('moves the caret with arrow keys in a multiline first message', async () => {
+  const start = vi.fn<NewSessionState['start']>(() => Promise.resolve())
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <PickerHarness
+        selectedDirectory={exampleSessionDirectories[0] ?? null}
+        start={start}
+      />,
+    )
+  })
+  const firstMessage = container.querySelector<HTMLTextAreaElement>(
+    '[aria-label="First message"]',
+  )
+  if (firstMessage === null) {
+    throw new Error('First message input was not rendered')
+  }
+  await act(async () => {
+    firstMessage.focus()
+    await userEvent.keyboard('alpha{Shift>}{Enter}{/Shift}omega')
+  })
+  const caretBefore = firstMessage.selectionStart
+  await act(async () => {
+    await userEvent.keyboard('{ArrowUp}{Enter}')
+  })
+
+  const snapshot = () => ({
+    message: firstMessage.value,
+    caretBefore,
+    caretAfter: firstMessage.selectionStart,
+    starts: start.mock.calls.map(([, engine]) => engine),
+  })
+  expect(snapshot()).toEqual({
+    message: 'alpha\nomega',
+    caretBefore: 11,
+    caretAfter: 5,
+    starts: ['claude'],
+  })
+})
+
 it.each([
   ['composition state', true, undefined],
   ['legacy key code', false, 229],
