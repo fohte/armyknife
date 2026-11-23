@@ -192,10 +192,12 @@ function PullRequestHarness({
   isMobile,
   pullRequests: sessionPullRequests = pullRequests,
   mergeStatus = () => null,
+  onRetryMerge,
 }: {
   isMobile: boolean
   pullRequests?: PullRequest[]
   mergeStatus?: (pullRequest: PullRequest) => AsyncActionStatus | null
+  onRetryMerge?: (pullRequest: PullRequest) => void
 }) {
   const [open, setOpen] = useState(false)
   return (
@@ -205,6 +207,7 @@ function PullRequestHarness({
       isMobile={isMobile}
       open={open}
       mergeStatus={mergeStatus}
+      {...(onRetryMerge === undefined ? {} : { onRetryMerge })}
       onOpenChange={setOpen}
     />
   )
@@ -215,6 +218,7 @@ function render(
   sessionPullRequests: PullRequest[] = pullRequests,
   mergeStatus: (pullRequest: PullRequest) => AsyncActionStatus | null = () =>
     null,
+  onRetryMerge?: (pullRequest: PullRequest) => void,
 ) {
   act(() => {
     root?.render(
@@ -222,6 +226,7 @@ function render(
         isMobile={isMobile}
         pullRequests={sessionPullRequests}
         mergeStatus={mergeStatus}
+        {...(onRetryMerge === undefined ? {} : { onRetryMerge })}
       />,
     )
   })
@@ -483,7 +488,8 @@ it.each([
     if (mergeablePullRequest === undefined) {
       throw new Error('Expected a mergeable pull request')
     }
-    render(isMobile, [mergeablePullRequest], () => 'mergeFailed')
+    const onRetryMerge = vi.fn<(pullRequest: PullRequest) => void>()
+    render(isMobile, [mergeablePullRequest], () => 'mergeFailed', onRetryMerge)
 
     const trigger = container.querySelector<HTMLButtonElement>(
       '.session-pr-trigger',
@@ -506,8 +512,16 @@ it.each([
         action: action?.textContent ?? null,
         actionLabel: action?.getAttribute('aria-label') ?? null,
         actionDisabled: action?.disabled ?? false,
+        retryCalls: onRetryMerge.mock.calls,
       }
     }
+    const action = row?.querySelector<HTMLButtonElement>('button')
+    if (action === null || action === undefined) {
+      throw new Error('Expected retry action')
+    }
+    act(() => {
+      action.click()
+    })
     expect(snapshot()).toEqual({
       label: 'Failed',
       labelRole: 'status',
@@ -515,6 +529,7 @@ it.each([
       action: 'Retry',
       actionLabel: 'Retry merging PR #43',
       actionDisabled: false,
+      retryCalls: [[mergeablePullRequest]],
     })
   },
 )

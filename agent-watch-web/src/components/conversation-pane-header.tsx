@@ -131,21 +131,6 @@ export function ConversationPaneHeader({
       },
     ]
   })
-  const mergeBand =
-    mergeBandTarget === null
-      ? null
-      : createPortal(
-          <MergeBand
-            rows={mergeRows}
-            isMobile={isMobile}
-            onMerge={merge.openMergeConfirmation}
-            onRetry={(target) => {
-              const action = merge.mergeActionFor(target)
-              if (action?.status === 'mergeFailed') merge.retryMerge(action.id)
-            }}
-          />,
-          mergeBandTarget,
-        )
   const mergeStatusFor = (target: (typeof pullRequests)[number]) =>
     merge.mergeStatusFor(target)
   const mergeErrorFor = (target: (typeof pullRequests)[number]) =>
@@ -156,6 +141,18 @@ export function ConversationPaneHeader({
     const action = merge.mergeActionFor(target)
     if (action?.status === 'mergeFailed') merge.retryMerge(action.id)
   }
+  const mergeBand =
+    mergeBandTarget === null
+      ? null
+      : createPortal(
+          <MergeBand
+            rows={mergeRows}
+            isMobile={isMobile}
+            onMerge={merge.openMergeConfirmation}
+            onRetry={retryMerge}
+          />,
+          mergeBandTarget,
+        )
   const linkedTasks = getSessionTasks(session)
   const mobileRepoName = session.repo.split('/').at(-1) ?? session.repo
 
