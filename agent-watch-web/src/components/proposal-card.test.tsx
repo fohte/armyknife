@@ -85,16 +85,34 @@ function renderCards(cardProps: Props[]) {
         onSelectSession={onSelectSession}
       >
         <>
-          {cardProps.map((card) => (
+          {cardProps.map((card, index) => (
             <ProposalCard
               {...card}
-              key={`${card.sessionId ?? 'proposal'}-${String(card.seq)}`}
+              key={`${card.sessionId ?? 'proposal'}-${String(card.seq)}-${String(index)}`}
             />
           ))}
         </>
       </MarkdownSessionLinksProvider>,
     )
   })
+}
+
+function positionCardLabelNearTop(
+  firstCard: HTMLElement,
+  label: HTMLLabelElement,
+  scrollContainer: HTMLElement,
+) {
+  const spacer = document.createElement('div')
+  spacer.style.height = '800px'
+  firstCard.after(spacer)
+  scrollContainer.scrollTop +=
+    label.getBoundingClientRect().top -
+    scrollContainer.getBoundingClientRect().top -
+    40
+  act(() => {
+    scrollContainer.dispatchEvent(new Event('scroll'))
+  })
+  return scrollContainer.scrollTop
 }
 
 function requireElement<T extends Element>(element: T | null): T {
@@ -367,8 +385,7 @@ it('keeps option labels phrasing-only and links associated with their radios', (
 
     return {
       optionTag: option?.tagName,
-      inputId: input?.id,
-      labelFor: label?.htmlFor,
+      labelTargetsInput: label?.control === input,
       labelText: label?.textContent,
       labelLinkCount: label?.querySelectorAll('a').length,
       descriptionTag: description?.tagName,
@@ -378,8 +395,7 @@ it('keeps option labels phrasing-only and links associated with their radios', (
 
   expect(snapshot()).toEqual({
     optionTag: 'DIV',
-    inputId: 'proposal-session-alpha-7-option-0',
-    labelFor: 'proposal-session-alpha-7-option-0',
+    labelTargetsInput: true,
     labelText: 'Use the existing flow',
     labelLinkCount: 0,
     descriptionTag: 'DIV',
@@ -487,33 +503,28 @@ it('keeps a proposal choice in its own session when labels share a sequence numb
     props({ sessionId: 'session-alpha' }),
     props({ sessionId: 'session-beta' }),
   ])
-  const cards = Array.from(container.querySelectorAll('.chat-proposal-card'))
+  const cards = Array.from(
+    container.querySelectorAll<HTMLElement>('.chat-proposal-card'),
+  )
   const firstCard = cards[0]
   const secondCard = cards[1]
   if (firstCard === undefined || secondCard === undefined) {
     throw new Error('Expected two proposal cards')
   }
-  const spacer = document.createElement('div')
-  spacer.style.height = '800px'
-  firstCard.after(spacer)
   const secondLabel = requireElement(
     secondCard.querySelector<HTMLLabelElement>('.chat-proposal-option-label'),
   )
-  const scroll = container
-  scroll.scrollTop +=
-    secondLabel.getBoundingClientRect().top -
-    scroll.getBoundingClientRect().top -
-    40
-  act(() => {
-    scroll.dispatchEvent(new Event('scroll'))
-  })
-  const scrollBeforeSelection = scroll.scrollTop
+  const scrollBeforeSelection = positionCardLabelNearTop(
+    firstCard,
+    secondLabel,
+    container,
+  )
 
   await act(async () => {
     await userEvent.click(secondLabel)
   })
-  const scrollAfterClick = scroll.scrollTop
-  const scrollBeforeKeyboard = scroll.scrollTop
+  const scrollAfterClick = container.scrollTop
+  const scrollBeforeKeyboard = container.scrollTop
   act(() => {
     requireElement(
       secondCard.querySelector<HTMLInputElement>('.chat-proposal-option input'),
@@ -525,7 +536,7 @@ it('keeps a proposal choice in its own session when labels share a sequence numb
     scrollBeforeSelection,
     scrollAfterClick,
     scrollBeforeKeyboard,
-    scrollAfterKeyboard: scroll.scrollTop,
+    scrollAfterKeyboard: container.scrollTop,
     selectedChoices: cards.map((card) =>
       Array.from(
         card.querySelectorAll<HTMLInputElement>('.chat-proposal-option input'),
@@ -552,6 +563,53 @@ it('keeps a proposal choice in its own session when labels share a sequence numb
       [false, true],
     ],
     commentLabelsTargetOwnTextarea: [true, true],
+  })
+})
+
+it('keeps focus and scroll on a duplicated proposal when its later choice is selected', async () => {
+  container.className = 'conversation-scroll'
+  container.style.cssText = 'width: 420px; height: 260px; overflow-y: auto'
+  const repeatedProposal = props({ sessionId: 'session-alpha' })
+  renderCards([repeatedProposal, repeatedProposal])
+
+  const cards = Array.from(
+    container.querySelectorAll<HTMLElement>('.chat-proposal-card'),
+  )
+  const firstCard = cards[0]
+  const secondCard = cards[1]
+  if (firstCard === undefined || secondCard === undefined) {
+    throw new Error('Expected two proposal cards')
+  }
+  const secondLabel = requireElement(
+    secondCard.querySelector<HTMLLabelElement>('.chat-proposal-option-label'),
+  )
+  const firstRadio = requireElement(
+    firstCard.querySelector<HTMLInputElement>('.chat-proposal-option input'),
+  )
+  const secondRadio = requireElement(
+    secondCard.querySelector<HTMLInputElement>('.chat-proposal-option input'),
+  )
+  const scrollBeforeSelection = positionCardLabelNearTop(
+    firstCard,
+    secondLabel,
+    container,
+  )
+
+  await act(async () => {
+    await userEvent.click(secondLabel)
+  })
+
+  const snapshot = () => ({
+    scrollBeforeSelection,
+    scrollAfterSelection: container.scrollTop,
+    focusStayedOnLaterRadio: document.activeElement === secondRadio,
+    focusMovedToFirstRadio: document.activeElement === firstRadio,
+  })
+  expect(snapshot()).toEqual({
+    scrollBeforeSelection,
+    scrollAfterSelection: scrollBeforeSelection,
+    focusStayedOnLaterRadio: true,
+    focusMovedToFirstRadio: false,
   })
 })
 

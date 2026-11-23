@@ -2,7 +2,7 @@ import '#components/card-comment.css'
 import '#components/proposal-card.css'
 
 import { Button } from '@fohte/ui/button'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
 
 import {
   AttachmentPreviewList,
@@ -52,7 +52,7 @@ export function ProposalCard({
   onAnswer,
 }: ProposalCardProps) {
   const [draftSessionId] = useState(() => sessionId ?? crypto.randomUUID())
-  const proposalFieldId = `proposal-${draftSessionId}-${String(seq)}`
+  const proposalFieldId = `proposal-${useId()}`
   const attachmentState = useAttachments(
     `${sessionId ?? 'proposal'}:proposal:${String(seq)}`,
   )
