@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.864](https://github.com/fohte/armyknife/compare/v0.1.863...v0.1.864) (2026-11-23)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** restore Merge to PR rows ([#2120](https://github.com/fohte/armyknife/issues/2120)) ([d78da5d](https://github.com/fohte/armyknife/commit/d78da5d685e8a4df2ce589e94a307ab31cd63c0a))
+
 ## [0.1.863](https://github.com/fohte/armyknife/compare/v0.1.862...v0.1.863) (2026-11-23)
 
 
