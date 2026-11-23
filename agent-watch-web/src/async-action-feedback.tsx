@@ -59,6 +59,7 @@ export type AsyncAction = {
   pullRequestOwner?: string
   pullRequestRepo?: string
   pullRequestHeadSha?: string
+  timelineIndex?: number
   message?: string
   error?: string
   checks?: CloseWorktreeChecks
@@ -93,6 +94,7 @@ export type StartAsyncActionOptions = {
   pullRequestOwner?: string
   pullRequestRepo?: string
   pullRequestHeadSha?: string
+  timelineIndex?: number
   run: () => Promise<AsyncActionOutcome>
   onRetry?: (retry: () => void, actionId: number) => void
   onCloseKeepWorktree?: () => void
@@ -287,6 +289,9 @@ export function AsyncActionFeedbackProvider({
           ...(options.pullRequestHeadSha === undefined
             ? {}
             : { pullRequestHeadSha: options.pullRequestHeadSha }),
+          ...(options.timelineIndex === undefined
+            ? {}
+            : { timelineIndex: options.timelineIndex }),
           createdAt: Date.now(),
         },
         ...current,

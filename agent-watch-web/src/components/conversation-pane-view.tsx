@@ -22,7 +22,10 @@ import type {
   PendingPermissionActions,
   PermissionRequestIdentity,
 } from '#components/permission-card'
-import { renderConversationAsyncActionItems } from '#components/render-conversation-async-action-items'
+import {
+  renderConversationAsyncActionItem,
+  renderConversationAsyncActionItems,
+} from '#components/render-conversation-async-action-items'
 import { scrollToConversationStatusCard } from '#components/scroll-to-conversation-status-card'
 import { SessionLinkElapsedSecondsContext } from '#components/session-link-elapsed-seconds'
 import { SessionUsageRow } from '#components/session-usage-row'
@@ -266,6 +269,7 @@ export function ConversationPaneView({
   const {
     activeTool,
     conversationMessageCount,
+    conversationMessageIndices,
     elements: conversationMessageElements,
     hasUnansweredProposal,
   } = useConversationMessageElements({
@@ -295,6 +299,62 @@ export function ConversationPaneView({
     sessions: sessionLinkTargets,
     now,
   })
+  const conversationTimelineElements: ReactNode[] = []
+  if (actionFeedback === null) {
+    conversationTimelineElements.push(...conversationMessageElements)
+  } else {
+    const positionedActions = actionFeedback.actions
+      .filter(
+        (action) =>
+          action.sessionId === session.id &&
+          action.kind === 'merge' &&
+          action.timelineIndex !== undefined &&
+          action.timelineIndex >= start,
+      )
+      .toSorted(
+        (left, right) =>
+          (left.timelineIndex ?? 0) - (right.timelineIndex ?? 0) ||
+          left.createdAt - right.createdAt ||
+          left.id - right.id,
+      )
+    let nextAction = 0
+    for (const [
+      messageOffset,
+      messageElement,
+    ] of conversationMessageElements.entries()) {
+      const messageIndex = conversationMessageIndices[messageOffset]
+      while (
+        messageIndex !== undefined &&
+        nextAction < positionedActions.length &&
+        (positionedActions[nextAction]?.timelineIndex ?? Infinity) <=
+          messageIndex
+      ) {
+        const action = positionedActions[nextAction]
+        if (action !== undefined) {
+          conversationTimelineElements.push(
+            renderConversationAsyncActionItem({
+              action,
+              feedback: actionFeedback,
+            }),
+          )
+        }
+        nextAction += 1
+      }
+      conversationTimelineElements.push(messageElement)
+    }
+    while (nextAction < positionedActions.length) {
+      const action = positionedActions[nextAction]
+      if (action !== undefined) {
+        conversationTimelineElements.push(
+          renderConversationAsyncActionItem({
+            action,
+            feedback: actionFeedback,
+          }),
+        )
+      }
+      nextAction += 1
+    }
+  }
   const statusBandState = getConversationStatusBandState({
     session,
     messages,
@@ -343,6 +403,7 @@ export function ConversationPaneView({
       <ConversationPaneHeader
         key={session.id}
         session={session}
+        timelineIndex={start + messages.length}
         mergeBandTarget={mergeBandTarget}
         vibeMode={vibeMode}
         actions={actions}
@@ -400,7 +461,7 @@ export function ConversationPaneView({
           {...(onCommandExecuted === undefined ? {} : { onCommandExecuted })}
           {...(onCommandStarted === undefined ? {} : { onCommandStarted })}
         >
-          {conversationMessageElements}
+          {conversationTimelineElements}
         </MarkdownCommandContextProvider>
         {renderConversationAsyncActionItems({
           feedback: actionFeedback,

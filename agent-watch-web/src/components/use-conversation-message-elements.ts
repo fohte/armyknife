@@ -258,6 +258,9 @@ export function useConversationMessageElements({
     return {
       activeTool,
       conversationMessageCount: conversationMessages.length,
+      conversationMessageIndices: conversationMessages.map(
+        ({ index }) => start + index,
+      ),
       elements: rows.map(({ element }) => element),
       hasUnansweredProposal,
     }

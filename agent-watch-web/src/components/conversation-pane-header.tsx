@@ -37,6 +37,7 @@ import type {
 
 type ConversationPaneHeaderProps = {
   session: Session
+  timelineIndex?: number
   vibeMode?: VibeMode | undefined
   actions: SessionActions | null
   isMobile: boolean
@@ -64,6 +65,7 @@ type ConversationPaneHeaderProps = {
 
 export function ConversationPaneHeader({
   session,
+  timelineIndex,
   vibeMode = session.vibeMode,
   actions,
   isMobile,
@@ -105,6 +107,7 @@ export function ConversationPaneHeader({
   const merge = useConversationPaneHeaderMerge({
     session,
     pullRequests,
+    ...(timelineIndex === undefined ? {} : { timelineIndex }),
     setPullRequestListOpen,
   })
   const mergeRows = merge.mergeablePullRequests.flatMap((target) => {
