@@ -10,7 +10,7 @@ import {
 
 import { NewSessionModelPicker } from '#components/new-session-model-picker'
 import { SessionDirectoryOptions } from '#components/session-directory-options'
-import { useConversationPaneKeyboard } from '#components/use-conversation-pane-keyboard'
+import { useNewSessionMessageKeyboard } from '#components/use-new-session-message-keyboard'
 import type { NewSessionState } from '#use-new-session'
 
 function isImeEnter(event: ReactKeyboardEvent) {
@@ -45,17 +45,11 @@ export function NewSessionPicker({
   const pickerRef = useRef<HTMLElement>(null)
   const wasModelPickerOpen = useRef(false)
   const selectedDirectory = state.selectedDirectory
-  const handleMessageKeyDown = useConversationPaneKeyboard({
+  const handleMessageKeyDown = useNewSessionMessageKeyboard({
     isMobile,
-    canInterrupt: false,
-    interruptPending: false,
-    interrupt: () => undefined,
-    updateDraft: state.setInitialMessage,
-    sendMessage: async () => {
-      if (selectedDirectory !== null && !launchPending) {
-        await state.start(onLaunched, state.engine)
-      }
-    },
+    launchPending,
+    onLaunched,
+    state,
   })
 
   useEffect(() => {
@@ -288,7 +282,6 @@ export function NewSessionPicker({
                 <strong>Claude Code</strong>
                 <span> in {selectedDirectory.path}</span>
               </span>
-              <kbd>↵</kbd>
             </button>
             <button
               aria-selected={state.engine === 'codex'}
@@ -304,7 +297,6 @@ export function NewSessionPicker({
                 <strong>Codex</strong>
                 <span> in {selectedDirectory.path}</span>
               </span>
-              <kbd>⌥↵</kbd>
             </button>
             <h2>OPTIONS</h2>
             <button

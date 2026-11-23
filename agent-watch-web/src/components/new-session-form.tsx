@@ -11,8 +11,8 @@ import {
   useSkillCompletion,
 } from '#components/skill-completion'
 import { useBeforeUnloadWarning } from '#components/use-beforeunload-warning'
-import { useConversationPaneKeyboard } from '#components/use-conversation-pane-keyboard'
 import { useDismissableLayer } from '#components/use-dismissable-layer'
+import { useNewSessionMessageKeyboard } from '#components/use-new-session-message-keyboard'
 import type { NewSessionState } from '#use-new-session'
 
 type NewSessionFormProps = {
@@ -45,17 +45,11 @@ export function NewSessionForm({
   const directoryPopoverRef = useRef<HTMLDivElement>(null)
   const engineControlRef = useRef<HTMLDivElement>(null)
   const selectedDirectory = state.selectedDirectory
-  const handleMessageKeyDown = useConversationPaneKeyboard({
+  const handleMessageKeyDown = useNewSessionMessageKeyboard({
     isMobile,
-    canInterrupt: false,
-    interruptPending: false,
-    interrupt: () => undefined,
-    updateDraft: state.setInitialMessage,
-    sendMessage: async () => {
-      if (selectedDirectory !== null && !launchPending) {
-        await state.start(onLaunched, state.engine)
-      }
-    },
+    launchPending,
+    onLaunched,
+    state,
   })
   const skillCompletion = useSkillCompletion({
     draft: state.initialMessage,

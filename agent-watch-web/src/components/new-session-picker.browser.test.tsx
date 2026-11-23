@@ -22,6 +22,7 @@ function requireButton(selector: string) {
 function PickerHarness({
   start,
   onClose = () => undefined,
+  isMobile = false,
   chooseModel = () => undefined,
   setSelectedEffort = () => undefined,
   selectedDirectory: initialSelectedDirectory = null,
@@ -32,6 +33,7 @@ function PickerHarness({
 }: {
   start: NewSessionState['start']
   onClose?: () => void
+  isMobile?: boolean
   chooseModel?: NewSessionState['chooseModel']
   setSelectedEffort?: NewSessionState['setSelectedEffort']
   selectedDirectory?: NewSessionState['selectedDirectory']
@@ -78,6 +80,7 @@ function PickerHarness({
   return (
     <NewSessionPicker
       state={state}
+      isMobile={isMobile}
       initialModelPickerOpen={initialModelPickerOpen}
       onClose={onClose}
       onLaunched={() => undefined}
@@ -138,6 +141,36 @@ it('uses the reply keyboard behavior for the first message', async () => {
     afterNewlines: { message: '\n\n', starts: 0 },
     starts: ['claude'],
   })
+})
+
+it('keeps Enter as a newline in the mobile first message', async () => {
+  const start = vi.fn<NewSessionState['start']>(() => Promise.resolve())
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <PickerHarness
+        isMobile
+        selectedDirectory={exampleSessionDirectories[0] ?? null}
+        start={start}
+      />,
+    )
+  })
+  const firstMessage = container.querySelector<HTMLTextAreaElement>(
+    '[aria-label="First message"]',
+  )
+  if (firstMessage === null) {
+    throw new Error('First message input was not rendered')
+  }
+  await act(async () => {
+    firstMessage.focus()
+    await userEvent.keyboard('{Enter}')
+  })
+
+  const snapshot = () => ({
+    message: firstMessage.value,
+    starts: start.mock.calls,
+  })
+  expect(snapshot()).toEqual({ message: '\n', starts: [] })
 })
 
 it('selects a directory with arrow keys and Enter', async () => {

@@ -90,7 +90,13 @@ function StatefulSkillForm() {
   )
 }
 
-function StatefulKeyboardForm({ start }: { start: NewSessionState['start'] }) {
+function StatefulKeyboardForm({
+  start,
+  isMobile = false,
+}: {
+  start: NewSessionState['start']
+  isMobile?: boolean
+}) {
   const [initialMessage, setInitialMessage] = useState('')
   return (
     <NewSessionForm
@@ -100,6 +106,7 @@ function StatefulKeyboardForm({ start }: { start: NewSessionState['start'] }) {
         setInitialMessage,
         start,
       })}
+      isMobile={isMobile}
       onClose={() => undefined}
       onLaunched={() => undefined}
     />
@@ -218,6 +225,26 @@ it('uses the reply keyboard behavior for the first message', async () => {
     afterNewlines: { message: '\n\n', starts: 0 },
     starts: ['function'],
   })
+})
+
+it('keeps Enter as a newline in the mobile first message', async () => {
+  const start = vi.fn<NewSessionState['start']>(() => Promise.resolve())
+  root = createRoot(container)
+  act(() => root?.render(<StatefulKeyboardForm isMobile start={start} />))
+  const textarea = container.querySelector<HTMLTextAreaElement>(
+    '[aria-label="First message"]',
+  )
+  if (textarea === null) throw new Error('First message field was not rendered')
+  await act(async () => {
+    textarea.focus()
+    await userEvent.keyboard('{Enter}')
+  })
+
+  const snapshot = () => ({
+    message: textarea.value,
+    starts: start.mock.calls,
+  })
+  expect(snapshot()).toEqual({ message: '\n', starts: [] })
 })
 
 it('opens directory suggestions and selects the clicked directory', async () => {
