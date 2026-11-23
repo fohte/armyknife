@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.873](https://github.com/fohte/armyknife/compare/v0.1.872...v0.1.873) (2026-11-23)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show new sessions in Recent ([#2136](https://github.com/fohte/armyknife/issues/2136)) ([8526ff9](https://github.com/fohte/armyknife/commit/8526ff93b7c6088d7463c33ce27379feafb1b875))
+
 ## [0.1.872](https://github.com/fohte/armyknife/compare/v0.1.871...v0.1.872) (2026-11-23)
 
 
