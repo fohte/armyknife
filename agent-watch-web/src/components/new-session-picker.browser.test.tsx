@@ -220,8 +220,15 @@ it('selects the engine and starts the session with arrow keys', async () => {
     await userEvent.keyboard('{ArrowDown}{Enter}')
   })
 
-  const snapshot = () => start.mock.calls.map(([, engine]) => engine)
-  expect(snapshot()).toEqual(['codex'])
+  const snapshot = () => ({
+    keyboardHint: container.querySelector('.new-session-picker-footer > span')
+      ?.textContent,
+    starts: start.mock.calls.map(([, engine]) => engine),
+  })
+  expect(snapshot()).toEqual({
+    keyboardHint: '↑↓ Engine / model',
+    starts: ['codex'],
+  })
 })
 
 it('changes the engine with arrow keys in a single-line first message', async () => {
@@ -246,8 +253,15 @@ it('changes the engine with arrow keys in a single-line first message', async ()
     await userEvent.keyboard('{ArrowDown}{Enter}')
   })
 
-  const snapshot = () => start.mock.calls.map(([, engine]) => engine)
-  expect(snapshot()).toEqual(['codex'])
+  const snapshot = () => ({
+    keyboardHint: container.querySelector('.new-session-picker-footer > span')
+      ?.textContent,
+    starts: start.mock.calls.map(([, engine]) => engine),
+  })
+  expect(snapshot()).toEqual({
+    keyboardHint: '↑↓ Engine / model',
+    starts: ['codex'],
+  })
 })
 
 it('moves the caret with arrow keys in a multiline first message', async () => {
@@ -280,12 +294,15 @@ it('moves the caret with arrow keys in a multiline first message', async () => {
     message: firstMessage.value,
     caretBefore,
     caretAfter: firstMessage.selectionStart,
+    keyboardHint: container.querySelector('.new-session-picker-footer > span')
+      ?.textContent,
     starts: start.mock.calls.map(([, engine]) => engine),
   })
   expect(snapshot()).toEqual({
     message: 'alpha\nomega',
     caretBefore: 11,
     caretAfter: 5,
+    keyboardHint: '↑↓ Message cursor',
     starts: ['claude'],
   })
 })

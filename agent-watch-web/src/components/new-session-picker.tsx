@@ -370,7 +370,9 @@ export function NewSessionPicker({
                 <span>
                   {selectedDirectory === null
                     ? '↑↓ Directory · ↵ Select'
-                    : '↑↓ Engine / model'}
+                    : state.initialMessage.includes('\n')
+                      ? '↑↓ Message cursor'
+                      : '↑↓ Engine / model'}
                 </span>
                 <span>⌥W Worktree</span>
                 <span>⌫ Change directory</span>
