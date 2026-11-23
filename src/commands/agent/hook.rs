@@ -2200,13 +2200,8 @@ mod tests {
         });
         expected.status = expected_status;
         let mut expected = serde_json::to_value(expected).expect("session should serialize");
-        for snapshot in [&mut actual, &mut expected] {
-            snapshot["created_at"] = serde_json::json!("<timestamp>");
-            snapshot["updated_at"] = serde_json::json!("<timestamp>");
-            if !snapshot["last_prompted_at"].is_null() {
-                snapshot["last_prompted_at"] = serde_json::json!("<timestamp>");
-            }
-        }
+        normalize_session_timestamps(&mut actual);
+        normalize_session_timestamps(&mut expected);
 
         assert_eq!(
             (
@@ -4346,6 +4341,14 @@ mod tests {
             engine: Engine::Claude,
             model: None,
             effort: None,
+        }
+    }
+
+    fn normalize_session_timestamps(snapshot: &mut serde_json::Value) {
+        snapshot["created_at"] = serde_json::json!("<timestamp>");
+        snapshot["updated_at"] = serde_json::json!("<timestamp>");
+        if !snapshot["last_prompted_at"].is_null() {
+            snapshot["last_prompted_at"] = serde_json::json!("<timestamp>");
         }
     }
 
