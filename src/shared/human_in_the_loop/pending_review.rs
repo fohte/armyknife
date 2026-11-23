@@ -211,7 +211,7 @@ mod tests {
 
     use crate::commands::agent::store;
     use crate::commands::agent::types::{Engine, Session, SessionStatus};
-    use crate::shared::human_in_the_loop::LockGuard;
+    use crate::shared::human_in_the_loop::{LockGuard, ReviewDocumentOperationLock};
 
     use super::{PendingReviewGuard, review_document_marker, review_document_marker_with};
 
@@ -411,6 +411,64 @@ mod tests {
         );
         drop(lock);
         assert_eq!(review_document_marker_with(&marker, |_, _| false), None);
+    }
+
+    #[test]
+    fn review_document_marker_does_not_block_while_document_operation_lock_is_held() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let temp_dir = TempDir::new().expect("temp dir creation should succeed");
+        let draft_path = temp_dir.path().join("fixture-draft.md");
+        let marker = [
+            "review-id",
+            "v3",
+            "123",
+            draft_path.to_str().expect("fixture path should be UTF-8"),
+            "queue",
+            "41",
+            "linux:987",
+        ]
+        .join("\0");
+        let expected_marker = Some(super::ReviewDocumentMarker {
+            id: "review-id".to_string(),
+            path: draft_path.clone(),
+            queue_key: Some("queue".to_string()),
+            started_at: 123,
+        });
+        let _review_guard = LockGuard::acquire(&draft_path).expect("review lock should be active");
+        let operation_lock = ReviewDocumentOperationLock::acquire(&draft_path)
+            .expect("review document operation lock should be acquired");
+        let (started_sender, started_receiver) = mpsc::channel();
+        let (result_sender, result_receiver) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            started_sender.send(()).expect("worker should report start");
+            let result = review_document_marker_with(&marker, |_, _| false);
+            result_sender
+                .send(result)
+                .expect("worker should send marker result");
+        });
+
+        started_receiver
+            .recv()
+            .expect("worker should report start before checking the marker");
+        let immediate_result = result_receiver.recv_timeout(Duration::from_secs(1));
+        let completed_while_locked = immediate_result.is_ok();
+        drop(operation_lock);
+        let final_result = match immediate_result {
+            Ok(result) => Some(result),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                result_receiver.recv_timeout(Duration::from_secs(1)).ok()
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => None,
+        }
+        .flatten();
+        worker.join().expect("marker check worker should finish");
+
+        assert_eq!(
+            (completed_while_locked, final_result),
+            (true, expected_marker)
+        );
     }
 
     #[test]

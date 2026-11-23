@@ -66,7 +66,12 @@ impl LockGuard {
     /// Check whether a live review holder exists for the given document.
     pub fn is_locked(document_path: &Path) -> bool {
         matches!(
-            inspect_lock(&Self::lock_path(document_path), is_process_alive, |_| ()),
+            inspect_lock(
+                &Self::lock_path(document_path),
+                is_process_alive,
+                AdvisoryLockMode::NonBlocking,
+                |_| (),
+            ),
             LockState::Active
         )
     }
@@ -221,6 +226,7 @@ fn write_staging_record(lock_path: &Path, record: &LockRecord) -> io::Result<Pat
 fn inspect_lock<T>(
     path: &Path,
     mut is_alive: impl FnMut(u32) -> bool,
+    lock_mode: AdvisoryLockMode,
     mut on_stale: impl FnMut(&File) -> T,
 ) -> LockState<T> {
     for _ in 0..8 {
@@ -229,7 +235,11 @@ fn inspect_lock<T>(
             Ok(None) => return LockState::Missing,
             Err(_) => return LockState::Active,
         };
-        let Ok(_file_lock) = AdvisoryLock::exclusive(&file) else {
+        let file_lock = match lock_mode {
+            AdvisoryLockMode::Blocking => AdvisoryLock::exclusive(&file),
+            AdvisoryLockMode::NonBlocking => AdvisoryLock::try_exclusive(&file),
+        };
+        let Ok(_file_lock) = file_lock else {
             return LockState::Active;
         };
         if !same_file_at_path(&file, path) {
@@ -283,6 +293,12 @@ enum LockState<T> {
     Stale(T),
 }
 
+#[derive(Clone, Copy)]
+enum AdvisoryLockMode {
+    Blocking,
+    NonBlocking,
+}
+
 enum StaleRemoval {
     Removed,
     Replaced,
@@ -294,7 +310,7 @@ fn try_remove_stale_lock(path: &Path) -> StaleRemoval {
 }
 
 fn try_remove_stale_lock_with(path: &Path, is_alive: impl FnMut(u32) -> bool) -> StaleRemoval {
-    match inspect_lock(path, is_alive, |file| {
+    match inspect_lock(path, is_alive, AdvisoryLockMode::Blocking, |file| {
         if !same_file_at_path(file, path) {
             return StaleRemoval::Active;
         }
@@ -451,6 +467,15 @@ impl<'a> AdvisoryLock<'a> {
     fn exclusive(file: &'a File) -> io::Result<Self> {
         // SAFETY: file remains open for the lifetime of this guard.
         if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } == 0 {
+            Ok(Self { file })
+        } else {
+            Err(io::Error::last_os_error())
+        }
+    }
+
+    fn try_exclusive(file: &'a File) -> io::Result<Self> {
+        // SAFETY: file remains open for the lifetime of this guard.
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
             Ok(Self { file })
         } else {
             Err(io::Error::last_os_error())
@@ -678,7 +703,12 @@ mod tests {
             pid == u32::MAX
         });
         let after_parent = LockRecord::parse(&fs::read(&lock_path).unwrap()).unwrap();
-        let locked_after_parent = inspect_lock(&lock_path, |pid| pid == u32::MAX, |_| ());
+        let locked_after_parent = inspect_lock(
+            &lock_path,
+            |pid| pid == u32::MAX,
+            AdvisoryLockMode::Blocking,
+            |_| (),
+        );
         release_holder_with(&lock_path, parent_guard.lock_id(), u32::MAX, |_| false);
 
         assert_eq!(
