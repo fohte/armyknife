@@ -9708,21 +9708,38 @@ it('keeps a merge result after the messages present when an older page is prepen
   function MergeResultStarter() {
     const feedback = useOptionalAsyncActionFeedback()
     return (
-      <button
-        type="button"
-        onClick={() => {
-          feedback?.start({
-            kind: 'merge',
-            sessionId: session.id,
-            sessionTitle: session.title,
-            pullRequestNumber: 9061,
-            timelineIndex: 2,
-            run: () => Promise.resolve({ status: 'merged' as const }),
-          })
-        }}
-      >
-        Start merge action
-      </button>
+      <>
+        <button
+          type="button"
+          onClick={() => {
+            feedback?.start({
+              kind: 'merge',
+              sessionId: session.id,
+              sessionTitle: session.title,
+              pullRequestNumber: 9061,
+              timelineIndex: 2,
+              run: () => Promise.resolve({ status: 'merged' as const }),
+            })
+            feedback?.start({
+              kind: 'merge',
+              sessionId: 'fixture-other-session',
+              sessionTitle: 'Another session',
+              pullRequestNumber: 9062,
+              timelineIndex: 2,
+              run: () => Promise.resolve({ status: 'merged' as const }),
+            })
+          }}
+        >
+          Start merge action
+        </button>
+        <output
+          data-other-session-timeline-index={String(
+            feedback?.actions.find(
+              (action) => action.sessionId === 'fixture-other-session',
+            )?.timelineIndex ?? '',
+          )}
+        />
+      </>
     )
   }
 
@@ -9770,19 +9787,26 @@ it('keeps a merge result after the messages present when an older page is prepen
     () => container.querySelectorAll('.chat-assistant-message').length === 3,
   )
 
-  const snapshot = () =>
-    Array.from(
+  const snapshot = () => ({
+    timeline: Array.from(
       container.querySelectorAll(
         '.conversation-scroll .chat-assistant-message, .conversation-scroll .async-action-item--line',
       ),
       (element) => normalizeAsyncActionLineTime(element.textContent),
-    )
-  expect(snapshot()).toEqual([
-    'Older message.',
-    'First visible message.',
-    'Latest visible message.',
-    'Merged PR #9061 · <time>',
-  ])
+    ),
+    otherSessionTimelineIndex: container
+      .querySelector('[data-other-session-timeline-index]')
+      ?.getAttribute('data-other-session-timeline-index'),
+  })
+  expect(snapshot()).toEqual({
+    timeline: [
+      'Older message.',
+      'First visible message.',
+      'Latest visible message.',
+      'Merged PR #9061 · <time>',
+    ],
+    otherSessionTimelineIndex: '2',
+  })
 })
 
 it('keeps the current page when older history ends and clears its scroll anchor', async () => {

@@ -9,6 +9,10 @@ import {
   useState,
 } from 'react'
 
+import {
+  shiftMergeTimelineIndices as shiftMergeActionTimelineIndices,
+  type ShiftMergeTimelineIndicesOptions,
+} from '#async-action-timeline'
 import { AsyncActionFeedbackHost } from '#components/async-action-feedback-host'
 import type { CloseWorktreeChecks } from '#session-operation-types'
 
@@ -106,13 +110,6 @@ type AsyncActionRetryUpdate = Pick<
   StartAsyncActionOptions,
   'run' | 'onRetry' | 'pullRequestHeadSha'
 >
-type ShiftMergeTimelineIndicesOptions = {
-  sessionId: string
-  from: number
-  through: number
-  offset: number
-}
-
 function runningStatusFor(kind: AsyncAction['kind']): AsyncActionStatus {
   switch (kind) {
     case 'merge':
@@ -350,25 +347,8 @@ export function AsyncActionFeedbackProvider({
   )
 
   const shiftMergeTimelineIndices = useCallback(
-    ({
-      sessionId,
-      from,
-      through,
-      offset,
-    }: ShiftMergeTimelineIndicesOptions) => {
-      if (offset === 0) return
-      setActions((current) =>
-        current.map((action) => {
-          const timelineIndex = action.timelineIndex
-          return action.kind === 'merge' &&
-            action.sessionId === sessionId &&
-            timelineIndex !== undefined &&
-            timelineIndex >= from &&
-            timelineIndex <= through
-            ? { ...action, timelineIndex: timelineIndex + offset }
-            : action
-        }),
-      )
+    (options: ShiftMergeTimelineIndicesOptions) => {
+      setActions((current) => shiftMergeActionTimelineIndices(current, options))
     },
     [],
   )
