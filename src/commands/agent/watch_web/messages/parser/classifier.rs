@@ -1,7 +1,7 @@
 use serde_json::Value;
 
 use crate::commands::agent::peer_message::{
-    ExtractedPeerMessage, extract_peer_message, task_notification_envelope, without_session_context,
+    ExtractedPeerMessage, extract_peer_message, task_notification_envelope,
 };
 
 use super::super::action_event;
@@ -66,9 +66,9 @@ pub(super) fn classify_inbound(
         == Some("human")
     {
         return match marked_user_body(text, user_marker) {
-            Some(body) => marked_user_message_body(without_session_context(&body)),
+            Some(body) => marked_user_message_body(user_text_without_session_context(&body)),
             None => MessageKind::User {
-                text: without_session_context(text),
+                text: user_text_without_session_context(text),
             },
         };
     }
@@ -150,6 +150,33 @@ pub(super) fn classify_inbound(
     MessageKind::User {
         text: text.to_owned(),
     }
+}
+
+fn user_text_without_session_context(text: &str) -> String {
+    let Some(context_end) = text.rfind("</session-context>") else {
+        return text.to_owned();
+    };
+    if !text[context_end + "</session-context>".len()..]
+        .trim()
+        .is_empty()
+    {
+        return text.to_owned();
+    }
+    let Some(context_start) = text[..context_end].rfind("<session-context>") else {
+        return text.to_owned();
+    };
+    let before_context = &text[..context_start];
+    let prompt = before_context
+        .strip_suffix('\n')
+        .and_then(|before| before.strip_suffix('\n'))
+        .or_else(|| {
+            before_context
+                .strip_suffix('\n')
+                .and_then(|before| before.strip_suffix('\r'))
+                .and_then(|before| before.strip_suffix('\n'))
+                .and_then(|before| before.strip_suffix('\r'))
+        });
+    prompt.map_or_else(|| text.to_owned(), str::to_owned)
 }
 
 fn subagent_report(record: &Value) -> Option<MessageKind> {
@@ -411,20 +438,43 @@ mod tests {
             Please inspect this fictional issue.
 
             <session-context>
-            - Working directory: /fictional/project
-            - Parent working directory: /fictional
+            - User-authored note: keep this literal block.
             </session-context>
 
             Keep this follow-up sentence.
+
+            <session-context>
+            - Working directory: /fictional/project
+            - Parent working directory: /fictional
+            </session-context>
         "},
         None,
         MessageKind::User {
             text: indoc! {"
                 Please inspect this fictional issue.
 
-                Keep this follow-up sentence.
-            "}
+                <session-context>
+                - User-authored note: keep this literal block.
+                </session-context>
+
+                Keep this follow-up sentence."}
             .to_owned(),
+        },
+    )]
+    #[case::marked_human_session_context_is_hidden_and_prompt_text_remains(
+        json!({"type":"user","origin":{"kind":"human"}}),
+        indoc! {"
+            ⟦armyknife-user:fixture-marker-violet⟧
+            This message was sent by the human user in armyknife watch-web, either as a message or an action notification.
+            Please inspect this marked fictional issue.
+
+            <session-context>
+            - Working directory: /fictional/project
+            </session-context>
+        "},
+        Some("⟦armyknife-user:fixture-marker-violet⟧"),
+        MessageKind::User {
+            text: "Please inspect this marked fictional issue.".to_owned(),
         },
     )]
     #[case::human_vibe_notice_is_an_event(
