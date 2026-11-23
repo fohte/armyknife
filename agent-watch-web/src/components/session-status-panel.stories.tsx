@@ -23,7 +23,8 @@ const phoneStatusTimeReference = Date.now()
 const statusPrDraft: ReviewDocumentSummary = {
   id: 'fixture-pr-draft',
   kind: 'pr_draft',
-  target: { repository: 'example/service', branch: 'retry-policy' },
+  target: { repository: 'example/web-app', branch: 'feature/retry-limit' },
+  startedAt: Date.now() - 120_000,
   isEditor: true,
   canSave: true,
   canFinish: true,
@@ -32,7 +33,12 @@ const statusPrDraft: ReviewDocumentSummary = {
 const statusIssueComment: ReviewDocumentSummary = {
   id: 'fixture-issue-comment',
   kind: 'issue_comment',
-  target: { issueNumber: 28, title: 'Improve retries' },
+  target: {
+    repository: 'example/web-app',
+    issueNumber: 412,
+    title: '配信が 4 件目から届かない',
+  },
+  startedAt: Date.now() - 180_000,
   isEditor: true,
   canSave: true,
   canFinish: true,
@@ -40,6 +46,7 @@ const statusIssueComment: ReviewDocumentSummary = {
 
 const statusWaitingPrDraft: ReviewDocumentSummary = {
   ...statusPrDraft,
+  startedAt: Date.now() - 120_000,
   isEditor: false,
   canSave: false,
   canFinish: false,
@@ -48,7 +55,12 @@ const statusWaitingPrDraft: ReviewDocumentSummary = {
 const statusWaitingReplies: ReviewDocumentSummary = {
   id: 'fixture-review-replies',
   kind: 'review_replies',
-  target: { pullRequestNumber: 15, threadCount: 2 },
+  target: {
+    repository: 'example/web-app',
+    pullRequestNumber: 2049,
+    threadCount: 2,
+  },
+  startedAt: Date.now() - 60_000,
   isEditor: false,
   canSave: false,
   canFinish: false,
@@ -57,11 +69,27 @@ const statusWaitingReplies: ReviewDocumentSummary = {
 const statusWaitingDraft: ReviewDocumentSummary = {
   id: 'fixture-waiting-draft',
   kind: 'draft',
-  target: {},
+  target: { path: 'docs/retry-plan.md' },
+  startedAt: Date.now() - 60_000,
   isEditor: false,
   canSave: false,
   canFinish: false,
 }
+
+const issueCommentBody = `再現手順を足します。
+
+1. 送信先を応答の遅いサーバーにする
+2. 通知を 10 件続けて送る
+3. 4 件目から届かない`
+
+const prDraftBody = `## Why
+
+再送の上限が 3 回で固定されていて、応答の遅い送信先では足りない。
+
+## What
+
+- 上限を \`RETRY_LIMIT\` で変えられるようにする
+- 既定値は 3 回のまま`
 
 const defaultStatusViewport = (Story: ComponentType) => (
   <div style={{ width: '420px', height: '600px', display: 'flex' }}>
@@ -71,12 +99,6 @@ const defaultStatusViewport = (Story: ComponentType) => (
 
 const reviewStatusViewport = (Story: ComponentType) => (
   <div style={{ width: '640px', height: '900px', display: 'flex' }}>
-    <Story />
-  </div>
-)
-
-const expandedReviewViewport = (Story: ComponentType) => (
-  <div style={{ width: '800px', height: '900px', display: 'flex' }}>
     <Story />
   </div>
 )
@@ -126,7 +148,7 @@ export const ReviewDocumentIsActive: Story = {
               needsFollowUp: true,
               tags: ['service', 'reliability'],
             }}
-            body={'## Summary\n\nReview the retry behavior.'}
+            body={issueCommentBody}
           />
         ),
       },
@@ -156,7 +178,7 @@ export const ReviewShowsMultipleDrafts: Story = {
               statusWaitingDraft,
             ]}
             frontmatter={{ priority: 'normal', needsFollowUp: true }}
-            body={'## Summary\n\nReview the retry behavior.'}
+            body={issueCommentBody}
           />
         ),
       },
@@ -181,11 +203,11 @@ export const ReviewShowsPullRequestDraft: Story = {
             summary={statusPrDraft}
             summaries={[statusPrDraft]}
             frontmatter={{
-              title: 'Improve retry handling',
+              title: '再送の上限を設定で変えられるようにする',
               labels: ['reliability'],
               ready: false,
             }}
-            body={'## Summary\n\nRetry temporary failures safely.'}
+            body={prDraftBody}
           />
         ),
       },
@@ -210,40 +232,8 @@ export const ReviewShowsEditMode: Story = {
             summary={statusIssueComment}
             summaries={[statusIssueComment]}
             frontmatter={{ priority: 'normal', needsFollowUp: true }}
-            body={'## Summary\n\nReview the retry behavior.'}
+            body={issueCommentBody}
             view="edit"
-          />
-        ),
-      },
-    ],
-    activeTabId: 'review-document',
-  },
-}
-
-export const ReviewFillsTheDesktopViewport: Story = {
-  name: 'The expanded Review panel shows Markdown beside Preview',
-  decorators: [expandedReviewViewport],
-  args: {
-    expanded: true,
-    showCollapseControl: false,
-    tabs: [
-      {
-        id: 'review-document',
-        label: 'Review',
-        count: 1,
-        visible: true,
-        showCount: true,
-        content: (
-          <ReviewDocumentPanel
-            summary={statusPrDraft}
-            summaries={[statusPrDraft]}
-            isExpanded
-            frontmatter={{
-              title: 'Improve retry handling',
-              labels: ['reliability'],
-              ready: false,
-            }}
-            body={'## Summary\n\nRetry temporary failures safely.'}
           />
         ),
       },

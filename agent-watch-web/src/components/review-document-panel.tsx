@@ -5,6 +5,7 @@ import { markdown } from '@codemirror/lang-markdown'
 import { defaultHighlightStyle, syntaxHighlighting } from '@codemirror/language'
 import { Compartment, EditorState } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
+import { Maximize2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 
 import { MarkdownMessage } from '#components/markdown-message'
@@ -16,11 +17,10 @@ type ReviewDocumentPanelProps = {
   summary?: ReviewDocumentSummary
   summaries?: readonly ReviewDocumentSummary[]
   isMobile?: boolean
-  isExpanded?: boolean
   canSave?: boolean
   canFinish?: boolean
   onSelectDocument?: (id: string) => void
-  onExpand?: () => void
+  onOpenFocus?: () => void
   frontmatter: JsonValue
   body: string
   status?: 'idle' | 'saving' | 'saved' | 'error' | 'finishing'
@@ -291,11 +291,10 @@ export function ReviewDocumentPanel({
   summary,
   summaries = [],
   isMobile = false,
-  isExpanded = false,
   canSave = true,
   canFinish = true,
   onSelectDocument = () => undefined,
-  onExpand = () => undefined,
+  onOpenFocus = () => undefined,
   frontmatter,
   body,
   status = 'idle',
@@ -326,7 +325,6 @@ export function ReviewDocumentPanel({
       className="review-document-panel"
       data-view={view}
       data-status={status}
-      data-expanded={isExpanded}
     >
       <ReviewDocumentNavigation
         {...(summary === undefined ? {} : { summary })}
@@ -336,8 +334,6 @@ export function ReviewDocumentPanel({
             ? frontmatter['title']
             : ''
         }
-        isMobile={isMobile}
-        isExpanded={isExpanded}
         canSave={canSave}
         busy={busy}
         onTitleChange={(title) => {
@@ -346,7 +342,6 @@ export function ReviewDocumentPanel({
           }
         }}
         onSelectDocument={onSelectDocument}
-        onToggleExpanded={onExpand}
       />
       <div className="review-document-content">
         {frontmatterEntries === null || frontmatterEntries.length > 0 ? (
@@ -386,22 +381,24 @@ export function ReviewDocumentPanel({
           className="review-document-body-editor"
           aria-label="Document body"
         >
-          {isExpanded ? null : (
-            <div className="review-document-body-heading">
-              <h2>Body</h2>
+          <div className="review-document-body-heading">
+            <h2>BODY</h2>
+            <div className="review-document-body-toolbar">
+              {isMobile ? null : (
+                <button
+                  aria-label="Open draft full width"
+                  className="review-document-full-width"
+                  type="button"
+                  onClick={onOpenFocus}
+                >
+                  <Maximize2 aria-hidden="true" size={13} />
+                  <span>Full width</span>
+                </button>
+              )}
               <div
                 className="review-document-view-toggle"
                 aria-label="Body view"
               >
-                <button
-                  aria-pressed={view === 'edit'}
-                  type="button"
-                  onClick={() => {
-                    onViewChange('edit')
-                  }}
-                >
-                  Edit
-                </button>
                 <button
                   aria-pressed={view === 'preview'}
                   type="button"
@@ -411,14 +408,20 @@ export function ReviewDocumentPanel({
                 >
                   Preview
                 </button>
+                <button
+                  aria-pressed={view === 'edit'}
+                  type="button"
+                  onClick={() => {
+                    onViewChange('edit')
+                  }}
+                >
+                  Edit
+                </button>
               </div>
             </div>
-          )}
+          </div>
           <div className="review-document-body-columns">
             <div className="review-document-edit-column">
-              {isExpanded ? (
-                <h3 className="review-document-column-heading">Markdown</h3>
-              ) : null}
               <MarkdownEditor
                 value={body}
                 disabled={!canSave || busy}
@@ -426,9 +429,6 @@ export function ReviewDocumentPanel({
               />
             </div>
             <div className="review-document-preview-column">
-              {isExpanded ? (
-                <h3 className="review-document-column-heading">Preview</h3>
-              ) : null}
               <MarkdownMessage className="review-document-body">
                 {body}
               </MarkdownMessage>

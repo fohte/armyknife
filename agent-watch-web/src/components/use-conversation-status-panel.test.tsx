@@ -54,7 +54,7 @@ function StatusPanelHarness({
           {
             id: currentSession.reviewDocumentId,
             kind: 'draft' as const,
-            target: {},
+            target: { path: 'docs/retry-plan.md' },
             isEditor: true,
             canSave: true,
             canFinish: true,
@@ -82,9 +82,7 @@ function StatusPanelHarness({
       activeTabId={panel.activeTabId}
       onTabChange={panel.onTabChange}
       onClose={() => undefined}
-      expanded={panel.isReviewExpanded}
       showCollapseControl={false}
-      onCollapse={panel.onCollapseReview}
       size={isMobile ? 'phone' : 'desktop'}
     />
   )
@@ -397,7 +395,11 @@ it('loads each selected draft and restores the previous draft when switching bac
     {
       id: 'fixture-review-b',
       kind: 'issue_comment',
-      target: { issueNumber: 28, title: 'Improve retries' },
+      target: {
+        repository: 'example/web-app',
+        issueNumber: 412,
+        title: 'Delivery checks fail on the fourth attempt',
+      },
       isEditor: false,
       canSave: false,
       canFinish: false,
@@ -424,7 +426,9 @@ it('loads each selected draft and restores the previous draft when switching bac
   )
   await act(async () => {
     await page
-      .getByRole('button', { name: 'Issue comment #28 · Improve retries' })
+      .getByRole('tab', {
+        name: 'Issue comment example/web-app #412 · Delivery checks fail on the fourth attempt',
+      })
       .click()
   })
   await waitForState(
@@ -434,7 +438,7 @@ it('loads each selected draft and restores the previous draft when switching bac
   )
   await act(async () => {
     await page
-      .getByRole('button', { name: 'PR draft example/service · first' })
+      .getByRole('tab', { name: 'PR draft example/service · first' })
       .click()
   })
   await waitForState(
@@ -457,13 +461,13 @@ it('loads each selected draft and restores the previous draft when switching bac
       '/api/sessions/fixture-session/review-documents/fixture-review-a',
       '/api/sessions/fixture-session/review-documents/fixture-review-b',
     ],
-    selectedDraft: 'PR draftexample/service · first',
+    selectedDraft: 'PR draftfirst',
     body: 'First draft body',
     reviewTab: 'Review2',
   })
 })
 
-it('expands the Review panel on desktop and hides the control on phone', async () => {
+it('shows the Full width action on desktop and hides it on phone', async () => {
   const fetcher = vi.fn<typeof fetch>(() =>
     Promise.resolve(
       new Response(
@@ -490,18 +494,9 @@ it('expands the Review panel on desktop and hides the control on phone', async (
   await waitForState(
     () => container.querySelector('.review-document-body') !== null,
   )
-  await act(async () => {
-    await page.getByRole('button', { name: 'Open draft full width' }).click()
-  })
-  const expandedPanel = container
-    .querySelector('.session-status-panel')
-    ?.getAttribute('data-expanded')
-  await act(async () => {
-    await page.getByRole('button', { name: 'Exit full width review' }).click()
-  })
-  const collapsedPanel = container
-    .querySelector('.session-status-panel')
-    ?.getAttribute('data-expanded')
+  const desktopFullWidthActions = container.querySelectorAll(
+    '.review-document-full-width',
+  ).length
 
   act(() => {
     root?.render(
@@ -514,16 +509,15 @@ it('expands the Review panel on desktop and hides the control on phone', async (
   })
 
   const expansionSnapshot = () => ({
-    expandedPanel,
-    collapsedPanel,
-    phoneExpandControls: container.querySelectorAll('.review-document-expand')
-      .length,
+    desktopFullWidthActions,
+    phoneFullWidthActions: container.querySelectorAll(
+      '.review-document-full-width',
+    ).length,
   })
 
   expect(expansionSnapshot()).toEqual({
-    expandedPanel: 'true',
-    collapsedPanel: 'false',
-    phoneExpandControls: 0,
+    desktopFullWidthActions: 1,
+    phoneFullWidthActions: 0,
   })
 })
 
@@ -560,7 +554,7 @@ it('preserves unsaved review edits when a preview link opens a web UI', async ()
           {
             id: 'fixture-review-a',
             kind: 'draft',
-            target: {},
+            target: { path: 'docs/retry-plan.md' },
             isEditor: true,
             canSave: true,
             canFinish: true,

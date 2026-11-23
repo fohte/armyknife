@@ -198,7 +198,7 @@ export function useConversationStatusPanel({
   const [selectedReviewDocumentId, setSelectedReviewDocumentId] = useState<
     string | null
   >(null)
-  const [isReviewExpanded, setReviewExpanded] = useState(false)
+  const [isReviewFocusOpen, setReviewFocusOpen] = useState(false)
   const reviewDocumentId = session.reviewDocumentId
   const reviewDocuments =
     reviewDocumentSummaries?.status === 'ready'
@@ -220,13 +220,6 @@ export function useConversationStatusPanel({
     selectedDocumentId === null
       ? null
       : (reviewDocumentStates[selectedDocumentId] ?? null)
-  const hasReviewDocumentPanel =
-    selectedSummary !== null &&
-    reviewDocumentState !== null &&
-    reviewDocumentState.sessionId === session.id &&
-    !reviewDocumentState.loading &&
-    reviewDocumentState.error === null &&
-    reviewDocumentState.document !== null
   const reviewDocumentRetryCount =
     selectedDocumentId === null
       ? 0
@@ -296,7 +289,7 @@ export function useConversationStatusPanel({
       ? activePanelTabId
       : defaultPanelTabId
   useEffect(() => {
-    if (!statusPanelOpen || isMobile) setReviewExpanded(false)
+    if (!statusPanelOpen || isMobile) setReviewFocusOpen(false)
   }, [isMobile, statusPanelOpen])
   useEffect(() => {
     if (selectedDocumentId === null) {
@@ -519,7 +512,6 @@ export function useConversationStatusPanel({
                   summary={selectedSummary}
                   summaries={reviewDocuments}
                   isMobile={isMobile}
-                  isExpanded={isReviewExpanded}
                   canSave={selectedSummary.canSave}
                   canFinish={selectedSummary.canFinish}
                   frontmatter={reviewDocumentState.document.frontmatter}
@@ -529,8 +521,8 @@ export function useConversationStatusPanel({
                   error={reviewDocumentState.saveError}
                   view={reviewDocumentState.view}
                   onSelectDocument={setSelectedReviewDocumentId}
-                  onExpand={() => {
-                    if (!isMobile) setReviewExpanded((expanded) => !expanded)
+                  onOpenFocus={() => {
+                    if (!isMobile) setReviewFocusOpen(true)
                   }}
                   onFrontmatterChange={(frontmatter) => {
                     updateSelectedReviewDocument((current) => ({
@@ -660,10 +652,17 @@ export function useConversationStatusPanel({
     onOpenWebUiInFullscreen,
     fullscreenWebUi,
     mobileWebUi,
-    isReviewExpanded,
-    hasReviewDocumentPanel,
-    onCollapseReview: () => {
-      setReviewExpanded(false)
+    isReviewFocusOpen,
+    reviewFocusBody:
+      reviewDocumentState === null ||
+      reviewDocumentState.sessionId !== session.id ||
+      reviewDocumentState.loading ||
+      reviewDocumentState.error !== null ||
+      reviewDocumentState.document === null
+        ? null
+        : reviewDocumentState.document.body,
+    onCloseReviewFocus: () => {
+      setReviewFocusOpen(false)
     },
     onDecisionJumpComplete,
     onDecisionJumpSucceeded,

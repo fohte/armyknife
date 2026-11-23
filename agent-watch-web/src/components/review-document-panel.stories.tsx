@@ -7,7 +7,12 @@ import type { ReviewDocumentSummary } from '#components/review-document-summary'
 const issueComment: ReviewDocumentSummary = {
   id: 'fixture-issue-comment',
   kind: 'issue_comment',
-  target: { issueNumber: 28, title: 'Improve the retry policy' },
+  target: {
+    repository: 'example/web-app',
+    issueNumber: 412,
+    title: '配信が 4 件目から届かない',
+  },
+  startedAt: Date.now() - 180_000,
   isEditor: true,
   canSave: true,
   canFinish: true,
@@ -16,14 +21,15 @@ const issueComment: ReviewDocumentSummary = {
 const prDraft: ReviewDocumentSummary = {
   id: 'fixture-pr-draft',
   kind: 'pr_draft',
-  target: { repository: 'example/service', branch: 'retry-policy' },
+  target: { repository: 'example/web-app', branch: 'feature/retry-limit' },
+  startedAt: Date.now() - 120_000,
   isEditor: true,
   canSave: true,
   canFinish: true,
 }
 
-const waitingIssueComment: ReviewDocumentSummary = {
-  ...issueComment,
+const waitingPrDraft: ReviewDocumentSummary = {
+  ...prDraft,
   isEditor: false,
   canSave: false,
   canFinish: false,
@@ -32,7 +38,12 @@ const waitingIssueComment: ReviewDocumentSummary = {
 const reviewReplies: ReviewDocumentSummary = {
   id: 'fixture-review-replies',
   kind: 'review_replies',
-  target: { pullRequestNumber: 15, threadCount: 2 },
+  target: {
+    repository: 'example/web-app',
+    pullRequestNumber: 2049,
+    threadCount: 2,
+  },
+  startedAt: Date.now() - 60_000,
   isEditor: false,
   canSave: false,
   canFinish: false,
@@ -41,7 +52,8 @@ const reviewReplies: ReviewDocumentSummary = {
 const queuedDraft: ReviewDocumentSummary = {
   id: 'fixture-queued-draft',
   kind: 'draft',
-  target: {},
+  target: { path: 'docs/retry-plan.md' },
+  startedAt: Date.now() - 60_000,
   isEditor: false,
   canSave: false,
   canFinish: false,
@@ -70,24 +82,12 @@ const phoneViewport = (Story: ComponentType) => (
 const meta = {
   component: ReviewDocumentPanel,
   args: {
-    frontmatter: {
-      title: 'Retry policy',
-      enabled: true,
-      labels: ['backend', 'reliability'],
-      plan: {
-        attempts: 3,
-        notifyOnFailure: false,
-      },
-    },
-    body: `## Summary
+    frontmatter: { submit: false },
+    body: `再現手順を足します。
 
-Describe the retry behavior for temporary service errors.
-
-## Changes
-
-- Retry transient failures
-- Stop after three attempts
-`,
+1. 送信先を応答の遅いサーバーにする
+2. 通知を 10 件続けて送る
+3. 4 件目から届かない`,
   },
 } satisfies Meta<typeof ReviewDocumentPanel>
 
@@ -106,9 +106,8 @@ export const EditingTheReviewDocument: Story = {
 export const MultipleDraftsCanBeSelected: Story = {
   name: 'The panel shows several drafts and highlights the open editor',
   args: {
-    summary: prDraft,
-    summaries: [prDraft, waitingIssueComment, reviewReplies],
-    frontmatter: { title: 'Improve retries', status: 'draft' },
+    summary: issueComment,
+    summaries: [issueComment, waitingPrDraft, reviewReplies, queuedDraft],
   },
   decorators: [desktopViewport],
 }
@@ -129,14 +128,25 @@ export const PullRequestDraftShowsItsTitle: Story = {
   args: {
     summary: prDraft,
     summaries: [prDraft],
-    frontmatter: { title: 'Improve retry handling', labels: ['reliability'] },
+    frontmatter: {
+      title: '再送の上限を設定で変えられるようにする',
+      steps: { 'ready-for-translation': false, submit: false },
+    },
+    body: `## Why
+
+再送の上限が 3 回で固定されていて、応答の遅い送信先では足りない。
+
+## What
+
+- 上限を \`RETRY_LIMIT\` で変えられるようにする
+- 既定値は 3 回のまま`,
   },
   decorators: [desktopViewport],
 }
 
 export const RawDraftCanBeEdited: Story = {
   name: 'The Edit view shows the raw draft file',
-  args: { view: 'edit' },
+  args: { summary: issueComment, summaries: [issueComment], view: 'edit' },
   decorators: [desktopViewport],
 }
 
@@ -148,13 +158,23 @@ export const UnsavedChangesAreVisible: Story = {
 
 export const MobileEditing: Story = {
   name: 'The mobile review document shows its editor',
-  args: { view: 'edit', isMobile: true },
+  args: {
+    summary: issueComment,
+    summaries: [issueComment],
+    view: 'edit',
+    isMobile: true,
+  },
   decorators: [phoneViewport],
 }
 
 export const MobilePreview: Story = {
   name: 'The mobile review document shows its Markdown preview',
-  args: { view: 'preview', isMobile: true },
+  args: {
+    summary: issueComment,
+    summaries: [issueComment],
+    view: 'preview',
+    isMobile: true,
+  },
   decorators: [phoneViewport],
 }
 

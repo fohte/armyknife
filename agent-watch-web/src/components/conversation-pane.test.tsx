@@ -6704,12 +6704,16 @@ it('opens the Review tab from the draft review band in one click', async () => {
   })
 })
 
-it('keeps an exit control when a selected draft fails in the Review panel', async () => {
+it('opens DraftFocus and exits Review after a draft load failure', async () => {
   const reviewDocuments = [
     {
       id: 'fixture-review-a',
       kind: 'issue_comment' as const,
-      target: { issueNumber: 21, title: 'Retry handling' },
+      target: {
+        repository: 'example/web-app',
+        issueNumber: 412,
+        title: 'Delivery checks fail on the fourth attempt',
+      },
       isEditor: true,
       canSave: true,
       canFinish: true,
@@ -6717,7 +6721,7 @@ it('keeps an exit control when a selected draft fails in the Review panel', asyn
     {
       id: 'fixture-review-b',
       kind: 'pr_draft' as const,
-      target: { repository: 'example/service', branch: 'retry-policy' },
+      target: { repository: 'example/web-app', branch: 'feature/retry-limit' },
       isEditor: true,
       canSave: true,
       canFinish: true,
@@ -6804,68 +6808,71 @@ it('keeps an exit control when a selected draft fails in the Review panel', asyn
     await userEvent.click(
       requireElement(
         container.querySelector<HTMLButtonElement>(
-          '.review-document-expand[aria-label="Open draft full width"]',
+          '.review-document-full-width[aria-label="Open draft full width"]',
         ),
       ),
     )
   })
-  await waitForState(
-    () =>
-      container
-        .querySelector('.session-status-panel')
-        ?.getAttribute('data-expanded') === 'true',
+  const fullFocusReady = await waitForState(
+    () => container.querySelector('.review-document-focus') !== null,
   )
-  const nextDraftTab = requireElement(
+  expect(fullFocusReady).toBe(true)
+  const focusSnapshot = () => ({
+    sessionTitle: container.querySelector('.review-document-focus-session')
+      ?.textContent,
+    draftTitle: container.querySelector('.review-document-focus-header strong')
+      ?.textContent,
+    columns: Array.from(
+      container.querySelectorAll('.review-document-focus-column h2'),
+      (heading) => heading.textContent,
+    ),
+    markdown: container.querySelector('.review-document-focus-markdown pre')
+      ?.textContent,
+    preview: container.querySelector(
+      '.review-document-focus-preview .review-document-body',
+    )?.textContent,
+    statusPanelCount: container.querySelectorAll('.session-status-panel')
+      .length,
+    metadataCount: container.querySelectorAll('.review-document-frontmatter')
+      .length,
+    actionCount: container.querySelectorAll('.review-document-actions').length,
+  })
+  expect(focusSnapshot()).toEqual({
+    sessionTitle: 'Choose a retry policy',
+    draftTitle: 'Draft',
+    columns: ['MARKDOWN', 'PREVIEW'],
+    markdown: 'Readable fixture draft',
+    preview: 'Readable fixture draft',
+    statusPanelCount: 0,
+    metadataCount: 0,
+    actionCount: 0,
+  })
+  await act(async () => {
+    await userEvent.keyboard('{Escape}')
+  })
+  const reviewRestored = await waitForState(
+    () => container.querySelector('.review-document-panel') !== null,
+  )
+  expect(reviewRestored).toBe(true)
+  const queuedDraftTab = requireElement(
     container.querySelectorAll<HTMLButtonElement>('.review-document-tab')[1] ??
       null,
   )
-  await act(async () => userEvent.click(nextDraftTab))
-  await waitForState(() => container.querySelector('[role="alert"]') !== null)
-  const afterDraftFailure = {
-    expanded: container
-      .querySelector('.session-status-panel')
-      ?.getAttribute('data-expanded'),
-    alert: container.querySelector('[role="alert"]')?.textContent,
-    exitControls: Array.from(
-      container.querySelectorAll<HTMLButtonElement>(
-        '.session-status-panel-collapse, .review-document-expand',
-      ),
-      (button) => button.getAttribute('aria-label'),
+  await act(async () => userEvent.click(queuedDraftTab))
+  const draftErrorShown = await waitForState(
+    () => container.querySelector('[role="alert"]') !== null,
+  )
+  expect(draftErrorShown).toBe(true)
+  const closeReviewPanel = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      '.session-status-panel-close[aria-label="Close session status panel"]',
     ),
-  }
-
-  await act(async () => {
-    await userEvent.click(
-      requireElement(
-        container.querySelector<HTMLButtonElement>(
-          '.session-status-panel-collapse[aria-label="Exit full width review"]',
-        ),
-      ),
-    )
-  })
-  const afterCollapse = {
-    expanded: container
-      .querySelector('.session-status-panel')
-      ?.getAttribute('data-expanded'),
-    alert: container.querySelector('[role="alert"]')?.textContent,
-    exitControlCount: container.querySelectorAll(
-      '.session-status-panel-collapse, .review-document-expand',
-    ).length,
-  }
-
-  const snapshot = () => ({ afterDraftFailure, afterCollapse })
-  expect(snapshot()).toEqual({
-    afterDraftFailure: {
-      expanded: 'true',
-      alert: 'Could not load the draft: Request failed (503)Retry draft',
-      exitControls: ['Exit full width review'],
-    },
-    afterCollapse: {
-      expanded: 'false',
-      alert: 'Could not load the draft: Request failed (503)Retry draft',
-      exitControlCount: 0,
-    },
-  })
+  )
+  await act(async () => userEvent.click(closeReviewPanel))
+  const reviewClosed = await waitForState(
+    () => container.querySelector('.session-status-panel') === null,
+  )
+  expect(reviewClosed).toBe(true)
 })
 
 it('directs Codex questions and permissions to the terminal', () => {

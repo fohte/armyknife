@@ -5,7 +5,12 @@ import { ReviewDocumentNavigation } from '#components/review-document-navigation
 const issueComment = {
   id: 'fixture-issue-comment',
   kind: 'issue_comment',
-  target: { issueNumber: 28, title: 'Improve retry handling' },
+  target: {
+    repository: 'example/web-app',
+    issueNumber: 412,
+    title: '配信が 4 件目から届かない',
+  },
+  startedAt: Date.now() - 180_000,
   isEditor: true,
   canSave: true,
   canFinish: true,
@@ -14,7 +19,8 @@ const issueComment = {
 const prDraft = {
   id: 'fixture-pr-draft',
   kind: 'pr_draft',
-  target: { repository: 'example/api', branch: 'retry-window' },
+  target: { repository: 'example/web-app', branch: 'feature/retry-limit' },
+  startedAt: Date.now() - 120_000,
   isEditor: true,
   canSave: true,
   canFinish: true,
@@ -32,19 +38,17 @@ export default meta
 type Story = StoryObj<typeof meta>
 
 export const OneDraftIsSelected: Story = {
-  name: 'One draft appears in the row below Review',
+  name: 'One draft uses the heading without a draft tab row',
 }
 
 export const SeveralDraftsAreVisible: Story = {
   name: 'Several drafts show their targets and editor status',
   args: {
-    summary: prDraft,
+    summary: issueComment,
     summaries: [
-      prDraft,
+      issueComment,
       {
-        id: 'fixture-issue-comment',
-        kind: 'issue_comment',
-        target: { issueNumber: 28, title: 'Improve retry handling' },
+        ...prDraft,
         isEditor: false,
         canSave: false,
         canFinish: false,
@@ -52,19 +56,25 @@ export const SeveralDraftsAreVisible: Story = {
       {
         id: 'fixture-review-replies',
         kind: 'review_replies',
-        target: { pullRequestNumber: 15, threadCount: 2 },
+        target: {
+          repository: 'example/web-app',
+          pullRequestNumber: 2049,
+          threadCount: 2,
+        },
+        startedAt: Date.now() - 60_000,
+        isEditor: false,
+        canSave: false,
+        canFinish: false,
+      },
+      {
+        id: 'fixture-queued-draft',
+        kind: 'draft',
+        target: { path: 'docs/retry-plan.md' },
+        startedAt: Date.now() - 60_000,
         isEditor: false,
         canSave: false,
         canFinish: false,
       },
     ],
-    title: 'Improve retry handling',
-  },
-}
-
-export const PhoneHidesFullWidthControl: Story = {
-  name: 'The phone header keeps its title without a full width control',
-  args: {
-    isMobile: true,
   },
 }
