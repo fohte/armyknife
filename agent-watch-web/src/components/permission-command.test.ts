@@ -11,6 +11,18 @@ it('wraps shell separators outside quoted strings and indents continuations', ()
   )
 })
 
+it('leaves unsupported shell syntax unchanged to avoid misleading previews', () => {
+  const commands = [
+    'case "$choice" in alpha|beta) printf done ;; esac && printf complete',
+    '[[ $value =~ ^(alpha|beta)$ ]] && printf complete',
+    'printf "%s" ${VALUE:-left|right} && printf complete',
+    `printf "%s" "$(printf "%s|%s" left right)" && printf complete`,
+    "printf '%s' $'left\\'|right' && printf complete",
+  ]
+
+  expect(commands.map(formatPermissionCommand)).toEqual(commands)
+})
+
 it('leaves command substitutions and backtick contents on their original line', () => {
   const command =
     "printf %s $(printf 'a && b' | sed 's/a/b/') && printf %s `printf 'x;y'`"

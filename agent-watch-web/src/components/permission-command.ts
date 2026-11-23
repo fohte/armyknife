@@ -1,5 +1,11 @@
 export function formatPermissionCommand(command: string): string {
-  if (command.includes('\n') || command.includes('\r')) return command
+  if (
+    command.includes('\n') ||
+    command.includes('\r') ||
+    hasUnsupportedSyntax(command)
+  ) {
+    return command
+  }
 
   let formatted = ''
   let quote: "'" | '"' | '`' | null = null
@@ -90,6 +96,20 @@ export function formatPermissionCommand(command: string): string {
   }
 
   return formatted
+}
+
+function hasUnsupportedSyntax(command: string): boolean {
+  // These constructs can contain separators that are not shell list operators.
+  return (
+    command.includes("$'") ||
+    command.includes('${') ||
+    command.includes('[[') ||
+    command.includes('((') ||
+    command.includes('<(') ||
+    command.includes('>(') ||
+    /\bcase\b/.test(command) ||
+    /"[^"]*\$\(/.test(command)
+  )
 }
 
 function readSeparator(command: string, index: number): string | null {

@@ -70,6 +70,7 @@ export function PermissionCard({
           code={message.command}
           displayCode={formatPermissionCommand(message.command)}
           language="bash"
+          copyable
         />
       )}
       {message.items === undefined || message.items.length === 0 ? null : (

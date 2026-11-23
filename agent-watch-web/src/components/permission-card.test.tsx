@@ -83,7 +83,7 @@ it('shows web approval and rejection for a Codex permission with capabilities', 
   })
 
   expect(renderedState()).toEqual({
-    buttons: ['Approve', 'Reject'],
+    buttons: ['Copy code', 'Approve', 'Reject'],
     terminalFallback: null,
   })
 })
@@ -114,7 +114,7 @@ it('keeps the terminal fallback for a Codex permission without web capabilities'
   })
 
   expect(renderedState()).toEqual({
-    buttons: ['Open in terminal'],
+    buttons: ['Copy code', 'Open in terminal'],
     fallback: 'Review this permission in terminal.',
   })
 })
@@ -212,6 +212,43 @@ it('formats separators for display while retaining the original permission comma
   expect(snapshot()).toEqual({
     displayedCommand: `printf '%s\\n' "keep && quoted" &&\n  printf '%s\\n' ./sample/long/path |\n  sed 's/path/file/'`,
     messageCommand: originalCommand,
+  })
+})
+
+it('copies the original permission command instead of its formatted preview', async () => {
+  const originalCommand = `printf '%s' "keep && quoted" && printf done`
+  const writeText = vi.fn(() => Promise.resolve())
+  vi.stubGlobal('navigator', { clipboard: { writeText } })
+  const message: Extract<ChatItem, { type: 'permission' }> = {
+    type: 'permission',
+    requestId: 'permission-request-example',
+    tool: 'Bash',
+    description: '',
+    command: originalCommand,
+  }
+  renderPermissionCard(message)
+
+  await act(async () => {
+    const { highlightCode } = await import('./syntax-highlighter')
+    await highlightCode(originalCommand, 'bash')
+  })
+
+  const copyButton = container.querySelector<HTMLButtonElement>(
+    '.syntax-code-block-copy-button',
+  )
+  const copyButtonLabel = copyButton?.getAttribute('aria-label') ?? null
+  await act(async () => {
+    copyButton?.click()
+    await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    copyButtonLabel,
+    copiedCommands: writeText.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    copyButtonLabel: 'Copy code',
+    copiedCommands: [[originalCommand]],
   })
 })
 

@@ -163,6 +163,36 @@ it('formats separators in a denied command without changing its source value', (
   })
 })
 
+it('copies the original denied command instead of its formatted preview', async () => {
+  const originalCommand = `printf '%s' "keep && quoted" && printf done`
+  const writeText = vi.fn(() => Promise.resolve())
+  vi.stubGlobal('navigator', { clipboard: { writeText } })
+  renderCard({ message: { ...operation, command: originalCommand } })
+
+  await act(async () => {
+    const { highlightCode } = await import('./syntax-highlighter')
+    await highlightCode(originalCommand, 'bash')
+  })
+
+  const copyButton = container.querySelector<HTMLButtonElement>(
+    '.syntax-code-block-copy-button',
+  )
+  const copyButtonLabel = copyButton?.getAttribute('aria-label') ?? null
+  await act(async () => {
+    copyButton?.click()
+    await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    copyButtonLabel,
+    copiedCommands: writeText.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    copyButtonLabel: 'Copy code',
+    copiedCommands: [[originalCommand]],
+  })
+})
+
 it('sends no retry action for denials without a classifier verdict', () => {
   renderCard({
     message: {

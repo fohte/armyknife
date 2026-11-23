@@ -123,6 +123,7 @@ function PermissionDeniedDetails({
           code={message.command}
           displayCode={formatPermissionCommand(message.command)}
           language="bash"
+          copyable
         />
       )}
       {message.reason === null ? null : (
