@@ -379,6 +379,11 @@ fn ensure_watch_web_user_marker(
     Ok(())
 }
 
+fn is_watch_web_user_prompt(prompt: &str, marker: &str) -> bool {
+    super::peer_message::extract_peer_message(prompt, Some(marker))
+        .is_some_and(|message| message.has_user_marker)
+}
+
 fn startup_metadata_for_resume(sessions_dir: &Path, input: &HookInput) -> Result<Option<Session>> {
     if input.engine != Engine::Claude || input.source.as_deref() != Some("resume") {
         return Ok(None);
@@ -676,6 +681,15 @@ fn process_hook_event_impl_with_env_and_unreported_stop(
 
     let tmux_info = tmux_info_from_pane(pane_info.as_ref(), side_effects)?;
 
+    let is_peer_prompt = super::peer_message::is_peer_message(input.prompt.as_deref());
+    let watch_web_user_marker =
+        if event == HookEvent::UserPromptSubmit && input.engine == Engine::Claude && is_peer_prompt
+        {
+            store::watch_web_user_marker_from(sessions_dir, &input.session_id)?
+        } else {
+            None
+        };
+
     let mut status = determine_status(event, &input);
     let may_contain_work_type = work_type::may_contain_work_type(event, &input);
 
@@ -730,9 +744,17 @@ fn process_hook_event_impl_with_env_and_unreported_stop(
         )
     });
     session.restore_from_archive();
+    let is_initial_watch_web_user_prompt = event == HookEvent::UserPromptSubmit
+        && session.launch_id.is_some()
+        && session.last_prompted_at.is_none()
+        && input
+            .prompt
+            .as_deref()
+            .zip(watch_web_user_marker.as_deref())
+            .is_some_and(|(prompt, marker)| is_watch_web_user_prompt(prompt, marker));
     if event == HookEvent::UserPromptSubmit
         && input.agent_id.is_none()
-        && !super::peer_message::is_peer_message(input.prompt.as_deref())
+        && (!is_peer_prompt || is_initial_watch_web_user_prompt)
         && !input
             .prompt
             .as_deref()
@@ -5605,6 +5627,55 @@ mod tests {
             assert_eq!(
                 (result, session.last_prompted_at == Some(session.updated_at)),
                 (ProcessResult::SessionSaved, true),
+            );
+        }
+
+        #[test]
+        fn watch_web_peer_initial_prompt_is_recorded_as_human_input() {
+            let temp_dir = create_temp_sessions_dir();
+            let env = EnvVars {
+                session_launch_id: Some("launch-fixture".to_string()),
+                session_has_initial_prompt: Some(true),
+                ..EnvVars::default()
+            };
+            process_hook_event_impl_with_env(
+                HookEvent::SessionStart,
+                create_test_input_with_source(None, Some("startup")),
+                temp_dir.path(),
+                &SideEffects::none(),
+                None,
+                env,
+            )
+            .expect("watch-web session should start");
+            let marker = store::watch_web_user_marker_from(temp_dir.path(), "test-123")
+                .expect("watch-web marker should load")
+                .expect("watch-web marker should exist");
+            let prefixed_message = crate::commands::agent::watch_web_user_marker::prefix_message(
+                &marker,
+                "Example user prompt",
+            );
+            let prompt = format!("Another Claude session sent a message:\n{prefixed_message}");
+            let mut input = create_test_input(None);
+            input.prompt = Some(prompt.clone());
+
+            let result = process_hook_event_impl(
+                HookEvent::UserPromptSubmit,
+                input,
+                temp_dir.path(),
+                &SideEffects::none(),
+            )
+            .expect("watch-web initial prompt should succeed");
+            let session = store::load_session_from(temp_dir.path(), "test-123")
+                .expect("session should load")
+                .expect("session should exist");
+
+            assert_eq!(
+                (
+                    crate::commands::agent::peer_message::is_peer_message(Some(&prompt)),
+                    result,
+                    session.last_prompted_at == Some(session.updated_at),
+                ),
+                (true, ProcessResult::SessionSaved, true),
             );
         }
 
