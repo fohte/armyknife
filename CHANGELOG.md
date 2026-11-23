@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.878](https://github.com/fohte/armyknife/compare/v0.1.877...v0.1.878) (2026-11-23)
+
+
+### Features
+
+* **agent-watch-web:** show draft context ([#2148](https://github.com/fohte/armyknife/issues/2148)) ([8ba9492](https://github.com/fohte/armyknife/commit/8ba9492ff6c4548759888fc3b2623f35d4d4aae1))
+
 ## [0.1.877](https://github.com/fohte/armyknife/compare/v0.1.876...v0.1.877) (2026-11-23)
 
 
