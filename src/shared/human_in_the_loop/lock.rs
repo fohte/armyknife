@@ -63,7 +63,7 @@ impl LockGuard {
         }
     }
 
-    /// Check whether a live review holder exists for the given document.
+    /// Check whether a review lock is active, treating a busy lock as active.
     pub fn is_locked(document_path: &Path) -> bool {
         matches!(
             inspect_lock(

@@ -207,6 +207,7 @@ mod tests {
     use std::path::PathBuf;
 
     use chrono::Utc;
+    use rstest::{fixture, rstest};
     use tempfile::TempDir;
 
     use crate::commands::agent::store;
@@ -256,6 +257,41 @@ mod tests {
             engine: Engine::Claude,
             model: None,
             effort: None,
+        }
+    }
+
+    struct ReviewMarkerFixture {
+        _temp_dir: TempDir,
+        draft_path: PathBuf,
+        marker: String,
+        expected_marker: super::ReviewDocumentMarker,
+    }
+
+    #[fixture]
+    fn review_marker_fixture() -> ReviewMarkerFixture {
+        let temp_dir = TempDir::new().expect("temp dir creation should succeed");
+        let draft_path = temp_dir.path().join("fixture-draft.md");
+        let marker = [
+            "review-id",
+            "v3",
+            "123",
+            draft_path.to_str().expect("fixture path should be UTF-8"),
+            "queue",
+            "41",
+            "linux:987",
+        ]
+        .join("\0");
+
+        ReviewMarkerFixture {
+            _temp_dir: temp_dir,
+            draft_path: draft_path.clone(),
+            marker,
+            expected_marker: super::ReviewDocumentMarker {
+                id: "review-id".to_string(),
+                path: draft_path,
+                queue_key: Some("queue".to_string()),
+                started_at: 123,
+            },
         }
     }
 
@@ -383,64 +419,40 @@ mod tests {
         assert_eq!(review_document_marker_with(&marker, |_, _| false), None);
     }
 
-    #[test]
-    fn review_document_marker_stays_active_while_an_editor_holds_the_lock() {
-        let temp_dir = TempDir::new().expect("temp dir creation should succeed");
-        let draft_path = temp_dir.path().join("fixture-draft.md");
-        let marker = [
-            "review-id",
-            "v3",
-            "123",
-            draft_path.to_str().expect("fixture path should be UTF-8"),
-            "queue",
-            "41",
-            "linux:987",
-        ]
-        .join("\0");
-        let expected_marker = Some(super::ReviewDocumentMarker {
-            id: "review-id".to_string(),
-            path: draft_path.clone(),
-            queue_key: Some("queue".to_string()),
-            started_at: 123,
-        });
-        let lock = LockGuard::acquire(&draft_path).expect("editor review lock should be active");
+    #[rstest]
+    fn review_document_marker_stays_active_while_an_editor_holds_the_lock(
+        review_marker_fixture: ReviewMarkerFixture,
+    ) {
+        let lock = LockGuard::acquire(&review_marker_fixture.draft_path)
+            .expect("editor review lock should be active");
 
         assert_eq!(
-            review_document_marker_with(&marker, |_, _| false),
-            expected_marker
+            review_document_marker_with(&review_marker_fixture.marker, |_, _| false),
+            Some(review_marker_fixture.expected_marker.clone())
         );
         drop(lock);
-        assert_eq!(review_document_marker_with(&marker, |_, _| false), None);
+        assert_eq!(
+            review_document_marker_with(&review_marker_fixture.marker, |_, _| false),
+            None
+        );
     }
 
-    #[test]
-    fn review_document_marker_does_not_block_while_document_operation_lock_is_held() {
+    #[rstest]
+    fn review_document_marker_does_not_block_while_document_operation_lock_is_held(
+        review_marker_fixture: ReviewMarkerFixture,
+    ) {
         use std::sync::mpsc;
         use std::time::Duration;
 
-        let temp_dir = TempDir::new().expect("temp dir creation should succeed");
-        let draft_path = temp_dir.path().join("fixture-draft.md");
-        let marker = [
-            "review-id",
-            "v3",
-            "123",
-            draft_path.to_str().expect("fixture path should be UTF-8"),
-            "queue",
-            "41",
-            "linux:987",
-        ]
-        .join("\0");
-        let expected_marker = Some(super::ReviewDocumentMarker {
-            id: "review-id".to_string(),
-            path: draft_path.clone(),
-            queue_key: Some("queue".to_string()),
-            started_at: 123,
-        });
-        let _review_guard = LockGuard::acquire(&draft_path).expect("review lock should be active");
-        let operation_lock = ReviewDocumentOperationLock::acquire(&draft_path)
-            .expect("review document operation lock should be acquired");
+        let _review_guard = LockGuard::acquire(&review_marker_fixture.draft_path)
+            .expect("review lock should be active");
+        let operation_lock =
+            ReviewDocumentOperationLock::acquire(&review_marker_fixture.draft_path)
+                .expect("review document operation lock should be acquired");
         let (started_sender, started_receiver) = mpsc::channel();
         let (result_sender, result_receiver) = mpsc::channel();
+        let marker = review_marker_fixture.marker;
+        let expected_marker = Some(review_marker_fixture.expected_marker);
         let worker = std::thread::spawn(move || {
             started_sender.send(()).expect("worker should report start");
             let result = review_document_marker_with(&marker, |_, _| false);
