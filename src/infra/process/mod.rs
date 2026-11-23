@@ -14,10 +14,13 @@ use std::time::{Duration, Instant};
 
 use crate::shared::command;
 
+mod identity;
 mod output_tail;
 mod snapshot;
 
 use snapshot::list_process_cwds;
+
+pub(crate) use identity::{process_start_time, process_start_time_matches};
 
 pub(crate) use output_tail::{
     DrainDeadlineCheck, OutputTail, OutputTailOptions, read_output_tail, set_nonblocking,

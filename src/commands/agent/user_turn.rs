@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 
 use super::types::{DisplayStatus, Session, SessionStatus};
 use crate::shared::config::{AgentConfig, AgentStatusState};
-use crate::shared::human_in_the_loop::{PR_DRAFT_REVIEW_MARKER, review_document_path};
+use crate::shared::human_in_the_loop::{is_active_pr_draft_review_marker, review_document_path};
 
 /// Variant order is the shared next-action priority used by tmux status and watch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -127,7 +127,7 @@ fn has_pending_review_document(session: &Session) -> bool {
     session
         .pending_human_review_ids
         .iter()
-        .any(|id| review_document_path(id).is_some() || id.starts_with(PR_DRAFT_REVIEW_MARKER))
+        .any(|id| review_document_path(id).is_some() || is_active_pr_draft_review_marker(id))
 }
 
 fn waiting_input_user_turn(session: &Session) -> Option<UserTurnKind> {
@@ -156,6 +156,7 @@ mod tests {
     use std::collections::BTreeSet;
     use std::path::PathBuf;
 
+    use crate::shared::human_in_the_loop::PR_DRAFT_REVIEW_MARKER;
     use chrono::{DateTime, TimeZone, Utc};
     use rstest::rstest;
 
@@ -323,6 +324,29 @@ mod tests {
         assert_eq!(
             next_user_turn(&[session], &AgentConfig::default()).map(|turn| turn.kind),
             Some(UserTurnKind::Body)
+        );
+    }
+
+    #[test]
+    fn stale_pr_draft_marker_does_not_create_a_body_turn() {
+        let mut session = session("waiting", timestamp(1));
+        session.status = SessionStatus::WaitingInput;
+        session.pending_human_review_ids.insert(
+            [
+                "pr-draft-review:example-review",
+                "v3",
+                "123",
+                "/fixture/draft.md",
+                "",
+                "4294967295",
+                "missing-process-start",
+            ]
+            .join("\0"),
+        );
+
+        assert_eq!(
+            next_user_turn(&[session], &AgentConfig::default()).map(|turn| turn.kind),
+            None
         );
     }
 
