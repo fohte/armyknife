@@ -5,7 +5,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { page } from 'vitest/browser'
 
-import { copyCommandFromCard } from '#components/permission-command.test-utils'
+import { copyCommandFromCard } from '#components/permission-command-helpers.test'
 import { PermissionDeniedCard } from '#components/permission-denied-card'
 import type { ChatItem } from '#types'
 

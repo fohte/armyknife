@@ -6,7 +6,7 @@ import {
   type PendingPermissionActionState,
   PermissionCard,
 } from '#components/permission-card'
-import { copyCommandFromCard } from '#components/permission-command.test-utils'
+import { copyCommandFromCard } from '#components/permission-command-helpers.test'
 import type { ChatItem, SessionActions } from '#types'
 
 let container: HTMLDivElement
