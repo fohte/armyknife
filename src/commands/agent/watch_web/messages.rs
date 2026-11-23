@@ -3000,6 +3000,48 @@ mod tests {
     }
 
     #[test]
+    fn pending_permission_fallback_does_not_parse_a_shared_tool_during_sibling_work() {
+        let mut session = stored_session();
+        session.pending_permission_agent_ids = BTreeSet::from([MAIN_THREAD_AGENT_KEY.to_string()]);
+        session.pending_agent_task_ids = BTreeSet::from(["fixture-agent".to_string()]);
+        session.current_tool = Some("Bash(echo fixture)".to_string());
+
+        assert_eq!(
+            load_messages_with("fixture-session", |id| {
+                Ok((id == "fixture-session").then(|| session.clone()))
+            })
+            .unwrap(),
+            Some(vec![ChatItem::Permission {
+                request_id: None,
+                tool: "Bash(echo fixture)".to_string(),
+                description: "Waiting for permission".to_string(),
+                command: None,
+            }])
+        );
+    }
+
+    #[test]
+    fn pending_permission_fallback_previews_oversized_bash_commands() {
+        let mut session = stored_session();
+        let oversized_command = "x".repeat(MAX_PERMISSION_COMMAND_BYTES + 1);
+        session.pending_permission_agent_ids = BTreeSet::from([MAIN_THREAD_AGENT_KEY.to_string()]);
+        session.current_tool = Some(format!("Bash({oversized_command})"));
+
+        assert_eq!(
+            load_messages_with("fixture-session", |id| {
+                Ok((id == "fixture-session").then(|| session.clone()))
+            })
+            .unwrap(),
+            Some(vec![ChatItem::Permission {
+                request_id: None,
+                tool: "Bash".to_string(),
+                description: format!("Command preview: {}…", "x".repeat(200)),
+                command: None,
+            }])
+        );
+    }
+
+    #[test]
     fn permission_card_serializes_its_request_id_for_watch_web_actions() {
         assert_eq!(
             serde_json::to_value(ChatItem::Permission {
