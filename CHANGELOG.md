@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.869](https://github.com/fohte/armyknife/compare/v0.1.868...v0.1.869) (2026-11-23)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** format Bash fallback ([#2132](https://github.com/fohte/armyknife/issues/2132)) ([5e2f980](https://github.com/fohte/armyknife/commit/5e2f980a4ebf61ac8e51574d5d6648d6b802d1f0))
+
 ## [0.1.868](https://github.com/fohte/armyknife/compare/v0.1.867...v0.1.868) (2026-11-23)
 
 
