@@ -5,6 +5,7 @@ import { page } from 'vitest/browser'
 
 import { MarkdownSessionLinksProvider } from '#components/markdown-message'
 import type { WebUiLinkTarget } from '#components/markdown-session-links'
+import type { ReviewDocumentSummary } from '#components/review-document-summary'
 import { SessionStatusPanel } from '#components/session-status-panel'
 import { useConversationStatusPanel } from '#components/use-conversation-status-panel'
 import type { Session } from '#types'
@@ -33,15 +34,35 @@ let root: Root | null = null
 function StatusPanelHarness({
   currentSession,
   statusPanelOpen = false,
+  reviewDocumentSummaries,
+  isMobile = false,
 }: {
   currentSession: Session
   statusPanelOpen?: boolean
+  reviewDocumentSummaries?: readonly ReviewDocumentSummary[]
+  isMobile?: boolean
 }) {
+  const summaries =
+    reviewDocumentSummaries ??
+    (currentSession.reviewDocumentId == null
+      ? []
+      : [
+          {
+            id: currentSession.reviewDocumentId,
+            kind: 'draft' as const,
+            target: {},
+            isEditor: true,
+            canSave: true,
+            canFinish: true,
+          },
+        ])
   const panel = useConversationStatusPanel({
     session: currentSession,
+    reviewDocumentSummaries: summaries,
     messages: [],
     backgroundTasks: [],
     statusPanelOpen,
+    isMobile,
     onAction: () => Promise.resolve(true),
     onCloseStatusPanel: () => undefined,
   })
@@ -51,6 +72,9 @@ function StatusPanelHarness({
       activeTabId={panel.activeTabId}
       onTabChange={panel.onTabChange}
       onClose={() => undefined}
+      expanded={panel.isReviewExpanded}
+      onCollapse={panel.onCollapseReview}
+      size={isMobile ? 'phone' : 'desktop'}
     />
   )
 }
@@ -115,7 +139,7 @@ it('shows the Review tab only for sessions with an active review document', () =
     .map(({ tabs, selectedTab }) => `${tabs.join(',')}|${selectedTab ?? ''}`)
     .join('\n')
 
-  expect(states).toBe('|\nReview|Review\n|')
+  expect(states).toBe('|\nReview1|Review1\n|')
 })
 
 it('shows linked open and completed tasks in the Tasks tab', () => {
@@ -320,10 +344,175 @@ it('fetches and renders the review document when the status panel opens', async 
   const panel = () => ({ closedPanelRequests, ...openPanel() })
   expect(panel()).toEqual({
     closedPanelRequests: [],
-    requests: ['/api/sessions/fixture-session/review-document'],
-    selectedTab: 'Review',
+    requests: [
+      '/api/sessions/fixture-session/review-documents/fixture-review-a',
+    ],
+    selectedTab: 'Review1',
     title: 'Fixture pull request',
     markdown: 'Fixture draft body',
+  })
+})
+
+it('loads each selected draft and restores the previous draft when switching back', async () => {
+  const requests: string[] = []
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    requests.push(url)
+    const isSecondDraft = url.endsWith('/fixture-review-b')
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({
+          id: isSecondDraft ? 'fixture-review-b' : 'fixture-review-a',
+          revision: 'fixture-revision',
+          frontmatter: {
+            title: isSecondDraft ? 'Second draft' : 'First draft',
+          },
+          body: isSecondDraft ? 'Second draft body' : 'First draft body',
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    )
+  })
+  vi.stubGlobal('fetch', fetcher)
+  const reviewDocumentSummaries: ReviewDocumentSummary[] = [
+    {
+      id: 'fixture-review-a',
+      kind: 'pr_draft',
+      target: { repository: 'example/service', branch: 'first' },
+      isEditor: true,
+      canSave: true,
+      canFinish: true,
+    },
+    {
+      id: 'fixture-review-b',
+      kind: 'issue_comment',
+      target: { issueNumber: 28, title: 'Improve retries' },
+      isEditor: false,
+      canSave: false,
+      canFinish: false,
+    },
+  ]
+
+  act(() => {
+    root?.render(
+      <StatusPanelHarness
+        currentSession={{
+          ...session,
+          reviewDocumentId: 'fixture-review-a',
+          reviewDocumentCount: 2,
+        }}
+        reviewDocumentSummaries={reviewDocumentSummaries}
+        statusPanelOpen
+      />,
+    )
+  })
+  await waitForState(
+    () =>
+      container.querySelector('.review-document-body')?.textContent ===
+      'First draft body',
+  )
+  await act(async () => {
+    await page
+      .getByRole('button', { name: 'Issue comment #28 · Improve retries' })
+      .click()
+  })
+  await waitForState(
+    () =>
+      container.querySelector('.review-document-body')?.textContent ===
+      'Second draft body',
+  )
+  await act(async () => {
+    await page
+      .getByRole('button', { name: 'PR draft example/service · first' })
+      .click()
+  })
+  await waitForState(
+    () =>
+      container.querySelector('.review-document-body')?.textContent ===
+      'First draft body',
+  )
+
+  const selectedDraftSnapshot = () => ({
+    requests,
+    selectedDraft: container.querySelector('.review-document-tab--selected')
+      ?.textContent,
+    body: container.querySelector('.review-document-body')?.textContent,
+    reviewTab: container.querySelector('[role="tab"][aria-selected="true"]')
+      ?.textContent,
+  })
+
+  expect(selectedDraftSnapshot()).toEqual({
+    requests: [
+      '/api/sessions/fixture-session/review-documents/fixture-review-a',
+      '/api/sessions/fixture-session/review-documents/fixture-review-b',
+    ],
+    selectedDraft: 'PR draftexample/service · first',
+    body: 'First draft body',
+    reviewTab: 'Review2',
+  })
+})
+
+it('expands the Review panel on desktop and hides the control on phone', async () => {
+  const fetcher = vi.fn<typeof fetch>(() =>
+    Promise.resolve(
+      new Response(
+        JSON.stringify({
+          id: 'fixture-review-a',
+          revision: 'fixture-revision',
+          frontmatter: {},
+          body: 'Readable draft body',
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    ),
+  )
+  vi.stubGlobal('fetch', fetcher)
+
+  act(() => {
+    root?.render(
+      <StatusPanelHarness
+        currentSession={{ ...session, reviewDocumentId: 'fixture-review-a' }}
+        statusPanelOpen
+      />,
+    )
+  })
+  await waitForState(
+    () => container.querySelector('.review-document-body') !== null,
+  )
+  await act(async () => {
+    await page.getByRole('button', { name: 'Open draft full width' }).click()
+  })
+  const expandedPanel = container
+    .querySelector('.session-status-panel')
+    ?.getAttribute('data-expanded')
+  await act(async () => {
+    await page.getByRole('button', { name: 'Exit full width review' }).click()
+  })
+  const collapsedPanel = container
+    .querySelector('.session-status-panel')
+    ?.getAttribute('data-expanded')
+
+  act(() => {
+    root?.render(
+      <StatusPanelHarness
+        currentSession={{ ...session, reviewDocumentId: 'fixture-review-a' }}
+        isMobile
+        statusPanelOpen
+      />,
+    )
+  })
+
+  const expansionSnapshot = () => ({
+    expandedPanel,
+    collapsedPanel,
+    phoneExpandControls: container.querySelectorAll('.review-document-expand')
+      .length,
+  })
+
+  expect(expansionSnapshot()).toEqual({
+    expandedPanel: 'true',
+    collapsedPanel: 'false',
+    phoneExpandControls: 0,
   })
 })
 
@@ -354,6 +543,16 @@ it('preserves unsaved review edits when a preview link opens a web UI', async ()
         reviewDocumentId: 'fixture-review-a',
         webUis: [webUi],
       },
+      reviewDocumentSummaries: [
+        {
+          id: 'fixture-review-a',
+          kind: 'draft',
+          target: {},
+          isEditor: true,
+          canSave: true,
+          canFinish: true,
+        },
+      ],
       messages: [],
       backgroundTasks: [],
       statusPanelOpen: true,
@@ -418,7 +617,9 @@ it('preserves unsaved review edits when a preview link opens a web UI', async ()
     }
   }
   expect(getState()).toEqual({
-    requests: ['/api/sessions/fixture-session/review-document'],
+    requests: [
+      '/api/sessions/fixture-session/review-documents/fixture-review-a',
+    ],
     title: 'Unsaved title',
   })
 })
@@ -468,6 +669,9 @@ it('saves the edited document and sends the same edits before finishing review',
     await page.getByRole('checkbox', { name: 'enabled' }).click()
   })
   await act(async () => {
+    await page.getByRole('button', { name: 'Edit' }).click()
+  })
+  await act(async () => {
     await page
       .getByRole('textbox', { name: 'Markdown body' })
       .fill('Edited body.')
@@ -477,6 +681,9 @@ it('saves the edited document and sends the same edits before finishing review',
       container.querySelector('.review-document-editor .cm-content')
         ?.textContent === 'Edited body.',
   )
+  await act(async () => {
+    await page.getByRole('button', { name: 'Preview' }).click()
+  })
   await waitForState(
     () =>
       container.querySelector('.review-document-body')?.textContent ===
@@ -501,7 +708,7 @@ it('saves the edited document and sends the same edits before finishing review',
 
   expect(requests).toEqual([
     {
-      url: '/api/sessions/fixture-session/review-document',
+      url: '/api/sessions/fixture-session/review-documents/fixture-review-a',
       method: 'GET',
       body: null,
     },
@@ -573,6 +780,7 @@ it.each([
     )
     await act(async () => {
       await page.getByRole('textbox', { name: 'title' }).fill('Edited title')
+      await page.getByRole('button', { name: 'Edit' }).click()
       await page
         .getByRole('textbox', { name: 'Markdown body' })
         .fill('Edited body.')
@@ -582,6 +790,9 @@ it.each([
         container.querySelector('.review-document-body')?.textContent ===
         'Edited body.',
     )
+    await act(async () => {
+      await page.getByRole('button', { name: 'Preview' }).click()
+    })
     await act(async () => {
       await page.getByRole('button', { name: button }).click()
     })
@@ -607,7 +818,7 @@ it.each([
         'This draft changed since you opened it. Your edits are still here; copy them before reloading to see the latest version.',
       requests: [
         {
-          url: '/api/sessions/fixture-session/review-document',
+          url: '/api/sessions/fixture-session/review-documents/fixture-review-a',
           method: 'GET',
           body: null,
         },
@@ -690,8 +901,8 @@ it('refetches the review document when its active ID changes', async () => {
   })
   expect(snapshot()).toEqual({
     requests: [
-      '/api/sessions/fixture-session/review-document',
-      '/api/sessions/fixture-session/review-document',
+      '/api/sessions/fixture-session/review-documents/fixture-review-a',
+      '/api/sessions/fixture-session/review-documents/fixture-review-b',
     ],
     title: 'Second fixture',
     body: 'Second body',
@@ -724,8 +935,10 @@ it('shows an alert when the review document request fails', async () => {
     alert: container.querySelector('[role="alert"]')?.textContent,
   })
   expect(result()).toEqual({
-    requests: ['/api/sessions/fixture-session/review-document'],
-    alert: 'Could not load the review document: Fixture request failed',
+    requests: [
+      '/api/sessions/fixture-session/review-documents/fixture-review-a',
+    ],
+    alert: 'Could not load the draft: Fixture request failed',
   })
 })
 

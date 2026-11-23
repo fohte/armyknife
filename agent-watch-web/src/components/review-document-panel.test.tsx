@@ -30,7 +30,7 @@ function ReviewDocumentHarness({
     retry: { limit: 2, notify: false },
   })
   const [body, setBody] = useState('## Summary\n\nFixture body.')
-  const [view, setView] = useState<'edit' | 'preview'>('edit')
+  const [view, setView] = useState<'edit' | 'preview'>('preview')
 
   return (
     <div
@@ -88,6 +88,7 @@ it('edits typed fields and the mobile Markdown editor before saving or finishing
     await page.getByRole('textbox', { name: 'Item 1' }).fill('first edited')
     await page.getByRole('textbox', { name: 'limit' }).fill('5')
     await page.getByRole('checkbox', { name: 'notify' }).click()
+    await page.getByRole('button', { name: 'Edit' }).click()
     await markdownEditor.fill(markdownBody)
   })
   const editorContent = container.querySelector('.cm-content')
@@ -197,7 +198,44 @@ it('shows the unsaved state before the review actions', () => {
   )
 })
 
-it('keeps the mobile Markdown editor usable when metadata fills the viewport', async () => {
+it('shows the only open draft in the draft tab row', () => {
+  const summary = {
+    id: 'fixture-issue-comment',
+    kind: 'issue_comment' as const,
+    target: { issueNumber: 28, title: 'Improve retries' },
+    isEditor: true,
+    canSave: true,
+    canFinish: true,
+  }
+  root = createRoot(container)
+  act(() =>
+    root?.render(
+      <ReviewDocumentPanel
+        summary={summary}
+        summaries={[summary]}
+        frontmatter={{}}
+        body="Fixture body."
+      />,
+    ),
+  )
+
+  const tab = container.querySelector('.review-document-tab')
+  const snapshot = () => ({
+    label: tab?.getAttribute('aria-label'),
+    current: tab?.getAttribute('aria-current'),
+    status: tab
+      ?.querySelector('.review-document-dot')
+      ?.getAttribute('aria-label'),
+  })
+
+  expect(snapshot()).toEqual({
+    label: 'Issue comment #28 · Improve retries',
+    current: 'page',
+    status: 'Editor open',
+  })
+})
+
+it('keeps the mobile preview usable when metadata fills the viewport', async () => {
   await page.viewport(390, 844)
   container.style.width = '390px'
   container.style.height = '844px'
@@ -240,21 +278,21 @@ it('keeps the mobile Markdown editor usable when metadata fills the viewport', a
   const metadata = container.querySelector<HTMLElement>(
     '.review-document-frontmatter',
   )
-  const editorColumn = container.querySelector<HTMLElement>(
-    '.review-document-edit-column',
+  const previewColumn = container.querySelector<HTMLElement>(
+    '.review-document-preview-column',
   )
-  if (bodyEditor === null || metadata === null || editorColumn === null) {
+  if (bodyEditor === null || metadata === null || previewColumn === null) {
     throw new Error('The mobile review editor layout was not rendered.')
   }
 
   const snapshot = () => ({
     bodyEditorHasRoom: bodyEditor.getBoundingClientRect().height >= 320,
-    editorColumnHasRoom: editorColumn.getBoundingClientRect().height >= 240,
+    previewColumnHasRoom: previewColumn.getBoundingClientRect().height >= 240,
     metadataCanScroll: metadata.scrollHeight > metadata.clientHeight,
   })
   expect(snapshot()).toEqual({
     bodyEditorHasRoom: true,
-    editorColumnHasRoom: true,
+    previewColumnHasRoom: true,
     metadataCanScroll: true,
   })
 })
@@ -288,6 +326,7 @@ it.each([
               { length: 80 },
               (_, index) => `Document line ${String(index + 1)}`,
             ).join('\n')}
+            view="edit"
           />
         </div>,
       ),

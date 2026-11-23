@@ -360,6 +360,8 @@ export function ConversationPane({
   }))
   const {
     activeTabId,
+    isReviewExpanded,
+    onCollapseReview,
     onOpenCritInFullscreen,
     onOpenWebUiInFullscreen,
     mobileWebUi,
@@ -372,6 +374,7 @@ export function ConversationPane({
     tabs: panelTabs,
   } = useConversationStatusPanel({
     session,
+    reviewDocumentSummaries: editorReviewDocument?.summaries ?? null,
     messages,
     allDecisions: displayedConversation.decisions,
     backgroundTasks: displayBackgroundTasks,
@@ -394,6 +397,8 @@ export function ConversationPane({
       onClose={onCloseStatusPanel}
       sessionTitle={session.title}
       size={isMobile ? 'phone' : 'desktop'}
+      expanded={isReviewExpanded}
+      onCollapse={onCollapseReview}
     />
   ) : null
 
@@ -438,7 +443,7 @@ export function ConversationPane({
         onOpenCritInFullscreen()
         if (!statusPanelOpen) onToggleStatusPanel()
       }}
-      editorReviewDocument={editorReviewDocument}
+      editorReviewDocument={editorReviewDocument?.state ?? null}
       onOpenDrafts={() => {
         onTabChange('review-document')
         if (!statusPanelOpen) onToggleStatusPanel()

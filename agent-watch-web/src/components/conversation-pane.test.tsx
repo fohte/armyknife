@@ -6629,7 +6629,7 @@ it('opens the Review tab from the draft review band in one click', async () => {
         ]),
       )
     }
-    if (url.endsWith('/review-document')) {
+    if (url.endsWith('/review-documents/fixture-review-document')) {
       return Promise.resolve(
         jsonResponse({
           id: 'fixture-review-document',
@@ -6687,7 +6687,7 @@ it('opens the Review tab from the draft review band in one click', async () => {
   const reviewTab = await waitForState(
     () =>
       container.querySelector('[role="tab"][aria-selected="true"]')
-        ?.textContent === 'Review',
+        ?.textContent === 'Review1',
   )
 
   const snapshot = () => ({
@@ -6699,7 +6699,7 @@ it('opens the Review tab from the draft review band in one click', async () => {
   })
   expect(snapshot()).toEqual({
     reviewTab: true,
-    selectedTab: 'Review',
+    selectedTab: 'Review1',
     reviewAction: 'Open drafts →',
   })
 })

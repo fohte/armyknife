@@ -3,7 +3,6 @@ import {
   type SetStateAction,
   useCallback,
   useEffect,
-  useRef,
   useState,
 } from 'react'
 
@@ -16,6 +15,7 @@ import { requestJson } from '#components/conversation-requests'
 import type { Decision } from '#components/decision-card'
 import { DecisionsPanel } from '#components/decisions-panel'
 import { ReviewDocumentPanel } from '#components/review-document-panel'
+import type { ReviewDocumentSummary } from '#components/review-document-summary'
 import { RunningTasksPanel } from '#components/running-tasks-panel'
 import type { SessionStatusPanelTab } from '#components/session-status-panel'
 import { SessionTasksPanel } from '#components/session-tasks-panel'
@@ -35,6 +35,7 @@ import type { BackgroundTask, ChatItem, Session, SessionTreeNode } from '#types'
 
 type UseConversationStatusPanelOptions = {
   session: Session
+  reviewDocumentSummaries?: readonly ReviewDocumentSummary[] | null
   messages: readonly ChatItem[]
   allDecisions?: readonly Decision[]
   backgroundTasks: readonly BackgroundTask[]
@@ -65,11 +66,13 @@ type ReviewDocumentState = {
   view: 'edit' | 'preview'
 }
 
+type ReviewDocumentStates = Record<string, ReviewDocumentState>
+
 function requestReviewDocumentAction(
   sessionId: string,
   document: ReviewDocumentResponse,
   action: 'save' | 'finish',
-  setState: Dispatch<SetStateAction<ReviewDocumentState | null>>,
+  setState: Dispatch<SetStateAction<ReviewDocumentStates>>,
   run: ReturnType<typeof useSessionOperations>['run'],
 ) {
   const savedRevision = (value: unknown) =>
@@ -79,50 +82,62 @@ function requestReviewDocumentAction(
     typeof value.revision === 'string'
       ? value.revision
       : null
-  const matchesDocument = (
-    current: ReviewDocumentState | null,
-  ): current is ReviewDocumentState =>
-    current !== null &&
-    current.sessionId === sessionId &&
-    current.reviewDocumentId === document.id
   setState((current) => {
-    if (current === null || !matchesDocument(current)) return current
+    const state = current[document.id]
+    if (state === undefined || state.sessionId !== sessionId) return current
     return {
       ...current,
-      saveStatus: action === 'save' ? 'saving' : 'finishing',
-      saveError: null,
+      [document.id]: {
+        ...state,
+        saveStatus: action === 'save' ? 'saving' : 'finishing',
+        saveError: null,
+      },
     }
   })
 
   const onSuccess = (result: unknown) => {
     const revision = savedRevision(result)
     setState((current) => {
-      if (!matchesDocument(current)) return current
-      return action === 'save'
-        ? {
-            ...current,
-            ...(current.document === null || revision === null
-              ? {}
-              : {
-                  document: { ...current.document, revision },
-                }),
-            saveStatus: 'saved',
-            saveError: null,
-            unsavedChanges: false,
-          }
-        : null
+      const state = current[document.id]
+      if (state === undefined || state.sessionId !== sessionId) return current
+      return {
+        ...current,
+        [document.id]:
+          action === 'save'
+            ? {
+                ...state,
+                ...(state.document === null || revision === null
+                  ? {}
+                  : {
+                      document: { ...state.document, revision },
+                    }),
+                saveStatus: 'saved',
+                saveError: null,
+                unsavedChanges: false,
+              }
+            : {
+                ...state,
+                saveStatus: 'saved',
+                saveError: null,
+                unsavedChanges: false,
+              },
+      }
     })
   }
   const onError = (error: Error) => {
-    setState((current) =>
-      matchesDocument(current)
-        ? {
+    setState((current) => {
+      const state = current[document.id]
+      return state === undefined || state.sessionId !== sessionId
+        ? current
+        : {
             ...current,
-            saveStatus: 'error',
-            saveError: error.message,
+            [document.id]: {
+              ...state,
+              saveStatus: 'error',
+              saveError: error.message,
+            },
           }
-        : current,
-    )
+    })
   }
   const operation = createSessionOperation(
     sessionId,
@@ -156,6 +171,7 @@ export function useConversationStatusPanel({
   hostname,
   onAction,
   onCloseStatusPanel,
+  reviewDocumentSummaries = null,
 }: UseConversationStatusPanelOptions) {
   const { run } = useSessionOperations()
   const [activePanelTabId, setActivePanelTabId] = useState<string | null>(null)
@@ -170,10 +186,30 @@ export function useConversationStatusPanel({
     onDecisionJumpComplete()
     if (isMobile) onCloseStatusPanel()
   }, [isMobile, onCloseStatusPanel, onDecisionJumpComplete])
-  const [reviewDocumentState, setReviewDocumentState] =
-    useState<ReviewDocumentState | null>(null)
-  const reviewDocumentStateRef = useRef<ReviewDocumentState | null>(null)
+  const [reviewDocumentStates, setReviewDocumentStates] =
+    useState<ReviewDocumentStates>({})
+  const [selectedReviewDocumentId, setSelectedReviewDocumentId] = useState<
+    string | null
+  >(null)
+  const [isReviewExpanded, setReviewExpanded] = useState(false)
   const reviewDocumentId = session.reviewDocumentId
+  const reviewDocuments = reviewDocumentSummaries ?? []
+  const selectedSummary =
+    reviewDocuments.find(
+      (summary) => summary.id === selectedReviewDocumentId,
+    ) ??
+    reviewDocuments.find((summary) => summary.id === reviewDocumentId) ??
+    reviewDocuments[0] ??
+    null
+  const selectedDocumentId = selectedSummary?.id ?? null
+  const reviewTabCount = Math.max(
+    session.reviewDocumentCount ?? Number(reviewDocumentId != null),
+    reviewDocuments.length,
+  )
+  const reviewDocumentState =
+    selectedDocumentId === null
+      ? null
+      : (reviewDocumentStates[selectedDocumentId] ?? null)
   const decisions =
     allDecisions ??
     messages.filter(
@@ -224,7 +260,7 @@ export function useConversationStatusPanel({
     ...(backgroundTasks.length === 0 ? [] : ['running']),
     ...(sessionTasks.length === 0 ? [] : ['tasks']),
     ...(treeAvailable ? ['tree'] : []),
-    ...(reviewDocumentId == null ? [] : ['review-document']),
+    ...(reviewTabCount === 0 ? [] : ['review-document']),
     ...(decisionCount === 0 ? [] : ['decisions']),
     ...webUiTabIds,
   ]
@@ -239,75 +275,89 @@ export function useConversationStatusPanel({
       ? activePanelTabId
       : defaultPanelTabId
   useEffect(() => {
-    if (reviewDocumentId == null) {
-      reviewDocumentStateRef.current = null
-      setReviewDocumentState(null)
+    if (!statusPanelOpen || isMobile) setReviewExpanded(false)
+  }, [isMobile, statusPanelOpen])
+  useEffect(() => {
+    if (selectedDocumentId === null) {
       return
     }
     if (!statusPanelOpen || activeTabId !== 'review-document') {
       return
     }
-    const currentReviewDocument = reviewDocumentStateRef.current
-    if (
-      currentReviewDocument?.sessionId === session.id &&
-      currentReviewDocument.reviewDocumentId === reviewDocumentId &&
-      currentReviewDocument.document !== null
-    ) {
+    const currentReviewDocument = reviewDocumentStates[selectedDocumentId]
+    if (currentReviewDocument?.sessionId === session.id) {
       return
     }
-    let current = true
-    setReviewDocumentState({
-      sessionId: session.id,
-      reviewDocumentId,
-      document: null,
-      error: null,
-      loading: true,
-      saveStatus: 'idle',
-      saveError: null,
-      unsavedChanges: false,
-      view: 'edit',
-    })
+    setReviewDocumentStates((states) => ({
+      ...states,
+      [selectedDocumentId]: {
+        sessionId: session.id,
+        reviewDocumentId: selectedDocumentId,
+        document: null,
+        error: null,
+        loading: true,
+        saveStatus: 'idle',
+        saveError: null,
+        unsavedChanges: false,
+        view: 'preview',
+      },
+    }))
     void requestJson(
-      `/api/sessions/${encodeURIComponent(session.id)}/review-document`,
+      `/api/sessions/${encodeURIComponent(session.id)}/review-documents/${encodeURIComponent(selectedDocumentId)}`,
       isReviewDocumentResponse,
     ).match(
       (document) => {
-        if (current) {
-          const nextState: ReviewDocumentState = {
-            sessionId: session.id,
-            reviewDocumentId: document.id,
-            document,
-            error: null,
-            loading: false,
-            saveStatus: 'idle',
-            saveError: null,
-            unsavedChanges: false,
-            view: 'edit',
-          }
-          reviewDocumentStateRef.current = nextState
-          setReviewDocumentState(nextState)
+        const nextState: ReviewDocumentState = {
+          sessionId: session.id,
+          reviewDocumentId: document.id,
+          document,
+          error: null,
+          loading: false,
+          saveStatus: 'idle',
+          saveError: null,
+          unsavedChanges: false,
+          view: 'preview',
         }
+        setReviewDocumentStates((states) => ({
+          ...states,
+          [document.id]: nextState,
+        }))
       },
       (error) => {
-        if (current) {
-          setReviewDocumentState({
+        setReviewDocumentStates((states) => ({
+          ...states,
+          [selectedDocumentId]: {
             sessionId: session.id,
-            reviewDocumentId,
+            reviewDocumentId: selectedDocumentId,
             document: null,
             error: error.message,
             loading: false,
             saveStatus: 'idle',
             saveError: null,
             unsavedChanges: false,
-            view: 'edit',
-          })
-        }
+            view: 'preview',
+          },
+        }))
       },
     )
-    return () => {
-      current = false
-    }
-  }, [activeTabId, session.id, reviewDocumentId, statusPanelOpen])
+  }, [
+    activeTabId,
+    session.id,
+    selectedDocumentId,
+    statusPanelOpen,
+    reviewDocumentStates,
+  ])
+  const updateSelectedReviewDocument = (
+    update: (state: ReviewDocumentState) => ReviewDocumentState,
+  ) => {
+    if (selectedDocumentId === null) return
+    setReviewDocumentStates((states) => {
+      const state = states[selectedDocumentId]
+      return state === undefined
+        ? states
+        : { ...states, [selectedDocumentId]: update(state) }
+    })
+  }
   const tabs: readonly SessionStatusPanelTab[] = [
     ...(availableTabIds.includes('running')
       ? [
@@ -389,61 +439,72 @@ export function useConversationStatusPanel({
           {
             id: 'review-document',
             label: 'Review',
-            count: 0,
+            count: reviewTabCount,
             visible: true,
-            showCount: false,
+            showCount: true,
             content:
-              reviewDocumentState === null ||
-              reviewDocumentState.sessionId !== session.id ||
-              reviewDocumentState.reviewDocumentId !==
-                session.reviewDocumentId ||
-              reviewDocumentState.loading ? (
+              selectedSummary === null ? (
                 <div className="session-tree-feedback" role="status">
-                  Loading review document…
+                  {reviewDocumentSummaries === null
+                    ? 'Loading drafts…'
+                    : 'No open drafts.'}
+                </div>
+              ) : reviewDocumentState === null ||
+                reviewDocumentState.sessionId !== session.id ||
+                reviewDocumentState.loading ? (
+                <div className="session-tree-feedback" role="status">
+                  Loading draft…
                 </div>
               ) : reviewDocumentState.error !== null ? (
                 <div className="session-tree-feedback" role="alert">
-                  Could not load the review document:{' '}
-                  {reviewDocumentState.error}
+                  Could not load the draft: {reviewDocumentState.error}
                 </div>
               ) : reviewDocumentState.document === null ? null : (
                 <ReviewDocumentPanel
+                  summary={selectedSummary}
+                  summaries={reviewDocuments}
+                  isMobile={isMobile}
+                  canSave={selectedSummary.canSave}
+                  canFinish={selectedSummary.canFinish}
                   frontmatter={reviewDocumentState.document.frontmatter}
                   body={reviewDocumentState.document.body}
                   status={reviewDocumentState.saveStatus}
                   unsavedChanges={reviewDocumentState.unsavedChanges}
                   error={reviewDocumentState.saveError}
                   view={reviewDocumentState.view}
+                  onSelectDocument={setSelectedReviewDocumentId}
+                  onExpand={() => {
+                    if (!isMobile) setReviewExpanded(true)
+                  }}
                   onFrontmatterChange={(frontmatter) => {
-                    setReviewDocumentState((current) =>
-                      current?.document === null || current === null
-                        ? current
-                        : {
-                            ...current,
-                            document: { ...current.document, frontmatter },
-                            saveStatus: 'idle',
-                            saveError: null,
-                            unsavedChanges: true,
-                          },
-                    )
+                    updateSelectedReviewDocument((current) => ({
+                      ...current,
+                      document:
+                        current.document === null
+                          ? null
+                          : { ...current.document, frontmatter },
+                      saveStatus: 'idle',
+                      saveError: null,
+                      unsavedChanges: true,
+                    }))
                   }}
                   onBodyChange={(body) => {
-                    setReviewDocumentState((current) =>
-                      current?.document === null || current === null
-                        ? current
-                        : {
-                            ...current,
-                            document: { ...current.document, body },
-                            saveStatus: 'idle',
-                            saveError: null,
-                            unsavedChanges: true,
-                          },
-                    )
+                    updateSelectedReviewDocument((current) => ({
+                      ...current,
+                      document:
+                        current.document === null
+                          ? null
+                          : { ...current.document, body },
+                      saveStatus: 'idle',
+                      saveError: null,
+                      unsavedChanges: true,
+                    }))
                   }}
                   onViewChange={(view) => {
-                    setReviewDocumentState((current) =>
-                      current === null ? current : { ...current, view },
-                    )
+                    updateSelectedReviewDocument((current) => ({
+                      ...current,
+                      view,
+                    }))
                   }}
                   onSave={() => {
                     const document = reviewDocumentState.document
@@ -452,7 +513,7 @@ export function useConversationStatusPanel({
                         session.id,
                         document,
                         'save',
-                        setReviewDocumentState,
+                        setReviewDocumentStates,
                         run,
                       )
                   }}
@@ -463,7 +524,7 @@ export function useConversationStatusPanel({
                         session.id,
                         document,
                         'finish',
-                        setReviewDocumentState,
+                        setReviewDocumentStates,
                         run,
                       )
                   }}
@@ -543,6 +604,10 @@ export function useConversationStatusPanel({
     onOpenWebUiInFullscreen,
     fullscreenWebUi,
     mobileWebUi,
+    isReviewExpanded,
+    onCollapseReview: () => {
+      setReviewExpanded(false)
+    },
     onDecisionJumpComplete,
     onDecisionJumpSucceeded,
     onSelectDecision: setSelectedDecisionSeq,

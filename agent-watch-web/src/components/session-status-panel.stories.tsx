@@ -58,17 +58,99 @@ export const ReviewDocumentIsActive: Story = {
       {
         id: 'review-document',
         label: 'Review',
-        count: 0,
+        count: 1,
         visible: true,
-        showCount: false,
+        showCount: true,
         content: (
           <ReviewDocumentPanel
+            summary={{
+              id: 'fixture-pr-draft',
+              kind: 'pr_draft',
+              target: { repository: 'example/service', branch: 'retry-policy' },
+              isEditor: true,
+              canSave: true,
+              canFinish: true,
+            }}
+            summaries={[
+              {
+                id: 'fixture-pr-draft',
+                kind: 'pr_draft',
+                target: {
+                  repository: 'example/service',
+                  branch: 'retry-policy',
+                },
+                isEditor: true,
+                canSave: true,
+                canFinish: true,
+              },
+            ]}
             frontmatter={{
               title: 'Review the retry policy',
               enabled: true,
               steps: { publish: false },
             }}
             body={'## Summary\n\nReview the retry behavior.'}
+          />
+        ),
+      },
+    ],
+    activeTabId: 'review-document',
+  },
+}
+
+export const ReviewFillsTheDesktopViewport: Story = {
+  name: 'The active Review panel expands to the full desktop width',
+  decorators: [defaultStatusViewport],
+  args: {
+    expanded: true,
+    tabs: [
+      {
+        id: 'review-document',
+        label: 'Review',
+        count: 3,
+        visible: true,
+        showCount: true,
+        content: (
+          <ReviewDocumentPanel
+            summary={{
+              id: 'fixture-pr-draft',
+              kind: 'pr_draft',
+              target: { repository: 'example/service', branch: 'retry-policy' },
+              isEditor: true,
+              canSave: true,
+              canFinish: true,
+            }}
+            summaries={[
+              {
+                id: 'fixture-pr-draft',
+                kind: 'pr_draft',
+                target: {
+                  repository: 'example/service',
+                  branch: 'retry-policy',
+                },
+                isEditor: true,
+                canSave: true,
+                canFinish: true,
+              },
+              {
+                id: 'fixture-issue-comment',
+                kind: 'issue_comment',
+                target: { issueNumber: 28, title: 'Improve retries' },
+                isEditor: false,
+                canSave: false,
+                canFinish: false,
+              },
+              {
+                id: 'fixture-review-replies',
+                kind: 'review_replies',
+                target: { pullRequestNumber: 15, threadCount: 2 },
+                isEditor: false,
+                canSave: false,
+                canFinish: false,
+              },
+            ]}
+            frontmatter={{ title: 'Improve retry handling' }}
+            body={'## Summary\n\nRetry temporary failures safely.'}
           />
         ),
       },

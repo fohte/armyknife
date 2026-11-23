@@ -12,6 +12,145 @@
   font-size: var(--status-font-size, 13px);
 }
 
+.review-document-header {
+  display: flex;
+  min-width: 0;
+  flex: 0 0 auto;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.review-document-heading {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.review-document-heading-context {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.review-document-kind {
+  flex: 0 0 auto;
+  color: var(--aw-text-primary);
+  font-size: var(--status-heading-font-size, 11.5px);
+  font-weight: 700;
+}
+
+.review-document-target {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--aw-text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--status-xs-font-size, 11.5px);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-document-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  border-radius: 50%;
+  background: #71717a;
+}
+
+.review-document-dot--editor {
+  background: #fbbf24;
+}
+
+.review-document-title-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--aw-text-secondary);
+  font-size: var(--status-xs-font-size, 11.5px);
+}
+
+.review-document-title-field .review-document-input {
+  max-width: 420px;
+}
+
+.review-document-expand {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  place-items: center;
+  border: 1px solid var(--aw-border-control);
+  border-radius: 4px;
+  color: var(--aw-text-secondary);
+  background: transparent;
+  cursor: pointer;
+}
+
+.review-document-tabs {
+  display: flex;
+  min-width: 0;
+  flex: 0 0 auto;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scrollbar-width: thin;
+}
+
+.review-document-tab {
+  position: relative;
+  display: flex;
+  width: 180px;
+  min-width: 120px;
+  height: 46px;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2px;
+  border: 1px solid var(--aw-border-row);
+  border-radius: 4px;
+  padding: 0 25px 0 10px;
+  color: var(--aw-text-secondary);
+  background: var(--aw-bg-app);
+  text-align: left;
+  cursor: pointer;
+}
+
+.review-document-tab--selected {
+  border-color: var(--aw-border-control);
+  color: var(--aw-text-primary);
+  background: var(--aw-bg-nav);
+}
+
+.review-document-tab .review-document-dot {
+  position: absolute;
+  top: 12px;
+  right: 10px;
+}
+
+.review-document-tab-kind,
+.review-document-tab-target {
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-document-tab-kind {
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.review-document-tab-target {
+  color: var(--aw-text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
 .review-document-content {
   display: flex;
   min-height: 0;
@@ -33,7 +172,10 @@
 
 .review-document-frontmatter h2,
 .review-document-body-heading h2 {
-  display: none;
+  margin: 0;
+  color: var(--aw-text-secondary);
+  font-size: var(--status-xs-font-size, 11.5px);
+  font-weight: 700;
 }
 
 .review-document-fields {
@@ -127,15 +269,18 @@
 
 .review-document-body-heading {
   display: flex;
-  justify-content: stretch;
+  align-items: center;
+  justify-content: space-between;
   margin: 0;
 }
 
 .review-document-view-toggle {
-  display: grid;
-  width: 100%;
+  display: inline-grid;
+  width: auto;
+  min-width: 160px;
   grid-template-columns: 1fr 1fr;
   padding: 2px;
+  border-radius: 4px;
   background: var(--aw-border-row);
 }
 
@@ -166,6 +311,7 @@
   min-width: 0;
   min-height: 0;
   flex: 1 1 auto;
+  flex-direction: column;
 }
 
 .review-document-edit-column,
@@ -185,6 +331,10 @@
 
 .review-document-panel[data-view='edit'] .review-document-preview-column,
 .review-document-panel[data-view='preview'] .review-document-edit-column {
+  display: none;
+}
+
+.review-document-panel[data-view='edit'] .review-document-frontmatter {
   display: none;
 }
 
@@ -278,4 +428,14 @@
 .review-document-actions .review-document-finish {
   border-color: var(--aw-color-working);
   color: var(--aw-text-primary);
+}
+
+.session-status-panel[data-size='phone'] .review-document-tab {
+  width: 160px;
+  height: 52px;
+  min-width: 145px;
+}
+
+.session-status-panel[data-size='phone'] .review-document-view-toggle button {
+  min-height: 36px;
 }

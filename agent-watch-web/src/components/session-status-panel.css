@@ -24,6 +24,16 @@
   background: var(--aw-bg-nav);
 }
 
+.session-status-panel[data-expanded='true'] {
+  position: fixed;
+  z-index: 100;
+  inset: 0;
+  width: 100vw;
+  height: 100dvh;
+  min-width: 0;
+  flex: none;
+}
+
 .session-status-panel-tabs {
   box-sizing: border-box;
   display: flex;
@@ -130,6 +140,18 @@
   padding: 0;
   color: var(--aw-text-muted);
   font-size: 16px;
+}
+
+.session-status-panel-collapse {
+  box-sizing: border-box;
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  min-height: 30px;
+  flex: 0 0 auto;
+  align-self: center;
+  padding: 0;
+  color: var(--aw-text-muted);
 }
 
 .session-status-panel-count {

@@ -51,7 +51,134 @@ export default meta
 type Story = StoryObj<typeof meta>
 
 export const EditingTheReviewDocument: Story = {
-  name: 'The review document is ready to edit and preview',
+  name: 'One issue comment opens in preview with its metadata',
+  args: {
+    summary: {
+      id: 'fixture-issue-comment',
+      kind: 'issue_comment',
+      target: {
+        issueNumber: 28,
+        title: 'Improve the retry policy',
+      },
+      isEditor: true,
+      canSave: true,
+      canFinish: true,
+    },
+    summaries: [
+      {
+        id: 'fixture-issue-comment',
+        kind: 'issue_comment',
+        target: {
+          issueNumber: 28,
+          title: 'Improve the retry policy',
+        },
+        isEditor: true,
+        canSave: true,
+        canFinish: true,
+      },
+    ],
+  },
+  decorators: [desktopViewport],
+}
+
+export const MultipleDraftsCanBeSelected: Story = {
+  name: 'The panel shows several drafts and highlights the open editor',
+  args: {
+    summary: {
+      id: 'fixture-pr-draft',
+      kind: 'pr_draft',
+      target: { repository: 'example/service', branch: 'retry-policy' },
+      isEditor: true,
+      canSave: true,
+      canFinish: true,
+    },
+    summaries: [
+      {
+        id: 'fixture-pr-draft',
+        kind: 'pr_draft',
+        target: { repository: 'example/service', branch: 'retry-policy' },
+        isEditor: true,
+        canSave: true,
+        canFinish: true,
+      },
+      {
+        id: 'fixture-issue-comment',
+        kind: 'issue_comment',
+        target: { issueNumber: 28, title: 'Improve the retry policy' },
+        isEditor: false,
+        canSave: false,
+        canFinish: false,
+      },
+      {
+        id: 'fixture-review-replies',
+        kind: 'review_replies',
+        target: { pullRequestNumber: 15, threadCount: 2 },
+        isEditor: false,
+        canSave: false,
+        canFinish: false,
+      },
+    ],
+    frontmatter: { title: 'Improve retries', status: 'draft' },
+  },
+  decorators: [desktopViewport],
+}
+
+export const WaitingDraftCanBeRead: Story = {
+  name: 'A queued draft stays readable while it waits for the editor',
+  args: {
+    summary: {
+      id: 'fixture-queued-draft',
+      kind: 'draft',
+      target: {},
+      isEditor: false,
+      canSave: false,
+      canFinish: false,
+    },
+    summaries: [
+      {
+        id: 'fixture-queued-draft',
+        kind: 'draft',
+        target: {},
+        isEditor: false,
+        canSave: false,
+        canFinish: false,
+      },
+    ],
+    canSave: false,
+    canFinish: false,
+  },
+  decorators: [desktopViewport],
+}
+
+export const PullRequestDraftShowsItsTitle: Story = {
+  name: 'A pull request draft shows its editable title above the body',
+  args: {
+    summary: {
+      id: 'fixture-pr-draft',
+      kind: 'pr_draft',
+      target: { repository: 'example/service', branch: 'retry-policy' },
+      isEditor: true,
+      canSave: true,
+      canFinish: true,
+    },
+    summaries: [
+      {
+        id: 'fixture-pr-draft',
+        kind: 'pr_draft',
+        target: { repository: 'example/service', branch: 'retry-policy' },
+        isEditor: true,
+        canSave: true,
+        canFinish: true,
+      },
+    ],
+    frontmatter: { title: 'Improve retry handling', labels: ['reliability'] },
+  },
+  decorators: [desktopViewport],
+}
+
+export const RawDraftCanBeEdited: Story = {
+  name: 'The Edit view shows the raw draft file',
+  args: { view: 'edit' },
   decorators: [desktopViewport],
 }
 
@@ -63,12 +190,13 @@ export const UnsavedChangesAreVisible: Story = {
 
 export const MobileEditing: Story = {
   name: 'The mobile review document shows its editor',
+  args: { isMobile: true },
   decorators: [phoneViewport],
 }
 
 export const MobilePreview: Story = {
   name: 'The mobile review document shows its Markdown preview',
-  args: { view: 'preview' },
+  args: { view: 'preview', isMobile: true },
   decorators: [phoneViewport],
 }
 

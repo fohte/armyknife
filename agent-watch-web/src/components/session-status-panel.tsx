@@ -1,7 +1,7 @@
 import '#components/session-status-panel.css'
 
 import { Button } from '@fohte/ui/button'
-import { ChevronLeft } from 'lucide-react'
+import { ChevronLeft, Minimize2 } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
@@ -24,6 +24,8 @@ type SessionStatusPanelProps = {
   onTabChange: (id: string) => void
   onClose: () => void
   sessionTitle?: string
+  expanded?: boolean
+  onCollapse?: () => void
 }
 
 export function SessionStatusPanel({
@@ -33,6 +35,8 @@ export function SessionStatusPanel({
   onTabChange,
   onClose,
   sessionTitle,
+  expanded = false,
+  onCollapse = () => undefined,
 }: SessionStatusPanelProps) {
   const isPhone = size === 'phone'
   const visibleTabs = tabs.filter((tab) => tab.visible ?? tab.count > 0)
@@ -107,6 +111,7 @@ export function SessionStatusPanel({
       id="session-status-panel"
       className="session-status-panel"
       data-size={size}
+      data-expanded={expanded}
       aria-label="Session status panel"
       aria-labelledby={isPhone ? 'session-status-panel-title' : undefined}
       role={isPhone ? 'dialog' : undefined}
@@ -176,17 +181,30 @@ export function SessionStatusPanel({
           </div>
         </div>
         {isPhone ? null : (
-          <Button
-            className="session-status-panel-close"
-            type="button"
-            variant="plain"
-            aria-label="Close session status panel"
-            onClick={() => {
-              onClose()
-            }}
-          >
-            ×
-          </Button>
+          <>
+            {expanded ? (
+              <Button
+                className="session-status-panel-collapse"
+                type="button"
+                variant="plain"
+                aria-label="Exit full width review"
+                onClick={onCollapse}
+              >
+                <Minimize2 aria-hidden="true" size={16} />
+              </Button>
+            ) : null}
+            <Button
+              className="session-status-panel-close"
+              type="button"
+              variant="plain"
+              aria-label="Close session status panel"
+              onClick={() => {
+                onClose()
+              }}
+            >
+              ×
+            </Button>
+          </>
         )}
       </div>
       {activeTab !== undefined ? (

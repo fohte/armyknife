@@ -10,10 +10,16 @@ export type ReviewDocumentSummary = {
     threadCount?: number
   }
   isEditor: boolean
+  canSave: boolean
+  canFinish: boolean
 }
 
 export type EditorReviewDocumentState =
   | { status: 'ready'; summary: ReviewDocumentSummary }
+  | { status: 'unavailable' }
+
+export type ReviewDocumentSummariesState =
+  | { status: 'ready'; summaries: ReviewDocumentSummary[] }
   | { status: 'unavailable' }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -47,7 +53,9 @@ export function isReviewDocumentSummaryList(
           typeof item['target']['title'] === 'string') &&
         (item['target']['threadCount'] === undefined ||
           typeof item['target']['threadCount'] === 'number') &&
-        typeof item['isEditor'] === 'boolean',
+        typeof item['isEditor'] === 'boolean' &&
+        typeof item['canSave'] === 'boolean' &&
+        typeof item['canFinish'] === 'boolean',
     )
   )
 }

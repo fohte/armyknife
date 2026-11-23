@@ -35,13 +35,14 @@ let root: Root | null = null
 
 function EditorDocumentView({ session }: { session: Session }) {
   const document = useEditorReviewDocument(session)
+  const editorState = document?.state ?? null
   return (
     <output>
-      {document === null
+      {editorState === null
         ? 'Loading editor document'
-        : document.status === 'unavailable'
+        : editorState.status === 'unavailable'
           ? 'Draft details are unavailable'
-          : `${document.summary.kind} #${String(document.summary.target.issueNumber)}`}
+          : `${editorState.summary.kind} #${String(editorState.summary.target.issueNumber)}`}
     </output>
   )
 }

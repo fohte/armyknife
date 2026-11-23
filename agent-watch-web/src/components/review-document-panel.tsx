@@ -5,12 +5,21 @@ import { markdown } from '@codemirror/lang-markdown'
 import { defaultHighlightStyle, syntaxHighlighting } from '@codemirror/language'
 import { Compartment, EditorState } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
+import { Maximize2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 
 import { MarkdownMessage } from '#components/markdown-message'
+import type { ReviewDocumentSummary } from '#components/review-document-summary'
 import type { JsonValue } from '#types'
 
 type ReviewDocumentPanelProps = {
+  summary?: ReviewDocumentSummary
+  summaries?: readonly ReviewDocumentSummary[]
+  isMobile?: boolean
+  canSave?: boolean
+  canFinish?: boolean
+  onSelectDocument?: (id: string) => void
+  onExpand?: () => void
   frontmatter: JsonValue
   body: string
   status?: 'idle' | 'saving' | 'saved' | 'error' | 'finishing'
@@ -29,6 +38,50 @@ type JsonPathPart = string | number
 
 function isJsonObject(value: JsonValue): value is JsonObject {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function kindLabel(kind: ReviewDocumentSummary['kind']) {
+  switch (kind) {
+    case 'pr_draft':
+      return 'PR draft'
+    case 'issue_comment':
+      return 'Issue comment'
+    case 'issue_body':
+      return 'Issue body'
+    case 'review_replies':
+      return 'Review replies'
+    case 'draft':
+      return 'Draft'
+  }
+}
+
+function targetLabel(summary: ReviewDocumentSummary) {
+  const { target } = summary
+  switch (summary.kind) {
+    case 'pr_draft':
+      return [target.repository, target.branch].filter(Boolean).join(' · ')
+    case 'issue_comment':
+    case 'issue_body':
+      return [
+        target.issueNumber === undefined
+          ? null
+          : `#${String(target.issueNumber)}`,
+        target.title,
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    case 'review_replies':
+      return [
+        target.pullRequestNumber === undefined
+          ? null
+          : `PR #${String(target.pullRequestNumber)}`,
+        `${String(target.threadCount ?? 0)} threads`,
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    case 'draft':
+      return ''
+  }
 }
 
 function updateAtPath(
@@ -278,12 +331,19 @@ function MarkdownEditor({
 }
 
 export function ReviewDocumentPanel({
+  summary,
+  summaries = [],
+  isMobile = false,
+  canSave = true,
+  canFinish = true,
+  onSelectDocument = () => undefined,
+  onExpand = () => undefined,
   frontmatter,
   body,
   status = 'idle',
   unsavedChanges = false,
   error = null,
-  view = 'edit',
+  view = 'preview',
   onFrontmatterChange = () => undefined,
   onBodyChange = () => undefined,
   onViewChange = () => undefined,
@@ -304,6 +364,85 @@ export function ReviewDocumentPanel({
       data-view={view}
       data-status={status}
     >
+      {summary === undefined ? null : (
+        <header className="review-document-header">
+          <div className="review-document-heading">
+            <div className="review-document-heading-context">
+              <span className="review-document-kind">
+                {kindLabel(summary.kind)}
+              </span>
+              <span className="review-document-target">
+                {targetLabel(summary)}
+              </span>
+              <span
+                aria-label={summary.isEditor ? 'Editor open' : 'Waiting'}
+                className={`review-document-dot${summary.isEditor ? ' review-document-dot--editor' : ''}`}
+              />
+            </div>
+            {summary.kind === 'pr_draft' ? (
+              <label className="review-document-title-field">
+                <span>Title</span>
+                <input
+                  aria-label="Draft title"
+                  className="review-document-input"
+                  disabled={!canSave || busy}
+                  value={
+                    isJsonObject(frontmatter) &&
+                    typeof frontmatter['title'] === 'string'
+                      ? frontmatter['title']
+                      : ''
+                  }
+                  onChange={(event) => {
+                    if (isJsonObject(frontmatter)) {
+                      onFrontmatterChange({
+                        ...frontmatter,
+                        title: event.currentTarget.value,
+                      })
+                    }
+                  }}
+                />
+              </label>
+            ) : null}
+          </div>
+          {isMobile ? null : (
+            <button
+              aria-label="Open draft full width"
+              className="review-document-expand"
+              type="button"
+              onClick={onExpand}
+            >
+              <Maximize2 aria-hidden="true" size={16} />
+            </button>
+          )}
+        </header>
+      )}
+      {summaries.length === 0 ? null : (
+        <nav className="review-document-tabs" aria-label="Open drafts">
+          {summaries.map((item) => (
+            <button
+              key={item.id}
+              aria-label={`${kindLabel(item.kind)} ${targetLabel(item)}`.trim()}
+              aria-current={item.id === summary?.id ? 'page' : undefined}
+              className={`review-document-tab${item.id === summary?.id ? ' review-document-tab--selected' : ''}`}
+              type="button"
+              onClick={() => {
+                onSelectDocument(item.id)
+              }}
+            >
+              <span className="review-document-tab-kind">
+                {kindLabel(item.kind)}
+              </span>
+              <span className="review-document-tab-target">
+                {targetLabel(item)}
+              </span>
+              <span
+                aria-label={item.isEditor ? 'Editor open' : 'Waiting'}
+                className={`review-document-dot${item.isEditor ? ' review-document-dot--editor' : ''}`}
+              />
+            </button>
+          ))}
+        </nav>
+      )}
       <div className="review-document-content">
         <section
           className="review-document-frontmatter"
@@ -312,23 +451,28 @@ export function ReviewDocumentPanel({
           <h2>Frontmatter</h2>
           {isJsonObject(frontmatter) ? (
             <dl className="review-document-fields">
-              {Object.entries(frontmatter).map(([name, value]) => (
-                <FieldEditor
-                  key={name}
-                  name={name}
-                  path={[name]}
-                  value={value}
-                  disabled={busy}
-                  onChange={updateFrontmatter}
-                />
-              ))}
+              {Object.entries(frontmatter)
+                .filter(
+                  ([name]) =>
+                    !(summary?.kind === 'pr_draft' && name === 'title'),
+                )
+                .map(([name, value]) => (
+                  <FieldEditor
+                    key={name}
+                    name={name}
+                    path={[name]}
+                    value={value}
+                    disabled={!canSave || busy}
+                    onChange={updateFrontmatter}
+                  />
+                ))}
             </dl>
           ) : (
             <FieldEditor
               name="Frontmatter"
               path={[]}
               value={frontmatter}
-              disabled={busy}
+              disabled={!canSave || busy}
               onChange={(path, value) => {
                 if (path.length === 0) onFrontmatterChange(value)
               }}
@@ -367,7 +511,7 @@ export function ReviewDocumentPanel({
             <div className="review-document-edit-column">
               <MarkdownEditor
                 value={body}
-                disabled={busy}
+                disabled={!canSave || busy}
                 onChange={onBodyChange}
               />
             </div>
@@ -395,12 +539,12 @@ export function ReviewDocumentPanel({
             {error}
           </span>
         )}
-        <button disabled={busy} type="button" onClick={onSave}>
+        <button disabled={!canSave || busy} type="button" onClick={onSave}>
           Save
         </button>
         <button
           className="review-document-finish"
-          disabled={busy}
+          disabled={!canFinish || busy}
           type="button"
           onClick={onFinish}
         >
