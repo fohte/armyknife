@@ -71,9 +71,19 @@ pub(super) fn collect_pending_permission_cards(
         .contains(MAIN_THREAD_AGENT_KEY)
         && !main_permission_is_question
     {
-        let command = main_permission_data.and_then(|data| {
-            permission_request_command(data.tool_name.as_deref(), Some(&data.tool_input))
-        });
+        let fallback_command = if main_permission_data.is_none() {
+            session
+                .current_tool
+                .as_deref()
+                .and_then(bash_command_from_current_tool)
+        } else {
+            None
+        };
+        let command = main_permission_data
+            .and_then(|data| {
+                permission_request_command(data.tool_name.as_deref(), Some(&data.tool_input))
+            })
+            .or_else(|| fallback_command.map(str::to_owned));
         let tool = main_permission_data
             .and_then(|data| {
                 if data.tool_name.as_deref() == Some("Bash") {
@@ -82,6 +92,7 @@ pub(super) fn collect_pending_permission_cards(
                     permission_request_pending_tool(data)
                 }
             })
+            .or_else(|| fallback_command.map(|_| "Bash".to_string()))
             .or_else(|| session.current_tool.clone())
             .unwrap_or_else(|| "Permission required".to_string());
         let description = main_permission_data
@@ -184,6 +195,12 @@ pub(super) fn collect_pending_permission_cards(
     }
 
     Ok(PendingPermissionCards { cards, questions })
+}
+
+fn bash_command_from_current_tool(current_tool: &str) -> Option<&str> {
+    current_tool
+        .strip_prefix("Bash(")
+        .and_then(|tool| tool.strip_suffix(')'))
 }
 
 fn permission_request_pending_tool(data: &PermissionRequestData) -> Option<String> {

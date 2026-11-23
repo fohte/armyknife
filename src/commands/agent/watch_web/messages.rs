@@ -2966,15 +2966,23 @@ mod tests {
         );
     }
 
-    #[test]
-    fn pending_permission_fallback_does_not_reuse_the_last_assistant_message() {
+    #[rstest]
+    #[case::bash_command("Bash(cargo test -p sample)", "Bash", Some("cargo test -p sample"))]
+    #[case::bash_command_with_parentheses("Bash(echo (sample))", "Bash", Some("echo (sample)"))]
+    #[case::other_tool("Read(src/main.rs)", "Read(src/main.rs)", None)]
+    #[case::bare_bash("Bash", "Bash", None)]
+    fn pending_permission_fallback_parses_bash_command_without_reusing_the_last_assistant_message(
+        #[case] current_tool: &str,
+        #[case] expected_tool: &str,
+        #[case] expected_command: Option<&str>,
+    ) {
         let mut session = stored_session();
         session.pending_permission_agent_ids = BTreeSet::from([MAIN_THREAD_AGENT_KEY.to_string()]);
         session.pending_permission_request_ids = BTreeMap::from([(
             MAIN_THREAD_AGENT_KEY.to_string(),
             "permission-request-main".to_string(),
         )]);
-        session.current_tool = Some("Bash(cargo test -p sample)".to_string());
+        session.current_tool = Some(current_tool.to_string());
         session.last_message = Some("Run the package tests".to_string());
 
         assert_eq!(
@@ -2984,9 +2992,9 @@ mod tests {
             .unwrap(),
             Some(vec![ChatItem::Permission {
                 request_id: Some("permission-request-main".to_string()),
-                tool: "Bash(cargo test -p sample)".to_string(),
+                tool: expected_tool.to_string(),
                 description: "Waiting for permission".to_string(),
-                command: None,
+                command: expected_command.map(str::to_string),
             }])
         );
     }
