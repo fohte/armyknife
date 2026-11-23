@@ -5658,6 +5658,32 @@ mod tests {
         }
 
         #[rstest]
+        #[case::claude(Engine::Claude)]
+        #[case::codex(Engine::Codex)]
+        fn unmarked_initial_prompt_is_recorded_for_recent(#[case] engine: Engine) {
+            let temp_dir = create_temp_sessions_dir();
+            let mut input = create_test_input(None);
+            input.engine = engine;
+            input.prompt = Some("Example user prompt".to_string());
+
+            let result = process_hook_event_impl(
+                HookEvent::UserPromptSubmit,
+                input,
+                temp_dir.path(),
+                &SideEffects::none(),
+            )
+            .expect("initial prompt should succeed");
+            let session = store::load_session_from(temp_dir.path(), "test-123")
+                .expect("session should load")
+                .expect("session should exist");
+
+            assert_eq!(
+                (result, session.last_prompted_at == Some(session.updated_at),),
+                (ProcessResult::SessionSaved, true),
+            );
+        }
+
+        #[rstest]
         #[case::peer(
             None,
             indoc::indoc! {"

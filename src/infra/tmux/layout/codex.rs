@@ -173,6 +173,7 @@ impl Launch {
                     .wait_for_thread_started(cwd)
                     .context("Failed to wait for Codex app-server thread/start")?;
                 if let Some(marker) = initial_prompt_marker
+                    && marker.should_mark_pending
                     && let Err(error) = (marker.mark_pending)(&thread_id)
                 {
                     tracing::warn!(
@@ -191,6 +192,7 @@ impl Launch {
                     }
                     Err(codex_steer::DeliveryError::NotDelivered(error)) => {
                         if let Some(marker) = initial_prompt_marker
+                            && marker.should_mark_pending
                             && let Err(clear_error) = (marker.clear_pending)(&thread_id)
                         {
                             tracing::warn!(
@@ -304,6 +306,7 @@ mod tests {
                 prompt_file: None,
                 pane_id: Some("%42"),
                 initial_prompt_marker: Some(super::super::InitialPromptMarker {
+                    should_mark_pending: true,
                     mark_pending: &mark_pending,
                     clear_pending: &clear_pending,
                     prefix_watch_web_message: None,
@@ -352,6 +355,7 @@ mod tests {
                 prompt_file: None,
                 pane_id: Some("%42"),
                 initial_prompt_marker: Some(super::super::InitialPromptMarker {
+                    should_mark_pending: true,
                     mark_pending: &mark_pending,
                     clear_pending: &clear_pending,
                     prefix_watch_web_message: None,
@@ -406,6 +410,7 @@ mod tests {
                 prompt_file: None,
                 pane_id: Some("%42"),
                 initial_prompt_marker: Some(super::super::InitialPromptMarker {
+                    should_mark_pending: true,
                     mark_pending: &mark_pending,
                     clear_pending: &clear_pending,
                     prefix_watch_web_message: None,

@@ -193,6 +193,7 @@ impl Launch {
                     .unwrap_or(prompt);
                 let before_send = || {
                     if let Some(marker) = initial_prompt_marker
+                        && marker.should_mark_pending
                         && let Err(error) = (marker.mark_pending)(&connection.session_id)
                     {
                         tracing::warn!(
@@ -205,6 +206,7 @@ impl Launch {
                 };
                 if let Err(error) = client.send_message(&connection, &prompt, &before_send) {
                     if let Some(marker) = initial_prompt_marker
+                        && marker.should_mark_pending
                         && let Err(clear_error) = (marker.clear_pending)(&connection.session_id)
                     {
                         tracing::warn!(
@@ -363,6 +365,7 @@ mod tests {
                 prompt_file: None,
                 pane_id: Some("%2"),
                 initial_prompt_marker: Some(super::super::InitialPromptMarker {
+                    should_mark_pending: true,
                     mark_pending: &mark_pending,
                     clear_pending: &clear_pending,
                     prefix_watch_web_message: None,
@@ -410,6 +413,7 @@ mod tests {
                 prompt_file: None,
                 pane_id: Some("%2"),
                 initial_prompt_marker: Some(super::super::InitialPromptMarker {
+                    should_mark_pending: true,
                     mark_pending: &mark_pending,
                     clear_pending: &clear_pending,
                     prefix_watch_web_message: Some(&prefix_watch_web_message),
@@ -460,6 +464,7 @@ mod tests {
                 prompt_file: None,
                 pane_id: Some("%2"),
                 initial_prompt_marker: Some(super::super::InitialPromptMarker {
+                    should_mark_pending: true,
                     mark_pending: &mark_pending,
                     clear_pending: &clear_pending,
                     prefix_watch_web_message: None,
@@ -506,6 +511,7 @@ mod tests {
                 prompt_file: None,
                 pane_id: Some("%2"),
                 initial_prompt_marker: Some(super::super::InitialPromptMarker {
+                    should_mark_pending: true,
                     mark_pending: &mark_pending,
                     clear_pending: &clear_pending,
                     prefix_watch_web_message: None,
