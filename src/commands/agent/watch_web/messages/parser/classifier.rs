@@ -165,6 +165,10 @@ pub(super) fn user_text_without_session_context(text: &str) -> String {
     let Some(context_start) = text[..context_end].rfind("<session-context>") else {
         return text.to_owned();
     };
+    let context = &text[context_start + "<session-context>".len()..context_end];
+    if !is_generated_session_context(context) {
+        return text.to_owned();
+    }
     let before_context = &text[..context_start];
     let prompt = before_context
         .strip_suffix('\n')
@@ -177,6 +181,33 @@ pub(super) fn user_text_without_session_context(text: &str) -> String {
                 .and_then(|before| before.strip_suffix('\r'))
         });
     prompt.map_or_else(|| text.to_owned(), str::to_owned)
+}
+
+fn is_generated_session_context(context: &str) -> bool {
+    let lines: Vec<_> = context.trim().lines().collect();
+    match lines.as_slice() {
+        [working_directory, parent_working_directory] => {
+            has_context_field(working_directory, "- Working directory: ")
+                && has_context_field(parent_working_directory, "- Parent working directory: ")
+        }
+        [working_directory, optional_field, parent_working_directory] => {
+            has_context_field(working_directory, "- Working directory: ")
+                && (has_context_field(optional_field, "- Branch: ")
+                    || has_context_field(optional_field, "- Base: "))
+                && has_context_field(parent_working_directory, "- Parent working directory: ")
+        }
+        [working_directory, branch, base, parent_working_directory] => {
+            has_context_field(working_directory, "- Working directory: ")
+                && has_context_field(branch, "- Branch: ")
+                && has_context_field(base, "- Base: ")
+                && has_context_field(parent_working_directory, "- Parent working directory: ")
+        }
+        _ => false,
+    }
+}
+
+fn has_context_field(line: &str, field: &str) -> bool {
+    line.starts_with(field)
 }
 
 fn subagent_report(record: &Value) -> Option<MessageKind> {
@@ -472,6 +503,7 @@ mod tests {
 
             <session-context>
             - Working directory: /fictional/project
+            - Parent working directory: /fictional
             </session-context>
         "},
         Some("⟦armyknife-user:fixture-marker-violet⟧"),
@@ -488,11 +520,35 @@ mod tests {
 
             <session-context>
             - Working directory: /fictional/project
+            - Parent working directory: /fictional
             </session-context>
         "},
         Some("⟦armyknife-user:fixture-marker-violet⟧"),
         MessageKind::User {
             text: "Please inspect this peer-delivered fictional issue.".to_owned(),
+        },
+    )]
+    #[case::peer_origin_watch_web_marker_preserves_user_authored_context(
+        json!({"type":"user","origin":{"kind":"peer","from":"fixture-sender-id"}}),
+        indoc! {"
+            ⟦armyknife-user:fixture-marker-violet⟧
+            This message was sent by the human user in armyknife watch-web, either as a message or an action notification.
+            Please keep this literal context block.
+
+            <session-context>
+            - User-authored note: preserve this text.
+            </session-context>
+        "},
+        Some("⟦armyknife-user:fixture-marker-violet⟧"),
+        MessageKind::User {
+            text: indoc! {"
+                Please keep this literal context block.
+
+                <session-context>
+                - User-authored note: preserve this text.
+                </session-context>
+            "}
+            .to_owned(),
         },
     )]
     #[case::human_vibe_notice_is_an_event(

@@ -96,6 +96,7 @@ fn append_text_with_user_marker_and_image_directory(
 pub(in crate::commands::agent::watch_web::messages::parser) fn append_user_text_with_rewind_id(
     items: &mut Vec<ChatItem>,
     text: String,
+    is_initial_user_message: bool,
     parent: Option<&ParentSession>,
     timestamp: Option<DateTime<Utc>>,
     rewind_id: Option<String>,
@@ -103,14 +104,15 @@ pub(in crate::commands::agent::watch_web::messages::parser) fn append_user_text_
     if text.trim().is_empty() {
         return;
     }
+    let text = if is_initial_user_message
+        && crate::commands::agent::peer_message::extract_peer_message(&text, None).is_none()
+    {
+        classifier::user_text_without_session_context(&text)
+    } else {
+        text
+    };
     let classification =
         classifier::classify_inbound(&serde_json::json!({"type":"user"}), &text, None);
-    let classification = match classification {
-        classifier::MessageKind::User { text } => classifier::MessageKind::User {
-            text: classifier::user_text_without_session_context(&text),
-        },
-        classification => classification,
-    };
     append_classification(
         items,
         classification,
