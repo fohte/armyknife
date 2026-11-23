@@ -47,6 +47,7 @@ const appTestFiles = [
   'src/components/conversation-message-row.browser.test.tsx',
   'src/components/board-view.test.tsx',
   'src/components/conversation-pane.test.tsx',
+  'src/components/conversation-merge-timeline.browser.test.tsx',
   'src/components/conversation-status-band.browser.test.tsx',
   'src/components/use-editor-review-document.browser.test.tsx',
   'src/components/conversation-pane-header.test.tsx',

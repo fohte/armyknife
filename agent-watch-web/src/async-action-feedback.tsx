@@ -9,6 +9,10 @@ import {
   useState,
 } from 'react'
 
+import {
+  shiftMergeTimelineIndices as shiftMergeActionTimelineIndices,
+  type ShiftMergeTimelineIndicesOptions,
+} from '#async-action-timeline'
 import { AsyncActionFeedbackHost } from '#components/async-action-feedback-host'
 import type { CloseWorktreeChecks } from '#session-operation-types'
 
@@ -59,10 +63,12 @@ export type AsyncAction = {
   pullRequestOwner?: string
   pullRequestRepo?: string
   pullRequestHeadSha?: string
+  timelineIndex?: number
   message?: string
   error?: string
   checks?: CloseWorktreeChecks
   createdAt: number
+  completedAt?: number
 }
 
 export type AsyncActionOutcome =
@@ -93,6 +99,7 @@ export type StartAsyncActionOptions = {
   pullRequestOwner?: string
   pullRequestRepo?: string
   pullRequestHeadSha?: string
+  timelineIndex?: number
   run: () => Promise<AsyncActionOutcome>
   onRetry?: (retry: () => void, actionId: number) => void
   onCloseKeepWorktree?: () => void
@@ -103,7 +110,6 @@ type AsyncActionRetryUpdate = Pick<
   StartAsyncActionOptions,
   'run' | 'onRetry' | 'pullRequestHeadSha'
 >
-
 function runningStatusFor(kind: AsyncAction['kind']): AsyncActionStatus {
   switch (kind) {
     case 'merge':
@@ -129,6 +135,7 @@ type AsyncActionFeedbackValue = {
   start: (options: StartAsyncActionOptions) => number
   retry: (id: number) => void
   retryWith: (id: number, update: AsyncActionRetryUpdate) => void
+  shiftMergeTimelineIndices: (options: ShiftMergeTimelineIndicesOptions) => void
   requestMergeRetryConfirmation: (id: number) => void
   consumeMergeRetryConfirmation: (id: number) => void
   finishMergeRetryConfirmation: (id: number) => void
@@ -207,14 +214,20 @@ export function AsyncActionFeedbackProvider({
           delete next.error
           delete next.message
           delete next.checks
+          delete next.completedAt
           return next
         }),
       )
       const outcome = await run()
+      const completedAt = Date.now()
       setActions((current) =>
         current.map((action) => {
           if (action.id !== id) return action
-          const next: AsyncAction = { ...action, status: outcome.status }
+          const next: AsyncAction = {
+            ...action,
+            status: outcome.status,
+            completedAt,
+          }
           if ('message' in outcome) next.message = outcome.message
           if ('error' in outcome) next.error = outcome.error
           else delete next.error
@@ -287,6 +300,9 @@ export function AsyncActionFeedbackProvider({
           ...(options.pullRequestHeadSha === undefined
             ? {}
             : { pullRequestHeadSha: options.pullRequestHeadSha }),
+          ...(options.timelineIndex === undefined
+            ? {}
+            : { timelineIndex: options.timelineIndex }),
           createdAt: Date.now(),
         },
         ...current,
@@ -328,6 +344,13 @@ export function AsyncActionFeedbackProvider({
       void runAction(id, update.run)
     },
     [runAction],
+  )
+
+  const shiftMergeTimelineIndices = useCallback(
+    (options: ShiftMergeTimelineIndicesOptions) => {
+      setActions((current) => shiftMergeActionTimelineIndices(current, options))
+    },
+    [],
   )
 
   const requestMergeRetryConfirmation = useCallback((id: number) => {
@@ -447,6 +470,7 @@ export function AsyncActionFeedbackProvider({
         start,
         retry,
         retryWith,
+        shiftMergeTimelineIndices,
         requestMergeRetryConfirmation,
         consumeMergeRetryConfirmation,
         finishMergeRetryConfirmation,

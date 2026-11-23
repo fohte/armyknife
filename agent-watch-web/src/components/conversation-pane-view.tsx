@@ -1,7 +1,6 @@
 import '#components/conversation-pane.css'
 import '#components/conversation-pane-view.css'
 
-import { Button } from '@fohte/ui/button'
 import { type ReactNode, useCallback, useMemo, useRef, useState } from 'react'
 
 import { useOptionalAsyncActionFeedback } from '#async-action-feedback'
@@ -15,9 +14,9 @@ import type { EditorReviewDocumentState } from '#components/conversation-pane-re
 import { ConversationSelectionReply } from '#components/conversation-selection-reply'
 import { ConversationStatusBand } from '#components/conversation-status-band'
 import { getConversationStatusBandState } from '#components/conversation-status-band-state'
+import { ConversationTimeline } from '#components/conversation-timeline'
 import { EndedSessionBanner } from '#components/ended-session-banner'
 import { FileDropIndicator } from '#components/file-drop-indicator'
-import { MarkdownCommandContextProvider } from '#components/markdown-command-context'
 import { MessageComposer } from '#components/message-composer'
 import type {
   PendingPermissionActions,
@@ -271,6 +270,7 @@ export function ConversationPaneView({
   const {
     activeTool,
     conversationMessageCount,
+    conversationMessageIndices,
     elements: conversationMessageElements,
     hasUnansweredProposal,
   } = useConversationMessageElements({
@@ -300,12 +300,21 @@ export function ConversationPaneView({
     sessions: sessionLinkTargets,
     now,
   })
+  const conversationTimelineMessages = conversationMessageElements.flatMap(
+    (element, offset) => {
+      const index = conversationMessageIndices[offset]
+      return [{ element, ...(index === undefined ? {} : { index }) }]
+    },
+  )
   const statusBandState = getConversationStatusBandState({
     session,
     messages,
     backgroundTasks,
     editorReviewDocument: editorReviewDocument ?? null,
   })
+  // A merge result falls back to the trailing action list until the initial page establishes its boundary.
+  const mergeTimelineIndex =
+    loading && messages.length === 0 ? undefined : start + messages.length
   const returnToRequestCard = () => {
     scrollToConversationStatusCard(
       conversationScrollRef.current,
@@ -349,6 +358,9 @@ export function ConversationPaneView({
       <ConversationPaneHeader
         key={session.id}
         session={session}
+        {...(mergeTimelineIndex === undefined
+          ? {}
+          : { timelineIndex: mergeTimelineIndex })}
         mergeBandTarget={mergeBandTarget}
         vibeMode={vibeMode}
         actions={actions}
@@ -369,50 +381,33 @@ export function ConversationPaneView({
       />
       {isMobile ? mobileUpdateNotice : null}
 
-      <div
-        ref={conversationScrollRef}
-        className="conversation-scroll"
-        aria-live="polite"
+      <ConversationTimeline
+        actions={actionFeedback?.actions ?? []}
+        hasActiveTool={activeTool != null}
+        hasOlderMessages={
+          start > 0 || (epoch !== undefined && olderCursor != null)
+        }
+        loading={loading}
+        loadingOlder={loadingOlder}
+        messageCount={conversationMessageCount}
+        messages={conversationTimelineMessages}
+        onLoadOlder={loadOlder}
         onScroll={() => {
           dismissSelectionReply()
           onScroll()
         }}
-      >
-        {start > 0 || (epoch !== undefined && olderCursor != null) ? (
-          <Button
-            className="conversation-load-older"
-            type="button"
-            variant="plain"
-            disabled={loadingOlder}
-            onClick={loadOlder}
-          >
-            {loadingOlder ? 'Loading older messages…' : 'Load older messages'}
-          </Button>
-        ) : null}
-        {isMobile ? null : (
-          <div className="conversation-timeline">
-            <span>Conversation</span>
-          </div>
-        )}
-        {loading && messages.length === 0 ? (
-          <p className="conversation-status">Loading conversation…</p>
-        ) : null}
-        {!loading && conversationMessageCount === 0 && activeTool == null ? (
-          <p className="conversation-status">No messages yet.</p>
-        ) : null}
-        <MarkdownCommandContextProvider
-          sessionId={session.id}
-          sessionTitle={session.title}
-          {...(onCommandExecuted === undefined ? {} : { onCommandExecuted })}
-          {...(onCommandStarted === undefined ? {} : { onCommandStarted })}
-        >
-          {conversationMessageElements}
-        </MarkdownCommandContextProvider>
-        {renderConversationAsyncActionItems({
+        scrollRef={conversationScrollRef}
+        sessionId={session.id}
+        sessionTitle={session.title}
+        start={start}
+        trailingActions={renderConversationAsyncActionItems({
           feedback: actionFeedback,
           sessionId: session.id,
         })}
-      </div>
+        {...(onCommandExecuted === undefined ? {} : { onCommandExecuted })}
+        {...(onCommandStarted === undefined ? {} : { onCommandStarted })}
+        {...(actionFeedback === null ? {} : { onRetry: actionFeedback.retry })}
+      />
 
       <div className="conversation-merge-band-slot" ref={setMergeBandTarget} />
       {isEnded ? (
