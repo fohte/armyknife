@@ -5654,7 +5654,10 @@ mod tests {
                 &marker,
                 "Example user prompt",
             );
-            let prompt = format!("Another Claude session sent a message:\n{prefixed_message}");
+            let prompt = indoc::formatdoc! {"
+                Another Claude session sent a message:
+                {prefixed_message}
+            "};
             let mut input = create_test_input(None);
             input.prompt = Some(prompt.clone());
 
