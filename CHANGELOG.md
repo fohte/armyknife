@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.866](https://github.com/fohte/armyknife/compare/v0.1.865...v0.1.866) (2026-11-23)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** highlight draft reviews ([#2124](https://github.com/fohte/armyknife/issues/2124)) ([31f33f6](https://github.com/fohte/armyknife/commit/31f33f63ec453168afc5977e5eb64a171a06639d))
+
 ## [0.1.865](https://github.com/fohte/armyknife/compare/v0.1.864...v0.1.865) (2026-11-23)
 
 
