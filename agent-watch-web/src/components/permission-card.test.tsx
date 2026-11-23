@@ -6,6 +6,7 @@ import {
   type PendingPermissionActionState,
   PermissionCard,
 } from '#components/permission-card'
+import { copyCommandFromCard } from '#components/permission-command.test-utils'
 import type { ChatItem, SessionActions } from '#types'
 
 let container: HTMLDivElement
@@ -217,8 +218,6 @@ it('formats separators for display while retaining the original permission comma
 
 it('copies the original permission command instead of its formatted preview', async () => {
   const originalCommand = `printf '%s' "keep && quoted" && printf done`
-  const writeText = vi.fn(() => Promise.resolve())
-  vi.stubGlobal('navigator', { clipboard: { writeText } })
   const message: Extract<ChatItem, { type: 'permission' }> = {
     type: 'permission',
     requestId: 'permission-request-example',
@@ -228,25 +227,7 @@ it('copies the original permission command instead of its formatted preview', as
   }
   renderPermissionCard(message)
 
-  await act(async () => {
-    const { highlightCode } = await import('./syntax-highlighter')
-    await highlightCode(originalCommand, 'bash')
-  })
-
-  const copyButton = container.querySelector<HTMLButtonElement>(
-    '.syntax-code-block-copy-button',
-  )
-  const copyButtonLabel = copyButton?.getAttribute('aria-label') ?? null
-  await act(async () => {
-    copyButton?.click()
-    await Promise.resolve()
-  })
-
-  const snapshot = () => ({
-    copyButtonLabel,
-    copiedCommands: writeText.mock.calls,
-  })
-  expect(snapshot()).toEqual({
+  expect(await copyCommandFromCard(container, originalCommand)).toEqual({
     copyButtonLabel: 'Copy code',
     copiedCommands: [[originalCommand]],
   })

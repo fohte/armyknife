@@ -3,7 +3,9 @@ import '#index.css'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { page } from 'vitest/browser'
 
+import { copyCommandFromCard } from '#components/permission-command.test-utils'
 import { PermissionDeniedCard } from '#components/permission-denied-card'
 import type { ChatItem } from '#types'
 
@@ -165,29 +167,9 @@ it('formats separators in a denied command without changing its source value', (
 
 it('copies the original denied command instead of its formatted preview', async () => {
   const originalCommand = `printf '%s' "keep && quoted" && printf done`
-  const writeText = vi.fn(() => Promise.resolve())
-  vi.stubGlobal('navigator', { clipboard: { writeText } })
   renderCard({ message: { ...operation, command: originalCommand } })
 
-  await act(async () => {
-    const { highlightCode } = await import('./syntax-highlighter')
-    await highlightCode(originalCommand, 'bash')
-  })
-
-  const copyButton = container.querySelector<HTMLButtonElement>(
-    '.syntax-code-block-copy-button',
-  )
-  const copyButtonLabel = copyButton?.getAttribute('aria-label') ?? null
-  await act(async () => {
-    copyButton?.click()
-    await Promise.resolve()
-  })
-
-  const snapshot = () => ({
-    copyButtonLabel,
-    copiedCommands: writeText.mock.calls,
-  })
-  expect(snapshot()).toEqual({
+  expect(await copyCommandFromCard(container, originalCommand)).toEqual({
     copyButtonLabel: 'Copy code',
     copiedCommands: [[originalCommand]],
   })
@@ -279,6 +261,46 @@ it('shows dismissed denials as a collapsed command row that can expand', () => {
     summary: 'Operation denied · Dismissed Bash ▸',
     expanded: true,
     heading: 'Operation denied',
+  })
+})
+
+it('keeps a long dismissed command summary within a narrow viewport', async () => {
+  await page.viewport(320, 800)
+  container.style.width = '320px'
+  const command = `printf '%s' '${'sample/'.repeat(60)}'`
+  renderCard({
+    message: {
+      ...operation,
+      command,
+      resolved: true,
+      resolution: 'dismissed',
+    },
+  })
+
+  const summary = requireElement(container.querySelector('summary'))
+  const card = requireElement(container.querySelector('article'))
+  const commandElement = requireElement(summary.querySelector('code'))
+  const chevron = requireElement(
+    summary.querySelector('.permission-denied-chevron'),
+  )
+  const snapshot = () => {
+    const summaryBounds = summary.getBoundingClientRect()
+    const cardBounds = card.getBoundingClientRect()
+    return {
+      viewportWidth: window.innerWidth,
+      command: commandElement.textContent,
+      summaryFits: summary.scrollWidth <= summary.clientWidth,
+      summaryWithinCard: summaryBounds.right <= cardBounds.right,
+      chevronWidth: chevron.getBoundingClientRect().width,
+    }
+  }
+
+  expect(snapshot()).toEqual({
+    viewportWidth: 320,
+    command,
+    summaryFits: true,
+    summaryWithinCard: true,
+    chevronWidth: 24,
   })
 })
 
