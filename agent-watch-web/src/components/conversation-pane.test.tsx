@@ -6704,6 +6704,170 @@ it('opens the Review tab from the draft review band in one click', async () => {
   })
 })
 
+it('keeps an exit control when a selected draft fails in the Review panel', async () => {
+  const reviewDocuments = [
+    {
+      id: 'fixture-review-a',
+      kind: 'issue_comment' as const,
+      target: { issueNumber: 21, title: 'Retry handling' },
+      isEditor: true,
+      canSave: true,
+      canFinish: true,
+    },
+    {
+      id: 'fixture-review-b',
+      kind: 'pr_draft' as const,
+      target: { repository: 'example/service', branch: 'retry-policy' },
+      isEditor: true,
+      canSave: true,
+      canFinish: true,
+    },
+  ]
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.endsWith('/messages?limit=100')) {
+      return Promise.resolve(jsonResponse(messagesResponse([])))
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    if (url.endsWith('/review-documents')) {
+      return Promise.resolve(jsonResponse(reviewDocuments))
+    }
+    if (url.endsWith('/review-documents/fixture-review-a')) {
+      return Promise.resolve(
+        jsonResponse({
+          id: 'fixture-review-a',
+          revision: 'fixture-revision-a',
+          frontmatter: { priority: 'normal' },
+          body: 'Readable fixture draft',
+        }),
+      )
+    }
+    if (url.endsWith('/review-documents/fixture-review-b')) {
+      return Promise.resolve(jsonResponse({}, 503))
+    }
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  function ReviewConversationHarness() {
+    const [statusPanelOpen, setStatusPanelOpen] = useState(false)
+    return (
+      <ConversationPane
+        session={{
+          ...session,
+          kind: 'Review',
+          reviewDocumentId: 'fixture-review-a',
+          reviewDocumentCount: 2,
+          webUis: [],
+        }}
+        shouldSkipSessionTreeFetch
+        initialSessionTree={[]}
+        refreshKey={0}
+        sessionTreeRefreshKey={0}
+        onSelectSession={() => undefined}
+        statusPanelOpen={statusPanelOpen}
+        onToggleStatusPanel={() => {
+          setStatusPanelOpen((open) => !open)
+        }}
+        onCloseStatusPanel={() => {
+          setStatusPanelOpen(false)
+        }}
+      />
+    )
+  }
+
+  root = createRoot(container)
+  act(() => root?.render(<ReviewConversationHarness />))
+  const reviewActionReady = await waitForState(
+    () =>
+      container.querySelector<HTMLButtonElement>(
+        '.conversation-status-band-review',
+      ) !== null,
+  )
+  expect(reviewActionReady).toBe(true)
+  await act(async () => {
+    await userEvent.click(
+      requireElement(
+        container.querySelector<HTMLButtonElement>(
+          '.conversation-status-band-review',
+        ),
+      ),
+    )
+  })
+  const reviewLoaded = await waitForState(
+    () =>
+      container.querySelector('.review-document-body')?.textContent ===
+      'Readable fixture draft',
+  )
+  expect(reviewLoaded).toBe(true)
+  await act(async () => {
+    await userEvent.click(
+      requireElement(
+        container.querySelector<HTMLButtonElement>(
+          '.review-document-expand[aria-label="Open draft full width"]',
+        ),
+      ),
+    )
+  })
+  await waitForState(
+    () =>
+      container
+        .querySelector('.session-status-panel')
+        ?.getAttribute('data-expanded') === 'true',
+  )
+  const nextDraftTab = requireElement(
+    container.querySelectorAll<HTMLButtonElement>('.review-document-tab')[1] ??
+      null,
+  )
+  await act(async () => userEvent.click(nextDraftTab))
+  await waitForState(() => container.querySelector('[role="alert"]') !== null)
+  const afterDraftFailure = {
+    expanded: container
+      .querySelector('.session-status-panel')
+      ?.getAttribute('data-expanded'),
+    alert: container.querySelector('[role="alert"]')?.textContent,
+    exitControls: Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '.session-status-panel-collapse, .review-document-expand',
+      ),
+      (button) => button.getAttribute('aria-label'),
+    ),
+  }
+
+  await act(async () => {
+    await userEvent.click(
+      requireElement(
+        container.querySelector<HTMLButtonElement>(
+          '.session-status-panel-collapse[aria-label="Exit full width review"]',
+        ),
+      ),
+    )
+  })
+  const afterCollapse = {
+    expanded: container
+      .querySelector('.session-status-panel')
+      ?.getAttribute('data-expanded'),
+    alert: container.querySelector('[role="alert"]')?.textContent,
+    exitControlCount: container.querySelectorAll(
+      '.session-status-panel-collapse, .review-document-expand',
+    ).length,
+  }
+
+  const snapshot = () => ({ afterDraftFailure, afterCollapse })
+  expect(snapshot()).toEqual({
+    afterDraftFailure: {
+      expanded: 'true',
+      alert: 'Could not load the draft: Request failed (503)Retry draft',
+      exitControls: ['Exit full width review'],
+    },
+    afterCollapse: {
+      expanded: 'false',
+      alert: 'Could not load the draft: Request failed (503)Retry draft',
+      exitControlCount: 0,
+    },
+  })
+})
+
 it('directs Codex questions and permissions to the terminal', () => {
   const onAction = vi.fn(() => Promise.resolve(true))
   const codexActions: SessionActions = {
