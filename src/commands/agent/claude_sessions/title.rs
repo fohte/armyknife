@@ -49,10 +49,32 @@ pub(super) fn title_from_first_user_message(message: &str) -> String {
 
 fn first_sentence(message: &str) -> &str {
     let trimmed = message.trim();
-    let sentence_end = trimmed.char_indices().find_map(|(index, character)| {
-        matches!(character, '.' | '!' | '?' | '。' | '！' | '？')
-            .then_some(index + character.len_utf8())
-    });
+    let mut characters = trimmed.char_indices().peekable();
+    let sentence_end = loop {
+        let Some((index, character)) = characters.next() else {
+            break None;
+        };
+        let mut lookahead = characters.clone();
+        let mut end = index + character.len_utf8();
+        while let Some((quote_index, quote)) = lookahead.next_if(|(_, next_character)| {
+            matches!(
+                *next_character,
+                '"' | '\'' | '”' | '’' | '»' | '›' | '」' | '』'
+            )
+        }) {
+            end = quote_index + quote.len_utf8();
+        }
+        let ends_sentence = match character {
+            '.' => lookahead
+                .peek()
+                .is_none_or(|(_, next_character)| next_character.is_whitespace()),
+            '!' | '?' | '。' | '！' | '？' => true,
+            _ => false,
+        };
+        if ends_sentence {
+            break Some(end);
+        }
+    };
     sentence_end.map_or(trimmed, |end| &trimmed[..end])
 }
 
@@ -121,6 +143,27 @@ mod tests {
         "Repair the sample index. Then verify it.",
         "Repair the sample index."
     )]
+    #[case::version_number(
+        "Prepare runok v1.0.0 now. Then verify it.",
+        "Prepare runok v1.0.0 now."
+    )]
+    #[case::decimal_number("Use 3.14 for the sample. Then verify it.", "Use 3.14 for the sample.")]
+    #[case::domain_name(
+        "Visit example.com for details. Then verify it.",
+        "Visit example.com for details."
+    )]
+    #[case::period_at_end("Prepare runok v1.0.0", "Prepare runok v1.0.0")]
+    #[case::quoted_ascii_sentence("Say \"Done.\" Then verify it.", "Say \"Done.\"")]
+    #[case::quoted_sentence_at_end("Say “Done.”", "Say “Done.”")]
+    #[case::quoted_japanese_sentence("「完了。」次を確認する。", "「完了。」")]
+    #[case::ascii_exclamation(
+        "Repair the sample index! Then verify it.",
+        "Repair the sample index!"
+    )]
+    #[case::ascii_question("Repair the sample index? Then verify it.", "Repair the sample index?")]
+    #[case::japanese_period("サンプルを確認。次を実行します。", "サンプルを確認。")]
+    #[case::japanese_exclamation("サンプルを確認！次を実行します。", "サンプルを確認！")]
+    #[case::japanese_question("サンプルを確認？次を実行します。", "サンプルを確認？")]
     #[case::peer_message_session_context_and_notice(
         indoc! {"
             Another Claude session sent a message:
