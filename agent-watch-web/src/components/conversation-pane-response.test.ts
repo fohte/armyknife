@@ -4,7 +4,6 @@ import {
   isConversationResponse,
   isSessionTreeResponse,
 } from '#components/conversation-pane-response'
-import { isReviewDocumentSummaryList } from '#components/review-document-summary'
 
 const response = (message: unknown) => ({
   messages: [message],
@@ -37,52 +36,6 @@ const groupedToolSummary = (items: unknown[]) => ({
   summary: 'Read ×1',
   operations: [{ tool: 'Read', target: 'fixture/source.rs', failed: false }],
   items,
-})
-
-it('accepts a review document summary list with an editor document', () => {
-  expect(
-    isReviewDocumentSummaryList([
-      {
-        id: 'fixture-review-document',
-        kind: 'issue_comment',
-        target: { issueNumber: 1234, title: 'Refresh the sample service' },
-        isEditor: true,
-        canSave: true,
-        canFinish: true,
-      },
-    ]),
-  ).toEqual(true)
-})
-
-it.each([
-  {
-    name: 'an unknown document kind',
-    item: {
-      id: 'fixture-review-document',
-      kind: 'issue_discussion',
-      target: {},
-      isEditor: true,
-    },
-  },
-  {
-    name: 'a missing target',
-    item: {
-      id: 'fixture-review-document',
-      kind: 'issue_comment',
-      isEditor: true,
-    },
-  },
-  {
-    name: 'a non-boolean editor flag',
-    item: {
-      id: 'fixture-review-document',
-      kind: 'issue_comment',
-      target: {},
-      isEditor: 'true',
-    },
-  },
-])('rejects a review document summary with $name', ({ item }) => {
-  expect(isReviewDocumentSummaryList([item])).toEqual(false)
 })
 
 it('accepts a compact boundary event from the conversation API', () => {

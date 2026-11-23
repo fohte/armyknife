@@ -1,13 +1,13 @@
 import { expect, it } from 'vitest'
 
+import type {
+  EditorReviewDocumentState,
+  ReviewDocumentSummary,
+} from '#components/conversation-pane-response'
 import {
   type ConversationStatusBandState,
   getConversationStatusBandState,
 } from '#components/conversation-status-band-state'
-import type {
-  EditorReviewDocumentState,
-  ReviewDocumentSummary,
-} from '#components/review-document-summary'
 import type { BackgroundTask, ChatItem, Session } from '#types'
 
 const session: Session = {

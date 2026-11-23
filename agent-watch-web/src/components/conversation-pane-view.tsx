@@ -11,6 +11,7 @@ import type {
   CommandOutputStart,
 } from '#components/command-result-message'
 import { ConversationPaneHeader } from '#components/conversation-pane-header'
+import type { EditorReviewDocumentState } from '#components/conversation-pane-response'
 import { ConversationSelectionReply } from '#components/conversation-selection-reply'
 import { ConversationStatusBand } from '#components/conversation-status-band'
 import { getConversationStatusBandState } from '#components/conversation-status-band-state'
@@ -23,7 +24,6 @@ import type {
   PermissionRequestIdentity,
 } from '#components/permission-card'
 import { renderConversationAsyncActionItems } from '#components/render-conversation-async-action-items'
-import type { EditorReviewDocumentState } from '#components/review-document-summary'
 import { scrollToConversationStatusCard } from '#components/scroll-to-conversation-status-card'
 import { SessionLinkElapsedSecondsContext } from '#components/session-link-elapsed-seconds'
 import { SessionUsageRow } from '#components/session-usage-row'

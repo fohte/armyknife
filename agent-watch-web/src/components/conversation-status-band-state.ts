@@ -2,7 +2,7 @@ import { getPendingCritReviewUrl } from '#components/conversation-crit-url'
 import type {
   EditorReviewDocumentState,
   ReviewDocumentSummary,
-} from '#components/review-document-summary'
+} from '#components/conversation-pane-response'
 import type { BackgroundTask, ChatItem, Session } from '#types'
 
 export type ConversationStatusBandState = {

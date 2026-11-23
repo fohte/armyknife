@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react'
 
-import { requestJson } from '#components/conversation-requests'
 import {
   type EditorReviewDocumentState,
   isReviewDocumentSummaryList,
-} from '#components/review-document-summary'
+} from '#components/conversation-pane-response'
+import { requestJson } from '#components/conversation-requests'
 import type { Session } from '#types'
 
 type EditorReviewDocument = {
