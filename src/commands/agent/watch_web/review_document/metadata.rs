@@ -127,30 +127,24 @@ fn classify_cached(
             .collect::<Vec<_>>();
         if components.len() >= 4 {
             let repository = Some(format!("{}/{}", components[0], components[1]));
-            let frontmatter = read_frontmatter(path);
-            let issue_metadata = if components.last() == Some(&"issue.md") {
-                path.parent().and_then(read_issue_metadata)
-            } else {
-                None
-            };
-            let title = frontmatter
-                .as_ref()
-                .and_then(|value| value.get("title"))
-                .and_then(serde_yaml::Value::as_str)
-                .map(str::to_owned)
-                .or_else(|| {
-                    issue_metadata
-                        .as_ref()
-                        .map(|metadata| metadata.title.clone())
-                });
-
             if components.last() == Some(&"issue.md") {
+                let frontmatter = read_frontmatter(path);
+                let title = frontmatter
+                    .as_ref()
+                    .and_then(|value| value.get("title"))
+                    .and_then(serde_yaml::Value::as_str)
+                    .map(str::to_owned);
                 let issue_number = frontmatter
                     .as_ref()
                     .and_then(|value| value.get("readonly"))
                     .and_then(|value| value.get("number"))
-                    .and_then(serde_yaml::Value::as_i64)
-                    .or_else(|| issue_metadata.as_ref().map(|metadata| metadata.number));
+                    .and_then(serde_yaml::Value::as_i64);
+                let issue_metadata =
+                    if components[2] != "new" && (title.is_none() || issue_number.is_none()) {
+                        path.parent().and_then(read_issue_metadata)
+                    } else {
+                        None
+                    };
                 return (
                     if components[2] == "new" {
                         ReviewDocumentKind::Draft
@@ -159,8 +153,13 @@ fn classify_cached(
                     },
                     ReviewDocumentTarget {
                         repository,
-                        issue_number,
-                        title,
+                        issue_number: issue_number
+                            .or_else(|| issue_metadata.as_ref().map(|metadata| metadata.number)),
+                        title: title.or_else(|| {
+                            issue_metadata
+                                .as_ref()
+                                .map(|metadata| metadata.title.clone())
+                        }),
                         ..ReviewDocumentTarget::default()
                     },
                 );
@@ -243,144 +242,4 @@ fn read_frontmatter(path: &Path) -> Option<serde_yaml::Value> {
 fn parse_frontmatter(content: &str) -> Option<serde_yaml::Value> {
     let (_, yaml, _) = crate::shared::yaml_frontmatter::split_frontmatter(content)?;
     serde_yaml::from_str(yaml).ok()
-}
-
-#[cfg(test)]
-mod tests {
-    use std::path::Path;
-
-    use indoc::indoc;
-    use rstest::{fixture, rstest};
-    use tempfile::TempDir;
-
-    use super::{ReviewDocumentKind, ReviewDocumentRoots, ReviewDocumentTarget, classify};
-
-    #[fixture]
-    fn review_document_roots() -> (TempDir, ReviewDocumentRoots) {
-        let temp_dir = TempDir::new().expect("fixture directory should be created");
-        let roots = ReviewDocumentRoots {
-            pr_draft: temp_dir.path().join("pr-body-draft"),
-            issue_agent: temp_dir.path().join("gh-issue-agent"),
-            pr_review: temp_dir.path().join("gh-pr-review"),
-        };
-        (temp_dir, roots)
-    }
-
-    fn write_document(path: &Path, content: &str) {
-        std::fs::create_dir_all(path.parent().expect("fixture file should have a parent"))
-            .expect("fixture directory should be created");
-        std::fs::write(path, content).expect("fixture document should be written");
-    }
-
-    #[cfg(unix)]
-    #[rstest]
-    fn classifies_pr_drafts_when_the_root_is_a_symlink(
-        review_document_roots: (TempDir, ReviewDocumentRoots),
-    ) {
-        use std::os::unix::fs::symlink;
-
-        let (temp_dir, mut roots) = review_document_roots;
-        let actual_root = temp_dir.path().join("actual-pr-drafts");
-        std::fs::create_dir_all(&actual_root).expect("actual draft root should be created");
-        let linked_root = temp_dir.path().join("pr-body-draft");
-        symlink(&actual_root, &linked_root).expect("draft root symlink should be created");
-        roots.pr_draft = linked_root;
-        let path = actual_root.join("demo-owner/example-repo/feature/review-metadata.md");
-        write_document(
-            &path,
-            indoc! {"
-                ---
-                title: Example change
-                ---
-                Body.
-            "},
-        );
-
-        assert_eq!(
-            classify(&path, &roots),
-            (
-                ReviewDocumentKind::PrDraft,
-                ReviewDocumentTarget {
-                    repository: Some("demo-owner/example-repo".to_owned()),
-                    branch: Some("feature/review-metadata".to_owned()),
-                    title: Some("Example change".to_owned()),
-                    ..ReviewDocumentTarget::default()
-                },
-            ),
-        );
-    }
-
-    #[rstest]
-    fn classifies_existing_issue_comment_edits(
-        review_document_roots: (TempDir, ReviewDocumentRoots),
-    ) {
-        let (_temp_dir, roots) = review_document_roots;
-        let issue_dir = roots.issue_agent.join("demo-owner/example-repo/7319");
-        let issue_path = issue_dir.join("issue.md");
-        let comment_path = issue_dir.join("comments/001_comment_88600.md");
-        write_document(
-            &issue_path,
-            indoc! {"
-                ---
-                title: Example issue
-                readonly:
-                  number: 7319
-                ---
-                Body.
-            "},
-        );
-        write_document(&comment_path, "Existing comment body.");
-
-        assert_eq!(
-            classify(&comment_path, &roots),
-            (
-                ReviewDocumentKind::IssueComment,
-                ReviewDocumentTarget {
-                    repository: Some("demo-owner/example-repo".to_owned()),
-                    issue_number: Some(7319),
-                    title: Some("Example issue".to_owned()),
-                    ..ReviewDocumentTarget::default()
-                },
-            ),
-        );
-    }
-
-    #[rstest]
-    fn reads_issue_targets_from_legacy_metadata_json(
-        review_document_roots: (TempDir, ReviewDocumentRoots),
-    ) {
-        let (_temp_dir, roots) = review_document_roots;
-        let issue_dir = roots.issue_agent.join("demo-owner/example-repo/7319");
-        let issue_path = issue_dir.join("issue.md");
-        write_document(&issue_path, "Legacy issue body.\n");
-        write_document(
-            &issue_dir.join("metadata.json"),
-            indoc! {r#"
-                {
-                  "number": 7319,
-                  "title": "Legacy example issue",
-                  "state": "OPEN",
-                  "labels": [],
-                  "assignees": [],
-                  "milestone": null,
-                  "author": "example-author",
-                  "createdAt": "2026-01-01T00:00:00Z",
-                  "updatedAt": "2026-01-02T00:00:00Z"
-                }
-            "#},
-        );
-
-        assert_eq!(
-            classify(&issue_path, &roots),
-            (
-                ReviewDocumentKind::IssueBody,
-                ReviewDocumentTarget {
-                    repository: Some("demo-owner/example-repo".to_owned()),
-                    issue_number: Some(7319),
-                    title: Some("Legacy example issue".to_owned()),
-                    ..ReviewDocumentTarget::default()
-                },
-            ),
-        );
-    }
 }

@@ -877,21 +877,43 @@ mod tests {
             issue_agent: temp_dir.path().join("gh-issue-agent"),
             pr_review: temp_dir.path().join("gh-pr-review"),
         };
-        let pr_draft_path = roots
-            .pr_draft
-            .join("sample-owner/sample-repo/feature/example.md");
+        #[cfg(unix)]
+        let pr_draft_root = {
+            use std::os::unix::fs::symlink;
+
+            let actual_root = temp_dir.path().join("actual-pr-body-draft");
+            std::fs::create_dir_all(&actual_root).expect("actual draft root should be created");
+            symlink(&actual_root, &roots.pr_draft).expect("draft root symlink should be created");
+            actual_root
+        };
+        #[cfg(not(unix))]
+        let pr_draft_root = roots.pr_draft.clone();
+        let pr_draft_path = pr_draft_root.join("sample-owner/sample-repo/feature/example.md");
         let issue_path = roots
             .issue_agent
-            .join("sample-owner/sample-repo/42/issue.md");
+            .join("sample-owner/sample-repo/7319/issue.md");
         let comment_path = roots
             .issue_agent
-            .join("sample-owner/sample-repo/42/comments/new_reply.md");
+            .join("sample-owner/sample-repo/7319/comments/new_reply.md");
+        let existing_comment_path = roots
+            .issue_agent
+            .join("sample-owner/sample-repo/7319/comments/001_comment_88600.md");
+        let legacy_issue_path = roots
+            .issue_agent
+            .join("sample-owner/sample-repo/5843/issue.md");
+        let legacy_metadata_path = legacy_issue_path
+            .parent()
+            .expect("legacy issue should have a parent")
+            .join("metadata.json");
+        let legacy_comment_path = roots
+            .issue_agent
+            .join("sample-owner/sample-repo/5843/comments/002_comment_88601.md");
         let new_issue_path = roots
             .issue_agent
             .join("sample-owner/sample-repo/new/issue.md");
         let replies_path = roots
             .pr_review
-            .join("sample-owner/sample-repo/43/threads.md");
+            .join("sample-owner/sample-repo/8462/threads.md");
         let generic_path = temp_dir.path().join("generic-draft.md");
         for (path, contents) in [
             (
@@ -909,12 +931,31 @@ mod tests {
                     ---
                     title: Sample issue
                     readonly:
-                      number: 42
+                      number: 7319
                     ---
                     Body.
                 "},
             ),
             (comment_path.as_path(), "Comment body."),
+            (existing_comment_path.as_path(), "Existing comment body."),
+            (legacy_issue_path.as_path(), "Legacy issue body."),
+            (
+                legacy_metadata_path.as_path(),
+                indoc! {r#"
+                    {
+                      "number": 5843,
+                      "title": "Legacy sample issue",
+                      "state": "OPEN",
+                      "labels": [],
+                      "assignees": [],
+                      "milestone": null,
+                      "author": "sample-author",
+                      "createdAt": "2026-01-01T00:00:00Z",
+                      "updatedAt": "2026-01-02T00:00:00Z"
+                    }
+                "#},
+            ),
+            (legacy_comment_path.as_path(), "Legacy comment body."),
             (
                 new_issue_path.as_path(),
                 indoc! {"
@@ -928,7 +969,7 @@ mod tests {
                 replies_path.as_path(),
                 indoc! {r#"
                     ---
-                    pr: 43
+                    pr: 8462
                     repo: sample-owner/sample-repo
                     pulled_at: 2026-01-15T10:00:00Z
                     ---
@@ -963,9 +1004,12 @@ mod tests {
             ("pr-draft", &pr_draft_path, 1),
             ("issue-body", &issue_path, 2),
             ("issue-comment", &comment_path, 3),
-            ("new-issue", &new_issue_path, 4),
-            ("review-replies", &replies_path, 5),
-            ("generic", &generic_path, 6),
+            ("existing-issue-comment", &existing_comment_path, 4),
+            ("legacy-issue-body", &legacy_issue_path, 5),
+            ("legacy-issue-comment", &legacy_comment_path, 6),
+            ("new-issue", &new_issue_path, 7),
+            ("review-replies", &replies_path, 8),
+            ("generic", &generic_path, 9),
         ] {
             session
                 .pending_human_review_ids
@@ -1015,7 +1059,7 @@ mod tests {
                         "kind": "issue_body",
                         "target": {
                             "repository": "sample-owner/sample-repo",
-                            "issueNumber": 42,
+                            "issueNumber": 7319,
                             "title": "Sample issue",
                         },
                         "isEditor": false,
@@ -1027,8 +1071,44 @@ mod tests {
                         "kind": "issue_comment",
                         "target": {
                             "repository": "sample-owner/sample-repo",
-                            "issueNumber": 42,
+                            "issueNumber": 7319,
                             "title": "Sample issue",
+                        },
+                        "isEditor": false,
+                        "canSave": false,
+                        "canFinish": false,
+                    },
+                    {
+                        "id": "existing-issue-comment",
+                        "kind": "issue_comment",
+                        "target": {
+                            "repository": "sample-owner/sample-repo",
+                            "issueNumber": 7319,
+                            "title": "Sample issue",
+                        },
+                        "isEditor": false,
+                        "canSave": false,
+                        "canFinish": false,
+                    },
+                    {
+                        "id": "legacy-issue-body",
+                        "kind": "issue_body",
+                        "target": {
+                            "repository": "sample-owner/sample-repo",
+                            "issueNumber": 5843,
+                            "title": "Legacy sample issue",
+                        },
+                        "isEditor": false,
+                        "canSave": false,
+                        "canFinish": false,
+                    },
+                    {
+                        "id": "legacy-issue-comment",
+                        "kind": "issue_comment",
+                        "target": {
+                            "repository": "sample-owner/sample-repo",
+                            "issueNumber": 5843,
+                            "title": "Legacy sample issue",
                         },
                         "isEditor": false,
                         "canSave": false,
@@ -1050,7 +1130,7 @@ mod tests {
                         "kind": "review_replies",
                         "target": {
                             "repository": "sample-owner/sample-repo",
-                            "pullRequestNumber": 43,
+                            "pullRequestNumber": 8462,
                             "threadCount": 1,
                         },
                         "isEditor": false,
