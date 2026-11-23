@@ -1,0 +1,107 @@
+.pr-merge-entry {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-radius: 0;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.pr-merge-entry.is-band {
+  height: 32px;
+  padding: 0 14px;
+}
+
+.pr-merge-entry.is-row {
+  height: 26px;
+  padding: 0 10px;
+}
+
+.pr-merge-entry.is-mobile {
+  height: 44px;
+  min-width: 72px;
+  padding: 0 14px;
+  font-size: 13px;
+}
+
+.pr-merge-entry.is-band.is-ready {
+  border-color: var(--aw-text-primary);
+  background: var(--aw-text-primary);
+  color: var(--aw-bg-app);
+  font-weight: 700;
+}
+
+.pr-merge-entry.is-row.is-ready {
+  border-color: var(--aw-border-control);
+  background: transparent;
+  color: var(--aw-text-primary);
+  font-weight: 400;
+}
+
+.pr-merge-entry.is-mergeFailed {
+  border-color: var(--aw-color-error);
+  color: var(--aw-text-primary);
+}
+
+.pr-merge-entry-row-group {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.pr-merge-entry-failure-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--aw-color-error);
+  font-size: 12px;
+}
+
+.pr-merge-entry.is-merging,
+.pr-merge-entry.is-queued {
+  border-color: var(--aw-border);
+  color: var(--aw-text-muted);
+  opacity: 1;
+}
+
+.pr-merge-entry.is-merging svg,
+.pr-merge-entry.is-queued svg {
+  animation: pr-merge-entry-spin 1s linear infinite;
+  color: var(--aw-color-working);
+}
+
+.pr-merge-entry.is-unavailable,
+.pr-merge-entry.is-merged,
+.pr-merge-entry.is-alreadyMerged {
+  height: 26px;
+  color: var(--aw-text-muted);
+  font-size: 12px;
+}
+
+.pr-merge-entry.is-merged {
+  color: var(--aw-color-success);
+}
+
+.pr-merge-entry.is-row.is-merged,
+.pr-merge-entry.is-row.is-alreadyMerged {
+  min-width: 0;
+  padding: 0;
+  color: var(--aw-color-success);
+}
+
+.pr-merge-entry.is-row.is-merging svg,
+.pr-merge-entry.is-row.is-queued svg {
+  color: var(--aw-text-muted);
+}
+
+@keyframes pr-merge-entry-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

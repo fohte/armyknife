@@ -148,6 +148,14 @@ export function ConversationPaneHeader({
         )
   const mergeStatusFor = (target: (typeof pullRequests)[number]) =>
     merge.mergeStatusFor(target)
+  const mergeErrorFor = (target: (typeof pullRequests)[number]) =>
+    merge.mergeActionFor(target)?.error
+  const canRetryMerge = (target: (typeof pullRequests)[number]) =>
+    merge.isMergeable(target)
+  const retryMerge = (target: (typeof pullRequests)[number]) => {
+    const action = merge.mergeActionFor(target)
+    if (action?.status === 'mergeFailed') merge.retryMerge(action.id)
+  }
   const linkedTasks = getSessionTasks(session)
   const mobileRepoName = session.repo.split('/').at(-1) ?? session.repo
 
@@ -288,6 +296,10 @@ export function ConversationPaneHeader({
               isMobile
               open={pullRequestListOpen}
               mergeStatus={mergeStatusFor}
+              canRetryMerge={canRetryMerge}
+              mergeError={mergeErrorFor}
+              onMerge={merge.openMergeConfirmation}
+              onRetryMerge={retryMerge}
               onOpenChange={setPullRequestListOpen}
             />
             <MobileConversationActionsMenu
@@ -402,6 +414,10 @@ export function ConversationPaneHeader({
                   isMobile={false}
                   open={pullRequestListOpen}
                   mergeStatus={mergeStatusFor}
+                  canRetryMerge={canRetryMerge}
+                  mergeError={mergeErrorFor}
+                  onMerge={merge.openMergeConfirmation}
+                  onRetryMerge={retryMerge}
                   onOpenChange={setPullRequestListOpen}
                 />
                 {session.category === 'done' && onClose !== undefined ? (

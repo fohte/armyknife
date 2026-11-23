@@ -846,7 +846,7 @@ it('merges a ready pull request from the merge band when several PRs exist', asy
   })
   const mergeButton = requireElement(
     container.querySelector<HTMLButtonElement>(
-      'button[aria-label^="Merge PR #43"]',
+      '.merge-band-row button[aria-label^="Merge PR #43"]',
     ),
   )
   act(() => {
@@ -895,6 +895,64 @@ it('merges a ready pull request from the merge band when several PRs exist', asy
     feedback: 'Merged PR #43A fixture title',
   })
 })
+
+it.each([
+  { description: 'desktop', isMobile: false },
+  { description: 'phone', isMobile: true },
+])(
+  'opens the shared merge confirmation from a ready PR row on $description',
+  ({ isMobile }) => {
+    renderHeader(
+      isMobile,
+      vi.fn(() => Promise.resolve(true)),
+      {
+        ...session,
+        pullRequests: [
+          {
+            number: 42,
+            state: 'Open',
+            owner: 'example-org',
+            repo: 'example-repo',
+            url: 'https://github.com/example-org/example-repo/pull/42',
+            headSha: 'fixture-ready-head',
+            ciState: 'Successful',
+            isCurrentBranch: true,
+          },
+        ],
+      },
+    )
+
+    act(() => {
+      requireElement(
+        container.querySelector<HTMLButtonElement>('.session-pr-trigger'),
+      ).click()
+    })
+    const mergeButton = requireElement(
+      container.querySelector<HTMLButtonElement>(
+        '.session-pr-row button[aria-label^="Merge PR #42"]',
+      ),
+    )
+    act(() => {
+      mergeButton.click()
+    })
+
+    const confirmation = container.querySelector<HTMLElement>(
+      '[role="alertdialog"]',
+    )
+    const snapshot = () => ({
+      confirmationLabel: confirmation?.querySelector('h2')?.textContent ?? null,
+      confirmedHead: confirmation?.querySelector('code')?.textContent ?? null,
+      listOpen: container
+        .querySelector('.session-pr-trigger')
+        ?.getAttribute('aria-expanded'),
+    })
+    expect(snapshot()).toEqual({
+      confirmationLabel: 'Merge this pull request?',
+      confirmedHead: 'fixture-ready-head',
+      listOpen: 'false',
+    })
+  },
+)
 
 it('shows merge feedback when a PR uses the session repository fallback', async () => {
   const fetchMock = vi.fn<typeof fetch>(() =>
@@ -1207,7 +1265,7 @@ it('keeps pending merge progress scoped to the PR repository identity', async ()
     requestCount: fetchMock.mock.calls.length,
   })
   expect(mergeState()).toEqual({
-    actionForSecondPullRequest: 'CI passed',
+    actionForSecondPullRequest: 'Merge',
     actionForFirstPullRequest: 'Merging…',
     actionWhileBothMergesArePending: [
       {
@@ -1222,7 +1280,7 @@ it('keeps pending merge progress scoped to the PR repository identity', async ()
     actionAfterFirstMergeCompletes: [
       {
         href: 'https://github.com/example-org/example-repository/pull/42',
-        action: 'Merged',
+        action: '✓ Merged',
       },
       {
         href: 'https://github.com/example-team/example-repository/pull/42',

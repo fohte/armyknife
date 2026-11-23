@@ -7,6 +7,7 @@ import {
   type AsyncActionStatus,
   useOptionalAsyncActionFeedback,
 } from '#async-action-feedback'
+import { PullRequestMergeButton } from '#components/pull-request-merge-button'
 import { useDismissableLayer } from '#components/use-dismissable-layer'
 import type { PullRequest } from '#types'
 
@@ -16,6 +17,10 @@ type SessionPullRequestsProps = {
   isMobile: boolean
   open: boolean
   mergeStatus?: (pullRequest: PullRequest) => AsyncActionStatus | null
+  canRetryMerge?: (pullRequest: PullRequest) => boolean
+  mergeError?: (pullRequest: PullRequest) => string | undefined
+  onMerge?: (pullRequest: PullRequest) => void
+  onRetryMerge?: (pullRequest: PullRequest) => void
   onOpenChange: (open: boolean) => void
 }
 
@@ -74,6 +79,13 @@ export function pullRequestMergeReason(pullRequest: PullRequest) {
     return ciStateLabel(pullRequest.ciState)
   }
   return 'Head SHA unavailable'
+}
+
+function pullRequestRowMergeReason(pullRequest: PullRequest) {
+  if (pullRequest.state === 'Open' && pullRequest.ciState === 'Failed') {
+    return 'CI failing'
+  }
+  return pullRequestMergeReason(pullRequest)
 }
 
 function pullRequestGroups(pullRequests: readonly PullRequest[]) {
@@ -135,6 +147,10 @@ export function SessionPullRequests({
   isMobile,
   open,
   mergeStatus,
+  canRetryMerge,
+  mergeError,
+  onMerge,
+  onRetryMerge,
   onOpenChange,
 }: SessionPullRequestsProps) {
   const triggerRef = useRef<HTMLButtonElement>(null)
@@ -238,52 +254,73 @@ export function SessionPullRequests({
       {groups.map((group) => (
         <div className="session-pr-group" key={group.name}>
           <h3>{group.name}</h3>
-          {group.pullRequests.map((pullRequest) => (
-            <div
-              className="session-pr-row"
-              key={`${pullRequest.owner ?? repo}/${pullRequest.repo ?? ''}/${String(pullRequest.number)}`}
-            >
-              <span
-                className={`session-pr-ci-dot ${ciStateClass(pullRequest.ciState)}${pullRequest.state === 'Merged' ? ' is-merged' : ''}`}
-                role="img"
-                aria-label={ciStateLabel(pullRequest.ciState)}
-                title={ciStateLabel(pullRequest.ciState)}
-              />
-              <a
-                className="session-pr-row-copy"
-                href={pullRequestUrl(pullRequest, repo)}
-                target="_blank"
-                rel="noreferrer"
+          {group.pullRequests.map((pullRequest) => {
+            const status = mergeStatusFor(pullRequest)
+            const canRetry = canRetryMerge?.(pullRequest) ?? true
+            const entryStatus = mergeEntryStatus(pullRequest, status, canRetry)
+            const error = mergeError?.(pullRequest)
+            return (
+              <div
+                className="session-pr-row"
+                key={`${pullRequest.owner ?? repo}/${pullRequest.repo ?? ''}/${String(pullRequest.number)}`}
               >
-                <span className="session-pr-row-title">
-                  <span className="session-pr-number">
-                    #{String(pullRequest.number)}
-                  </span>{' '}
-                  {pullRequest.title ?? 'Untitled pull request'}
-                </span>
-                <span className="session-pr-row-meta">
-                  <span className="session-pr-row-repo">
-                    {pullRequestRepo(pullRequest, repo)}
-                  </span>
-                  {isMobile ? (
-                    <span className="session-pr-row-mobile-state">
-                      ·{' '}
-                      {pullRequest.state === 'Merged'
-                        ? '✓ Merged'
-                        : pullRequest.state}
-                    </span>
-                  ) : null}
-                </span>
-              </a>
-              {isMobile && pullRequest.state !== 'Open' ? null : (
                 <span
-                  className={`session-pr-row-state${rowStateClass(pullRequest, mergeStatusFor(pullRequest))}`}
+                  className={`session-pr-ci-dot ${ciStateClass(pullRequest.ciState)}${pullRequest.state === 'Merged' || ['merged', 'alreadyMerged'].includes(entryStatus) ? ' is-merged' : ''}`}
+                  role="img"
+                  aria-label={ciStateLabel(pullRequest.ciState)}
+                  title={ciStateLabel(pullRequest.ciState)}
+                />
+                <a
+                  className="session-pr-row-copy"
+                  href={pullRequestUrl(pullRequest, repo)}
+                  target="_blank"
+                  rel="noreferrer"
                 >
-                  {rowStateLabel(pullRequest, mergeStatusFor(pullRequest))}
-                </span>
-              )}
-            </div>
-          ))}
+                  <span className="session-pr-row-title">
+                    <span className="session-pr-number">
+                      #{String(pullRequest.number)}
+                    </span>{' '}
+                    {pullRequest.title ?? 'Untitled pull request'}
+                  </span>
+                  <span className="session-pr-row-meta">
+                    <span className="session-pr-row-repo">
+                      {pullRequestRepo(pullRequest, repo)}
+                    </span>
+                    {isMobile ? (
+                      <span className="session-pr-row-mobile-state">
+                        · {mobilePullRequestState(pullRequest, status)}
+                      </span>
+                    ) : null}
+                  </span>
+                </a>
+                {isMobile &&
+                pullRequest.state !== 'Open' &&
+                !['merged', 'alreadyMerged'].includes(entryStatus) ? null : (
+                  <PullRequestMergeButton
+                    status={entryStatus}
+                    pullRequestNumber={pullRequest.number}
+                    isMobile={isMobile}
+                    placement="row"
+                    {...(pullRequest.owner === undefined ||
+                    pullRequest.repo === undefined
+                      ? {}
+                      : {
+                          pullRequestRepo: `${pullRequest.owner}/${pullRequest.repo}`,
+                        })}
+                    unavailableReason={pullRequestRowMergeReason(pullRequest)}
+                    canRetry={canRetry}
+                    onMerge={() => {
+                      onMerge?.(pullRequest)
+                    }}
+                    onRetry={() => {
+                      onRetryMerge?.(pullRequest)
+                    }}
+                    {...(error === undefined ? {} : { title: error })}
+                  />
+                )}
+              </div>
+            )
+          })}
         </div>
       ))}
       {isMobile ? (
@@ -359,34 +396,24 @@ export function SessionPullRequests({
   )
 }
 
-function rowStateLabel(
+function mergeEntryStatus(
   pullRequest: PullRequest,
   status: AsyncActionStatus | null | undefined,
+  canRetry: boolean,
 ) {
-  if (pullRequest.state === 'Merged') return 'Merged'
-  if (status === 'mergeFailed') return 'Merge failed'
-  if (status === 'queued') return 'Queued'
-  if (status === 'merging') return 'Merging…'
-  if (status === 'alreadyMerged') return 'Already merged'
-  if (status === 'merged' || pullRequest.state === 'Merged') {
-    return 'Merged'
-  }
-  return isPullRequestMergeable(pullRequest)
-    ? ciStateLabel(pullRequest.ciState)
-    : pullRequestMergeReason(pullRequest)
+  if (pullRequest.state === 'Merged' || status === 'merged') return 'merged'
+  if (status === 'alreadyMerged') return 'alreadyMerged'
+  if (status === 'mergeFailed') return canRetry ? 'mergeFailed' : 'unavailable'
+  if (status === 'merging') return 'merging'
+  if (status === 'queued') return 'queued'
+  return isPullRequestMergeable(pullRequest) ? 'ready' : 'unavailable'
 }
 
-function rowStateClass(
+function mobilePullRequestState(
   pullRequest: PullRequest,
-  status: AsyncActionStatus | null | undefined,
+  status: AsyncActionStatus | null,
 ) {
-  if (pullRequest.state === 'Merged') return ' is-merged'
-  if (status === 'merged') return ' is-merged-success'
-  if (status === 'mergeFailed') return ' is-failed'
-  if (status === 'merging') return ' is-merging'
-  if (status === 'queued') return ' is-queued'
-  if (status === 'alreadyMerged' || pullRequest.state === 'Merged') {
-    return ' is-merged'
-  }
-  return ''
+  if (pullRequest.state === 'Merged' || status === 'merged') return 'Merged'
+  if (status === 'alreadyMerged') return 'Already merged'
+  return pullRequest.state
 }

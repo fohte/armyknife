@@ -206,32 +206,6 @@
   gap: 5px;
 }
 
-.session-pr-row-state {
-  color: var(--aw-text-muted);
-  font-size: 12px;
-  white-space: nowrap;
-}
-
-.session-pr-row-state.is-merged {
-  color: var(--aw-text-muted);
-}
-
-.session-pr-row-state.is-merged-success {
-  color: var(--aw-color-success);
-}
-
-.session-pr-row-state.is-merging {
-  color: var(--aw-text-muted);
-}
-
-.session-pr-row-state.is-queued {
-  color: var(--aw-color-working);
-}
-
-.session-pr-row-state.is-failed {
-  color: var(--aw-color-error);
-}
-
 .session-pr-row-mobile-state {
   flex: 0 0 auto;
   color: var(--aw-text-muted);
@@ -328,10 +302,6 @@
 .session-pr-list--mobile .session-pr-row-repo {
   color: var(--aw-text-muted);
   font-family: var(--font-mono);
-  font-size: 12.5px;
-}
-
-.session-pr-list--mobile .session-pr-row-state {
   font-size: 12.5px;
 }
 
