@@ -28,6 +28,7 @@ type SessionKeyboardNavigationOptions = {
   toggleInbox: () => void
   toggleStatusPanel: () => void
   focusComposer: () => boolean
+  openNewSession: () => void
 }
 
 export function useSessionKeyboardNavigation({
@@ -45,6 +46,7 @@ export function useSessionKeyboardNavigation({
   toggleInbox,
   toggleStatusPanel,
   focusComposer,
+  openNewSession,
 }: SessionKeyboardNavigationOptions) {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -118,6 +120,9 @@ export function useSessionKeyboardNavigation({
           }),
           'replace',
         )
+      } else if (action?.type === 'new-session') {
+        event.preventDefault()
+        openNewSession()
       } else if (action?.type === 'focus-composer' && focusComposer()) {
         event.preventDefault()
       } else if (
@@ -156,6 +161,7 @@ export function useSessionKeyboardNavigation({
     toggleInbox,
     toggleStatusPanel,
     focusComposer,
+    openNewSession,
     view,
   ])
 }

@@ -138,7 +138,7 @@ export function AsyncActionFeedbackHost({
             {ordered.length === 0 ? (
               <div className="async-action-empty">
                 <p>No recent activity.</p>
-                <p>Merge, Close and command results appear here.</p>
+                <p>Merge, Close, Rewind and command results appear here.</p>
               </div>
             ) : null}
             <div className="async-action-activity-list">

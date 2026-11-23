@@ -2,7 +2,7 @@ use crate::commands::agent::types::{DisplayStatus, Session, SessionStatus};
 use crate::commands::agent::user_turn::{UserTurn, UserTurnKind};
 use crate::infra::github::{PrCiState, PrProgressInfo, PrState};
 use crate::shared::config::{AgentConfig, AgentStatusState};
-use crate::shared::human_in_the_loop::PR_DRAFT_REVIEW_MARKER;
+use crate::shared::human_in_the_loop::is_active_pr_draft_review_marker;
 
 use super::{ProgressMark, StageMarks, user_turn_for};
 
@@ -103,7 +103,7 @@ pub(in crate::commands::agent::tui) fn session_stage_marks(
     let has_pr_body_review = session
         .pending_human_review_ids
         .iter()
-        .any(|id| id.starts_with(PR_DRAFT_REVIEW_MARKER));
+        .any(|id| is_active_pr_draft_review_marker(id));
     let implementation = if has_pull_request || has_crit || has_pr_body_review {
         ProgressMark::Done
     } else {

@@ -647,6 +647,9 @@ fn process_hook_event_impl_with_env_and_unreported_stop(
                     SessionStatus::Ended
                 },
             );
+            if env.session_has_initial_prompt == Some(true) {
+                session.last_prompted_at = Some(now);
+            }
             session.model = model;
             session.effort = effort;
             ensure_watch_web_user_marker(&session_lock, event, input.engine)?;
@@ -954,18 +957,25 @@ fn process_hook_event_impl_with_env_and_unreported_stop(
     }
     metadata_update.apply(&mut session.model, &mut session.effort);
 
-    session.current_tool = match event {
-        HookEvent::PreToolUse => format_current_tool(&input),
-        HookEvent::PostToolUse | HookEvent::Stop | HookEvent::StopFailure => None,
-        _ => session.current_tool,
-    };
-    session.current_tool_name = match event {
-        HookEvent::PreToolUse | HookEvent::PermissionRequest => {
-            input.tool_name.clone().or(session.current_tool_name)
-        }
-        HookEvent::PostToolUse | HookEvent::Stop | HookEvent::StopFailure => None,
-        _ => session.current_tool_name,
-    };
+    let preserve_main_permission_tool = input.agent_id.is_some()
+        && session
+            .pending_permission_agent_ids
+            .contains(MAIN_THREAD_AGENT_KEY);
+    if !preserve_main_permission_tool {
+        session.current_tool = match event {
+            HookEvent::PreToolUse => format_current_tool(&input),
+            HookEvent::PermissionRequest if input.agent_id.is_none() => format_current_tool(&input),
+            HookEvent::PostToolUse | HookEvent::Stop | HookEvent::StopFailure => None,
+            _ => session.current_tool,
+        };
+        session.current_tool_name = match event {
+            HookEvent::PreToolUse | HookEvent::PermissionRequest => {
+                input.tool_name.clone().or(session.current_tool_name)
+            }
+            HookEvent::PostToolUse | HookEvent::Stop | HookEvent::StopFailure => None,
+            _ => session.current_tool_name,
+        };
+    }
 
     if let Some(config) = &work_type_config {
         work_type::update_session_work_type(&mut session, event, &input, &config.agent);
@@ -2184,11 +2194,10 @@ mod tests {
             .expect("session should load")
             .expect("session should exist");
         let mut actual = serde_json::to_value(session).expect("session should serialize");
-        actual["created_at"] = serde_json::json!("<timestamp>");
-        actual["updated_at"] = serde_json::json!("<timestamp>");
 
         let mut expected = create_test_session(None);
         expected.launch_id = Some("launch-fixture".to_string());
+        expected.last_prompted_at = (has_initial_prompt == Some(true)).then_some(Utc::now());
         expected.tmux_info = Some(TmuxInfo {
             session_name: "main".to_string(),
             window_name: "claude".to_string(),
@@ -2198,8 +2207,8 @@ mod tests {
         });
         expected.status = expected_status;
         let mut expected = serde_json::to_value(expected).expect("session should serialize");
-        expected["created_at"] = serde_json::json!("<timestamp>");
-        expected["updated_at"] = serde_json::json!("<timestamp>");
+        normalize_session_timestamps(&mut actual);
+        normalize_session_timestamps(&mut expected);
 
         assert_eq!(
             (
@@ -4053,6 +4062,64 @@ mod tests {
         );
     }
 
+    #[test]
+    fn main_permission_tool_survives_sibling_agent_events() {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let sessions_dir = temp_dir.path();
+
+        save_test_session(sessions_dir, "multi-agent-sess", |session| {
+            session.status = SessionStatus::Running;
+        });
+
+        let main_permission: HookInput = serde_json::from_str(
+            r#"{"session_id":"multi-agent-sess","cwd":"/tmp/test","tool_name":"Bash","tool_input":{"command":"main-command"}}"#,
+        )
+        .expect("valid JSON");
+        process_hook_event_impl(
+            HookEvent::PermissionRequest,
+            main_permission,
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("main permission request should succeed");
+
+        let sibling_tool_json = r#"{"session_id":"multi-agent-sess","cwd":"/tmp/test","agent_id":"agent-b","tool_name":"Bash","tool_input":{"command":"sibling-command"}}"#;
+        let sibling_pre_tool: HookInput =
+            serde_json::from_str(sibling_tool_json).expect("valid JSON");
+        process_hook_event_impl(
+            HookEvent::PreToolUse,
+            sibling_pre_tool,
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("sibling pre-tool event should succeed");
+        let sibling_post_tool: HookInput =
+            serde_json::from_str(sibling_tool_json).expect("valid JSON");
+        process_hook_event_impl(
+            HookEvent::PostToolUse,
+            sibling_post_tool,
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("sibling post-tool event should succeed");
+
+        let reloaded = store::load_session_from(sessions_dir, "multi-agent-sess")
+            .expect("load")
+            .expect("session exists");
+        assert_eq!(
+            (
+                reloaded.current_tool,
+                reloaded.current_tool_name,
+                reloaded.pending_permission_agent_ids,
+            ),
+            (
+                Some("Bash(main-command)".to_string()),
+                Some("Bash".to_string()),
+                set_of(&[MAIN_THREAD_AGENT_KEY]),
+            ),
+        );
+    }
+
     #[rstest]
     // Notification never carries `agent_id` (see `HookInput::agent_id`), so
     // this always resolves to `MAIN_THREAD_AGENT_KEY` -- but the `Notification`
@@ -4339,6 +4406,14 @@ mod tests {
             engine: Engine::Claude,
             model: None,
             effort: None,
+        }
+    }
+
+    fn normalize_session_timestamps(snapshot: &mut serde_json::Value) {
+        snapshot["created_at"] = serde_json::json!("<timestamp>");
+        snapshot["updated_at"] = serde_json::json!("<timestamp>");
+        if !snapshot["last_prompted_at"].is_null() {
+            snapshot["last_prompted_at"] = serde_json::json!("<timestamp>");
         }
     }
 
@@ -5575,13 +5650,21 @@ mod tests {
             );
         }
 
-        #[test]
-        fn user_prompt_submit_creates_session() {
+        #[rstest]
+        #[case::missing_prompt(Engine::Claude, None)]
+        #[case::claude_prompt(Engine::Claude, Some("Example user prompt"))]
+        #[case::codex_prompt(Engine::Codex, Some("Example user prompt"))]
+        fn user_prompt_submit_creates_session(
+            #[case] engine: Engine,
+            #[case] prompt: Option<&str>,
+        ) {
             let temp_dir = create_temp_sessions_dir();
 
             // Verify that user-prompt-submit creates a session (for new sessions that
             // skipped SessionStart due to source="startup")
-            let input = create_test_input(None);
+            let mut input = create_test_input(None);
+            input.engine = engine;
+            input.prompt = prompt.map(str::to_string);
 
             let result = process_hook_event_impl(
                 HookEvent::UserPromptSubmit,
@@ -5591,15 +5674,77 @@ mod tests {
             )
             .expect("should succeed");
 
-            assert_eq!(
-                result,
-                ProcessResult::SessionSaved,
-                "user-prompt-submit should create the session"
-            );
             let session = store::load_session_from(temp_dir.path(), "test-123")
                 .expect("session should load")
                 .expect("session should exist");
-            assert_eq!(session.last_prompted_at, Some(session.updated_at));
+            assert_eq!(
+                (result, session.last_prompted_at == Some(session.updated_at)),
+                (ProcessResult::SessionSaved, true),
+            );
+        }
+
+        #[test]
+        fn watch_web_peer_initial_prompt_uses_launch_timestamp() {
+            let temp_dir = create_temp_sessions_dir();
+            let env = EnvVars {
+                session_launch_id: Some("launch-fixture".to_string()),
+                session_has_initial_prompt: Some(true),
+                ..EnvVars::default()
+            };
+            let startup_result = process_hook_event_impl_with_env(
+                HookEvent::SessionStart,
+                create_test_input_with_source(None, Some("startup")),
+                temp_dir.path(),
+                &SideEffects::none(),
+                None,
+                env,
+            )
+            .expect("watch-web session should start");
+            let startup_session = store::load_session_from(temp_dir.path(), "test-123")
+                .expect("session should load after startup")
+                .expect("session should exist after startup");
+            let launch_prompt_at = startup_session.last_prompted_at;
+            let marker = store::watch_web_user_marker_from(temp_dir.path(), "test-123")
+                .expect("watch-web marker should load")
+                .expect("watch-web marker should exist");
+            let prefixed_message = crate::commands::agent::watch_web_user_marker::prefix_message(
+                &marker,
+                "Example user prompt",
+            );
+            let prompt = indoc::formatdoc! {"
+                Another Claude session sent a message:
+                {prefixed_message}
+            "};
+            let mut input = create_test_input(None);
+            input.prompt = Some(prompt.clone());
+
+            let result = process_hook_event_impl(
+                HookEvent::UserPromptSubmit,
+                input,
+                temp_dir.path(),
+                &SideEffects::none(),
+            )
+            .expect("watch-web initial prompt should succeed");
+            let session = store::load_session_from(temp_dir.path(), "test-123")
+                .expect("session should load")
+                .expect("session should exist");
+
+            assert_eq!(
+                (
+                    crate::commands::agent::peer_message::is_peer_message(Some(&prompt)),
+                    startup_result,
+                    launch_prompt_at == Some(startup_session.created_at),
+                    result,
+                    session.last_prompted_at == launch_prompt_at,
+                ),
+                (
+                    true,
+                    ProcessResult::SessionSaved,
+                    true,
+                    ProcessResult::SessionSaved,
+                    true,
+                ),
+            );
         }
 
         #[rstest]

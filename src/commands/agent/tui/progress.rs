@@ -969,6 +969,35 @@ mod tests {
     }
 
     #[test]
+    fn stale_pr_draft_marker_does_not_mark_progress_as_a_review() {
+        let mut session = session("delegate");
+        session.status = SessionStatus::Stopped;
+        session.pending_human_review_ids.insert(
+            [
+                "pr-draft-review:example-review",
+                "v3",
+                "123",
+                "/fixture/draft.md",
+                "",
+                "4294967295",
+                "missing-process-start",
+            ]
+            .join("\0"),
+        );
+
+        assert_eq!(
+            session_stage_marks(&session, false, &AgentConfig::default()),
+            StageMarks {
+                implementation: ProgressMark::NotStarted,
+                diff_review: ProgressMark::NotStarted,
+                pr_body: ProgressMark::NotStarted,
+                ci: ProgressMark::NotStarted,
+                merge: ProgressMark::NotStarted,
+            }
+        );
+    }
+
+    #[test]
     fn unknown_custom_user_status_uses_its_configured_name() {
         let mut selected = session("selected");
         selected.status = SessionStatus::Stopped;

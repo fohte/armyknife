@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
+import { useOptionalAsyncActionFeedback } from '#async-action-feedback'
 import {
   reuseEqualValue,
   shareUnchangedMessages,
@@ -46,6 +47,8 @@ export function useConversationPaneData({
   pendingOperations,
   confirm,
 }: UseConversationPaneDataOptions) {
+  const shiftMergeTimelineIndices =
+    useOptionalAsyncActionFeedback()?.shiftMergeTimelineIndices
   const sessionConversationCache = useSessionConversationCache()
   const setCachedConversation = sessionConversationCache?.setCachedConversation
   const [initialCachedConversation] = useState(() =>
@@ -334,6 +337,15 @@ export function useConversationPaneData({
           : [...response.messages, ...latest.messages]
         const epochChanged = response.epoch !== latest.epoch
         const start = epochChanged ? 0 : response.start
+        // Epoch changes can renumber retained messages, so rebase their merge results.
+        if (!epochReset) {
+          shiftMergeTimelineIndices?.({
+            sessionId,
+            from: latest.start,
+            through: latest.start + latest.messages.length,
+            offset: start + response.messages.length - latest.start,
+          })
+        }
         markMessagesLoaded()
         updateConversation({
           ...response,
@@ -363,7 +375,13 @@ export function useConversationPaneData({
         setLoadingOlder(false)
       },
     )
-  }, [clearErrors, markMessagesLoaded, sessionId, updateConversation])
+  }, [
+    clearErrors,
+    markMessagesLoaded,
+    sessionId,
+    shiftMergeTimelineIndices,
+    updateConversation,
+  ])
 
   useEffect(() => {
     void refresh()

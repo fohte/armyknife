@@ -21,7 +21,8 @@ mod review_finish;
 mod session_watch;
 mod tmux;
 pub(crate) use pending_review::{
-    ReviewDocumentMarker, review_document_marker, review_document_path,
+    ReviewDocumentMarker, is_active_pr_draft_review_marker, review_document_marker,
+    review_document_path,
 };
 pub(crate) use review_completion::complete_review;
 pub(crate) use review_finish::{

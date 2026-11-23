@@ -422,6 +422,8 @@ pub struct TmuxSessionSpec<'a> {
 
 #[derive(Clone, Copy)]
 pub(crate) struct InitialPromptMarker<'a> {
+    /// User-submitted watch-web prompts belong in Recent immediately.
+    pub(crate) should_mark_pending: bool,
     pub(crate) mark_pending: &'a dyn Fn(&str) -> anyhow::Result<()>,
     pub(crate) clear_pending: &'a dyn Fn(&str) -> anyhow::Result<()>,
     pub(crate) prefix_watch_web_message: Option<&'a WatchWebMessagePrefix<'a>>,

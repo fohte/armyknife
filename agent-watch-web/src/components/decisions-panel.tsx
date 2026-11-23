@@ -101,7 +101,7 @@ export function DecisionsPanel({
         event.altKey ||
         event.ctrlKey ||
         event.metaKey ||
-        event.shiftKey ||
+        (event.shiftKey && event.key.toLowerCase() !== 'c') ||
         isEditableTarget(event.target) ||
         selectedDecision === undefined
       ) {
@@ -134,6 +134,7 @@ export function DecisionsPanel({
 
       if (
         (event.key === 'c' || event.key === 'C') &&
+        event.shiftKey &&
         selectedDecision.review === null
       ) {
         event.preventDefault()
@@ -206,7 +207,7 @@ export function DecisionsPanel({
           Tap a decision to jump to it in the conversation.
         </p>
         <span className="decisions-panel-keyboard-hint">
-          Y OK and next · C Change · ↵ Jump to it in the conversation
+          Y OK and next · ⇧C Change · ↵ Jump to it in the conversation
         </span>
       </footer>
     </section>

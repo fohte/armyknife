@@ -71,9 +71,28 @@ pub(super) fn collect_pending_permission_cards(
         .contains(MAIN_THREAD_AGENT_KEY)
         && !main_permission_is_question
     {
-        let command = main_permission_data.and_then(|data| {
-            permission_request_command(data.tool_name.as_deref(), Some(&data.tool_input))
-        });
+        // `current_tool` is shared with subagents, so only trust it while none are active.
+        let fallback_bash_command = if main_permission_data.is_none()
+            && session.pending_agent_task_ids.is_empty()
+            && session
+                .pending_permission_agent_ids
+                .iter()
+                .all(|agent_id| agent_id == MAIN_THREAD_AGENT_KEY)
+        {
+            session
+                .current_tool
+                .as_deref()
+                .and_then(bash_command_from_current_tool)
+        } else {
+            None
+        };
+        let fallback_command =
+            fallback_bash_command.filter(|command| command.len() <= MAX_PERMISSION_COMMAND_BYTES);
+        let command = main_permission_data
+            .and_then(|data| {
+                permission_request_command(data.tool_name.as_deref(), Some(&data.tool_input))
+            })
+            .or_else(|| fallback_command.map(str::to_owned));
         let tool = main_permission_data
             .and_then(|data| {
                 if data.tool_name.as_deref() == Some("Bash") {
@@ -82,18 +101,26 @@ pub(super) fn collect_pending_permission_cards(
                     permission_request_pending_tool(data)
                 }
             })
+            .or_else(|| fallback_bash_command.map(|_| "Bash".to_string()))
             .or_else(|| session.current_tool.clone())
             .unwrap_or_else(|| "Permission required".to_string());
-        let description = main_permission_data
-            .map(|data| {
-                permission_request_description(
-                    data.tool_name.as_deref(),
-                    Some(&data.tool_input),
-                    command.as_deref(),
-                    "Waiting for permission",
-                )
-            })
-            .unwrap_or_else(|| "Waiting for permission".to_string());
+        let description = match main_permission_data {
+            Some(data) => permission_request_description(
+                data.tool_name.as_deref(),
+                Some(&data.tool_input),
+                command.as_deref(),
+                "Waiting for permission",
+            ),
+            None => fallback_bash_command
+                .filter(|_| fallback_command.is_none())
+                .map(|command| {
+                    format!(
+                        "Command preview: {}",
+                        permission_request_command_preview(command)
+                    )
+                })
+                .unwrap_or_else(|| "Waiting for permission".to_string()),
+        };
         cards.push(TimedCard::new(
             CardKind::Permission,
             None,
@@ -186,6 +213,12 @@ pub(super) fn collect_pending_permission_cards(
     Ok(PendingPermissionCards { cards, questions })
 }
 
+fn bash_command_from_current_tool(current_tool: &str) -> Option<&str> {
+    current_tool
+        .strip_prefix("Bash(")
+        .and_then(|tool| tool.strip_suffix(')'))
+}
+
 fn permission_request_pending_tool(data: &PermissionRequestData) -> Option<String> {
     let tool_name = data.tool_name.as_deref()?;
     let detail = tool_input_detail(&data.tool_input);
@@ -249,13 +282,17 @@ pub(in crate::commands::agent::watch_web) fn permission_request_command_summary(
     let command = tool_input
         .and_then(|input| input.get("command"))
         .and_then(Value::as_str)?;
+    Some(permission_request_command_preview(command))
+}
+
+fn permission_request_command_preview(command: &str) -> String {
     let mut chars = command.chars();
     let preview = chars.by_ref().take(200).collect::<String>();
-    Some(if chars.next().is_some() {
+    if chars.next().is_some() {
         format!("{preview}…")
     } else {
         preview
-    })
+    }
 }
 
 pub(in crate::commands::agent::watch_web) fn permission_request_description(

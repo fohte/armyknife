@@ -42,12 +42,14 @@ function isMergeResponse(value: unknown): value is MergeResponse {
 type UseConversationPaneHeaderMergeOptions = {
   session: Session
   pullRequests: readonly PullRequest[]
+  timelineIndex?: number
   setPullRequestListOpen: (open: boolean) => void
 }
 
 export function useConversationPaneHeaderMerge({
   session,
   pullRequests,
+  timelineIndex,
   setPullRequestListOpen,
 }: UseConversationPaneHeaderMergeOptions) {
   const [mergeConfirmationOpen, setMergeConfirmationOpen] = useState(false)
@@ -209,6 +211,7 @@ export function useConversationPaneHeaderMerge({
       pullRequestOwner: target.owner,
       pullRequestRepo: target.repo,
       pullRequestHeadSha: target.expectedHeadSha,
+      ...(timelineIndex === undefined ? {} : { timelineIndex }),
       run: async () => {
         const result = await run(target)
         return result.match(

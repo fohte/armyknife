@@ -2555,6 +2555,40 @@ it('moves the selected App row with j and k and scrolls it into view', () => {
   })
 })
 
+it('opens the new-session form with c when no field has focus', () => {
+  renderApp()
+
+  let shortcutEvent: KeyboardEvent | null = null
+  act(() => {
+    shortcutEvent = dispatchKey(window, 'c')
+  })
+  const firstMessage = container.querySelector<HTMLTextAreaElement>(
+    '.new-session-view [aria-label="First message"]',
+  )
+
+  let typingEvent: KeyboardEvent | null = null
+  if (firstMessage !== null) {
+    act(() => {
+      typingEvent = dispatchKey(firstMessage, 'c')
+    })
+  }
+
+  const snapshot = () => ({
+    openedPicker: container.querySelector('.new-session-picker') !== null,
+    openedForm: container.querySelector('.new-session-view') !== null,
+    shortcutPrevented: shortcutEvent?.defaultPrevented,
+    firstMessageRendered: firstMessage !== null,
+    typingPrevented: typingEvent?.defaultPrevented ?? null,
+  })
+  expect(snapshot()).toEqual({
+    openedPicker: false,
+    openedForm: true,
+    shortcutPrevented: true,
+    firstMessageRendered: true,
+    typingPrevented: false,
+  })
+})
+
 it('limits keyboard navigation to sessions matching the Inbox filters', () => {
   renderApp()
   publishSessions({

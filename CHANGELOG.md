@@ -1,5 +1,82 @@
 # Changelog
 
+## [0.1.877](https://github.com/fohte/armyknife/compare/v0.1.876...v0.1.877) (2026-11-23)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show rewind status ([#2146](https://github.com/fohte/armyknife/issues/2146)) ([ec3ff0b](https://github.com/fohte/armyknife/commit/ec3ff0b09b88cfa8bdf1951414bfeb63e1f40b5a))
+
+## [0.1.876](https://github.com/fohte/armyknife/compare/v0.1.875...v0.1.876) (2026-11-23)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** open new session form with c ([#2144](https://github.com/fohte/armyknife/issues/2144)) ([01383f0](https://github.com/fohte/armyknife/commit/01383f05640a6643b629d2de503a9be9fdf9bfa0))
+
+## [0.1.875](https://github.com/fohte/armyknife/compare/v0.1.874...v0.1.875) (2026-11-23)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** order merge results in chat ([#2141](https://github.com/fohte/armyknife/issues/2141)) ([aeefb44](https://github.com/fohte/armyknife/commit/aeefb44c6a4b192608f9e7cef9b55619ed73ddab))
+
+## [0.1.874](https://github.com/fohte/armyknife/compare/v0.1.873...v0.1.874) (2026-11-23)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** hide generated context ([#2138](https://github.com/fohte/armyknife/issues/2138)) ([1fb25be](https://github.com/fohte/armyknife/commit/1fb25bef6187684cb2e3c5a29722ae44ad331ef8))
+
+## [0.1.873](https://github.com/fohte/armyknife/compare/v0.1.872...v0.1.873) (2026-11-23)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show new sessions in Recent ([#2136](https://github.com/fohte/armyknife/issues/2136)) ([8526ff9](https://github.com/fohte/armyknife/commit/8526ff93b7c6088d7463c33ce27379feafb1b875))
+
+## [0.1.872](https://github.com/fohte/armyknife/compare/v0.1.871...v0.1.872) (2026-11-23)
+
+
+### Bug Fixes
+
+* **watch-web:** hide ended reviews ([#2128](https://github.com/fohte/armyknife/issues/2128)) ([772fea1](https://github.com/fohte/armyknife/commit/772fea1a0c0bb8ac18aaacd39457abe38226a40e))
+
+## [0.1.871](https://github.com/fohte/armyknife/compare/v0.1.870...v0.1.871) (2026-11-23)
+
+
+### Features
+
+* **agent-watch-web:** add keyboard controls ([#2129](https://github.com/fohte/armyknife/issues/2129)) ([6ec44d4](https://github.com/fohte/armyknife/commit/6ec44d400e40b26bb9791ba500bdb4a08078d568))
+
+## [0.1.870](https://github.com/fohte/armyknife/compare/v0.1.869...v0.1.870) (2026-11-23)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** prevent scroll on selection ([#2134](https://github.com/fohte/armyknife/issues/2134)) ([a5956c2](https://github.com/fohte/armyknife/commit/a5956c27a11d1f912ba28f8f1e8c66a72ad6393e))
+
+## [0.1.869](https://github.com/fohte/armyknife/compare/v0.1.868...v0.1.869) (2026-11-23)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** format Bash fallback ([#2132](https://github.com/fohte/armyknife/issues/2132)) ([5e2f980](https://github.com/fohte/armyknife/commit/5e2f980a4ebf61ac8e51574d5d6648d6b802d1f0))
+
+## [0.1.868](https://github.com/fohte/armyknife/compare/v0.1.867...v0.1.868) (2026-11-23)
+
+
+### Bug Fixes
+
+* **agent:** keep periods inside temporary titles ([#2130](https://github.com/fohte/armyknife/issues/2130)) ([31e5e86](https://github.com/fohte/armyknife/commit/31e5e8632c0d4d00b57f9c4543d05a0d6cf57938))
+
+## [0.1.867](https://github.com/fohte/armyknife/compare/v0.1.866...v0.1.867) (2026-11-23)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show folded to-dos in Inbox ([#2125](https://github.com/fohte/armyknife/issues/2125)) ([a06281d](https://github.com/fohte/armyknife/commit/a06281d4c37ecede5b362672f750c41e51212fae))
+
 ## [0.1.866](https://github.com/fohte/armyknife/compare/v0.1.865...v0.1.866) (2026-11-23)
 
 

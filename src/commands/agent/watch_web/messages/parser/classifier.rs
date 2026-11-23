@@ -66,9 +66,9 @@ pub(super) fn classify_inbound(
         == Some("human")
     {
         return match marked_user_body(text, user_marker) {
-            Some(body) => marked_user_message_body(body),
+            Some(body) => marked_user_message_body(user_text_without_session_context(&body)),
             None => MessageKind::User {
-                text: text.to_owned(),
+                text: user_text_without_session_context(text),
             },
         };
     }
@@ -150,6 +150,64 @@ pub(super) fn classify_inbound(
     MessageKind::User {
         text: text.to_owned(),
     }
+}
+
+pub(super) fn user_text_without_session_context(text: &str) -> String {
+    let Some(context_end) = text.rfind("</session-context>") else {
+        return text.to_owned();
+    };
+    if !text[context_end + "</session-context>".len()..]
+        .trim()
+        .is_empty()
+    {
+        return text.to_owned();
+    }
+    let Some(context_start) = text[..context_end].rfind("<session-context>") else {
+        return text.to_owned();
+    };
+    let context = &text[context_start + "<session-context>".len()..context_end];
+    if !is_generated_session_context(context) {
+        return text.to_owned();
+    }
+    let before_context = &text[..context_start];
+    let prompt = before_context
+        .strip_suffix('\n')
+        .and_then(|before| before.strip_suffix('\n'))
+        .or_else(|| {
+            before_context
+                .strip_suffix('\n')
+                .and_then(|before| before.strip_suffix('\r'))
+                .and_then(|before| before.strip_suffix('\n'))
+                .and_then(|before| before.strip_suffix('\r'))
+        });
+    prompt.map_or_else(|| text.to_owned(), str::to_owned)
+}
+
+fn is_generated_session_context(context: &str) -> bool {
+    let lines: Vec<_> = context.trim().lines().collect();
+    match lines.as_slice() {
+        [working_directory, parent_working_directory] => {
+            has_context_field(working_directory, "- Working directory: ")
+                && has_context_field(parent_working_directory, "- Parent working directory: ")
+        }
+        [working_directory, optional_field, parent_working_directory] => {
+            has_context_field(working_directory, "- Working directory: ")
+                && (has_context_field(optional_field, "- Branch: ")
+                    || has_context_field(optional_field, "- Base: "))
+                && has_context_field(parent_working_directory, "- Parent working directory: ")
+        }
+        [working_directory, branch, base, parent_working_directory] => {
+            has_context_field(working_directory, "- Working directory: ")
+                && has_context_field(branch, "- Branch: ")
+                && has_context_field(base, "- Base: ")
+                && has_context_field(parent_working_directory, "- Parent working directory: ")
+        }
+        _ => false,
+    }
+}
+
+fn has_context_field(line: &str, field: &str) -> bool {
+    line.starts_with(field)
 }
 
 fn subagent_report(record: &Value) -> Option<MessageKind> {
@@ -343,7 +401,9 @@ pub(super) fn marked_user_body(text: &str, marker: Option<&str>) -> Option<Strin
 fn marked_or_peer_message(text: &str, marker: Option<&str>) -> Option<MessageKind> {
     let message = extract_peer_message(text, marker)?;
     if message.has_user_marker_in_body || (message.sender_id.is_none() && message.has_user_marker) {
-        return Some(marked_user_message_body(message.body));
+        return Some(marked_user_message_body(user_text_without_session_context(
+            &message.body,
+        )));
     }
     let text = peer_message_text(&message);
     let session_id = message.sender_id?;
@@ -405,6 +465,92 @@ mod tests {
 
     #[rstest]
     #[case::human_user(json!({"type":"user","origin":{"kind":"human"}}), "Please continue.", Some("fixture-marker"), MessageKind::User { text: "Please continue.".to_owned() })]
+    #[case::human_session_context_is_hidden_and_prompt_text_remains(
+        json!({"type":"user","origin":{"kind":"human"}}),
+        indoc! {"
+            Please inspect this fictional issue.
+
+            <session-context>
+            - User-authored note: keep this literal block.
+            </session-context>
+
+            Keep this follow-up sentence.
+
+            <session-context>
+            - Working directory: /fictional/project
+            - Parent working directory: /fictional
+            </session-context>
+        "},
+        None,
+        MessageKind::User {
+            text: indoc! {"
+                Please inspect this fictional issue.
+
+                <session-context>
+                - User-authored note: keep this literal block.
+                </session-context>
+
+                Keep this follow-up sentence."}
+            .to_owned(),
+        },
+    )]
+    #[case::marked_human_session_context_is_hidden_and_prompt_text_remains(
+        json!({"type":"user","origin":{"kind":"human"}}),
+        indoc! {"
+            ⟦armyknife-user:fixture-marker-violet⟧
+            This message was sent by the human user in armyknife watch-web, either as a message or an action notification.
+            Please inspect this marked fictional issue.
+
+            <session-context>
+            - Working directory: /fictional/project
+            - Parent working directory: /fictional
+            </session-context>
+        "},
+        Some("⟦armyknife-user:fixture-marker-violet⟧"),
+        MessageKind::User {
+            text: "Please inspect this marked fictional issue.".to_owned(),
+        },
+    )]
+    #[case::peer_origin_watch_web_marker_is_user_and_context_is_hidden(
+        json!({"type":"user","origin":{"kind":"peer","from":"fixture-sender-id"}}),
+        indoc! {"
+            ⟦armyknife-user:fixture-marker-violet⟧
+            This message was sent by the human user in armyknife watch-web, either as a message or an action notification.
+            Please inspect this peer-delivered fictional issue.
+
+            <session-context>
+            - Working directory: /fictional/project
+            - Parent working directory: /fictional
+            </session-context>
+        "},
+        Some("⟦armyknife-user:fixture-marker-violet⟧"),
+        MessageKind::User {
+            text: "Please inspect this peer-delivered fictional issue.".to_owned(),
+        },
+    )]
+    #[case::peer_origin_watch_web_marker_preserves_user_authored_context(
+        json!({"type":"user","origin":{"kind":"peer","from":"fixture-sender-id"}}),
+        indoc! {"
+            ⟦armyknife-user:fixture-marker-violet⟧
+            This message was sent by the human user in armyknife watch-web, either as a message or an action notification.
+            Please keep this literal context block.
+
+            <session-context>
+            - User-authored note: preserve this text.
+            </session-context>
+        "},
+        Some("⟦armyknife-user:fixture-marker-violet⟧"),
+        MessageKind::User {
+            text: indoc! {"
+                Please keep this literal context block.
+
+                <session-context>
+                - User-authored note: preserve this text.
+                </session-context>
+            "}
+            .to_owned(),
+        },
+    )]
     #[case::human_vibe_notice_is_an_event(
         json!({"type":"user","origin":{"kind":"human"}}),
         indoc! {"

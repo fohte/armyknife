@@ -5,12 +5,13 @@ import { Filter, X } from 'lucide-react'
 import { type ReactNode, useCallback, useState } from 'react'
 
 import { InboxFilterBar } from '#components/inbox-filter-bar'
-import { InboxTodoLaterSection } from '#components/inbox-todo-later-section'
 import { InboxViewDialogLayers } from '#components/inbox-view-dialog-layers'
 import { MobileNavigationActions } from '#components/mobile-navigation-actions'
+import { MobileTodoLaterCount } from '#components/mobile-todo-later-count'
 import { filterInboxSessions, parseInboxFilterQuery } from '#inbox-filter'
 import { InboxSessionListItem } from '#inbox-session-list-item'
 import { renderInboxSessionSection } from '#inbox-session-section'
+import { sumTodoLaterCount } from '#inbox-todo-later-count'
 import { formatMobileConnectionTime, nextReturnLabel } from '#inbox-view-utils'
 import type { SavedInboxView } from '#saved-inbox-views'
 import type { Session } from '#types'
@@ -118,13 +119,10 @@ export function InboxView({
     (session) => session.category === 'needs_action',
   )
   const inProgress = filteredSessions.filter(
-    (session) =>
-      session.category === 'in_progress' && (session.todoLaterCount ?? 0) === 0,
+    (session) => session.category === 'in_progress',
   )
-  const done = filteredSessions.filter(
-    (session) =>
-      session.category === 'done' && (session.todoLaterCount ?? 0) === 0,
-  )
+  const todoLaterCount = sumTodoLaterCount(inProgress)
+  const done = filteredSessions.filter((session) => session.category === 'done')
   const allDone = sessions.filter(
     (session) =>
       session.category === 'done' && (session.todoLaterCount ?? 0) === 0,
@@ -136,9 +134,10 @@ export function InboxView({
   const connected = connectionError === null
   const lastUpdatedTime = formatMobileConnectionTime(lastUpdatedAt)
   const later = filteredSessions.filter(
-    (session) =>
-      session.category === 'later' && (session.todoLaterCount ?? 0) === 0,
+    (session) => session.category === 'later',
   )
+  const laterTodoLaterCount = sumTodoLaterCount(later)
+  const doneTodoLaterCount = sumTodoLaterCount(done)
   const setFilterQuery = useCallback(
     (query: string) => {
       if (onFilterQueryChange !== undefined) {
@@ -312,12 +311,6 @@ export function InboxView({
           onCloseSession,
           onOpenActions: setActionSheetSession,
         })}
-        <InboxTodoLaterSection
-          sessions={filteredSessions}
-          selectedId={selectedId}
-          onSelect={onSelect}
-          isMobile={isMobile}
-        />
         <Button
           type="button"
           variant="plain"
@@ -327,6 +320,9 @@ export function InboxView({
         >
           <span>◷ Later</span>
           <span className="later-section-count">{later.length}</span>
+          {isMobile ? (
+            <MobileTodoLaterCount count={laterTodoLaterCount} />
+          ) : null}
           {later.length > 0 || isMobile ? (
             <span className="later-next-return">
               {later.length > 0 ? nextReturnLabel(later) : 'Next activity'}
@@ -368,6 +364,7 @@ export function InboxView({
         >
           <span>In progress</span>
           <span className="mobile-collapse-count">{inProgress.length}</span>
+          <MobileTodoLaterCount count={todoLaterCount} />
           <span className="mobile-collapse-chevron" aria-hidden="true">
             {inProgressExpanded ? '⌄' : '›'}
           </span>
@@ -405,6 +402,7 @@ export function InboxView({
           >
             <span>Done</span>
             <span className="mobile-collapse-count">{done.length}</span>
+            <MobileTodoLaterCount count={doneTodoLaterCount} />
             {unreviewedDoneCount > 0 ? (
               <span className="mobile-done-review-count">
                 ◇ {String(unreviewedDoneCount)} to review
@@ -447,6 +445,9 @@ export function InboxView({
         })}
       </div>
       <footer className="inbox-footer" aria-label="Keyboard shortcuts">
+        <span>
+          <kbd>c</kbd> New session
+        </span>
         <span>
           <kbd>i</kbd> Reply
         </span>

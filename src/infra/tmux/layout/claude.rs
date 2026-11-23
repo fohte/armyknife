@@ -193,6 +193,7 @@ impl Launch {
                     .unwrap_or(prompt);
                 let before_send = || {
                     if let Some(marker) = initial_prompt_marker
+                        && marker.should_mark_pending
                         && let Err(error) = (marker.mark_pending)(&connection.session_id)
                     {
                         tracing::warn!(
@@ -205,6 +206,7 @@ impl Launch {
                 };
                 if let Err(error) = client.send_message(&connection, &prompt, &before_send) {
                     if let Some(marker) = initial_prompt_marker
+                        && marker.should_mark_pending
                         && let Err(clear_error) = (marker.clear_pending)(&connection.session_id)
                     {
                         tracing::warn!(
@@ -234,6 +236,7 @@ mod tests {
     enum Call {
         Wait(String),
         Mark(String),
+        Clear(String),
         Send(PeerConnection, String),
     }
 
@@ -363,6 +366,7 @@ mod tests {
                 prompt_file: None,
                 pane_id: Some("%2"),
                 initial_prompt_marker: Some(super::super::InitialPromptMarker {
+                    should_mark_pending: true,
                     mark_pending: &mark_pending,
                     clear_pending: &clear_pending,
                     prefix_watch_web_message: None,
@@ -390,11 +394,18 @@ mod tests {
     #[test]
     fn prefixes_watch_web_initial_prompt_with_the_connected_session_marker() {
         let calls = Arc::new(Mutex::new(Vec::new()));
+        let mark_calls = calls.clone();
         let prefix_watch_web_message = |session_id: &str, content: &str| {
             let marker = format!("⟦armyknife-user:fixture-{session_id}⟧");
             Ok([marker.as_str(), "This message was sent by the human user in armyknife watch-web, either as a message or an action notification.", content].join("\n"))
         };
-        let mark_pending = |_session_id: &str| Ok(());
+        let mark_pending = move |session_id: &str| {
+            mark_calls
+                .lock()
+                .unwrap()
+                .push(Call::Mark(session_id.to_string()));
+            Ok(())
+        };
         let clear_pending = |_session_id: &str| Ok(());
         let launch = Launch::prepare_with(Engine::Claude, Some("Inspect the example."), 1, || {
             Box::new(StubClient {
@@ -410,6 +421,7 @@ mod tests {
                 prompt_file: None,
                 pane_id: Some("%2"),
                 initial_prompt_marker: Some(super::super::InitialPromptMarker {
+                    should_mark_pending: false,
                     mark_pending: &mark_pending,
                     clear_pending: &clear_pending,
                     prefix_watch_web_message: Some(&prefix_watch_web_message),
@@ -460,6 +472,7 @@ mod tests {
                 prompt_file: None,
                 pane_id: Some("%2"),
                 initial_prompt_marker: Some(super::super::InitialPromptMarker {
+                    should_mark_pending: true,
                     mark_pending: &mark_pending,
                     clear_pending: &clear_pending,
                     prefix_watch_web_message: None,
@@ -506,6 +519,7 @@ mod tests {
                 prompt_file: None,
                 pane_id: Some("%2"),
                 initial_prompt_marker: Some(super::super::InitialPromptMarker {
+                    should_mark_pending: true,
                     mark_pending: &mark_pending,
                     clear_pending: &clear_pending,
                     prefix_watch_web_message: None,
@@ -522,6 +536,63 @@ mod tests {
             (
                 Err("Claude pane %2 was created, but initial prompt delivery failed: Failed to send initial prompt through Claude messaging: socket unavailable".to_string()),
                 vec!["session-example".to_string()],
+            ),
+        );
+    }
+
+    #[test]
+    fn failed_watch_web_prompt_delivery_does_not_touch_the_pending_marker() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let mark_calls = calls.clone();
+        let clear_calls = calls.clone();
+        let mark_pending = move |session_id: &str| {
+            mark_calls
+                .lock()
+                .unwrap()
+                .push(Call::Mark(session_id.to_string()));
+            Ok(())
+        };
+        let clear_pending = move |session_id: &str| {
+            clear_calls
+                .lock()
+                .unwrap()
+                .push(Call::Clear(session_id.to_string()));
+            Ok(())
+        };
+        let launch = Launch::prepare_with(Engine::Claude, Some("prompt"), 1, || {
+            Box::new(StubClient {
+                connection: Ok(connection()),
+                delivery: Some(Err(anyhow::anyhow!("socket unavailable"))),
+                calls: calls.clone(),
+            })
+        })
+        .expect("messaging client should be created");
+
+        let route = launch.finish_and_recover_with(
+            RecoverySpec {
+                prompt_file: None,
+                pane_id: Some("%2"),
+                initial_prompt_marker: Some(super::super::InitialPromptMarker {
+                    should_mark_pending: false,
+                    mark_pending: &mark_pending,
+                    clear_pending: &clear_pending,
+                    prefix_watch_web_message: None,
+                }),
+            },
+            |_| Some("example/repo:@1.%2".to_string()),
+        );
+
+        assert_eq!(
+            (
+                route.map_err(|error| format!("{error:#}")),
+                calls.lock().unwrap().clone(),
+            ),
+            (
+                Err("Claude pane %2 was created, but initial prompt delivery failed: Failed to send initial prompt through Claude messaging: socket unavailable".to_string()),
+                vec![
+                    Call::Wait("example/repo:@1.%2".to_string()),
+                    Call::Send(connection(), "prompt".to_string()),
+                ],
             ),
         );
     }

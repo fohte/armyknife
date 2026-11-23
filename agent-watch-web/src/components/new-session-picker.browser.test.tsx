@@ -123,6 +123,28 @@ it('launches Codex when Option+Enter is pressed after choosing a directory', asy
   expect(snapshot()).toEqual([{ callbackType: 'function', engine: 'codex' }])
 })
 
+it('selects the next directory with ArrowDown and Enter', async () => {
+  const start = vi.fn<NewSessionState['start']>(() => Promise.resolve())
+  root = createRoot(container)
+  act(() => {
+    root?.render(<PickerHarness start={start} />)
+  })
+  await act(async () => {
+    await userEvent.keyboard('{ArrowDown}{Enter}')
+  })
+
+  const snapshot = () => ({
+    directory: container
+      .querySelector('.new-session-picker-directory')
+      ?.getAttribute('aria-label'),
+    startCalls: start.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    directory: 'Change directory, currently /Users/example/work/handbook',
+    startCalls: [],
+  })
+})
+
 it.each([
   ['composition state', true, undefined],
   ['legacy key code', false, 229],
@@ -204,6 +226,30 @@ it('launches the focused engine option when Enter is pressed', async () => {
   await act(async () => {
     await userEvent.click(codexOption)
     await userEvent.keyboard('{Enter}')
+  })
+
+  const snapshot = () =>
+    start.mock.calls.map(([onLaunched, engine]) => [typeof onLaunched, engine])
+  expect(snapshot()).toEqual([['function', 'codex']])
+})
+
+it('launches Codex when Option+Enter is pressed on the Claude Code option', async () => {
+  const start = vi.fn<NewSessionState['start']>(() => Promise.resolve())
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <PickerHarness
+        selectedDirectory={exampleSessionDirectories[0] ?? null}
+        start={start}
+      />,
+    )
+  })
+  const claudeOption = requireButton(
+    '.new-session-picker-options > button:first-of-type',
+  )
+  await act(async () => {
+    claudeOption.focus()
+    await userEvent.keyboard('{Alt>}{Enter}{/Alt}')
   })
 
   const snapshot = () =>

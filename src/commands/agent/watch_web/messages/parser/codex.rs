@@ -411,6 +411,7 @@ impl CodexParserState {
         let mut items = Vec::new();
         let mut tools = ToolSummary::default();
         let mut card_timeline = CardTimeline::new(cards);
+        let mut has_seen_user_message = false;
         for event in &self.events {
             card_timeline.insert_before_record(event.timestamp, &mut items, &mut tools);
             for effect in &event.effects {
@@ -426,9 +427,12 @@ impl CodexParserState {
                     } => {
                         tools.flush_into(&mut items);
                         let text = text.decode()?;
+                        let is_initial_user_message = !has_seen_user_message;
+                        has_seen_user_message = true;
                         append_user_text_with_rewind_id(
                             &mut items,
                             text,
+                            is_initial_user_message,
                             parent,
                             *timestamp,
                             rewind_id.clone(),
@@ -1041,6 +1045,127 @@ mod tests {
                 failed: false,
             }],
         );
+    }
+
+    #[rstest]
+    #[case::generated_context_is_hidden(
+        indoc! {r#"
+            {"type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","content":"Please inspect this fictional issue.\n\n<session-context>\n- Working directory: /fictional/project\n- Branch: fixture/branch\n- Base: origin/main\n- Parent working directory: /fictional\n</session-context>"}}}
+        "#},
+        vec![ChatItem::User {
+            rewind_id: None,
+            text: "Please inspect this fictional issue.".to_string(),
+            timestamp: None,
+            from: None,
+            queued_prompt_id: None,
+        }],
+    )]
+    #[case::tagged_initial_prompt_keeps_rewind_control(
+        indoc! {r#"
+            {"type":"turn_context","payload":{"turn_id":"fixture-turn-id"}}
+            {"type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","content":"<task>Review the fictional change.</task>\n\n<session-context>\n- Working directory: /fictional/project\n- Parent working directory: /fictional\n</session-context>"}}}
+        "#},
+        vec![ChatItem::User {
+            rewind_id: Some("fixture-turn-id".to_string()),
+            text: "<task>Review the fictional change.</task>".to_string(),
+            timestamp: None,
+            from: None,
+            queued_prompt_id: None,
+        }],
+    )]
+    #[case::leading_user_context_does_not_expose_generated_context(
+        indoc! {r#"
+            {"type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","content":"<session-context>\nUser-authored note.\n</session-context>\n\n<session-context>\n- Working directory: /fictional/project\n- Parent working directory: /fictional\n</session-context>"}}}
+        "#},
+        vec![ChatItem::User {
+            rewind_id: None,
+            text: indoc! {"
+                <session-context>
+                User-authored note.
+                </session-context>"}
+            .to_string(),
+            timestamp: None,
+            from: None,
+            queued_prompt_id: None,
+        }],
+    )]
+    #[case::user_context_before_generated_context_remains_visible(
+        indoc! {r#"
+            {"type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","content":"<session-context>\nUser-authored note.\n</session-context>\n\nPlease inspect this fictional issue.\n\n<session-context>\n- Working directory: /fictional/project\n- Parent working directory: /fictional\n</session-context>"}}}
+        "#},
+        vec![ChatItem::User {
+            rewind_id: None,
+            text: indoc! {"
+                <session-context>
+                User-authored note.
+                </session-context>
+
+                Please inspect this fictional issue."}
+            .to_string(),
+            timestamp: None,
+            from: None,
+            queued_prompt_id: None,
+        }],
+    )]
+    #[case::peer_context_remains_visible(
+        indoc! {r#"
+            {"type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","content":"<peer-message>\n- From session_id: fixture-peer-id\n\nFictional request.\n\n<session-context>\n- Working directory: /fictional/peer\n</session-context>\n</peer-message>"}}}
+        "#},
+        vec![ChatItem::Peer {
+            direction: PeerDirection::From,
+            session_id: "fixture-peer-id".to_string(),
+            session_title: None,
+            content: vec![UserContentPart::Text {
+                text: indoc! {"
+                    Fictional request.
+
+                    <session-context>
+                    - Working directory: /fictional/peer
+                    </session-context>"}
+                .to_string(),
+            }],
+            timestamp: None,
+            failed: false,
+        }],
+    )]
+    #[case::later_user_context_remains_visible(
+        indoc! {r#"
+            {"type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","content":"Earlier fictional prompt."}}}
+            {"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Fictional response."}]}}
+            {"type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","content":"Keep this later context.\n\n<session-context>\n- Working directory: /fictional/project\n- Parent working directory: /fictional\n</session-context>"}}}
+        "#},
+        vec![
+            ChatItem::User {
+                rewind_id: None,
+                text: "Earlier fictional prompt.".to_string(),
+                timestamp: None,
+                from: None,
+                queued_prompt_id: None,
+            },
+            ChatItem::Assistant {
+                text: "Fictional response.".to_string(),
+            },
+            ChatItem::User {
+                rewind_id: None,
+                text: indoc! {"
+                    Keep this later context.
+
+                    <session-context>
+                    - Working directory: /fictional/project
+                    - Parent working directory: /fictional
+                    </session-context>"}
+                .to_string(),
+                timestamp: None,
+                from: None,
+                queued_prompt_id: None,
+            },
+        ],
+    )]
+    fn codex_context_filtering_preserves_user_and_peer_content(
+        #[case] transcript: &str,
+        #[case] expected: Vec<ChatItem>,
+    ) {
+        assert_eq!(parse(Cursor::new(transcript), None).unwrap(), expected);
     }
 
     #[test]
