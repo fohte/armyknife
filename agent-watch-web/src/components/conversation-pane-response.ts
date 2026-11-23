@@ -12,6 +12,12 @@ import type {
 } from '#types'
 import { isVibeMode } from '#vibe-mode'
 
+export {
+  type EditorReviewDocumentState,
+  isReviewDocumentSummaryList,
+  type ReviewDocumentSummary,
+} from '#components/review-document-summary'
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }

@@ -48,6 +48,7 @@ const appTestFiles = [
   'src/components/board-view.test.tsx',
   'src/components/conversation-pane.test.tsx',
   'src/components/conversation-status-band.browser.test.tsx',
+  'src/components/use-editor-review-document.browser.test.tsx',
   'src/components/conversation-pane-header.test.tsx',
   'src/components/merge-band.browser.test.tsx',
   'src/components/vibe-mode-control.browser.test.tsx',

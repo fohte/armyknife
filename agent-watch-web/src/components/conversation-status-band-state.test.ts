@@ -1,5 +1,9 @@
 import { expect, it } from 'vitest'
 
+import type {
+  EditorReviewDocumentState,
+  ReviewDocumentSummary,
+} from '#components/conversation-pane-response'
 import {
   type ConversationStatusBandState,
   getConversationStatusBandState,
@@ -51,12 +55,32 @@ const question: ChatItem = {
   ],
 }
 
+const permission: ChatItem = {
+  type: 'permission',
+  requestId: 'fixture-permission-request',
+  tool: 'exec',
+  description: 'Run the sample check',
+  command: 'cargo test --package sample',
+}
+
+const editorIssueComment: ReviewDocumentSummary = {
+  id: 'fixture-review-document',
+  kind: 'issue_comment',
+  target: { issueNumber: 1234 },
+  isEditor: true,
+}
+const editorIssueCommentState: EditorReviewDocumentState = {
+  status: 'ready',
+  summary: editorIssueComment,
+}
+
 type StatusCase = {
   name: string
   input: {
     session: Session
     messages?: readonly ChatItem[]
     backgroundTasks?: readonly BackgroundTask[]
+    editorReviewDocument?: EditorReviewDocumentState | null
   }
   expected: ConversationStatusBandState | null
 }
@@ -127,6 +151,58 @@ const statusCases: StatusCase[] = [
       },
     },
     expected: { kind: 'crit-review', detail: 'crit · PR #742' },
+  },
+  {
+    name: 'one draft review',
+    input: {
+      session: {
+        ...session,
+        reviewDocumentId: editorIssueComment.id,
+        reviewDocumentCount: 1,
+      },
+      editorReviewDocument: editorIssueCommentState,
+    },
+    expected: {
+      kind: 'draft-review',
+      detail: '1 draft · Issue comment #1234 is in the editor',
+    },
+  },
+  {
+    name: 'multiple drafts and Crit review',
+    input: {
+      session: {
+        ...session,
+        category: 'needs_action',
+        activityStatus: 'waiting',
+        isWaitingForCritReview: true,
+        kind: 'Review',
+        pullRequest: { number: 742, state: 'Open' },
+        critUrl: 'https://crit.example.test/review/fixture',
+        reviewDocumentId: editorIssueComment.id,
+        reviewDocumentCount: 4,
+      },
+      editorReviewDocument: editorIssueCommentState,
+    },
+    expected: {
+      kind: 'draft-review',
+      detail:
+        '4 drafts · Issue comment #1234 is in the editor · crit · PR #742',
+    },
+  },
+  {
+    name: 'draft details unavailable',
+    input: {
+      session: {
+        ...session,
+        reviewDocumentId: editorIssueComment.id,
+        reviewDocumentCount: 1,
+      },
+      editorReviewDocument: { status: 'unavailable' },
+    },
+    expected: {
+      kind: 'draft-review',
+      detail: '1 draft · Draft details are unavailable',
+    },
   },
   {
     name: 'crit review with pull requests',
@@ -219,18 +295,44 @@ const statusCases: StatusCase[] = [
     },
   },
   {
+    name: 'question with a draft',
+    input: {
+      session: {
+        ...session,
+        category: 'needs_action',
+        kind: 'Question',
+        reviewDocumentId: editorIssueComment.id,
+        reviewDocumentCount: 1,
+      },
+      messages: [question],
+    },
+    expected: {
+      kind: 'question',
+      detail: 'Which retry interval should be used?',
+    },
+  },
+  {
     name: 'permission',
     input: {
       session: { ...session, category: 'needs_action', kind: 'Approve' },
-      messages: [
-        {
-          type: 'permission',
-          requestId: 'fixture-permission-request',
-          tool: 'exec',
-          description: 'Run the sample check',
-          command: 'cargo test --package sample',
-        } satisfies ChatItem,
-      ],
+      messages: [permission],
+    },
+    expected: {
+      kind: 'permission',
+      detail: 'Bash  cargo test --package sample',
+    },
+  },
+  {
+    name: 'permission with a draft',
+    input: {
+      session: {
+        ...session,
+        category: 'needs_action',
+        kind: 'Approve',
+        reviewDocumentId: editorIssueComment.id,
+        reviewDocumentCount: 1,
+      },
+      messages: [permission],
     },
     expected: {
       kind: 'permission',
@@ -265,6 +367,7 @@ it.each(statusCases)(
         session: input.session,
         messages: input.messages ?? [],
         backgroundTasks: input.backgroundTasks ?? [],
+        editorReviewDocument: input.editorReviewDocument ?? null,
       }),
     ).toEqual(expected)
   },

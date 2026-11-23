@@ -287,6 +287,38 @@ it.each([
   },
 )
 
+it('opens the draft review panel from the review band', async () => {
+  const onOpenDrafts = vi.fn()
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationStatusBand
+        state={{
+          kind: 'draft-review',
+          detail: '2 drafts · Issue comment #1234 is in the editor',
+        }}
+        elapsedSeconds={0}
+        activeTool={undefined}
+        backgroundTasks={[]}
+        onOpenDrafts={onOpenDrafts}
+      />,
+    )
+  })
+
+  const button = container.querySelector<HTMLButtonElement>(
+    '.conversation-status-band-review',
+  )
+  if (button === null)
+    throw new Error('The draft review button was not rendered')
+  await act(async () => userEvent.click(button))
+
+  const snapshot = () => ({
+    text: button.textContent,
+    calls: onOpenDrafts.mock.calls.length,
+  })
+  expect(snapshot()).toEqual({ text: 'Open drafts →', calls: 1 })
+})
+
 it('shows the full active-tool command after the compact row is pressed', async () => {
   const activeToolDetail =
     'Bash  cargo test --package fictional -- --show-output'

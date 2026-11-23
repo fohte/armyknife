@@ -16,6 +16,7 @@ type ConversationStatusBandProps = {
   defaultExpanded?: boolean
   defaultBackgroundTasksExpanded?: boolean
   onReviewInCrit?: () => void
+  onOpenDrafts?: () => void
   onReturnToCard?: () => void
 }
 
@@ -24,6 +25,7 @@ const statusLabels: Record<ConversationStatusBandState['kind'], string> = {
   compacting: 'Compacting…',
   'background-tasks': 'Background tasks',
   'crit-review': 'Waiting for your review',
+  'draft-review': 'Waiting for your review',
   question: 'Question',
   permission: 'Permission',
   waiting: 'Waiting',
@@ -38,17 +40,17 @@ export function ConversationStatusBand({
   defaultExpanded = false,
   defaultBackgroundTasksExpanded = false,
   onReviewInCrit,
+  onOpenDrafts,
   onReturnToCard,
 }: ConversationStatusBandProps) {
   const [isExpanded, setIsExpanded] = useState(defaultExpanded)
   const detailsId = useId()
   if (state === null) return null
 
-  const isReview = state.kind === 'crit-review'
+  const isReview = state.kind === 'crit-review' || state.kind === 'draft-review'
+  const isDraftReview = state.kind === 'draft-review'
   const isWarning =
-    state.kind === 'crit-review' ||
-    state.kind === 'question' ||
-    state.kind === 'permission'
+    isReview || state.kind === 'question' || state.kind === 'permission'
   const title =
     state.kind === 'working'
       ? `Working · ${formatElapsedTime(elapsedSeconds)}`
@@ -82,7 +84,7 @@ export function ConversationStatusBand({
   if (isReview) {
     return (
       <section
-        className={`conversation-status-band conversation-status-band--crit-review is-waiting is-warning${isMobile ? ' is-mobile' : ''}`}
+        className={`conversation-status-band conversation-status-band--review is-waiting is-warning${isMobile ? ' is-mobile' : ''}`}
         aria-label="Conversation status"
         role="status"
       >
@@ -110,9 +112,10 @@ export function ConversationStatusBand({
           className="conversation-status-band-review"
           type="button"
           variant="secondary"
-          onClick={onReviewInCrit}
+          onClick={isDraftReview ? onOpenDrafts : onReviewInCrit}
         >
-          Review in crit <span aria-hidden="true">→</span>
+          {isDraftReview ? 'Open drafts' : 'Review in crit'}{' '}
+          <span aria-hidden="true">→</span>
         </Button>
       </section>
     )

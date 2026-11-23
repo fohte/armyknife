@@ -105,6 +105,10 @@ function isSession(value: unknown): value is Session {
     (value['reviewDocumentId'] === undefined ||
       value['reviewDocumentId'] === null ||
       typeof value['reviewDocumentId'] === 'string') &&
+    (value['reviewDocumentCount'] === undefined ||
+      (typeof value['reviewDocumentCount'] === 'number' &&
+        Number.isInteger(value['reviewDocumentCount']) &&
+        value['reviewDocumentCount'] >= 0)) &&
     (value['workType'] === undefined ||
       value['workType'] === null ||
       typeof value['workType'] === 'string') &&

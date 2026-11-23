@@ -76,6 +76,7 @@ export type Session = {
   isWaitingForCritReview?: boolean
   webUis?: { name: string; url: string; exposedUrl?: string | null }[]
   reviewDocumentId?: string | null
+  reviewDocumentCount?: number
   laterUntil?: string | null
   isToday?: boolean
   decisionCount?: number
