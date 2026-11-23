@@ -954,18 +954,25 @@ fn process_hook_event_impl_with_env_and_unreported_stop(
     }
     metadata_update.apply(&mut session.model, &mut session.effort);
 
-    session.current_tool = match event {
-        HookEvent::PreToolUse => format_current_tool(&input),
-        HookEvent::PostToolUse | HookEvent::Stop | HookEvent::StopFailure => None,
-        _ => session.current_tool,
-    };
-    session.current_tool_name = match event {
-        HookEvent::PreToolUse | HookEvent::PermissionRequest => {
-            input.tool_name.clone().or(session.current_tool_name)
-        }
-        HookEvent::PostToolUse | HookEvent::Stop | HookEvent::StopFailure => None,
-        _ => session.current_tool_name,
-    };
+    let preserve_main_permission_tool = input.agent_id.is_some()
+        && session
+            .pending_permission_agent_ids
+            .contains(MAIN_THREAD_AGENT_KEY);
+    if !preserve_main_permission_tool {
+        session.current_tool = match event {
+            HookEvent::PreToolUse => format_current_tool(&input),
+            HookEvent::PermissionRequest if input.agent_id.is_none() => format_current_tool(&input),
+            HookEvent::PostToolUse | HookEvent::Stop | HookEvent::StopFailure => None,
+            _ => session.current_tool,
+        };
+        session.current_tool_name = match event {
+            HookEvent::PreToolUse | HookEvent::PermissionRequest => {
+                input.tool_name.clone().or(session.current_tool_name)
+            }
+            HookEvent::PostToolUse | HookEvent::Stop | HookEvent::StopFailure => None,
+            _ => session.current_tool_name,
+        };
+    }
 
     if let Some(config) = &work_type_config {
         work_type::update_session_work_type(&mut session, event, &input, &config.agent);
@@ -4050,6 +4057,64 @@ mod tests {
         assert_eq!(
             (reloaded.status, reloaded.pending_permission_agent_ids),
             (SessionStatus::WaitingInput, set_of(&["agent-a"])),
+        );
+    }
+
+    #[test]
+    fn main_permission_tool_survives_sibling_agent_events() {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let sessions_dir = temp_dir.path();
+
+        save_test_session(sessions_dir, "multi-agent-sess", |session| {
+            session.status = SessionStatus::Running;
+        });
+
+        let main_permission: HookInput = serde_json::from_str(
+            r#"{"session_id":"multi-agent-sess","cwd":"/tmp/test","tool_name":"Bash","tool_input":{"command":"main-command"}}"#,
+        )
+        .expect("valid JSON");
+        process_hook_event_impl(
+            HookEvent::PermissionRequest,
+            main_permission,
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("main permission request should succeed");
+
+        let sibling_tool_json = r#"{"session_id":"multi-agent-sess","cwd":"/tmp/test","agent_id":"agent-b","tool_name":"Bash","tool_input":{"command":"sibling-command"}}"#;
+        let sibling_pre_tool: HookInput =
+            serde_json::from_str(sibling_tool_json).expect("valid JSON");
+        process_hook_event_impl(
+            HookEvent::PreToolUse,
+            sibling_pre_tool,
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("sibling pre-tool event should succeed");
+        let sibling_post_tool: HookInput =
+            serde_json::from_str(sibling_tool_json).expect("valid JSON");
+        process_hook_event_impl(
+            HookEvent::PostToolUse,
+            sibling_post_tool,
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("sibling post-tool event should succeed");
+
+        let reloaded = store::load_session_from(sessions_dir, "multi-agent-sess")
+            .expect("load")
+            .expect("session exists");
+        assert_eq!(
+            (
+                reloaded.current_tool,
+                reloaded.current_tool_name,
+                reloaded.pending_permission_agent_ids,
+            ),
+            (
+                Some("Bash(main-command)".to_string()),
+                Some("Bash".to_string()),
+                set_of(&[MAIN_THREAD_AGENT_KEY]),
+            ),
         );
     }
 
