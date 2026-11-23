@@ -90,6 +90,29 @@ function StatefulSkillForm() {
   )
 }
 
+function StatefulKeyboardForm({
+  start,
+  isMobile = false,
+}: {
+  start: NewSessionState['start']
+  isMobile?: boolean
+}) {
+  const [initialMessage, setInitialMessage] = useState('')
+  return (
+    <NewSessionForm
+      state={makeState({
+        initialMessage,
+        selectedDirectory: exampleSessionDirectories[0] ?? null,
+        setInitialMessage,
+        start,
+      })}
+      isMobile={isMobile}
+      onClose={() => undefined}
+      onLaunched={() => undefined}
+    />
+  )
+}
+
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   container = document.createElement('div')
@@ -172,6 +195,56 @@ it('suggests and inserts skills in the first message field', async () => {
     optionCount: 0,
     expanded: 'false',
   })
+})
+
+it('uses the reply keyboard behavior for the first message', async () => {
+  const start = vi.fn<NewSessionState['start']>(() => Promise.resolve())
+  root = createRoot(container)
+  act(() => root?.render(<StatefulKeyboardForm start={start} />))
+  const textarea = container.querySelector<HTMLTextAreaElement>(
+    '[aria-label="First message"]',
+  )
+  if (textarea === null) throw new Error('First message field was not rendered')
+  await act(async () => {
+    textarea.focus()
+    await userEvent.keyboard('{Shift>}{Enter}{/Shift}{Alt>}{Enter}{/Alt}')
+  })
+  const afterNewlines = {
+    message: textarea.value,
+    starts: start.mock.calls.length,
+  }
+  await act(async () => {
+    await userEvent.keyboard('{Enter}')
+  })
+
+  const snapshot = () => ({
+    afterNewlines,
+    starts: start.mock.calls.map(([onLaunched]) => typeof onLaunched),
+  })
+  expect(snapshot()).toEqual({
+    afterNewlines: { message: '\n\n', starts: 0 },
+    starts: ['function'],
+  })
+})
+
+it('keeps Enter as a newline in the mobile first message', async () => {
+  const start = vi.fn<NewSessionState['start']>(() => Promise.resolve())
+  root = createRoot(container)
+  act(() => root?.render(<StatefulKeyboardForm isMobile start={start} />))
+  const textarea = container.querySelector<HTMLTextAreaElement>(
+    '[aria-label="First message"]',
+  )
+  if (textarea === null) throw new Error('First message field was not rendered')
+  await act(async () => {
+    textarea.focus()
+    await userEvent.keyboard('{Enter}')
+  })
+
+  const snapshot = () => ({
+    message: textarea.value,
+    starts: start.mock.calls,
+  })
+  expect(snapshot()).toEqual({ message: '\n', starts: [] })
 })
 
 it('opens directory suggestions and selects the clicked directory', async () => {

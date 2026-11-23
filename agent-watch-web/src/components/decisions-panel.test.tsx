@@ -292,7 +292,8 @@ it('shows the phone hint and reviewed decisions for the phone status panel', () 
     jumpHint: 'Tap a decision to jump to it in the conversation.',
     jumpHintDisplay: 'block',
     hintInFooter: true,
-    keyboardHint: 'Y OK and next · C Change · ↵ Jump to it in the conversation',
+    keyboardHint:
+      'Y OK and next · ⇧C Change · ↵ Jump to it in the conversation',
     keyboardHintDisplay: 'none',
   })
 })
@@ -334,7 +335,8 @@ it('shows desktop shortcuts while keeping reviewed decisions in the list', () =>
     reviewedCount: 2,
     jumpHintDisplay: 'none',
     shortcutsDisplay: 'flex',
-    keyboardHint: 'Y OK and next · C Change · ↵ Jump to it in the conversation',
+    keyboardHint:
+      'Y OK and next · ⇧C Change · ↵ Jump to it in the conversation',
     keyboardHintDisplay: 'block',
   })
 })
@@ -425,23 +427,44 @@ it('does not use Y while a text field is focused', () => {
   textarea.remove()
 })
 
-it('uses C to open and focus the change comment field', () => {
+it('uses Shift+C to open and focus the change comment field', () => {
   renderPanel()
   const cardButton = document.createElement('button')
   document.body.append(cardButton)
   cardButton.focus()
+  let bareCEvent: KeyboardEvent | null = null
 
   act(() => {
+    bareCEvent = new KeyboardEvent('keydown', {
+      key: 'c',
+      bubbles: true,
+      cancelable: true,
+    })
+    cardButton.dispatchEvent(bareCEvent)
+  })
+  const fieldAfterBareC =
+    container.querySelector<HTMLTextAreaElement>('textarea')?.id ?? null
+  act(() => {
+    cardButton.focus()
     cardButton.dispatchEvent(
-      new KeyboardEvent('keydown', { key: 'c', bubbles: true }),
+      new KeyboardEvent('keydown', {
+        key: 'C',
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
     )
   })
 
   const snapshot = () => ({
+    fieldAfterBareC,
+    bareCPrevented: bareCEvent?.defaultPrevented,
     field: container.querySelector<HTMLTextAreaElement>('textarea')?.id,
     focused: document.activeElement?.id,
   })
   expect(snapshot()).toEqual({
+    fieldAfterBareC: null,
+    bareCPrevented: false,
     field: 'decision-change-1',
     focused: 'decision-change-1',
   })

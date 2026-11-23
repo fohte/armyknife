@@ -292,6 +292,9 @@ function AppContent() {
     toggleInbox,
     toggleStatusPanel,
     focusComposer,
+    openNewSession: () => {
+      if (newSessionMode === null) openNewSession('palette')
+    },
   })
 
   const laterSession = sessionsWithElapsedTime.find(
