@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.870](https://github.com/fohte/armyknife/compare/v0.1.869...v0.1.870) (2026-11-23)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** prevent scroll on selection ([#2134](https://github.com/fohte/armyknife/issues/2134)) ([a5956c2](https://github.com/fohte/armyknife/commit/a5956c27a11d1f912ba28f8f1e8c66a72ad6393e))
+
 ## [0.1.869](https://github.com/fohte/armyknife/compare/v0.1.868...v0.1.869) (2026-11-23)
 
 
