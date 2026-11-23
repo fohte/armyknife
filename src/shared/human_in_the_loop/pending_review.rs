@@ -123,7 +123,7 @@ pub(crate) struct ReviewDocumentMarker {
     pub(crate) started_at: u128,
 }
 
-/// Returns the document metadata stored with an active review marker.
+/// Returns document metadata for a recognized review marker, including legacy formats.
 pub(crate) fn review_document_marker(review_id: &str) -> Option<ReviewDocumentMarker> {
     review_document_marker_with(review_id, crate::infra::process::process_start_time_matches)
 }
@@ -135,6 +135,7 @@ fn review_document_marker_with(
     let (id, metadata) = review_id.split_once('\0')?;
     let mut fields = metadata.split('\0');
     let first = fields.next()?;
+    // A lockless legacy marker may still be queued; old formats do not record process identity.
     let (started_at, path, queue_key) = if first == "v3" {
         let started_at = fields.next().and_then(|value| value.parse::<u128>().ok())?;
         let path = fields.next()?;
@@ -174,7 +175,7 @@ pub(crate) fn is_active_pr_draft_review_marker(review_id: &str) -> bool {
         }
 }
 
-/// Returns the document path stored with an active review marker.
+/// Returns the document path stored in a recognized review marker.
 pub(crate) fn review_document_path(review_id: &str) -> Option<PathBuf> {
     review_document_marker(review_id).map(|marker| marker.path)
 }
@@ -503,9 +504,6 @@ mod tests {
         #[case] review_id: &str,
         #[case] expected: ReviewDocumentMarker,
     ) {
-        assert_eq!(
-            review_document_marker_with(review_id, |_, _| false),
-            Some(expected)
-        );
+        assert_eq!(review_document_marker(review_id), Some(expected));
     }
 }
