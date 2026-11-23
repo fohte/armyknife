@@ -38,8 +38,10 @@ function EditorDocumentView({ session }: { session: Session }) {
   return (
     <output>
       {document === null
-        ? 'No editor document'
-        : `${document.kind} #${String(document.target.issueNumber)}`}
+        ? 'Loading editor document'
+        : document.status === 'unavailable'
+          ? 'Draft details are unavailable'
+          : `${document.summary.kind} #${String(document.summary.target.issueNumber)}`}
     </output>
   )
 }
@@ -92,5 +94,32 @@ it('loads the summary for the editor document from the session endpoint', async 
   expect(snapshot()).toEqual({
     request: ['/api/sessions/fixture-session/review-documents'],
     document: 'issue_comment #1234',
+  })
+})
+
+it('shows when the editor document details could not be loaded', async () => {
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValue(
+      new Response('temporary server failure', { status: 500 }),
+    )
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+
+  act(() => root?.render(<EditorDocumentView session={session} />))
+  await act(async () => {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      if (container.textContent === 'Draft details are unavailable') return
+      await new Promise((resolve) => window.setTimeout(resolve, 0))
+    }
+  })
+
+  const snapshot = () => ({
+    request: fetcher.mock.calls.map(([input]) => requestUrl(input)),
+    document: container.textContent,
+  })
+  expect(snapshot()).toEqual({
+    request: ['/api/sessions/fixture-session/review-documents'],
+    document: 'Draft details are unavailable',
   })
 })

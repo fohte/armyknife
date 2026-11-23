@@ -1,10 +1,13 @@
 import { expect, it } from 'vitest'
 
-import type { ReviewDocumentSummary } from '#components/conversation-pane-response'
 import {
   type ConversationStatusBandState,
   getConversationStatusBandState,
 } from '#components/conversation-status-band-state'
+import type {
+  EditorReviewDocumentState,
+  ReviewDocumentSummary,
+} from '#components/review-document-summary'
 import type { BackgroundTask, ChatItem, Session } from '#types'
 
 const session: Session = {
@@ -52,11 +55,23 @@ const question: ChatItem = {
   ],
 }
 
+const permission: ChatItem = {
+  type: 'permission',
+  requestId: 'fixture-permission-request',
+  tool: 'exec',
+  description: 'Run the sample check',
+  command: 'cargo test --package sample',
+}
+
 const editorIssueComment: ReviewDocumentSummary = {
   id: 'fixture-review-document',
   kind: 'issue_comment',
   target: { issueNumber: 1234 },
   isEditor: true,
+}
+const editorIssueCommentState: EditorReviewDocumentState = {
+  status: 'ready',
+  summary: editorIssueComment,
 }
 
 type StatusCase = {
@@ -65,7 +80,7 @@ type StatusCase = {
     session: Session
     messages?: readonly ChatItem[]
     backgroundTasks?: readonly BackgroundTask[]
-    editorReviewDocument?: ReviewDocumentSummary | null
+    editorReviewDocument?: EditorReviewDocumentState | null
   }
   expected: ConversationStatusBandState | null
 }
@@ -145,7 +160,7 @@ const statusCases: StatusCase[] = [
         reviewDocumentId: editorIssueComment.id,
         reviewDocumentCount: 1,
       },
-      editorReviewDocument: editorIssueComment,
+      editorReviewDocument: editorIssueCommentState,
     },
     expected: {
       kind: 'draft-review',
@@ -166,12 +181,27 @@ const statusCases: StatusCase[] = [
         reviewDocumentId: editorIssueComment.id,
         reviewDocumentCount: 4,
       },
-      editorReviewDocument: editorIssueComment,
+      editorReviewDocument: editorIssueCommentState,
     },
     expected: {
       kind: 'draft-review',
       detail:
         '4 drafts · Issue comment #1234 is in the editor · crit · PR #742',
+    },
+  },
+  {
+    name: 'draft details unavailable',
+    input: {
+      session: {
+        ...session,
+        reviewDocumentId: editorIssueComment.id,
+        reviewDocumentCount: 1,
+      },
+      editorReviewDocument: { status: 'unavailable' },
+    },
+    expected: {
+      kind: 'draft-review',
+      detail: '1 draft · Draft details are unavailable',
     },
   },
   {
@@ -265,18 +295,44 @@ const statusCases: StatusCase[] = [
     },
   },
   {
+    name: 'question with a draft',
+    input: {
+      session: {
+        ...session,
+        category: 'needs_action',
+        kind: 'Question',
+        reviewDocumentId: editorIssueComment.id,
+        reviewDocumentCount: 1,
+      },
+      messages: [question],
+    },
+    expected: {
+      kind: 'question',
+      detail: 'Which retry interval should be used?',
+    },
+  },
+  {
     name: 'permission',
     input: {
       session: { ...session, category: 'needs_action', kind: 'Approve' },
-      messages: [
-        {
-          type: 'permission',
-          requestId: 'fixture-permission-request',
-          tool: 'exec',
-          description: 'Run the sample check',
-          command: 'cargo test --package sample',
-        } satisfies ChatItem,
-      ],
+      messages: [permission],
+    },
+    expected: {
+      kind: 'permission',
+      detail: 'Bash  cargo test --package sample',
+    },
+  },
+  {
+    name: 'permission with a draft',
+    input: {
+      session: {
+        ...session,
+        category: 'needs_action',
+        kind: 'Approve',
+        reviewDocumentId: editorIssueComment.id,
+        reviewDocumentCount: 1,
+      },
+      messages: [permission],
     },
     expected: {
       kind: 'permission',

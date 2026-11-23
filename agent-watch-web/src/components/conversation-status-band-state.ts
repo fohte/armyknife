@@ -1,5 +1,8 @@
 import { getPendingCritReviewUrl } from '#components/conversation-crit-url'
-import type { ReviewDocumentSummary } from '#components/conversation-pane-response'
+import type {
+  EditorReviewDocumentState,
+  ReviewDocumentSummary,
+} from '#components/review-document-summary'
 import type { BackgroundTask, ChatItem, Session } from '#types'
 
 export type ConversationStatusBandState = {
@@ -78,7 +81,7 @@ export function getConversationStatusBandState({
   session: Session
   messages: readonly ChatItem[]
   backgroundTasks: readonly BackgroundTask[]
-  editorReviewDocument?: ReviewDocumentSummary | null
+  editorReviewDocument?: EditorReviewDocumentState | null
 }): ConversationStatusBandState | null {
   const isCompacting = session.isCompacting === true
   const isWaitingForBackgroundTasks = session.waitingForBackgroundTasks === true
@@ -93,20 +96,6 @@ export function getConversationStatusBandState({
   if (isCompacting) {
     return { kind: 'compacting', detail: null }
   }
-  if (session.reviewDocumentId != null) {
-    const documentCount = Math.max(1, session.reviewDocumentCount ?? 1)
-    const draftLabel = `${String(documentCount)} ${documentCount === 1 ? 'draft' : 'drafts'}`
-    const editorDetail = `${editorDocumentDetail(editorReviewDocument)} is in the editor`
-    const critDetail =
-      isWaitingForUser && getPendingCritReviewUrl(session) !== null
-        ? ` · ${critReviewDetail(session)}`
-        : ''
-    return {
-      kind: 'draft-review',
-      detail: `${draftLabel} · ${editorDetail}${critDetail}`,
-    }
-  }
-  if (isWorking) return { kind: 'working', detail: null }
   if (isWaitingForUser) {
     const question = pendingQuestion(messages)
     if (question?.type === 'question') {
@@ -124,6 +113,29 @@ export function getConversationStatusBandState({
         detail: `${permission.tool.toLowerCase() === 'exec' ? 'Bash' : permission.tool}  ${permission.command ?? permission.description}`,
       }
     }
+  }
+  if (session.reviewDocumentId != null) {
+    const documentCount = Math.max(1, session.reviewDocumentCount ?? 1)
+    const draftLabel = `${String(documentCount)} ${documentCount === 1 ? 'draft' : 'drafts'}`
+    const editorDetail =
+      editorReviewDocument?.status === 'unavailable'
+        ? 'Draft details are unavailable'
+        : `${editorDocumentDetail(
+            editorReviewDocument?.status === 'ready'
+              ? editorReviewDocument.summary
+              : null,
+          )} is in the editor`
+    const critDetail =
+      isWaitingForUser && getPendingCritReviewUrl(session) !== null
+        ? ` · ${critReviewDetail(session)}`
+        : ''
+    return {
+      kind: 'draft-review',
+      detail: `${draftLabel} · ${editorDetail}${critDetail}`,
+    }
+  }
+  if (isWorking) return { kind: 'working', detail: null }
+  if (isWaitingForUser) {
     if (getPendingCritReviewUrl(session) !== null) {
       return {
         kind: 'crit-review',

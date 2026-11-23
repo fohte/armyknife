@@ -1,16 +1,16 @@
 import { useEffect, useState } from 'react'
 
-import {
-  isReviewDocumentSummaryList,
-  type ReviewDocumentSummary,
-} from '#components/conversation-pane-response'
 import { requestJson } from '#components/conversation-requests'
+import {
+  type EditorReviewDocumentState,
+  isReviewDocumentSummaryList,
+} from '#components/review-document-summary'
 import type { Session } from '#types'
 
 type EditorReviewDocument = {
   sessionId: string
   id: string
-  summary: ReviewDocumentSummary | null
+  state: EditorReviewDocumentState
 }
 
 export function useEditorReviewDocument(session: Session) {
@@ -32,14 +32,16 @@ export function useEditorReviewDocument(session: Session) {
     ).match(
       (documents) => {
         if (current) {
+          const summary = documents.find(
+            (document) => document.id === reviewDocumentId && document.isEditor,
+          )
           setEditorDocument({
             sessionId: session.id,
             id: reviewDocumentId,
-            summary:
-              documents.find(
-                (document) =>
-                  document.id === reviewDocumentId && document.isEditor,
-              ) ?? null,
+            state:
+              summary === undefined
+                ? { status: 'unavailable' }
+                : { status: 'ready', summary },
           })
         }
       },
@@ -48,7 +50,7 @@ export function useEditorReviewDocument(session: Session) {
           setEditorDocument({
             sessionId: session.id,
             id: reviewDocumentId,
-            summary: null,
+            state: { status: 'unavailable' },
           })
         }
       },
@@ -60,6 +62,6 @@ export function useEditorReviewDocument(session: Session) {
 
   return editorDocument?.sessionId === session.id &&
     editorDocument.id === reviewDocumentId
-    ? editorDocument.summary
+    ? editorDocument.state
     : null
 }
