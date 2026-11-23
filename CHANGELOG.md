@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.875](https://github.com/fohte/armyknife/compare/v0.1.874...v0.1.875) (2026-11-23)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** order merge results in chat ([#2141](https://github.com/fohte/armyknife/issues/2141)) ([aeefb44](https://github.com/fohte/armyknife/commit/aeefb44c6a4b192608f9e7cef9b55619ed73ddab))
+
 ## [0.1.874](https://github.com/fohte/armyknife/compare/v0.1.873...v0.1.874) (2026-11-23)
 
 
