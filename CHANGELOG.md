@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.871](https://github.com/fohte/armyknife/compare/v0.1.870...v0.1.871) (2026-11-23)
+
+
+### Features
+
+* **agent-watch-web:** add keyboard controls ([#2129](https://github.com/fohte/armyknife/issues/2129)) ([6ec44d4](https://github.com/fohte/armyknife/commit/6ec44d400e40b26bb9791ba500bdb4a08078d568))
+
 ## [0.1.870](https://github.com/fohte/armyknife/compare/v0.1.869...v0.1.870) (2026-11-23)
 
 
