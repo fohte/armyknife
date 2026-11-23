@@ -1,7 +1,7 @@
 use serde_json::Value;
 
 use crate::commands::agent::peer_message::{
-    ExtractedPeerMessage, extract_peer_message, task_notification_envelope,
+    ExtractedPeerMessage, extract_peer_message, task_notification_envelope, without_session_context,
 };
 
 use super::super::action_event;
@@ -66,9 +66,9 @@ pub(super) fn classify_inbound(
         == Some("human")
     {
         return match marked_user_body(text, user_marker) {
-            Some(body) => marked_user_message_body(body),
+            Some(body) => marked_user_message_body(without_session_context(&body)),
             None => MessageKind::User {
-                text: text.to_owned(),
+                text: without_session_context(text),
             },
         };
     }
@@ -405,6 +405,28 @@ mod tests {
 
     #[rstest]
     #[case::human_user(json!({"type":"user","origin":{"kind":"human"}}), "Please continue.", Some("fixture-marker"), MessageKind::User { text: "Please continue.".to_owned() })]
+    #[case::human_session_context_is_hidden_and_prompt_text_remains(
+        json!({"type":"user","origin":{"kind":"human"}}),
+        indoc! {"
+            Please inspect this fictional issue.
+
+            <session-context>
+            - Working directory: /fictional/project
+            - Parent working directory: /fictional
+            </session-context>
+
+            Keep this follow-up sentence.
+        "},
+        None,
+        MessageKind::User {
+            text: indoc! {"
+                Please inspect this fictional issue.
+
+                Keep this follow-up sentence.
+            "}
+            .to_owned(),
+        },
+    )]
     #[case::human_vibe_notice_is_an_event(
         json!({"type":"user","origin":{"kind":"human"}}),
         indoc! {"
