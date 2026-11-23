@@ -4,6 +4,7 @@ import type { ComponentType } from 'react'
 import type { Decision } from '#components/decision-card'
 import { DecisionsPanel } from '#components/decisions-panel'
 import { ReviewDocumentPanel } from '#components/review-document-panel'
+import type { ReviewDocumentSummary } from '#components/review-document-summary'
 import { BackgroundTaskRowView } from '#components/running-task-row-view'
 import { RunningTasksPanelView } from '#components/running-tasks-panel-view'
 import { SessionStatusPanel } from '#components/session-status-panel'
@@ -18,6 +19,33 @@ import type {
 } from '#types'
 
 const phoneStatusTimeReference = Date.now()
+
+const statusPrDraft: ReviewDocumentSummary = {
+  id: 'fixture-pr-draft',
+  kind: 'pr_draft',
+  target: { repository: 'example/service', branch: 'retry-policy' },
+  isEditor: true,
+  canSave: true,
+  canFinish: true,
+}
+
+const statusWaitingIssue: ReviewDocumentSummary = {
+  id: 'fixture-issue-comment',
+  kind: 'issue_comment',
+  target: { issueNumber: 28, title: 'Improve retries' },
+  isEditor: false,
+  canSave: false,
+  canFinish: false,
+}
+
+const statusWaitingReplies: ReviewDocumentSummary = {
+  id: 'fixture-review-replies',
+  kind: 'review_replies',
+  target: { pullRequestNumber: 15, threadCount: 2 },
+  isEditor: false,
+  canSave: false,
+  canFinish: false,
+}
 
 const defaultStatusViewport = (Story: ComponentType) => (
   <div style={{ width: '420px', height: '600px', display: 'flex' }}>
@@ -63,27 +91,8 @@ export const ReviewDocumentIsActive: Story = {
         showCount: true,
         content: (
           <ReviewDocumentPanel
-            summary={{
-              id: 'fixture-pr-draft',
-              kind: 'pr_draft',
-              target: { repository: 'example/service', branch: 'retry-policy' },
-              isEditor: true,
-              canSave: true,
-              canFinish: true,
-            }}
-            summaries={[
-              {
-                id: 'fixture-pr-draft',
-                kind: 'pr_draft',
-                target: {
-                  repository: 'example/service',
-                  branch: 'retry-policy',
-                },
-                isEditor: true,
-                canSave: true,
-                canFinish: true,
-              },
-            ]}
+            summary={statusPrDraft}
+            summaries={[statusPrDraft]}
             frontmatter={{
               title: 'Review the retry policy',
               enabled: true,
@@ -112,42 +121,11 @@ export const ReviewFillsTheDesktopViewport: Story = {
         showCount: true,
         content: (
           <ReviewDocumentPanel
-            summary={{
-              id: 'fixture-pr-draft',
-              kind: 'pr_draft',
-              target: { repository: 'example/service', branch: 'retry-policy' },
-              isEditor: true,
-              canSave: true,
-              canFinish: true,
-            }}
+            summary={statusPrDraft}
             summaries={[
-              {
-                id: 'fixture-pr-draft',
-                kind: 'pr_draft',
-                target: {
-                  repository: 'example/service',
-                  branch: 'retry-policy',
-                },
-                isEditor: true,
-                canSave: true,
-                canFinish: true,
-              },
-              {
-                id: 'fixture-issue-comment',
-                kind: 'issue_comment',
-                target: { issueNumber: 28, title: 'Improve retries' },
-                isEditor: false,
-                canSave: false,
-                canFinish: false,
-              },
-              {
-                id: 'fixture-review-replies',
-                kind: 'review_replies',
-                target: { pullRequestNumber: 15, threadCount: 2 },
-                isEditor: false,
-                canSave: false,
-                canFinish: false,
-              },
+              statusPrDraft,
+              statusWaitingIssue,
+              statusWaitingReplies,
             ]}
             frontmatter={{ title: 'Improve retry handling' }}
             body={'## Summary\n\nRetry temporary failures safely.'}

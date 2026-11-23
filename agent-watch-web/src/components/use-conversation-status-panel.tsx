@@ -3,6 +3,7 @@ import {
   type SetStateAction,
   useCallback,
   useEffect,
+  useRef,
   useState,
 } from 'react'
 
@@ -15,7 +16,7 @@ import { requestJson } from '#components/conversation-requests'
 import type { Decision } from '#components/decision-card'
 import { DecisionsPanel } from '#components/decisions-panel'
 import { ReviewDocumentPanel } from '#components/review-document-panel'
-import type { ReviewDocumentSummary } from '#components/review-document-summary'
+import type { ReviewDocumentSummariesState } from '#components/review-document-summary'
 import { RunningTasksPanel } from '#components/running-tasks-panel'
 import type { SessionStatusPanelTab } from '#components/session-status-panel'
 import { SessionTasksPanel } from '#components/session-tasks-panel'
@@ -35,7 +36,8 @@ import type { BackgroundTask, ChatItem, Session, SessionTreeNode } from '#types'
 
 type UseConversationStatusPanelOptions = {
   session: Session
-  reviewDocumentSummaries?: readonly ReviewDocumentSummary[] | null
+  reviewDocumentSummaries?: ReviewDocumentSummariesState | null
+  onRetryReviewDocumentSummaries?: () => void
   messages: readonly ChatItem[]
   allDecisions?: readonly Decision[]
   backgroundTasks: readonly BackgroundTask[]
@@ -172,6 +174,7 @@ export function useConversationStatusPanel({
   onAction,
   onCloseStatusPanel,
   reviewDocumentSummaries = null,
+  onRetryReviewDocumentSummaries,
 }: UseConversationStatusPanelOptions) {
   const { run } = useSessionOperations()
   const [activePanelTabId, setActivePanelTabId] = useState<string | null>(null)
@@ -188,12 +191,19 @@ export function useConversationStatusPanel({
   }, [isMobile, onCloseStatusPanel, onDecisionJumpComplete])
   const [reviewDocumentStates, setReviewDocumentStates] =
     useState<ReviewDocumentStates>({})
+  const [reviewDocumentRetryCounts, setReviewDocumentRetryCounts] = useState<
+    Record<string, number>
+  >({})
+  const requestedReviewDocuments = useRef(new Set<string>())
   const [selectedReviewDocumentId, setSelectedReviewDocumentId] = useState<
     string | null
   >(null)
   const [isReviewExpanded, setReviewExpanded] = useState(false)
   const reviewDocumentId = session.reviewDocumentId
-  const reviewDocuments = reviewDocumentSummaries ?? []
+  const reviewDocuments =
+    reviewDocumentSummaries?.status === 'ready'
+      ? reviewDocumentSummaries.summaries
+      : []
   const selectedSummary =
     reviewDocuments.find(
       (summary) => summary.id === selectedReviewDocumentId,
@@ -210,6 +220,10 @@ export function useConversationStatusPanel({
     selectedDocumentId === null
       ? null
       : (reviewDocumentStates[selectedDocumentId] ?? null)
+  const reviewDocumentRetryCount =
+    selectedDocumentId === null
+      ? 0
+      : (reviewDocumentRetryCounts[selectedDocumentId] ?? 0)
   const decisions =
     allDecisions ??
     messages.filter(
@@ -284,10 +298,11 @@ export function useConversationStatusPanel({
     if (!statusPanelOpen || activeTabId !== 'review-document') {
       return
     }
-    const currentReviewDocument = reviewDocumentStates[selectedDocumentId]
-    if (currentReviewDocument?.sessionId === session.id) {
+    const requestKey = `${session.id}:${selectedDocumentId}:${String(reviewDocumentRetryCount)}`
+    if (requestedReviewDocuments.current.has(requestKey)) {
       return
     }
+    requestedReviewDocuments.current.add(requestKey)
     setReviewDocumentStates((states) => ({
       ...states,
       [selectedDocumentId]: {
@@ -345,8 +360,24 @@ export function useConversationStatusPanel({
     session.id,
     selectedDocumentId,
     statusPanelOpen,
-    reviewDocumentStates,
+    reviewDocumentRetryCount,
   ])
+  const retrySelectedReviewDocument = () => {
+    if (selectedDocumentId === null) return
+    setReviewDocumentStates((states) => {
+      const state = states[selectedDocumentId]
+      return state === undefined
+        ? states
+        : {
+            ...states,
+            [selectedDocumentId]: { ...state, error: null, loading: true },
+          }
+    })
+    setReviewDocumentRetryCounts((counts) => ({
+      ...counts,
+      [selectedDocumentId]: (counts[selectedDocumentId] ?? 0) + 1,
+    }))
+  }
   const updateSelectedReviewDocument = (
     update: (state: ReviewDocumentState) => ReviewDocumentState,
   ) => {
@@ -444,11 +475,25 @@ export function useConversationStatusPanel({
             showCount: true,
             content:
               selectedSummary === null ? (
-                <div className="session-tree-feedback" role="status">
-                  {reviewDocumentSummaries === null
-                    ? 'Loading drafts…'
-                    : 'No open drafts.'}
-                </div>
+                reviewDocumentSummaries?.status === 'unavailable' ? (
+                  <div className="session-tree-feedback" role="alert">
+                    Could not load open drafts: {reviewDocumentSummaries.error}
+                    {onRetryReviewDocumentSummaries === undefined ? null : (
+                      <button
+                        type="button"
+                        onClick={onRetryReviewDocumentSummaries}
+                      >
+                        Retry drafts
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <div className="session-tree-feedback" role="status">
+                    {reviewDocumentSummaries === null
+                      ? 'Loading drafts…'
+                      : 'No open drafts.'}
+                  </div>
+                )
               ) : reviewDocumentState === null ||
                 reviewDocumentState.sessionId !== session.id ||
                 reviewDocumentState.loading ? (
@@ -458,6 +503,9 @@ export function useConversationStatusPanel({
               ) : reviewDocumentState.error !== null ? (
                 <div className="session-tree-feedback" role="alert">
                   Could not load the draft: {reviewDocumentState.error}
+                  <button type="button" onClick={retrySelectedReviewDocument}>
+                    Retry draft
+                  </button>
                 </div>
               ) : reviewDocumentState.document === null ? null : (
                 <ReviewDocumentPanel

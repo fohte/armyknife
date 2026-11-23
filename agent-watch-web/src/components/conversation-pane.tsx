@@ -375,6 +375,11 @@ export function ConversationPane({
   } = useConversationStatusPanel({
     session,
     reviewDocumentSummaries: editorReviewDocument?.summaries ?? null,
+    ...(editorReviewDocument?.retrySummaries === undefined
+      ? {}
+      : {
+          onRetryReviewDocumentSummaries: editorReviewDocument.retrySummaries,
+        }),
     messages,
     allDecisions: displayedConversation.decisions,
     backgroundTasks: displayBackgroundTasks,

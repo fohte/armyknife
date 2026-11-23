@@ -35,11 +35,15 @@ function StatusPanelHarness({
   currentSession,
   statusPanelOpen = false,
   reviewDocumentSummaries,
+  reviewDocumentError,
+  onRetryReviewDocumentSummaries,
   isMobile = false,
 }: {
   currentSession: Session
   statusPanelOpen?: boolean
-  reviewDocumentSummaries?: readonly ReviewDocumentSummary[]
+  reviewDocumentSummaries?: ReviewDocumentSummary[]
+  reviewDocumentError?: string
+  onRetryReviewDocumentSummaries?: () => void
   isMobile?: boolean
 }) {
   const summaries =
@@ -58,7 +62,13 @@ function StatusPanelHarness({
         ])
   const panel = useConversationStatusPanel({
     session: currentSession,
-    reviewDocumentSummaries: summaries,
+    reviewDocumentSummaries:
+      reviewDocumentError === undefined
+        ? { status: 'ready', summaries }
+        : { status: 'unavailable', error: reviewDocumentError },
+    ...(onRetryReviewDocumentSummaries === undefined
+      ? {}
+      : { onRetryReviewDocumentSummaries }),
     messages: [],
     backgroundTasks: [],
     statusPanelOpen,
@@ -543,16 +553,19 @@ it('preserves unsaved review edits when a preview link opens a web UI', async ()
         reviewDocumentId: 'fixture-review-a',
         webUis: [webUi],
       },
-      reviewDocumentSummaries: [
-        {
-          id: 'fixture-review-a',
-          kind: 'draft',
-          target: {},
-          isEditor: true,
-          canSave: true,
-          canFinish: true,
-        },
-      ],
+      reviewDocumentSummaries: {
+        status: 'ready',
+        summaries: [
+          {
+            id: 'fixture-review-a',
+            kind: 'draft',
+            target: {},
+            isEditor: true,
+            canSave: true,
+            canFinish: true,
+          },
+        ],
+      },
       messages: [],
       backgroundTasks: [],
       statusPanelOpen: true,
@@ -909,15 +922,26 @@ it('refetches the review document when its active ID changes', async () => {
   })
 })
 
-it('shows an alert when the review document request fails', async () => {
-  const fetcher = vi.fn<typeof fetch>(() =>
-    Promise.resolve(
+it('retries loading a draft after the request fails', async () => {
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(
       new Response(JSON.stringify({ error: 'Fixture request failed' }), {
         status: 500,
         headers: { 'Content-Type': 'application/json' },
       }),
-    ),
-  )
+    )
+    .mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          id: 'fixture-review-a',
+          revision: 'fixture-revision',
+          frontmatter: { title: 'Recovered fixture' },
+          body: 'Recovered draft body',
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    )
   vi.stubGlobal('fetch', fetcher)
 
   act(() => {
@@ -929,16 +953,65 @@ it('shows an alert when the review document request fails', async () => {
     )
   })
   await waitForState(() => container.querySelector('[role="alert"]') !== null)
+  await act(async () => {
+    await page.getByRole('button', { name: 'Retry draft' }).click()
+  })
+  await waitForState(
+    () =>
+      container.querySelector('.review-document-body')?.textContent ===
+      'Recovered draft body',
+  )
 
   const result = () => ({
     requests: fetcher.mock.calls.map(([input]) => requestUrl(input)),
-    alert: container.querySelector('[role="alert"]')?.textContent,
+    alert: container.querySelector('[role="alert"]')?.textContent ?? null,
+    title: container.querySelector<HTMLInputElement>(
+      '.review-document-frontmatter input[type="text"]',
+    )?.value,
+    body: container.querySelector('.review-document-body')?.textContent,
   })
   expect(result()).toEqual({
     requests: [
       '/api/sessions/fixture-session/review-documents/fixture-review-a',
+      '/api/sessions/fixture-session/review-documents/fixture-review-a',
     ],
-    alert: 'Could not load the draft: Fixture request failed',
+    alert: null,
+    title: 'Recovered fixture',
+    body: 'Recovered draft body',
+  })
+})
+
+it('offers to retry when the open draft list cannot be loaded', async () => {
+  const onRetryReviewDocumentSummaries = vi.fn()
+  root = createRoot(container)
+
+  act(() => {
+    root?.render(
+      <StatusPanelHarness
+        currentSession={{
+          ...session,
+          reviewDocumentId: null,
+          reviewDocumentCount: 1,
+        }}
+        reviewDocumentError="Fixture list failure"
+        onRetryReviewDocumentSummaries={onRetryReviewDocumentSummaries}
+        statusPanelOpen
+      />,
+    )
+  })
+  await waitForState(() => container.querySelector('[role="alert"]') !== null)
+
+  await act(async () => {
+    await page.getByRole('button', { name: 'Retry drafts' }).click()
+  })
+
+  const retryResult = () => ({
+    alert: container.querySelector('[role="alert"]')?.textContent,
+    retryCalls: onRetryReviewDocumentSummaries.mock.calls.length,
+  })
+  expect(retryResult()).toEqual({
+    alert: 'Could not load open drafts: Fixture list failureRetry drafts',
+    retryCalls: 1,
   })
 })
 

@@ -235,6 +235,107 @@ it('shows the only open draft in the draft tab row', () => {
   })
 })
 
+it('keeps a queued draft readable while disabling editing and review actions', async () => {
+  await page.viewport(390, 844)
+  const summary = {
+    id: 'fixture-queued-draft',
+    kind: 'draft' as const,
+    target: {},
+    isEditor: false,
+    canSave: false,
+    canFinish: false,
+  }
+  const onSave = vi.fn()
+  const onFinish = vi.fn()
+  function QueuedDraftHarness() {
+    const [view, setView] = useState<'edit' | 'preview'>('preview')
+    return (
+      <ReviewDocumentPanel
+        summary={summary}
+        summaries={[summary]}
+        canSave={false}
+        canFinish={false}
+        frontmatter={{ title: 'Queued title', enabled: true }}
+        body="Queued draft body."
+        view={view}
+        onViewChange={setView}
+        onSave={onSave}
+        onFinish={onFinish}
+      />
+    )
+  }
+
+  root = createRoot(container)
+  act(() => root?.render(<QueuedDraftHarness />))
+  const preview = {
+    metadataInputsDisabled: Array.from(
+      container.querySelectorAll<HTMLInputElement>(
+        '.review-document-frontmatter input',
+      ),
+      (input) => input.disabled,
+    ),
+    saveDisabled: container.querySelector<HTMLButtonElement>(
+      '.review-document-actions button:not(.review-document-finish)',
+    )?.disabled,
+    finishDisabled: container.querySelector<HTMLButtonElement>(
+      '.review-document-finish',
+    )?.disabled,
+    body: container.querySelector('.review-document-body')?.textContent,
+  }
+
+  await act(async () => {
+    await page.getByRole('button', { name: 'Edit' }).click()
+  })
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>(
+        '.review-document-actions button:not(.review-document-finish)',
+      )
+      ?.click()
+    container
+      .querySelector<HTMLButtonElement>('.review-document-finish')
+      ?.click()
+  })
+
+  const snapshot = () => ({
+    preview,
+    edit: {
+      view: container
+        .querySelector('.review-document-panel')
+        ?.getAttribute('data-view'),
+      bodyEditorDisabled:
+        container
+          .querySelector('.review-document-editor .cm-content')
+          ?.getAttribute('contenteditable') === 'false',
+      saveDisabled: container.querySelector<HTMLButtonElement>(
+        '.review-document-actions button:not(.review-document-finish)',
+      )?.disabled,
+      finishDisabled: container.querySelector<HTMLButtonElement>(
+        '.review-document-finish',
+      )?.disabled,
+    },
+    callbacks: {
+      save: onSave.mock.calls.length,
+      finish: onFinish.mock.calls.length,
+    },
+  })
+  expect(snapshot()).toEqual({
+    preview: {
+      metadataInputsDisabled: [true, true],
+      saveDisabled: true,
+      finishDisabled: true,
+      body: 'Queued draft body.',
+    },
+    edit: {
+      view: 'edit',
+      bodyEditorDisabled: true,
+      saveDisabled: true,
+      finishDisabled: true,
+    },
+    callbacks: { save: 0, finish: 0 },
+  })
+})
+
 it('keeps the mobile preview usable when metadata fills the viewport', async () => {
   await page.viewport(390, 844)
   container.style.width = '390px'

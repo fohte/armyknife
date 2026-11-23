@@ -20,7 +20,7 @@ export type EditorReviewDocumentState =
 
 export type ReviewDocumentSummariesState =
   | { status: 'ready'; summaries: ReviewDocumentSummary[] }
-  | { status: 'unavailable' }
+  | { status: 'unavailable'; error: string }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
