@@ -192,6 +192,29 @@ it('highlights a multiline Bash permission without overflowing its card', async 
   })
 })
 
+it('formats separators for display while retaining the original permission command', () => {
+  const originalCommand = `printf '%s\\n' "keep && quoted" && printf '%s\\n' ./sample/long/path | sed 's/path/file/'`
+  const message: Extract<ChatItem, { type: 'permission' }> = {
+    type: 'permission',
+    requestId: 'permission-request-example',
+    tool: 'Bash',
+    description: '',
+    command: originalCommand,
+  }
+  renderPermissionCard(message)
+
+  const snapshot = () => ({
+    displayedCommand: container.querySelector('.permission-command code')
+      ?.textContent,
+    messageCommand: message.command,
+  })
+
+  expect(snapshot()).toEqual({
+    displayedCommand: `printf '%s\\n' "keep && quoted" &&\n  printf '%s\\n' ./sample/long/path |\n  sed 's/path/file/'`,
+    messageCommand: originalCommand,
+  })
+})
+
 it('shows the description for a non-Bash permission', () => {
   const message: Extract<ChatItem, { type: 'permission' }> = {
     type: 'permission',

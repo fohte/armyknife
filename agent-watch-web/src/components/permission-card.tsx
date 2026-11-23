@@ -4,6 +4,7 @@ import '#components/permission-card.css'
 import { Button } from '@fohte/ui/button'
 
 import { OpenInTerminalAction } from '#components/open-in-terminal-action'
+import { formatPermissionCommand } from '#components/permission-command'
 import { SyntaxCodeBlock } from '#components/syntax-code-block'
 import { summarizeToolGroupItems, ToolSummary } from '#components/tool-summary'
 import type { ChatItem, OpenInTerminalStatus, SessionActions } from '#types'
@@ -67,6 +68,7 @@ export function PermissionCard({
         <SyntaxCodeBlock
           className="permission-command"
           code={message.command}
+          displayCode={formatPermissionCommand(message.command)}
           language="bash"
         />
       )}

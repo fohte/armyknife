@@ -146,6 +146,23 @@ git status --short`
   expect(snapshot()).toEqual({ code: command, hasColoredToken: true })
 })
 
+it('formats separators in a denied command without changing its source value', () => {
+  const command = `printf '%s\\n' "keep && quoted" && printf '%s\\n' ./sample/long/path | sed 's/path/file/'`
+  const message = { ...operation, command }
+  renderCard({ message })
+
+  const snapshot = () => ({
+    displayedCommand: container.querySelector('.permission-denied-input code')
+      ?.textContent,
+    messageCommand: message.command,
+  })
+
+  expect(snapshot()).toEqual({
+    displayedCommand: `printf '%s\\n' "keep && quoted" &&\n  printf '%s\\n' ./sample/long/path |\n  sed 's/path/file/'`,
+    messageCommand: command,
+  })
+})
+
 it('sends no retry action for denials without a classifier verdict', () => {
   renderCard({
     message: {

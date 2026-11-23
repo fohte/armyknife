@@ -8,14 +8,7 @@ const permission: ChatItem = {
   requestId: 'permission-request-example',
   tool: 'Bash',
   description: '',
-  command: `set -euo pipefail
-printf '%s\\n' 'Preparing preview'
-git add ./sample-config.yml && git commit -m "$(cat <<'EOF'
-chore: refresh sample config
-
-intent(sample): keep local settings in sync
-EOF
-)"`,
+  command: `printf '%s\\n' "Preparing preview with && kept inside quotes" && printf '%s\\n' ./sample/fixtures/generated/preview-output/long-path/example.json | sed 's/example/preview/' && printf '%s\\n' 'Preview completed'`,
 }
 
 const actions: SessionActions = {

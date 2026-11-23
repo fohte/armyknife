@@ -8,6 +8,7 @@ import { useCopyToClipboard } from '#components/use-copy-to-clipboard'
 
 type SyntaxCodeBlockProps = {
   code: string
+  displayCode?: string
   language: string
   className?: string
   children?: ReactNode
@@ -121,6 +122,7 @@ function renderHighlightedCode(
 
 export function SyntaxCodeBlock({
   code,
+  displayCode,
   language,
   className,
   children,
@@ -128,24 +130,26 @@ export function SyntaxCodeBlock({
   copyable = false,
 }: SyntaxCodeBlockProps) {
   const { status, copy } = useCopyToClipboard(code)
+  const visibleCode = displayCode ?? code
   const [highlightedCode, setHighlightedCode] =
     useState<HighlightedCode | null>(null)
   const highlighted =
-    highlightedCode?.code === code && highlightedCode.language === language
+    highlightedCode?.code === visibleCode &&
+    highlightedCode.language === language
       ? highlightedCode.result
       : null
   const highlightedContent =
     highlighted === null
       ? null
-      : renderHighlightedCode(code, highlighted, links)
+      : renderHighlightedCode(visibleCode, highlighted, links)
 
   useEffect(() => {
     let active = true
     void import('./syntax-highlighter')
-      .then(({ highlightCode }) => highlightCode(code, language))
+      .then(({ highlightCode }) => highlightCode(visibleCode, language))
       .then((result) => {
         if (active && result !== null) {
-          setHighlightedCode({ code, language, result })
+          setHighlightedCode({ code: visibleCode, language, result })
         }
       })
       .catch((error: unknown) => {
@@ -160,7 +164,7 @@ export function SyntaxCodeBlock({
     return () => {
       active = false
     }
-  }, [code, language])
+  }, [visibleCode, language])
 
   const pre = (
     <pre
@@ -168,7 +172,7 @@ export function SyntaxCodeBlock({
       data-language={language}
     >
       <code className={`language-${language}`}>
-        {highlightedContent ?? children ?? code}
+        {highlightedContent ?? children ?? visibleCode}
       </code>
     </pre>
   )
