@@ -379,11 +379,6 @@ fn ensure_watch_web_user_marker(
     Ok(())
 }
 
-fn is_watch_web_user_prompt(prompt: &str, marker: &str) -> bool {
-    super::peer_message::extract_peer_message(prompt, Some(marker))
-        .is_some_and(|message| message.has_user_marker)
-}
-
 fn startup_metadata_for_resume(sessions_dir: &Path, input: &HookInput) -> Result<Option<Session>> {
     if input.engine != Engine::Claude || input.source.as_deref() != Some("resume") {
         return Ok(None);
@@ -652,6 +647,9 @@ fn process_hook_event_impl_with_env_and_unreported_stop(
                     SessionStatus::Ended
                 },
             );
+            if env.session_has_initial_prompt == Some(true) {
+                session.last_prompted_at = Some(now);
+            }
             session.model = model;
             session.effort = effort;
             ensure_watch_web_user_marker(&session_lock, event, input.engine)?;
@@ -680,15 +678,6 @@ fn process_hook_event_impl_with_env_and_unreported_stop(
     }
 
     let tmux_info = tmux_info_from_pane(pane_info.as_ref(), side_effects)?;
-
-    let is_peer_prompt = super::peer_message::is_peer_message(input.prompt.as_deref());
-    let watch_web_user_marker =
-        if event == HookEvent::UserPromptSubmit && input.engine == Engine::Claude && is_peer_prompt
-        {
-            store::watch_web_user_marker_from(sessions_dir, &input.session_id)?
-        } else {
-            None
-        };
 
     let mut status = determine_status(event, &input);
     let may_contain_work_type = work_type::may_contain_work_type(event, &input);
@@ -744,17 +733,9 @@ fn process_hook_event_impl_with_env_and_unreported_stop(
         )
     });
     session.restore_from_archive();
-    let is_initial_watch_web_user_prompt = event == HookEvent::UserPromptSubmit
-        && session.launch_id.is_some()
-        && session.last_prompted_at.is_none()
-        && input
-            .prompt
-            .as_deref()
-            .zip(watch_web_user_marker.as_deref())
-            .is_some_and(|(prompt, marker)| is_watch_web_user_prompt(prompt, marker));
     if event == HookEvent::UserPromptSubmit
         && input.agent_id.is_none()
-        && (!is_peer_prompt || is_initial_watch_web_user_prompt)
+        && !super::peer_message::is_peer_message(input.prompt.as_deref())
         && !input
             .prompt
             .as_deref()
@@ -2206,11 +2187,10 @@ mod tests {
             .expect("session should load")
             .expect("session should exist");
         let mut actual = serde_json::to_value(session).expect("session should serialize");
-        actual["created_at"] = serde_json::json!("<timestamp>");
-        actual["updated_at"] = serde_json::json!("<timestamp>");
 
         let mut expected = create_test_session(None);
         expected.launch_id = Some("launch-fixture".to_string());
+        expected.last_prompted_at = (has_initial_prompt == Some(true)).then_some(Utc::now());
         expected.tmux_info = Some(TmuxInfo {
             session_name: "main".to_string(),
             window_name: "claude".to_string(),
@@ -2220,8 +2200,13 @@ mod tests {
         });
         expected.status = expected_status;
         let mut expected = serde_json::to_value(expected).expect("session should serialize");
-        expected["created_at"] = serde_json::json!("<timestamp>");
-        expected["updated_at"] = serde_json::json!("<timestamp>");
+        for snapshot in [&mut actual, &mut expected] {
+            snapshot["created_at"] = serde_json::json!("<timestamp>");
+            snapshot["updated_at"] = serde_json::json!("<timestamp>");
+            if !snapshot["last_prompted_at"].is_null() {
+                snapshot["last_prompted_at"] = serde_json::json!("<timestamp>");
+            }
+        }
 
         assert_eq!(
             (
@@ -5631,14 +5616,14 @@ mod tests {
         }
 
         #[test]
-        fn watch_web_peer_initial_prompt_is_recorded_as_human_input() {
+        fn watch_web_peer_initial_prompt_uses_launch_timestamp() {
             let temp_dir = create_temp_sessions_dir();
             let env = EnvVars {
                 session_launch_id: Some("launch-fixture".to_string()),
                 session_has_initial_prompt: Some(true),
                 ..EnvVars::default()
             };
-            process_hook_event_impl_with_env(
+            let startup_result = process_hook_event_impl_with_env(
                 HookEvent::SessionStart,
                 create_test_input_with_source(None, Some("startup")),
                 temp_dir.path(),
@@ -5647,6 +5632,10 @@ mod tests {
                 env,
             )
             .expect("watch-web session should start");
+            let startup_session = store::load_session_from(temp_dir.path(), "test-123")
+                .expect("session should load after startup")
+                .expect("session should exist after startup");
+            let launch_prompt_at = startup_session.last_prompted_at;
             let marker = store::watch_web_user_marker_from(temp_dir.path(), "test-123")
                 .expect("watch-web marker should load")
                 .expect("watch-web marker should exist");
@@ -5675,10 +5664,18 @@ mod tests {
             assert_eq!(
                 (
                     crate::commands::agent::peer_message::is_peer_message(Some(&prompt)),
+                    startup_result,
+                    launch_prompt_at == Some(startup_session.created_at),
                     result,
-                    session.last_prompted_at == Some(session.updated_at),
+                    session.last_prompted_at == launch_prompt_at,
                 ),
-                (true, ProcessResult::SessionSaved, true),
+                (
+                    true,
+                    ProcessResult::SessionSaved,
+                    true,
+                    ProcessResult::SessionSaved,
+                    true,
+                ),
             );
         }
 
