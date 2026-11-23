@@ -263,61 +263,72 @@ export const InboxHasNoFilters: Story = {
   args: { filterQuery: '' },
 }
 
-export const InboxShowsFoldedTodosBelowNeedsAction: Story = {
-  name: 'The inbox groups folded to-dos below Needs action',
+export const InboxShowsFoldedTodosInProgress: Story = {
+  name: 'The inbox shows a folded to-do in the In progress row',
   args: {
     sessions: [
-      ...sessions,
       sampleSession(
         'sample-todo-later',
         'in_progress',
-        'Check the alert on a phone',
+        'Choose a notification sound',
         {
-          todoLaterCount: 2,
-          todoLaterTitle: 'Check the alert on a phone',
+          todoLaterCount: 1,
+          todoLaterTitle: 'Check the alert sound on a phone',
         },
       ),
+      ...sessions,
     ],
   },
 }
 
-export const InboxShowsFoldedTodosBelowNeedsActionOnPhone: Story = {
-  name: 'A phone shows the folded to-do row below Needs action',
+export const IPhoneShowsFoldedTodoCountInProgress: Story = {
+  name: 'The iPhone shows the folded to-do count in In progress',
   args: {
     isMobile: true,
     sessions: [
-      ...sessions,
       sampleSession(
         'sample-todo-later',
         'in_progress',
-        'Check the alert on a phone',
+        'Choose a notification sound',
         {
-          todoLaterCount: 2,
-          todoLaterTitle: 'Check the alert on a phone',
+          todoLaterCount: 1,
+          todoLaterTitle: 'Check the alert sound on a phone',
         },
       ),
+      ...sessions,
     ],
   },
   parameters: { viewport: { defaultViewport: 'mobile1' } },
 }
 
-export const InboxSummarizesFoldedTodosAcrossSessions: Story = {
-  name: 'The inbox summarizes folded to-dos across sessions',
+export const IPhoneShowsFoldedTodoCountsInEachStatus: Story = {
+  name: 'The iPhone shows folded to-do counts in each status row',
   args: {
+    isMobile: true,
+    inProgressExpanded: false,
+    laterExpanded: false,
+    doneExpanded: false,
     sessions: [
-      ...sessions,
-      sampleSession('sample-folded-alert', 'done', 'Review a phone alert', {
-        kind: 'Todo',
-        todoLaterCount: 2,
-        todoLaterTitle: 'Check the alert sound',
-      }),
-      sampleSession('sample-folded-delivery', 'done', 'Verify a delivery', {
-        kind: 'Todo',
+      sampleSession(
+        'sample-todo-progress',
+        'in_progress',
+        'Choose a notification sound',
+        { todoLaterCount: 1, todoLaterTitle: 'Check the alert sound' },
+      ),
+      sampleSession(
+        'sample-todo-later',
+        'later',
+        'Wait for the staging build',
+        { todoLaterCount: 2, todoLaterTitle: 'Check delivery status' },
+      ),
+      sampleSession('sample-todo-done', 'done', 'Document request limits', {
         todoLaterCount: 1,
-        todoLaterTitle: 'Check the delivery status',
+        todoLaterTitle: 'Review the alert sound',
       }),
+      ...sessions,
     ],
   },
+  parameters: { viewport: { defaultViewport: 'mobile1' } },
 }
 
 export const InboxFiltersSessionsByProjectAndKind: Story = {
