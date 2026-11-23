@@ -130,8 +130,12 @@ export function SessionRow({
           )
           .join(' · ')
       : null
-  const rowPreview =
-    critReviewReason ?? decisionPreview ?? todoLaterPreview ?? session.preview
+  const rowPreview = [
+    critReviewReason ?? decisionPreview ?? session.preview,
+    todoLaterPreview,
+  ]
+    .filter((part) => part !== null && part.length > 0)
+    .join(' · ')
 
   return (
     <div
@@ -166,7 +170,7 @@ export function SessionRow({
             {formatElapsedTime(session.elapsedSeconds)}
           </span>
         </span>
-        {density === 'full' && rowPreview !== null && rowPreview.length > 0 ? (
+        {density === 'full' && rowPreview.length > 0 ? (
           <span
             className={`session-preview${decisionPreview === null ? '' : ' is-decision-preview'}`}
           >

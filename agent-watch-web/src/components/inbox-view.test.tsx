@@ -163,10 +163,15 @@ function foldedTodoCategorySnapshot() {
       '.mobile-in-progress-todo-later-count',
     )?.textContent,
     laterCount: container.querySelector('.later-section-count')?.textContent,
+    laterTodoLaterCount: container.querySelector(
+      '.mobile-later-todo-later-count',
+    )?.textContent,
     laterTitles: Array.from(
       container.querySelectorAll('.later-session-list .session-title'),
       (title) => title.textContent,
     ),
+    doneTodoLaterCount: container.querySelector('.mobile-done-todo-later-count')
+      ?.textContent,
     doneTitles: Array.from(
       container.querySelectorAll('.done-section .session-title'),
       (title) => title.textContent,
@@ -360,7 +365,9 @@ it('shows folded to-dos in their session categories without adding Needs action 
     ],
     inProgressTodoLaterCount: '3 to-do later',
     laterCount: '2',
+    laterTodoLaterCount: '2 to-do later',
     laterTitles: ['Review the changes', 'Review the changes'],
+    doneTodoLaterCount: '1 to-do later',
     doneTitles: ['Document request limits', 'Document request limits'],
     todoLaterSectionExists: false,
   })

@@ -250,7 +250,25 @@ it('keeps the Crit review reason ahead of a folded-to-do preview', () => {
     todoLaterTitle: 'Check the alert sound',
   })
 
-  expect(snapshot()).toEqual(expectedFullRow('Awaiting reviewer feedback'))
+  expect(snapshot()).toEqual(
+    expectedFullRow(
+      'Awaiting reviewer feedback · To-do · later · Check the alert sound',
+    ),
+  )
+})
+
+it('keeps the pending request preview alongside a folded-to-do marker', () => {
+  renderRow('full', {
+    ...session,
+    todoLaterCount: 1,
+    todoLaterTitle: 'Check the alert sound',
+  })
+
+  expect(snapshot()).toEqual(
+    expectedFullRow(
+      'Should retries stop after three attempts? · To-do · later · Check the alert sound',
+    ),
+  )
 })
 
 it('shows compact rows without a preview and reserves the missing role slot', () => {
@@ -301,12 +319,14 @@ it('keeps the full layout for mobile Inbox rows', () => {
   })
 })
 
-it('shows unreviewed decisions in the Done preview', () => {
+it('shows folded to-dos alongside unreviewed decisions in the Done preview', () => {
   renderRow('full', {
     ...session,
     category: 'done',
     decisionCount: 3,
     unreviewedDecisionCount: 2,
+    todoLaterCount: 1,
+    todoLaterTitle: 'Review the alert sound',
   })
 
   const decisionPreviewSnapshot = () => ({
@@ -317,7 +337,7 @@ it('shows unreviewed decisions in the Done preview', () => {
   })
 
   expect(decisionPreviewSnapshot()).toEqual({
-    preview: '◇ 2 decisions to review',
+    preview: '◇ 2 decisions to review · To-do · later · Review the alert sound',
     previewClassName: 'session-preview is-decision-preview',
     decisionCount: null,
   })

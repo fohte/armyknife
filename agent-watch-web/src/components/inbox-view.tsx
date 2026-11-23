@@ -137,6 +137,14 @@ export function InboxView({
   const later = filteredSessions.filter(
     (session) => session.category === 'later',
   )
+  const laterTodoLaterCount = later.reduce(
+    (count, session) => count + (session.todoLaterCount ?? 0),
+    0,
+  )
+  const doneTodoLaterCount = done.reduce(
+    (count, session) => count + (session.todoLaterCount ?? 0),
+    0,
+  )
   const setFilterQuery = useCallback(
     (query: string) => {
       if (onFilterQueryChange !== undefined) {
@@ -319,6 +327,11 @@ export function InboxView({
         >
           <span>◷ Later</span>
           <span className="later-section-count">{later.length}</span>
+          {isMobile && laterTodoLaterCount > 0 ? (
+            <span className="mobile-later-todo-later-count">
+              {laterTodoLaterCount} to-do later
+            </span>
+          ) : null}
           {later.length > 0 || isMobile ? (
             <span className="later-next-return">
               {later.length > 0 ? nextReturnLabel(later) : 'Next activity'}
@@ -402,6 +415,11 @@ export function InboxView({
           >
             <span>Done</span>
             <span className="mobile-collapse-count">{done.length}</span>
+            {doneTodoLaterCount > 0 ? (
+              <span className="mobile-done-todo-later-count">
+                {doneTodoLaterCount} to-do later
+              </span>
+            ) : null}
             {unreviewedDoneCount > 0 ? (
               <span className="mobile-done-review-count">
                 ◇ {String(unreviewedDoneCount)} to review

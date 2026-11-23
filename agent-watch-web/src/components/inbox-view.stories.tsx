@@ -301,6 +301,36 @@ export const IPhoneShowsFoldedTodoCountInProgress: Story = {
   parameters: { viewport: { defaultViewport: 'mobile1' } },
 }
 
+export const IPhoneShowsFoldedTodoCountsInEachStatus: Story = {
+  name: 'The iPhone shows folded to-do counts in each status row',
+  args: {
+    isMobile: true,
+    inProgressExpanded: false,
+    laterExpanded: false,
+    doneExpanded: false,
+    sessions: [
+      sampleSession(
+        'sample-todo-progress',
+        'in_progress',
+        'Choose a notification sound',
+        { todoLaterCount: 1, todoLaterTitle: 'Check the alert sound' },
+      ),
+      sampleSession(
+        'sample-todo-later',
+        'later',
+        'Wait for the staging build',
+        { todoLaterCount: 2, todoLaterTitle: 'Check delivery status' },
+      ),
+      sampleSession('sample-todo-done', 'done', 'Document request limits', {
+        todoLaterCount: 1,
+        todoLaterTitle: 'Review the alert sound',
+      }),
+      ...sessions,
+    ],
+  },
+  parameters: { viewport: { defaultViewport: 'mobile1' } },
+}
+
 export const InboxFiltersSessionsByProjectAndKind: Story = {
   name: 'The inbox shows project and kind filters as removable chips',
   args: { filterQuery: 'project:sample project kind:question,review' },
