@@ -1060,15 +1060,33 @@ mod tests {
             queued_prompt_id: None,
         }],
     )]
+    #[case::tagged_initial_prompt_keeps_rewind_control(
+        indoc! {r#"
+            {"type":"turn_context","payload":{"turn_id":"fixture-turn-id"}}
+            {"type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","content":"<task>Review the fictional change.</task>\n\n<session-context>\n- Working directory: /fictional/project\n- Parent working directory: /fictional\n</session-context>"}}}
+        "#},
+        vec![ChatItem::User {
+            rewind_id: Some("fixture-turn-id".to_string()),
+            text: "<task>Review the fictional change.</task>".to_string(),
+            timestamp: None,
+            from: None,
+            queued_prompt_id: None,
+        }],
+    )]
     #[case::leading_user_context_does_not_expose_generated_context(
         indoc! {r#"
             {"type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","content":"<session-context>\nUser-authored note.\n</session-context>\n\n<session-context>\n- Working directory: /fictional/project\n- Parent working directory: /fictional\n</session-context>"}}}
         "#},
-        vec![ChatItem::Event {
-            kind: EventKind::System,
-            text: "User-authored note.".to_string(),
-            failed: false,
+        vec![ChatItem::User {
+            rewind_id: None,
+            text: indoc! {"
+                <session-context>
+                User-authored note.
+                </session-context>"}
+            .to_string(),
             timestamp: None,
+            from: None,
+            queued_prompt_id: None,
         }],
     )]
     #[case::user_context_before_generated_context_remains_visible(

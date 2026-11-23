@@ -138,6 +138,7 @@ fn initial_prompt_marker(
     prompt.map(|_| InitialPromptMarker {
         mark_pending: &crate::commands::agent::store::mark_pending_initial_prompt,
         clear_pending: &crate::commands::agent::store::clear_pending_initial_prompt,
+        // CLI launches keep peer attribution instead of appearing as a watch-web user prompt.
         prefix_watch_web_message: watch_web_launch.then_some(&prefix_watch_web_initial_message),
     })
 }
