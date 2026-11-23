@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.872](https://github.com/fohte/armyknife/compare/v0.1.871...v0.1.872) (2026-11-23)
+
+
+### Bug Fixes
+
+* **watch-web:** hide ended reviews ([#2128](https://github.com/fohte/armyknife/issues/2128)) ([772fea1](https://github.com/fohte/armyknife/commit/772fea1a0c0bb8ac18aaacd39457abe38226a40e))
+
 ## [0.1.871](https://github.com/fohte/armyknife/compare/v0.1.870...v0.1.871) (2026-11-23)
 
 
