@@ -215,6 +215,8 @@ struct SessionView {
     todo_later_title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     review_document_id: Option<String>,
+    #[serde(skip_serializing_if = "is_zero")]
+    review_document_count: usize,
 }
 
 impl std::ops::Deref for SessionView {
@@ -469,8 +471,8 @@ async fn list_sessions<S: SessionSource>(
         .collect::<HashMap<_, _>>();
     let sessions_for_review_documents = response_sessions.clone();
     let review_document_source = source.clone();
-    let review_document_ids = tokio::task::spawn_blocking(move || {
-        super::review_document::active_review_document_ids(
+    let review_document_states = tokio::task::spawn_blocking(move || {
+        super::review_document::review_document_session_states(
             &sessions_for_review_documents,
             |session| review_document_source.review_document_queue(session),
         )
@@ -706,10 +708,12 @@ async fn list_sessions<S: SessionSource>(
                     .folded_todo_summaries
                     .get(&session.session_id)
                     .and_then(|summary| summary.first_title.clone()),
-                review_document_id: review_document_ids
+                review_document_id: review_document_states
                     .get(&session.session_id)
-                    .cloned()
-                    .unwrap_or_default(),
+                    .and_then(|state| state.editor_id.clone()),
+                review_document_count: review_document_states
+                    .get(&session.session_id)
+                    .map_or(0, |state| state.count),
             }
         })
         .collect::<Vec<_>>();
@@ -2148,13 +2152,20 @@ mod tests {
         ];
         let review_document_dir = tempfile::TempDir::new().unwrap();
         let review_document_path = review_document_dir.path().join("fixture-draft.md");
+        let queued_review_document_path = review_document_dir.path().join("queued-draft.md");
         std::fs::write(&review_document_path, "fixture").unwrap();
+        std::fs::write(&queued_review_document_path, "queued fixture").unwrap();
         let _review_lock =
             crate::shared::human_in_the_loop::LockGuard::acquire(&review_document_path).unwrap();
         source.sessions[0].pending_human_review_ids.insert(format!(
             "fixture-review\0v2\0{}\0{}\0",
             42,
             review_document_path.display()
+        ));
+        source.sessions[0].pending_human_review_ids.insert(format!(
+            "queued-review\0v2\0{}\0{}\0",
+            43,
+            queued_review_document_path.display()
         ));
         source.sessions[0].work_type = Some("release-guide".to_string());
         source
@@ -2193,6 +2204,7 @@ mod tests {
             }
         ]);
         expected["sessions"][0]["reviewDocumentId"] = serde_json::json!("fixture-review");
+        expected["sessions"][0]["reviewDocumentCount"] = serde_json::json!(2);
         expected["sessions"][0]["lastPromptedAt"] = serde_json::json!("1970-01-01T00:15:00Z");
         expected["sessions"][0]["isWaitingForCritReview"] = serde_json::json!(true);
         expected["sessions"][0]["preview"] = serde_json::json!("Check the sample page");

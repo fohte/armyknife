@@ -7,6 +7,17 @@ mod submit;
 
 use clap::Subcommand;
 
+pub(crate) fn draft_dir() -> std::path::PathBuf {
+    common::DraftFile::draft_dir()
+}
+
+pub(crate) fn parse_draft_path_under(
+    path: &std::path::Path,
+    draft_dir: &std::path::Path,
+) -> Option<(String, String, String)> {
+    common::DraftFile::parse_path_under(path, draft_dir)
+}
+
 #[derive(Subcommand, Clone, PartialEq, Eq)]
 pub enum PrDraftCommands {
     /// Create a new PR body draft file

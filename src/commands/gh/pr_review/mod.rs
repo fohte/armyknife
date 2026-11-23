@@ -16,6 +16,12 @@ use crate::infra::git;
 pub use api::fetch_pr_data;
 pub type Result<T> = anyhow::Result<T>;
 
+pub(crate) fn count_review_threads(content: &str) -> Option<usize> {
+    markdown::MarkdownParser::parse(content)
+        .ok()
+        .map(|threads| threads.threads.len())
+}
+
 #[derive(Subcommand, Clone, PartialEq, Eq)]
 pub enum PrReviewCommands {
     /// View PR review comments in a concise format

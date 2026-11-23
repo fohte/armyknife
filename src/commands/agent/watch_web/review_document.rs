@@ -12,11 +12,16 @@ use sha2::{Digest, Sha256};
 use crate::commands::agent::review_queue::{ReviewDocumentQueue, review_document_queue};
 use crate::commands::agent::store;
 use crate::commands::agent::types::Session;
+#[cfg(test)]
+use crate::shared::human_in_the_loop::ReviewDocumentOperationLock;
 use crate::shared::human_in_the_loop::{
-    FINISH_ACK_TIMEOUT, LockGuard, ReviewDocumentMarker, ReviewDocumentOperationLock,
-    finish_ack_fifo_path, finish_request_fifo_path, open_fifo_reader, review_document_marker,
-    wait_for_finish_ack,
+    LockGuard, ReviewDocumentMarker, finish_ack_fifo_path, finish_request_fifo_path,
+    review_document_marker,
 };
+
+mod metadata;
+mod save;
+use metadata::{ReviewDocumentRoots, ReviewDocumentSummary, summarize};
 
 type SessionLoader = Arc<dyn Fn(&str) -> anyhow::Result<Option<Session>> + Send + Sync>;
 type ReviewQueueLoader = Arc<dyn Fn(&Session) -> ReviewDocumentQueue + Send + Sync>;
@@ -25,10 +30,11 @@ type ReviewDocumentEditLock = Arc<tokio::sync::Mutex<()>>;
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ReviewDocumentResponse {
-    id: String,
     revision: String,
     frontmatter: serde_json::Value,
     body: String,
+    #[serde(flatten)]
+    summary: ReviewDocumentSummary,
 }
 
 #[derive(Deserialize)]
@@ -47,7 +53,11 @@ struct ReviewDocumentSaved {
 }
 
 pub(super) fn router() -> Router {
-    router_with_dependencies(store::load_session, review_document_queue)
+    router_with_dependencies(
+        store::load_session,
+        review_document_queue,
+        ReviewDocumentRoots::default(),
+    )
 }
 
 #[cfg(test)]
@@ -62,15 +72,42 @@ fn router_with_loaders(
     load_session: impl Fn(&str) -> anyhow::Result<Option<Session>> + Send + Sync + 'static,
     load_review_queue: impl Fn(&Session) -> ReviewDocumentQueue + Send + Sync + 'static,
 ) -> Router {
-    router_with_dependencies(load_session, load_review_queue)
+    router_with_dependencies(
+        load_session,
+        load_review_queue,
+        ReviewDocumentRoots::default(),
+    )
+}
+
+#[cfg(test)]
+fn router_with_path_roots(
+    load_session: impl Fn(&str) -> anyhow::Result<Option<Session>> + Send + Sync + 'static,
+    load_review_queue: impl Fn(&Session) -> ReviewDocumentQueue + Send + Sync + 'static,
+    roots: ReviewDocumentRoots,
+) -> Router {
+    router_with_dependencies(load_session, load_review_queue, roots)
 }
 
 fn router_with_dependencies(
     load_session: impl Fn(&str) -> anyhow::Result<Option<Session>> + Send + Sync + 'static,
     load_review_queue: impl Fn(&Session) -> ReviewDocumentQueue + Send + Sync + 'static,
+    roots: ReviewDocumentRoots,
 ) -> Router {
     Router::new()
         .route("/sessions/{id}/review-document", get(get_review_document))
+        .route("/sessions/{id}/review-documents", get(get_review_documents))
+        .route(
+            "/sessions/{id}/review-documents/{document_id}",
+            get(get_review_document_by_id),
+        )
+        .route(
+            "/sessions/{id}/review-documents/{document_id}/save",
+            post(save_review_document_by_id),
+        )
+        .route(
+            "/sessions/{id}/review-documents/{document_id}/finish",
+            post(finish_review_document_by_id),
+        )
         .route(
             "/sessions/{id}/review-document/save",
             post(save_review_document),
@@ -84,14 +121,16 @@ fn router_with_dependencies(
             Arc::new(load_session) as SessionLoader,
             Arc::new(load_review_queue) as ReviewQueueLoader,
             Arc::new(tokio::sync::Mutex::new(())) as ReviewDocumentEditLock,
+            roots,
         ))
 }
 
 async fn get_review_document(
-    State((load_session, load_review_queue, _)): State<(
+    State((load_session, load_review_queue, _, roots)): State<(
         SessionLoader,
         ReviewQueueLoader,
         ReviewDocumentEditLock,
+        ReviewDocumentRoots,
     )>,
     RoutePath(session_id): RoutePath<String>,
 ) -> Result<Json<ReviewDocumentResponse>, StatusCode> {
@@ -108,10 +147,11 @@ async fn get_review_document(
             return Ok(None);
         }
         let queue = load_review_queue(&session);
-        let Some(marker) = active_review_document(&session, queue) else {
+        let Some(marker) = active_review_document(&session, queue.clone()) else {
             return Ok(None);
         };
-        match load_review_document(&marker) {
+        let summary = summary_for_marker(&session, &marker, queue.clone(), &roots);
+        match load_review_document(&marker, summary) {
             Ok(response) => Ok(Some(response)),
             Err(error) => {
                 tracing::warn!(%error, "failed to read active review document");
@@ -128,19 +168,100 @@ async fn get_review_document(
     response.map(Json).ok_or(StatusCode::NOT_FOUND)
 }
 
-async fn save_review_document(
-    State((load_session, load_review_queue, edit_lock)): State<(
+async fn get_review_documents(
+    State((load_session, load_review_queue, _, roots)): State<(
         SessionLoader,
         ReviewQueueLoader,
         ReviewDocumentEditLock,
+        ReviewDocumentRoots,
+    )>,
+    RoutePath(session_id): RoutePath<String>,
+) -> Result<Json<Vec<ReviewDocumentSummary>>, StatusCode> {
+    let documents = tokio::task::spawn_blocking(move || {
+        let session = match load_session(&session_id) {
+            Ok(Some(session)) => session,
+            Ok(None) => return Ok(None),
+            Err(error) => {
+                tracing::warn!(%error, "failed to load session for review document list");
+                return Err(StatusCode::INTERNAL_SERVER_ERROR);
+            }
+        };
+        let queue = load_review_queue(&session);
+        let markers = review_document_markers(&session);
+        let editor_id = active_review_document(&session, queue.clone()).map(|marker| marker.id);
+        let mut summaries = markers
+            .iter()
+            .map(|marker| summary_for_editor(marker, editor_id.as_deref(), &roots))
+            .collect::<Vec<_>>();
+        summaries.sort_by_key(|summary| std::cmp::Reverse(summary.is_editor));
+        Ok(Some(summaries))
+    })
+    .await
+    .map_err(|error| {
+        tracing::error!(%error, "review document list task failed");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })??;
+
+    documents.map(Json).ok_or(StatusCode::NOT_FOUND)
+}
+
+async fn get_review_document_by_id(
+    State((load_session, load_review_queue, _, roots)): State<(
+        SessionLoader,
+        ReviewQueueLoader,
+        ReviewDocumentEditLock,
+        ReviewDocumentRoots,
+    )>,
+    RoutePath((session_id, document_id)): RoutePath<(String, String)>,
+) -> Result<Json<ReviewDocumentResponse>, StatusCode> {
+    let response = tokio::task::spawn_blocking(move || {
+        let session = load_session(&session_id)
+            .map_err(|error| {
+                tracing::warn!(%error, "failed to load session for review document");
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?
+            .ok_or(StatusCode::NOT_FOUND)?;
+        let queue = load_review_queue(&session);
+        let Some(marker) = review_document_markers(&session)
+            .into_iter()
+            .find(|marker| marker.id == document_id)
+        else {
+            return Err(StatusCode::NOT_FOUND);
+        };
+        let summary = summary_for_marker(&session, &marker, queue.clone(), &roots);
+        load_review_document(&marker, summary).map_err(|error| {
+            tracing::warn!(%error, "failed to read review document");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })
+    })
+    .await
+    .map_err(|error| {
+        tracing::error!(%error, "review document task failed");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })??;
+
+    Ok(Json(response))
+}
+
+async fn save_review_document(
+    State((load_session, load_review_queue, edit_lock, _)): State<(
+        SessionLoader,
+        ReviewQueueLoader,
+        ReviewDocumentEditLock,
+        ReviewDocumentRoots,
     )>,
     RoutePath(session_id): RoutePath<String>,
     axum::Json(request): axum::Json<ReviewDocumentEditRequest>,
 ) -> Result<axum::Json<ReviewDocumentSaved>, StatusCode> {
     let _edit_guard = edit_lock.lock().await;
-    let revision =
-        save_document_for_session(load_session, load_review_queue, session_id, request, false)
-            .await?;
+    let revision = save::save_document_for_session(
+        load_session,
+        load_review_queue,
+        session_id,
+        request,
+        false,
+    )
+    .await?;
     Ok(axum::Json(ReviewDocumentSaved {
         success: true,
         revision,
@@ -148,17 +269,18 @@ async fn save_review_document(
 }
 
 async fn finish_review_document(
-    State((load_session, load_review_queue, edit_lock)): State<(
+    State((load_session, load_review_queue, edit_lock, _)): State<(
         SessionLoader,
         ReviewQueueLoader,
         ReviewDocumentEditLock,
+        ReviewDocumentRoots,
     )>,
     RoutePath(session_id): RoutePath<String>,
     axum::Json(request): axum::Json<ReviewDocumentEditRequest>,
 ) -> Result<axum::Json<ReviewDocumentSaved>, StatusCode> {
     let _edit_guard = edit_lock.lock().await;
     let revision =
-        save_document_for_session(load_session, load_review_queue, session_id, request, true)
+        save::save_document_for_session(load_session, load_review_queue, session_id, request, true)
             .await?;
     Ok(axum::Json(ReviewDocumentSaved {
         success: true,
@@ -166,231 +288,75 @@ async fn finish_review_document(
     }))
 }
 
-async fn save_document_for_session(
+async fn save_review_document_by_id(
+    State((load_session, load_review_queue, edit_lock, _)): State<(
+        SessionLoader,
+        ReviewQueueLoader,
+        ReviewDocumentEditLock,
+        ReviewDocumentRoots,
+    )>,
+    RoutePath((session_id, document_id)): RoutePath<(String, String)>,
+    axum::Json(request): axum::Json<ReviewDocumentEditRequest>,
+) -> Result<axum::Json<ReviewDocumentSaved>, StatusCode> {
+    save_review_document_for_id(
+        load_session,
+        load_review_queue,
+        edit_lock,
+        session_id,
+        document_id,
+        request,
+        false,
+    )
+    .await
+}
+
+async fn finish_review_document_by_id(
+    State((load_session, load_review_queue, edit_lock, _)): State<(
+        SessionLoader,
+        ReviewQueueLoader,
+        ReviewDocumentEditLock,
+        ReviewDocumentRoots,
+    )>,
+    RoutePath((session_id, document_id)): RoutePath<(String, String)>,
+    axum::Json(request): axum::Json<ReviewDocumentEditRequest>,
+) -> Result<axum::Json<ReviewDocumentSaved>, StatusCode> {
+    save_review_document_for_id(
+        load_session,
+        load_review_queue,
+        edit_lock,
+        session_id,
+        document_id,
+        request,
+        true,
+    )
+    .await
+}
+
+async fn save_review_document_for_id(
     load_session: SessionLoader,
     load_review_queue: ReviewQueueLoader,
+    edit_lock: ReviewDocumentEditLock,
     session_id: String,
+    document_id: String,
     request: ReviewDocumentEditRequest,
     finishing: bool,
-) -> Result<String, StatusCode> {
-    tokio::task::spawn_blocking(move || {
-        let session = load_session(&session_id)
-            .map_err(|error| {
-                tracing::warn!(%error, "failed to load session for review document edit");
-                StatusCode::INTERNAL_SERVER_ERROR
-            })?
-            .ok_or(StatusCode::NOT_FOUND)?;
-        let queue = load_review_queue(&session);
-        let marker = active_review_document(&session, queue).ok_or(StatusCode::NOT_FOUND)?;
-        if marker.id != request.id {
-            return Err(StatusCode::CONFLICT);
-        }
-        let review_lock = ReviewDocumentOperationLock::acquire(&marker.path).map_err(|error| {
-            tracing::warn!(%error, "failed to lock active review document for editing");
-            if error.kind() == std::io::ErrorKind::NotFound {
-                StatusCode::CONFLICT
-            } else {
-                StatusCode::INTERNAL_SERVER_ERROR
-            }
-        })?;
-        let current_session = load_session(&session_id)
-            .map_err(|error| {
-                tracing::warn!(%error, "failed to recheck session for review document edit");
-                StatusCode::INTERNAL_SERVER_ERROR
-            })?
-            .ok_or(StatusCode::NOT_FOUND)?;
-        let current_marker =
-            select_review_document(&current_session, load_review_queue(&current_session))
-                .ok_or(StatusCode::NOT_FOUND)?;
-        if current_marker.id != request.id
-            || current_marker.path != marker.path
-            || !review_lock.is_active(&marker.path)
-        {
-            return Err(StatusCode::CONFLICT);
-        }
-        let current_content = std::fs::read(&marker.path).map_err(|error| {
-            tracing::warn!(%error, "failed to read active review document before saving");
-            if error.kind() == std::io::ErrorKind::NotFound {
-                StatusCode::CONFLICT
-            } else {
-                StatusCode::INTERNAL_SERVER_ERROR
-            }
-        })?;
-        if request.revision != review_document_revision(&current_content) {
-            return Err(StatusCode::CONFLICT);
-        }
-        let fifo_path = finish_request_fifo_path(&marker.path);
-        if !is_fifo(&fifo_path) {
-            return Err(StatusCode::CONFLICT);
-        }
-        let mut ack_reader = if finishing {
-            Some(
-                open_fifo_reader(&finish_ack_fifo_path(&marker.path)).map_err(|error| {
-                    tracing::warn!(%error, "failed to open review finish acknowledgement FIFO");
-                    StatusCode::INTERNAL_SERVER_ERROR
-                })?,
-            )
-        } else {
-            None
-        };
-        let content = render_review_document(&marker.path, request.frontmatter, &request.body)?;
-        let revision = review_document_revision(content.as_bytes());
-        overwrite_review_document(&marker.path, content.as_bytes(), &request.revision)?;
-        if finishing {
-            crate::shared::human_in_the_loop::try_signal_fifo(&fifo_path).map_err(|error| {
-                tracing::warn!(%error, "failed to signal review finish request");
-                StatusCode::INTERNAL_SERVER_ERROR
-            })?;
-        }
-        drop(review_lock);
-        if let Some(ack_reader) = ack_reader.as_mut() {
-            let acknowledgement =
-                wait_for_finish_ack(ack_reader, FINISH_ACK_TIMEOUT).map_err(|error| {
-                    tracing::warn!(%error, "review process did not acknowledge finish request");
-                    if error.kind() == std::io::ErrorKind::TimedOut {
-                        StatusCode::GATEWAY_TIMEOUT
-                    } else {
-                        StatusCode::INTERNAL_SERVER_ERROR
-                    }
-                })?;
-            if acknowledgement != b'0' {
-                tracing::warn!("review completion handler rejected the finish request");
-                return Err(StatusCode::INTERNAL_SERVER_ERROR);
-            }
-        }
-        Ok(revision)
-    })
-    .await
-    .map_err(|error| {
-        tracing::error!(%error, "review document edit task failed");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?
-}
-
-fn overwrite_review_document(
-    path: &std::path::Path,
-    content: &[u8],
-    expected_revision: &str,
-) -> Result<(), StatusCode> {
-    use std::fs;
-    use std::io::Write;
-    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
-
-    let metadata = fs::symlink_metadata(path).map_err(|error| {
-        tracing::warn!(%error, "failed to inspect active review document before saving");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-    if !metadata.file_type().is_file() {
+) -> Result<axum::Json<ReviewDocumentSaved>, StatusCode> {
+    if request.id != document_id {
         return Err(StatusCode::CONFLICT);
     }
-
-    let mut staging_name = path.as_os_str().to_os_string();
-    staging_name.push(format!(".{}.tmp", uuid::Uuid::new_v4()));
-    let staging_path = std::path::PathBuf::from(staging_name);
-    let result = (|| {
-        let mut options = fs::OpenOptions::new();
-        options
-            .write(true)
-            .create_new(true)
-            .mode(metadata.mode() & 0o7777)
-            .custom_flags(libc::O_NOFOLLOW);
-        let mut file = options.open(&staging_path).map_err(|error| {
-            tracing::warn!(%error, "failed to create review document staging file");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
-        file.set_permissions(metadata.permissions())
-            .map_err(|error| {
-                tracing::warn!(%error, "failed to preserve review document permissions");
-                StatusCode::INTERNAL_SERVER_ERROR
-            })?;
-        file.write_all(content).map_err(|error| {
-            tracing::warn!(%error, "failed to write review document staging file");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
-        file.sync_all().map_err(|error| {
-            tracing::warn!(%error, "failed to sync review document staging file");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
-
-        let current_content = fs::read(path).map_err(|error| {
-            tracing::warn!(%error, "failed to recheck active review document before saving");
-            if error.kind() == std::io::ErrorKind::NotFound {
-                StatusCode::CONFLICT
-            } else {
-                StatusCode::INTERNAL_SERVER_ERROR
-            }
-        })?;
-        if review_document_revision(&current_content) != expected_revision {
-            return Err(StatusCode::CONFLICT);
-        }
-
-        let current_metadata = fs::symlink_metadata(path).map_err(|error| {
-            tracing::warn!(%error, "failed to recheck active review document before saving");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
-        if !current_metadata.file_type().is_file()
-            || current_metadata.dev() != metadata.dev()
-            || current_metadata.ino() != metadata.ino()
-        {
-            return Err(StatusCode::CONFLICT);
-        }
-
-        fs::rename(&staging_path, path).map_err(|error| {
-            tracing::warn!(%error, "failed to replace active review document");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
-        let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
-        fs::File::open(parent)
-            .and_then(|directory| directory.sync_all())
-            .map_err(|error| {
-                tracing::warn!(%error, "failed to sync active review document directory");
-                StatusCode::INTERNAL_SERVER_ERROR
-            })
-    })();
-
-    if result.is_err() {
-        let _ = fs::remove_file(staging_path);
-    }
-    result
-}
-
-fn render_review_document(
-    path: &std::path::Path,
-    frontmatter: serde_json::Value,
-    body: &str,
-) -> Result<String, StatusCode> {
-    let current = std::fs::read_to_string(path).map_err(|error| {
-        tracing::warn!(%error, "failed to read active review document before saving");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-    let mut content = String::new();
-    if crate::shared::yaml_frontmatter::split_frontmatter(&current).is_some()
-        || !frontmatter.is_null()
-    {
-        let yaml = serde_yaml::to_string(&frontmatter).map_err(|error| {
-            tracing::warn!(%error, "failed to serialize review document frontmatter");
-            StatusCode::BAD_REQUEST
-        })?;
-        content.push_str("---\n");
-        content.push_str(yaml.trim_start_matches("---\n").trim_end());
-        content.push('\n');
-        content.push_str("---");
-        content.push('\n');
-    }
-    content.push_str(body);
-    Ok(content)
-}
-
-#[cfg(unix)]
-fn is_fifo(path: &std::path::Path) -> bool {
-    use std::os::unix::fs::FileTypeExt;
-
-    std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_fifo())
-}
-
-#[cfg(not(unix))]
-fn is_fifo(_path: &std::path::Path) -> bool {
-    false
+    let _edit_guard = edit_lock.lock().await;
+    let revision = save::save_document_for_session(
+        load_session,
+        load_review_queue,
+        session_id,
+        request,
+        finishing,
+    )
+    .await?;
+    Ok(axum::Json(ReviewDocumentSaved {
+        success: true,
+        revision,
+    }))
 }
 
 pub(super) fn active_review_document_id(
@@ -410,20 +376,70 @@ pub(super) fn has_review_document_marker(session: &Session) -> bool {
         .any(|review_id| review_document_marker(review_id).is_some())
 }
 
-pub(super) fn active_review_document_ids(
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ReviewDocumentSessionState {
+    pub(super) count: usize,
+    pub(super) editor_id: Option<String>,
+}
+
+pub(super) fn review_document_session_states(
     sessions: &[Session],
     load_review_queue: impl Fn(&Session) -> ReviewDocumentQueue,
-) -> HashMap<String, Option<String>> {
+) -> HashMap<String, ReviewDocumentSessionState> {
     sessions
         .iter()
         .filter_map(|session| {
-            if !has_review_document_marker(session) {
+            let markers = review_document_markers(session);
+            if markers.is_empty() {
                 return None;
             }
-            let review_document_id = active_review_document_id(session, load_review_queue(session));
-            Some((session.session_id.clone(), review_document_id))
+            let editor_id = active_review_document_id(session, load_review_queue(session));
+            Some((
+                session.session_id.clone(),
+                ReviewDocumentSessionState {
+                    count: markers.len(),
+                    editor_id,
+                },
+            ))
         })
         .collect()
+}
+
+fn review_document_markers(session: &Session) -> Vec<ReviewDocumentMarker> {
+    let mut markers = session
+        .pending_human_review_ids
+        .iter()
+        .filter_map(|review_id| review_document_marker(review_id))
+        .collect::<Vec<_>>();
+    markers.sort_by(|left, right| {
+        left.started_at
+            .cmp(&right.started_at)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    markers
+}
+
+fn summary_for_marker(
+    session: &Session,
+    marker: &ReviewDocumentMarker,
+    queue: ReviewDocumentQueue,
+    roots: &ReviewDocumentRoots,
+) -> ReviewDocumentSummary {
+    let is_editor =
+        active_review_document(session, queue).is_some_and(|active| active.id == marker.id);
+    summary_for_editor(marker, is_editor.then_some(marker.id.as_str()), roots)
+}
+
+fn summary_for_editor(
+    marker: &ReviewDocumentMarker,
+    editor_id: Option<&str>,
+    roots: &ReviewDocumentRoots,
+) -> ReviewDocumentSummary {
+    let is_editor = editor_id == Some(marker.id.as_str());
+    let request_fifo = finish_request_fifo_path(&marker.path);
+    let can_save = is_editor && save::is_fifo(&request_fifo);
+    let can_finish = can_save && save::is_fifo(&finish_ack_fifo_path(&marker.path));
+    summarize(roots, marker, is_editor, can_save, can_finish)
 }
 
 fn active_review_document(
@@ -438,30 +454,23 @@ fn select_review_document(
     session: &Session,
     queue: ReviewDocumentQueue,
 ) -> Option<ReviewDocumentMarker> {
-    let mut markers = session
-        .pending_human_review_ids
-        .iter()
-        .filter_map(|review_id| review_document_marker(review_id))
-        .collect::<Vec<_>>();
+    let markers = review_document_markers(session);
 
     match queue {
         ReviewDocumentQueue::Managed(Some(shown_key)) => markers
             .into_iter()
             .find(|marker| marker.queue_key.as_deref() == Some(shown_key.as_str())),
         ReviewDocumentQueue::Managed(None) | ReviewDocumentQueue::Unavailable => None,
-        ReviewDocumentQueue::Unmanaged => {
-            markers.retain(|marker| marker.queue_key.is_none());
-            markers.sort_by(|left, right| {
-                left.started_at
-                    .cmp(&right.started_at)
-                    .then_with(|| left.id.cmp(&right.id))
-            });
-            markers.into_iter().next()
-        }
+        ReviewDocumentQueue::Unmanaged => markers
+            .into_iter()
+            .find(|marker| marker.queue_key.is_none()),
     }
 }
 
-fn load_review_document(marker: &ReviewDocumentMarker) -> anyhow::Result<ReviewDocumentResponse> {
+fn load_review_document(
+    marker: &ReviewDocumentMarker,
+    summary: ReviewDocumentSummary,
+) -> anyhow::Result<ReviewDocumentResponse> {
     let content = std::fs::read_to_string(&marker.path)?;
     let revision = review_document_revision(content.as_bytes());
     let (frontmatter, body) = match crate::shared::yaml_frontmatter::split_frontmatter(&content) {
@@ -473,10 +482,10 @@ fn load_review_document(marker: &ReviewDocumentMarker) -> anyhow::Result<ReviewD
     };
 
     Ok(ReviewDocumentResponse {
-        id: marker.id.clone(),
         revision,
         frontmatter,
         body,
+        summary,
     })
 }
 
@@ -504,8 +513,9 @@ mod tests {
     use crate::shared::human_in_the_loop::LockGuard;
 
     use super::{
-        ReviewDocumentOperationLock, finish_ack_fifo_path, finish_request_fifo_path,
-        review_document_revision, router_with_loaders, router_with_session_loader,
+        ReviewDocumentOperationLock, ReviewDocumentRoots, finish_ack_fifo_path,
+        finish_request_fifo_path, review_document_revision, router_with_loaders,
+        router_with_path_roots, router_with_session_loader,
     };
 
     fn current_revision(path: &Path) -> String {
@@ -679,6 +689,11 @@ mod tests {
 
                         Fixture body.
                     "},
+                    "kind": "draft",
+                    "target": {},
+                    "isEditor": true,
+                    "canSave": false,
+                    "canFinish": false,
                 }),
             ),
         );
@@ -730,6 +745,11 @@ mod tests {
                     "revision": current_revision(&visible_path),
                     "frontmatter": null,
                     "body": "Visible body.",
+                    "kind": "draft",
+                    "target": {},
+                    "isEditor": true,
+                    "canSave": false,
+                    "canFinish": false,
                 }),
             ),
         );
@@ -778,7 +798,500 @@ mod tests {
                     "revision": current_revision(&older_path),
                     "frontmatter": null,
                     "body": "Earlier body.",
+                    "kind": "draft",
+                    "target": {},
+                    "isEditor": true,
+                    "canSave": false,
+                    "canFinish": false,
                 }),
+            ),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn lists_the_editor_document_before_queued_documents(
+        active_review_document: ActiveReviewDocument,
+    ) {
+        let queued_path = active_review_document
+            .temp_dir
+            .path()
+            .join("queued-document.md");
+        std::fs::write(&queued_path, "Queued body.").expect("queued document should be written");
+        let mut session = active_review_document.session;
+        session.pending_human_review_ids.insert(review_marker(
+            "queued-review",
+            &queued_path,
+            2,
+            None,
+        ));
+        let app = router_with_session_loader(move |_| Ok(Some(session.clone())));
+        let response = app
+            .oneshot(
+                Request::get("/sessions/fixture-session/review-documents")
+                    .body(Body::empty())
+                    .expect("request should be valid"),
+            )
+            .await
+            .expect("request should complete");
+        let status = response.status();
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should be read");
+
+        assert_eq!(
+            (
+                status,
+                serde_json::from_slice::<serde_json::Value>(&body)
+                    .expect("response should be JSON"),
+            ),
+            (
+                StatusCode::OK,
+                serde_json::json!([
+                    {
+                        "id": "fixture-review",
+                        "kind": "draft",
+                        "target": {},
+                        "isEditor": true,
+                        "canSave": true,
+                        "canFinish": true,
+                    },
+                    {
+                        "id": "queued-review",
+                        "kind": "draft",
+                        "target": {},
+                        "isEditor": false,
+                        "canSave": false,
+                        "canFinish": false,
+                    },
+                ]),
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn lists_typed_documents_with_their_targets_through_the_review_api() {
+        let temp_dir = TempDir::new().expect("fixture directory should be created");
+        let roots = ReviewDocumentRoots {
+            pr_draft: temp_dir.path().join("pr-body-draft"),
+            issue_agent: temp_dir.path().join("gh-issue-agent"),
+            pr_review: temp_dir.path().join("gh-pr-review"),
+        };
+        #[cfg(unix)]
+        let pr_draft_root = {
+            use std::os::unix::fs::symlink;
+
+            let actual_root = temp_dir.path().join("actual-pr-body-draft");
+            std::fs::create_dir_all(&actual_root).expect("actual draft root should be created");
+            symlink(&actual_root, &roots.pr_draft).expect("draft root symlink should be created");
+            actual_root
+        };
+        #[cfg(not(unix))]
+        let pr_draft_root = roots.pr_draft.clone();
+        let pr_draft_path = pr_draft_root.join("sample-owner/sample-repo/feature/example.md");
+        let issue_path = roots
+            .issue_agent
+            .join("sample-owner/sample-repo/7319/issue.md");
+        let comment_path = roots
+            .issue_agent
+            .join("sample-owner/sample-repo/7319/comments/new_reply.md");
+        let existing_comment_path = roots
+            .issue_agent
+            .join("sample-owner/sample-repo/7319/comments/001_comment_88600.md");
+        let legacy_issue_path = roots
+            .issue_agent
+            .join("sample-owner/sample-repo/5843/issue.md");
+        let legacy_metadata_path = legacy_issue_path
+            .parent()
+            .expect("legacy issue should have a parent")
+            .join("metadata.json");
+        let legacy_comment_path = roots
+            .issue_agent
+            .join("sample-owner/sample-repo/5843/comments/002_comment_88601.md");
+        let new_issue_path = roots
+            .issue_agent
+            .join("sample-owner/sample-repo/new/issue.md");
+        let replies_path = roots
+            .pr_review
+            .join("sample-owner/sample-repo/8462/threads.md");
+        let generic_path = temp_dir.path().join("generic-draft.md");
+        for (path, contents) in [
+            (
+                pr_draft_path.as_path(),
+                indoc! {"
+                    ---
+                    title: Sample pull request
+                    ---
+                    Body.
+                "},
+            ),
+            (
+                issue_path.as_path(),
+                indoc! {"
+                    ---
+                    title: Sample issue
+                    readonly:
+                      number: 7319
+                    ---
+                    Body.
+                "},
+            ),
+            (comment_path.as_path(), "Comment body."),
+            (existing_comment_path.as_path(), "Existing comment body."),
+            (legacy_issue_path.as_path(), "Legacy issue body."),
+            (
+                legacy_metadata_path.as_path(),
+                indoc! {r#"
+                    {
+                      "number": 5843,
+                      "title": "Legacy sample issue",
+                      "state": "OPEN",
+                      "labels": [],
+                      "assignees": [],
+                      "milestone": null,
+                      "author": "sample-author",
+                      "createdAt": "2026-01-01T00:00:00Z",
+                      "updatedAt": "2026-01-02T00:00:00Z"
+                    }
+                "#},
+            ),
+            (legacy_comment_path.as_path(), "Legacy comment body."),
+            (
+                new_issue_path.as_path(),
+                indoc! {"
+                    ---
+                    title: New issue
+                    ---
+                    Body.
+                "},
+            ),
+            (
+                replies_path.as_path(),
+                indoc! {r#"
+                    ---
+                    pr: 8462
+                    repo: sample-owner/sample-repo
+                    pulled_at: 2026-01-15T10:00:00Z
+                    ---
+
+                    <!-- reviews -->
+                    <!-- /reviews -->
+
+                    <!-- thread: RT_sample path: src/lib.rs:7 -->
+                    - [ ] resolve
+                    <!-- diff -->
+                    ```diff
+                    @@ -1 +1 @@
+                    -old
+                    +new
+                    ```
+                    <!-- /diff -->
+                    <!-- comment: @reviewer 2026-01-15T10:30:00Z -->
+                    Sample comment.
+                    <!-- /comment -->
+                "#},
+            ),
+            (generic_path.as_path(), "Generic body."),
+        ] {
+            std::fs::create_dir_all(path.parent().expect("fixture file should have a parent"))
+                .expect("fixture directory should be created");
+            std::fs::write(path, contents).expect("fixture document should be written");
+        }
+
+        let mut session = session_with_review(&generic_path);
+        session.pending_human_review_ids.clear();
+        for (id, path, started_at) in [
+            ("pr-draft", &pr_draft_path, 1),
+            ("issue-body", &issue_path, 2),
+            ("issue-comment", &comment_path, 3),
+            ("existing-issue-comment", &existing_comment_path, 4),
+            ("legacy-issue-body", &legacy_issue_path, 5),
+            ("legacy-issue-comment", &legacy_comment_path, 6),
+            ("new-issue", &new_issue_path, 7),
+            ("review-replies", &replies_path, 8),
+            ("generic", &generic_path, 9),
+        ] {
+            session
+                .pending_human_review_ids
+                .insert(review_marker(id, path, started_at, None));
+        }
+        let app = router_with_path_roots(
+            move |_| Ok(Some(session.clone())),
+            |_| ReviewDocumentQueue::Unmanaged,
+            roots,
+        );
+        let response = app
+            .oneshot(
+                Request::get("/sessions/fixture-session/review-documents")
+                    .body(Body::empty())
+                    .expect("request should be valid"),
+            )
+            .await
+            .expect("request should complete");
+        let status = response.status();
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should be read");
+
+        assert_eq!(
+            (
+                status,
+                serde_json::from_slice::<serde_json::Value>(&body)
+                    .expect("response should be JSON"),
+            ),
+            (
+                StatusCode::OK,
+                serde_json::json!([
+                    {
+                        "id": "pr-draft",
+                        "kind": "pr_draft",
+                        "target": {
+                            "repository": "sample-owner/sample-repo",
+                            "branch": "feature/example",
+                            "title": "Sample pull request",
+                        },
+                        "isEditor": false,
+                        "canSave": false,
+                        "canFinish": false,
+                    },
+                    {
+                        "id": "issue-body",
+                        "kind": "issue_body",
+                        "target": {
+                            "repository": "sample-owner/sample-repo",
+                            "issueNumber": 7319,
+                            "title": "Sample issue",
+                        },
+                        "isEditor": false,
+                        "canSave": false,
+                        "canFinish": false,
+                    },
+                    {
+                        "id": "issue-comment",
+                        "kind": "issue_comment",
+                        "target": {
+                            "repository": "sample-owner/sample-repo",
+                            "issueNumber": 7319,
+                            "title": "Sample issue",
+                        },
+                        "isEditor": false,
+                        "canSave": false,
+                        "canFinish": false,
+                    },
+                    {
+                        "id": "existing-issue-comment",
+                        "kind": "issue_comment",
+                        "target": {
+                            "repository": "sample-owner/sample-repo",
+                            "issueNumber": 7319,
+                            "title": "Sample issue",
+                        },
+                        "isEditor": false,
+                        "canSave": false,
+                        "canFinish": false,
+                    },
+                    {
+                        "id": "legacy-issue-body",
+                        "kind": "issue_body",
+                        "target": {
+                            "repository": "sample-owner/sample-repo",
+                            "issueNumber": 5843,
+                            "title": "Legacy sample issue",
+                        },
+                        "isEditor": false,
+                        "canSave": false,
+                        "canFinish": false,
+                    },
+                    {
+                        "id": "legacy-issue-comment",
+                        "kind": "issue_comment",
+                        "target": {
+                            "repository": "sample-owner/sample-repo",
+                            "issueNumber": 5843,
+                            "title": "Legacy sample issue",
+                        },
+                        "isEditor": false,
+                        "canSave": false,
+                        "canFinish": false,
+                    },
+                    {
+                        "id": "new-issue",
+                        "kind": "draft",
+                        "target": {
+                            "repository": "sample-owner/sample-repo",
+                            "title": "New issue",
+                        },
+                        "isEditor": false,
+                        "canSave": false,
+                        "canFinish": false,
+                    },
+                    {
+                        "id": "review-replies",
+                        "kind": "review_replies",
+                        "target": {
+                            "repository": "sample-owner/sample-repo",
+                            "pullRequestNumber": 8462,
+                            "threadCount": 1,
+                        },
+                        "isEditor": false,
+                        "canSave": false,
+                        "canFinish": false,
+                    },
+                    {
+                        "id": "generic",
+                        "kind": "draft",
+                        "target": {},
+                        "isEditor": false,
+                        "canSave": false,
+                        "canFinish": false,
+                    },
+                ]),
+            ),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn gets_a_queued_document_by_id(active_review_document: ActiveReviewDocument) {
+        let queued_path = active_review_document
+            .temp_dir
+            .path()
+            .join("queued-document.md");
+        std::fs::write(&queued_path, "Queued body.").expect("queued document should be written");
+        let mut session = active_review_document.session;
+        session.pending_human_review_ids.insert(review_marker(
+            "queued-review",
+            &queued_path,
+            2,
+            None,
+        ));
+        let app = router_with_session_loader(move |_| Ok(Some(session.clone())));
+        let response = app
+            .oneshot(
+                Request::get("/sessions/fixture-session/review-documents/queued-review")
+                    .body(Body::empty())
+                    .expect("request should be valid"),
+            )
+            .await
+            .expect("request should complete");
+        let status = response.status();
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should be read");
+
+        assert_eq!(
+            (
+                status,
+                serde_json::from_slice::<serde_json::Value>(&body)
+                    .expect("response should be JSON"),
+            ),
+            (
+                StatusCode::OK,
+                serde_json::json!({
+                    "id": "queued-review",
+                    "revision": current_revision(&queued_path),
+                    "frontmatter": null,
+                    "body": "Queued body.",
+                    "kind": "draft",
+                    "target": {},
+                    "isEditor": false,
+                    "canSave": false,
+                    "canFinish": false,
+                }),
+            ),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn rejects_saving_a_queued_document_by_id(active_review_document: ActiveReviewDocument) {
+        let queued_path = active_review_document
+            .temp_dir
+            .path()
+            .join("queued-document.md");
+        std::fs::write(&queued_path, "Queued body.").expect("queued document should be written");
+        let mut session = active_review_document.session;
+        session.pending_human_review_ids.insert(review_marker(
+            "queued-review",
+            &queued_path,
+            2,
+            None,
+        ));
+        let app = router_with_session_loader(move |_| Ok(Some(session.clone())));
+        let response = app
+            .oneshot(
+                Request::post("/sessions/fixture-session/review-documents/queued-review/save")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "id": "queued-review",
+                            "revision": current_revision(&queued_path),
+                            "frontmatter": null,
+                            "body": "Changed body.",
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should be valid"),
+            )
+            .await
+            .expect("request should complete");
+
+        assert_eq!(
+            (
+                response.status(),
+                std::fs::read_to_string(&queued_path).expect("queued document should be readable"),
+            ),
+            (StatusCode::CONFLICT, "Queued body.".to_string()),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn rejects_a_document_id_that_does_not_match_the_save_route(
+        active_review_document: ActiveReviewDocument,
+    ) {
+        let active_path = active_review_document.document_path;
+        let queued_path = active_review_document
+            .temp_dir
+            .path()
+            .join("queued-document.md");
+        std::fs::write(&queued_path, "Queued body.").expect("queued document should be written");
+        let mut session = active_review_document.session;
+        session.pending_human_review_ids.insert(review_marker(
+            "queued-review",
+            &queued_path,
+            2,
+            None,
+        ));
+        let app = router_with_session_loader(move |_| Ok(Some(session.clone())));
+        let response = app
+            .oneshot(
+                Request::post("/sessions/fixture-session/review-documents/queued-review/save")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "id": "fixture-review",
+                            "revision": current_revision(&active_path),
+                            "frontmatter": null,
+                            "body": "Must not overwrite the active document.",
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should be valid"),
+            )
+            .await
+            .expect("request should complete");
+
+        assert_eq!(
+            (
+                response.status(),
+                std::fs::read_to_string(&active_path).expect("active document should be readable"),
+                std::fs::read_to_string(&queued_path).expect("queued document should be readable"),
+            ),
+            (
+                StatusCode::CONFLICT,
+                "Original body.".to_string(),
+                "Queued body.".to_string(),
             ),
         );
     }
@@ -858,7 +1371,7 @@ mod tests {
         let app = router_with_session_loader(move |_| Ok(Some(session.clone())));
         let response = app
             .oneshot(
-                Request::post("/sessions/fixture-session/review-document/save")
+                Request::post("/sessions/fixture-session/review-documents/fixture-review/save")
                     .header("content-type", "application/json")
                     .body(Body::from(
                         serde_json::json!({
@@ -1060,18 +1573,19 @@ mod tests {
             move |_| Ok(Some(session.clone())),
             |_| ReviewDocumentQueue::Managed(Some("fixture-editor-session".to_string())),
         );
-        let request = Request::post("/sessions/fixture-session/review-document/finish")
-            .header("content-type", "application/json")
-            .body(Body::from(
-                serde_json::json!({
-                    "id": "fixture-review",
-                    "revision": current_revision(&document_path),
-                    "frontmatter": null,
-                    "body": "Saved before review closes.",
-                })
-                .to_string(),
-            ))
-            .expect("request should be valid");
+        let request =
+            Request::post("/sessions/fixture-session/review-documents/fixture-review/finish")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "id": "fixture-review",
+                        "revision": current_revision(&document_path),
+                        "frontmatter": null,
+                        "body": "Saved before review closes.",
+                    })
+                    .to_string(),
+                ))
+                .expect("request should be valid");
         let finish_task = tokio::spawn(async move { app.oneshot(request).await });
         let start = std::time::Instant::now();
         let mut finish_signal = [0_u8; 1];

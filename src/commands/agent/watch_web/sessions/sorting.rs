@@ -93,6 +93,7 @@ mod tests {
             todo_later_count: 0,
             todo_later_title: None,
             review_document_id: None,
+            review_document_count: 0,
         }
     }
 
