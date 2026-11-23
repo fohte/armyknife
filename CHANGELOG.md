@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.876](https://github.com/fohte/armyknife/compare/v0.1.875...v0.1.876) (2026-11-23)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** open new session form with c ([#2144](https://github.com/fohte/armyknife/issues/2144)) ([01383f0](https://github.com/fohte/armyknife/commit/01383f05640a6643b629d2de503a9be9fdf9bfa0))
+
 ## [0.1.875](https://github.com/fohte/armyknife/compare/v0.1.874...v0.1.875) (2026-11-23)
 
 
