@@ -466,6 +466,39 @@ it('changes the model and effort with arrow keys in the model picker', async () 
   })
 })
 
+it('closes the model picker instead of launching when Enter is pressed in the first message', async () => {
+  const start = vi.fn<NewSessionState['start']>(() => Promise.resolve())
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <PickerHarness
+        initialModelPickerOpen
+        selectedDirectory={exampleSessionDirectories[0] ?? null}
+        start={start}
+      />,
+    )
+  })
+  const firstMessage = container.querySelector<HTMLTextAreaElement>(
+    '[aria-label="First message"]',
+  )
+  if (firstMessage === null) {
+    throw new Error('First message input was not rendered')
+  }
+  await act(async () => {
+    firstMessage.focus()
+    await userEvent.keyboard('{Enter}')
+  })
+
+  const modelButton = container.querySelector<HTMLButtonElement>(
+    '.new-session-picker-model',
+  )
+  const snapshot = () => ({
+    starts: start.mock.calls.length,
+    modelPickerOpen: modelButton?.getAttribute('aria-expanded') ?? null,
+  })
+  expect(snapshot()).toEqual({ starts: 0, modelPickerOpen: 'false' })
+})
+
 it('shows the profile model in Default while another model is selected', () => {
   const start = vi.fn<NewSessionState['start']>(() => Promise.resolve())
   root = createRoot(container)

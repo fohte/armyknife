@@ -250,7 +250,8 @@
 .inbox-footer {
   display: flex;
   min-height: 32px;
-  flex: 0 0 32px;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
   align-items: center;
   gap: 16px;
   padding: 0 16px;

@@ -220,7 +220,7 @@ export function NewSessionPicker({
               onChange={(event) => {
                 state.setInitialMessage(event.currentTarget.value)
               }}
-              onKeyDown={handleMessageKeyDown}
+              onKeyDown={modelPickerOpen ? undefined : handleMessageKeyDown}
               placeholder="First message (optional)"
               value={state.initialMessage}
             />

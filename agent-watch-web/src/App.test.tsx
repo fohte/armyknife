@@ -2555,37 +2555,41 @@ it('moves the selected App row with j and k and scrolls it into view', () => {
   })
 })
 
-it('opens a new-session form with c when no field has focus', async () => {
+it('opens the keyboard new-session picker with c when no field has focus', async () => {
   renderApp()
 
   let shortcutEvent: KeyboardEvent | null = null
   act(() => {
     shortcutEvent = dispatchKey(window, 'c')
   })
-  const opened = container.querySelector('.new-session-view') !== null
-  const textarea = container.querySelector<HTMLTextAreaElement>(
-    '[aria-label="First message"]',
+  const searchInput = container.querySelector<HTMLInputElement>(
+    '[aria-label="Search directories"]',
   )
-  if (textarea === null) throw new Error('First message field was not rendered')
-  await act(async () => {
-    await userEvent.type(textarea, 'fixture prompt')
-  })
+  if (searchInput !== null) {
+    await act(async () => {
+      await userEvent.type(searchInput, 'fixture query')
+    })
+  }
 
   let typingEvent: KeyboardEvent | null = null
-  act(() => {
-    typingEvent = dispatchKey(textarea, 'c')
-  })
+  if (searchInput !== null) {
+    act(() => {
+      typingEvent = dispatchKey(searchInput, 'c')
+    })
+  }
 
   const snapshot = () => ({
-    opened,
+    openedPicker: container.querySelector('.new-session-picker') !== null,
+    openedForm: container.querySelector('.new-session-view') !== null,
     shortcutPrevented: shortcutEvent?.defaultPrevented,
-    prompt: textarea.value,
-    typingPrevented: typingEvent?.defaultPrevented,
+    query: searchInput?.value ?? null,
+    typingPrevented: typingEvent?.defaultPrevented ?? null,
   })
   expect(snapshot()).toEqual({
-    opened: true,
+    openedPicker: true,
+    openedForm: false,
     shortcutPrevented: true,
-    prompt: 'fixture prompt',
+    query: 'fixture query',
     typingPrevented: false,
   })
 })
