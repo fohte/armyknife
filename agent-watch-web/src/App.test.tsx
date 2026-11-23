@@ -2555,26 +2555,21 @@ it('moves the selected App row with j and k and scrolls it into view', () => {
   })
 })
 
-it('opens the keyboard new-session picker with c when no field has focus', async () => {
+it('opens the new-session form with c when no field has focus', () => {
   renderApp()
 
   let shortcutEvent: KeyboardEvent | null = null
   act(() => {
     shortcutEvent = dispatchKey(window, 'c')
   })
-  const searchInput = container.querySelector<HTMLInputElement>(
-    '[aria-label="Search directories"]',
+  const firstMessage = container.querySelector<HTMLTextAreaElement>(
+    '.new-session-view [aria-label="First message"]',
   )
-  if (searchInput !== null) {
-    await act(async () => {
-      await userEvent.type(searchInput, 'fixture query')
-    })
-  }
 
   let typingEvent: KeyboardEvent | null = null
-  if (searchInput !== null) {
+  if (firstMessage !== null) {
     act(() => {
-      typingEvent = dispatchKey(searchInput, 'c')
+      typingEvent = dispatchKey(firstMessage, 'c')
     })
   }
 
@@ -2582,14 +2577,14 @@ it('opens the keyboard new-session picker with c when no field has focus', async
     openedPicker: container.querySelector('.new-session-picker') !== null,
     openedForm: container.querySelector('.new-session-view') !== null,
     shortcutPrevented: shortcutEvent?.defaultPrevented,
-    query: searchInput?.value ?? null,
+    firstMessageRendered: firstMessage !== null,
     typingPrevented: typingEvent?.defaultPrevented ?? null,
   })
   expect(snapshot()).toEqual({
-    openedPicker: true,
-    openedForm: false,
+    openedPicker: false,
+    openedForm: true,
     shortcutPrevented: true,
-    query: 'fixture query',
+    firstMessageRendered: true,
     typingPrevented: false,
   })
 })

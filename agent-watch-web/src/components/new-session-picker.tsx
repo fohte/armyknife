@@ -10,7 +10,6 @@ import {
 
 import { NewSessionModelPicker } from '#components/new-session-model-picker'
 import { SessionDirectoryOptions } from '#components/session-directory-options'
-import { useNewSessionMessageKeyboard } from '#components/use-new-session-message-keyboard'
 import type { NewSessionState } from '#use-new-session'
 
 function isImeEnter(event: ReactKeyboardEvent) {
@@ -40,17 +39,11 @@ export function NewSessionPicker({
 }: NewSessionPickerProps) {
   const [activeIndex, setActiveIndex] = useState(0)
   const [modelPickerOpen, setModelPickerOpen] = useState(initialModelPickerOpen)
-  const firstMessageRef = useRef<HTMLTextAreaElement>(null)
+  const firstMessageRef = useRef<HTMLInputElement>(null)
   const modelOptionRef = useRef<HTMLButtonElement>(null)
   const pickerRef = useRef<HTMLElement>(null)
   const wasModelPickerOpen = useRef(false)
   const selectedDirectory = state.selectedDirectory
-  const handleMessageKeyDown = useNewSessionMessageKeyboard({
-    isMobile,
-    launchPending,
-    onLaunched,
-    state,
-  })
 
   useEffect(() => {
     if (modelPickerOpen) {
@@ -75,7 +68,6 @@ export function NewSessionPicker({
         tabIndex={-1}
         onKeyDown={(event) => {
           if (isImeEnter(event)) return
-          if (event.defaultPrevented) return
           if (modelPickerOpen) {
             if (event.key === 'Escape' || event.key === 'Backspace') {
               event.preventDefault()
@@ -136,12 +128,6 @@ export function NewSessionPicker({
             return
           }
           if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-            if (
-              event.target instanceof HTMLTextAreaElement &&
-              event.target.value.includes('\n')
-            ) {
-              return
-            }
             event.preventDefault()
             if (selectedDirectory !== null) {
               state.setEngine(state.engine === 'claude' ? 'codex' : 'claude')
@@ -158,12 +144,6 @@ export function NewSessionPicker({
             }
             return
           }
-          if (
-            event.key === 'Enter' &&
-            event.target instanceof HTMLTextAreaElement
-          ) {
-            return
-          }
           if (event.key === 'Enter') {
             event.preventDefault()
             if (selectedDirectory === null) {
@@ -178,8 +158,7 @@ export function NewSessionPicker({
           if (
             event.key === 'Backspace' &&
             selectedDirectory !== null &&
-            (event.target instanceof HTMLInputElement ||
-            event.target instanceof HTMLTextAreaElement
+            (event.target instanceof HTMLInputElement
               ? event.target.value.length === 0
               : true)
           ) {
@@ -213,14 +192,21 @@ export function NewSessionPicker({
             {selectedDirectory?.path ?? 'Choose a directory'}
           </button>
           {selectedDirectory !== null ? (
-            <textarea
+            <input
               ref={firstMessageRef}
               aria-label="First message"
               className="new-session-picker-message"
               onChange={(event) => {
                 state.setInitialMessage(event.currentTarget.value)
               }}
-              onKeyDown={modelPickerOpen ? undefined : handleMessageKeyDown}
+              onKeyDown={(event) => {
+                if (
+                  event.key === 'Backspace' &&
+                  event.currentTarget.value === ''
+                ) {
+                  state.chooseDirectory(null)
+                }
+              }}
               placeholder="First message (optional)"
               value={state.initialMessage}
             />
@@ -280,6 +266,18 @@ export function NewSessionPicker({
               onClick={() => {
                 state.setEngine('claude')
               }}
+              onKeyDown={(event) => {
+                if (event.key !== 'Enter' || isImeEnter(event)) {
+                  return
+                }
+                event.preventDefault()
+                if (!state.isStarting && !launchPending) {
+                  void state.start(
+                    onLaunched,
+                    event.altKey ? 'codex' : 'claude',
+                  )
+                }
+              }}
               role="option"
               type="button"
             >
@@ -287,6 +285,7 @@ export function NewSessionPicker({
                 <strong>Claude Code</strong>
                 <span> in {selectedDirectory.path}</span>
               </span>
+              <kbd>↵</kbd>
             </button>
             <button
               aria-selected={state.engine === 'codex'}
@@ -295,6 +294,15 @@ export function NewSessionPicker({
               onClick={() => {
                 state.setEngine('codex')
               }}
+              onKeyDown={(event) => {
+                if (event.key !== 'Enter' || isImeEnter(event)) {
+                  return
+                }
+                event.preventDefault()
+                if (!state.isStarting && !launchPending) {
+                  void state.start(onLaunched, 'codex')
+                }
+              }}
               role="option"
               type="button"
             >
@@ -302,6 +310,7 @@ export function NewSessionPicker({
                 <strong>Codex</strong>
                 <span> in {selectedDirectory.path}</span>
               </span>
+              <kbd>⌥↵</kbd>
             </button>
             <h2>OPTIONS</h2>
             <button
@@ -367,13 +376,7 @@ export function NewSessionPicker({
               </button>
             ) : (
               <>
-                <span>
-                  {selectedDirectory === null
-                    ? '↑↓ Directory · ↵ Select'
-                    : state.initialMessage.includes('\n')
-                      ? '↑↓ Message cursor'
-                      : '↑↓ Engine / model'}
-                </span>
+                <span>↑↓ Engine / model</span>
                 <span>⌥W Worktree</span>
                 <span>⌫ Change directory</span>
                 <button
