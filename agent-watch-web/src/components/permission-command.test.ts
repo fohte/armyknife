@@ -18,6 +18,7 @@ it('leaves unsupported shell syntax unchanged to avoid misleading previews', () 
     'printf "%s" ${VALUE:-left|right} && printf complete',
     `printf "%s" "$(printf "%s|%s" left right)" && printf complete`,
     "printf '%s' $'left\\'|right' && printf complete",
+    `printf '%s' @(alpha|beta) && printf complete`,
   ]
 
   expect(commands.map(formatPermissionCommand)).toEqual(commands)

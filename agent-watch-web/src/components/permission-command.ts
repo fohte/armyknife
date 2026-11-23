@@ -107,6 +107,7 @@ function hasUnsupportedSyntax(command: string): boolean {
     command.includes('((') ||
     command.includes('<(') ||
     command.includes('>(') ||
+    /[@?!*+]\(/.test(command) ||
     /\bcase\b/.test(command) ||
     /"[^"]*\$\(/.test(command)
   )
