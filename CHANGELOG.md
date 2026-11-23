@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.865](https://github.com/fohte/armyknife/compare/v0.1.864...v0.1.865) (2026-11-23)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** wrap long commands ([#2122](https://github.com/fohte/armyknife/issues/2122)) ([3383bec](https://github.com/fohte/armyknife/commit/3383bec9a527ff982689f7984d8e2a978d7664fe))
+
 ## [0.1.864](https://github.com/fohte/armyknife/compare/v0.1.863...v0.1.864) (2026-11-23)
 
 
