@@ -239,6 +239,7 @@ export function ConversationPane({
 
   const { onRewind } = useConversationPaneActions({
     sessionId: session.id,
+    sessionTitle: session.title,
     run,
     refresh: () => {
       void refresh()

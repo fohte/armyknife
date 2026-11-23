@@ -6829,6 +6829,7 @@ it('opens the forked session with the selected message when storage rejects its 
     text: 'Revisit this request.',
     rewindId: 'fixture-user-message',
   }
+  let completeRewind: ((response: Response) => void) | undefined
   const originalSetItem = Storage.prototype.setItem.bind(window.localStorage)
   vi.spyOn(Storage.prototype, 'setItem').mockImplementation((key, value) => {
     if (key === `agent-watch-web:composer-draft:${forkedSession.id}`) {
@@ -6851,7 +6852,9 @@ it('opens the forked session with the selected message when storage rejects its 
       return Promise.resolve(jsonResponse({ ...actions, rewind: true }))
     }
     if (url.endsWith('/rewind')) {
-      return Promise.resolve(jsonResponse({ sessionId: forkedSession.id }))
+      return new Promise((resolve) => {
+        completeRewind = resolve
+      })
     }
     return Promise.resolve(jsonResponse({}))
   })
@@ -6875,7 +6878,11 @@ it('opens the forked session with the selected message when storage rejects its 
 
   root = createRoot(container)
   act(() => {
-    root?.render(<RewindHarness />)
+    root?.render(
+      <AsyncActionFeedbackProvider>
+        <RewindHarness />
+      </AsyncActionFeedbackProvider>,
+    )
   })
   expect(
     await waitForState(
@@ -6889,6 +6896,17 @@ it('opens the forked session with the selected message when storage rejects its 
     container
       .querySelector<HTMLButtonElement>('.chat-rewind-menu button')
       ?.click()
+  })
+  expect(
+    await waitForState(
+      () =>
+        container.querySelector('.async-action-toast-stack')?.textContent ===
+        'Rewinding sessionChoose a retry policy',
+    ),
+  ).toBe(true)
+  await act(async () => {
+    completeRewind?.(jsonResponse({ sessionId: forkedSession.id }))
+    await Promise.resolve()
   })
   expect(
     await waitForState(
@@ -6913,6 +6931,7 @@ it('opens the forked session with the selected message when storage rejects its 
       `agent-watch-web:composer-draft:${forkedSession.id}`,
     ),
     composer: container.querySelector<HTMLTextAreaElement>('textarea')?.value,
+    feedback: container.querySelector('.async-action-toast-stack')?.textContent,
   })
   expect(snapshot()).toEqual({
     selectedSessions: [['fixture-fork-session']],
@@ -6927,6 +6946,114 @@ it('opens the forked session with the selected message when storage rejects its 
     ],
     draft: null,
     composer: 'Revisit this request.',
+    feedback: 'Rewound sessionChoose a retry policy',
+  })
+})
+
+it('shows rewind request errors without switching sessions or offering Retry', async () => {
+  const originalSession = { ...session, engine: 'claude' as const }
+  const forkedSession = { ...originalSession, id: 'fixture-fork-session' }
+  const selectedSessions = vi.fn()
+  const selectedMessage: ChatItem = {
+    type: 'user',
+    text: 'Revisit this request.',
+    rewindId: 'fixture-user-message',
+  }
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.endsWith('/messages?limit=100')) {
+      return Promise.resolve(jsonResponse(messagesResponse([selectedMessage])))
+    }
+    if (url.endsWith('/actions')) {
+      return Promise.resolve(jsonResponse({ ...actions, rewind: true }))
+    }
+    if (url.endsWith('/rewind')) {
+      return Promise.resolve(
+        jsonResponse({ error: 'The rewind could not be completed.' }, 500),
+      )
+    }
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  function RewindHarness() {
+    const [currentSession, setCurrentSession] = useState(originalSession)
+    return (
+      <ConversationPane
+        key={currentSession.id}
+        session={currentSession}
+        refreshKey={0}
+        sessionTreeRefreshKey={0}
+        onSelectSession={(id) => {
+          selectedSessions(id)
+          setCurrentSession(forkedSession)
+        }}
+      />
+    )
+  }
+
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <AsyncActionFeedbackProvider>
+        <RewindHarness />
+      </AsyncActionFeedbackProvider>,
+    )
+  })
+  expect(
+    await waitForState(
+      () => container.querySelector('.chat-rewind-menu summary') !== null,
+    ),
+  ).toBe(true)
+  act(() => {
+    container.querySelector<HTMLElement>('.chat-rewind-menu summary')?.click()
+  })
+  await act(async () => {
+    container
+      .querySelector<HTMLButtonElement>('.chat-rewind-menu button')
+      ?.click()
+    await Promise.resolve()
+  })
+  expect(
+    await waitForState(
+      () =>
+        container.querySelector('.async-action-toast-stack')?.textContent ===
+        'Rewind failedChoose a retry policyThe rewind could not be completed.',
+    ),
+  ).toBe(true)
+
+  const snapshot = () => ({
+    selectedSessions: selectedSessions.mock.calls,
+    rewindRequests: fetcher.mock.calls
+      .filter(([, init]) => init?.method === 'POST')
+      .map(([input, init]) => ({
+        url: requestUrl(input),
+        body:
+          typeof init?.body === 'string'
+            ? (JSON.parse(init.body) as unknown)
+            : null,
+      })),
+    retryButtons: Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '.async-action-toast-stack .async-action-controls button',
+      ),
+      (button) => button.textContent,
+    ),
+    composer: container.querySelector<HTMLTextAreaElement>('textarea')?.value,
+  })
+  expect(snapshot()).toEqual({
+    selectedSessions: [],
+    rewindRequests: [
+      {
+        url: '/api/sessions/sample-session/rewind',
+        body: {
+          messageId: 'fixture-user-message',
+          mode: 'conversation_and_code',
+        },
+      },
+    ],
+    retryButtons: [],
+    composer: '',
   })
 })
 

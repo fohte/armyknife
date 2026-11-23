@@ -71,7 +71,10 @@ function withDesktopLayout(
     isAsyncActionFailureStatus(action.status),
   ).length
   const runningCount = actions.filter(
-    (action) => action.status === 'merging' || action.status === 'closing',
+    (action) =>
+      action.status === 'merging' ||
+      action.status === 'closing' ||
+      action.status === 'rewinding',
   ).length
   const count = failed
     ? failedCount
@@ -435,7 +438,7 @@ export const ActivityKeepsTheResult: Story = {
 }
 
 export const ActivityShowsEmptyState: Story = {
-  name: 'Activity explains where merge, close, and command results will appear.',
+  name: 'Activity explains where merge, close, rewind, and command results will appear.',
   args: { actions: [], toastIds: [], activityOpen: true },
 }
 
@@ -486,7 +489,7 @@ export const DesktopActivityShowsCloseFailure: Story = {
 }
 
 export const PhoneShowsEmptyActivity: Story = {
-  name: 'The phone sheet explains where merge, close, and command results appear.',
+  name: 'The phone sheet explains where merge, close, rewind, and command results appear.',
   parameters: {
     layout: 'fullscreen',
     viewport: { defaultViewport: 'mobile2' },

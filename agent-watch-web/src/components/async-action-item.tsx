@@ -89,6 +89,18 @@ function copy(action: AsyncAction) {
         return action.kind === 'close'
           ? { title: 'Close failed', line: 'Close failed' }
           : { title: '', line: '' }
+      case 'rewinding':
+        return action.kind === 'rewind'
+          ? { title: 'Rewinding session', line: 'Rewinding session…' }
+          : { title: '', line: '' }
+      case 'rewound':
+        return action.kind === 'rewind'
+          ? { title: 'Rewound session', line: 'Rewound session' }
+          : { title: '', line: '' }
+      case 'rewindFailed':
+        return action.kind === 'rewind'
+          ? { title: 'Rewind failed', line: 'Rewind failed' }
+          : { title: '', line: '' }
       case 'runningCommand':
         return { title: 'Running command', line: 'Running command…' }
       case 'ranCommand':
@@ -107,10 +119,12 @@ function copy(action: AsyncAction) {
   const icon =
     action.status === 'merging' ||
     action.status === 'closing' ||
+    action.status === 'rewinding' ||
     action.status === 'runningCommand'
       ? 'running'
       : action.status === 'merged' ||
           action.status === 'closed' ||
+          action.status === 'rewound' ||
           action.status === 'ranCommand'
         ? 'success'
         : action.status === 'queued'
@@ -150,6 +164,7 @@ export function AsyncActionItem({
   const isQueue = text.icon === 'queued'
   const label = form === 'line' ? text.line : text.title
   const hasCloseChecks = action.kind === 'close' && action.checks !== undefined
+  const canRetry = action.kind !== 'rewind'
   const canShowCommandOutput =
     action.kind === 'command' &&
     (action.status === 'commandFailed' || action.status === 'commandTimedOut')
@@ -202,17 +217,22 @@ export function AsyncActionItem({
             </button>
           </div>
         ) : null}
-        {isFailure && !canShowCommandOutput && form === 'toast' ? (
+        {isFailure &&
+        !canShowCommandOutput &&
+        form === 'toast' &&
+        (canRetry || hasCloseChecks) ? (
           <div className="async-action-controls">
             {hasCloseChecks ? (
               <button type="button" onClick={onCloseKeepWorktree}>
                 Close and keep worktree
               </button>
             ) : null}
-            <button type="button" onClick={onRetry}>
-              Retry
-            </button>
-            {action.kind !== 'close' || hasCloseChecks ? (
+            {canRetry ? (
+              <button type="button" onClick={onRetry}>
+                Retry
+              </button>
+            ) : null}
+            {action.kind === 'merge' || hasCloseChecks ? (
               <button type="button" onClick={onDetails}>
                 Details
               </button>
@@ -226,16 +246,21 @@ export function AsyncActionItem({
             </button>
           </div>
         ) : null}
-        {isFailure && !canShowCommandOutput && form === 'row' ? (
+        {isFailure &&
+        !canShowCommandOutput &&
+        form === 'row' &&
+        (canRetry || hasCloseChecks) ? (
           <div className="async-action-controls">
             {hasCloseChecks ? (
               <button type="button" onClick={onCloseKeepWorktree}>
                 Close and keep worktree
               </button>
             ) : null}
-            <button type="button" onClick={onRetry}>
-              Retry
-            </button>
+            {canRetry ? (
+              <button type="button" onClick={onRetry}>
+                Retry
+              </button>
+            ) : null}
             {hasCloseChecks ? (
               <button
                 className="async-action-open-terminal"
@@ -247,20 +272,25 @@ export function AsyncActionItem({
             ) : null}
           </div>
         ) : null}
-        {isFailure && !canShowCommandOutput && form === 'line' ? (
+        {isFailure &&
+        !canShowCommandOutput &&
+        form === 'line' &&
+        (canRetry || hasCloseChecks) ? (
           <div className="async-action-controls">
             {hasCloseChecks ? (
               <button type="button" onClick={onCloseKeepWorktree}>
                 Close and keep worktree
               </button>
             ) : null}
-            <button
-              className="async-action-line-retry"
-              type="button"
-              onClick={onRetry}
-            >
-              Retry
-            </button>
+            {canRetry ? (
+              <button
+                className="async-action-line-retry"
+                type="button"
+                onClick={onRetry}
+              >
+                Retry
+              </button>
+            ) : null}
           </div>
         ) : null}
       </div>
