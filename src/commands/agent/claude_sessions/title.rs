@@ -54,15 +54,25 @@ fn first_sentence(message: &str) -> &str {
         let Some((index, character)) = characters.next() else {
             break None;
         };
+        let mut lookahead = characters.clone();
+        let mut end = index + character.len_utf8();
+        while let Some((quote_index, quote)) = lookahead.next_if(|(_, next_character)| {
+            matches!(
+                *next_character,
+                '"' | '\'' | '”' | '’' | '»' | '›' | '」' | '』'
+            )
+        }) {
+            end = quote_index + quote.len_utf8();
+        }
         let ends_sentence = match character {
-            '.' => characters
+            '.' => lookahead
                 .peek()
                 .is_none_or(|(_, next_character)| next_character.is_whitespace()),
             '!' | '?' | '。' | '！' | '？' => true,
             _ => false,
         };
         if ends_sentence {
-            break Some(index + character.len_utf8());
+            break Some(end);
         }
     };
     sentence_end.map_or(trimmed, |end| &trimmed[..end])
@@ -143,6 +153,9 @@ mod tests {
         "Visit example.com for details."
     )]
     #[case::period_at_end("Prepare runok v1.0.0", "Prepare runok v1.0.0")]
+    #[case::quoted_ascii_sentence("Say \"Done.\" Then verify it.", "Say \"Done.\"")]
+    #[case::quoted_sentence_at_end("Say “Done.”", "Say “Done.”")]
+    #[case::quoted_japanese_sentence("「完了。」次を確認する。", "「完了。」")]
     #[case::ascii_exclamation(
         "Repair the sample index! Then verify it.",
         "Repair the sample index!"
