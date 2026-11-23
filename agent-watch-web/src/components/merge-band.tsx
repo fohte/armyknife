@@ -1,8 +1,6 @@
 import '#components/merge-band.css'
 
-import { Button } from '@fohte/ui/button'
-import { LoaderCircle } from 'lucide-react'
-
+import { PullRequestMergeButton } from '#components/pull-request-merge-button'
 import type { PullRequest } from '#types'
 
 type MergeBandRow = {
@@ -59,42 +57,25 @@ export function MergeBand({
                 : (pullRequest.title ?? 'Untitled pull request')}
             </p>
           </div>
-          {status === 'ready' ? (
-            <Button
-              className="merge-band-action is-ready"
-              type="button"
-              variant="secondary"
-              aria-label={`Merge PR #${String(pullRequest.number)}${pullRequest.owner === undefined || pullRequest.repo === undefined ? '' : ` in ${pullRequest.owner}/${pullRequest.repo}`}`}
-              onClick={() => {
-                onMerge(pullRequest)
-              }}
-            >
-              Merge
-            </Button>
-          ) : status === 'mergeFailed' && canRetry !== false ? (
-            <Button
-              className="merge-band-action is-failed"
-              type="button"
-              variant="outline"
-              aria-label={`Retry merging PR #${String(pullRequest.number)}`}
-              onClick={() => {
-                onRetry(pullRequest)
-              }}
-            >
-              Retry
-            </Button>
-          ) : status === 'mergeFailed' ? null : (
-            <Button
-              className="merge-band-action is-pending"
-              type="button"
-              variant="outline"
-              disabled
-              aria-label={`${statusLabels[status]} PR #${String(pullRequest.number)}`}
-            >
-              <LoaderCircle aria-hidden="true" size={13} />
-              {status === 'queued' ? 'Queued' : 'Merging…'}
-            </Button>
-          )}
+          <PullRequestMergeButton
+            status={status}
+            pullRequestNumber={pullRequest.number}
+            isMobile={isMobile}
+            placement="band"
+            {...(pullRequest.owner === undefined ||
+            pullRequest.repo === undefined
+              ? {}
+              : {
+                  pullRequestRepo: `${pullRequest.owner}/${pullRequest.repo}`,
+                })}
+            {...(canRetry === undefined ? {} : { canRetry })}
+            onMerge={() => {
+              onMerge(pullRequest)
+            }}
+            onRetry={() => {
+              onRetry(pullRequest)
+            }}
+          />
         </div>
       ))}
     </section>

@@ -192,10 +192,12 @@ function PullRequestHarness({
   isMobile,
   pullRequests: sessionPullRequests = pullRequests,
   mergeStatus = () => null,
+  onRetryMerge,
 }: {
   isMobile: boolean
   pullRequests?: PullRequest[]
   mergeStatus?: (pullRequest: PullRequest) => AsyncActionStatus | null
+  onRetryMerge?: (pullRequest: PullRequest) => void
 }) {
   const [open, setOpen] = useState(false)
   return (
@@ -205,6 +207,7 @@ function PullRequestHarness({
       isMobile={isMobile}
       open={open}
       mergeStatus={mergeStatus}
+      {...(onRetryMerge === undefined ? {} : { onRetryMerge })}
       onOpenChange={setOpen}
     />
   )
@@ -215,6 +218,7 @@ function render(
   sessionPullRequests: PullRequest[] = pullRequests,
   mergeStatus: (pullRequest: PullRequest) => AsyncActionStatus | null = () =>
     null,
+  onRetryMerge?: (pullRequest: PullRequest) => void,
 ) {
   act(() => {
     root?.render(
@@ -222,6 +226,7 @@ function render(
         isMobile={isMobile}
         pullRequests={sessionPullRequests}
         mergeStatus={mergeStatus}
+        {...(onRetryMerge === undefined ? {} : { onRetryMerge })}
       />,
     )
   })
@@ -310,7 +315,7 @@ it.each([
             .querySelector('.session-pr-row-mobile-state')
             ?.getAttribute('aria-hidden') ?? null,
         reason: row.querySelector('.session-pr-row-state')?.textContent ?? null,
-        hasAction: row.querySelector('button') !== null,
+        hasAction: row.querySelector('button[aria-label^="Merge PR"]') !== null,
         ciState:
           row
             .querySelector('.session-pr-ci-dot[role="img"]')
@@ -370,8 +375,8 @@ it.each([
           repo: 'example-org/example-infra',
           mobileState: isMobile ? '· Open' : null,
           mobileStateAriaHidden: null,
-          reason: 'CI passed',
-          hasAction: false,
+          reason: 'Merge',
+          hasAction: true,
           ciState: 'CI passed',
           href: 'https://github.com/example-org/example-infra/pull/43',
         },
@@ -390,9 +395,9 @@ it.each([
           number: '#41',
           title: 'Record attempts',
           repo: 'example-org/example-repo',
-          mobileState: isMobile ? '· ✓ Merged' : null,
+          mobileState: isMobile ? '· Merged' : null,
           mobileStateAriaHidden: null,
-          reason: isMobile ? null : 'Merged',
+          reason: '✓ Merged',
           hasAction: false,
           ciState: 'CI status unknown',
           href: 'https://github.com/example-org/example-repo/pull/41',
@@ -439,7 +444,7 @@ it.each([
   expect(snapshot()).toEqual({ expanded: 'false', popoverVisible: false })
 })
 
-it('shows merge status as read-only text in the pull request list', () => {
+it('shows a disabled merge action while a pull request is merging', () => {
   render(false, pullRequests, (pullRequest) =>
     pullRequest.number === 43 ? 'merging' : null,
   )
@@ -456,16 +461,145 @@ it('shows merge status as read-only text in the pull request list', () => {
     rowStatus: mergeableRow?.querySelector('.session-pr-row-state')
       ?.textContent,
     hasMergeAction: mergeableRow?.querySelector('button') !== null,
+    actionDisabled:
+      mergeableRow?.querySelector<HTMLButtonElement>('button')?.disabled ??
+      false,
     expanded: container
       .querySelector('.session-pr-trigger')
       ?.getAttribute('aria-expanded'),
   })
   expect(snapshot()).toEqual({
     rowStatus: 'Merging…',
-    hasMergeAction: false,
+    hasMergeAction: true,
+    actionDisabled: true,
     expanded: 'true',
   })
 })
+
+it.each([
+  { description: 'desktop', isMobile: false },
+  { description: 'phone', isMobile: true },
+])(
+  'shows a failure label and retry action in the $description list row',
+  ({ isMobile }) => {
+    const mergeablePullRequest = pullRequests.find(
+      (pullRequest) => pullRequest.number === 43,
+    )
+    if (mergeablePullRequest === undefined) {
+      throw new Error('Expected a mergeable pull request')
+    }
+    const onRetryMerge = vi.fn<(pullRequest: PullRequest) => void>()
+    render(isMobile, [mergeablePullRequest], () => 'mergeFailed', onRetryMerge)
+
+    const trigger = container.querySelector<HTMLButtonElement>(
+      '.session-pr-trigger',
+    )
+    if (trigger === null) throw new Error('Expected pull request trigger')
+    act(() => {
+      trigger.click()
+    })
+    const row = container.querySelector<HTMLElement>('.session-pr-row')
+
+    const snapshot = () => {
+      const label = row?.querySelector<HTMLElement>(
+        '.pr-merge-entry-failure-label',
+      )
+      const action = row?.querySelector<HTMLButtonElement>('button')
+      return {
+        label: label?.textContent.trim() ?? null,
+        labelRole: label?.getAttribute('role') ?? null,
+        icon: label?.querySelector('svg')?.getAttribute('aria-hidden') ?? null,
+        action: action?.textContent ?? null,
+        actionLabel: action?.getAttribute('aria-label') ?? null,
+        actionDisabled: action?.disabled ?? false,
+        retryCalls: onRetryMerge.mock.calls,
+      }
+    }
+    const action = row?.querySelector<HTMLButtonElement>('button')
+    if (action === null || action === undefined) {
+      throw new Error('Expected retry action')
+    }
+    act(() => {
+      action.click()
+    })
+    expect(snapshot()).toEqual({
+      label: 'Failed',
+      labelRole: 'status',
+      icon: 'true',
+      action: 'Retry',
+      actionLabel: 'Retry merging PR #43',
+      actionDisabled: false,
+      retryCalls: [[mergeablePullRequest]],
+    })
+  },
+)
+
+it.each([
+  {
+    description: 'a merge on desktop',
+    isMobile: false,
+    status: 'merged' as const,
+    expectedStatus: '✓ Merged',
+  },
+  {
+    description: 'a merge on the phone',
+    isMobile: true,
+    status: 'merged' as const,
+    expectedStatus: '✓ Merged',
+  },
+  {
+    description: 'an already-completed merge on desktop',
+    isMobile: false,
+    status: 'alreadyMerged' as const,
+    expectedStatus: '✓ Already merged',
+  },
+  {
+    description: 'an already-completed merge on the phone',
+    isMobile: true,
+    status: 'alreadyMerged' as const,
+    expectedStatus: '✓ Already merged',
+  },
+])(
+  'shows the merged row status and marker for $description',
+  ({ isMobile, status, expectedStatus }) => {
+    const mergeablePullRequest = pullRequests.find(
+      (pullRequest) => pullRequest.number === 43,
+    )
+    if (mergeablePullRequest === undefined) {
+      throw new Error('Expected a mergeable pull request')
+    }
+    render(isMobile, [mergeablePullRequest], () => status)
+
+    const trigger = container.querySelector<HTMLButtonElement>(
+      '.session-pr-trigger',
+    )
+    if (trigger === null) throw new Error('Expected pull request trigger')
+    act(() => {
+      trigger.click()
+    })
+    const row = container.querySelector<HTMLElement>('.session-pr-row')
+
+    const snapshot = () => ({
+      status: row?.querySelector('.session-pr-row-state')?.textContent ?? null,
+      mobileState:
+        row?.querySelector('.session-pr-row-mobile-state')?.textContent ?? null,
+      ciDotClass: row?.querySelector('.session-pr-ci-dot')?.className ?? null,
+      actionTag: row?.querySelector('.pr-merge-entry')?.tagName ?? null,
+      hasButton: row?.querySelector('button') !== null,
+    })
+    expect(snapshot()).toEqual({
+      status: expectedStatus,
+      mobileState: isMobile
+        ? status === 'merged'
+          ? '· Merged'
+          : '· Already merged'
+        : null,
+      ciDotClass: 'session-pr-ci-dot is-passed is-merged',
+      actionTag: 'SPAN',
+      hasButton: false,
+    })
+  },
+)
 
 it.each([
   {
@@ -618,7 +752,7 @@ it('ignores stale merge feedback for non-open pull requests', () => {
     hasFailureBorder: false,
     mergeMark: false,
     ciDot: false,
-    rows: ['CI passed', 'Closed', 'Merged', 'Merged'],
+    rows: ['Merge', 'Closed', '✓ Merged', '✓ Merged'],
   })
 })
 
@@ -875,7 +1009,7 @@ it('shows the CI failure reason as read-only row status text', () => {
           hasMergeAction:
             row.querySelector('button[aria-label^="Merge PR"]') !== null,
         },
-  ).toEqual({ reason: 'CI failed', hasMergeAction: false })
+  ).toEqual({ reason: 'CI failing', hasMergeAction: false })
 })
 
 it('shows the missing head SHA reason as read-only row status text', () => {

@@ -41,6 +41,21 @@ const desktopMergeButtonDecorator: Decorator = (Story) => (
   </div>
 )
 
+const mobileMergeListDecorator: Decorator = (Story) => (
+  <div
+    className="conversation-pane"
+    data-mobile="true"
+    style={{
+      position: 'relative',
+      height: 844,
+      background: 'var(--aw-bg-app)',
+      color: 'var(--aw-text-primary)',
+    }}
+  >
+    <Story />
+  </div>
+)
+
 const otherPullRequests: PullRequest[] = [
   {
     number: 43,
@@ -281,38 +296,66 @@ export const ChecksHavePassedInTheDesktopList: Story = {
 }
 
 export const ChecksHavePassedInTheMobileList: Story = {
-  name: 'The mobile sheet shows CI passed for a mergeable pull request',
+  name: 'The mobile sheet shows a merge button for a mergeable pull request',
   args: {
     pullRequests: [mergeablePullRequest],
     isMobile: true,
     open: true,
   },
-  decorators: [
-    (Story) => (
-      <div
-        className="conversation-pane"
-        data-mobile="true"
-        style={{
-          position: 'relative',
-          height: 500,
-          background: 'var(--aw-bg-app)',
-          color: 'var(--aw-text-primary)',
-        }}
-      >
-        <Story />
-      </div>
-    ),
-  ],
+  decorators: [mobileMergeListDecorator],
 }
 
 export const MergeIsInProgressInTheDesktopList: Story = {
-  name: 'The desktop list shows Merging while a pull request is being merged',
+  name: 'The desktop list disables Merge while a pull request is merging',
   args: {
     pullRequests: [mergeablePullRequest],
     open: true,
     mergeStatus: () => 'merging',
   },
   decorators: [desktopMergeButtonDecorator],
+}
+
+export const MergeIsInProgressInTheMobileList: Story = {
+  name: 'The mobile sheet disables Merge while a pull request is merging',
+  args: {
+    pullRequests: [mergeablePullRequest],
+    isMobile: true,
+    open: true,
+    mergeStatus: () => 'merging',
+  },
+  decorators: [mobileMergeListDecorator],
+}
+
+export const MergeIsQueuedInTheMobileList: Story = {
+  name: 'The mobile sheet shows a disabled queued merge action',
+  args: {
+    pullRequests: [mergeablePullRequest],
+    isMobile: true,
+    open: true,
+    mergeStatus: (): AsyncActionStatus => 'queued',
+  },
+  decorators: [mobileMergeListDecorator],
+}
+
+export const MergeCanBeRetriedInTheDesktopList: Story = {
+  name: 'The desktop list offers Retry after a merge fails',
+  args: {
+    pullRequests: [mergeablePullRequest],
+    open: true,
+    mergeStatus: (): AsyncActionStatus => 'mergeFailed',
+  },
+  decorators: [desktopMergeButtonDecorator],
+}
+
+export const MergeCanBeRetriedInTheMobileList: Story = {
+  name: 'The mobile sheet offers Retry after a merge fails',
+  args: {
+    pullRequests: [mergeablePullRequest],
+    isMobile: true,
+    open: true,
+    mergeStatus: (): AsyncActionStatus => 'mergeFailed',
+  },
+  decorators: [mobileMergeListDecorator],
 }
 
 export const MobilePullRequestSheetIsOpen: Story = {
@@ -348,6 +391,16 @@ export const AFailingPullRequestCannotBeMerged: Story = {
   },
 }
 
+export const AFailingPullRequestCannotBeMergedOnMobile: Story = {
+  name: 'The mobile sheet explains why a pull request cannot be merged',
+  args: {
+    pullRequests: [{ ...currentBranchPullRequest, ciState: 'Failed' }],
+    isMobile: true,
+    open: true,
+  },
+  decorators: [mobileMergeListDecorator],
+}
+
 export const MobileCompactHeaderButton: Story = {
   name: 'The mobile header shows a compact pull request icon and total count',
   args: {
@@ -375,7 +428,7 @@ export const MobileCompactHeaderButton: Story = {
 }
 
 export const MergeSucceededInTheList: Story = {
-  name: 'The pull request row reports a successful merge.',
+  name: 'The desktop list reports a completed merge',
   args: {
     pullRequests: [mergeablePullRequest],
     open: true,
@@ -384,8 +437,19 @@ export const MergeSucceededInTheList: Story = {
   decorators: [desktopMergeButtonDecorator],
 }
 
+export const MergeSucceededInTheMobileList: Story = {
+  name: 'The mobile sheet reports a completed merge',
+  args: {
+    pullRequests: [mergeablePullRequest],
+    isMobile: true,
+    open: true,
+    mergeStatus: (): AsyncActionStatus => 'merged',
+  },
+  decorators: [mobileMergeListDecorator],
+}
+
 export const PullRequestWasAlreadyMergedInTheList: Story = {
-  name: 'The pull request row reports that it was already merged.',
+  name: 'The desktop list reports that the pull request was already merged',
   args: {
     pullRequests: [mergeablePullRequest],
     open: true,
@@ -394,22 +458,23 @@ export const PullRequestWasAlreadyMergedInTheList: Story = {
   decorators: [desktopMergeButtonDecorator],
 }
 
+export const PullRequestWasAlreadyMergedInTheMobileList: Story = {
+  name: 'The mobile sheet reports that the pull request was already merged',
+  args: {
+    pullRequests: [mergeablePullRequest],
+    isMobile: true,
+    open: true,
+    mergeStatus: (): AsyncActionStatus => 'alreadyMerged',
+  },
+  decorators: [mobileMergeListDecorator],
+}
+
 export const MergeIsQueuedInTheList: Story = {
-  name: 'The pull request row reports that the merge is queued',
+  name: 'The desktop list shows a disabled queued merge action',
   args: {
     pullRequests: [mergeablePullRequest],
     open: true,
     mergeStatus: (): AsyncActionStatus => 'queued',
-  },
-  decorators: [desktopMergeButtonDecorator],
-}
-
-export const MergeCanBeRetriedInTheList: Story = {
-  name: 'The pull request row reports a failed merge without an action',
-  args: {
-    pullRequests: [mergeablePullRequest],
-    open: true,
-    mergeStatus: (): AsyncActionStatus => 'mergeFailed',
   },
   decorators: [desktopMergeButtonDecorator],
 }
