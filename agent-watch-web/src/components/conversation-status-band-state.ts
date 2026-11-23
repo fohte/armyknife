@@ -1,4 +1,5 @@
 import { getPendingCritReviewUrl } from '#components/conversation-crit-url'
+import type { ReviewDocumentSummary } from '#components/conversation-pane-response'
 import type { BackgroundTask, ChatItem, Session } from '#types'
 
 export type ConversationStatusBandState = {
@@ -7,6 +8,7 @@ export type ConversationStatusBandState = {
     | 'compacting'
     | 'background-tasks'
     | 'crit-review'
+    | 'draft-review'
     | 'question'
     | 'permission'
     | 'waiting'
@@ -30,14 +32,53 @@ function pendingPermission(messages: readonly ChatItem[]) {
     .find((message) => message.type === 'permission')
 }
 
+function critReviewDetail(session: Session) {
+  const pullRequests =
+    session.pullRequests !== undefined && session.pullRequests.length > 0
+      ? session.pullRequests
+      : session.pullRequest === null
+        ? []
+        : [session.pullRequest]
+  const pullRequest = pullRequests[0]
+  return pullRequest === undefined
+    ? 'crit'
+    : `crit · PR #${String(pullRequest.number)}`
+}
+
+function editorDocumentDetail(document: ReviewDocumentSummary | null) {
+  if (document === null) return 'Draft'
+  switch (document.kind) {
+    case 'pr_draft':
+      return `PR draft${document.target.branch === undefined ? '' : ` · ${document.target.branch}`}`
+    case 'issue_comment':
+      return document.target.issueNumber === undefined
+        ? 'Issue comment'
+        : `Issue comment #${String(document.target.issueNumber)}`
+    case 'issue_body':
+      return document.target.issueNumber === undefined
+        ? 'Issue body'
+        : `Issue body #${String(document.target.issueNumber)}`
+    case 'review_replies':
+      return document.target.pullRequestNumber === undefined
+        ? 'Review replies'
+        : `Review replies on PR #${String(document.target.pullRequestNumber)}`
+    case 'draft':
+      return document.target.title === undefined
+        ? 'Draft'
+        : `Draft: ${document.target.title}`
+  }
+}
+
 export function getConversationStatusBandState({
   session,
   messages,
   backgroundTasks,
+  editorReviewDocument = null,
 }: {
   session: Session
   messages: readonly ChatItem[]
   backgroundTasks: readonly BackgroundTask[]
+  editorReviewDocument?: ReviewDocumentSummary | null
 }): ConversationStatusBandState | null {
   const isCompacting = session.isCompacting === true
   const isWaitingForBackgroundTasks = session.waitingForBackgroundTasks === true
@@ -51,6 +92,19 @@ export function getConversationStatusBandState({
 
   if (isCompacting) {
     return { kind: 'compacting', detail: null }
+  }
+  if (session.reviewDocumentId != null) {
+    const documentCount = Math.max(1, session.reviewDocumentCount ?? 1)
+    const draftLabel = `${String(documentCount)} ${documentCount === 1 ? 'draft' : 'drafts'}`
+    const editorDetail = `${editorDocumentDetail(editorReviewDocument)} is in the editor`
+    const critDetail =
+      isWaitingForUser && getPendingCritReviewUrl(session) !== null
+        ? ` · ${critReviewDetail(session)}`
+        : ''
+    return {
+      kind: 'draft-review',
+      detail: `${draftLabel} · ${editorDetail}${critDetail}`,
+    }
   }
   if (isWorking) return { kind: 'working', detail: null }
   if (isWaitingForUser) {
@@ -71,19 +125,9 @@ export function getConversationStatusBandState({
       }
     }
     if (getPendingCritReviewUrl(session) !== null) {
-      const pullRequests =
-        session.pullRequests !== undefined && session.pullRequests.length > 0
-          ? session.pullRequests
-          : session.pullRequest === null
-            ? []
-            : [session.pullRequest]
-      const pullRequest = pullRequests[0]
       return {
         kind: 'crit-review',
-        detail:
-          pullRequest === undefined
-            ? 'crit'
-            : `crit · PR #${String(pullRequest.number)}`,
+        detail: critReviewDetail(session),
       }
     }
     return {

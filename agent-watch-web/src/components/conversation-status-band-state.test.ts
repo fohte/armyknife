@@ -1,5 +1,6 @@
 import { expect, it } from 'vitest'
 
+import type { ReviewDocumentSummary } from '#components/conversation-pane-response'
 import {
   type ConversationStatusBandState,
   getConversationStatusBandState,
@@ -51,12 +52,20 @@ const question: ChatItem = {
   ],
 }
 
+const editorIssueComment: ReviewDocumentSummary = {
+  id: 'fixture-review-document',
+  kind: 'issue_comment',
+  target: { issueNumber: 1234 },
+  isEditor: true,
+}
+
 type StatusCase = {
   name: string
   input: {
     session: Session
     messages?: readonly ChatItem[]
     backgroundTasks?: readonly BackgroundTask[]
+    editorReviewDocument?: ReviewDocumentSummary | null
   }
   expected: ConversationStatusBandState | null
 }
@@ -127,6 +136,43 @@ const statusCases: StatusCase[] = [
       },
     },
     expected: { kind: 'crit-review', detail: 'crit · PR #742' },
+  },
+  {
+    name: 'one draft review',
+    input: {
+      session: {
+        ...session,
+        reviewDocumentId: editorIssueComment.id,
+        reviewDocumentCount: 1,
+      },
+      editorReviewDocument: editorIssueComment,
+    },
+    expected: {
+      kind: 'draft-review',
+      detail: '1 draft · Issue comment #1234 is in the editor',
+    },
+  },
+  {
+    name: 'multiple drafts and Crit review',
+    input: {
+      session: {
+        ...session,
+        category: 'needs_action',
+        activityStatus: 'waiting',
+        isWaitingForCritReview: true,
+        kind: 'Review',
+        pullRequest: { number: 742, state: 'Open' },
+        critUrl: 'https://crit.example.test/review/fixture',
+        reviewDocumentId: editorIssueComment.id,
+        reviewDocumentCount: 4,
+      },
+      editorReviewDocument: editorIssueComment,
+    },
+    expected: {
+      kind: 'draft-review',
+      detail:
+        '4 drafts · Issue comment #1234 is in the editor · crit · PR #742',
+    },
   },
   {
     name: 'crit review with pull requests',
@@ -265,6 +311,7 @@ it.each(statusCases)(
         session: input.session,
         messages: input.messages ?? [],
         backgroundTasks: input.backgroundTasks ?? [],
+        editorReviewDocument: input.editorReviewDocument ?? null,
       }),
     ).toEqual(expected)
   },

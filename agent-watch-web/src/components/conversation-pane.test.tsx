@@ -6608,6 +6608,102 @@ it('opens the Crit review fullscreen from the status band in one click', async (
   })
 })
 
+it('opens the Review tab from the draft review band in one click', async () => {
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.endsWith('/messages?limit=100')) {
+      return Promise.resolve(jsonResponse(messagesResponse([])))
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    if (url.endsWith('/review-documents')) {
+      return Promise.resolve(
+        jsonResponse([
+          {
+            id: 'fixture-review-document',
+            kind: 'issue_comment',
+            target: { issueNumber: 1234 },
+            isEditor: true,
+            canSave: true,
+            canFinish: true,
+          },
+        ]),
+      )
+    }
+    if (url.endsWith('/review-document')) {
+      return Promise.resolve(
+        jsonResponse({
+          id: 'fixture-review-document',
+          revision: 'fixture-revision',
+          frontmatter: {},
+          body: '',
+        }),
+      )
+    }
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+  function StatusPanelHarness() {
+    const [statusPanelOpen, setStatusPanelOpen] = useState(false)
+    return (
+      <ConversationPane
+        session={{
+          ...session,
+          reviewDocumentId: 'fixture-review-document',
+          reviewDocumentCount: 1,
+          webUis: [],
+        }}
+        refreshKey={0}
+        sessionTreeRefreshKey={0}
+        onSelectSession={() => undefined}
+        statusPanelOpen={statusPanelOpen}
+        onToggleStatusPanel={() => {
+          setStatusPanelOpen((open) => !open)
+        }}
+      />
+    )
+  }
+  root = createRoot(container)
+  act(() => root?.render(<StatusPanelHarness />))
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  const reviewButton = await waitForState(
+    () =>
+      container.querySelector<HTMLButtonElement>(
+        '.conversation-status-band-review',
+      ) !== null,
+  )
+  if (!reviewButton) throw new Error('Expected the draft review action')
+  await act(async () => {
+    await userEvent.click(
+      requireElement(
+        container.querySelector<HTMLButtonElement>(
+          '.conversation-status-band-review',
+        ),
+      ),
+    )
+  })
+  const reviewTab = await waitForState(
+    () =>
+      container.querySelector('[role="tab"][aria-selected="true"]')
+        ?.textContent === 'Review',
+  )
+
+  const snapshot = () => ({
+    reviewTab,
+    selectedTab: container.querySelector('[role="tab"][aria-selected="true"]')
+      ?.textContent,
+    reviewAction: container.querySelector('.conversation-status-band-review')
+      ?.textContent,
+  })
+  expect(snapshot()).toEqual({
+    reviewTab: true,
+    selectedTab: 'Review',
+    reviewAction: 'Open drafts →',
+  })
+})
+
 it('directs Codex questions and permissions to the terminal', () => {
   const onAction = vi.fn(() => Promise.resolve(true))
   const codexActions: SessionActions = {

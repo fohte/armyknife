@@ -11,6 +11,7 @@ import type {
   CommandOutputStart,
 } from '#components/command-result-message'
 import { ConversationPaneHeader } from '#components/conversation-pane-header'
+import type { ReviewDocumentSummary } from '#components/conversation-pane-response'
 import { ConversationSelectionReply } from '#components/conversation-selection-reply'
 import { ConversationStatusBand } from '#components/conversation-status-band'
 import { getConversationStatusBandState } from '#components/conversation-status-band-state'
@@ -88,6 +89,8 @@ type ConversationPaneViewProps = {
   onOpenInTerminal?: () => void
   onSelectSession: (id: string) => void
   onReviewInCrit?: () => void
+  onOpenDrafts?: () => void
+  editorReviewDocument?: ReviewDocumentSummary | null
   isMobile?: boolean
   statusPanelOpen?: boolean
   mobileStatusPanel?: ReactNode
@@ -144,6 +147,8 @@ export function ConversationPaneView({
   onOpenInTerminal,
   onSelectSession,
   onReviewInCrit,
+  onOpenDrafts,
+  editorReviewDocument,
   isMobile = false,
   statusPanelOpen = false,
   mobileStatusPanel = null,
@@ -299,6 +304,7 @@ export function ConversationPaneView({
     session,
     messages,
     backgroundTasks,
+    editorReviewDocument: editorReviewDocument ?? null,
   })
   const returnToRequestCard = () => {
     scrollToConversationStatusCard(
@@ -426,6 +432,7 @@ export function ConversationPaneView({
             backgroundTasks={backgroundTasks}
             isMobile={isMobile}
             {...(onReviewInCrit === undefined ? {} : { onReviewInCrit })}
+            {...(onOpenDrafts === undefined ? {} : { onOpenDrafts })}
             {...(statusBandState?.kind === 'question' ||
             statusBandState?.kind === 'permission'
               ? { onReturnToCard: returnToRequestCard }

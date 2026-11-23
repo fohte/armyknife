@@ -17,6 +17,7 @@ import { SessionStatusPanel } from '#components/session-status-panel'
 import { useConversationPaneActions } from '#components/use-conversation-pane-actions'
 import { useConversationPaneData } from '#components/use-conversation-pane-data'
 import { useConversationStatusPanel } from '#components/use-conversation-status-panel'
+import { useEditorReviewDocument } from '#components/use-editor-review-document'
 import {
   type SessionTreeCallbacks,
   useSessionTree,
@@ -348,6 +349,7 @@ export function ConversationPane({
       operation.sessionId === session.id && operation.type === 'interrupt',
   )
   const { messages, backgroundTasks } = displayedConversation
+  const editorReviewDocument = useEditorReviewDocument(session)
   const backgroundTaskElapsedOffset =
     messagesLoadedAt === null
       ? 0
@@ -434,6 +436,11 @@ export function ConversationPane({
       onSelectSession={selectLinkedSession}
       onReviewInCrit={() => {
         onOpenCritInFullscreen()
+        if (!statusPanelOpen) onToggleStatusPanel()
+      }}
+      editorReviewDocument={editorReviewDocument}
+      onOpenDrafts={() => {
+        onTabChange('review-document')
         if (!statusPanelOpen) onToggleStatusPanel()
       }}
       onOpenTasks={() => {

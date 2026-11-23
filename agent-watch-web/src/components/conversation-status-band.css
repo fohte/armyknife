@@ -123,7 +123,7 @@
   margin: 0;
 }
 
-.conversation-status-band--crit-review .conversation-status-band-main {
+.conversation-status-band--review .conversation-status-band-main {
   display: flex;
   min-width: 0;
   flex: 1;
@@ -131,14 +131,14 @@
   gap: 12px;
 }
 
-.conversation-status-band--crit-review .conversation-status-band-copy {
+.conversation-status-band--review .conversation-status-band-copy {
   display: grid;
   min-width: 0;
   flex: 1;
   gap: 1px;
 }
 
-.conversation-status-band--crit-review .conversation-status-band-title {
+.conversation-status-band--review .conversation-status-band-title {
   display: flex;
   min-width: 0;
   align-items: center;
@@ -147,7 +147,7 @@
   white-space: nowrap;
 }
 
-.conversation-status-band--crit-review .conversation-status-band-title strong {
+.conversation-status-band--review .conversation-status-band-title strong {
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -169,6 +169,7 @@
   border: 1px solid #fafafa;
   background: #fafafa;
   color: #0a0a0a;
+  font-family: inherit;
   font-size: 12px;
   font-weight: 700;
 }
@@ -243,8 +244,7 @@
   gap: 8px;
 }
 
-.conversation-status-band--crit-review.is-mobile
-  .conversation-status-band-title {
+.conversation-status-band--review.is-mobile .conversation-status-band-title {
   font-size: 14px;
 }
 
@@ -309,11 +309,11 @@
     padding: 10px 12px;
   }
 
-  .conversation-status-band--crit-review .conversation-status-band-main {
+  .conversation-status-band--review .conversation-status-band-main {
     gap: 8px;
   }
 
-  .conversation-status-band--crit-review .conversation-status-band-title {
+  .conversation-status-band--review .conversation-status-band-title {
     font-size: 14px;
   }
 

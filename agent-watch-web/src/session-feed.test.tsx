@@ -413,6 +413,18 @@ const invalidSessionCases: {
     name: 'an inherited vibe state without an ancestor ID',
     overrides: { isPaused: false, vibeMode: { mode: 'inherited' } },
   },
+  {
+    name: 'a negative review document count',
+    overrides: { reviewDocumentCount: -1 },
+  },
+  {
+    name: 'a fractional review document count',
+    overrides: { reviewDocumentCount: 1.5 },
+  },
+  {
+    name: 'a string review document count',
+    overrides: { reviewDocumentCount: '2' },
+  },
 ]
 
 it.each(invalidSessionCases)(

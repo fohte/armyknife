@@ -134,6 +134,90 @@ export const CritReviewAndBackgroundTasksAreWaiting: Story = {
   },
 }
 
+export const OneDraftIsWaitingForReview: Story = {
+  name: 'One issue comment draft is waiting for review',
+  args: {
+    state: state(
+      'draft-review',
+      '1 draft · Issue comment #1234 is in the editor',
+    ),
+  },
+}
+
+export const MultipleDraftsAreWaitingForReview: Story = {
+  name: 'Four drafts are waiting while an issue comment is in the editor',
+  args: {
+    state: state(
+      'draft-review',
+      '4 drafts · Issue comment #1234 is in the editor',
+    ),
+  },
+}
+
+export const CritAndDraftReviewsAreWaiting: Story = {
+  name: 'Crit and draft reviews are both waiting',
+  args: {
+    state: state(
+      'draft-review',
+      '4 drafts · Issue comment #1234 is in the editor · crit · PR #742',
+    ),
+  },
+}
+
+export const OneDraftIsWaitingForReviewOnMobile: Story = {
+  name: 'The mobile band offers one issue comment draft for review',
+  args: {
+    state: state(
+      'draft-review',
+      '1 draft · Issue comment #1234 is in the editor',
+    ),
+    isMobile: true,
+  },
+  decorators: [
+    (Story) => (
+      <div style={{ width: '390px' }}>
+        <Story />
+      </div>
+    ),
+  ],
+}
+
+export const MultipleDraftsAreWaitingForReviewOnMobile: Story = {
+  name: 'The mobile band shows the count of four drafts',
+  args: {
+    state: state(
+      'draft-review',
+      '4 drafts · Issue comment #1234 is in the editor',
+    ),
+    isMobile: true,
+  },
+  decorators: [
+    (Story) => (
+      <div style={{ width: '390px' }}>
+        <Story />
+      </div>
+    ),
+  ],
+}
+
+export const CritAndDraftReviewsAreWaitingOnMobile: Story = {
+  name: 'The mobile band shows Crit and draft review waiting together',
+  args: {
+    state: state(
+      'draft-review',
+      '4 drafts · Issue comment #1234 is in the editor · crit · PR #742',
+    ),
+    isMobile: true,
+  },
+  decorators: [
+    (Story) => (
+      <div style={{ width: '390px' }}>
+        <Story />
+      </div>
+    ),
+  ],
+}
+
 export const AllCritBackgroundTasksAreExpanded: Story = {
   name: 'The Crit review shows every background task',
   args: {
