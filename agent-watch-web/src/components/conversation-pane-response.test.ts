@@ -2,9 +2,9 @@ import { expect, it } from 'vitest'
 
 import {
   isConversationResponse,
-  isReviewDocumentSummaryList,
   isSessionTreeResponse,
 } from '#components/conversation-pane-response'
+import { isReviewDocumentSummaryList } from '#components/review-document-summary'
 
 const response = (message: unknown) => ({
   messages: [message],
