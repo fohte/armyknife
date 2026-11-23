@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.874](https://github.com/fohte/armyknife/compare/v0.1.873...v0.1.874) (2026-11-23)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** hide generated context ([#2138](https://github.com/fohte/armyknife/issues/2138)) ([1fb25be](https://github.com/fohte/armyknife/commit/1fb25bef6187684cb2e3c5a29722ae44ad331ef8))
+
 ## [0.1.873](https://github.com/fohte/armyknife/compare/v0.1.872...v0.1.873) (2026-11-23)
 
 
