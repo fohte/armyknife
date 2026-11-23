@@ -6829,6 +6829,7 @@ it('opens the forked session with the selected message when storage rejects its 
     text: 'Revisit this request.',
     rewindId: 'fixture-user-message',
   }
+  let completeRewind: ((response: Response) => void) | undefined
   const originalSetItem = Storage.prototype.setItem.bind(window.localStorage)
   vi.spyOn(Storage.prototype, 'setItem').mockImplementation((key, value) => {
     if (key === `agent-watch-web:composer-draft:${forkedSession.id}`) {
@@ -6851,7 +6852,9 @@ it('opens the forked session with the selected message when storage rejects its 
       return Promise.resolve(jsonResponse({ ...actions, rewind: true }))
     }
     if (url.endsWith('/rewind')) {
-      return Promise.resolve(jsonResponse({ sessionId: forkedSession.id }))
+      return new Promise((resolve) => {
+        completeRewind = resolve
+      })
     }
     return Promise.resolve(jsonResponse({}))
   })
@@ -6875,7 +6878,11 @@ it('opens the forked session with the selected message when storage rejects its 
 
   root = createRoot(container)
   act(() => {
-    root?.render(<RewindHarness />)
+    root?.render(
+      <AsyncActionFeedbackProvider>
+        <RewindHarness />
+      </AsyncActionFeedbackProvider>,
+    )
   })
   expect(
     await waitForState(
@@ -6889,6 +6896,17 @@ it('opens the forked session with the selected message when storage rejects its 
     container
       .querySelector<HTMLButtonElement>('.chat-rewind-menu button')
       ?.click()
+  })
+  expect(
+    await waitForState(
+      () =>
+        container.querySelector('.async-action-toast-stack')?.textContent ===
+        'Rewinding sessionChoose a retry policy',
+    ),
+  ).toBe(true)
+  await act(async () => {
+    completeRewind?.(jsonResponse({ sessionId: forkedSession.id }))
+    await Promise.resolve()
   })
   expect(
     await waitForState(
@@ -6913,6 +6931,7 @@ it('opens the forked session with the selected message when storage rejects its 
       `agent-watch-web:composer-draft:${forkedSession.id}`,
     ),
     composer: container.querySelector<HTMLTextAreaElement>('textarea')?.value,
+    feedback: container.querySelector('.async-action-toast-stack')?.textContent,
   })
   expect(snapshot()).toEqual({
     selectedSessions: [['fixture-fork-session']],
@@ -6927,6 +6946,7 @@ it('opens the forked session with the selected message when storage rejects its 
     ],
     draft: null,
     composer: 'Revisit this request.',
+    feedback: 'Rewound sessionChoose a retry policy',
   })
 })
 

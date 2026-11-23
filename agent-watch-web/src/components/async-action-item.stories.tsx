@@ -24,7 +24,9 @@ const meta = {
   },
   decorators: [
     (Story, context) =>
-      context.args.form === 'toast' ? (
+      context.id.includes('rewind') ? (
+        <Story />
+      ) : context.args.form === 'toast' ? (
         <div className="async-action-toast-stack">
           <Story />
         </div>
@@ -37,8 +39,117 @@ const meta = {
 export default meta
 type Story = StoryObj<typeof meta>
 
+type FeedbackComparisonState = 'running' | 'succeeded' | 'failed'
+
+function RewindCloseComparison({ state }: { state: FeedbackComparisonState }) {
+  const rewindStatus =
+    state === 'running'
+      ? 'rewinding'
+      : state === 'succeeded'
+        ? 'rewound'
+        : 'rewindFailed'
+  const closeStatus =
+    state === 'running'
+      ? 'closing'
+      : state === 'succeeded'
+        ? 'closed'
+        : 'closeFailed'
+  const renderItem = (
+    kind: 'rewind' | 'close',
+    status: typeof rewindStatus | typeof closeStatus,
+  ) => (
+    <div>
+      <h3>{kind === 'rewind' ? 'Rewind' : 'Close'}</h3>
+      <div
+        className="async-action-toast-stack"
+        style={{
+          position: 'static',
+          width: '100%',
+          maxHeight: 'none',
+          flexDirection: 'column',
+          overflow: 'visible',
+          pointerEvents: 'auto',
+        }}
+      >
+        <AsyncActionItem
+          action={{
+            id: kind === 'rewind' ? 1 : 2,
+            kind,
+            sessionId: 'example-session',
+            sessionTitle: 'Review the example request',
+            status,
+            ...(state === 'failed'
+              ? {
+                  error: `The example session could not be ${kind === 'rewind' ? 'rewound' : 'closed'}.`,
+                }
+              : {}),
+            createdAt: 1_800_000_000_000,
+          }}
+          form="toast"
+          onRetry={() => undefined}
+          onDetails={() => undefined}
+        />
+      </div>
+    </div>
+  )
+
+  return (
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+        gap: 24,
+        maxWidth: 900,
+        padding: 32,
+      }}
+    >
+      {renderItem('rewind', rewindStatus)}
+      {renderItem('close', closeStatus)}
+    </div>
+  )
+}
+
+function RewindCloseAllStatesComparison() {
+  return (
+    <div style={{ display: 'grid', gap: 24, padding: 32 }}>
+      {(['running', 'succeeded', 'failed'] as const).map((state) => (
+        <section key={state}>
+          <h2>
+            {state === 'running'
+              ? 'Running'
+              : state === 'succeeded'
+                ? 'Succeeded'
+                : 'Failed'}
+          </h2>
+          <RewindCloseComparison state={state} />
+        </section>
+      ))}
+    </div>
+  )
+}
+
 export const MergeIsRunning: Story = {
   name: 'The merge is running in a toast.',
+}
+
+export const RewindIsRunningBesideClose: Story = {
+  name: 'The running rewind matches the running close toast.',
+  render: () => <RewindCloseComparison state="running" />,
+}
+
+export const RewindSucceededBesideClose: Story = {
+  name: 'The successful rewind matches the successful close toast.',
+  render: () => <RewindCloseComparison state="succeeded" />,
+}
+
+export const RewindFailedBesideClose: Story = {
+  name: 'The failed rewind matches the failed close toast.',
+  render: () => <RewindCloseComparison state="failed" />,
+}
+
+export const RewindAndCloseFeedbackComparison: Story = {
+  name: 'Rewind and Close use the same feedback for each outcome.',
+  render: () => <RewindCloseAllStatesComparison />,
 }
 
 export const MergeSucceededInActivity: Story = {

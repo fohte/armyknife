@@ -10,117 +10,34 @@ import {
 } from 'react'
 
 import {
+  type AsyncAction,
+  type AsyncActionOutcome,
+  isAsyncActionRunningStatus,
+  runningStatusFor,
+  type StartAsyncActionOptions,
+} from '#async-action-model'
+import {
   shiftMergeTimelineIndices as shiftMergeActionTimelineIndices,
   type ShiftMergeTimelineIndicesOptions,
 } from '#async-action-timeline'
 import { AsyncActionFeedbackHost } from '#components/async-action-feedback-host'
-import type { CloseWorktreeChecks } from '#session-operation-types'
 
-export type AsyncActionStatus =
-  | 'runningCommand'
-  | 'ranCommand'
-  | 'commandFailed'
-  | 'commandTimedOut'
-  | 'merging'
-  | 'merged'
-  | 'alreadyMerged'
-  | 'queued'
-  | 'mergeFailed'
-  | 'closing'
-  | 'closed'
-  | 'closeFailed'
-
-export function isAsyncActionFailureStatus(status: AsyncActionStatus) {
-  return (
-    status === 'mergeFailed' ||
-    status === 'closeFailed' ||
-    status === 'commandFailed' ||
-    status === 'commandTimedOut'
-  )
-}
-
-export function isAsyncActionRunningStatus(status: AsyncActionStatus) {
-  return (
-    status === 'merging' || status === 'closing' || status === 'runningCommand'
-  )
-}
-
-export function formatAsyncActionTime(timestamp: number) {
-  const date = new Date(timestamp)
-  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
-}
-
-export type AsyncAction = {
-  id: number
-  sessionId: string
-  sessionTitle: string
-  kind: 'merge' | 'close' | 'command'
-  status: AsyncActionStatus
-  command?: string
-  commandOutputIndex?: number
-  exitCode?: number
-  pullRequestNumber?: number
-  pullRequestOwner?: string
-  pullRequestRepo?: string
-  pullRequestHeadSha?: string
-  timelineIndex?: number
-  message?: string
-  error?: string
-  checks?: CloseWorktreeChecks
-  createdAt: number
-  completedAt?: number
-}
-
-export type AsyncActionOutcome =
-  | {
-      status: 'ranCommand' | 'commandTimedOut'
-      commandOutputIndex?: number
-    }
-  | {
-      status: 'commandFailed'
-      exitCode?: number
-      error?: string
-      commandOutputIndex?: number
-    }
-  | { status: 'merged' | 'alreadyMerged' | 'queued'; message?: string }
-  | { status: 'closed' }
-  | {
-      status: 'mergeFailed' | 'closeFailed'
-      error: string
-      checks?: CloseWorktreeChecks
-    }
-
-export type StartAsyncActionOptions = {
-  kind: 'merge' | 'close' | 'command'
-  sessionId: string
-  sessionTitle: string
-  command?: string
-  pullRequestNumber?: number
-  pullRequestOwner?: string
-  pullRequestRepo?: string
-  pullRequestHeadSha?: string
-  timelineIndex?: number
-  run: () => Promise<AsyncActionOutcome>
-  onRetry?: (retry: () => void, actionId: number) => void
-  onCloseKeepWorktree?: () => void
-  onOpenInTerminal?: () => void
-}
+export type {
+  AsyncAction,
+  AsyncActionOutcome,
+  AsyncActionStatus,
+  StartAsyncActionOptions,
+} from '#async-action-model'
+export {
+  formatAsyncActionTime,
+  isAsyncActionFailureStatus,
+  isAsyncActionRunningStatus,
+} from '#async-action-model'
 
 type AsyncActionRetryUpdate = Pick<
   StartAsyncActionOptions,
   'run' | 'onRetry' | 'pullRequestHeadSha'
 >
-function runningStatusFor(kind: AsyncAction['kind']): AsyncActionStatus {
-  switch (kind) {
-    case 'merge':
-      return 'merging'
-    case 'close':
-      return 'closing'
-    case 'command':
-      return 'runningCommand'
-  }
-}
-
 type AsyncActionFeedbackValue = {
   actions: readonly AsyncAction[]
   toastIds: readonly number[]
@@ -254,6 +171,7 @@ export function AsyncActionFeedbackProvider({
         outcome.status === 'alreadyMerged' ||
         outcome.status === 'queued' ||
         outcome.status === 'closed' ||
+        outcome.status === 'rewound' ||
         outcome.status === 'ranCommand'
       ) {
         const timer = setTimeout(() => {

@@ -89,6 +89,18 @@ function copy(action: AsyncAction) {
         return action.kind === 'close'
           ? { title: 'Close failed', line: 'Close failed' }
           : { title: '', line: '' }
+      case 'rewinding':
+        return action.kind === 'rewind'
+          ? { title: 'Rewinding session', line: 'Rewinding session…' }
+          : { title: '', line: '' }
+      case 'rewound':
+        return action.kind === 'rewind'
+          ? { title: 'Rewound session', line: 'Rewound session' }
+          : { title: '', line: '' }
+      case 'rewindFailed':
+        return action.kind === 'rewind'
+          ? { title: 'Rewind failed', line: 'Rewind failed' }
+          : { title: '', line: '' }
       case 'runningCommand':
         return { title: 'Running command', line: 'Running command…' }
       case 'ranCommand':
@@ -107,10 +119,12 @@ function copy(action: AsyncAction) {
   const icon =
     action.status === 'merging' ||
     action.status === 'closing' ||
+    action.status === 'rewinding' ||
     action.status === 'runningCommand'
       ? 'running'
       : action.status === 'merged' ||
           action.status === 'closed' ||
+          action.status === 'rewound' ||
           action.status === 'ranCommand'
         ? 'success'
         : action.status === 'queued'
@@ -212,7 +226,7 @@ export function AsyncActionItem({
             <button type="button" onClick={onRetry}>
               Retry
             </button>
-            {action.kind !== 'close' || hasCloseChecks ? (
+            {action.kind === 'merge' || hasCloseChecks ? (
               <button type="button" onClick={onDetails}>
                 Details
               </button>

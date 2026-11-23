@@ -79,6 +79,34 @@ function MissingProviderHarness({
   )
 }
 
+function RewindFeedbackHarness({
+  run,
+}: {
+  run: () => Promise<AsyncActionOutcome>
+}) {
+  const feedback = useOptionalAsyncActionFeedback()
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => {
+          feedback?.start({
+            kind: 'rewind',
+            sessionId: 'example-session',
+            sessionTitle: 'Review the example request',
+            run,
+          })
+        }}
+      >
+        Start rewind
+      </button>
+      <output>
+        {JSON.stringify(feedback?.actions.map(({ status }) => status))}
+      </output>
+    </>
+  )
+}
+
 function CommandFeedbackHarness({
   run,
 }: {
@@ -279,6 +307,45 @@ it('records a merge while it runs, then keeps its result in Activity', async () 
     state: '{"actions":["merged"],"toastIds":[]}',
     toast: null,
     activity: 'Merged PR #42Sample session14:13',
+  })
+})
+
+it('shows rewind failure in the action toast and Activity state', async () => {
+  const run = vi.fn(() =>
+    Promise.resolve({
+      status: 'rewindFailed' as const,
+      error: 'The example session could not be rewound.',
+    }),
+  )
+  act(() => {
+    root?.render(
+      <AsyncActionFeedbackProvider>
+        <RewindFeedbackHarness run={run} />
+      </AsyncActionFeedbackProvider>,
+    )
+  })
+
+  const startButton = container.querySelector('button')
+  if (!(startButton instanceof HTMLButtonElement)) {
+    throw new Error('Expected the start rewind button')
+  }
+  await act(async () => {
+    await userEvent.click(startButton)
+    await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    status: textContent('output'),
+    toast: textContent('.async-action-toast-stack'),
+    failureRole: container
+      .querySelector('.async-action-item')
+      ?.getAttribute('role'),
+  })
+  expect(snapshot()).toEqual({
+    status: '["rewindFailed"]',
+    toast:
+      'Rewind failedReview the example requestThe example session could not be rewound.Retry',
+    failureRole: 'alert',
   })
 })
 
