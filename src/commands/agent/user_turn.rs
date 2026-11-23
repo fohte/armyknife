@@ -328,6 +328,29 @@ mod tests {
     }
 
     #[test]
+    fn stale_pr_draft_marker_does_not_create_a_body_turn() {
+        let mut session = session("waiting", timestamp(1));
+        session.status = SessionStatus::WaitingInput;
+        session.pending_human_review_ids.insert(
+            [
+                "pr-draft-review:example-review",
+                "v3",
+                "123",
+                "/fixture/draft.md",
+                "",
+                "4294967295",
+                "missing-process-start",
+            ]
+            .join("\0"),
+        );
+
+        assert_eq!(
+            next_user_turn(&[session], &AgentConfig::default()).map(|turn| turn.kind),
+            None
+        );
+    }
+
+    #[test]
     fn finished_crit_review_is_not_a_user_turn_until_the_client_reconnects() {
         let mut session = session("review", timestamp(1));
         session.status = SessionStatus::WaitingInput;

@@ -1,10 +1,11 @@
+use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
-use crate::infra::process::is_process_alive;
+use crate::infra::process::{is_process_alive, process_start_time, process_start_time_matches};
 
 use super::error::{HumanInTheLoopError, Result};
 use crate::infra::tmux;
@@ -25,9 +26,13 @@ impl LockGuard {
         let lock_path = Self::lock_path(document_path);
         let holder_pid = std::process::id();
         let lock_id = uuid::Uuid::new_v4().to_string();
+        let process_start_times = process_start_time(holder_pid)
+            .map(|start_time| BTreeMap::from([(holder_pid, start_time)]))
+            .unwrap_or_default();
         let record = LockRecord {
             id: lock_id.clone(),
             pids: vec![holder_pid],
+            process_start_times,
         };
 
         loop {
@@ -75,7 +80,7 @@ impl LockGuard {
         let Ok(Some(record)) = read_record(file) else {
             return false;
         };
-        same_file_at_path(file, &lock_path) && record.pids.iter().any(|pid| is_process_alive(*pid))
+        same_file_at_path(file, &lock_path) && record.has_live_holder(is_process_alive)
     }
 
     /// Get the lock file path for a document.
@@ -108,6 +113,7 @@ impl Drop for LockGuard {
 struct LockRecord {
     id: String,
     pids: Vec<u32>,
+    process_start_times: BTreeMap<u32, String>,
 }
 
 impl LockRecord {
@@ -121,6 +127,13 @@ impl LockRecord {
         for pid in &self.pids {
             contents.push_str("pid=");
             contents.push_str(&pid.to_string());
+            contents.push('\n');
+        }
+        for (pid, start_time) in &self.process_start_times {
+            contents.push_str("process_start=");
+            contents.push_str(&pid.to_string());
+            contents.push(':');
+            contents.push_str(start_time);
             contents.push('\n');
         }
         contents.into_bytes()
@@ -143,19 +156,43 @@ impl LockRecord {
         }
 
         let mut pids = Vec::new();
+        let mut process_start_times = BTreeMap::new();
         for line in lines {
-            let pid = line.strip_prefix("pid=")?.parse::<u32>().ok()?;
-            if pid == 0 {
-                return None;
+            if let Some(value) = line.strip_prefix("pid=") {
+                let pid = value.parse::<u32>().ok()?;
+                if pid == 0 {
+                    return None;
+                }
+                pids.push(pid);
+            } else {
+                let value = line.strip_prefix("process_start=")?;
+                let (pid, start_time) = value.split_once(':')?;
+                let pid = pid.parse::<u32>().ok()?;
+                if pid == 0 || start_time.is_empty() {
+                    return None;
+                }
+                process_start_times.insert(pid, start_time.to_string());
             }
-            pids.push(pid);
         }
 
-        if pids.is_empty() {
+        if pids.is_empty() || process_start_times.keys().any(|pid| !pids.contains(pid)) {
             return None;
         }
 
-        Some(Self { id, pids })
+        Some(Self {
+            id,
+            pids,
+            process_start_times,
+        })
+    }
+
+    fn has_live_holder(&self, mut is_alive: impl FnMut(u32) -> bool) -> bool {
+        self.pids.iter().any(|pid| {
+            self.process_start_times.get(pid).map_or_else(
+                || is_alive(*pid),
+                |start_time| process_start_time_matches(*pid, start_time),
+            )
+        })
     }
 }
 
@@ -207,7 +244,7 @@ fn inspect_lock<T>(
             continue;
         }
 
-        return if record.pids.iter().any(|pid| is_alive(*pid)) {
+        return if record.has_live_holder(&mut is_alive) {
             LockState::Active
         } else {
             LockState::Stale(on_stale(&file))
@@ -293,6 +330,9 @@ fn register_holder(path: &Path, lock_id: &str, holder_pid: u32) -> Result<()> {
     }
 
     record.pids.push(holder_pid);
+    if let Some(start_time) = process_start_time(holder_pid) {
+        record.process_start_times.insert(holder_pid, start_time);
+    }
     replace_record(path, &file, &record)?;
     Ok(())
 }
@@ -326,8 +366,15 @@ fn release_holder_with(
 
     let remaining_pids: Vec<_> = record
         .pids
-        .into_iter()
-        .filter(|pid| *pid != holder_pid && is_alive(*pid))
+        .iter()
+        .copied()
+        .filter(|pid| {
+            *pid != holder_pid
+                && record.process_start_times.get(pid).map_or_else(
+                    || is_alive(*pid),
+                    |start_time| process_start_time_matches(*pid, start_time),
+                )
+        })
         .collect();
     if remaining_pids.is_empty() {
         if same_file_at_path(&file, path) && fs::remove_file(path).is_ok() {
@@ -336,9 +383,15 @@ fn release_holder_with(
         return;
     }
 
+    let remaining_process_start_times = record
+        .process_start_times
+        .into_iter()
+        .filter(|(pid, _)| remaining_pids.contains(pid))
+        .collect();
     let remaining = LockRecord {
         id: record.id,
         pids: remaining_pids,
+        process_start_times: remaining_process_start_times,
     };
     let _ = replace_record(path, &file, &remaining);
 }
@@ -483,6 +536,7 @@ mod tests {
         let record = LockRecord {
             id: id.to_string(),
             pids: pids.to_vec(),
+            process_start_times: BTreeMap::new(),
         };
         fs::write(path, record.serialize()).unwrap();
     }
@@ -515,6 +569,22 @@ mod tests {
             (initially_locked, while_held, after_drop),
             (false, (true, true), (false, false)),
         );
+    }
+
+    #[rstest]
+    fn lock_guard_rejects_a_reused_pid_when_its_start_time_changes(
+        review_document: ReviewDocumentFixture,
+    ) {
+        let lock = LockGuard::acquire(&review_document.path).unwrap();
+        let lock_path = LockGuard::lock_path(&review_document.path);
+        let mut record = LockRecord::parse(&fs::read(&lock_path).unwrap()).unwrap();
+        record
+            .process_start_times
+            .insert(lock.holder_pid, "different-process-start".to_string());
+        fs::write(&lock_path, record.serialize()).unwrap();
+
+        assert!(!LockGuard::is_locked(&review_document.path));
+        drop(lock);
     }
 
     #[rstest]
@@ -601,15 +671,15 @@ mod tests {
         let lock_path = LockGuard::lock_path(&review_document.path);
         let parent_guard = LockGuard::acquire(&review_document.path).unwrap();
         let parent_pid = parent_guard.holder_pid;
-        register_holder(&lock_path, parent_guard.lock_id(), 202).unwrap();
+        register_holder(&lock_path, parent_guard.lock_id(), u32::MAX).unwrap();
         let after_register = LockRecord::parse(&fs::read(&lock_path).unwrap()).unwrap();
 
         release_holder_with(&lock_path, parent_guard.lock_id(), parent_pid, |pid| {
-            pid == 202
+            pid == u32::MAX
         });
         let after_parent = LockRecord::parse(&fs::read(&lock_path).unwrap()).unwrap();
-        let locked_after_parent = inspect_lock(&lock_path, |pid| pid == 202, |_| ());
-        release_holder_with(&lock_path, parent_guard.lock_id(), 202, |_| false);
+        let locked_after_parent = inspect_lock(&lock_path, |pid| pid == u32::MAX, |_| ());
+        release_holder_with(&lock_path, parent_guard.lock_id(), u32::MAX, |_| false);
 
         assert_eq!(
             (
@@ -618,7 +688,7 @@ mod tests {
                 matches!(locked_after_parent, LockState::Active),
                 lock_path.exists(),
             ),
-            (vec![parent_pid, 202], vec![202], true, false),
+            (vec![parent_pid, u32::MAX], vec![u32::MAX], true, false),
         );
     }
 

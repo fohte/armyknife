@@ -141,7 +141,9 @@ fn review_document_marker_with(
         let queue_key = fields.next()?;
         let pid = fields.next().and_then(|value| value.parse::<u32>().ok())?;
         let process_started_at = fields.next()?;
-        if !process_start_time_matches(pid, process_started_at) {
+        if !process_start_time_matches(pid, process_started_at)
+            && !LockGuard::is_locked(Path::new(path))
+        {
             return None;
         }
         (started_at, path, Some(queue_key))
@@ -378,6 +380,36 @@ mod tests {
         ]
         .join("\0");
 
+        assert_eq!(review_document_marker_with(&marker, |_, _| false), None);
+    }
+
+    #[test]
+    fn review_document_marker_stays_active_while_an_editor_holds_the_lock() {
+        let temp_dir = TempDir::new().expect("temp dir creation should succeed");
+        let draft_path = temp_dir.path().join("fixture-draft.md");
+        let marker = [
+            "review-id",
+            "v3",
+            "123",
+            draft_path.to_str().expect("fixture path should be UTF-8"),
+            "queue",
+            "41",
+            "linux:987",
+        ]
+        .join("\0");
+        let expected_marker = Some(super::ReviewDocumentMarker {
+            id: "review-id".to_string(),
+            path: draft_path.clone(),
+            queue_key: Some("queue".to_string()),
+            started_at: 123,
+        });
+        let lock = LockGuard::acquire(&draft_path).expect("editor review lock should be active");
+
+        assert_eq!(
+            review_document_marker_with(&marker, |_, _| false),
+            expected_marker
+        );
+        drop(lock);
         assert_eq!(review_document_marker_with(&marker, |_, _| false), None);
     }
 
