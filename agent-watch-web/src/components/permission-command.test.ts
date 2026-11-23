@@ -26,6 +26,18 @@ it('keeps combined pipe operators intact', () => {
   )
 })
 
+it('leaves shell comments unchanged after a word boundary', () => {
+  const command = 'printf safe # && printf dangerous | sed'
+
+  expect(formatPermissionCommand(command)).toBe(command)
+})
+
+it('formats separators after a hash embedded in a word', () => {
+  expect(formatPermissionCommand('printf safe#value && printf done')).toBe(
+    'printf safe#value &&\n  printf done',
+  )
+})
+
 it('does not split escaped shell separators', () => {
   const command = 'printf \\&\\& && printf done'
 
