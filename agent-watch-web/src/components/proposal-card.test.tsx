@@ -532,6 +532,15 @@ it('keeps a proposal choice in its own session when labels share a sequence numb
         (input) => input.checked,
       ),
     ),
+    commentLabelsTargetOwnTextarea: cards.map((card) => {
+      const commentLabel = requireElement(
+        card.querySelector<HTMLLabelElement>('.chat-proposal-comment-label'),
+      )
+      const comment = requireElement(
+        card.querySelector<HTMLTextAreaElement>('.chat-proposal-comment'),
+      )
+      return commentLabel.control === comment
+    }),
   })
   expect(snapshot()).toEqual({
     scrollBeforeSelection,
@@ -542,6 +551,7 @@ it('keeps a proposal choice in its own session when labels share a sequence numb
       [false, false],
       [false, true],
     ],
+    commentLabelsTargetOwnTextarea: [true, true],
   })
 })
 
