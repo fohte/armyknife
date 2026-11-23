@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.867](https://github.com/fohte/armyknife/compare/v0.1.866...v0.1.867) (2026-11-23)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show folded to-dos in Inbox ([#2125](https://github.com/fohte/armyknife/issues/2125)) ([a06281d](https://github.com/fohte/armyknife/commit/a06281d4c37ecede5b362672f750c41e51212fae))
+
 ## [0.1.866](https://github.com/fohte/armyknife/compare/v0.1.865...v0.1.866) (2026-11-23)
 
 
