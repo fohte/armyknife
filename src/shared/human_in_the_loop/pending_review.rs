@@ -3,6 +3,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::commands::agent::store;
 use crate::shared::env_var::EnvVars;
+use crate::shared::human_in_the_loop::LockGuard;
+
+use super::PR_DRAFT_REVIEW_MARKER;
 
 pub(super) struct PendingReviewGuard {
     sessions_dir: PathBuf,
@@ -87,11 +90,15 @@ impl PendingReviewGuard {
                     .duration_since(UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_nanos();
-                format!(
-                    "{marker_id}\0v2\0{started_at}\0{}\0{}",
-                    path.to_string_lossy(),
-                    queue_key.unwrap_or_default()
-                )
+                let path = path.to_string_lossy();
+                let queue_key = queue_key.unwrap_or_default();
+                match crate::infra::process::process_start_time(std::process::id()) {
+                    Some(process_started_at) => format!(
+                        "{marker_id}\0v3\0{started_at}\0{path}\0{queue_key}\0{}\0{process_started_at}",
+                        std::process::id(),
+                    ),
+                    None => format!("{marker_id}\0v2\0{started_at}\0{path}\0{queue_key}"),
+                }
             }
             None => marker_id,
         };
@@ -118,16 +125,37 @@ pub(crate) struct ReviewDocumentMarker {
 
 /// Returns the document metadata stored with an active review marker.
 pub(crate) fn review_document_marker(review_id: &str) -> Option<ReviewDocumentMarker> {
+    review_document_marker_with(review_id, crate::infra::process::process_start_time_matches)
+}
+
+fn review_document_marker_with(
+    review_id: &str,
+    process_start_time_matches: impl Fn(u32, &str) -> bool,
+) -> Option<ReviewDocumentMarker> {
     let (id, metadata) = review_id.split_once('\0')?;
     let mut fields = metadata.split('\0');
     let first = fields.next()?;
-    let (started_at, path, queue_key) = if first == "v2" {
-        let started_at = fields.next().and_then(|value| value.parse::<u128>().ok());
-        match (started_at, fields.next()) {
-            (Some(started_at), Some(path)) => (started_at, path, fields.next()),
-            _ => (0, first, None),
+    let (started_at, path, queue_key) = if first == "v3" {
+        let started_at = fields.next().and_then(|value| value.parse::<u128>().ok())?;
+        let path = fields.next()?;
+        let queue_key = fields.next()?;
+        let pid = fields.next().and_then(|value| value.parse::<u32>().ok())?;
+        let process_started_at = fields.next()?;
+        if !process_start_time_matches(pid, process_started_at) {
+            return None;
         }
+        (started_at, path, Some(queue_key))
+    } else if first == "v2" {
+        let started_at = fields.next().and_then(|value| value.parse::<u128>().ok())?;
+        let path = fields.next()?;
+        if !LockGuard::is_locked(Path::new(path)) {
+            return None;
+        }
+        (started_at, path, fields.next())
     } else {
+        if !LockGuard::is_locked(Path::new(first)) {
+            return None;
+        }
         (0, first, None)
     };
     if path.is_empty() {
@@ -139,6 +167,15 @@ pub(crate) fn review_document_marker(review_id: &str) -> Option<ReviewDocumentMa
         queue_key: queue_key.filter(|key| !key.is_empty()).map(str::to_string),
         started_at,
     })
+}
+
+pub(crate) fn is_active_pr_draft_review_marker(review_id: &str) -> bool {
+    review_id.starts_with(PR_DRAFT_REVIEW_MARKER)
+        && if review_id.contains('\0') {
+            review_document_marker(review_id).is_some()
+        } else {
+            true
+        }
 }
 
 /// Returns the document path stored with an active review marker.
@@ -172,8 +209,9 @@ mod tests {
 
     use crate::commands::agent::store;
     use crate::commands::agent::types::{Engine, Session, SessionStatus};
+    use crate::shared::human_in_the_loop::LockGuard;
 
-    use super::{PendingReviewGuard, review_document_marker};
+    use super::{PendingReviewGuard, review_document_marker, review_document_marker_with};
 
     fn session(session_id: &str) -> Session {
         Session {
@@ -325,5 +363,47 @@ mod tests {
                 BTreeSet::new()
             )
         );
+    }
+
+    #[test]
+    fn review_document_marker_is_ignored_when_the_owner_process_has_exited() {
+        let marker = [
+            "review-id",
+            "v3",
+            "123",
+            "/fixture/draft.md",
+            "queue",
+            "41",
+            "linux:987",
+        ]
+        .join("\0");
+
+        assert_eq!(review_document_marker_with(&marker, |_, _| false), None);
+    }
+
+    #[test]
+    fn v2_review_document_marker_stays_readable_while_its_lock_is_active() {
+        let temp_dir = TempDir::new().expect("temp dir creation should succeed");
+        let draft_path = temp_dir.path().join("fixture-draft.md");
+        let lock = LockGuard::acquire(&draft_path).expect("review lock should be acquired");
+        let review_id = [
+            "legacy-id",
+            "v2",
+            "123",
+            draft_path.to_str().expect("fixture path should be UTF-8"),
+            "queue",
+        ]
+        .join("\0");
+
+        assert_eq!(
+            review_document_marker(&review_id),
+            Some(super::ReviewDocumentMarker {
+                id: "legacy-id".to_string(),
+                path: draft_path,
+                queue_key: Some("queue".to_string()),
+                started_at: 123,
+            })
+        );
+        drop(lock);
     }
 }

@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 
 use super::types::{DisplayStatus, Session, SessionStatus};
 use crate::shared::config::{AgentConfig, AgentStatusState};
-use crate::shared::human_in_the_loop::{PR_DRAFT_REVIEW_MARKER, review_document_path};
+use crate::shared::human_in_the_loop::{is_active_pr_draft_review_marker, review_document_path};
 
 /// Variant order is the shared next-action priority used by tmux status and watch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -127,7 +127,7 @@ fn has_pending_review_document(session: &Session) -> bool {
     session
         .pending_human_review_ids
         .iter()
-        .any(|id| review_document_path(id).is_some() || id.starts_with(PR_DRAFT_REVIEW_MARKER))
+        .any(|id| review_document_path(id).is_some() || is_active_pr_draft_review_marker(id))
 }
 
 fn waiting_input_user_turn(session: &Session) -> Option<UserTurnKind> {
@@ -156,6 +156,7 @@ mod tests {
     use std::collections::BTreeSet;
     use std::path::PathBuf;
 
+    use crate::shared::human_in_the_loop::PR_DRAFT_REVIEW_MARKER;
     use chrono::{DateTime, TimeZone, Utc};
     use rstest::rstest;
 
