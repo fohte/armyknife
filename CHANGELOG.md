@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.868](https://github.com/fohte/armyknife/compare/v0.1.867...v0.1.868) (2026-11-23)
+
+
+### Bug Fixes
+
+* **agent:** keep periods inside temporary titles ([#2130](https://github.com/fohte/armyknife/issues/2130)) ([31e5e86](https://github.com/fohte/armyknife/commit/31e5e8632c0d4d00b57f9c4543d05a0d6cf57938))
+
 ## [0.1.867](https://github.com/fohte/armyknife/compare/v0.1.866...v0.1.867) (2026-11-23)
 
 
