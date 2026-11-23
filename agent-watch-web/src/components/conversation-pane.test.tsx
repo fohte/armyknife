@@ -9660,6 +9660,131 @@ it('loads older messages from a tail cursor and anchors when the epoch changes',
   })
 })
 
+it('keeps a merge result after the messages present when an older page is prepended', async () => {
+  const initialMessages: ChatItem[] = [
+    { type: 'assistant', text: 'First visible message.' },
+    { type: 'assistant', text: 'Latest visible message.' },
+  ]
+  const olderMessage: ChatItem = {
+    type: 'assistant',
+    text: 'Older message.',
+  }
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.endsWith('/messages?limit=100')) {
+      return Promise.resolve(
+        jsonResponse(
+          messagesResponse(initialMessages, [], {
+            start: 0,
+            total: 3,
+            epoch: 'fixture-epoch-amber',
+            olderCursor: 'fixture-older-page',
+          }),
+        ),
+      )
+    }
+    if (
+      url.endsWith(
+        '/messages?olderCursor=fixture-older-page&limit=100&epoch=fixture-epoch-amber',
+      )
+    ) {
+      return Promise.resolve(
+        jsonResponse(
+          messagesResponse([olderMessage], [], {
+            start: 1,
+            total: 3,
+            epoch: 'fixture-epoch-cobalt',
+          }),
+        ),
+      )
+    }
+    if (url.endsWith('/actions')) {
+      return Promise.resolve(jsonResponse(actions))
+    }
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  function MergeResultStarter() {
+    const feedback = useOptionalAsyncActionFeedback()
+    return (
+      <button
+        type="button"
+        onClick={() => {
+          feedback?.start({
+            kind: 'merge',
+            sessionId: session.id,
+            sessionTitle: session.title,
+            pullRequestNumber: 9061,
+            timelineIndex: 2,
+            run: () => Promise.resolve({ status: 'merged' as const }),
+          })
+        }}
+      >
+        Start merge action
+      </button>
+    )
+  }
+
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <AsyncActionFeedbackProvider>
+        <MergeResultStarter />
+        <ConversationPane
+          session={session}
+          shouldSkipSessionTreeFetch
+          initialSessionTree={[]}
+          refreshKey={0}
+          sessionTreeRefreshKey={0}
+          onSelectSession={() => undefined}
+        />
+      </AsyncActionFeedbackProvider>,
+    )
+  })
+  await waitForState(
+    () => container.querySelectorAll('.chat-assistant-message').length === 2,
+  )
+  await act(async () => {
+    await userEvent.click(
+      requireElement(
+        [...container.querySelectorAll<HTMLButtonElement>('button')].find(
+          (button) => button.textContent === 'Start merge action',
+        ) ?? null,
+      ),
+    )
+  })
+  await waitForState(
+    () =>
+      container.querySelector('.async-action-item--line')?.textContent ===
+      'Merged PR #9061',
+  )
+  await act(async () => {
+    await userEvent.click(
+      requireElement(
+        container.querySelector<HTMLButtonElement>('.conversation-load-older'),
+      ),
+    )
+  })
+  await waitForState(
+    () => container.querySelectorAll('.chat-assistant-message').length === 3,
+  )
+
+  const snapshot = () =>
+    Array.from(
+      container.querySelectorAll(
+        '.conversation-scroll .chat-assistant-message, .conversation-scroll .async-action-item--line',
+      ),
+      (element) => normalizeAsyncActionLineTime(element.textContent),
+    )
+  expect(snapshot()).toEqual([
+    'Older message.',
+    'First visible message.',
+    'Latest visible message.',
+    'Merged PR #9061 · <time>',
+  ])
+})
+
 it('keeps the current page when older history ends and clears its scroll anchor', async () => {
   const resetMessages: ChatItem[] = [
     { type: 'assistant', text: 'Reset fixture response.' },

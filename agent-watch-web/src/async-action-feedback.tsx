@@ -106,6 +106,12 @@ type AsyncActionRetryUpdate = Pick<
   StartAsyncActionOptions,
   'run' | 'onRetry' | 'pullRequestHeadSha'
 >
+type ShiftMergeTimelineIndicesOptions = {
+  sessionId: string
+  from: number
+  through: number
+  offset: number
+}
 
 function runningStatusFor(kind: AsyncAction['kind']): AsyncActionStatus {
   switch (kind) {
@@ -132,6 +138,7 @@ type AsyncActionFeedbackValue = {
   start: (options: StartAsyncActionOptions) => number
   retry: (id: number) => void
   retryWith: (id: number, update: AsyncActionRetryUpdate) => void
+  shiftMergeTimelineIndices: (options: ShiftMergeTimelineIndicesOptions) => void
   requestMergeRetryConfirmation: (id: number) => void
   consumeMergeRetryConfirmation: (id: number) => void
   finishMergeRetryConfirmation: (id: number) => void
@@ -342,6 +349,30 @@ export function AsyncActionFeedbackProvider({
     [runAction],
   )
 
+  const shiftMergeTimelineIndices = useCallback(
+    ({
+      sessionId,
+      from,
+      through,
+      offset,
+    }: ShiftMergeTimelineIndicesOptions) => {
+      if (offset === 0) return
+      setActions((current) =>
+        current.map((action) => {
+          const timelineIndex = action.timelineIndex
+          return action.kind === 'merge' &&
+            action.sessionId === sessionId &&
+            timelineIndex !== undefined &&
+            timelineIndex >= from &&
+            timelineIndex <= through
+            ? { ...action, timelineIndex: timelineIndex + offset }
+            : action
+        }),
+      )
+    },
+    [],
+  )
+
   const requestMergeRetryConfirmation = useCallback((id: number) => {
     setPendingMergeRetryActionIds((current) =>
       current.includes(id) ? current : [...current, id],
@@ -459,6 +490,7 @@ export function AsyncActionFeedbackProvider({
         start,
         retry,
         retryWith,
+        shiftMergeTimelineIndices,
         requestMergeRetryConfirmation,
         consumeMergeRetryConfirmation,
         finishMergeRetryConfirmation,

@@ -5,7 +5,7 @@ import {
 } from '#async-action-feedback'
 import { AsyncActionItem } from '#components/async-action-item'
 
-export function renderConversationAsyncActionItem({
+function renderConversationAsyncActionItem({
   action,
   feedback,
 }: {
