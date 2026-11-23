@@ -52,6 +52,7 @@ export function ProposalCard({
   onAnswer,
 }: ProposalCardProps) {
   const [draftSessionId] = useState(() => sessionId ?? crypto.randomUUID())
+  const proposalFieldId = `proposal-${draftSessionId}-${String(seq)}`
   const attachmentState = useAttachments(
     `${sessionId ?? 'proposal'}:proposal:${String(seq)}`,
   )
@@ -255,9 +256,9 @@ export function ProposalCard({
             }}
           >
             <input
-              id={`proposal-${String(seq)}-option-${String(index)}`}
+              id={`${proposalFieldId}-option-${String(index)}`}
               type="radio"
-              name={`proposal-${String(seq)}`}
+              name={proposalFieldId}
               value={String(index)}
               checked={selectedChoice === index}
               disabled={isDisabled}
@@ -269,7 +270,7 @@ export function ProposalCard({
               <div className="chat-proposal-option-heading">
                 <label
                   className="chat-proposal-option-label"
-                  htmlFor={`proposal-${String(seq)}-option-${String(index)}`}
+                  htmlFor={`${proposalFieldId}-option-${String(index)}`}
                 >
                   {option.label}
                 </label>
@@ -308,14 +309,14 @@ export function ProposalCard({
         <>
           <label
             className="chat-proposal-comment-label"
-            htmlFor={`proposal-comment-${String(seq)}`}
+            htmlFor={`${proposalFieldId}-comment`}
           >
             Comment (optional)
           </label>
           <div className="chat-card-comment-drop-zone">
             {isFileDragActive ? <FileDropIndicator /> : null}
             <textarea
-              id={`proposal-comment-${String(seq)}`}
+              id={`${proposalFieldId}-comment`}
               className="chat-card-comment chat-proposal-comment"
               rows={2}
               value={comment}

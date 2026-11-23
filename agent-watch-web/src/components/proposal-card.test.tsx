@@ -2,6 +2,7 @@ import type { ComponentProps } from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { userEvent } from 'vitest/browser'
 
 import { MarkdownSessionLinksProvider } from '#components/markdown-message'
 import { ProposalCard } from '#components/proposal-card'
@@ -85,7 +86,10 @@ function renderCards(cardProps: Props[]) {
       >
         <>
           {cardProps.map((card) => (
-            <ProposalCard {...card} key={card.seq} />
+            <ProposalCard
+              {...card}
+              key={`${card.sessionId ?? 'proposal'}-${String(card.seq)}`}
+            />
           ))}
         </>
       </MarkdownSessionLinksProvider>,
@@ -340,6 +344,7 @@ it('shows a saved image in an answered proposal comment', () => {
 it('keeps option labels phrasing-only and links associated with their radios', () => {
   renderCard(
     props({
+      sessionId: 'session-alpha',
       options: [
         {
           label: 'Use the existing flow',
@@ -373,8 +378,8 @@ it('keeps option labels phrasing-only and links associated with their radios', (
 
   expect(snapshot()).toEqual({
     optionTag: 'DIV',
-    inputId: 'proposal-7-option-0',
-    labelFor: 'proposal-7-option-0',
+    inputId: 'proposal-session-alpha-7-option-0',
+    labelFor: 'proposal-session-alpha-7-option-0',
     labelText: 'Use the existing flow',
     labelLinkCount: 0,
     descriptionTag: 'DIV',
@@ -472,6 +477,71 @@ it('selects an option from its description but not from its links or copy button
     afterSecondDescriptionClick: [false, true],
     afterLinkClick: [false, true],
     afterCopyClick: [false, true],
+  })
+})
+
+it('keeps a proposal choice in its own session when labels share a sequence number', async () => {
+  container.className = 'conversation-scroll'
+  container.style.cssText = 'width: 420px; height: 260px; overflow-y: auto'
+  renderCards([
+    props({ sessionId: 'session-alpha' }),
+    props({ sessionId: 'session-beta' }),
+  ])
+  const cards = Array.from(container.querySelectorAll('.chat-proposal-card'))
+  const firstCard = cards[0]
+  const secondCard = cards[1]
+  if (firstCard === undefined || secondCard === undefined) {
+    throw new Error('Expected two proposal cards')
+  }
+  const spacer = document.createElement('div')
+  spacer.style.height = '800px'
+  firstCard.after(spacer)
+  const secondLabel = requireElement(
+    secondCard.querySelector<HTMLLabelElement>('.chat-proposal-option-label'),
+  )
+  const scroll = container
+  scroll.scrollTop +=
+    secondLabel.getBoundingClientRect().top -
+    scroll.getBoundingClientRect().top -
+    40
+  act(() => {
+    scroll.dispatchEvent(new Event('scroll'))
+  })
+  const scrollBeforeSelection = scroll.scrollTop
+
+  await act(async () => {
+    await userEvent.click(secondLabel)
+  })
+  const scrollAfterClick = scroll.scrollTop
+  const scrollBeforeKeyboard = scroll.scrollTop
+  act(() => {
+    requireElement(
+      secondCard.querySelector<HTMLInputElement>('.chat-proposal-option input'),
+    ).blur()
+  })
+  dispatchKey(window, '2')
+
+  const snapshot = () => ({
+    scrollBeforeSelection,
+    scrollAfterClick,
+    scrollBeforeKeyboard,
+    scrollAfterKeyboard: scroll.scrollTop,
+    selectedChoices: cards.map((card) =>
+      Array.from(
+        card.querySelectorAll<HTMLInputElement>('.chat-proposal-option input'),
+        (input) => input.checked,
+      ),
+    ),
+  })
+  expect(snapshot()).toEqual({
+    scrollBeforeSelection,
+    scrollAfterClick: scrollBeforeSelection,
+    scrollBeforeKeyboard: scrollBeforeSelection,
+    scrollAfterKeyboard: scrollBeforeSelection,
+    selectedChoices: [
+      [false, false],
+      [false, true],
+    ],
   })
 })
 
