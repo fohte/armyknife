@@ -293,7 +293,7 @@ function AppContent() {
     toggleStatusPanel,
     focusComposer,
     openNewSession: () => {
-      if (newSessionMode === null) openNewSession('palette')
+      if (newSessionMode === null) openNewSession('form')
     },
   })
 

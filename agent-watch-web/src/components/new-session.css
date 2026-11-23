@@ -379,7 +379,6 @@
 }
 
 .new-session-picker-message {
-  min-height: 38px;
   min-width: 140px;
   flex: 1 1 160px;
   border: 0;
@@ -387,7 +386,6 @@
   background: transparent;
   color: var(--aw-text-primary);
   font: inherit;
-  resize: vertical;
 }
 
 .new-session-picker-options {
