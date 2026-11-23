@@ -6704,6 +6704,132 @@ it('opens the Review tab from the draft review band in one click', async () => {
   })
 })
 
+it('returns from DraftFocus with the Back to conversation button', async () => {
+  const reviewDocuments = [
+    {
+      id: 'fixture-focus-document',
+      kind: 'issue_comment' as const,
+      target: {
+        repository: 'example/web-app',
+        issueNumber: 412,
+        title: 'Delivery checks fail on the fourth attempt',
+      },
+      isEditor: true,
+      canSave: true,
+      canFinish: true,
+    },
+  ]
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.endsWith('/messages?limit=100')) {
+      return Promise.resolve(jsonResponse(messagesResponse([])))
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    if (url.endsWith('/review-documents')) {
+      return Promise.resolve(jsonResponse(reviewDocuments))
+    }
+    if (url.endsWith('/review-documents/fixture-focus-document')) {
+      return Promise.resolve(
+        jsonResponse({
+          id: 'fixture-focus-document',
+          revision: 'fixture-focus-revision',
+          frontmatter: { priority: 'normal' },
+          body: 'Readable fixture draft',
+        }),
+      )
+    }
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  function FocusConversationHarness() {
+    const [statusPanelOpen, setStatusPanelOpen] = useState(false)
+    return (
+      <ConversationPane
+        session={{
+          ...session,
+          kind: 'Review',
+          reviewDocumentId: 'fixture-focus-document',
+          reviewDocumentCount: 1,
+          webUis: [],
+        }}
+        shouldSkipSessionTreeFetch
+        initialSessionTree={[]}
+        refreshKey={0}
+        sessionTreeRefreshKey={0}
+        onSelectSession={() => undefined}
+        statusPanelOpen={statusPanelOpen}
+        onToggleStatusPanel={() => {
+          setStatusPanelOpen((open) => !open)
+        }}
+        onCloseStatusPanel={() => {
+          setStatusPanelOpen(false)
+        }}
+      />
+    )
+  }
+
+  root = createRoot(container)
+  act(() => root?.render(<FocusConversationHarness />))
+  const reviewActionReady = await waitForState(
+    () =>
+      container.querySelector<HTMLButtonElement>(
+        '.conversation-status-band-review',
+      ) !== null,
+  )
+  expect(reviewActionReady).toBe(true)
+  await act(async () => {
+    await userEvent.click(
+      requireElement(
+        container.querySelector<HTMLButtonElement>(
+          '.conversation-status-band-review',
+        ),
+      ),
+    )
+  })
+  const reviewLoaded = await waitForState(
+    () =>
+      container.querySelector('.review-document-body')?.textContent ===
+      'Readable fixture draft',
+  )
+  expect(reviewLoaded).toBe(true)
+  await act(async () => {
+    await userEvent.click(
+      requireElement(
+        container.querySelector<HTMLButtonElement>(
+          '.review-document-full-width[aria-label="Open draft full width"]',
+        ),
+      ),
+    )
+  })
+  const fullFocusReady = await waitForState(
+    () => container.querySelector('.review-document-focus') !== null,
+  )
+  expect(fullFocusReady).toBe(true)
+  await act(async () => {
+    await userEvent.click(
+      requireElement(
+        container.querySelector<HTMLButtonElement>(
+          '.review-document-focus-back[aria-label="Back to conversation"]',
+        ),
+      ),
+    )
+  })
+
+  const snapshot = () => ({
+    focusCount: container.querySelectorAll('.review-document-focus').length,
+    reviewPanelCount: container.querySelectorAll('.review-document-panel')
+      .length,
+    statusPanelCount: container.querySelectorAll('.session-status-panel')
+      .length,
+  })
+  expect(snapshot()).toEqual({
+    focusCount: 0,
+    reviewPanelCount: 1,
+    statusPanelCount: 1,
+  })
+})
+
 it('opens DraftFocus and exits Review after a draft load failure', async () => {
   const reviewDocuments = [
     {
@@ -6863,6 +6989,12 @@ it('opens DraftFocus and exits Review after a draft load failure', async () => {
     () => container.querySelector('[role="alert"]') !== null,
   )
   expect(draftErrorShown).toBe(true)
+  const failureSnapshot = () => ({
+    alert: container.querySelector('[role="alert"]')?.textContent,
+  })
+  expect(failureSnapshot()).toEqual({
+    alert: 'Could not load the draft: Request failed (503)Retry draft',
+  })
   const closeReviewPanel = requireElement(
     container.querySelector<HTMLButtonElement>(
       '.session-status-panel-close[aria-label="Close session status panel"]',

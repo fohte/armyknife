@@ -1,4 +1,4 @@
-import '#components/review-document-panel.css'
+import '#components/review-document-navigation.css'
 
 import { useEffect, useState } from 'react'
 
