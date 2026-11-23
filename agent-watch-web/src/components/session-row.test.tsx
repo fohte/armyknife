@@ -240,6 +240,19 @@ it.each([
   expect(snapshot()).toEqual(expectedFullRow(preview))
 })
 
+it('keeps the Crit review reason ahead of a folded-to-do preview', () => {
+  renderRow('full', {
+    ...session,
+    isWaitingForCritReview: true,
+    kind: 'Review',
+    waitingReason: 'Awaiting reviewer feedback',
+    todoLaterCount: 1,
+    todoLaterTitle: 'Check the alert sound',
+  })
+
+  expect(snapshot()).toEqual(expectedFullRow('Awaiting reviewer feedback'))
+})
+
 it('shows compact rows without a preview and reserves the missing role slot', () => {
   renderRow('compact', { ...session, workType: null })
 

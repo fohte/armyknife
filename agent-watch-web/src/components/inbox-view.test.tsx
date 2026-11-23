@@ -175,6 +175,18 @@ function foldedTodoCategorySnapshot() {
   }
 }
 
+function doneCloseAllSnapshot() {
+  return {
+    doneTitles: Array.from(
+      container.querySelectorAll('.done-section .session-title'),
+      (title) => title.textContent,
+    ),
+    closeAllDisabled: container.querySelector<HTMLButtonElement>(
+      '.done-section .inbox-close-all',
+    )?.disabled,
+  }
+}
+
 function doneRowSnapshot() {
   return {
     text: container.querySelector('.mobile-done-toggle')?.textContent,
@@ -313,6 +325,14 @@ it('shows folded to-dos in their session categories without adding Needs action 
         todoLaterTitle: 'Check the alert sound',
       },
       {
+        ...progressSession,
+        id: 'folded-todo-session-secondary',
+        category: 'in_progress',
+        title: 'Update the alert fallback',
+        todoLaterCount: 2,
+        todoLaterTitle: 'Check the fallback route',
+      },
+      {
         ...laterSession,
         id: 'folded-later-session',
         todoLaterCount: 2,
@@ -333,12 +353,38 @@ it('shows folded to-dos in their session categories without adding Needs action 
 
   expect(foldedTodoCategorySnapshot()).toEqual({
     needsActionCount: '2',
-    inProgressTitles: ['Add request metrics', 'Choose a notification sound'],
-    inProgressTodoLaterCount: '1 to-do later',
+    inProgressTitles: [
+      'Add request metrics',
+      'Choose a notification sound',
+      'Update the alert fallback',
+    ],
+    inProgressTodoLaterCount: '3 to-do later',
     laterCount: '2',
     laterTitles: ['Review the changes', 'Review the changes'],
     doneTitles: ['Document request limits', 'Document request limits'],
     todoLaterSectionExists: false,
+  })
+})
+
+it('keeps folded-to-do sessions in Done out of Close all', () => {
+  const doneSession = sessions.at(3)
+  if (doneSession === undefined) {
+    throw new Error('Expected a done session')
+  }
+  renderInbox({
+    sessions: [
+      {
+        ...doneSession,
+        id: 'folded-done-session',
+        todoLaterCount: 1,
+        todoLaterTitle: 'Review the alert sound',
+      },
+    ],
+  })
+
+  expect(doneCloseAllSnapshot()).toEqual({
+    doneTitles: ['Document request limits'],
+    closeAllDisabled: true,
   })
 })
 

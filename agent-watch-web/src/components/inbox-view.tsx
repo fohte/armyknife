@@ -124,7 +124,10 @@ export function InboxView({
     0,
   )
   const done = filteredSessions.filter((session) => session.category === 'done')
-  const allDone = sessions.filter((session) => session.category === 'done')
+  const allDone = sessions.filter(
+    (session) =>
+      session.category === 'done' && (session.todoLaterCount ?? 0) === 0,
+  )
   const unreviewedDoneCount = done.reduce(
     (count, session) => count + (session.unreviewedDecisionCount ?? 0),
     0,

@@ -130,8 +130,8 @@ export function SessionRow({
           )
           .join(' · ')
       : null
-  const preview = critReviewReason ?? decisionPreview ?? session.preview
-  const rowPreview = todoLaterPreview ?? preview
+  const rowPreview =
+    critReviewReason ?? decisionPreview ?? todoLaterPreview ?? session.preview
 
   return (
     <div
