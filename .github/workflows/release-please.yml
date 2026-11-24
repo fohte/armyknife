@@ -34,12 +34,13 @@ jobs:
           identity: ${{ github.event.repository.name }}-release-please
           domain: octo-sts.fohte.net
 
-      - name: Record master HEAD
-        id: master
+      - name: Record default branch HEAD
+        id: base
         env:
           GH_TOKEN: ${{ steps.octo-sts.outputs.token }}
+          TARGET_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
-          SHA=$(gh api "repos/${{ github.repository }}/commits/master" --jq .sha)
+          SHA=$(gh api "repos/${{ github.repository }}/commits/$TARGET_BRANCH" --jq .sha)
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
 
       - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
@@ -55,28 +56,28 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.octo-sts.outputs.token }}
           PR_JSON: ${{ steps.release.outputs.pr }}
-          MASTER_SHA: ${{ steps.master.outputs.sha }}
+          BASE_SHA: ${{ steps.base.outputs.sha }}
+          TARGET_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           PR_NUMBER=$(echo "$PR_JSON" | jq -r '.number')
-          HEAD_SHA=$(gh pr view "$PR_NUMBER" --json headRefOid --jq .headRefOid -R "${{ github.repository }}")
-          PARENT_SHA=$(gh api "repos/${{ github.repository }}/commits/$HEAD_SHA" --jq '.parents[0].sha')
+          CURRENT_BASE_SHA=$(gh api "repos/${{ github.repository }}/commits/$TARGET_BRANCH" --jq .sha)
 
-          if [[ "$PARENT_SHA" == "$MASTER_SHA" ]]; then
+          if [[ "$CURRENT_BASE_SHA" == "$BASE_SHA" ]]; then
             echo "stale=false" >> "$GITHUB_OUTPUT"
-            echo "Release PR was based on the recorded master HEAD"
+            echo "The default branch has not changed since release-please started"
             exit 0
           fi
 
-          MASTER_FILES=$(gh api --paginate --slurp \
-            "repos/${{ github.repository }}/compare/$MASTER_SHA...$PARENT_SHA" \
+          BRANCH_FILES=$(gh api --paginate --slurp \
+            "repos/${{ github.repository }}/compare/$BASE_SHA...$CURRENT_BASE_SHA" \
             --jq '[.[].files[]?.filename] | unique')
           PR_FILES=$(gh api --paginate --slurp \
             "repos/${{ github.repository }}/pulls/$PR_NUMBER/files?per_page=100" \
             --jq '[.[][] | .filename] | unique')
           OVERLAP=$(jq -cn \
-            --argjson master_files "$MASTER_FILES" \
+            --argjson branch_files "$BRANCH_FILES" \
             --argjson pr_files "$PR_FILES" \
-            '$master_files | map(select(. as $file | $pr_files | index($file)))')
+            '$branch_files | map(select(. as $file | $pr_files | index($file)))')
 
           if [[ "$OVERLAP" == "[]" ]]; then
             echo "stale=false" >> "$GITHUB_OUTPUT"
@@ -86,9 +87,9 @@ jobs:
 
           echo "stale=true" >> "$GITHUB_OUTPUT"
           FILE_LIST=$(echo "$OVERLAP" | jq -r 'join(", ")')
-          gh pr comment "$PR_NUMBER" -R "${{ github.repository }}" --body "This release PR was created from an older view of master. While release-please was running, master advanced with changes to files this PR also updates: $FILE_LIST. I am closing this PR so the queued release-please run can recreate it from the latest master."
+          gh pr comment "$PR_NUMBER" -R "${{ github.repository }}" --body "This release PR was created from an older view of $TARGET_BRANCH. While release-please was running, $TARGET_BRANCH advanced with changes to files this PR also updates: $FILE_LIST. I am closing this PR so the queued release-please run can recreate it from the latest $TARGET_BRANCH."
           gh pr close "$PR_NUMBER" -R "${{ github.repository }}"
-          echo "::warning::Closed stale release PR $PR_NUMBER because its changes overlap with master updates: $FILE_LIST"
+          echo "::warning::Closed stale release PR $PR_NUMBER because its changes overlap with $TARGET_BRANCH updates: $FILE_LIST"
 
       # Auto-merge release PR to enable automatic releases on every merge to master
       - name: Auto-merge release PR
