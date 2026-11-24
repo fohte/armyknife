@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.910](https://github.com/fohte/armyknife/compare/v0.1.909...v0.1.910) (2026-11-24)
+
+
+### Dependencies
+
+* update rust to v1.100.0 ([#2234](https://github.com/fohte/armyknife/issues/2234)) ([95b3064](https://github.com/fohte/armyknife/commit/95b3064074247bd8fc72a2d7e7329043195f3b3a))
+
 ## [0.1.909](https://github.com/fohte/armyknife/compare/v0.1.908...v0.1.909) (2026-11-24)
 
 
