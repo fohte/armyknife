@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.881](https://github.com/fohte/armyknife/compare/v0.1.880...v0.1.881) (2026-11-24)
+
+
+### Dependencies
+
+* update rust crate rstest to v0.28.0 ([#902](https://github.com/fohte/armyknife/issues/902)) ([5dd31d6](https://github.com/fohte/armyknife/commit/5dd31d6f6cf5ccc54b8dbcb0f1ecd63542caa3ef))
+
 ## [0.1.880](https://github.com/fohte/armyknife/compare/v0.1.879...v0.1.880) (2026-11-24)
 
 
