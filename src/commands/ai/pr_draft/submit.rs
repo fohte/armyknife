@@ -38,6 +38,10 @@ pub struct SubmitArgs {
     #[arg(long)]
     pub base: Option<String>,
 
+    /// Do not add the pull request to a GitHub stack
+    #[arg(long)]
+    pub no_stack: bool,
+
     /// Create as draft PR
     #[arg(long)]
     pub draft: bool,
@@ -244,7 +248,8 @@ async fn run_impl_with_recording<P: PostSubmitProcessor, R: Fn(&str)>(
                 })
                 .await?;
 
-            if let Some(base_branch) = args.base.as_deref()
+            if !args.no_stack
+                && let Some(base_branch) = args.base.as_deref()
                 && let Some(warning) = stack_created_pull_request(
                     gh_client,
                     &target.owner,
@@ -609,6 +614,7 @@ mod tests {
             base: None,
             draft: false,
             no_review: false,
+            no_stack: false,
         };
         let processor = PostSubmitSpy {
             metadata: has_tq_metadata.then(|| TqBranchMetadata {
@@ -958,6 +964,34 @@ mod tests {
                         base: None,
                         draft: false,
                         no_review: true,
+                        no_stack: false,
+                    }),
+                )),
+        );
+    }
+
+    #[test]
+    fn submit_parses_no_stack_flag_with_base() {
+        let parsed = crate::cli::Cli::try_parse_from([
+            "a",
+            "ai",
+            "pr-draft",
+            "submit",
+            "--base",
+            "renovate/example",
+            "--no-stack",
+        ])
+        .expect("--no-stack should be a valid submit option");
+
+        assert!(
+            parsed.command
+                == crate::cli::Commands::Ai(crate::commands::ai::AiCommands::PrDraft(
+                    super::super::PrDraftCommands::Submit(SubmitArgs {
+                        filepath: None,
+                        base: Some("renovate/example".to_string()),
+                        no_stack: true,
+                        draft: false,
+                        no_review: false,
                     }),
                 )),
         );
@@ -1015,6 +1049,7 @@ mod tests {
             base: None,
             draft: false,
             no_review: true,
+            no_stack: false,
         };
 
         let target_repo = std::cell::RefCell::new(None);
@@ -1085,6 +1120,7 @@ mod tests {
             base: None,
             draft: false,
             no_review: false,
+            no_stack: false,
         };
 
         let client = env.mock.client();
@@ -1119,6 +1155,7 @@ mod tests {
             base: None,
             draft: false,
             no_review: false,
+            no_stack: false,
         };
 
         let client = env.mock.client();
@@ -1160,6 +1197,7 @@ mod tests {
             base: None,
             draft: false,
             no_review: false,
+            no_stack: false,
         };
 
         let client = env.mock.client();
@@ -1199,6 +1237,7 @@ mod tests {
             base: None,
             draft: false,
             no_review: false,
+            no_stack: false,
         };
         post_submit_spy.failure_stage = Some(SubmitSyncStage::Link);
         let client = env.mock.client();
@@ -1255,6 +1294,7 @@ mod tests {
             base: None,
             draft: false,
             no_review: false,
+            no_stack: false,
         };
         let client = env.mock.client();
 
@@ -1314,6 +1354,7 @@ mod tests {
             base: None,
             draft: false,
             no_review: false,
+            no_stack: false,
         };
 
         let client = env.mock.client();
@@ -1370,6 +1411,7 @@ mod tests {
             base: None,
             draft: false,
             no_review: false,
+            no_stack: false,
         };
 
         let client = env.mock.client();
@@ -1452,6 +1494,17 @@ mod tests {
             .expect("decode update request body")
     }
 
+    async fn pull_request_create_payloads(env: &TestEnv, path: &str) -> Vec<serde_json::Value> {
+        env.mock
+            .received_requests()
+            .await
+            .iter()
+            .filter(|request| request.method.as_str() == "POST" && request.url.path() == path)
+            .map(|request| request.body_json::<serde_json::Value>())
+            .collect::<serde_json::Result<Vec<_>>>()
+            .expect("decode pull request create request body")
+    }
+
     async fn stack_requests(env: &TestEnv) -> Vec<(String, String, String, serde_json::Value)> {
         env.mock
             .received_requests()
@@ -1509,6 +1562,15 @@ mod tests {
         branch: &str,
         base: Option<&str>,
     ) -> anyhow::Result<()> {
+        run_stack_submit_with_options(env, branch, base, false).await
+    }
+
+    async fn run_stack_submit_with_options(
+        env: &TestEnv,
+        branch: &str,
+        base: Option<&str>,
+        no_stack: bool,
+    ) -> anyhow::Result<()> {
         let draft_path = create_approved_draft(
             &env.owner,
             &env.repo,
@@ -1521,6 +1583,7 @@ mod tests {
             base: base.map(str::to_string),
             draft: false,
             no_review: false,
+            no_stack,
         };
         let client = env.mock.client();
 
@@ -1588,6 +1651,7 @@ mod tests {
             base: None,
             draft: false,
             no_review: false,
+            no_stack: false,
         };
 
         let client = env.mock.client();
@@ -1661,6 +1725,7 @@ mod tests {
             base: None,
             draft: false,
             no_review: false,
+            no_stack: false,
         };
         let client = env.mock.client();
         let result = run_impl(
@@ -1784,6 +1849,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn submit_does_not_stack_when_no_stack_is_enabled() {
+        let env = setup_test_env_without_pull_request_mocks("sample-owner", "no-stack").await;
+        let ctx = env.mock.repo(&env.owner, &env.repo);
+        ctx.list_pull_requests_empty_for_branch("feature/top").await;
+        ctx.list_open_pull_requests_with(17, "Base change", "Body", "renovate/example")
+            .await;
+        ctx.pull_request(18).create().await;
+
+        let result =
+            run_stack_submit_with_options(&env, "feature/top", Some("renovate/example"), true)
+                .await;
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                pull_request_create_payloads(&env, "/repos/sample-owner/no-stack/pulls").await,
+                stack_requests(&env).await,
+            ),
+            (
+                Ok(()),
+                vec![serde_json::json!({
+                    "title": "Add stack support",
+                    "body": "Body content\n",
+                    "head": "feature/top",
+                    "base": "renovate/example",
+                })],
+                Vec::new(),
+            ),
+        );
+    }
+
+    #[tokio::test]
     async fn submit_does_not_stack_a_base_pr_from_another_repository() {
         let env = setup_test_env_without_pull_request_mocks("sample-owner", "stack-fork").await;
         let ctx = env.mock.repo(&env.owner, &env.repo);
@@ -1859,6 +1956,7 @@ mod tests {
             base: None,
             draft: false,
             no_review: false,
+            no_stack: false,
         };
         let client = env.mock.client();
         let result = run_impl(
@@ -1912,6 +2010,7 @@ mod tests {
             base: None,
             draft: false,
             no_review: false,
+            no_stack: false,
         };
 
         let client = env.mock.client();
@@ -1977,6 +2076,7 @@ mod tests {
             base: None,
             draft: false,
             no_review: false,
+            no_stack: false,
         };
         let client = SubmitClientStub {
             existing_pr_number,
@@ -2053,6 +2153,7 @@ mod tests {
             base: None,
             draft: false,
             no_review: false,
+            no_stack: false,
         };
 
         let client = env.mock.client();
@@ -2124,6 +2225,7 @@ mod tests {
             base: Some("master".to_string()),
             draft: false,
             no_review: false,
+            no_stack: false,
         };
 
         let spy = HookSpy::default();
@@ -2198,6 +2300,7 @@ mod tests {
             base: None,
             draft: false,
             no_review: false,
+            no_stack: false,
         };
 
         let spy = HookSpy::default();
@@ -2238,6 +2341,7 @@ mod tests {
             base: None,
             draft: false,
             no_review: false,
+            no_stack: false,
         };
 
         let hook = |_name: &str, _env: &[(&str, &str)]| -> anyhow::Result<()> {
