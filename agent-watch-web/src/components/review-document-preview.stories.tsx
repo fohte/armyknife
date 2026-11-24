@@ -87,3 +87,24 @@ export const MultipleReviewThreads: Story = {
     body: `<!-- thread: THREAD_sample_1 path: src/preflight.ts:42 author: @hina-k -->\n- [ ] resolve\n<!-- diff -->\n\`\`\`diff\n@@ -39,5 +41,7 @@ export function preflight(msg) {\n   const target = msg.target;\n-  if (!target) return fail('no target');\n+  if (target == null) {\n+    return fail('no target');\n+  }\n\`\`\`\n<!-- /diff -->\n<!-- comment: @hina-k 2026-01-15T10:30:00Z -->\nこの判定は null も通しますか?\n<!-- /comment -->\n通しません。手前で弾いています。\n\n<!-- thread: THREAD_sample_2 path: src/preflight.ts:57 author: @hina-k -->\n- [x] resolve\n<!-- diff -->\n\`\`\`diff\n@@ -55,4 +56,6 @@ export function preflight(msg) {\n   } catch (e) {\n+    log.warn('preflight failed', e);\n+    return fail(String(e));\n   }\n\`\`\`\n<!-- /diff -->\n<!-- comment: @hina-k 2026-01-15T10:34:00Z -->\n失敗したときのログはどこに出ますか?\n<!-- /comment -->\n<!-- comment: @ren-o 2026-01-15T11:02:00Z -->\n送信ログと同じ場所だと追いやすいです。\n<!-- /comment -->\n送信ログに理由と一緒に出します。`,
   },
 }
+
+export const ReviewMessagesWithoutInlineThreads: Story = {
+  name: 'Review messages render when a pull request has no inline threads',
+  args: {
+    summary: {
+      ...repliesSummary,
+      target: {
+        ...repliesSummary.target,
+        threadCount: 0,
+      },
+    },
+    body: `<!-- reviews -->
+<!-- review: @sample-reviewer state=COMMENTED 2026-01-15T10:30:00Z -->
+The retry policy needs more detail before this change is ready.
+<!-- /review -->
+<!-- review: @another-reviewer state=COMMENTED 2026-01-15T10:34:00Z -->
+Please explain how the retry limit applies to slow destinations.
+<!-- /review -->
+<!-- /reviews -->`,
+  },
+}

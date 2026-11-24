@@ -946,7 +946,7 @@ Please keep this delay configurable.
   })
 })
 
-it('shows a PR review message when there are no inline threads', () => {
+it('shows all PR review messages in order when there are no inline threads', () => {
   const summary = {
     id: 'fixture-review-summary',
     kind: 'review_replies' as const,
@@ -962,6 +962,9 @@ it('shows a PR review message when there are no inline threads', () => {
   const body = `<!-- reviews -->
 <!-- review: @sample-reviewer state=COMMENTED 2026-11-24T00:00:00Z -->
 The overall review needs a response.
+<!-- /review -->
+<!-- review: @another-reviewer state=COMMENTED 2026-11-24T00:01:00Z -->
+A second reviewer requests a follow-up.
 <!-- /review -->
 <!-- /reviews -->`
 
@@ -979,12 +982,18 @@ The overall review needs a response.
 
   const snapshot = () => ({
     threadCards: container.querySelectorAll('.review-document-thread').length,
-    reviewBody: container.querySelector('.review-document-body')?.textContent,
+    reviewMessages: Array.from(
+      container.querySelectorAll('.review-document-body p'),
+      (paragraph) => paragraph.textContent,
+    ),
   })
 
   expect(snapshot()).toEqual({
     threadCards: 0,
-    reviewBody: 'The overall review needs a response.',
+    reviewMessages: [
+      'The overall review needs a response.',
+      'A second reviewer requests a follow-up.',
+    ],
   })
 })
 

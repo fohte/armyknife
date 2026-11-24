@@ -134,13 +134,34 @@ export const IssueBodyShowsTypedMetadata: Story = {
     frontmatter: {
       title: '設定画面から再送の上限を変えられるようにする',
       labels: ['enhancement', 'settings'],
-      assignees: ['hina-k'],
+      assignees: ['sample-assignee'],
       parentIssue: 'example/web-app#400',
       subIssues: ['example/web-app#419', 'example/web-app#420'],
       submit: false,
       readonly: { number: 418, author: 'sample-reporter' },
     },
     body: `## 背景\n\n再送の上限が 3 回で固定されていて、応答の遅い送信先では足りない。\n\n## やること\n\n- 設定画面に再送の上限の入力欄を足す\n- 既定値は 3 回のまま`,
+  },
+  decorators: [desktopViewport],
+}
+
+export const IssueBodyEditShowsMilestone: Story = {
+  name: 'An issue body keeps its milestone visible in Edit mode',
+  args: {
+    summary: issueBody,
+    summaries: [issueBody],
+    frontmatter: {
+      title: '設定画面から再送の上限を変えられるようにする',
+      labels: ['enhancement', 'settings'],
+      assignees: ['sample-assignee'],
+      parentIssue: 'example/web-app#400',
+      subIssues: ['example/web-app#419', 'example/web-app#420'],
+      milestone: '2026 Q4',
+      submit: false,
+      readonly: { number: 418, author: 'sample-reporter' },
+    },
+    body: `## 背景\n\n再送の上限が 3 回で固定されていて、応答の遅い送信先では足りない。\n\n## やること\n\n- 設定画面に再送の上限の入力欄を足す\n- 既定値は 3 回のまま`,
+    view: 'edit',
   },
   decorators: [desktopViewport],
 }
@@ -171,7 +192,7 @@ export const ReviewRepliesShowSeveralThreads: Story = {
     summary: editingReviewReplies,
     summaries: [editingReviewReplies],
     frontmatter: { submit: false },
-    body: `<!-- thread: THREAD_sample_1 path: src/preflight.ts:42 author: @hina-k -->\n- [ ] resolve\n<!-- diff -->\n\`\`\`diff\n@@ -39,5 +39,7 @@ export function preflight(msg) {\n   const target = msg.target;\n-  if (!target) return fail('no target');\n>+  if (target == null) {\n+    return fail('no target');\n+  }\n\`\`\`\n<!-- /diff -->\n<!-- comment: @hina-k 2026-01-15T10:30:00Z -->\nこの判定は null も通しますか?\n<!-- /comment -->\n通しません。手前で弾いています。\n\n<!-- thread: THREAD_sample_2 path: src/preflight.ts:57 author: @hina-k -->\n- [x] resolve\n<!-- diff -->\n\`\`\`diff\n@@ -55,4 +57,6 @@ export function preflight(msg) {\n   } catch (e) {\n>+    log.warn('preflight failed', e);\n+    return fail(String(e));\n   }\n\`\`\`\n<!-- /diff -->\n<!-- comment: @hina-k 2026-01-15T10:34:00Z -->\n失敗したときのログはどこに出ますか?\n<!-- /comment -->\n<!-- comment: @ren-o 2026-01-15T11:02:00Z -->\n送信ログと同じ場所だと追いやすいです。\n<!-- /comment -->\n送信ログに理由と一緒に出します。`,
+    body: `<!-- thread: THREAD_sample_1 path: src/preflight.ts:42 author: @sample-assignee -->\n- [ ] resolve\n<!-- diff -->\n\`\`\`diff\n@@ -39,5 +39,7 @@ export function preflight(msg) {\n   const target = msg.target;\n-  if (!target) return fail('no target');\n>+  if (target == null) {\n+    return fail('no target');\n+  }\n\`\`\`\n<!-- /diff -->\n<!-- comment: @sample-assignee 2026-01-15T10:30:00Z -->\nこの判定は null も通しますか?\n<!-- /comment -->\n通しません。手前で弾いています。\n\n<!-- thread: THREAD_sample_2 path: src/preflight.ts:57 author: @sample-assignee -->\n- [x] resolve\n<!-- diff -->\n\`\`\`diff\n@@ -55,4 +57,6 @@ export function preflight(msg) {\n   } catch (e) {\n>+    log.warn('preflight failed', e);\n+    return fail(String(e));\n   }\n\`\`\`\n<!-- /diff -->\n<!-- comment: @sample-assignee 2026-01-15T10:34:00Z -->\n失敗したときのログはどこに出ますか?\n<!-- /comment -->\n<!-- comment: @ren-o 2026-01-15T11:02:00Z -->\n送信ログと同じ場所だと追いやすいです。\n<!-- /comment -->\n送信ログに理由と一緒に出します。`,
   },
   decorators: [desktopViewport],
 }
