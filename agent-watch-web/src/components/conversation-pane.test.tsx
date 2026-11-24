@@ -278,6 +278,53 @@ function requireElement<T extends Element>(element: T | null): T {
   return element
 }
 
+function stubResizeObserver() {
+  const observers: Array<{
+    callback: ResizeObserverCallback
+    targets: Set<Element>
+    instance: ResizeObserver
+  }> = []
+  class ControlledResizeObserver implements ResizeObserver {
+    private readonly record: (typeof observers)[number]
+
+    constructor(callback: ResizeObserverCallback) {
+      this.record = { callback, targets: new Set(), instance: this }
+      observers.push(this.record)
+    }
+
+    observe(target: Element) {
+      this.record.targets.add(target)
+    }
+
+    unobserve(target: Element) {
+      this.record.targets.delete(target)
+    }
+
+    disconnect() {
+      this.record.targets.clear()
+    }
+  }
+  vi.stubGlobal('ResizeObserver', ControlledResizeObserver)
+
+  return (target: Element) => {
+    for (const observer of observers) {
+      if (!observer.targets.has(target)) continue
+      observer.callback(
+        [
+          {
+            target,
+            contentRect: target.getBoundingClientRect(),
+            borderBoxSize: [],
+            contentBoxSize: [],
+            devicePixelContentBoxSize: [],
+          },
+        ],
+        observer.instance,
+      )
+    }
+  }
+}
+
 async function waitForState(condition: () => boolean) {
   const deadline = Date.now() + 1000
   await act(async () => {
@@ -8408,6 +8455,10 @@ it('follows new messages at the bottom without moving a reader who scrolled up',
     scrollTop: { configurable: true, writable: true, value: 0 },
   })
   renderView(onAction, session, undefined, [firstMessage])
+  act(() => {
+    scroll.scrollTop = 200
+    scroll.dispatchEvent(new Event('scroll'))
+  })
   const initialBottom = scroll.scrollTop
 
   height = 500
@@ -8452,6 +8503,183 @@ it('follows new messages at the bottom without moving a reader who scrolled up',
     afterNewMessage: 400,
     whileReadingEarlierMessages: 40,
     afterReturningToBottom: 600,
+  })
+})
+
+it('keeps an expanded to-do in view when a new message arrives', () => {
+  const notifyResize = stubResizeObserver()
+  const todo: ChatItem = {
+    type: 'todo',
+    seq: 12,
+    title: 'Review the deployment sequence',
+    detail: Array.from(
+      { length: 16 },
+      () => 'Check the deployment sequence before moving to the next step.',
+    ).join('\n\n'),
+    completed: false,
+    resolution: null,
+    comment: null,
+  }
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction, session, undefined, [todo])
+  const scroll = requireElement(
+    container.querySelector<HTMLDivElement>('.conversation-scroll'),
+  )
+  let height = 300
+  Object.defineProperties(scroll, {
+    scrollHeight: { configurable: true, get: () => height },
+    clientHeight: { configurable: true, value: 100 },
+    scrollTop: { configurable: true, writable: true, value: 0 },
+  })
+  renderView(onAction, session, undefined, [todo])
+  act(() => {
+    scroll.scrollTop = 200
+    scroll.dispatchEvent(new Event('scroll'))
+  })
+  const initialBottom = scroll.scrollTop
+  const todoElement = requireElement(
+    container.querySelector<HTMLElement>('.chat-todo-card'),
+  )
+  act(() => {
+    notifyResize(todoElement)
+  })
+
+  const expandButton = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      '.collapsible-text__toggle[aria-expanded="false"]',
+    ),
+  )
+  act(() => {
+    expandButton.click()
+  })
+  height = 600
+  act(() => {
+    notifyResize(todoElement)
+  })
+  const afterExpanding = scroll.scrollTop
+
+  height = 800
+  renderView(onAction, session, undefined, [
+    todo,
+    { type: 'assistant', text: 'The next step is ready.' },
+  ])
+
+  const snapshot = () => ({
+    initialBottom,
+    afterExpanding,
+    afterNewMessage: scroll.scrollTop,
+  })
+  expect(snapshot()).toEqual({
+    initialBottom: 200,
+    afterExpanding: 200,
+    afterNewMessage: 200,
+  })
+})
+
+it.each([
+  {
+    card: 'to-do',
+    original: {
+      type: 'todo',
+      seq: 12,
+      title: 'Review the deployment sequence',
+      detail: null,
+      completed: false,
+      resolution: null,
+      comment: null,
+    } satisfies ChatItem,
+    updated: {
+      type: 'todo',
+      seq: 12,
+      title: 'Review the deployment sequence',
+      detail: null,
+      completed: true,
+      resolution: 'completed',
+      comment: null,
+    } satisfies ChatItem,
+  },
+  {
+    card: 'proposal',
+    original: proposal,
+    updated: {
+      ...proposal,
+      answer: { choice: 0, comment: null },
+      resolved: true,
+    },
+  },
+])(
+  'keeps the scroll position when a $card is updated',
+  ({ original, updated }) => {
+    const onAction = vi.fn(() => Promise.resolve(true))
+    renderView(onAction, session, undefined, [original])
+    const scroll = requireElement(
+      container.querySelector<HTMLDivElement>('.conversation-scroll'),
+    )
+    let height = 300
+    Object.defineProperties(scroll, {
+      scrollHeight: { configurable: true, get: () => height },
+      clientHeight: { configurable: true, value: 100 },
+      scrollTop: { configurable: true, writable: true, value: 0 },
+    })
+    renderView(onAction, session, undefined, [original])
+    act(() => {
+      scroll.scrollTop = 200
+      scroll.dispatchEvent(new Event('scroll'))
+    })
+
+    height = 600
+    renderView(onAction, session, undefined, [updated])
+
+    const snapshot = () => ({ scrollTop: scroll.scrollTop })
+    expect(snapshot()).toEqual({ scrollTop: 200 })
+  },
+)
+
+it('keeps following the bottom when a message grows after it is added', async () => {
+  const notifyResize = stubResizeObserver()
+  const onAction = vi.fn(() => Promise.resolve(true))
+  const firstMessage: ChatItem = { type: 'assistant', text: 'First message' }
+  renderView(onAction, session, undefined, [firstMessage])
+  const scroll = requireElement(
+    container.querySelector<HTMLDivElement>('.conversation-scroll'),
+  )
+  let height = 300
+  Object.defineProperties(scroll, {
+    scrollHeight: { configurable: true, get: () => height },
+    clientHeight: { configurable: true, value: 100 },
+    scrollTop: { configurable: true, writable: true, value: 0 },
+  })
+  renderView(onAction, session, undefined, [firstMessage])
+  act(() => {
+    scroll.scrollTop = 200
+    scroll.dispatchEvent(new Event('scroll'))
+  })
+
+  height = 500
+  renderView(onAction, session, undefined, [
+    firstMessage,
+    { type: 'assistant', text: 'A message with an image' },
+  ])
+  await act(async () => {
+    await Promise.resolve()
+  })
+  const afterNewMessage = scroll.scrollTop
+  const lastMessage = requireElement(scroll.lastElementChild)
+  act(() => {
+    notifyResize(lastMessage)
+  })
+  height = 700
+  act(() => {
+    notifyResize(lastMessage)
+  })
+
+  const snapshot = () => ({
+    afterNewMessage,
+    afterMessageGrowth: scroll.scrollTop,
+  })
+  expect(snapshot()).toEqual({
+    afterNewMessage: 400,
+    afterMessageGrowth: 600,
   })
 })
 
