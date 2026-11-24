@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.913](https://github.com/fohte/armyknife/compare/v0.1.912...v0.1.913) (2026-11-24)
+
+
+### Features
+
+* **agent-watch-web:** move iPhone PRs to a tab ([#2246](https://github.com/fohte/armyknife/issues/2246)) ([00cbbf0](https://github.com/fohte/armyknife/commit/00cbbf0bf1888773673f878d22f7dd00b7d5127d))
+
 ## [0.1.912](https://github.com/fohte/armyknife/compare/v0.1.911...v0.1.912) (2026-11-24)
 
 
