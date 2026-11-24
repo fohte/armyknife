@@ -52,18 +52,76 @@ it('calculates expected usage from the window reset time', () => {
   ).toEqual(50)
 })
 
-it('does not calculate pace until the window has elapsed enough', () => {
-  expect(
-    getExpectedUsagePercentage(
-      {
-        usedPercentage: 1,
-        resetsAt: 1_794_931_100,
-        windowSeconds: 18_000,
-      },
-      1_794_832_000,
-    ),
-  ).toEqual(null)
-})
+it.each([
+  [
+    'five-hour window',
+    { usedPercentage: 1, resetsAt: 17_999, windowSeconds: 18_000 },
+    0.005555555555555556,
+  ],
+  [
+    'seven-day window',
+    { usedPercentage: 1, resetsAt: 604_799, windowSeconds: 604_800 },
+    0.00016534391534391536,
+  ],
+])(
+  'shows the expected usage line at the start of the %s',
+  (_description, window, expected) => {
+    expect(getExpectedUsagePercentage(window, 0)).toEqual(expected)
+  },
+)
+
+it.each([
+  [
+    'five-hour window',
+    { usedPercentage: 1, resetsAt: 18_000, windowSeconds: 18_000 },
+  ],
+  [
+    'seven-day window',
+    { usedPercentage: 1, resetsAt: 604_800, windowSeconds: 604_800 },
+  ],
+])(
+  'omits the expected usage line at the start of the %s',
+  (_description, window) => {
+    expect(getExpectedUsagePercentage(window, 0)).toEqual(null)
+  },
+)
+
+it.each([
+  [
+    'five-hour window',
+    { usedPercentage: 1, resetsAt: 17_999, windowSeconds: 18_000 },
+    18_000,
+  ],
+  [
+    'seven-day window',
+    { usedPercentage: 1, resetsAt: 604_799, windowSeconds: 604_800 },
+    604_800,
+  ],
+])(
+  'calculates the landing estimate from the start of the %s',
+  (_description, window, expected) => {
+    expect(getUsageLandingEstimate(window, 0)).toEqual({
+      percentage: expected,
+      status: 'danger',
+    })
+  },
+)
+
+it.each([
+  [
+    'five-hour window',
+    { usedPercentage: 1, resetsAt: 18_000, windowSeconds: 18_000 },
+  ],
+  [
+    'seven-day window',
+    { usedPercentage: 1, resetsAt: 604_800, windowSeconds: 604_800 },
+  ],
+])(
+  'omits the landing estimate at the start of the %s',
+  (_description, window) => {
+    expect(getUsageLandingEstimate(window, 0)).toEqual(null)
+  },
+)
 
 it.each([
   [
@@ -95,10 +153,6 @@ it.each([
 
 it.each([
   [
-    'the window has barely elapsed',
-    { usedPercentage: 1, resetsAt: 1_794_849_280, windowSeconds: 18_000 },
-  ],
-  [
     'the window has reset',
     { usedPercentage: 88, resetsAt: 1_794_831_900, windowSeconds: 18_000 },
   ],
@@ -110,17 +164,17 @@ it.each([
   expect(getUsageLandingEstimate(window, 1_794_832_000)).toEqual(null)
 })
 
-it('calculates a landing estimate once the window reaches five percent', () => {
-  expect(
-    getUsageLandingEstimate(
-      {
-        usedPercentage: 1,
-        resetsAt: 1_794_849_100,
-        windowSeconds: 18_000,
-      },
-      1_794_832_000,
-    ),
-  ).toEqual({ percentage: 20, status: 'on-pace' })
+it.each([
+  [
+    'the window has reset',
+    { usedPercentage: 88, resetsAt: 1_794_831_900, windowSeconds: 18_000 },
+  ],
+  [
+    'there is no reset time',
+    { usedPercentage: 88, resetsAt: null, windowSeconds: 18_000 },
+  ],
+])('omits the expected usage line when %s', (_description, window) => {
+  expect(getExpectedUsagePercentage(window, 1_794_832_000)).toEqual(null)
 })
 
 it.each([

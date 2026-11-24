@@ -5,7 +5,7 @@ import { UsagePaceIndicator } from '#components/usage-pace-indicator'
 
 const nowSeconds = 1_800_000_000
 
-it('omits the projection before five percent of the window has elapsed', () => {
+it('shows the projection as soon as the window begins', () => {
   expect(
     renderToStaticMarkup(
       <UsagePaceIndicator
@@ -14,12 +14,14 @@ it('omits the projection before five percent of the window has elapsed', () => {
         usedPercentage={3}
         window={{
           usedPercentage: 3,
-          resetsAt: nowSeconds + 17_136,
+          resetsAt: nowSeconds + 17_999,
           windowSeconds: 18_000,
         }}
       />,
     ),
-  ).toEqual('')
+  ).toEqual(
+    '<span aria-label="7d: 3% used, projected 54000% at window end, well above quota pace, resets in 4h59m" class="usage-pace-indicator is-danger" title="7d: 3% used, projected 54000% at window end, well above quota pace, resets in 4h59m">→ 54000%</span>',
+  )
 })
 
 it('shows the forecast with its accessible pace and reset description', () => {
