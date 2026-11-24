@@ -625,9 +625,8 @@ async fn list_sessions<S: SessionSource>(
                 .or_else(|| todo_title.cloned())
                 .or_else(|| folded_todo_summary.and_then(|summary| summary.first_title.clone()))
                 .or_else(|| session.last_message.clone());
-            let last_conversation_activity_at = session
-                .last_prompted_at
-                .iter()
+            let last_conversation_activity_at = std::iter::once(&session.created_at)
+                .chain(session.last_prompted_at.iter())
                 .chain(agent_response_timestamps.get(&session.session_id))
                 .max()
                 .copied()
@@ -1321,6 +1320,7 @@ mod tests {
     #[case::user_prompt_is_latest(Some(990), Some(950), 110)]
     #[case::agent_response_is_latest(Some(900), Some(970), 130)]
     #[case::created_at_fallback(None, None, 400)]
+    #[case::rewind_creation_beats_inherited_prompt(Some(600), None, 400)]
     #[tokio::test]
     async fn sessions_route_elapsed_uses_latest_conversation_activity(
         mut source: TestSessionSource,
@@ -2198,6 +2198,8 @@ mod tests {
         source.web_states[0].later_until = None;
         source.web_states[0].is_today = false;
         source.sessions[0].status = SessionStatus::WaitingInput;
+        source.sessions[0].created_at =
+            Utc.timestamp_opt(700, 0).single().expect("valid timestamp");
         source.sessions[0].last_prompted_at =
             Some(Utc.timestamp_opt(900, 0).single().expect("valid timestamp"));
         source.sessions[0].crit_urls = vec!["http://127.0.0.1:6000".to_string()];
