@@ -1,4 +1,5 @@
 import { act } from 'react'
+import { createPortal } from 'react-dom'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { page } from 'vitest/browser'
@@ -6,9 +7,10 @@ import { page } from 'vitest/browser'
 import { MarkdownSessionLinksProvider } from '#components/markdown-message'
 import type { WebUiLinkTarget } from '#components/markdown-session-links'
 import type { ReviewDocumentSummary } from '#components/review-document-summary'
+import { SessionPullRequests } from '#components/session-pull-requests'
 import { SessionStatusPanel } from '#components/session-status-panel'
 import { useConversationStatusPanel } from '#components/use-conversation-status-panel'
-import type { Session } from '#types'
+import type { BackgroundTask, Session } from '#types'
 
 const session: Session = {
   id: 'fixture-session',
@@ -38,6 +40,7 @@ function StatusPanelHarness({
   reviewDocumentError,
   onRetryReviewDocumentSummaries,
   isMobile = false,
+  backgroundTasks = [],
 }: {
   currentSession: Session
   statusPanelOpen?: boolean
@@ -45,6 +48,7 @@ function StatusPanelHarness({
   reviewDocumentError?: string
   onRetryReviewDocumentSummaries?: () => void
   isMobile?: boolean
+  backgroundTasks?: readonly BackgroundTask[]
 }) {
   const summaries =
     reviewDocumentSummaries ??
@@ -70,21 +74,43 @@ function StatusPanelHarness({
       ? {}
       : { onRetryReviewDocumentSummaries }),
     messages: [],
-    backgroundTasks: [],
+    backgroundTasks,
     statusPanelOpen,
     isMobile,
     onAction: () => Promise.resolve(true),
     onCloseStatusPanel: () => undefined,
   })
+  const pullRequests =
+    currentSession.pullRequests !== undefined &&
+    currentSession.pullRequests.length > 0
+      ? currentSession.pullRequests
+      : currentSession.pullRequest === null
+        ? []
+        : [currentSession.pullRequest]
   return (
-    <SessionStatusPanel
-      tabs={panel.tabs}
-      activeTabId={panel.activeTabId}
-      onTabChange={panel.onTabChange}
-      onClose={() => undefined}
-      showCollapseControl={false}
-      size={isMobile ? 'phone' : 'desktop'}
-    />
+    <>
+      <SessionStatusPanel
+        tabs={panel.tabs}
+        activeTabId={panel.activeTabId}
+        onTabChange={panel.onTabChange}
+        onClose={() => undefined}
+        showCollapseControl={false}
+        size={isMobile ? 'phone' : 'desktop'}
+      />
+      {panel.pullRequestListTarget === null
+        ? null
+        : createPortal(
+            <SessionPullRequests
+              pullRequests={pullRequests}
+              repo={currentSession.repo}
+              isMobile
+              open={false}
+              presentation="list"
+              onOpenChange={() => undefined}
+            />,
+            panel.pullRequestListTarget,
+          )}
+    </>
   )
 }
 
@@ -238,6 +264,154 @@ it('shows linked tasks without adding a PRs tab', () => {
       (tab) => tab.textContent,
     ),
   ).toEqual(['Tasks1'])
+})
+
+it('shows the PRs tab after Running and renders its merge row on mobile', () => {
+  act(() => {
+    root?.render(
+      <StatusPanelHarness
+        currentSession={{
+          ...session,
+          pullRequest: {
+            number: 42,
+            state: 'Open',
+            owner: 'fixture',
+            repo: 'toolkit',
+            title: 'Improve request reliability',
+            headSha: 'fixture-head-sha',
+            ciState: 'Successful',
+            isCurrentBranch: true,
+          },
+        }}
+        backgroundTasks={[
+          {
+            id: 'fixture-background-task',
+            description: 'Run the request checks',
+            elapsedSeconds: 10,
+            kind: 'background_task',
+          },
+        ]}
+        isMobile
+      />,
+    )
+  })
+
+  const snapshot = () => ({
+    tabs: Array.from(
+      container.querySelectorAll<HTMLButtonElement>('[role="tab"]'),
+      (tab) => ({
+        label: tab.textContent,
+        selected: tab.getAttribute('aria-selected'),
+      }),
+    ),
+    pullRequestRows: container.querySelectorAll('.session-pr-row').length,
+    mergeDisabled:
+      container.querySelector<HTMLButtonElement>(
+        '.session-pr-row button[aria-label="Merge PR #42 in fixture/toolkit"]',
+      )?.disabled ?? null,
+  })
+  const initial = snapshot()
+
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>('#session-status-tab-pull-requests')
+      ?.click()
+  })
+
+  const result = () => ({ initial, selected: snapshot() })
+  expect(result()).toEqual({
+    initial: {
+      tabs: [
+        { label: 'Running1', selected: 'true' },
+        { label: 'PRs1', selected: 'false' },
+      ],
+      pullRequestRows: 0,
+      mergeDisabled: null,
+    },
+    selected: {
+      tabs: [
+        { label: 'Running1', selected: 'false' },
+        { label: 'PRs1', selected: 'true' },
+      ],
+      pullRequestRows: 1,
+      mergeDisabled: false,
+    },
+  })
+})
+
+it('returns to Running when a background task starts after PRs was the only tab', () => {
+  const currentSession: Session = {
+    ...session,
+    pullRequest: {
+      number: 42,
+      state: 'Open',
+      owner: 'fixture',
+      repo: 'toolkit',
+      title: 'Improve request reliability',
+      headSha: 'fixture-head-sha',
+      ciState: 'Successful',
+      isCurrentBranch: true,
+    },
+  }
+  const backgroundTask: BackgroundTask = {
+    id: 'fixture-background-task',
+    description: 'Run the request checks',
+    elapsedSeconds: 10,
+    kind: 'background_task',
+  }
+  const selectedTab = () =>
+    container.querySelector('[role="tab"][aria-selected="true"]')
+      ?.textContent ?? null
+  const render = (backgroundTasks: readonly BackgroundTask[]) => {
+    act(() => {
+      root?.render(
+        <StatusPanelHarness
+          currentSession={currentSession}
+          backgroundTasks={backgroundTasks}
+          isMobile
+        />,
+      )
+    })
+    return selectedTab()
+  }
+
+  const selection = () => ({
+    whileRunning: render([backgroundTask]),
+    afterTaskCompletes: render([]),
+    afterTaskStartsAgain: render([backgroundTask]),
+  })
+
+  expect(selection()).toEqual({
+    whileRunning: 'Running1',
+    afterTaskCompletes: 'PRs1',
+    afterTaskStartsAgain: 'Running1',
+  })
+})
+
+it('hides the PRs tab on mobile when a session has no pull requests', () => {
+  act(() => {
+    root?.render(
+      <StatusPanelHarness
+        currentSession={{ ...session, pullRequest: null, pullRequests: [] }}
+        backgroundTasks={[
+          {
+            id: 'fixture-background-task',
+            description: 'Run the request checks',
+            elapsedSeconds: 10,
+            kind: 'background_task',
+          },
+        ]}
+        isMobile
+      />,
+    )
+  })
+
+  expect(
+    Array.from(
+      container.querySelectorAll<HTMLButtonElement>('[role="tab"]'),
+      (tab) => tab.textContent,
+    ),
+  ).toEqual(['Running1'])
 })
 
 it.each(['Todo', 'Proposal'] as const)(

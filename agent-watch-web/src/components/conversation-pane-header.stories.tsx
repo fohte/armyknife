@@ -262,7 +262,7 @@ export const SessionHasMultiplePullRequests: Story = {
   },
 }
 
-export const MobileHeaderShowsPullRequestSheet: Story = {
+export const DesktopHeaderShowsPullRequestPopover: Story = {
   name: 'The desktop pull request button opens the pull request list',
   args: {
     pullRequestsOpen: true,
