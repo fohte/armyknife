@@ -356,62 +356,8 @@ async fn run_with_context(
             retry_started_at,
         }) = &scope
     {
-        let new_remote_comments = client
-            .get_comments(&ctx.owner, &ctx.repo_name, ctx.issue_number)
+        reconcile_review_comment_push(ctx, client, &local, &changeset, path, *retry_started_at)
             .await?;
-        let mut advanced = advance_comment_snapshot(
-            local.base_comments.as_deref().unwrap_or_default(),
-            &local.comments,
-            &new_remote_comments,
-            &changeset.comments,
-        );
-        let mut posted_new_comment_paths = Vec::new();
-        for local_comment in local.comments.iter().filter(|comment| comment.is_new()) {
-            if let Some(remote_comment) = new_remote_comments.iter().find(|remote_comment| {
-                comment_bodies_equal(&local_comment.body, &remote_comment.body)
-                    && remote_comment
-                        .author
-                        .as_ref()
-                        .is_some_and(|author| author.login == ctx.current_user)
-                    && &remote_comment.created_at >= retry_started_at
-            }) {
-                set_comment_snapshot(&mut advanced, remote_comment);
-                posted_new_comment_paths.push(
-                    ctx.storage
-                        .dir()
-                        .join("comments")
-                        .join(&local_comment.filename),
-                );
-            }
-        }
-        ctx.storage.save_base_comments(&advanced)?;
-        for path in posted_new_comment_paths {
-            std::fs::remove_file(path)?;
-        }
-
-        if let Some(local_comment) = local.comments.iter().find(|comment| {
-            !comment.is_new()
-                && paths_match(
-                    &ctx.storage.dir().join("comments").join(&comment.filename),
-                    path,
-                )
-        }) && let Some(comment_id) = local_comment.metadata.id.as_deref()
-            && let Some(remote_comment) = new_remote_comments
-                .iter()
-                .find(|comment| comment.id == comment_id)
-        {
-            let content =
-                crate::commands::gh::issue_agent::storage::LocalComment::format_from_comment(
-                    remote_comment,
-                );
-            std::fs::write(
-                ctx.storage
-                    .dir()
-                    .join("comments")
-                    .join(&local_comment.filename),
-                content,
-            )?;
-        }
     }
 
     if scope.is_none()
@@ -432,6 +378,73 @@ async fn run_with_context(
 
     // Show result
     print_result(args.dry_run, has_changes);
+
+    Ok(())
+}
+
+async fn reconcile_review_comment_push(
+    ctx: &IssueContext,
+    client: &GitHubClient,
+    local: &common::LocalData,
+    changeset: &ChangeSet<'_>,
+    selected_path: &std::path::Path,
+    retry_started_at: DateTime<Utc>,
+) -> anyhow::Result<()> {
+    let new_remote_comments = client
+        .get_comments(&ctx.owner, &ctx.repo_name, ctx.issue_number)
+        .await?;
+    let mut advanced = advance_comment_snapshot(
+        local.base_comments.as_deref().unwrap_or_default(),
+        &local.comments,
+        &new_remote_comments,
+        &changeset.comments,
+    );
+    let mut posted_new_comment_paths = Vec::new();
+    for local_comment in local.comments.iter().filter(|comment| comment.is_new()) {
+        if let Some(remote_comment) = new_remote_comments.iter().find(|remote_comment| {
+            comment_bodies_equal(&local_comment.body, &remote_comment.body)
+                && remote_comment
+                    .author
+                    .as_ref()
+                    .is_some_and(|author| author.login == ctx.current_user)
+                && remote_comment.created_at >= retry_started_at
+        }) {
+            set_comment_snapshot(&mut advanced, remote_comment);
+            posted_new_comment_paths.push(
+                ctx.storage
+                    .dir()
+                    .join("comments")
+                    .join(&local_comment.filename),
+            );
+        }
+    }
+    ctx.storage.save_base_comments(&advanced)?;
+    for path in posted_new_comment_paths {
+        std::fs::remove_file(path)?;
+    }
+
+    if let Some(local_comment) = local.comments.iter().find(|comment| {
+        !comment.is_new()
+            && paths_match(
+                &ctx.storage.dir().join("comments").join(&comment.filename),
+                selected_path,
+            )
+    }) && let Some(comment_id) = local_comment.metadata.id.as_deref()
+        && let Some(remote_comment) = new_remote_comments
+            .iter()
+            .find(|comment| comment.id == comment_id)
+    {
+        let content = crate::commands::gh::issue_agent::storage::LocalComment::format_from_comment(
+            remote_comment,
+        );
+        std::fs::write(
+            ctx.storage
+                .dir()
+                .join("comments")
+                .join(&local_comment.filename),
+            content,
+        )?;
+    }
 
     Ok(())
 }
@@ -550,7 +563,7 @@ fn collect_approval_paths(changeset: &ChangeSet<'_>, ctx: &IssueContext) -> Vec<
     let mut paths = Vec::new();
     let dir = ctx.storage.dir();
 
-    // Both body and metadata (title, labels, sub-issues, parent-issue) are
+    // Both body and metadata (title, labels, assignees, milestone, sub-issues, parent-issue) are
     // stored in issue.md's YAML frontmatter, so any change requires issue.md approval.
     let issue_md_changed = changeset.body.is_some()
         || changeset.title.is_some()

@@ -518,7 +518,7 @@ impl<'a> MockRepoContext<'a> {
         self.sub_issues(issue_number, &[]).await;
     }
 
-    /// Mock GET /repos/{owner}/{repo}/milestones.
+    /// Resolve frontmatter milestone titles to repository-specific numbers in push tests.
     pub async fn milestones(&self, milestones: &[(&str, u64)]) {
         let body = milestones
             .iter()
@@ -913,7 +913,7 @@ impl<'a> MockIssueBuilder<'a> {
         self
     }
 
-    /// Set the assignees returned by issue creation.
+    /// Mirror the create request so reconciliation tests see GitHub's returned metadata.
     pub fn assignees(mut self, assignees: Vec<&'a str>) -> Self {
         self.assignees = assignees;
         self
@@ -992,7 +992,7 @@ impl<'a> MockIssueBuilder<'a> {
             .await;
     }
 
-    /// Mock an issue PATCH that must carry an exact request body.
+    /// Pin field-specific PATCH payloads so REST updates do not target unrelated fields.
     pub async fn update_with_body(self, expected_body: serde_json::Value) {
         let owner = self.owner;
         let repo = self.repo;

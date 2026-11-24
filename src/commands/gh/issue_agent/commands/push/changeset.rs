@@ -375,6 +375,13 @@ impl<'a> ChangeSet<'a> {
             repo,
             number: issue_number,
         } = address;
+        let resolved_milestone = match self.milestone.as_ref() {
+            Some(MilestoneChange {
+                local: Some(title), ..
+            }) => Some(client.resolve_milestone_number(owner, repo, title).await?),
+            _ => None,
+        };
+
         if let Some(change) = &self.body {
             println!();
             println!("Updating issue body...");
@@ -414,11 +421,11 @@ impl<'a> ChangeSet<'a> {
                 .await?;
         }
 
-        if let Some(change) = &self.milestone {
+        if self.milestone.is_some() {
             println!();
             println!("Updating milestone...");
             client
-                .update_issue_milestone(owner, repo, issue_number, change.local.as_deref())
+                .update_issue_milestone(owner, repo, issue_number, resolved_milestone)
                 .await?;
         }
 
@@ -751,6 +758,147 @@ mod tests {
             expected.sort();
 
             assert_eq!(requests, expected);
+        }
+
+        #[rstest]
+        #[tokio::test]
+        async fn apply_rejects_a_missing_milestone_before_updating_other_fields() {
+            let mock = GitHubMockServer::start().await;
+            mock.repo("owner", "repo").milestones(&[]).await;
+            mock.repo("owner", "repo")
+                .issue(123)
+                .update_with_body(json!({ "body": "Updated body" }))
+                .await;
+            let storage_dir = tempfile::tempdir().unwrap();
+            let storage = IssueStorage::from_dir(storage_dir.path());
+            let changeset = ChangeSet {
+                body: Some(BodyChange {
+                    local: "Updated body",
+                    remote: "Current body",
+                }),
+                title: None,
+                labels: None,
+                assignees: None,
+                milestone: Some(MilestoneChange {
+                    local: Some("Missing milestone".to_string()),
+                    remote: None,
+                }),
+                sub_issues: None,
+                parent_issue: None,
+                comments: vec![],
+            };
+
+            let result = changeset
+                .apply(
+                    &mock.client(),
+                    IssueAddress {
+                        owner: "owner",
+                        repo: "repo",
+                        number: 123,
+                    },
+                    &storage,
+                    &factories::issue(),
+                    true,
+                )
+                .await
+                .map_err(|error| error.to_string());
+            let mut requests = mock
+                .received_requests()
+                .await
+                .into_iter()
+                .map(|request| {
+                    let mut query = request
+                        .url
+                        .query_pairs()
+                        .map(|(key, value)| format!("{key}={value}"))
+                        .collect::<Vec<_>>();
+                    query.sort();
+                    format!(
+                        "{} {} {}",
+                        request.method,
+                        request.url.path(),
+                        query.join("&"),
+                    )
+                })
+                .collect::<Vec<_>>();
+            requests.sort();
+
+            assert_eq!(
+                (result, requests),
+                (
+                    Err("Milestone \"Missing milestone\" was not found in owner/repo".to_string()),
+                    vec![
+                        "GET /repos/owner/repo/milestones page=1&per_page=100&state=all"
+                            .to_string(),
+                    ],
+                ),
+            );
+        }
+
+        #[rstest]
+        #[tokio::test]
+        async fn apply_clears_assignees_and_milestone() {
+            let mock = GitHubMockServer::start().await;
+            mock.repo("owner", "repo")
+                .issue(123)
+                .update_with_body(json!({ "assignees": [] }))
+                .await;
+            mock.repo("owner", "repo")
+                .issue(123)
+                .update_with_body(json!({ "milestone": null }))
+                .await;
+            let storage_dir = tempfile::tempdir().unwrap();
+            let storage = IssueStorage::from_dir(storage_dir.path());
+            let changeset = ChangeSet {
+                body: None,
+                title: None,
+                labels: None,
+                assignees: Some(AssigneeChange {
+                    local: vec![],
+                    remote_sorted: vec!["sample-assignee".to_string()],
+                }),
+                milestone: Some(MilestoneChange {
+                    local: None,
+                    remote: Some("Sample milestone".to_string()),
+                }),
+                sub_issues: None,
+                parent_issue: None,
+                comments: vec![],
+            };
+
+            let result = changeset
+                .apply(
+                    &mock.client(),
+                    IssueAddress {
+                        owner: "owner",
+                        repo: "repo",
+                        number: 123,
+                    },
+                    &storage,
+                    &factories::issue(),
+                    true,
+                )
+                .await
+                .map_err(|error| error.to_string());
+            let mut requests = mock
+                .received_requests()
+                .await
+                .into_iter()
+                .map(|request| {
+                    let body = serde_json::from_slice::<serde_json::Value>(&request.body)
+                        .unwrap_or(serde_json::Value::Null);
+                    format!("{} {} {}", request.method, request.url.path(), body,)
+                })
+                .collect::<Vec<_>>();
+            requests.sort();
+
+            let mut expected = vec![
+                "PATCH /repos/owner/repo/issues/123 {\"assignees\":[]}".to_string(),
+                "PATCH /repos/owner/repo/issues/123 {\"milestone\":null}".to_string(),
+            ];
+            expected.sort();
+
+            assert_eq!((result, requests), (Ok(()), expected));
         }
     }
 

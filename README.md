@@ -382,11 +382,12 @@ a gh issue-agent <command> <issue-number> [options]
 Each pulled issue directory contains `issue.md` for editable issue fields and
 body, `.issue.base.md` as a managed issue snapshot, `.comments.base.json` as a
 snapshot of comment IDs and bodies, and `comments/` for issue comments. When the
-issue snapshot exists, `push` compares title, body, labels, sub-issues, and parent
-issue against it. Remote-only issue field changes are preserved. Without
-`--force`, edits to the same field on both sides with different values stop the
-push. With a comment snapshot, `push` and `diff` compare local comment bodies
-against the snapshot, preserving comments added remotely and remote-only edits.
+issue snapshot exists, `push` compares title, body, labels, assignees, milestone,
+sub-issues, and parent issue against it. Remote-only issue field changes are
+preserved. Without `--force`, edits to the same field on both sides with
+different values stop the push. With a comment snapshot, `push` and `diff` compare
+local comment bodies against the snapshot, preserving comments added remotely and
+remote-only edits.
 Conflicts are reported when both sides changed a comment differently. Deleting
 a comment still requires `--allow-delete`, and editing another user's comment
 still requires `--edit-others`. Use `pull --force` to keep remote values or

@@ -420,7 +420,6 @@ impl GitHubClient {
         Ok(())
     }
 
-    /// Replace an issue's assignees.
     pub async fn update_issue_assignees(
         &self,
         owner: &str,
@@ -435,27 +434,31 @@ impl GitHubClient {
         Ok(())
     }
 
-    /// Set or clear an issue's milestone by title.
+    /// Resolve frontmatter's milestone title to the repository-specific number accepted by REST.
+    pub async fn resolve_milestone_number(
+        &self,
+        owner: &str,
+        repo: &str,
+        title: &str,
+    ) -> Result<u64> {
+        self.find_milestone_number(owner, repo, title)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Milestone {title:?} was not found in {owner}/{repo}"))
+    }
+
     pub async fn update_issue_milestone(
         &self,
         owner: &str,
         repo: &str,
         issue_number: u64,
-        title: Option<&str>,
+        milestone_number: Option<u64>,
     ) -> Result<()> {
-        let number = match title {
-            Some(title) => Some(
-                self.find_milestone_number(owner, repo, title)
-                    .await?
-                    .ok_or_else(|| {
-                        anyhow::anyhow!("Milestone {title:?} was not found in {owner}/{repo}")
-                    })?,
-            ),
-            None => None,
-        };
         let route = format!("/repos/{owner}/{repo}/issues/{issue_number}");
         let _: serde_json::Value = self
-            .rest_patch(&route, &serde_json::json!({ "milestone": number }))
+            .rest_patch(
+                &route,
+                &serde_json::json!({ "milestone": milestone_number }),
+            )
             .await?;
         Ok(())
     }
