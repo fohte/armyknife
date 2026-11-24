@@ -162,6 +162,53 @@ const meta = {
 export default meta
 type Story = StoryObj<typeof meta>
 
+const japaneseRepoPrDraftStoryArgs = {
+  summary: japaneseRepoPrDraft,
+  summaries: [japaneseRepoPrDraft],
+  view: 'preview',
+  frontmatter: {
+    title: '再送の上限を設定で変えられるようにする',
+    steps: { submit: false },
+  },
+  body: japanesePrDraftBody,
+} satisfies Story['args']
+
+const englishRepoPrDraftStoryArgs = {
+  summary: prDraft,
+  summaries: [prDraft],
+  view: 'preview',
+  frontmatter: {
+    title: 'Make the retry limit configurable',
+    steps: { 'ready-for-translation': false, submit: false },
+  },
+  body: englishPrDraftBody,
+} satisfies Story['args']
+
+const issueCommentActionStoryArgs = {
+  summary: issueComment,
+  summaries: [issueComment],
+  frontmatter: { submit: false },
+  body: issueCommentBody,
+} satisfies Story['args']
+
+const reviewRepliesActionStoryArgs = {
+  summary: editableReviewReplies,
+  summaries: [editableReviewReplies],
+  frontmatter: { submit: false },
+  body: reviewRepliesBody,
+} satisfies Story['args']
+
+const issueBodyActionStoryArgs = {
+  summary: issueBody,
+  summaries: [],
+  view: 'preview',
+  frontmatter: {
+    title: '再送上限を変更する',
+    submit: false,
+  },
+  body: issueBodyText,
+} satisfies Story['args']
+
 export const EditingTheReviewDocument: Story = {
   name: 'One issue comment opens in preview with its metadata',
   args: {
@@ -246,135 +293,75 @@ export const MobileEnglishRepoDraftAwaitsTranslation: Story = {
 
 export const JapaneseRepoDraftCanCreatePrImmediately: Story = {
   name: 'A Japanese repository draft can create its PR immediately.',
-  args: {
-    summary: japaneseRepoPrDraft,
-    summaries: [japaneseRepoPrDraft],
-    view: 'preview',
-    frontmatter: {
-      title: '再送の上限を設定で変えられるようにする',
-      steps: { submit: false },
-    },
-    body: japanesePrDraftBody,
-  },
+  args: japaneseRepoPrDraftStoryArgs,
   decorators: [designComparisonViewport],
 }
 
 export const MobileJapaneseRepoDraftCanCreatePrImmediately: Story = {
   name: 'The iPhone Japanese repository draft can create its PR immediately.',
   args: {
-    summary: japaneseRepoPrDraft,
-    summaries: [japaneseRepoPrDraft],
-    view: 'preview',
+    ...japaneseRepoPrDraftStoryArgs,
     isMobile: true,
-    frontmatter: {
-      title: '再送の上限を設定で変えられるようにする',
-      steps: { submit: false },
-    },
-    body: japanesePrDraftBody,
   },
   decorators: [phoneViewport],
 }
 
 export const EnglishRepoDraftAwaitsPrCreation: Story = {
   name: 'The translated pull request draft is ready to create',
-  args: {
-    summary: prDraft,
-    summaries: [prDraft],
-    view: 'preview',
-    frontmatter: {
-      title: 'Make the retry limit configurable',
-      steps: { 'ready-for-translation': false, submit: false },
-    },
-    body: englishPrDraftBody,
-  },
+  args: englishRepoPrDraftStoryArgs,
   decorators: [designComparisonViewport],
 }
 
 export const MobileEnglishRepoDraftAwaitsPrCreation: Story = {
   name: 'The iPhone English PR draft is ready to create.',
   args: {
-    summary: prDraft,
-    summaries: [prDraft],
-    view: 'preview',
+    ...englishRepoPrDraftStoryArgs,
     isMobile: true,
-    frontmatter: {
-      title: 'Make the retry limit configurable',
-      steps: { 'ready-for-translation': false, submit: false },
-    },
-    body: englishPrDraftBody,
   },
   decorators: [phoneViewport],
 }
 
 export const CommentCanBePostedImmediately: Story = {
   name: 'An issue comment can be posted or sent back',
-  args: {
-    summary: issueComment,
-    summaries: [issueComment],
-    frontmatter: { submit: false },
-  },
+  args: issueCommentActionStoryArgs,
   decorators: [designComparisonViewport],
 }
 
 export const MobileCommentCanBePostedImmediately: Story = {
   name: 'The iPhone issue comment can be posted or sent back.',
   args: {
-    summary: issueComment,
-    summaries: [issueComment],
+    ...issueCommentActionStoryArgs,
     isMobile: true,
-    frontmatter: { submit: false },
-    body: issueCommentBody,
   },
   decorators: [phoneViewport],
 }
 
 export const RepliesCanBePostedImmediately: Story = {
   name: 'Review replies can be posted or sent back',
-  args: {
-    summary: editableReviewReplies,
-    summaries: [editableReviewReplies],
-    frontmatter: { submit: false },
-    body: reviewRepliesBody,
-  },
+  args: reviewRepliesActionStoryArgs,
   decorators: [designComparisonViewport],
 }
 
 export const MobileRepliesCanBePostedImmediately: Story = {
   name: 'The iPhone review replies can be posted or sent back.',
   args: {
-    summary: editableReviewReplies,
-    summaries: [editableReviewReplies],
+    ...reviewRepliesActionStoryArgs,
     isMobile: true,
-    frontmatter: { submit: false },
-    body: reviewRepliesBody,
   },
   decorators: [phoneViewport],
 }
 
 export const IssueCanBeUpdatedImmediately: Story = {
   name: 'An issue body can be updated or sent back',
-  args: {
-    summary: issueBody,
-    summaries: [],
-    view: 'preview',
-    frontmatter: {
-      title: '再送上限を変更する',
-      submit: false,
-    },
-    body: issueBodyText,
-  },
+  args: issueBodyActionStoryArgs,
   decorators: [designComparisonViewport],
 }
 
 export const MobileIssueCanBeUpdatedImmediately: Story = {
   name: 'The iPhone issue body can be updated or sent back.',
   args: {
-    summary: issueBody,
-    summaries: [],
-    view: 'preview',
+    ...issueBodyActionStoryArgs,
     isMobile: true,
-    frontmatter: { title: '再送上限を変更する', submit: false },
-    body: issueBodyText,
   },
   decorators: [phoneViewport],
 }
