@@ -1,10 +1,10 @@
 import '#components/review-document-panel/direct-actions.css'
 
 import type { ReviewDocumentSummary } from '#components/review-document-summary'
+import type { ReviewDocumentAction } from '#session-operation-types'
 import type { JsonValue } from '#types'
 
-export type ReviewDocumentAction =
-  'post_comment' | 'create_pr' | 'post_replies' | 'update_issue'
+export type { ReviewDocumentAction } from '#session-operation-types'
 
 type ReviewDocumentActionsProps = {
   summary?: ReviewDocumentSummary | undefined

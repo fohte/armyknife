@@ -5,8 +5,8 @@ import {
   useOptionalAsyncActionFeedback,
 } from '#async-action-feedback'
 import { type ReviewDocumentResponse } from '#components/conversation-pane-response'
-import type { ReviewDocumentAction } from '#components/review-document-panel/actions'
 import { useSessionOperations } from '#session-operation-context'
+import type { ReviewDocumentAction } from '#session-operation-types'
 import { createSessionOperation } from '#session-operations'
 import type { JsonValue } from '#types'
 

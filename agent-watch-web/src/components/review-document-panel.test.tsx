@@ -118,6 +118,49 @@ it('posts an issue comment through its action button and preserves Send back', a
   })
 })
 
+it.each([
+  {
+    name: 'review replies',
+    kind: 'review_replies' as const,
+    target: { pullRequestNumber: 42, threadCount: 2 },
+    label: 'Post replies',
+    action: 'post_replies',
+  },
+  {
+    name: 'an issue body',
+    kind: 'issue_body' as const,
+    target: { repository: 'sample-owner/sample-repository', issueNumber: 42 },
+    label: 'Update issue',
+    action: 'update_issue',
+  },
+])('submits the selected action for $name', async (testCase) => {
+  root = createRoot(container)
+  act(() =>
+    root?.render(
+      <ReviewDocumentPanel
+        summary={{
+          id: 'fixture-review-document',
+          kind: testCase.kind,
+          target: testCase.target,
+          isEditor: true,
+          canSave: true,
+          canFinish: true,
+        }}
+        frontmatter={{ submit: false }}
+        body="Example draft body"
+        isMobile
+        onSubmit={(action) => directActions.push(action)}
+      />,
+    ),
+  )
+
+  await act(async () => {
+    await page.getByRole('button', { name: testCase.label }).click()
+  })
+
+  expect(directActions).toEqual([testCase.action])
+})
+
 it('routes the English-repo PR draft through translation before creation', async () => {
   const summary = {
     id: 'fixture-pr-draft',

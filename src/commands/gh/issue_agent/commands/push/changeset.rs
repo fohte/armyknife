@@ -1,5 +1,7 @@
 //! ChangeSet: Represents all detected changes between local and remote state.
 
+use chrono::{DateTime, Utc};
+
 use crate::commands::gh::issue_agent::models::{Comment, Issue, IssueMetadata};
 use crate::commands::gh::issue_agent::storage::{
     CommentSnapshot, IssueContent, IssueStorage, LocalComment,
@@ -10,8 +12,8 @@ use crossterm::style::Color;
 
 use super::super::common::{print_colored_line, print_diff};
 use super::detect::{
-    detect_body_change, detect_comment_changes, detect_label_change, detect_parent_issue_change,
-    detect_sub_issue_change, detect_title_change,
+    detect_body_change, detect_comment_changes_with_retry, detect_label_change,
+    detect_parent_issue_change, detect_sub_issue_change, detect_title_change,
 };
 use super::field_comparison::{IssueFieldComparisons, compare_issue_fields};
 use super::links::{
@@ -37,6 +39,7 @@ pub(crate) struct DetectOptions<'a> {
     pub(crate) current_user: &'a str,
     pub(crate) edit_others: bool,
     pub(crate) allow_delete: bool,
+    pub(crate) retry_started_at: Option<DateTime<Utc>>,
 }
 
 /// Represents all changes detected between local and remote state.
@@ -160,13 +163,14 @@ impl<'a> ChangeSet<'a> {
             } else {
                 detect_parent_issue_change(local.metadata, remote.issue)
             };
-        let comments = detect_comment_changes(
+        let comments = detect_comment_changes_with_retry(
             local.comments,
             remote.comments,
             local.base_comments,
             options.current_user,
             options.edit_others,
             options.allow_delete,
+            options.retry_started_at,
         )?;
 
         Ok(Self {
@@ -434,6 +438,7 @@ mod tests {
                 current_user: "testuser",
                 edit_others: false,
                 allow_delete: false,
+                retry_started_at: None,
             };
 
             let changeset =
@@ -470,6 +475,7 @@ mod tests {
                 current_user: "testuser",
                 edit_others: false,
                 allow_delete: false,
+                retry_started_at: None,
             };
 
             let changeset =

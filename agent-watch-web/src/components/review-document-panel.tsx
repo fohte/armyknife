@@ -10,14 +10,12 @@ import { useEffect, useRef, useState } from 'react'
 
 import { MarkdownMessage } from '#components/markdown-message'
 import { ReviewDocumentNavigation } from '#components/review-document-navigation'
-import {
-  type ReviewDocumentAction,
-  ReviewDocumentActions,
-} from '#components/review-document-panel/actions'
+import { ReviewDocumentActions } from '#components/review-document-panel/actions'
 import type { ReviewDocumentSummary } from '#components/review-document-summary'
+import type { ReviewDocumentAction } from '#session-operation-types'
 import type { JsonValue } from '#types'
 
-export type { ReviewDocumentAction } from '#components/review-document-panel/actions'
+export type { ReviewDocumentAction } from '#session-operation-types'
 
 type ReviewDocumentPanelProps = {
   summary?: ReviewDocumentSummary

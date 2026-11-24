@@ -10,12 +10,14 @@ mod links;
 
 use std::path::PathBuf;
 
+use chrono::{DateTime, Utc};
+
 use clap::Args;
 
 use super::common;
 use super::common::IssueContext;
 use crate::commands::gh::issue_agent::body_compare::comment_bodies_equal;
-use crate::commands::gh::issue_agent::models::{Comment, IssueFrontmatter};
+use crate::commands::gh::issue_agent::models::{Comment, IssueFrontmatter, IssueMetadata};
 use crate::commands::gh::issue_agent::storage::{CommentSnapshot, LocalComment};
 use crate::infra::github::GitHubClient;
 use crate::shared::human_in_the_loop::ApprovalManager;
@@ -55,6 +57,38 @@ pub struct PushArgs {
     /// Allow deleting comments from GitHub
     #[arg(long)]
     pub allow_delete: bool,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum ReviewDocumentPushScope {
+    Comment {
+        path: PathBuf,
+        retry_started_at: DateTime<Utc>,
+    },
+    IssueBody {
+        path: PathBuf,
+    },
+}
+
+pub(crate) async fn push_review_document(
+    issue_number: u64,
+    repo: String,
+    scope: ReviewDocumentPushScope,
+) -> anyhow::Result<()> {
+    let args = PushArgs {
+        target: issue_number.to_string(),
+        repo: Some(repo),
+        dry_run: false,
+        force: false,
+        edit_others: false,
+        allow_delete: false,
+    };
+    let issue_args = super::IssueArgs {
+        issue_number,
+        repo: args.repo.clone(),
+    };
+    let (ctx, client) = IssueContext::from_args(&issue_args).await?;
+    run_with_context(&args, &ctx, client, Some(scope)).await
 }
 
 /// Parse target string into PushTarget.
@@ -111,7 +145,7 @@ async fn run_update(args: &PushArgs, issue_number: u64) -> anyhow::Result<()> {
         repo: args.repo.clone(),
     };
     let (ctx, client) = IssueContext::from_args(&issue_args).await?;
-    run_with_context(args, &ctx, client).await
+    run_with_context(args, &ctx, client, None).await
 }
 
 /// Internal implementation that accepts a client and storage for testability.
@@ -142,32 +176,71 @@ pub(super) async fn run_with_client_and_storage(
         storage: storage.clone(),
         current_user: current_user.to_string(),
     };
-    run_with_context(args, &ctx, client).await
+    run_with_context(args, &ctx, client, None).await
 }
 
 async fn run_with_context(
     args: &PushArgs,
     ctx: &IssueContext,
     client: &GitHubClient,
+    scope: Option<ReviewDocumentPushScope>,
 ) -> anyhow::Result<()> {
     let remote = ctx.fetch_remote(client).await?;
-    let local = ctx.load_local()?;
+    let mut local = ctx.load_local()?;
+    if let Some(ReviewDocumentPushScope::Comment { path, .. }) = &scope {
+        let selected = local.comments.iter().any(|comment| {
+            paths_match(
+                &ctx.storage.dir().join("comments").join(&comment.filename),
+                path,
+            )
+        });
+        if !selected {
+            anyhow::bail!("The selected review comment is unavailable");
+        }
+        local.comments.retain(|comment| {
+            paths_match(
+                &ctx.storage.dir().join("comments").join(&comment.filename),
+                path,
+            )
+        });
+    }
+    if let Some(ReviewDocumentPushScope::IssueBody { path }) = &scope
+        && !paths_match(&ctx.storage.dir().join("issue.md"), path)
+    {
+        anyhow::bail!("The selected issue document is unavailable");
+    }
+    if matches!(scope, Some(ReviewDocumentPushScope::IssueBody { .. })) {
+        local.comments.clear();
+    }
     let field_comparisons = local.base_issue.as_ref().map(|base_issue| {
         compare_issue_fields(&local.metadata, &local.body, &remote.issue, base_issue)
     });
 
     // Check for field-level conflicts unless --force is specified
     if !args.force {
-        let conflict_input = ConflictCheckInput {
-            local_metadata: &local.metadata,
-            local_body: &local.body,
-            local_comments: &local.comments,
-            base_comments: local.base_comments.as_deref(),
-            remote_issue: &remote.issue,
-            remote_comments: &remote.comments,
+        let conflicts = if matches!(scope, Some(ReviewDocumentPushScope::Comment { .. })) {
+            let remote_metadata = IssueMetadata::from(IssueFrontmatter::from_issue(&remote.issue));
+            let remote_body = remote.issue.body.as_deref().unwrap_or("");
+            let conflict_input = ConflictCheckInput {
+                local_metadata: &remote_metadata,
+                local_body: remote_body,
+                local_comments: &local.comments,
+                base_comments: local.base_comments.as_deref(),
+                remote_issue: &remote.issue,
+                remote_comments: &remote.comments,
+            };
+            check_conflicts(&conflict_input, None)
+        } else {
+            let conflict_input = ConflictCheckInput {
+                local_metadata: &local.metadata,
+                local_body: &local.body,
+                local_comments: &local.comments,
+                base_comments: local.base_comments.as_deref(),
+                remote_issue: &remote.issue,
+                remote_comments: &remote.comments,
+            };
+            check_conflicts(&conflict_input, field_comparisons)
         };
-        let conflicts = check_conflicts(&conflict_input, field_comparisons);
-
         if !conflicts.is_empty() {
             eprintln!();
             eprintln!(
@@ -197,14 +270,28 @@ async fn run_with_context(
     let options = DetectOptions {
         current_user: &ctx.current_user,
         edit_others: args.edit_others || args.dry_run,
-        allow_delete: args.allow_delete || args.dry_run,
+        allow_delete: args.allow_delete
+            || args.dry_run
+            || matches!(scope, Some(ReviewDocumentPushScope::Comment { .. }))
+            || matches!(scope, Some(ReviewDocumentPushScope::IssueBody { .. })),
+        retry_started_at: match &scope {
+            Some(ReviewDocumentPushScope::Comment {
+                retry_started_at, ..
+            }) => Some(*retry_started_at),
+            _ => None,
+        },
     };
-    let changeset = ChangeSet::detect_with_comparisons(
+    let mut changeset = ChangeSet::detect_with_comparisons(
         &local_state,
         &remote_state,
         &options,
         field_comparisons,
     )?;
+    restrict_changeset_to_review_document(
+        &mut changeset,
+        &scope,
+        &ctx.storage.dir().join("comments"),
+    );
 
     // Display and apply changes
     let has_changes = changeset.has_changes();
@@ -227,27 +314,32 @@ async fn run_with_context(
             )
             .await?;
 
-        // Update local issue.md with new frontmatter from remote after successful push
-        let new_remote_issue = common::fetch_issue_with_sub_issues(
-            client,
-            &ctx.owner,
-            &ctx.repo_name,
-            ctx.issue_number,
-        )
-        .await?;
-        let new_frontmatter = IssueFrontmatter::from_issue(&new_remote_issue);
-        let body = new_remote_issue.body.as_deref().unwrap_or("");
-        ctx.storage.save_issue(&new_frontmatter, body)?;
-
-        // Refresh comment files so their IDs and update timestamps match GitHub.
-        let new_remote_comments = client
-            .get_comments(&ctx.owner, &ctx.repo_name, ctx.issue_number)
+        if !matches!(scope, Some(ReviewDocumentPushScope::Comment { .. })) {
+            // Update local issue.md with new frontmatter from remote after successful push
+            let new_remote_issue = common::fetch_issue_with_sub_issues(
+                client,
+                &ctx.owner,
+                &ctx.repo_name,
+                ctx.issue_number,
+            )
             .await?;
-        ctx.storage.save_comments(&new_remote_comments)?;
+            let new_frontmatter = IssueFrontmatter::from_issue(&new_remote_issue);
+            let body = new_remote_issue.body.as_deref().unwrap_or("");
+            ctx.storage.save_issue(&new_frontmatter, body)?;
+        }
+
+        if scope.is_none() {
+            // Refresh comment files so their IDs and update timestamps match GitHub.
+            let new_remote_comments = client
+                .get_comments(&ctx.owner, &ctx.repo_name, ctx.issue_number)
+                .await?;
+            ctx.storage.save_comments(&new_remote_comments)?;
+        }
 
         // Clean up approval records after successful push
         cleanup_approval_records(&changeset, ctx);
-    } else if !args.dry_run
+    } else if scope.is_none()
+        && !args.dry_run
         && field_comparisons.is_some_and(|comparison| comparison.all_sides_equal())
     {
         let frontmatter = IssueFrontmatter::from_issue(&remote.issue);
@@ -255,7 +347,8 @@ async fn run_with_context(
         ctx.storage.save_base_issue(&frontmatter, body)?;
     }
 
-    if !args.dry_run
+    if scope.is_none()
+        && !args.dry_run
         && !has_changes
         && let Some(base_comments) = local.base_comments.as_deref()
     {
@@ -274,6 +367,37 @@ async fn run_with_context(
     print_result(args.dry_run, has_changes);
 
     Ok(())
+}
+
+fn paths_match(left: &std::path::Path, right: &std::path::Path) -> bool {
+    left.canonicalize().unwrap_or_else(|_| left.to_path_buf())
+        == right.canonicalize().unwrap_or_else(|_| right.to_path_buf())
+}
+
+fn restrict_changeset_to_review_document(
+    changeset: &mut ChangeSet<'_>,
+    scope: &Option<ReviewDocumentPushScope>,
+    comments_dir: &std::path::Path,
+) {
+    match scope {
+        Some(ReviewDocumentPushScope::Comment { path, .. }) => {
+            changeset.body = None;
+            changeset.title = None;
+            changeset.labels = None;
+            changeset.sub_issues = None;
+            changeset.parent_issue = None;
+            changeset.comments.retain(|change| {
+                let filename = match change {
+                    CommentChange::New { filename, .. }
+                    | CommentChange::Updated { filename, .. } => *filename,
+                    CommentChange::Deleted { .. } => return false,
+                };
+                paths_match(&comments_dir.join(filename), path)
+            });
+        }
+        Some(ReviewDocumentPushScope::IssueBody { .. }) => changeset.comments.clear(),
+        None => {}
+    }
 }
 
 fn advance_comment_snapshot(
@@ -483,6 +607,131 @@ mod tests {
             assert_eq!(
                 advance_comment_snapshot(&base_comments, &[], &remote_comments, &changes),
                 Vec::<CommentSnapshot>::new(),
+            );
+        }
+    }
+
+    mod review_document_scope_tests {
+        use super::*;
+        use crate::commands::gh::issue_agent::commands::push::changeset::{
+            BodyChange, LabelChange, ParentIssueChange, SubIssueChange, TitleChange,
+        };
+
+        fn changeset() -> ChangeSet<'static> {
+            ChangeSet {
+                body: Some(BodyChange {
+                    local: "Updated issue body",
+                    remote: "Current issue body",
+                }),
+                title: Some(TitleChange {
+                    local: "Updated issue title",
+                    remote: "Current issue title",
+                }),
+                labels: Some(LabelChange {
+                    to_add: vec!["sample-label".to_string()],
+                    to_remove: vec![],
+                    local_sorted: vec!["sample-label".to_string()],
+                    remote_sorted: vec![],
+                }),
+                sub_issues: Some(SubIssueChange {
+                    to_add: vec!["sample-owner/sample-repo#7".to_string()],
+                    to_remove: vec![],
+                    local_sorted: vec!["sample-owner/sample-repo#7".to_string()],
+                    remote_sorted: vec![],
+                }),
+                parent_issue: Some(ParentIssueChange {
+                    local: Some("sample-owner/sample-repo#8".to_string()),
+                    remote: None,
+                }),
+                comments: vec![
+                    CommentChange::New {
+                        filename: "new_selected.md",
+                        body: "Selected comment",
+                    },
+                    CommentChange::New {
+                        filename: "new_unrelated.md",
+                        body: "Unrelated comment",
+                    },
+                    CommentChange::Deleted {
+                        database_id: 17,
+                        body: "Unrelated remote comment",
+                        author: "sample-author",
+                    },
+                ],
+            }
+        }
+
+        #[rstest]
+        fn issue_comment_action_keeps_only_the_selected_comment() {
+            let temp_dir = TempDir::new().expect("fixture directory should be created");
+            let comments_dir = temp_dir.path().join("comments");
+            let selected_path = comments_dir.join("new_selected.md");
+            let mut actual = changeset();
+            restrict_changeset_to_review_document(
+                &mut actual,
+                &Some(ReviewDocumentPushScope::Comment {
+                    path: selected_path,
+                    retry_started_at: chrono::Utc::now(),
+                }),
+                &comments_dir,
+            );
+
+            assert_eq!(
+                actual,
+                ChangeSet {
+                    body: None,
+                    title: None,
+                    labels: None,
+                    sub_issues: None,
+                    parent_issue: None,
+                    comments: vec![CommentChange::New {
+                        filename: "new_selected.md",
+                        body: "Selected comment",
+                    }],
+                },
+            );
+        }
+
+        #[rstest]
+        fn issue_body_action_does_not_include_comment_changes() {
+            let mut actual = changeset();
+            restrict_changeset_to_review_document(
+                &mut actual,
+                &Some(ReviewDocumentPushScope::IssueBody {
+                    path: PathBuf::from("issue.md"),
+                }),
+                std::path::Path::new("comments"),
+            );
+
+            assert_eq!(
+                actual,
+                ChangeSet {
+                    body: Some(BodyChange {
+                        local: "Updated issue body",
+                        remote: "Current issue body",
+                    }),
+                    title: Some(TitleChange {
+                        local: "Updated issue title",
+                        remote: "Current issue title",
+                    }),
+                    labels: Some(LabelChange {
+                        to_add: vec!["sample-label".to_string()],
+                        to_remove: vec![],
+                        local_sorted: vec!["sample-label".to_string()],
+                        remote_sorted: vec![],
+                    }),
+                    sub_issues: Some(SubIssueChange {
+                        to_add: vec!["sample-owner/sample-repo#7".to_string()],
+                        to_remove: vec![],
+                        local_sorted: vec!["sample-owner/sample-repo#7".to_string()],
+                        remote_sorted: vec![],
+                    }),
+                    parent_issue: Some(ParentIssueChange {
+                        local: Some("sample-owner/sample-repo#8".to_string()),
+                        remote: None,
+                    }),
+                    comments: vec![],
+                },
             );
         }
     }

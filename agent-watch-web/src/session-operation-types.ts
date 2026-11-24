@@ -3,8 +3,23 @@ import type { JsonValue, RewindMode } from '#types'
 
 type PermissionAction = 'approve' | 'reject' | 'retry' | 'dismiss'
 
-export type ReviewDocumentDirectAction =
-  'post_comment' | 'create_pr' | 'post_replies' | 'update_issue'
+export const REVIEW_DOCUMENT_ACTIONS = [
+  'post_comment',
+  'create_pr',
+  'post_replies',
+  'update_issue',
+] as const
+
+export type ReviewDocumentAction = (typeof REVIEW_DOCUMENT_ACTIONS)[number]
+
+export function isReviewDocumentAction(
+  value: unknown,
+): value is ReviewDocumentAction {
+  return (
+    typeof value === 'string' &&
+    (REVIEW_DOCUMENT_ACTIONS as readonly string[]).includes(value)
+  )
+}
 
 export type SessionOperation =
   | { type: 'today'; sessionId: string; isToday: boolean }
@@ -115,7 +130,7 @@ export type SessionOperation =
       revision: string
       frontmatter: JsonValue
       body: string
-      action: ReviewDocumentDirectAction
+      action: ReviewDocumentAction
     }
 
 export type CloseWorktreeChecks = {

@@ -7,6 +7,7 @@ import type {
   SessionOperation,
   SessionOperationError,
 } from '#session-operation-types'
+import { isReviewDocumentAction } from '#session-operation-types'
 
 let nextMessageOperationId = 0
 
@@ -306,10 +307,7 @@ export function createSessionOperation(
         revision === null ||
         body === null ||
         !isJsonValue(frontmatter) ||
-        (action !== 'post_comment' &&
-          action !== 'create_pr' &&
-          action !== 'post_replies' &&
-          action !== 'update_issue')
+        !isReviewDocumentAction(action)
       ) {
         return errOperation('Invalid review document action')
       }

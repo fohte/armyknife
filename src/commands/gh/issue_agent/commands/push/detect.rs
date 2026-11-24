@@ -1,155 +1,33 @@
 //! Change detection functions for push command.
 
+mod comment_permissions;
+mod comment_retry;
 mod comment_snapshot;
+mod issue_fields;
 mod three_way_conflicts;
 
 use std::collections::{HashMap, HashSet};
+
+use chrono::{DateTime, Utc};
 
 use crate::commands::gh::issue_agent::body_compare::{bodies_equal, comment_bodies_equal};
 use crate::commands::gh::issue_agent::models::{Comment, Issue, IssueMetadata};
 use crate::commands::gh::issue_agent::storage::{CommentSnapshot, LocalComment};
 
-use super::changeset::{
-    BodyChange, CommentChange, LabelChange, ParentIssueChange, SubIssueChange, TitleChange,
-};
+use super::changeset::CommentChange;
 use super::field_comparison::IssueFieldComparisons;
+use comment_permissions::{check_can_delete_comment, check_can_edit_comment};
+use comment_retry::new_comment_change;
 
 pub(super) use comment_snapshot::{
     CommentBodyComparison, compare_comment_bodies, index_base_comments,
 };
+pub(super) use issue_fields::{
+    detect_body_change, detect_label_change, detect_parent_issue_change, detect_sub_issue_change,
+    detect_title_change,
+};
 
-pub(super) fn detect_body_change<'a>(
-    local_body: &'a str,
-    remote_issue: &'a Issue,
-) -> Option<BodyChange<'a>> {
-    let remote_body = remote_issue.body.as_deref().unwrap_or("");
-    if bodies_equal(local_body, remote_body) {
-        None
-    } else {
-        Some(BodyChange {
-            local: local_body,
-            remote: remote_body,
-        })
-    }
-}
-
-pub(super) fn detect_title_change<'a>(
-    local_metadata: &'a IssueMetadata,
-    remote_issue: &'a Issue,
-) -> Option<TitleChange<'a>> {
-    if local_metadata.title != remote_issue.title {
-        Some(TitleChange {
-            local: &local_metadata.title,
-            remote: &remote_issue.title,
-        })
-    } else {
-        None
-    }
-}
-
-pub(super) fn detect_label_change(
-    local_metadata: &IssueMetadata,
-    remote_issue: &Issue,
-) -> Option<LabelChange> {
-    let remote_labels: HashSet<&str> = remote_issue
-        .labels
-        .iter()
-        .map(|l| l.name.as_str())
-        .collect();
-    let local_labels: HashSet<&str> = local_metadata.labels.iter().map(|s| s.as_str()).collect();
-
-    if remote_labels == local_labels {
-        return None;
-    }
-
-    // Compute to_add and to_remove as owned Strings
-    let to_remove: Vec<String> = remote_labels
-        .difference(&local_labels)
-        .map(|s| s.to_string())
-        .collect();
-    let to_add: Vec<String> = local_labels
-        .difference(&remote_labels)
-        .map(|s| s.to_string())
-        .collect();
-
-    let mut remote_sorted: Vec<String> = remote_labels.into_iter().map(|s| s.to_string()).collect();
-    remote_sorted.sort();
-    let mut local_sorted: Vec<String> = local_labels.into_iter().map(|s| s.to_string()).collect();
-    local_sorted.sort();
-
-    Some(LabelChange {
-        to_add,
-        to_remove,
-        local_sorted,
-        remote_sorted,
-    })
-}
-
-pub(super) fn detect_sub_issue_change(
-    local_metadata: &IssueMetadata,
-    remote_issue: &Issue,
-) -> Option<SubIssueChange> {
-    let remote_refs: HashSet<String> = remote_issue
-        .sub_issues
-        .iter()
-        .map(|r| r.to_ref_string())
-        .collect();
-    let local_refs: HashSet<&str> = local_metadata
-        .sub_issues
-        .iter()
-        .map(|s| s.as_str())
-        .collect();
-
-    if remote_refs.len() == local_refs.len()
-        && remote_refs.iter().all(|r| local_refs.contains(r.as_str()))
-    {
-        return None;
-    }
-
-    let to_remove: Vec<String> = remote_refs
-        .iter()
-        .filter(|r| !local_refs.contains(r.as_str()))
-        .cloned()
-        .collect();
-    let to_add: Vec<String> = local_refs
-        .iter()
-        .filter(|r| !remote_refs.contains(**r))
-        .map(|s| s.to_string())
-        .collect();
-
-    let mut remote_sorted: Vec<String> = remote_refs.into_iter().collect();
-    remote_sorted.sort();
-    let mut local_sorted: Vec<String> = local_refs.into_iter().map(|s| s.to_string()).collect();
-    local_sorted.sort();
-
-    Some(SubIssueChange {
-        to_add,
-        to_remove,
-        local_sorted,
-        remote_sorted,
-    })
-}
-
-pub(super) fn detect_parent_issue_change(
-    local_metadata: &IssueMetadata,
-    remote_issue: &Issue,
-) -> Option<ParentIssueChange> {
-    let remote_parent = remote_issue
-        .parent_issue
-        .as_ref()
-        .map(|r| r.to_ref_string());
-    let local_parent = local_metadata.parent_issue.clone();
-
-    if local_parent == remote_parent {
-        return None;
-    }
-
-    Some(ParentIssueChange {
-        local: local_parent,
-        remote: remote_parent,
-    })
-}
-
+#[cfg(test)]
 pub(super) fn detect_comment_changes<'a>(
     local_comments: &'a [LocalComment],
     remote_comments: &'a [Comment],
@@ -157,6 +35,26 @@ pub(super) fn detect_comment_changes<'a>(
     current_user: &'a str,
     edit_others: bool,
     allow_delete: bool,
+) -> anyhow::Result<Vec<CommentChange<'a>>> {
+    detect_comment_changes_with_retry(
+        local_comments,
+        remote_comments,
+        base_comments,
+        current_user,
+        edit_others,
+        allow_delete,
+        None,
+    )
+}
+
+pub(super) fn detect_comment_changes_with_retry<'a>(
+    local_comments: &'a [LocalComment],
+    remote_comments: &'a [Comment],
+    base_comments: Option<&[CommentSnapshot]>,
+    current_user: &'a str,
+    edit_others: bool,
+    allow_delete: bool,
+    retry_started_at: Option<DateTime<Utc>>,
 ) -> anyhow::Result<Vec<CommentChange<'a>>> {
     let remote_comments_map: HashMap<&str, &Comment> =
         remote_comments.iter().map(|c| (c.id.as_str(), c)).collect();
@@ -172,21 +70,13 @@ pub(super) fn detect_comment_changes<'a>(
 
     for local_comment in local_comments {
         if local_comment.is_new() {
-            let already_posted = remote_comments.iter().any(|remote_comment| {
-                remote_comment
-                    .author
-                    .as_ref()
-                    .is_some_and(|author| author.login == current_user)
-                    && comment_bodies_equal(&local_comment.body, &remote_comment.body)
-                    && base_comments_map
-                        .as_ref()
-                        .is_none_or(|base| !base.contains_key(remote_comment.id.as_str()))
-            });
-            if !already_posted {
-                changes.push(CommentChange::New {
-                    filename: &local_comment.filename,
-                    body: &local_comment.body,
-                });
+            if let Some(change) = new_comment_change(
+                local_comment,
+                remote_comments,
+                current_user,
+                retry_started_at,
+            ) {
+                changes.push(change);
             }
             continue;
         }
@@ -271,49 +161,6 @@ pub(super) fn detect_comment_changes<'a>(
     }
 
     Ok(changes)
-}
-
-/// Check if the user can delete a comment.
-/// Returns Ok(()) if allowed, Err with message if not.
-pub(super) fn check_can_delete_comment(
-    comment_author: &str,
-    current_user: &str,
-    allow_delete: bool,
-    database_id: i64,
-) -> anyhow::Result<()> {
-    if allow_delete {
-        Ok(())
-    } else if comment_author == current_user {
-        anyhow::bail!(
-            "Cannot delete comment (database_id: {}). Use --allow-delete to allow.",
-            database_id
-        )
-    } else {
-        anyhow::bail!(
-            "Cannot delete other user's comment (database_id: {}, author: {}). Use --allow-delete to allow.",
-            database_id,
-            comment_author
-        )
-    }
-}
-
-/// Check if the user can edit a comment.
-/// Returns Ok(()) if allowed, Err with message if not.
-pub(super) fn check_can_edit_comment(
-    comment_author: &str,
-    current_user: &str,
-    edit_others: bool,
-    filename: &str,
-) -> anyhow::Result<()> {
-    if comment_author == current_user || edit_others {
-        Ok(())
-    } else {
-        anyhow::bail!(
-            "Cannot edit other user's comment: {} (author: {}). Use --edit-others to allow.",
-            filename,
-            comment_author
-        )
-    }
 }
 
 /// Represents a field-level conflict between local and remote state.
@@ -1064,10 +911,10 @@ mod tests {
         }
 
         #[rstest]
-        #[case::recent_self_reply_is_a_retry("alice", false, false)]
+        #[case::same_author_without_attempt_is_new("alice", false, true)]
         #[case::same_text_from_another_user_is_new("bob", false, true)]
         #[case::same_text_in_the_base_is_new("alice", true, true)]
-        fn test_new_comment_retry_does_not_post_a_matching_recent_comment(
+        fn new_comments_are_not_suppressed_without_a_direct_retry(
             #[case] remote_author: &str,
             #[case] matching_comment_is_in_base: bool,
             #[case] expected_new_comment: bool,
@@ -1109,6 +956,46 @@ mod tests {
                 vec![]
             };
 
+            assert_eq!(changes, expected);
+        }
+
+        #[rstest]
+        #[case::posted_after_attempt("2024-01-01T00:00:01Z", true)]
+        #[case::created_before_attempt("2023-12-31T23:59:59Z", false)]
+        fn direct_retry_matches_only_comments_created_after_its_attempt(
+            #[case] remote_created_at: &str,
+            #[case] posted_after_attempt: bool,
+        ) {
+            let mut remote_comment =
+                make_remote_comment("IC_existing", 12345, "Example comment", "alice");
+            remote_comment.created_at = chrono::DateTime::parse_from_rfc3339(remote_created_at)
+                .expect("fixture timestamp should parse")
+                .with_timezone(&chrono::Utc);
+            let local_comments = vec![make_new_local_comment("Example comment")];
+            let base_comments = Vec::new();
+            let retry_started_at = chrono::DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
+                .expect("fixture retry timestamp should parse")
+                .with_timezone(&chrono::Utc);
+
+            let changes = detect_comment_changes_with_retry(
+                &local_comments,
+                std::slice::from_ref(&remote_comment),
+                Some(&base_comments),
+                "alice",
+                false,
+                false,
+                Some(retry_started_at),
+            )
+            .expect("direct retry detection should succeed");
+
+            let expected = if posted_after_attempt {
+                vec![]
+            } else {
+                vec![CommentChange::New {
+                    filename: "new_example_comment.md",
+                    body: "Example comment",
+                }]
+            };
             assert_eq!(changes, expected);
         }
 

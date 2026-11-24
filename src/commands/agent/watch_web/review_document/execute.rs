@@ -1,9 +1,13 @@
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Json;
 use axum::extract::{Path as RoutePath, State};
 use axum::http::StatusCode;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::metadata::ReviewDocumentKind;
@@ -39,7 +43,12 @@ pub(super) struct ActionRecord {
     body: String,
     status: ActionStatus,
     revision: String,
+    retry_started_at: Option<DateTime<Utc>>,
 }
+
+pub(super) type ActionExecutor = Arc<
+    dyn Fn(ActionRecord) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>> + Send + Sync,
+>;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -71,11 +80,11 @@ pub(super) async fn execute_review_document(
     RoutePath(session_id): RoutePath<String>,
     Json(request): Json<ReviewDocumentActionRequest>,
 ) -> Result<Json<ReviewDocumentActionResponse>, StatusCode> {
-    let _edit_guard = edit_lock.lock().await;
+    let edit_guard = edit_lock.lock().await;
     let key = (session_id.clone(), request.id.clone());
-    let existing = actions.lock().await.get(&key).cloned();
+    let existing = actions.lock().await.records.get(&key).cloned();
 
-    let (record, revision) = match existing {
+    let (mut record, revision, retrying) = match existing {
         Some(record) => {
             if record.action != request.action {
                 return Err(StatusCode::CONFLICT);
@@ -87,6 +96,7 @@ pub(super) async fn execute_review_document(
                     error: None,
                 }));
             }
+            let retrying = record.status == ActionStatus::Failed;
             let frontmatter =
                 approved_frontmatter(record.summary.kind, request.action, request.frontmatter)?;
             if same_action_content(
@@ -95,7 +105,7 @@ pub(super) async fn execute_review_document(
                 &frontmatter,
                 &request.body,
             ) {
-                (record.clone(), record.revision.clone())
+                (record.clone(), record.revision.clone(), retrying)
             } else {
                 let saved_revision = save::save_document_for_session(
                     load_session.clone(),
@@ -115,10 +125,10 @@ pub(super) async fn execute_review_document(
                     body: request.body,
                     status: ActionStatus::Running,
                     revision: saved_revision.clone(),
+                    retry_started_at: None,
                     ..record
                 };
-                actions.lock().await.insert(key.clone(), updated.clone());
-                (updated, saved_revision)
+                (updated, saved_revision, retrying)
             }
         }
         None => {
@@ -157,13 +167,13 @@ pub(super) async fn execute_review_document(
                 body: request.body,
                 status: ActionStatus::Running,
                 revision: saved_revision.clone(),
+                retry_started_at: None,
             };
-            actions.lock().await.insert(key.clone(), record.clone());
-            (record, saved_revision)
+            (record, saved_revision, false)
         }
     };
 
-    if record.status == ActionStatus::Failed {
+    if retrying {
         crate::shared::human_in_the_loop::ApprovalManager::new(&record.path)
             .save()
             .map_err(|error| {
@@ -171,13 +181,29 @@ pub(super) async fn execute_review_document(
                 StatusCode::INTERNAL_SERVER_ERROR
             })?;
     }
+    record.status = ActionStatus::Running;
+    actions
+        .lock()
+        .await
+        .records
+        .insert(key.clone(), record.clone());
+    let executor = actions.lock().await.executor.clone();
+    drop(edit_guard);
+
     let result = async {
         wait_for_review_lock_release(&record.path).await?;
-        run_action(&record).await
+        let mut action_record = record.clone();
+        action_record.retry_started_at.get_or_insert_with(Utc::now);
+        actions
+            .lock()
+            .await
+            .records
+            .insert(key.clone(), action_record.clone());
+        executor(action_record).await
     }
     .await;
     let mut records = actions.lock().await;
-    if let Some(current) = records.get_mut(&key) {
+    if let Some(current) = records.records.get_mut(&key) {
         current.status = if result.is_ok() {
             ActionStatus::Succeeded
         } else {
@@ -280,34 +306,34 @@ fn approved_frontmatter(
     Ok(frontmatter)
 }
 
-async fn run_action(record: &ActionRecord) -> anyhow::Result<()> {
-    use crate::commands::gh::issue_agent::commands::{PushArgs, run_push};
-
+pub(super) async fn run_action(record: &ActionRecord) -> anyhow::Result<()> {
     match record.action {
         ReviewDocumentAction::CreatePr => {
             crate::commands::ai::pr_draft::submit_draft(record.path.clone()).await
         }
-        ReviewDocumentAction::PostComment | ReviewDocumentAction::UpdateIssue => {
-            let issue_number = record
-                .summary
-                .target
-                .issue_number
-                .and_then(|number| u64::try_from(number).ok())
-                .ok_or_else(|| anyhow::anyhow!("Issue number is unavailable"))?;
-            let repo = record
-                .summary
-                .target
-                .repository
-                .clone()
-                .ok_or_else(|| anyhow::anyhow!("Repository is unavailable"))?;
-            run_push(&PushArgs {
-                target: issue_number.to_string(),
-                repo: Some(repo),
-                dry_run: false,
-                force: false,
-                edit_others: false,
-                allow_delete: false,
-            })
+        ReviewDocumentAction::PostComment => {
+            let (issue_number, repo) = issue_target(record)?;
+            crate::commands::gh::issue_agent::commands::push::push_review_document(
+                issue_number,
+                repo,
+                crate::commands::gh::issue_agent::commands::push::ReviewDocumentPushScope::Comment {
+                    path: record.path.clone(),
+                    retry_started_at: record
+                        .retry_started_at
+                        .ok_or_else(|| anyhow::anyhow!("Action start time is unavailable"))?,
+                },
+            )
+            .await
+        }
+        ReviewDocumentAction::UpdateIssue => {
+            let (issue_number, repo) = issue_target(record)?;
+            crate::commands::gh::issue_agent::commands::push::push_review_document(
+                issue_number,
+                repo,
+                crate::commands::gh::issue_agent::commands::push::ReviewDocumentPushScope::IssueBody {
+                    path: record.path.clone(),
+                },
+            )
             .await
         }
         ReviewDocumentAction::PostReplies => {
@@ -322,9 +348,32 @@ async fn run_action(record: &ActionRecord) -> anyhow::Result<()> {
                 .repository
                 .clone()
                 .ok_or_else(|| anyhow::anyhow!("Repository is unavailable"))?;
-            crate::commands::gh::pr_review::push_replies(pr_number, repo).await
+            crate::commands::gh::pr_review::push_review_replies(
+                pr_number,
+                repo,
+                record
+                    .retry_started_at
+                    .ok_or_else(|| anyhow::anyhow!("Action start time is unavailable"))?,
+            )
+            .await
         }
     }
+}
+
+fn issue_target(record: &ActionRecord) -> anyhow::Result<(u64, String)> {
+    let issue_number = record
+        .summary
+        .target
+        .issue_number
+        .and_then(|number| u64::try_from(number).ok())
+        .ok_or_else(|| anyhow::anyhow!("Issue number is unavailable"))?;
+    let repo = record
+        .summary
+        .target
+        .repository
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("Repository is unavailable"))?;
+    Ok((issue_number, repo))
 }
 
 #[cfg(test)]
@@ -337,6 +386,7 @@ mod tests {
     use axum::http::StatusCode;
     use rstest::rstest;
     use serde_json::json;
+    use std::time::Duration;
     use tempfile::TempDir;
 
     #[rstest]
@@ -442,13 +492,18 @@ mod tests {
         let path = directory.path().join("draft.md");
         std::fs::write(&path, "Fixture draft").expect("fixture draft should be written");
         let lock = LockGuard::acquire(&path).expect("review lock should be acquired");
-        let waiting = tokio::spawn(async move { super::wait_for_review_lock_release(&path).await });
+        let mut waiting =
+            tokio::spawn(async move { super::wait_for_review_lock_release(&path).await });
         tokio::task::yield_now().await;
+        let remained_pending = tokio::time::timeout(Duration::from_millis(25), &mut waiting)
+            .await
+            .is_err();
         drop(lock);
 
         waiting
             .await
             .expect("lock wait should not panic")
             .expect("review lock should be released");
+        assert!(remained_pending);
     }
 }

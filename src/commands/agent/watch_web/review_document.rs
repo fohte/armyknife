@@ -27,8 +27,12 @@ use metadata::{ReviewDocumentRoots, ReviewDocumentSummary, summarize};
 type SessionLoader = Arc<dyn Fn(&str) -> anyhow::Result<Option<Session>> + Send + Sync>;
 type ReviewQueueLoader = Arc<dyn Fn(&Session) -> ReviewDocumentQueue + Send + Sync>;
 type ReviewDocumentEditLock = Arc<tokio::sync::Mutex<()>>;
-type ReviewDocumentActionRegistry =
-    Arc<tokio::sync::Mutex<HashMap<(String, String), execute::ActionRecord>>>;
+type ReviewDocumentActionRegistry = Arc<tokio::sync::Mutex<ReviewDocumentActionRegistryState>>;
+
+struct ReviewDocumentActionRegistryState {
+    records: HashMap<(String, String), execute::ActionRecord>,
+    executor: execute::ActionExecutor,
+}
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -96,6 +100,30 @@ fn router_with_dependencies(
     load_review_queue: impl Fn(&Session) -> ReviewDocumentQueue + Send + Sync + 'static,
     roots: ReviewDocumentRoots,
 ) -> Router {
+    router_with_action_executor(
+        load_session,
+        load_review_queue,
+        roots,
+        Arc::new(|record| Box::pin(async move { execute::run_action(&record).await })),
+    )
+}
+
+#[cfg(test)]
+fn router_with_injected_action_executor(
+    load_session: impl Fn(&str) -> anyhow::Result<Option<Session>> + Send + Sync + 'static,
+    load_review_queue: impl Fn(&Session) -> ReviewDocumentQueue + Send + Sync + 'static,
+    roots: ReviewDocumentRoots,
+    executor: execute::ActionExecutor,
+) -> Router {
+    router_with_action_executor(load_session, load_review_queue, roots, executor)
+}
+
+fn router_with_action_executor(
+    load_session: impl Fn(&str) -> anyhow::Result<Option<Session>> + Send + Sync + 'static,
+    load_review_queue: impl Fn(&Session) -> ReviewDocumentQueue + Send + Sync + 'static,
+    roots: ReviewDocumentRoots,
+    executor: execute::ActionExecutor,
+) -> Router {
     Router::new()
         .route("/sessions/{id}/review-document", get(get_review_document))
         .route("/sessions/{id}/review-documents", get(get_review_documents))
@@ -129,7 +157,10 @@ fn router_with_dependencies(
             Arc::new(load_review_queue) as ReviewQueueLoader,
             Arc::new(tokio::sync::Mutex::new(())) as ReviewDocumentEditLock,
             roots,
-            Arc::new(tokio::sync::Mutex::new(HashMap::new())) as ReviewDocumentActionRegistry,
+            Arc::new(tokio::sync::Mutex::new(ReviewDocumentActionRegistryState {
+                records: HashMap::new(),
+                executor,
+            })) as ReviewDocumentActionRegistry,
         ))
 }
 
@@ -520,6 +551,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
 
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};
@@ -535,8 +567,8 @@ mod tests {
 
     use super::{
         ReviewDocumentOperationLock, ReviewDocumentRoots, finish_ack_fifo_path,
-        finish_request_fifo_path, review_document_revision, router_with_loaders,
-        router_with_path_roots, router_with_session_loader,
+        finish_request_fifo_path, review_document_revision, router_with_injected_action_executor,
+        router_with_loaders, router_with_path_roots, router_with_session_loader,
     };
 
     fn current_revision(path: &Path) -> String {
@@ -1555,6 +1587,209 @@ mod tests {
             (
                 StatusCode::CONFLICT,
                 "Latest body from another editor.".to_string(),
+            ),
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn direct_action_uses_the_injected_executor_once_for_a_successful_document() {
+        use std::io::Read;
+        use std::os::unix::fs::OpenOptionsExt;
+
+        crate::shared::testing::init_approval_dir();
+        let temp_dir = TempDir::new().expect("fixture directory should be created");
+        let roots = ReviewDocumentRoots {
+            pr_draft: temp_dir.path().join("pr-body-draft"),
+            issue_agent: temp_dir.path().join("gh-issue-agent"),
+            pr_review: temp_dir.path().join("gh-pr-review"),
+        };
+        let document_path = roots
+            .issue_agent
+            .join("sample-owner/sample-repo/7319/comments/new_example.md");
+        std::fs::create_dir_all(document_path.parent().expect("comment has a parent"))
+            .expect("comment directory should be created");
+        std::fs::write(
+            &document_path,
+            indoc! {"
+                ---
+                submit: false
+                ---
+
+                Example comment.
+            "},
+        )
+        .expect("comment document should be written");
+        create_fixture_fifo(&finish_request_fifo_path(&document_path));
+        create_fixture_fifo(&finish_ack_fifo_path(&document_path));
+        let review_lock = LockGuard::acquire(&document_path)
+            .expect("review lock should be acquired for the fixture document");
+        let mut session = session_with_review(&document_path);
+        session.cwd = temp_dir.path().to_path_buf();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let executor_calls = calls.clone();
+        let action_started = Arc::new(tokio::sync::Notify::new());
+        let executor_started = action_started.clone();
+        let release_action = Arc::new(tokio::sync::Notify::new());
+        let executor_release = release_action.clone();
+        let app = router_with_injected_action_executor(
+            move |_| Ok(Some(session.clone())),
+            |_| ReviewDocumentQueue::Unmanaged,
+            roots,
+            Arc::new(move |_| {
+                let calls = executor_calls.clone();
+                let started = executor_started.clone();
+                let release = executor_release.clone();
+                Box::pin(async move {
+                    let attempt = calls.fetch_add(1, Ordering::SeqCst);
+                    if attempt == 0 {
+                        started.notify_one();
+                        release.notified().await;
+                        Err(anyhow::anyhow!("Temporary submission failure"))
+                    } else {
+                        Ok(())
+                    }
+                })
+            }),
+        );
+        let finish_fifo = finish_request_fifo_path(&document_path);
+        let finish_ack_fifo = finish_ack_fifo_path(&document_path);
+        let mut finish_reader = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(&finish_fifo)
+            .expect("finish request FIFO reader should be opened");
+        let revision = current_revision(&document_path);
+        let request_body = serde_json::json!({
+            "id": "fixture-review",
+            "revision": revision,
+            "frontmatter": {"submit": false},
+            "body": "Example comment.",
+            "action": "post_comment",
+        });
+        let first_request = Request::post("/sessions/fixture-session/review-document/action")
+            .header("content-type", "application/json")
+            .body(Body::from(request_body.to_string()))
+            .expect("action request should be valid");
+        let first_app = app.clone();
+        let first_task = tokio::spawn(async move { first_app.oneshot(first_request).await });
+        let started_at = std::time::Instant::now();
+        let mut signal = [0_u8; 1];
+        let signal_bytes = loop {
+            let bytes = finish_reader
+                .read(&mut signal)
+                .expect("finish request FIFO should be readable");
+            if bytes > 0 || started_at.elapsed() >= Duration::from_secs(2) {
+                break bytes;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
+        if signal_bytes > 0 {
+            let operation_lock = ReviewDocumentOperationLock::acquire(&document_path)
+                .expect("review process should acquire the operation lock");
+            std::fs::remove_file(&finish_fifo)
+                .expect("review process should close the finish request FIFO");
+            drop(operation_lock);
+            crate::shared::human_in_the_loop::signal_fifo(&finish_ack_fifo);
+        }
+        drop(review_lock);
+        tokio::time::timeout(Duration::from_secs(2), action_started.notified())
+            .await
+            .expect("injected action should start");
+        let second_request = Request::post("/sessions/fixture-session/review-document/action")
+            .header("content-type", "application/json")
+            .body(Body::from(request_body.to_string()))
+            .expect("concurrent duplicate action request should be valid");
+        let second_app = app.clone();
+        let mut second_task = tokio::spawn(async move { second_app.oneshot(second_request).await });
+        let second_while_running =
+            tokio::time::timeout(Duration::from_millis(100), &mut second_task).await;
+        let returned_while_running = second_while_running.is_ok();
+        release_action.notify_one();
+        let second_response = match second_while_running {
+            Ok(result) => result.expect("concurrent duplicate request should complete"),
+            Err(_) => second_task
+                .await
+                .expect("queued duplicate request should not panic"),
+        }
+        .expect("concurrent duplicate request should complete");
+        let second_status = second_response.status();
+        let first_response = first_task
+            .await
+            .expect("first action task should not panic")
+            .expect("first action request should complete");
+        let first_status = first_response.status();
+        let first_body = to_bytes(first_response.into_body(), usize::MAX)
+            .await
+            .expect("first response body should be read");
+        let first_json = serde_json::from_slice::<serde_json::Value>(&first_body)
+            .expect("first response should be JSON");
+        let retry_response = app
+            .clone()
+            .oneshot(
+                Request::post("/sessions/fixture-session/review-document/action")
+                    .header("content-type", "application/json")
+                    .body(Body::from(request_body.to_string()))
+                    .expect("retry request should be valid"),
+            )
+            .await
+            .expect("retry request should complete");
+        let retry_status = retry_response.status();
+        let retry_body = to_bytes(retry_response.into_body(), usize::MAX)
+            .await
+            .expect("retry response body should be read");
+        let retry_json = serde_json::from_slice::<serde_json::Value>(&retry_body)
+            .expect("retry response should be JSON");
+        let third_response = app
+            .oneshot(
+                Request::post("/sessions/fixture-session/review-document/action")
+                    .header("content-type", "application/json")
+                    .body(Body::from(request_body.to_string()))
+                    .expect("duplicate action request should be valid"),
+            )
+            .await
+            .expect("completed action request should complete");
+        let third_status = third_response.status();
+        let third_body = to_bytes(third_response.into_body(), usize::MAX)
+            .await
+            .expect("completed action response body should be read");
+        let third_json = serde_json::from_slice::<serde_json::Value>(&third_body)
+            .expect("completed action response should be JSON");
+
+        assert_eq!(
+            (
+                signal_bytes,
+                first_status,
+                first_json,
+                returned_while_running,
+                second_status,
+                retry_status,
+                retry_json,
+                third_status,
+                third_json,
+                calls.load(Ordering::SeqCst),
+            ),
+            (
+                1,
+                StatusCode::OK,
+                serde_json::json!({
+                    "success": false,
+                    "revision": current_revision(&document_path),
+                    "error": "Temporary submission failure",
+                }),
+                true,
+                StatusCode::CONFLICT,
+                StatusCode::OK,
+                serde_json::json!({
+                    "success": true,
+                    "revision": current_revision(&document_path),
+                }),
+                StatusCode::OK,
+                serde_json::json!({
+                    "success": true,
+                    "revision": current_revision(&document_path),
+                }),
+                2,
             ),
         );
     }
