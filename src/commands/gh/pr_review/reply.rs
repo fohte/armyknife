@@ -306,8 +306,23 @@ async fn run_push_after_access(
     // Fetch latest remote state
     let remote = fetch_pr_data(owner, repo, args.pr_number, true).await?;
 
+    let current_user = if local
+        .threads
+        .iter()
+        .any(|thread| thread.draft_reply.is_some())
+    {
+        Some(GitHubClient::get()?.get_current_user().await?)
+    } else {
+        None
+    };
+
     // Detect changes
-    let changeset = ReplyChangeSet::detect(&local, &remote, &local.frontmatter.pulled_at);
+    let changeset = ReplyChangeSet::detect(
+        &local,
+        &remote,
+        &local.frontmatter.pulled_at,
+        current_user.as_deref().unwrap_or_default(),
+    );
 
     // Check for conflicts
     if changeset.has_conflicts() && !args.force {

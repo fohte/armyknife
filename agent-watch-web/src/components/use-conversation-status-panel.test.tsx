@@ -710,7 +710,7 @@ it('saves the edited document and sends the same edits before finishing review',
         'Saved',
   )
   await act(async () => {
-    await page.getByRole('button', { name: 'Finish review' }).click()
+    await page.getByRole('button', { name: 'Finish' }).click()
   })
   await waitForState(() => requests.length === 3)
 
@@ -745,7 +745,7 @@ it('saves the edited document and sends the same edits before finishing review',
 
 it.each([
   { action: 'save', button: 'Save' },
-  { action: 'finish', button: 'Finish review' },
+  { action: 'finish', button: 'Finish' },
 ])(
   'shows the reload instruction and keeps edits after a $action conflict',
   async ({ action, button }) => {

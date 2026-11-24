@@ -172,10 +172,22 @@ pub(super) fn detect_comment_changes<'a>(
 
     for local_comment in local_comments {
         if local_comment.is_new() {
-            changes.push(CommentChange::New {
-                filename: &local_comment.filename,
-                body: &local_comment.body,
+            let already_posted = remote_comments.iter().any(|remote_comment| {
+                remote_comment
+                    .author
+                    .as_ref()
+                    .is_some_and(|author| author.login == current_user)
+                    && comment_bodies_equal(&local_comment.body, &remote_comment.body)
+                    && base_comments_map
+                        .as_ref()
+                        .is_none_or(|base| !base.contains_key(remote_comment.id.as_str()))
             });
+            if !already_posted {
+                changes.push(CommentChange::New {
+                    filename: &local_comment.filename,
+                    body: &local_comment.body,
+                });
+            }
             continue;
         }
 
@@ -1039,6 +1051,65 @@ mod tests {
                 id: id.to_string(),
                 body: body.to_string(),
             }
+        }
+
+        fn make_new_local_comment(body: &str) -> LocalComment {
+            factories::local_comment_with(|comment| {
+                comment.filename = "new_example_comment.md".to_string();
+                comment.body = body.to_string();
+                comment.metadata.author = None;
+                comment.metadata.id = None;
+                comment.metadata.database_id = None;
+            })
+        }
+
+        #[rstest]
+        #[case::recent_self_reply_is_a_retry("alice", false, false)]
+        #[case::same_text_from_another_user_is_new("bob", false, true)]
+        #[case::same_text_in_the_base_is_new("alice", true, true)]
+        fn test_new_comment_retry_does_not_post_a_matching_recent_comment(
+            #[case] remote_author: &str,
+            #[case] matching_comment_is_in_base: bool,
+            #[case] expected_new_comment: bool,
+        ) {
+            let remote_comment =
+                make_remote_comment("IC_existing", 12345, "Example comment", remote_author);
+            let base_comments = if matching_comment_is_in_base {
+                vec![make_snapshot("IC_existing", "Example comment")]
+            } else {
+                Vec::new()
+            };
+            let mut local_comments = if matching_comment_is_in_base {
+                vec![make_local_comment(
+                    "IC_existing",
+                    12345,
+                    "Example comment",
+                    "alice",
+                )]
+            } else {
+                Vec::new()
+            };
+            local_comments.push(make_new_local_comment("Example comment"));
+
+            let changes = detect_comment_changes(
+                &local_comments,
+                std::slice::from_ref(&remote_comment),
+                Some(&base_comments),
+                "alice",
+                false,
+                false,
+            )
+            .expect("a matching recent comment should not make detection fail");
+            let expected = if expected_new_comment {
+                vec![CommentChange::New {
+                    filename: "new_example_comment.md",
+                    body: "Example comment",
+                }]
+            } else {
+                vec![]
+            };
+
+            assert_eq!(changes, expected);
         }
 
         #[rstest]

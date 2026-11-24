@@ -466,6 +466,44 @@ const commandAction = {
   createdAt: 1_800_000_000_000,
 }
 
+const reviewDocumentAction = {
+  id: 5,
+  sessionId: 'sample-session',
+  sessionTitle: 'Review the example request',
+  kind: 'review_document' as const,
+  reviewDocumentAction: 'Post comment' as const,
+  status: 'reviewDocumentActionRunning' as const,
+  createdAt: 1_800_000_000_000,
+}
+
+export const ReviewDocumentPostIsInProgress: Story = {
+  name: 'Posting an issue comment shows an in-progress action',
+  args: { form: 'toast', action: reviewDocumentAction },
+}
+
+export const ReviewDocumentPostSucceeded: Story = {
+  name: 'A posted issue comment shows a success action',
+  args: {
+    form: 'toast',
+    action: {
+      ...reviewDocumentAction,
+      status: 'reviewDocumentActionSucceeded',
+    },
+  },
+}
+
+export const ReviewDocumentPostFailed: Story = {
+  name: 'A failed issue comment post can be retried',
+  args: {
+    form: 'toast',
+    action: {
+      ...reviewDocumentAction,
+      status: 'reviewDocumentActionFailed',
+      error: 'The remote issue could not be updated.',
+    },
+  },
+}
+
 type RunCommandSceneState = 'running' | 'succeeded' | 'failed' | 'timedOut'
 
 function RunCommandFeedbackScene({

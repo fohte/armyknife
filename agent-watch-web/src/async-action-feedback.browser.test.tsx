@@ -137,6 +137,35 @@ function CommandFeedbackHarness({
   )
 }
 
+function ReviewDocumentActionHarness({
+  run,
+}: {
+  run: () => Promise<AsyncActionOutcome>
+}) {
+  const feedback = useOptionalAsyncActionFeedback()
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => {
+          feedback?.start({
+            kind: 'review_document',
+            reviewDocumentAction: 'Post comment',
+            sessionId: 'example-session',
+            sessionTitle: 'Review the example comment',
+            run,
+          })
+        }}
+      >
+        Post comment
+      </button>
+      <output>
+        {JSON.stringify(feedback?.actions.map(({ status }) => status))}
+      </output>
+    </>
+  )
+}
+
 function textContent(selector: string) {
   return container.querySelector(selector)?.textContent ?? null
 }
@@ -346,6 +375,90 @@ it('shows rewind failure in the action toast and status', async () => {
     toast:
       'Rewind failedReview the example requestThe example session could not be rewound.',
     failureRole: 'alert',
+  })
+})
+
+it('reports a review document action through failure, retry, and success', async () => {
+  const completions: Array<(outcome: AsyncActionOutcome) => void> = []
+  const run = vi.fn(
+    () =>
+      new Promise<AsyncActionOutcome>((resolve) => {
+        completions.push(resolve)
+      }),
+  )
+  act(() => {
+    root?.render(
+      <AsyncActionFeedbackProvider>
+        <ReviewDocumentActionHarness run={run} />
+      </AsyncActionFeedbackProvider>,
+    )
+  })
+
+  const startButton = container.querySelector('button')
+  if (!(startButton instanceof HTMLButtonElement)) {
+    throw new Error('Expected the review document action button')
+  }
+  await act(async () => {
+    await userEvent.click(startButton)
+  })
+  const running = {
+    status: textContent('output'),
+    toast: textContent('.async-action-toast-stack'),
+  }
+  await act(async () => {
+    completions[0]?.({
+      status: 'reviewDocumentActionFailed',
+      error: 'The example comment could not be posted.',
+    })
+    await Promise.resolve()
+  })
+  const failed = {
+    status: textContent('output'),
+    error: textContent('.async-action-error'),
+    retry: container.querySelector('.async-action-controls button')
+      ?.textContent,
+  }
+  const retryButton = Array.from(
+    container.querySelectorAll<HTMLButtonElement>('button'),
+  ).find((button) => button.textContent === 'Retry')
+  if (retryButton === undefined) {
+    throw new Error('Expected the failed action retry button')
+  }
+  await act(async () => {
+    await userEvent.click(retryButton)
+  })
+  const retrying = {
+    status: textContent('output'),
+    toast: textContent('.async-action-toast-stack'),
+  }
+  await act(async () => {
+    completions[1]?.({ status: 'reviewDocumentActionSucceeded' })
+    await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    running,
+    failed,
+    retrying,
+    succeeded: textContent('output'),
+    calls: run.mock.calls.length,
+  })
+  expect(snapshot()).toEqual({
+    running: {
+      status: '["reviewDocumentActionRunning"]',
+      toast: 'Post comment in progressReview the example comment',
+    },
+    failed: {
+      status: '["reviewDocumentActionFailed"]',
+      error: 'The example comment could not be posted.',
+      retry: 'Retry',
+    },
+    retrying: {
+      status: '["reviewDocumentActionRunning"]',
+      toast: 'Post comment in progressReview the example comment',
+    },
+    succeeded: '["reviewDocumentActionSucceeded"]',
+    calls: 2,
   })
 })
 

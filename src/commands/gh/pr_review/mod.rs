@@ -9,6 +9,17 @@ mod reply;
 mod review;
 mod storage;
 
+pub(crate) async fn push_replies(pr_number: u64, repo: String) -> anyhow::Result<()> {
+    reply::run_push(&reply::ReplyPushArgs {
+        pr_number,
+        repo: Some(repo),
+        dry_run: false,
+        force: false,
+        no_review: false,
+    })
+    .await
+}
+
 use clap::{Args, Subcommand};
 
 use crate::infra::git;

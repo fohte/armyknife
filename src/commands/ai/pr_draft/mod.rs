@@ -7,6 +7,16 @@ mod submit;
 
 use clap::Subcommand;
 
+pub(crate) async fn submit_draft(filepath: std::path::PathBuf) -> anyhow::Result<()> {
+    submit::run(&submit::SubmitArgs {
+        filepath: Some(filepath),
+        base: None,
+        draft: false,
+        no_review: false,
+    })
+    .await
+}
+
 pub(crate) fn draft_dir() -> std::path::PathBuf {
     common::DraftFile::draft_dir()
 }

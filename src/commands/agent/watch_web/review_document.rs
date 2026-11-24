@@ -19,6 +19,7 @@ use crate::shared::human_in_the_loop::{
     review_document_marker,
 };
 
+mod execute;
 mod metadata;
 mod save;
 use metadata::{ReviewDocumentRoots, ReviewDocumentSummary, summarize};
@@ -26,6 +27,8 @@ use metadata::{ReviewDocumentRoots, ReviewDocumentSummary, summarize};
 type SessionLoader = Arc<dyn Fn(&str) -> anyhow::Result<Option<Session>> + Send + Sync>;
 type ReviewQueueLoader = Arc<dyn Fn(&Session) -> ReviewDocumentQueue + Send + Sync>;
 type ReviewDocumentEditLock = Arc<tokio::sync::Mutex<()>>;
+type ReviewDocumentActionRegistry =
+    Arc<tokio::sync::Mutex<HashMap<(String, String), execute::ActionRecord>>>;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -116,21 +119,27 @@ fn router_with_dependencies(
             "/sessions/{id}/review-document/finish",
             post(finish_review_document),
         )
+        .route(
+            "/sessions/{id}/review-document/action",
+            post(execute::execute_review_document),
+        )
         .layer(DefaultBodyLimit::max(10 * 1024 * 1024))
         .with_state((
             Arc::new(load_session) as SessionLoader,
             Arc::new(load_review_queue) as ReviewQueueLoader,
             Arc::new(tokio::sync::Mutex::new(())) as ReviewDocumentEditLock,
             roots,
+            Arc::new(tokio::sync::Mutex::new(HashMap::new())) as ReviewDocumentActionRegistry,
         ))
 }
 
 async fn get_review_document(
-    State((load_session, load_review_queue, _, roots)): State<(
+    State((load_session, load_review_queue, _, roots, _)): State<(
         SessionLoader,
         ReviewQueueLoader,
         ReviewDocumentEditLock,
         ReviewDocumentRoots,
+        ReviewDocumentActionRegistry,
     )>,
     RoutePath(session_id): RoutePath<String>,
 ) -> Result<Json<ReviewDocumentResponse>, StatusCode> {
@@ -169,11 +178,12 @@ async fn get_review_document(
 }
 
 async fn get_review_documents(
-    State((load_session, load_review_queue, _, roots)): State<(
+    State((load_session, load_review_queue, _, roots, _)): State<(
         SessionLoader,
         ReviewQueueLoader,
         ReviewDocumentEditLock,
         ReviewDocumentRoots,
+        ReviewDocumentActionRegistry,
     )>,
     RoutePath(session_id): RoutePath<String>,
 ) -> Result<Json<Vec<ReviewDocumentSummary>>, StatusCode> {
@@ -206,11 +216,12 @@ async fn get_review_documents(
 }
 
 async fn get_review_document_by_id(
-    State((load_session, load_review_queue, _, roots)): State<(
+    State((load_session, load_review_queue, _, roots, _)): State<(
         SessionLoader,
         ReviewQueueLoader,
         ReviewDocumentEditLock,
         ReviewDocumentRoots,
+        ReviewDocumentActionRegistry,
     )>,
     RoutePath((session_id, document_id)): RoutePath<(String, String)>,
 ) -> Result<Json<ReviewDocumentResponse>, StatusCode> {
@@ -244,11 +255,12 @@ async fn get_review_document_by_id(
 }
 
 async fn save_review_document(
-    State((load_session, load_review_queue, edit_lock, _)): State<(
+    State((load_session, load_review_queue, edit_lock, _, _)): State<(
         SessionLoader,
         ReviewQueueLoader,
         ReviewDocumentEditLock,
         ReviewDocumentRoots,
+        ReviewDocumentActionRegistry,
     )>,
     RoutePath(session_id): RoutePath<String>,
     axum::Json(request): axum::Json<ReviewDocumentEditRequest>,
@@ -269,11 +281,12 @@ async fn save_review_document(
 }
 
 async fn finish_review_document(
-    State((load_session, load_review_queue, edit_lock, _)): State<(
+    State((load_session, load_review_queue, edit_lock, _, _)): State<(
         SessionLoader,
         ReviewQueueLoader,
         ReviewDocumentEditLock,
         ReviewDocumentRoots,
+        ReviewDocumentActionRegistry,
     )>,
     RoutePath(session_id): RoutePath<String>,
     axum::Json(request): axum::Json<ReviewDocumentEditRequest>,
@@ -289,11 +302,12 @@ async fn finish_review_document(
 }
 
 async fn save_review_document_by_id(
-    State((load_session, load_review_queue, edit_lock, _)): State<(
+    State((load_session, load_review_queue, edit_lock, _, _)): State<(
         SessionLoader,
         ReviewQueueLoader,
         ReviewDocumentEditLock,
         ReviewDocumentRoots,
+        ReviewDocumentActionRegistry,
     )>,
     RoutePath((session_id, document_id)): RoutePath<(String, String)>,
     axum::Json(request): axum::Json<ReviewDocumentEditRequest>,
@@ -311,11 +325,12 @@ async fn save_review_document_by_id(
 }
 
 async fn finish_review_document_by_id(
-    State((load_session, load_review_queue, edit_lock, _)): State<(
+    State((load_session, load_review_queue, edit_lock, _, _)): State<(
         SessionLoader,
         ReviewQueueLoader,
         ReviewDocumentEditLock,
         ReviewDocumentRoots,
+        ReviewDocumentActionRegistry,
     )>,
     RoutePath((session_id, document_id)): RoutePath<(String, String)>,
     axum::Json(request): axum::Json<ReviewDocumentEditRequest>,

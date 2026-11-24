@@ -34,7 +34,12 @@ pub struct ReplyChangeSet {
 
 impl ReplyChangeSet {
     /// Detect changes between local parsed data and remote state.
-    pub fn detect(local: &ParsedThreadsFile, remote: &PrData, pulled_at: &str) -> Self {
+    pub fn detect(
+        local: &ParsedThreadsFile,
+        remote: &PrData,
+        pulled_at: &str,
+        current_user: &str,
+    ) -> Self {
         let mut actions = Vec::new();
         let mut conflicts = Vec::new();
 
@@ -52,8 +57,13 @@ impl ReplyChangeSet {
             let action_start = actions.len();
 
             // Detect draft reply
+            // A retry can find the reply on GitHub while the local draft is still unchanged.
             if let Some(draft) = &local_thread.draft_reply
                 && let Some(root) = remote_thread.root_comment()
+                && !remote_thread
+                    .replies()
+                    .iter()
+                    .any(|reply| reply.body == *draft && reply.author_login() == current_user)
             {
                 actions.push(ReplyAction::PostReply {
                     thread_id: local_thread.thread_id.clone(),
@@ -234,6 +244,13 @@ mod tests {
         }
     }
 
+    fn make_reply(id: i64, author: &str, created_at: &str, body: &str) -> Comment {
+        let mut comment = make_comment(id, author, created_at);
+        comment.body = body.to_string();
+        comment.reply_to = Some(crate::commands::gh::pr_review::models::comment::ReplyTo {});
+        comment
+    }
+
     fn make_remote_thread(
         node_id: &str,
         comments: Vec<Comment>,
@@ -285,7 +302,7 @@ mod tests {
             )],
         };
 
-        let changeset = ReplyChangeSet::detect(&local, &remote, "2024-01-15T10:00:00Z");
+        let changeset = ReplyChangeSet::detect(&local, &remote, "2024-01-15T10:00:00Z", "user");
         assert!(!changeset.has_changes());
         assert!(!changeset.has_conflicts());
     }
@@ -302,13 +319,65 @@ mod tests {
             )],
         };
 
-        let changeset = ReplyChangeSet::detect(&local, &remote, "2024-01-15T10:00:00Z");
+        let changeset = ReplyChangeSet::detect(&local, &remote, "2024-01-15T10:00:00Z", "user");
         assert!(changeset.has_changes());
         assert_eq!(changeset.actions.len(), 1);
         assert!(matches!(
             &changeset.actions[0],
             ReplyAction::PostReply { body, in_reply_to: 1, .. } if body == "My reply"
         ));
+    }
+
+    #[rstest]
+    fn test_detect_skips_a_reply_that_was_posted_before_a_retry() {
+        let local = make_parsed_file(vec![make_local_thread("RT_abc", false, Some("My reply"))]);
+        let remote = PrData {
+            reviews: vec![],
+            threads: vec![make_remote_thread(
+                "RT_abc",
+                vec![
+                    make_comment(1, "user", "2024-01-15T09:00:00Z"),
+                    make_reply(2, "user", "2024-01-15T10:01:00Z", "My reply"),
+                ],
+                false,
+            )],
+        };
+
+        let changeset = ReplyChangeSet::detect(&local, &remote, "2024-01-15T10:00:00Z", "user");
+
+        assert_eq!((changeset.actions, changeset.conflicts), (vec![], vec![]));
+    }
+
+    #[rstest]
+    fn test_identical_reply_from_another_user_is_not_treated_as_a_retry() {
+        let local = make_parsed_file(vec![make_local_thread("RT_abc", false, Some("My reply"))]);
+        let remote = PrData {
+            reviews: vec![],
+            threads: vec![make_remote_thread(
+                "RT_abc",
+                vec![
+                    make_comment(1, "user", "2024-01-15T09:00:00Z"),
+                    make_reply(2, "other", "2024-01-15T10:01:00Z", "My reply"),
+                ],
+                false,
+            )],
+        };
+
+        assert_eq!(
+            ReplyChangeSet::detect(&local, &remote, "2024-01-15T10:00:00Z", "user"),
+            ReplyChangeSet {
+                actions: vec![ReplyAction::PostReply {
+                    thread_id: "RT_abc".to_string(),
+                    in_reply_to: 1,
+                    body: "My reply".to_string(),
+                }],
+                conflicts: vec![ThreadConflict {
+                    thread_id: "RT_abc".to_string(),
+                    path: "src/main.rs".to_string(),
+                    reason: "New comments added since last pull".to_string(),
+                }],
+            },
+        );
     }
 
     #[rstest]
@@ -323,7 +392,7 @@ mod tests {
             )],
         };
 
-        let changeset = ReplyChangeSet::detect(&local, &remote, "2024-01-15T10:00:00Z");
+        let changeset = ReplyChangeSet::detect(&local, &remote, "2024-01-15T10:00:00Z", "user");
         assert!(changeset.has_changes());
         assert_eq!(changeset.actions.len(), 1);
         assert!(matches!(
@@ -344,7 +413,7 @@ mod tests {
             )],
         };
 
-        let changeset = ReplyChangeSet::detect(&local, &remote, "2024-01-15T10:00:00Z");
+        let changeset = ReplyChangeSet::detect(&local, &remote, "2024-01-15T10:00:00Z", "user");
         assert!(!changeset.has_changes());
     }
 
@@ -360,7 +429,7 @@ mod tests {
             )],
         };
 
-        let changeset = ReplyChangeSet::detect(&local, &remote, "2024-01-15T10:00:00Z");
+        let changeset = ReplyChangeSet::detect(&local, &remote, "2024-01-15T10:00:00Z", "user");
         assert_eq!(changeset.actions.len(), 2);
         assert!(matches!(
             &changeset.actions[0],
@@ -409,7 +478,7 @@ mod tests {
             )],
         };
 
-        let changeset = ReplyChangeSet::detect(&local, &remote, "2024-01-15T10:00:00Z");
+        let changeset = ReplyChangeSet::detect(&local, &remote, "2024-01-15T10:00:00Z", "user");
         assert_eq!(
             changeset,
             ReplyChangeSet {
@@ -484,7 +553,7 @@ mod tests {
         };
 
         assert_eq!(
-            ReplyChangeSet::detect(&local, &remote, "2024-01-15T10:00:00Z"),
+            ReplyChangeSet::detect(&local, &remote, "2024-01-15T10:00:00Z", "user"),
             expected
         );
     }
@@ -497,7 +566,7 @@ mod tests {
             threads: vec![],
         };
 
-        let changeset = ReplyChangeSet::detect(&local, &remote, "2024-01-15T10:00:00Z");
+        let changeset = ReplyChangeSet::detect(&local, &remote, "2024-01-15T10:00:00Z", "user");
         assert!(!changeset.has_changes());
     }
 
@@ -517,7 +586,7 @@ mod tests {
             )],
         };
 
-        let changeset = ReplyChangeSet::detect(&local, &remote, "2024-01-15T10:00:00Z");
+        let changeset = ReplyChangeSet::detect(&local, &remote, "2024-01-15T10:00:00Z", "user");
         assert!(changeset.has_conflicts());
     }
 }

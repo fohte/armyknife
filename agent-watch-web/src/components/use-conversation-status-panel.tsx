@@ -1,20 +1,17 @@
-import {
-  type Dispatch,
-  type SetStateAction,
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-} from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
+import { useOptionalAsyncActionFeedback } from '#async-action-feedback'
 import { getPendingCritReviewUrl } from '#components/conversation-crit-url'
-import {
-  isReviewDocumentResponse,
-  type ReviewDocumentResponse,
-} from '#components/conversation-pane-response'
+import { isReviewDocumentResponse } from '#components/conversation-pane-response'
 import { requestJson } from '#components/conversation-requests'
 import type { Decision } from '#components/decision-card'
 import { DecisionsPanel } from '#components/decisions-panel'
+import {
+  frontmatterForReviewFinish,
+  requestReviewDocumentAction,
+  type ReviewDocumentState,
+  type ReviewDocumentStates,
+} from '#components/review-document-operation'
 import { ReviewDocumentPanel } from '#components/review-document-panel'
 import type { ReviewDocumentSummariesState } from '#components/review-document-summary'
 import { RunningTasksPanel } from '#components/running-tasks-panel'
@@ -26,7 +23,6 @@ import { WebUiPane } from '#components/web-ui-pane'
 import { webUiTabId } from '#components/web-ui-tab-id'
 import { webUiTargetUrl } from '#components/web-ui-target-url'
 import { useSessionOperations } from '#session-operation-context'
-import { createSessionOperation } from '#session-operations'
 import { getSessionTasks } from '#session-task-utils'
 import {
   needsActionDescendantCount,
@@ -56,108 +52,6 @@ type UseConversationStatusPanelOptions = {
   onCloseStatusPanel: () => void
 }
 
-type ReviewDocumentState = {
-  sessionId: string
-  reviewDocumentId: string
-  document: ReviewDocumentResponse | null
-  error: string | null
-  loading: boolean
-  saveStatus: 'idle' | 'saving' | 'saved' | 'error' | 'finishing'
-  saveError: string | null
-  unsavedChanges: boolean
-  view: 'edit' | 'preview'
-}
-
-type ReviewDocumentStates = Record<string, ReviewDocumentState>
-
-function requestReviewDocumentAction(
-  sessionId: string,
-  document: ReviewDocumentResponse,
-  action: 'save' | 'finish',
-  setState: Dispatch<SetStateAction<ReviewDocumentStates>>,
-  run: ReturnType<typeof useSessionOperations>['run'],
-) {
-  const savedRevision = (value: unknown) =>
-    typeof value === 'object' &&
-    value !== null &&
-    'revision' in value &&
-    typeof value.revision === 'string'
-      ? value.revision
-      : null
-  setState((current) => {
-    const state = current[document.id]
-    if (state === undefined || state.sessionId !== sessionId) return current
-    return {
-      ...current,
-      [document.id]: {
-        ...state,
-        saveStatus: action === 'save' ? 'saving' : 'finishing',
-        saveError: null,
-      },
-    }
-  })
-
-  const onSuccess = (result: unknown) => {
-    const revision = savedRevision(result)
-    setState((current) => {
-      const state = current[document.id]
-      if (state === undefined || state.sessionId !== sessionId) return current
-      return {
-        ...current,
-        [document.id]:
-          action === 'save'
-            ? {
-                ...state,
-                ...(state.document === null || revision === null
-                  ? {}
-                  : {
-                      document: { ...state.document, revision },
-                    }),
-                saveStatus: 'saved',
-                saveError: null,
-                unsavedChanges: false,
-              }
-            : {
-                ...state,
-                saveStatus: 'saved',
-                saveError: null,
-                unsavedChanges: false,
-              },
-      }
-    })
-  }
-  const onError = (error: Error) => {
-    setState((current) => {
-      const state = current[document.id]
-      return state === undefined || state.sessionId !== sessionId
-        ? current
-        : {
-            ...current,
-            [document.id]: {
-              ...state,
-              saveStatus: 'error',
-              saveError: error.message,
-            },
-          }
-    })
-  }
-  const operation = createSessionOperation(
-    sessionId,
-    `review-document/${action}`,
-    {
-      id: document.id,
-      revision: document.revision,
-      frontmatter: document.frontmatter,
-      body: document.body,
-    },
-  )
-  operation.match((value) => {
-    void run(value).then((result) => {
-      result.match(onSuccess, onError)
-    })
-  }, onError)
-}
-
 export function useConversationStatusPanel({
   session,
   messages,
@@ -177,6 +71,7 @@ export function useConversationStatusPanel({
   onRetryReviewDocumentSummaries,
 }: UseConversationStatusPanelOptions) {
   const { run } = useSessionOperations()
+  const actionFeedback = useOptionalAsyncActionFeedback()
   const [activePanelTabId, setActivePanelTabId] = useState<string | null>(null)
   const [selectedDecisionSeq, setSelectedDecisionSeq] = useState<number | null>(
     null,
@@ -517,6 +412,7 @@ export function useConversationStatusPanel({
                   frontmatter={reviewDocumentState.document.frontmatter}
                   body={reviewDocumentState.document.body}
                   status={reviewDocumentState.saveStatus}
+                  pendingAction={reviewDocumentState.pendingAction}
                   unsavedChanges={reviewDocumentState.unsavedChanges}
                   error={reviewDocumentState.saveError}
                   view={reviewDocumentState.view}
@@ -563,6 +459,8 @@ export function useConversationStatusPanel({
                         'save',
                         setReviewDocumentStates,
                         run,
+                        session.title,
+                        actionFeedback,
                       )
                   }}
                   onFinish={() => {
@@ -574,6 +472,36 @@ export function useConversationStatusPanel({
                         'finish',
                         setReviewDocumentStates,
                         run,
+                        session.title,
+                        actionFeedback,
+                        frontmatterForReviewFinish(document.frontmatter, false),
+                      )
+                  }}
+                  onApproveForTranslation={() => {
+                    const document = reviewDocumentState.document
+                    if (document !== null)
+                      requestReviewDocumentAction(
+                        session.id,
+                        document,
+                        'finish',
+                        setReviewDocumentStates,
+                        run,
+                        session.title,
+                        actionFeedback,
+                        frontmatterForReviewFinish(document.frontmatter, true),
+                      )
+                  }}
+                  onSubmit={(action) => {
+                    const document = reviewDocumentState.document
+                    if (document !== null)
+                      requestReviewDocumentAction(
+                        session.id,
+                        document,
+                        action,
+                        setReviewDocumentStates,
+                        run,
+                        session.title,
+                        actionFeedback,
                       )
                   }}
                 />

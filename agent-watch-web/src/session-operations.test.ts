@@ -470,6 +470,27 @@ const requests: {
     response: { success: true, revision: 'next-fixture-revision' },
   },
   {
+    name: 'post an approved review comment',
+    operation: {
+      type: 'review_document_action',
+      sessionId: 'test-session',
+      id: 'fixture-review',
+      revision: 'fixture-revision',
+      frontmatter: { submit: false },
+      body: 'Fixture comment',
+      action: 'post_comment',
+    },
+    path: 'review-document/action',
+    body: {
+      id: 'fixture-review',
+      revision: 'fixture-revision',
+      frontmatter: { submit: false },
+      body: 'Fixture comment',
+      action: 'post_comment',
+    },
+    response: { success: true, revision: 'next-fixture-revision' },
+  },
+  {
     name: 'merge pull request',
     operation: {
       type: 'merge',
@@ -752,6 +773,26 @@ const operationFactories: [
       revision: 'fixture-revision',
       frontmatter: { title: 'Fixture title' },
       body: 'Fixture body',
+    },
+  ],
+  [
+    'post an approved review comment',
+    'review-document/action',
+    {
+      id: 'fixture-review',
+      revision: 'fixture-revision',
+      frontmatter: { submit: false },
+      body: 'Fixture comment',
+      action: 'post_comment',
+    },
+    {
+      type: 'review_document_action',
+      sessionId: session.id,
+      id: 'fixture-review',
+      revision: 'fixture-revision',
+      frontmatter: { submit: false },
+      body: 'Fixture comment',
+      action: 'post_comment',
     },
   ],
   [
