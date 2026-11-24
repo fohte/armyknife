@@ -53,6 +53,7 @@ jobs:
       - name: Close stale release PR
         id: stale
         if: steps.release.outputs.prs_created == 'true'
+        shell: bash
         env:
           GH_TOKEN: ${{ steps.octo-sts.outputs.token }}
           PR_JSON: ${{ steps.release.outputs.pr }}
@@ -71,10 +72,17 @@ jobs:
           # Aggregate compare files omit paths reverted within the commit range.
           BASE_COMMIT_SHAS=$(gh api --paginate \
             "repos/${{ github.repository }}/compare/$BASE_SHA...$CURRENT_BASE_SHA" \
-            | jq -s -r '.[].commits[]?.sha')
+            | jq -r '.commits[].sha')
+          if [[ -z "$BASE_COMMIT_SHAS" ]]; then
+            echo "The default branch advanced but the comparison returned no commits"
+            exit 1
+          fi
+
           BRANCH_FILES=$(
             while IFS= read -r COMMIT_SHA; do
-              gh api "repos/${{ github.repository }}/commits/$COMMIT_SHA" | jq -r '.files[]?.filename'
+              gh api "repos/${{ github.repository }}/commits/$COMMIT_SHA" \
+                | jq -r '.files[].filename' \
+                || exit 1
             done <<< "$BASE_COMMIT_SHAS" | jq -R -s 'split("\n") | map(select(length > 0)) | unique'
           )
           PR_FILES=$(gh api \
