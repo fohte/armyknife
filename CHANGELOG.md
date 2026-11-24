@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.890](https://github.com/fohte/armyknife/compare/v0.1.889...v0.1.890) (2026-11-24)
+
+
+### Dependencies
+
+* update rust crate notify to v8.2.2 ([#2170](https://github.com/fohte/armyknife/issues/2170)) ([c964fe6](https://github.com/fohte/armyknife/commit/c964fe602f9b2da60ec3ced7b1b27b31e4efb358))
+
 ## [0.1.889](https://github.com/fohte/armyknife/compare/v0.1.888...v0.1.889) (2026-11-24)
 
 
