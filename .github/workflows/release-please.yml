@@ -68,9 +68,15 @@ jobs:
             exit 0
           fi
 
-          BRANCH_FILES=$(gh api \
+          # Aggregate compare files omit paths reverted within the commit range.
+          BASE_COMMIT_SHAS=$(gh api --paginate \
             "repos/${{ github.repository }}/compare/$BASE_SHA...$CURRENT_BASE_SHA" \
-            | jq '[.files[].filename] | unique')
+            | jq -s -r '.[].commits[]?.sha')
+          BRANCH_FILES=$(
+            while IFS= read -r COMMIT_SHA; do
+              gh api "repos/${{ github.repository }}/commits/$COMMIT_SHA" | jq -r '.files[]?.filename'
+            done <<< "$BASE_COMMIT_SHAS" | jq -R -s 'split("\n") | map(select(length > 0)) | unique'
+          )
           PR_FILES=$(gh api \
             "repos/${{ github.repository }}/pulls/$PR_NUMBER/files?per_page=100" \
             | jq '[.[].filename] | unique')
