@@ -620,7 +620,12 @@ export const PhoneStatusPanelHasNoPullRequests: Story = {
     presentation: 'list',
     onOpenChange: () => undefined,
   },
-  render: () => phoneStatusPanel([], undefined, false),
+  render: (args) =>
+    phoneStatusPanel(
+      args.pullRequests,
+      args.mergeStatus,
+      args.pullRequests.length > 0,
+    ),
 }
 
 export const PhoneStatusPanelShowsMergeInProgress: Story = {
@@ -635,5 +640,10 @@ export const PhoneStatusPanelShowsMergeInProgress: Story = {
     mergeStatus: () => 'merging',
     onOpenChange: () => undefined,
   },
-  render: () => phoneStatusPanel([mergeablePullRequest], () => 'merging'),
+  render: (args) =>
+    phoneStatusPanel(
+      args.pullRequests,
+      args.mergeStatus,
+      args.pullRequests.length > 0,
+    ),
 }

@@ -15,6 +15,7 @@ import {
 import { ReviewDocumentPanel } from '#components/review-document-panel'
 import type { ReviewDocumentSummariesState } from '#components/review-document-summary'
 import { RunningTasksPanel } from '#components/running-tasks-panel'
+import { getSessionPullRequests } from '#components/session-pull-request-utils'
 import type { SessionStatusPanelTab } from '#components/session-status-panel'
 import { SessionTasksPanel } from '#components/session-tasks-panel'
 import { SessionTreePanel } from '#components/session-tree-panel'
@@ -167,12 +168,7 @@ export function useConversationStatusPanel({
       sessionTree === null ||
       sessionTree.length > 1)
   const sessionTasks = getSessionTasks(session)
-  const pullRequests =
-    session.pullRequests !== undefined && session.pullRequests.length > 0
-      ? session.pullRequests
-      : session.pullRequest === null
-        ? []
-        : [session.pullRequest]
+  const pullRequests = getSessionPullRequests(session)
   const availableTabIds = [
     ...(backgroundTasks.length === 0 ? [] : ['running']),
     ...(isMobile && pullRequests.length > 0 ? ['pull-requests'] : []),

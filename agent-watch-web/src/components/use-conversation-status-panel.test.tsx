@@ -305,14 +305,12 @@ it('shows the PRs tab after Running and renders its merge row on mobile', () => 
       }),
     ),
     pullRequestRows: container.querySelectorAll('.session-pr-row').length,
+    mergeDisabled:
+      container.querySelector<HTMLButtonElement>(
+        '.session-pr-row button[aria-label="Merge PR #42 in fixture/toolkit"]',
+      )?.disabled ?? null,
   })
-  expect(snapshot()).toEqual({
-    tabs: [
-      { label: 'Running1', selected: 'true' },
-      { label: 'PRs1', selected: 'false' },
-    ],
-    pullRequestRows: 0,
-  })
+  const initial = snapshot()
 
   act(() => {
     container
@@ -320,18 +318,25 @@ it('shows the PRs tab after Running and renders its merge row on mobile', () => 
       ?.click()
   })
 
-  expect(snapshot()).toEqual({
-    tabs: [
-      { label: 'Running1', selected: 'false' },
-      { label: 'PRs1', selected: 'true' },
-    ],
-    pullRequestRows: 1,
+  const result = () => ({ initial, selected: snapshot() })
+  expect(result()).toEqual({
+    initial: {
+      tabs: [
+        { label: 'Running1', selected: 'true' },
+        { label: 'PRs1', selected: 'false' },
+      ],
+      pullRequestRows: 0,
+      mergeDisabled: null,
+    },
+    selected: {
+      tabs: [
+        { label: 'Running1', selected: 'false' },
+        { label: 'PRs1', selected: 'true' },
+      ],
+      pullRequestRows: 1,
+      mergeDisabled: false,
+    },
   })
-  expect(
-    container.querySelector<HTMLButtonElement>(
-      '.session-pr-row button[aria-label="Merge PR #42 in fixture/toolkit"]',
-    )?.disabled,
-  ).toBe(false)
 })
 
 it('hides the PRs tab on mobile when a session has no pull requests', () => {

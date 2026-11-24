@@ -18,6 +18,7 @@ import { MobileConversationActionsMenu } from '#components/mobile-conversation-a
 import { OpenInTerminalAction } from '#components/open-in-terminal-action'
 import { PullRequestMergeConfirmation } from '#components/pull-request-merge-confirmation'
 import { SessionHeading } from '#components/session-heading'
+import { getSessionPullRequests } from '#components/session-pull-request-utils'
 import {
   pullRequestMergeReason,
   SessionPullRequests,
@@ -110,12 +111,7 @@ export function ConversationPaneHeader({
   }
   const [mobileVibeOpen, setMobileVibeOpen] = useState(false)
   const parent = session.parent
-  const pullRequests =
-    session.pullRequests !== undefined && session.pullRequests.length > 0
-      ? session.pullRequests
-      : session.pullRequest === null
-        ? []
-        : [session.pullRequest]
+  const pullRequests = getSessionPullRequests(session)
   const merge = useConversationPaneHeaderMerge({
     session,
     pullRequests,

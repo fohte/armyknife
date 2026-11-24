@@ -3,6 +3,7 @@ import type {
   EditorReviewDocumentState,
   ReviewDocumentSummary,
 } from '#components/conversation-pane-response'
+import { getSessionPullRequests } from '#components/session-pull-request-utils'
 import type { BackgroundTask, ChatItem, Session } from '#types'
 
 export type ConversationStatusBandState = {
@@ -36,12 +37,7 @@ function pendingPermission(messages: readonly ChatItem[]) {
 }
 
 function critReviewDetail(session: Session) {
-  const pullRequests =
-    session.pullRequests !== undefined && session.pullRequests.length > 0
-      ? session.pullRequests
-      : session.pullRequest === null
-        ? []
-        : [session.pullRequest]
+  const pullRequests = getSessionPullRequests(session)
   const pullRequest = pullRequests[0]
   return pullRequest === undefined
     ? 'crit'
