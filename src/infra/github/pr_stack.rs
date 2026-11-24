@@ -42,6 +42,10 @@ pub trait PrStackClient: Send + Sync {
         stack_number: u64,
         pull_request: u64,
     ) -> Result<()>;
+
+    /// Remove unmerged pull requests from a stack.
+    async fn unstack_pull_requests(&self, owner: &str, repo: &str, stack_number: u64)
+    -> Result<()>;
 }
 
 #[derive(Debug, Deserialize)]
@@ -100,6 +104,16 @@ impl PrStackClient for GitHubClient {
         let _: serde_json::Value = self.rest_post(&route, &payload).await?;
         Ok(())
     }
+
+    async fn unstack_pull_requests(
+        &self,
+        owner: &str,
+        repo: &str,
+        stack_number: u64,
+    ) -> Result<()> {
+        let route = format!("/repos/{owner}/{repo}/stacks/{stack_number}/unstack");
+        self.rest_post_no_content(&route).await
+    }
 }
 
 #[cfg(test)]
@@ -146,5 +160,24 @@ mod tests {
                 },
             ]),
         );
+    }
+
+    #[rstest::rstest]
+    #[tokio::test]
+    async fn unstack_pull_requests_accepts_an_empty_response() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/repos/example-org/example-repo/stacks/88/unstack"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = GitHubClient::with_base_url(&server.uri(), "test-token").unwrap();
+
+        let result = client
+            .unstack_pull_requests("example-org", "example-repo", 88)
+            .await;
+
+        assert_eq!(result.map_err(|error| error.to_string()), Ok(()));
     }
 }

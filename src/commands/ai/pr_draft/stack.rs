@@ -286,6 +286,15 @@ mod tests {
             }
             Ok(())
         }
+
+        async fn unstack_pull_requests(
+            &self,
+            _owner: &str,
+            _repo: &str,
+            _stack_number: u64,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
     }
 
     #[derive(Clone, Copy)]

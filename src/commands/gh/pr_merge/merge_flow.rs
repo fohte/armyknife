@@ -17,7 +17,7 @@ pub(super) async fn run_merge(
     repo: &str,
     pr_number: u64,
 ) -> anyhow::Result<MergeOutcome> {
-    run_merge_with_expected_head(client, hook_runner, owner, repo, pr_number, None).await
+    run_merge_with_expected_head(client, hook_runner, owner, repo, pr_number, None, false).await
 }
 
 pub(super) async fn run_merge_with_expected_head(
@@ -27,6 +27,7 @@ pub(super) async fn run_merge_with_expected_head(
     repo: &str,
     pr_number: u64,
     expected_head_sha: Option<&str>,
+    unstack: bool,
 ) -> anyhow::Result<MergeOutcome> {
     let initial = client.view_pr(owner, repo, pr_number)?;
     if initial.state == PrState::Merged {
@@ -47,9 +48,27 @@ pub(super) async fn run_merge_with_expected_head(
             .await
             .context("Failed to inspect pull request states in the stack")?;
         if let Some(lower_pr) = unmerged_lower_pr(&stack_pull_requests, pr_number)? {
-            bail!("PR #{pr_number} cannot be merged because lower PR #{lower_pr} is not merged.");
+            if !unstack {
+                bail!(
+                    "PR #{pr_number} cannot be merged because lower PR #{lower_pr} is not merged."
+                );
+            }
+            client
+                .unstack_pull_requests(owner, repo, stack.number)
+                .await
+                .context("Failed to remove unmerged pull requests from the stack")?;
+            if client
+                .get_stack_for_pull_request(owner, repo, pr_number)
+                .await
+                .context("Failed to verify pull request was removed from its stack")?
+                .is_some()
+            {
+                bail!("PR #{pr_number} is still in a stack after unstacking; refusing to merge.");
+            }
+            false
+        } else {
+            true
         }
-        true
     } else {
         false
     };

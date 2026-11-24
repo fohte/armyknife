@@ -1,3 +1,5 @@
+#[cfg(test)]
+use std::cell::Cell;
 use std::{path::PathBuf, process::Output};
 
 use anyhow::{Context, bail};
@@ -24,7 +26,9 @@ mod checks;
 mod merge_flow;
 mod watch_web;
 
+#[cfg(test)]
 use watch_web::run_merge_and_close;
+use watch_web::run_merge_and_close_with_unstack;
 pub(crate) use watch_web::{WatchWebPrMergeResult, run_watch_web_pr_merge};
 
 #[cfg(test)]
@@ -38,6 +42,10 @@ pub struct PrMergeArgs {
     /// Target repository (owner/repo)
     #[arg(short = 'R', long = "repo")]
     pub repo: Option<String>,
+
+    /// Remove unmerged pull requests from the stack before merging
+    #[arg(long)]
+    pub unstack: bool,
 }
 
 pub async fn run(args: &PrMergeArgs) -> anyhow::Result<()> {
@@ -49,12 +57,13 @@ pub async fn run(args: &PrMergeArgs) -> anyhow::Result<()> {
     ensure_repo_vibe_access_for_session(in_agent_session, load_config, &owner, &repo)?;
 
     let client = GhCli;
-    run_merge_and_close(
+    run_merge_and_close_with_unstack(
         &client,
         &mut |env| hooks::run_hook("pre-pr-merge", env),
         &owner,
         &repo,
         args.pr_number,
+        args.unstack,
         |merged_pr| async move { close_merged_head_worktree(&merged_pr).await },
     )
     .await?;
@@ -94,6 +103,12 @@ trait PrMergeClient {
         repo: &str,
         stack_number: u64,
     ) -> anyhow::Result<Vec<PullRequestStackEntry>>;
+    async fn unstack_pull_requests(
+        &self,
+        owner: &str,
+        repo: &str,
+        stack_number: u64,
+    ) -> anyhow::Result<()>;
     fn wait_for_required_checks(
         &self,
         owner: &str,
@@ -354,6 +369,17 @@ impl PrMergeClient for GhCli {
             .await
     }
 
+    async fn unstack_pull_requests(
+        &self,
+        owner: &str,
+        repo: &str,
+        stack_number: u64,
+    ) -> anyhow::Result<()> {
+        GitHubClient::get()?
+            .unstack_pull_requests(owner, repo, stack_number)
+            .await
+    }
+
     fn wait_for_required_checks(
         &self,
         owner: &str,
@@ -460,6 +486,8 @@ mod tests {
         sync_merge_error: bool,
         merge_queue_enabled: bool,
         stack: Option<PullRequestStack>,
+        unstacked: Cell<bool>,
+        unstack_keeps_stack: bool,
         stack_pull_requests: Vec<PullRequestStackEntry>,
         merge_result: AsyncMergeResult,
     }
@@ -490,7 +518,11 @@ mod tests {
             _pr_number: u64,
         ) -> anyhow::Result<Option<PullRequestStack>> {
             self.events.borrow_mut().push("stack".to_string());
-            Ok(self.stack.clone())
+            Ok(if self.unstacked.get() && !self.unstack_keeps_stack {
+                None
+            } else {
+                self.stack.clone()
+            })
         }
 
         async fn get_pull_requests_in_stack(
@@ -503,6 +535,17 @@ mod tests {
                 .borrow_mut()
                 .push("stack-pull-requests".to_string());
             Ok(self.stack_pull_requests.clone())
+        }
+
+        async fn unstack_pull_requests(
+            &self,
+            _owner: &str,
+            _repo: &str,
+            _stack_number: u64,
+        ) -> anyhow::Result<()> {
+            self.events.borrow_mut().push("unstack".to_string());
+            self.unstacked.set(true);
+            Ok(())
         }
 
         fn wait_for_required_checks(
@@ -593,11 +636,38 @@ mod tests {
             sync_merge_error: false,
             merge_queue_enabled: false,
             stack: None,
+            unstacked: Cell::new(false),
+            unstack_keeps_stack: false,
             stack_pull_requests: Vec::new(),
             merge_result: AsyncMergeResult::Merged {
                 sha: Some("merge-a".to_string()),
             },
         }
+    }
+
+    fn fake_stacked_client(
+        snapshots: &[PrSnapshot],
+        events: Rc<RefCell<Vec<String>>>,
+        unstack_keeps_stack: bool,
+    ) -> FakePrMergeClient {
+        let mut client = fake_client(snapshots, events, false, false);
+        client.stack = Some(PullRequestStack {
+            number: 99,
+            position: 2,
+            size: 2,
+        });
+        client.unstack_keeps_stack = unstack_keeps_stack;
+        client.stack_pull_requests = vec![
+            PullRequestStackEntry {
+                number: 41,
+                merged_at: None,
+            },
+            PullRequestStackEntry {
+                number: 42,
+                merged_at: None,
+            },
+        ];
+        client
     }
 
     fn timed_out_merge_error() -> AsyncMergeFallback {
@@ -1443,6 +1513,7 @@ mod tests {
             "sample-repo",
             42,
             Some("confirmed-head"),
+            false,
         )
         .await;
 
@@ -1568,6 +1639,105 @@ mod tests {
                     "view".to_string(),
                     "stack".to_string(),
                     "stack-pull-requests".to_string(),
+                ],
+            ),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn run_merge_unstacks_before_hook_checks_and_merge(events: Rc<RefCell<Vec<String>>>) {
+        let client = fake_stacked_client(
+            &[
+                snapshot(PrState::Open, "head-a", "CLEAN"),
+                snapshot(PrState::Open, "head-a", "CLEAN"),
+                snapshot(PrState::Merged, "head-a", "CLEAN"),
+            ],
+            Rc::clone(&events),
+            false,
+        );
+        let mut hook = |_: &[(&str, &str)]| {
+            events.borrow_mut().push("hook".to_string());
+            Ok(())
+        };
+
+        let result = merge_flow::run_merge_with_expected_head(
+            &client,
+            &mut hook,
+            "example-org",
+            "example-repo",
+            42,
+            None,
+            true,
+        )
+        .await;
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                events.borrow().clone(),
+            ),
+            (
+                Ok(MergeOutcome::Merged(snapshot(
+                    PrState::Merged,
+                    "head-a",
+                    "CLEAN"
+                ))),
+                vec![
+                    "view".to_string(),
+                    "stack".to_string(),
+                    "stack-pull-requests".to_string(),
+                    "unstack".to_string(),
+                    "stack".to_string(),
+                    "hook".to_string(),
+                    "checks".to_string(),
+                    "view".to_string(),
+                    "merge:head-a".to_string(),
+                    "view".to_string(),
+                ],
+            ),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn run_merge_refuses_to_merge_when_unstack_keeps_pr_in_stack(
+        events: Rc<RefCell<Vec<String>>>,
+    ) {
+        let client = fake_stacked_client(
+            &[snapshot(PrState::Open, "head-a", "CLEAN")],
+            Rc::clone(&events),
+            true,
+        );
+        let mut hook = |_: &[(&str, &str)]| {
+            events.borrow_mut().push("hook".to_string());
+            Ok(())
+        };
+
+        let result = merge_flow::run_merge_with_expected_head(
+            &client,
+            &mut hook,
+            "example-org",
+            "example-repo",
+            42,
+            None,
+            true,
+        )
+        .await;
+
+        assert_eq!(
+            (
+                result.map(|_| ()).map_err(|error| error.to_string()),
+                events.borrow().clone(),
+            ),
+            (
+                Err("PR #42 is still in a stack after unstacking; refusing to merge.".to_string()),
+                vec![
+                    "view".to_string(),
+                    "stack".to_string(),
+                    "stack-pull-requests".to_string(),
+                    "unstack".to_string(),
+                    "stack".to_string(),
                 ],
             ),
         );

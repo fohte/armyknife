@@ -159,6 +159,20 @@ impl GitHubClient {
         check_response(response).await
     }
 
+    /// Send a POST request without a body and accept an empty success response.
+    pub(crate) async fn rest_post_no_content(&self, route: &str) -> Result<()> {
+        let response = self.http.post(self.url(route)).send().await?;
+        let status = response.status();
+        if !status.is_success() {
+            let body: serde_json::Value = response
+                .json()
+                .await
+                .unwrap_or_else(|_| serde_json::json!({"message": "Unknown error"}));
+            return Err(api_error_from_response(status.as_u16(), &body).into());
+        }
+        Ok(())
+    }
+
     /// Send a PATCH request with a JSON body and deserialize the response.
     pub(crate) async fn rest_patch<T: serde::de::DeserializeOwned>(
         &self,
