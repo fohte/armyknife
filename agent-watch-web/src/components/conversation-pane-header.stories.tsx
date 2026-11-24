@@ -53,12 +53,8 @@ const meta = {
         className="conversation-pane"
         data-mobile={context.args.isMobile}
         style={{
-          height: context.args.isMobile
-            ? (context.args.session.pullRequests?.length ?? 0) > 0 ||
-              context.args.session.pullRequest !== null
-              ? 130
-              : 88
-            : 96,
+          width: context.args.isMobile ? 390 : undefined,
+          height: context.args.isMobile ? 88 : 96,
         }}
       >
         <Story />
@@ -134,7 +130,7 @@ export const MobileHeaderShowsTaskAndRepository: Story = {
 }
 
 export const SessionPullRequestCanBeMerged: Story = {
-  name: 'The header shows the PR button for a mergeable pull request',
+  name: 'The desktop header shows its pull request button',
   args: {
     session: {
       ...session,
@@ -206,9 +202,8 @@ export const SessionHasMultiplePullRequests: Story = {
 }
 
 export const MobileHeaderShowsPullRequestSheet: Story = {
-  name: 'The mobile header shows the open pull request sheet below the title',
+  name: 'The desktop pull request button opens the pull request list',
   args: {
-    isMobile: true,
     pullRequestsOpen: true,
     session: {
       ...session,
@@ -246,6 +241,145 @@ export const MobileHeaderShowsPullRequestSheet: Story = {
           ciState: 'Successful',
           isCurrentBranch: false,
           headSha: 'fixture-other-sha',
+        },
+      ],
+    },
+  },
+}
+
+export const PhoneTitleFitsOnOneLine: Story = {
+  name: 'The phone header shows a short title on one line',
+  args: {
+    isMobile: true,
+    session: { ...session, title: 'Short title' },
+  },
+}
+
+export const PhoneTitleTruncatesAfterTwoLines: Story = {
+  name: 'The phone header truncates a long title after two lines',
+  args: {
+    isMobile: true,
+    session: {
+      ...session,
+      title:
+        'Review the retry flow across every background task and delivery path before the next release',
+    },
+  },
+}
+
+export const PhoneHeaderShowsNoPullRequests: Story = {
+  name: 'The phone header has no pull request status badge',
+  args: { isMobile: true, session },
+}
+
+export const PhoneHeaderShowsPullRequestStatus: Story = {
+  name: 'The phone header shows pull request count and CI status',
+  args: {
+    isMobile: true,
+    session: {
+      ...session,
+      pullRequest: {
+        number: 42,
+        state: 'Open',
+        owner: 'example-org',
+        repo: 'example-service',
+        ciState: 'InProgress',
+        isCurrentBranch: true,
+        headSha: 'sample-head-sha',
+      },
+      pullRequests: [
+        {
+          number: 42,
+          state: 'Open',
+          owner: 'example-org',
+          repo: 'example-service',
+          ciState: 'InProgress',
+          isCurrentBranch: true,
+          headSha: 'sample-head-sha',
+        },
+        {
+          number: 43,
+          state: 'Open',
+          owner: 'example-org',
+          repo: 'example-infra',
+          ciState: 'Successful',
+          isCurrentBranch: false,
+          headSha: 'sample-other-sha',
+        },
+      ],
+    },
+  },
+}
+
+export const PhoneNavigationShowsActivityFailure: Story = {
+  name: 'The phone navigation button marks failed Activity actions',
+  args: { isMobile: true, activityFailed: true },
+}
+
+export const PhoneHeaderShowsTheSelectedDesignState: Story = {
+  name: 'The phone header shows a long title, failed Activity, and three pull requests',
+  args: {
+    isMobile: true,
+    isToday: true,
+    activityFailed: true,
+    session: {
+      ...session,
+      vibeMode: { mode: 'enabled' },
+      title: 'Review the delivery retry policy across all services',
+      task: {
+        id: 'sample-task-phone-header',
+        number: 73,
+        title: 'Review retry behavior',
+        priority: null,
+      },
+      tasks: [
+        {
+          id: 'sample-task-phone-header',
+          number: 73,
+          title: 'Review retry behavior',
+          priority: null,
+        },
+      ],
+      pullRequest: {
+        number: 42,
+        state: 'Open',
+        owner: 'example-org',
+        repo: 'example-service',
+        title: 'Review retry behavior',
+        ciState: 'InProgress',
+        isCurrentBranch: true,
+        headSha: 'sample-head-sha',
+      },
+      pullRequests: [
+        {
+          number: 42,
+          state: 'Open',
+          owner: 'example-org',
+          repo: 'example-service',
+          title: 'Review retry behavior',
+          ciState: 'InProgress',
+          isCurrentBranch: true,
+          headSha: 'sample-head-sha',
+        },
+        {
+          number: 43,
+          state: 'Open',
+          owner: 'example-org',
+          repo: 'example-service',
+          title: 'Update delivery timeouts',
+          ciState: 'Successful',
+          isCurrentBranch: false,
+          headSha: 'sample-other-head-sha',
+        },
+        {
+          number: 44,
+          state: 'Open',
+          owner: 'example-team',
+          repo: 'sample-infra',
+          title: 'Add retry metrics',
+          ciState: 'Successful',
+          isCurrentBranch: false,
+          headSha: 'sample-infra-head-sha',
         },
       ],
     },

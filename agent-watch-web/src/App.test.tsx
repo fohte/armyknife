@@ -2772,6 +2772,34 @@ it.each(['Inbox', 'Board'] as const)(
   },
 )
 
+it('opens mobile navigation from the conversation header', () => {
+  renderMobileApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-a', 'A sample conversation')],
+  })
+  clickButton('[data-session-row]')
+  clickButton('.mobile-conversation-nav-toggle')
+
+  const snapshot = () => ({
+    drawerOpen:
+      container.querySelector<HTMLDialogElement>(
+        '[aria-label="Mobile navigation"]',
+      )?.open ?? false,
+    expanded: container
+      .querySelector<HTMLButtonElement>('.mobile-conversation-nav-toggle')
+      ?.getAttribute('aria-expanded'),
+    conversationVisible:
+      container.querySelector('.conversation-pane[data-mobile="true"]') !==
+      null,
+  })
+  expect(snapshot()).toEqual({
+    drawerOpen: true,
+    expanded: 'true',
+    conversationVisible: true,
+  })
+})
+
 it.each(['Inbox', 'Board'] as const)(
   'opens the command palette from the %s header',
   async (view) => {

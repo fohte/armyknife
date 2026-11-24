@@ -2,7 +2,7 @@
   display: grid;
   min-height: calc(74px + max(8px, env(safe-area-inset-top)));
   flex: 0 0 calc(74px + max(8px, env(safe-area-inset-top)));
-  grid-template-columns: 44px minmax(0, 1fr) auto;
+  grid-template-columns: 88px minmax(0, 1fr) auto;
   grid-template-rows: 44px 24px;
   align-items: center;
   column-gap: 4px;
@@ -20,6 +20,36 @@
   color: var(--aw-text-body);
 }
 
+.mobile-conversation-navigation {
+  grid-column: 1;
+  grid-row: 1;
+  display: flex;
+  width: 88px;
+  align-items: center;
+}
+
+.mobile-conversation-nav-toggle {
+  position: relative;
+  display: grid;
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  color: var(--aw-text-body);
+}
+
+.mobile-conversation-nav-failure {
+  position: absolute;
+  top: 9px;
+  right: 7px;
+  width: 7px;
+  height: 7px;
+  background: var(--aw-color-error);
+}
+
 .conversation-pane[data-mobile='true'] .conversation-copy-session-id {
   width: 26px;
   min-width: 26px;
@@ -33,6 +63,7 @@
 }
 
 .mobile-conversation-status-toggle {
+  position: relative;
   display: inline-flex;
   width: 44px;
   min-width: 44px;
@@ -50,6 +81,10 @@
 .mobile-conversation-status-toggle[aria-expanded='true'] {
   border-color: var(--aw-border-emphasis);
   background: var(--aw-bg-pressed);
+}
+
+.mobile-conversation-status-toggle.is-merge-failed {
+  border-color: var(--aw-color-error);
 }
 
 .mobile-session-status-overlay {
@@ -229,14 +264,18 @@
 }
 
 .conversation-pane[data-mobile='true'] .mobile-conversation-title h1 {
+  display: -webkit-box;
   overflow: hidden;
   min-width: 0;
   flex: 1;
-  margin: 2px 0 0;
-  font-size: 15px;
-  line-height: 1.25;
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.3;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow-wrap: anywhere;
 }
 
 .mobile-conversation-context {

@@ -2,6 +2,7 @@ import type { Decorator, Meta, StoryObj } from '@storybook/react-vite'
 
 import type { AsyncActionStatus } from '#async-action-feedback'
 import { SessionPullRequests } from '#components/session-pull-requests'
+import { SessionStatusPanel } from '#components/session-status-panel'
 import type { PullRequest } from '#types'
 
 const currentBranchPullRequest: PullRequest = {
@@ -477,4 +478,41 @@ export const MergeIsQueuedInTheList: Story = {
     mergeStatus: (): AsyncActionStatus => 'queued',
   },
   decorators: [desktopMergeButtonDecorator],
+}
+
+export const PhoneStatusPanelShowsPullRequestsBeforeTabs: Story = {
+  name: 'The phone status panel lists pull requests above its tabs',
+  args: {
+    pullRequests: [
+      mergeablePullRequest,
+      { ...currentBranchPullRequest, number: 43, ciState: 'Failed' },
+    ],
+    repo: 'example-org/example-repo',
+    isMobile: true,
+    open: false,
+    presentation: 'list',
+    onOpenChange: () => undefined,
+    onMerge: () => undefined,
+  },
+  render: (args) => (
+    <div style={{ width: 390, height: 844 }}>
+      <SessionStatusPanel
+        size="phone"
+        activeTabId="tasks"
+        onTabChange={() => undefined}
+        onClose={() => undefined}
+        tabs={[
+          {
+            id: 'tasks',
+            label: 'Tasks',
+            count: 1,
+            content: (
+              <div className="session-status-panel-empty">No tasks.</div>
+            ),
+          },
+        ]}
+        beforeTabs={<SessionPullRequests {...args} />}
+      />
+    </div>
+  ),
 }

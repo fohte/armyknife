@@ -82,6 +82,8 @@ type InboxConversationPanesProps = {
   statusPanelOpen?: boolean
   onToggleStatusPanel?: () => void
   onCloseStatusPanel?: () => void
+  onOpenNavigation?: () => void
+  mobileNavOpen?: boolean
   onBack: () => void
   onLater: (id: string) => void
   onCloseSession: (id: string, keepWorktree?: boolean) => void
@@ -105,6 +107,8 @@ export function InboxConversationPanes({
   statusPanelOpen = false,
   onToggleStatusPanel = () => undefined,
   onCloseStatusPanel = () => undefined,
+  onOpenNavigation,
+  mobileNavOpen = false,
   onBack,
   onLater,
   onCloseSession,
@@ -346,6 +350,8 @@ export function InboxConversationPanes({
         statusPanelOpen={statusPanelOpen}
         onToggleStatusPanel={onToggleStatusPanel}
         onCloseStatusPanel={onCloseStatusPanel}
+        {...(onOpenNavigation === undefined ? {} : { onOpenNavigation })}
+        mobileNavOpen={mobileNavOpen}
         {...(onOptimisticSessionOperation === undefined
           ? {}
           : { onOptimisticSessionOperation })}

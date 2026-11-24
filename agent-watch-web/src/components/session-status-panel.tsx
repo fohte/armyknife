@@ -20,6 +20,7 @@ export type SessionStatusPanelTab = {
 type SessionStatusPanelProps = {
   tabs: readonly SessionStatusPanelTab[]
   activeTabId: string | null
+  beforeTabs?: ReactNode
   size?: 'desktop' | 'phone'
   onTabChange: (id: string) => void
   onClose: () => void
@@ -32,6 +33,7 @@ type SessionStatusPanelProps = {
 export function SessionStatusPanel({
   tabs,
   activeTabId,
+  beforeTabs,
   size = 'desktop',
   onTabChange,
   onClose,
@@ -146,6 +148,7 @@ export function SessionStatusPanel({
           </div>
         </header>
       ) : null}
+      {beforeTabs}
       <div className="session-status-panel-tabs">
         <div
           className={`session-status-panel-tablist-wrap${hasHiddenTabs.left ? ' has-hidden-tabs-left' : ''}${hasHiddenTabs.right ? ' has-hidden-tabs-right' : ''}`}

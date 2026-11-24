@@ -236,6 +236,10 @@ export function AppWorkspace({
           showMobileConversation={state.showMobileConversation}
           inboxCollapsed={state.inboxCollapsed}
           statusPanelOpen={state.statusPanelOpen}
+          mobileNavOpen={state.mobileNavOpen}
+          onOpenNavigation={() => {
+            actions.setMobileNavOpen(true)
+          }}
           onToggleStatusPanel={actions.toggleStatusPanel}
           onCloseStatusPanel={() => {
             actions.setStatusPanelOpen(false)
@@ -333,7 +337,8 @@ export function AppWorkspace({
             label="Resize navigation and content"
           />
         )}
-        {state.isMobile && !state.showMobileConversation ? (
+        {state.isMobile &&
+        (!state.showMobileConversation || state.mobileNavOpen) ? (
           <MobileNavDrawer
             onClose={actions.closeMobileNav}
             open={state.mobileNavOpen}

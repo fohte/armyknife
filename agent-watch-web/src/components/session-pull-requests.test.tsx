@@ -1125,3 +1125,61 @@ it.each([
     })
   },
 )
+
+it('renders merge actions and unavailable reasons in the status panel list', () => {
+  const onMerge = vi.fn<(pullRequest: PullRequest) => void>()
+  const panelPullRequests = pullRequests
+    .filter(({ number }) => number === 42 || number === 43)
+    .map((pullRequest) =>
+      pullRequest.number === 42
+        ? { ...pullRequest, ciState: 'Failed' as const }
+        : pullRequest,
+    )
+  act(() => {
+    root?.render(
+      <SessionPullRequests
+        pullRequests={panelPullRequests}
+        repo="example-org/example-repo"
+        isMobile
+        open={false}
+        presentation="list"
+        onMerge={onMerge}
+        onOpenChange={() => undefined}
+      />,
+    )
+  })
+  const mergeButton = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Merge PR #43 in example-org/example-infra"]',
+  )
+  if (mergeButton === null) throw new Error('Expected a merge action')
+  act(() => {
+    mergeButton.click()
+  })
+
+  const snapshot = () => ({
+    dialogRole:
+      container.querySelector('.session-pr-list')?.getAttribute('role') ?? null,
+    mobileTrigger:
+      container.querySelector('.session-pr-trigger--mobile') !== null,
+    rows: Array.from(
+      container.querySelectorAll<HTMLElement>('.session-pr-row'),
+      (row) => ({
+        title: row.querySelector('.session-pr-row-title')?.textContent ?? null,
+        action: row.querySelector('.pr-merge-entry')?.textContent ?? null,
+      }),
+    ),
+    onMerge: onMerge.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    dialogRole: null,
+    mobileTrigger: false,
+    rows: [
+      { title: '#42 Show delivery status', action: 'CI failing' },
+      {
+        title: '#43 Add retry settings',
+        action: 'Merge',
+      },
+    ],
+    onMerge: [[pullRequests[1]]],
+  })
+})

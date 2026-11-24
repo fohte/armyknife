@@ -22,6 +22,7 @@ type SessionPullRequestsProps = {
   onMerge?: (pullRequest: PullRequest) => void
   onRetryMerge?: (pullRequest: PullRequest) => void
   onOpenChange: (open: boolean) => void
+  presentation?: 'trigger' | 'list'
 }
 
 type PullRequestGroup = {
@@ -79,6 +80,76 @@ export function pullRequestMergeReason(pullRequest: PullRequest) {
     return ciStateLabel(pullRequest.ciState)
   }
   return 'Head SHA unavailable'
+}
+
+export function sessionPullRequestStatusLabel(
+  pullRequests: readonly PullRequest[],
+  mergeStatus: (pullRequest: PullRequest) => AsyncActionStatus | null,
+) {
+  const currentPullRequest = getRepresentativePullRequest(pullRequests)
+  if (currentPullRequest === undefined) return null
+
+  const hasMergeFailure = pullRequests.some(
+    (pullRequest) =>
+      pullRequest.state === 'Open' &&
+      mergeStatus(pullRequest) === 'mergeFailed',
+  )
+  const hasMergeInProgress = pullRequests.some(
+    (pullRequest) =>
+      pullRequest.state === 'Open' &&
+      ['merging', 'queued'].includes(mergeStatus(pullRequest) ?? ''),
+  )
+  const currentStatus = mergeStatus(currentPullRequest)
+  const merged =
+    currentPullRequest.state === 'Merged' ||
+    currentStatus === 'merged' ||
+    currentStatus === 'alreadyMerged'
+  const additionalCount = Math.max(pullRequests.length - 1, 0)
+
+  return `PR #${String(currentPullRequest.number)}, ${merged ? 'merged' : currentPullRequest.state.toLowerCase()}, ${ciStateLabel(currentPullRequest.ciState)}${hasMergeInProgress ? ', a pull request is merging' : ''}${hasMergeFailure ? ', a merge failed' : ''}${additionalCount > 0 ? `. ${String(additionalCount)} more PR${additionalCount === 1 ? '' : 's'} from this session` : ''}`
+}
+
+export function SessionPullRequestStatusBadge({
+  pullRequests,
+  mergeStatus,
+}: {
+  pullRequests: readonly PullRequest[]
+  mergeStatus: (pullRequest: PullRequest) => AsyncActionStatus | null
+}) {
+  const currentPullRequest = getRepresentativePullRequest(pullRequests)
+  if (currentPullRequest === undefined) return null
+  const hasMergeFailure = pullRequests.some(
+    (pullRequest) =>
+      pullRequest.state === 'Open' &&
+      mergeStatus(pullRequest) === 'mergeFailed',
+  )
+  const hasMergeInProgress = pullRequests.some(
+    (pullRequest) =>
+      pullRequest.state === 'Open' &&
+      ['merging', 'queued'].includes(mergeStatus(pullRequest) ?? ''),
+  )
+  const currentStatus = mergeStatus(currentPullRequest)
+  const merged =
+    currentPullRequest.state === 'Merged' ||
+    currentStatus === 'merged' ||
+    currentStatus === 'alreadyMerged'
+
+  return (
+    <span className="session-pr-status-badge" aria-hidden="true">
+      {hasMergeFailure ? (
+        <span className="session-pr-status-mark is-failed">
+          <AlertCircle aria-hidden="true" size={15} />
+        </span>
+      ) : hasMergeInProgress ? (
+        <LoaderCircle className="session-pr-status-mark is-merging" size={14} />
+      ) : merged ? null : (
+        <span
+          className={`session-pr-status-ci-dot ${ciStateClass(currentPullRequest.ciState)}`}
+        />
+      )}
+      <span className="session-pr-status-count">{pullRequests.length}</span>
+    </span>
+  )
 }
 
 function pullRequestRowMergeReason(pullRequest: PullRequest) {
@@ -152,6 +223,7 @@ export function SessionPullRequests({
   onMerge,
   onRetryMerge,
   onOpenChange,
+  presentation = 'trigger',
 }: SessionPullRequestsProps) {
   const triggerRef = useRef<HTMLButtonElement>(null)
   const contentRef = useRef<HTMLElement>(null)
@@ -240,11 +312,11 @@ export function SessionPullRequests({
   const content = (
     <section
       ref={contentRef}
-      className={`session-pr-list${isMobile ? ' session-pr-list--mobile' : ''}`}
-      role="dialog"
+      className={`session-pr-list${isMobile ? ' session-pr-list--mobile' : ''}${presentation === 'list' ? ' session-pr-list--panel' : ''}`}
+      role={presentation === 'list' ? undefined : 'dialog'}
       aria-label="Pull requests from this session"
-      aria-modal={isMobile || undefined}
-      tabIndex={-1}
+      aria-modal={presentation === 'list' ? undefined : isMobile || undefined}
+      tabIndex={presentation === 'list' ? undefined : -1}
     >
       {isMobile ? (
         <h2 className="session-pr-list-title">
@@ -323,7 +395,7 @@ export function SessionPullRequests({
           })}
         </div>
       ))}
-      {isMobile ? (
+      {isMobile && presentation === 'trigger' ? (
         <div className="session-pr-list-actions is-single">
           <button
             className="session-pr-close"
@@ -338,6 +410,10 @@ export function SessionPullRequests({
       ) : null}
     </section>
   )
+
+  if (presentation === 'list') {
+    return content
+  }
 
   return (
     <div

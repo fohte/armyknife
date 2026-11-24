@@ -55,6 +55,8 @@ type ConversationPaneProps = {
   onToggleStatusPanel?: () => void
   onCloseStatusPanel?: () => void
   onBack?: () => void
+  onOpenNavigation?: () => void
+  mobileNavOpen?: boolean
   onLater?: () => void
   onClose?: () => void
   onOptimisticSessionOperation?: (operation: SessionOperation) => void
@@ -84,6 +86,8 @@ export function ConversationPane({
   onToggleStatusPanel = () => undefined,
   onCloseStatusPanel = () => undefined,
   onBack = () => undefined,
+  onOpenNavigation,
+  mobileNavOpen = false,
   onLater = () => undefined,
   onClose,
   onOptimisticSessionOperation,
@@ -94,6 +98,8 @@ export function ConversationPane({
   mobileUpdateNotice,
 }: ConversationPaneProps) {
   const sessionLinkTargets = useSessionLinkTargets(sessions)
+  const [pullRequestListTarget, setPullRequestListTarget] =
+    useState<HTMLDivElement | null>(null)
   const onSelectSessionRef = useRef(onSelectSession)
   onSelectSessionRef.current = onSelectSession
   const selectLinkedSession = useCallback((id: string) => {
@@ -399,6 +405,7 @@ export function ConversationPane({
   })
   const statusPanel = statusPanelOpen ? (
     <SessionStatusPanel
+      beforeTabs={isMobile ? <div ref={setPullRequestListTarget} /> : undefined}
       tabs={panelTabs}
       activeTabId={activeTabId}
       onTabChange={onTabChange}
@@ -467,8 +474,11 @@ export function ConversationPane({
       onToggleStatusPanel={onToggleStatusPanel}
       onSelectDecision={onSelectDecision}
       mobileStatusPanel={statusPanel}
+      pullRequestListTarget={pullRequestListTarget}
+      mobileNavOpen={mobileNavOpen}
       mobileWebUi={mobileWebUi}
       onBack={onBack}
+      {...(onOpenNavigation === undefined ? {} : { onOpenNavigation })}
       onLater={onLater}
       {...(onClose === undefined ? {} : { onClose })}
       isToday={isToday}
