@@ -3,6 +3,24 @@ import type { JsonValue, RewindMode } from '#types'
 
 type PermissionAction = 'approve' | 'reject' | 'retry' | 'dismiss'
 
+const REVIEW_DOCUMENT_ACTIONS = [
+  'post_comment',
+  'create_pr',
+  'post_replies',
+  'update_issue',
+] as const
+
+export type ReviewDocumentAction = (typeof REVIEW_DOCUMENT_ACTIONS)[number]
+
+export function isReviewDocumentAction(
+  value: unknown,
+): value is ReviewDocumentAction {
+  return (
+    typeof value === 'string' &&
+    (REVIEW_DOCUMENT_ACTIONS as readonly string[]).includes(value)
+  )
+}
+
 export type SessionOperation =
   | { type: 'today'; sessionId: string; isToday: boolean }
   | {
@@ -105,6 +123,15 @@ export type SessionOperation =
       frontmatter: JsonValue
       body: string
     }
+  | {
+      type: 'review_document_action'
+      sessionId: string
+      id: string
+      revision: string
+      frontmatter: JsonValue
+      body: string
+      action: ReviewDocumentAction
+    }
 
 export type CloseWorktreeChecks = {
   path: string
@@ -119,6 +146,7 @@ export type CloseWorktreeChecks = {
 export type SessionOperationError = Error & {
   code?: string | null
   checks?: CloseWorktreeChecks
+  revision?: string
 }
 function operationKey(operation: SessionOperation) {
   if (operation.type === 'permission') {
@@ -147,6 +175,9 @@ function operationKey(operation: SessionOperation) {
   }
   if (operation.type === 'primary_task') {
     return `${operation.sessionId}:primary_task:${operation.taskId}`
+  }
+  if (operation.type === 'review_document_action') {
+    return `${operation.sessionId}:review_document_action:${operation.id}`
   }
   if (operation.type === 'title') {
     return `${operation.sessionId}:title:${operation.title.trim()}`

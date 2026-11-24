@@ -9,9 +9,11 @@ import { Maximize2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 
 import { ReviewDocumentNavigation } from '#components/review-document-navigation'
+import { ReviewDocumentActions } from '#components/review-document-panel/actions'
 import { getReviewDocumentFrontmatterEntries } from '#components/review-document-panel-frontmatter'
 import { ReviewDocumentPreview } from '#components/review-document-preview'
 import type { ReviewDocumentSummary } from '#components/review-document-summary'
+import type { ReviewDocumentAction } from '#session-operation-types'
 import type { JsonValue } from '#types'
 
 type ReviewDocumentPanelProps = {
@@ -24,7 +26,8 @@ type ReviewDocumentPanelProps = {
   onOpenFocus?: () => void
   frontmatter: JsonValue
   body: string
-  status?: 'idle' | 'saving' | 'saved' | 'error' | 'finishing'
+  status?: 'idle' | 'saving' | 'saved' | 'error' | 'finishing' | 'submitting'
+  pendingAction?: ReviewDocumentAction | undefined
   unsavedChanges?: boolean
   error?: string | null
   view?: 'edit' | 'preview'
@@ -33,6 +36,8 @@ type ReviewDocumentPanelProps = {
   onViewChange?: (view: 'edit' | 'preview') => void
   onSave?: () => void
   onFinish?: () => void
+  onApproveForTranslation?: () => void
+  onSubmit?: (action: ReviewDocumentAction) => void
 }
 
 type JsonObject = { [key: string]: JsonValue }
@@ -299,6 +304,7 @@ export function ReviewDocumentPanel({
   frontmatter,
   body,
   status = 'idle',
+  pendingAction,
   unsavedChanges = false,
   error = null,
   view = 'preview',
@@ -307,8 +313,11 @@ export function ReviewDocumentPanel({
   onViewChange = () => undefined,
   onSave = () => undefined,
   onFinish = () => undefined,
+  onApproveForTranslation = onFinish,
+  onSubmit = () => undefined,
 }: ReviewDocumentPanelProps) {
-  const busy = status === 'saving' || status === 'finishing'
+  const busy =
+    status === 'saving' || status === 'finishing' || status === 'submitting'
   const updateFrontmatter = (
     path: readonly JsonPathPart[],
     value: JsonValue,
@@ -459,33 +468,22 @@ export function ReviewDocumentPanel({
         </section>
       </div>
 
-      <footer className="review-document-actions">
-        <span aria-live="polite" className="review-document-status">
-          {status === 'saving'
-            ? 'Saving…'
-            : status === 'saved'
-              ? 'Saved'
-              : status === 'finishing'
-                ? 'Finishing review…'
-                : (error ?? (unsavedChanges ? 'Unsaved changes' : ''))}
-        </span>
-        {error === null ? null : (
-          <span className="review-document-error" role="alert">
-            {error}
-          </span>
-        )}
-        <button disabled={!canSave || busy} type="button" onClick={onSave}>
-          Save
-        </button>
-        <button
-          className="review-document-finish"
-          disabled={!canFinish || busy}
-          type="button"
-          onClick={onFinish}
-        >
-          Finish review
-        </button>
-      </footer>
+      <ReviewDocumentActions
+        summary={summary}
+        isMobile={isMobile}
+        canSave={canSave}
+        canFinish={canFinish}
+        frontmatter={frontmatter}
+        body={body}
+        status={status}
+        pendingAction={pendingAction}
+        unsavedChanges={unsavedChanges}
+        error={error}
+        onSave={onSave}
+        onFinish={onFinish}
+        onApproveForTranslation={onApproveForTranslation}
+        onSubmit={onSubmit}
+      />
     </article>
   )
 }

@@ -51,6 +51,21 @@ function copy(action: AsyncAction) {
       : `PR #${String(action.pullRequestNumber)}`
   const labels = (() => {
     switch (action.status) {
+      case 'reviewDocumentActionRunning':
+        return {
+          title: `${action.reviewDocumentAction ?? 'Review action'} in progress`,
+          line: `${action.reviewDocumentAction ?? 'Review action'} in progress`,
+        }
+      case 'reviewDocumentActionSucceeded':
+        return {
+          title: `${action.reviewDocumentAction ?? 'Review action'} completed`,
+          line: `${action.reviewDocumentAction ?? 'Review action'} completed`,
+        }
+      case 'reviewDocumentActionFailed':
+        return {
+          title: `${action.reviewDocumentAction ?? 'Review action'} failed`,
+          line: `${action.reviewDocumentAction ?? 'Review action'} failed`,
+        }
       case 'merging':
         return action.kind === 'merge'
           ? { title: `Merging ${pr}`, line: `Merging ${pr}…` }
@@ -120,12 +135,14 @@ function copy(action: AsyncAction) {
     action.status === 'merging' ||
     action.status === 'closing' ||
     action.status === 'rewinding' ||
-    action.status === 'runningCommand'
+    action.status === 'runningCommand' ||
+    action.status === 'reviewDocumentActionRunning'
       ? 'running'
       : action.status === 'merged' ||
           action.status === 'closed' ||
           action.status === 'rewound' ||
-          action.status === 'ranCommand'
+          action.status === 'ranCommand' ||
+          action.status === 'reviewDocumentActionSucceeded'
         ? 'success'
         : action.status === 'queued'
           ? 'queued'

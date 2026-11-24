@@ -1,3 +1,5 @@
+use crate::commands::agent::store::WatchWebActionEventKind;
+
 pub(in crate::commands::agent::watch_web) const VIBE_MODE_ON_TAG: &str = "armyknife-vibe-mode-on";
 pub(in crate::commands::agent::watch_web) const VIBE_MODE_OFF_TAG: &str = "armyknife-vibe-mode-off";
 pub(in crate::commands::agent::watch_web) const TODO_COMPLETED_TAG: &str =
@@ -29,6 +31,19 @@ pub(super) fn is_action_event_tag(tag: &str) -> bool {
 
 pub(super) fn is_action_message_id(message_id: &str) -> bool {
     message_id.starts_with(ACTION_MESSAGE_ID_PREFIX)
+}
+
+pub(in crate::commands::agent::watch_web) fn event_text_for_kind(
+    kind: WatchWebActionEventKind,
+    body: &str,
+) -> String {
+    match kind {
+        WatchWebActionEventKind::VibeModeOn => "Vibe mode turned on".to_owned(),
+        WatchWebActionEventKind::VibeModeOff => "Vibe mode turned off".to_owned(),
+        WatchWebActionEventKind::TodoCompleted
+        | WatchWebActionEventKind::TodoRejected
+        | WatchWebActionEventKind::DecisionChange => one_line(body),
+    }
 }
 
 pub(super) fn event_text(tag: &str, body: &str, message_id: Option<&str>) -> Option<String> {

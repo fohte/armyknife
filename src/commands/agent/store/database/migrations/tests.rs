@@ -211,6 +211,73 @@ fn adds_folded_todo_columns_to_version_twenty_eight_database(database_fixture: D
 }
 
 #[rstest]
+fn adds_action_event_kind_to_version_thirty_database(database_fixture: DatabaseFixture) {
+    let DatabaseFixture {
+        temp_dir,
+        mut connection,
+    } = database_fixture;
+    Migrations::from_slice(&MIGRATION_ENTRIES[..30])
+        .to_latest(&mut connection)
+        .expect("version thirty schema should be created");
+    connection
+        .execute(
+            "INSERT INTO watch_web_queued_prompt (
+                session_id, message_id, content, attachments, sent_at, resolved
+             ) VALUES (
+                'fixture-session', 'fixture-message-cyan', 'Existing prompt.', '[]',
+                '2026-01-01T00:00:00Z', 0
+             )",
+            [],
+        )
+        .expect("existing queued prompt should be inserted");
+    drop(connection);
+
+    let connection = super::super::open_connection(temp_dir.path())
+        .expect("version thirty database should migrate to action event kinds");
+    connection
+        .execute(
+            "INSERT INTO watch_web_queued_prompt (session_id, content, sent_at)
+             VALUES ('fixture-session', 'Prompt from an older writer.', '2026-01-01T00:00:01Z')",
+            [],
+        )
+        .expect("older writer should omit the nullable action event kind");
+    let actual = connection
+        .prepare(
+            "SELECT message_id, content, action_event_kind
+             FROM watch_web_queued_prompt ORDER BY id",
+        )
+        .expect("migrated queued prompt query should prepare")
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, Option<String>>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
+        })
+        .expect("queued prompts should be queryable")
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .expect("queued prompts should deserialize");
+    let actual_user_version: i64 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .expect("database migration version should be readable");
+
+    assert_eq!(
+        (actual, actual_user_version),
+        (
+            vec![
+                (
+                    Some("fixture-message-cyan".to_owned()),
+                    "Existing prompt.".to_owned(),
+                    None,
+                ),
+                (None, "Prompt from an older writer.".to_owned(), None),
+            ],
+            current_version(),
+        ),
+    );
+}
+
+#[rstest]
 fn adds_permission_request_mailbox_to_version_nine_database(database_fixture: DatabaseFixture) {
     let DatabaseFixture {
         temp_dir,

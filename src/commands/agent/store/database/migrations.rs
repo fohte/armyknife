@@ -24,7 +24,7 @@ CREATE TRIGGER agent_file_delete_session
         DELETE FROM agent_file WHERE session_id = OLD.session_id;
     END;";
 
-static MIGRATION_ENTRIES: [M<'static>; 30] = [
+static MIGRATION_ENTRIES: [M<'static>; 31] = [
     M::up(
         "CREATE TABLE sessions (
             session_id TEXT PRIMARY KEY,
@@ -294,6 +294,7 @@ static MIGRATION_ENTRIES: [M<'static>; 30] = [
                 DELETE FROM agent_session_close WHERE session_id = OLD.session_id;
             END;",
     ),
+    M::up("ALTER TABLE watch_web_queued_prompt ADD COLUMN action_event_kind TEXT;"),
 ];
 
 static MIGRATIONS: LazyLock<Migrations<'static>> =

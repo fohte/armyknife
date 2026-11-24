@@ -1,5 +1,7 @@
 //! ChangeSet: Represents all detected changes between local and remote state.
 
+use chrono::{DateTime, Utc};
+
 use crate::commands::gh::issue_agent::models::{Comment, Issue, IssueMetadata};
 use crate::commands::gh::issue_agent::storage::{
     CommentSnapshot, IssueContent, IssueStorage, LocalComment,
@@ -10,8 +12,8 @@ use crossterm::style::Color;
 
 use super::super::common::{print_colored_line, print_diff};
 use super::detect::{
-    detect_body_change, detect_comment_changes, detect_label_change, detect_parent_issue_change,
-    detect_sub_issue_change, detect_title_change,
+    detect_body_change, detect_comment_changes_with_retry, detect_label_change,
+    detect_parent_issue_change, detect_sub_issue_change, detect_title_change,
 };
 use super::field_comparison::{IssueFieldComparisons, compare_issue_fields};
 use super::links::{
@@ -37,6 +39,7 @@ pub(crate) struct DetectOptions<'a> {
     pub(crate) current_user: &'a str,
     pub(crate) edit_others: bool,
     pub(crate) allow_delete: bool,
+    pub(crate) retry_started_at: Option<DateTime<Utc>>,
 }
 
 /// Represents all changes detected between local and remote state.
@@ -45,9 +48,17 @@ pub(crate) struct ChangeSet<'a> {
     pub(crate) body: Option<BodyChange<'a>>,
     pub(crate) title: Option<TitleChange<'a>>,
     pub(crate) labels: Option<LabelChange>,
+    pub(crate) assignees: Option<AssigneeChange>,
+    pub(crate) milestone: Option<MilestoneChange>,
     pub(crate) sub_issues: Option<SubIssueChange>,
     pub(crate) parent_issue: Option<ParentIssueChange>,
     pub(crate) comments: Vec<CommentChange<'a>>,
+}
+
+pub(crate) struct IssueAddress<'a> {
+    pub(crate) owner: &'a str,
+    pub(crate) repo: &'a str,
+    pub(crate) number: u64,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -68,6 +79,18 @@ pub(crate) struct LabelChange {
     pub(crate) to_remove: Vec<String>,
     pub(crate) local_sorted: Vec<String>,
     pub(crate) remote_sorted: Vec<String>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct AssigneeChange {
+    pub(crate) local: Vec<String>,
+    pub(crate) remote_sorted: Vec<String>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct MilestoneChange {
+    pub(crate) local: Option<String>,
+    pub(crate) remote: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -105,6 +128,32 @@ pub(crate) enum CommentChange<'a> {
         body: &'a str,
         author: &'a str,
     },
+}
+
+fn detect_assignee_change(local: &IssueMetadata, remote: &Issue) -> Option<AssigneeChange> {
+    let mut local = local.assignees.clone();
+    let mut remote_sorted = remote
+        .assignees
+        .iter()
+        .map(|assignee| assignee.login.clone())
+        .collect::<Vec<_>>();
+    local.sort();
+    remote_sorted.sort();
+    (local != remote_sorted).then_some(AssigneeChange {
+        local,
+        remote_sorted,
+    })
+}
+
+fn detect_milestone_change(local: &IssueMetadata, remote: &Issue) -> Option<MilestoneChange> {
+    let remote = remote
+        .milestone
+        .as_ref()
+        .map(|milestone| milestone.title.clone());
+    (local.milestone != remote).then_some(MilestoneChange {
+        local: local.milestone.clone(),
+        remote,
+    })
 }
 
 impl<'a> ChangeSet<'a> {
@@ -148,6 +197,16 @@ impl<'a> ChangeSet<'a> {
         } else {
             detect_label_change(local.metadata, remote.issue)
         };
+        let assignees = if field_comparisons.is_some_and(|fields| !fields.assignees.local_changed) {
+            None
+        } else {
+            detect_assignee_change(local.metadata, remote.issue)
+        };
+        let milestone = if field_comparisons.is_some_and(|fields| !fields.milestone.local_changed) {
+            None
+        } else {
+            detect_milestone_change(local.metadata, remote.issue)
+        };
         let sub_issues = if field_comparisons.is_some_and(|fields| !fields.sub_issues.local_changed)
         {
             None
@@ -160,19 +219,22 @@ impl<'a> ChangeSet<'a> {
             } else {
                 detect_parent_issue_change(local.metadata, remote.issue)
             };
-        let comments = detect_comment_changes(
+        let comments = detect_comment_changes_with_retry(
             local.comments,
             remote.comments,
             local.base_comments,
             options.current_user,
             options.edit_others,
             options.allow_delete,
+            options.retry_started_at,
         )?;
 
         Ok(Self {
             body,
             title,
             labels,
+            assignees,
+            milestone,
             sub_issues,
             parent_issue,
             comments,
@@ -183,6 +245,8 @@ impl<'a> ChangeSet<'a> {
         self.body.is_some()
             || self.title.is_some()
             || self.labels.is_some()
+            || self.assignees.is_some()
+            || self.milestone.is_some()
             || self.sub_issues.is_some()
             || self.parent_issue.is_some()
             || !self.comments.is_empty()
@@ -207,6 +271,28 @@ impl<'a> ChangeSet<'a> {
             println!("=== Labels ===");
             print_colored_line("- ", &format!("{:?}", change.remote_sorted), Color::Red);
             print_colored_line("+ ", &format!("{:?}", change.local_sorted), Color::Green);
+        }
+
+        if let Some(change) = &self.assignees {
+            println!();
+            println!("=== Assignees ===");
+            print_colored_line("- ", &format!("{:?}", change.remote_sorted), Color::Red);
+            print_colored_line("+ ", &format!("{:?}", change.local), Color::Green);
+        }
+
+        if let Some(change) = &self.milestone {
+            println!();
+            println!("=== Milestone ===");
+            print_colored_line(
+                "- ",
+                change.remote.as_deref().unwrap_or("(none)"),
+                Color::Red,
+            );
+            print_colored_line(
+                "+ ",
+                change.local.as_deref().unwrap_or("(none)"),
+                Color::Green,
+            );
         }
 
         if let Some(change) = &self.sub_issues {
@@ -279,12 +365,23 @@ impl<'a> ChangeSet<'a> {
     pub(super) async fn apply(
         &self,
         client: &GitHubClient,
-        owner: &str,
-        repo: &str,
-        issue_number: u64,
+        address: IssueAddress<'_>,
         storage: &IssueStorage,
         remote_issue: &Issue,
+        remove_new_comment_files: bool,
     ) -> anyhow::Result<()> {
+        let IssueAddress {
+            owner,
+            repo,
+            number: issue_number,
+        } = address;
+        let resolved_milestone = match self.milestone.as_ref() {
+            Some(MilestoneChange {
+                local: Some(title), ..
+            }) => Some(client.resolve_milestone_number(owner, repo, title).await?),
+            _ => None,
+        };
+
         if let Some(change) = &self.body {
             println!();
             println!("Updating issue body...");
@@ -316,6 +413,22 @@ impl<'a> ChangeSet<'a> {
             }
         }
 
+        if let Some(change) = &self.assignees {
+            println!();
+            println!("Updating assignees...");
+            client
+                .update_issue_assignees(owner, repo, issue_number, &change.local)
+                .await?;
+        }
+
+        if self.milestone.is_some() {
+            println!();
+            println!("Updating milestone...");
+            client
+                .update_issue_milestone(owner, repo, issue_number, resolved_milestone)
+                .await?;
+        }
+
         for change in &self.comments {
             match change {
                 CommentChange::New { filename, body } => {
@@ -324,9 +437,10 @@ impl<'a> ChangeSet<'a> {
                     client
                         .create_comment(owner, repo, issue_number, body)
                         .await?;
-                    // Remove the new comment file after successful creation
-                    let comment_path = storage.dir().join("comments").join(filename);
-                    std::fs::remove_file(&comment_path)?;
+                    if remove_new_comment_files {
+                        let comment_path = storage.dir().join("comments").join(filename);
+                        std::fs::remove_file(&comment_path)?;
+                    }
                 }
                 CommentChange::Updated {
                     database_id,
@@ -395,6 +509,8 @@ mod tests {
             body: None,
             title: None,
             labels: None,
+            assignees: None,
+            milestone: None,
             sub_issues: None,
             parent_issue: None,
             comments: vec![],
@@ -434,6 +550,7 @@ mod tests {
                 current_user: "testuser",
                 edit_others: false,
                 allow_delete: false,
+                retry_started_at: None,
             };
 
             let changeset =
@@ -470,6 +587,7 @@ mod tests {
                 current_user: "testuser",
                 edit_others: false,
                 allow_delete: false,
+                retry_started_at: None,
             };
 
             let changeset =
@@ -486,11 +604,301 @@ mod tests {
                         local_sorted: vec!["local-label".to_string()],
                         remote_sorted: vec!["base-label".to_string()],
                     }),
+                    assignees: None,
+                    milestone: None,
                     sub_issues: None,
                     parent_issue: None,
                     comments: vec![],
                 },
             );
+        }
+
+        #[rstest]
+        fn test_local_assignee_and_milestone_changes_are_retained_against_unchanged_base() {
+            let base_issue = factories::base_issue_content();
+            let mut metadata = IssueMetadata::from(base_issue.frontmatter.clone());
+            metadata.assignees = vec!["sample-assignee".to_string()];
+            metadata.milestone = Some("Sample milestone".to_string());
+            let local_comments = [];
+            let local = LocalState {
+                metadata: &metadata,
+                body: &base_issue.body,
+                comments: &local_comments,
+                base_comments: None,
+            };
+            let remote_issue = factories::issue_with_fields(
+                "Base title",
+                "Base body",
+                &["base-label"],
+                Some(10),
+                &[11],
+            );
+            let remote_comments = [];
+            let remote = RemoteState {
+                issue: &remote_issue,
+                comments: &remote_comments,
+            };
+            let options = DetectOptions {
+                current_user: "testuser",
+                edit_others: false,
+                allow_delete: false,
+                retry_started_at: None,
+            };
+
+            let changeset =
+                ChangeSet::detect_with_base(&local, &remote, &options, Some(&base_issue)).unwrap();
+
+            assert_eq!(
+                changeset,
+                ChangeSet {
+                    body: None,
+                    title: None,
+                    labels: None,
+                    assignees: Some(AssigneeChange {
+                        local: vec!["sample-assignee".to_string()],
+                        remote_sorted: vec![],
+                    }),
+                    milestone: Some(MilestoneChange {
+                        local: Some("Sample milestone".to_string()),
+                        remote: None,
+                    }),
+                    sub_issues: None,
+                    parent_issue: None,
+                    comments: vec![],
+                },
+            );
+        }
+    }
+
+    mod apply_issue_metadata_tests {
+        use super::*;
+        use crate::commands::gh::issue_agent::storage::IssueStorage;
+        use crate::commands::gh::issue_agent::testing::factories;
+        use crate::infra::github::mock::GitHubMockServer;
+        use serde_json::json;
+
+        #[rstest]
+        #[tokio::test]
+        async fn apply_updates_assignees_and_milestone_by_repository_values() {
+            let mock = GitHubMockServer::start().await;
+            let repository = mock.repo("owner", "repo");
+            repository.milestones(&[("Sample milestone", 17)]).await;
+            repository
+                .issue(123)
+                .update_with_body(json!({ "assignees": ["sample-assignee"] }))
+                .await;
+            repository
+                .issue(123)
+                .update_with_body(json!({ "milestone": 17 }))
+                .await;
+            let storage_dir = tempfile::tempdir().unwrap();
+            let storage = IssueStorage::from_dir(storage_dir.path());
+            let changeset = ChangeSet {
+                body: None,
+                title: None,
+                labels: None,
+                assignees: Some(AssigneeChange {
+                    local: vec!["sample-assignee".to_string()],
+                    remote_sorted: vec![],
+                }),
+                milestone: Some(MilestoneChange {
+                    local: Some("Sample milestone".to_string()),
+                    remote: None,
+                }),
+                sub_issues: None,
+                parent_issue: None,
+                comments: vec![],
+            };
+
+            changeset
+                .apply(
+                    &mock.client(),
+                    IssueAddress {
+                        owner: "owner",
+                        repo: "repo",
+                        number: 123,
+                    },
+                    &storage,
+                    &factories::issue(),
+                    true,
+                )
+                .await
+                .unwrap();
+
+            let mut requests = mock
+                .received_requests()
+                .await
+                .into_iter()
+                .map(|request| {
+                    let body = serde_json::from_slice::<serde_json::Value>(&request.body)
+                        .unwrap_or(serde_json::Value::Null);
+                    let mut query = request
+                        .url
+                        .query_pairs()
+                        .map(|(key, value)| format!("{key}={value}"))
+                        .collect::<Vec<_>>();
+                    query.sort();
+                    format!(
+                        "{} {} {} {}",
+                        request.method,
+                        request.url.path(),
+                        query.join("&"),
+                        body,
+                    )
+                })
+                .collect::<Vec<_>>();
+            requests.sort();
+
+            let mut expected = vec![
+                "GET /repos/owner/repo/milestones page=1&per_page=100&state=all null".to_string(),
+                "PATCH /repos/owner/repo/issues/123  {\"assignees\":[\"sample-assignee\"]}"
+                    .to_string(),
+                "PATCH /repos/owner/repo/issues/123  {\"milestone\":17}".to_string(),
+            ];
+            expected.sort();
+
+            assert_eq!(requests, expected);
+        }
+
+        #[rstest]
+        #[tokio::test]
+        async fn apply_rejects_a_missing_milestone_before_updating_other_fields() {
+            let mock = GitHubMockServer::start().await;
+            mock.repo("owner", "repo").milestones(&[]).await;
+            mock.repo("owner", "repo")
+                .issue(123)
+                .update_with_body(json!({ "body": "Updated body" }))
+                .await;
+            let storage_dir = tempfile::tempdir().unwrap();
+            let storage = IssueStorage::from_dir(storage_dir.path());
+            let changeset = ChangeSet {
+                body: Some(BodyChange {
+                    local: "Updated body",
+                    remote: "Current body",
+                }),
+                title: None,
+                labels: None,
+                assignees: None,
+                milestone: Some(MilestoneChange {
+                    local: Some("Missing milestone".to_string()),
+                    remote: None,
+                }),
+                sub_issues: None,
+                parent_issue: None,
+                comments: vec![],
+            };
+
+            let result = changeset
+                .apply(
+                    &mock.client(),
+                    IssueAddress {
+                        owner: "owner",
+                        repo: "repo",
+                        number: 123,
+                    },
+                    &storage,
+                    &factories::issue(),
+                    true,
+                )
+                .await
+                .map_err(|error| error.to_string());
+            let mut requests = mock
+                .received_requests()
+                .await
+                .into_iter()
+                .map(|request| {
+                    let mut query = request
+                        .url
+                        .query_pairs()
+                        .map(|(key, value)| format!("{key}={value}"))
+                        .collect::<Vec<_>>();
+                    query.sort();
+                    format!(
+                        "{} {} {}",
+                        request.method,
+                        request.url.path(),
+                        query.join("&"),
+                    )
+                })
+                .collect::<Vec<_>>();
+            requests.sort();
+
+            assert_eq!(
+                (result, requests),
+                (
+                    Err("Milestone \"Missing milestone\" was not found in owner/repo".to_string()),
+                    vec![
+                        "GET /repos/owner/repo/milestones page=1&per_page=100&state=all"
+                            .to_string(),
+                    ],
+                ),
+            );
+        }
+
+        #[rstest]
+        #[tokio::test]
+        async fn apply_clears_assignees_and_milestone() {
+            let mock = GitHubMockServer::start().await;
+            mock.repo("owner", "repo")
+                .issue(123)
+                .update_with_body(json!({ "assignees": [] }))
+                .await;
+            mock.repo("owner", "repo")
+                .issue(123)
+                .update_with_body(json!({ "milestone": null }))
+                .await;
+            let storage_dir = tempfile::tempdir().unwrap();
+            let storage = IssueStorage::from_dir(storage_dir.path());
+            let changeset = ChangeSet {
+                body: None,
+                title: None,
+                labels: None,
+                assignees: Some(AssigneeChange {
+                    local: vec![],
+                    remote_sorted: vec!["sample-assignee".to_string()],
+                }),
+                milestone: Some(MilestoneChange {
+                    local: None,
+                    remote: Some("Sample milestone".to_string()),
+                }),
+                sub_issues: None,
+                parent_issue: None,
+                comments: vec![],
+            };
+
+            let result = changeset
+                .apply(
+                    &mock.client(),
+                    IssueAddress {
+                        owner: "owner",
+                        repo: "repo",
+                        number: 123,
+                    },
+                    &storage,
+                    &factories::issue(),
+                    true,
+                )
+                .await
+                .map_err(|error| error.to_string());
+            let mut requests = mock
+                .received_requests()
+                .await
+                .into_iter()
+                .map(|request| {
+                    let body = serde_json::from_slice::<serde_json::Value>(&request.body)
+                        .unwrap_or(serde_json::Value::Null);
+                    format!("{} {} {}", request.method, request.url.path(), body,)
+                })
+                .collect::<Vec<_>>();
+            requests.sort();
+
+            let mut expected = vec![
+                "PATCH /repos/owner/repo/issues/123 {\"assignees\":[]}".to_string(),
+                "PATCH /repos/owner/repo/issues/123 {\"milestone\":null}".to_string(),
+            ];
+            expected.sort();
+
+            assert_eq!((result, requests), (Ok(()), expected));
         }
     }
 
@@ -585,6 +993,8 @@ mod tests {
                     local_sorted: vec!["new-label".to_string()],
                     remote_sorted: vec!["old-label".to_string()],
                 }),
+                assignees: None,
+                milestone: None,
                 sub_issues: Some(SubIssueChange {
                     to_add: vec!["owner/repo#10".to_string()],
                     to_remove: vec!["owner/repo#5".to_string()],

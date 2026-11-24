@@ -345,6 +345,7 @@ fn render_parser(
             let resolved_ids = super::queued_prompt::resolve_transcript_messages(
                 &mut messages,
                 input.additions.queued_prompts,
+                input.engine,
             );
             super::queued_prompt::append_unresolved_prompts(
                 &mut messages,
@@ -372,6 +373,7 @@ pub(super) fn render_claude_parser(
     resolved_ids.extend(super::queued_prompt::resolve_transcript_messages(
         &mut messages,
         input.additions.queued_prompts,
+        input.engine,
     ));
     resolved_ids.sort_unstable();
     resolved_ids.dedup();
@@ -449,6 +451,7 @@ mod tests {
                 id: index as i64 + 1,
                 message_id: Some((*message_id).to_owned()),
                 content: "Repeat this request.".to_owned(),
+                action_event_kind: None,
                 attachments: vec![WatchWebQueuedAttachment::File {
                     name: (*filename).to_owned(),
                 }],

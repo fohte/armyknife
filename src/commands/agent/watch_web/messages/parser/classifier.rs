@@ -44,6 +44,31 @@ pub(super) fn classify_inbound(
     text: &str,
     user_marker: Option<&str>,
 ) -> MessageKind {
+    classify_inbound_with_action_tags(record, text, user_marker, true)
+}
+
+pub(super) fn classify_codex_inbound(record: &Value, text: &str) -> MessageKind {
+    let is_hidden_tool_result = record.get("sourceToolAssistantUUID").is_some()
+        || record
+            .get("toolUseResult")
+            .is_some_and(|result| !result.is_null());
+    if !is_hidden_tool_result
+        && super::super::queued_prompt::id_from_content(text)
+            .is_some_and(action_event::is_action_message_id)
+    {
+        return MessageKind::User {
+            text: text.to_owned(),
+        };
+    }
+    classify_inbound_with_action_tags(record, text, None, false)
+}
+
+fn classify_inbound_with_action_tags(
+    record: &Value,
+    text: &str,
+    user_marker: Option<&str>,
+    classify_action_tags: bool,
+) -> MessageKind {
     if record.get("sourceToolAssistantUUID").is_some()
         || record
             .get("toolUseResult")
@@ -83,6 +108,11 @@ pub(super) fn classify_inbound(
 
     if let Some((tag, body)) = tagged {
         if action_event::is_action_event_tag(tag) {
+            if !classify_action_tags {
+                return MessageKind::User {
+                    text: text.to_owned(),
+                };
+            }
             return action_event::event_text(
                 tag,
                 body,
@@ -444,7 +474,7 @@ mod tests {
     use rstest::rstest;
     use serde_json::json;
 
-    use super::{EventKind, MessageKind, classify_inbound};
+    use super::{EventKind, MessageKind, classify_codex_inbound, classify_inbound};
 
     const HUMAN_PEER_ENVELOPE: &str = indoc! {r#"
         <peer-message>
@@ -800,6 +830,21 @@ mod tests {
                 None,
             ),
             MessageKind::Hidden,
+        );
+    }
+
+    #[test]
+    fn codex_action_tag_remains_user_content_until_the_message_id_is_resolved() {
+        let text = super::super::super::queued_prompt::add_id_marker(
+            "<armyknife-vibe-mode-on>watch-web enabled vibe mode.</armyknife-vibe-mode-on>",
+            "armyknife-action:fixture-message-rose",
+        );
+
+        assert_eq!(
+            classify_codex_inbound(&json!({"type":"user"}), &text),
+            MessageKind::User {
+                text: text.to_owned(),
+            },
         );
     }
 

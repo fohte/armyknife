@@ -111,7 +111,7 @@ function getElapsedWindowRatio(window: RateLimitWindow, nowSeconds: number) {
   const elapsedRatio =
     (window.windowSeconds - (window.resetsAt - nowSeconds)) /
     window.windowSeconds
-  if (elapsedRatio < 0.05) return null
+  if (elapsedRatio <= 0) return null
   return elapsedRatio
 }
 

@@ -14,11 +14,21 @@ export function getReviewDocumentFrontmatterEntries(
   if (!isJsonObject(frontmatter)) return null
 
   return Object.entries(frontmatter).filter(([name]) => {
-    if (summary?.kind === 'pr_draft' && name === 'title') return false
     if (summary?.kind === 'issue_body' || summary?.kind === 'review_replies') {
       return (
         name === 'submit' ||
         (summary.kind === 'issue_body' && name === 'milestone')
+      )
+    }
+    if (
+      summary?.kind === 'pr_draft' &&
+      (name === 'title' || name === 'steps')
+    ) {
+      return false
+    }
+    if (name === 'submit') {
+      return (
+        summary?.kind === 'draft' && summary.target.repository !== undefined
       )
     }
     return true

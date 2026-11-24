@@ -382,11 +382,12 @@ a gh issue-agent <command> <issue-number> [options]
 Each pulled issue directory contains `issue.md` for editable issue fields and
 body, `.issue.base.md` as a managed issue snapshot, `.comments.base.json` as a
 snapshot of comment IDs and bodies, and `comments/` for issue comments. When the
-issue snapshot exists, `push` compares title, body, labels, sub-issues, and parent
-issue against it. Remote-only issue field changes are preserved. Without
-`--force`, edits to the same field on both sides with different values stop the
-push. With a comment snapshot, `push` and `diff` compare local comment bodies
-against the snapshot, preserving comments added remotely and remote-only edits.
+issue snapshot exists, `push` compares title, body, labels, assignees, milestone,
+sub-issues, and parent issue against it. Remote-only issue field changes are
+preserved. Without `--force`, edits to the same field on both sides with
+different values stop the push. With a comment snapshot, `push` and `diff` compare
+local comment bodies against the snapshot, preserving comments added remotely and
+remote-only edits.
 Conflicts are reported when both sides changed a comment differently. Deleting
 a comment still requires `--allow-delete`, and editing another user's comment
 still requires `--edit-others`. Use `pull --force` to keep remote values or
@@ -1227,6 +1228,7 @@ Files sent by an agent are served by `GET /api/sessions/{id}/files/{file_id}` on
 - `GET /api/sessions/{id}/review-document` returns a `revision` with the active review document's frontmatter and Markdown body. The session list includes `reviewDocumentCount` for open review markers and `reviewDocumentId` when an editor lock is active. Legacy v2 and unversioned markers remain included because their format cannot distinguish an abandoned review from a queued review.
 - `POST /api/sessions/{id}/review-document/save` with `{"id":"review-id","revision":"revision-from-get","frontmatter":{"approved":true},"body":"Updated Markdown."}` saves edits to the active review document path recorded by the server. Both save and finish return `409` when the document changed since its revision was read.
 - `POST /api/sessions/{id}/review-document/finish` accepts the same payload, saves the edits, then asks the review process to close its editor and run the completion handler. It returns `504` if the review process does not acknowledge the request in time.
+- `POST /api/sessions/{id}/review-document/action` accepts the same payload with an `action` field set to `post_comment`, `create_pr`, `post_replies`, or `update_issue`. It saves the edits, marks the document approved, and runs the corresponding submission immediately. It returns `{"success":true,"revision":"..."}` when the action completes, or `{"success":false,"revision":"...","error":"..."}` when submission fails. Repeating a completed action for the same document returns success without submitting again.
 - `GET /api/sessions/{id}/review-documents` returns all open review documents, with the editor document first. This includes legacy v2 and unversioned markers without a live lock because they may still represent reviews waiting in the queue. Each entry has an `id`, a `kind` (`pr_draft`, `issue_comment`, `issue_body`, `review_replies`, or `draft`), a `target`, and `isEditor`, `canSave`, and `canFinish` flags. Target fields depend on the kind, such as `repository`, `branch`, `issueNumber`, `pullRequestNumber`, `title`, and `threadCount`. Entries may include `startedAt` as the Unix epoch timestamp in milliseconds. A generic `draft` target may include `path`, relative to the session working directory when possible and otherwise containing only the filename.
 - `GET /api/sessions/{id}/review-documents/{document_id}` returns that document's metadata, `revision`, `frontmatter`, and Markdown `body`, including for documents waiting in the review queue.
 - `POST /api/sessions/{id}/review-documents/{document_id}/save` and `/finish` accept the same edit payload as the singular routes. The URL and payload IDs must match, and only the current editor document can be saved or finished. A different current document or unavailable FIFO returns `409`; a missing marker returns `404`.

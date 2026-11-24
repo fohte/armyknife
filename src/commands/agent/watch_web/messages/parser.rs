@@ -117,7 +117,7 @@ pub(in crate::commands::agent::watch_web::messages::parser) fn append_user_text_
                 text: context_free_user_text,
             }
         }
-        _ => classifier::classify_inbound(&serde_json::json!({"type":"user"}), &text, None),
+        _ => classifier::classify_codex_inbound(&serde_json::json!({"type":"user"}), &text),
     };
     append_classification(
         items,

@@ -1,5 +1,131 @@
 # Changelog
 
+## [0.1.896](https://github.com/fohte/armyknife/compare/v0.1.895...v0.1.896) (2026-11-24)
+
+
+### Dependencies
+
+* update rust crate sha2 to v0.11.1 ([#2175](https://github.com/fohte/armyknife/issues/2175)) ([2f2db78](https://github.com/fohte/armyknife/commit/2f2db78493e3fdb3d718b5d28e76dc93ff4297fe))
+
+## [0.1.895](https://github.com/fohte/armyknife/compare/v0.1.894...v0.1.895) (2026-11-24)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show early quota forecasts ([#2192](https://github.com/fohte/armyknife/issues/2192)) ([86ea5ff](https://github.com/fohte/armyknife/commit/86ea5ff3e355290638648923e59101870a524f72))
+
+## [0.1.894](https://github.com/fohte/armyknife/compare/v0.1.893...v0.1.894) (2026-11-24)
+
+
+### Dependencies
+
+* update rust crate serde_json to v1.0.154 ([#2174](https://github.com/fohte/armyknife/issues/2174)) ([dd8a848](https://github.com/fohte/armyknife/commit/dd8a8482a976f287165bfd8ee4668b8047445405))
+
+## [0.1.893](https://github.com/fohte/armyknife/compare/v0.1.892...v0.1.893) (2026-11-24)
+
+
+### Dependencies
+
+* update rust crate toml_edit to v0.25.19 ([#2179](https://github.com/fohte/armyknife/issues/2179)) ([3890abe](https://github.com/fohte/armyknife/commit/3890abe9eb86f3bf12ccc1c49926a7244c0615e3))
+
+## [0.1.892](https://github.com/fohte/armyknife/compare/v0.1.891...v0.1.892) (2026-11-24)
+
+
+### Dependencies
+
+* update rust crate unicode-width to v0.2.3 ([#2181](https://github.com/fohte/armyknife/issues/2181)) ([3a1af83](https://github.com/fohte/armyknife/commit/3a1af83a0626e30b26ad1ea1b0e458b17e1c76c0))
+
+## [0.1.891](https://github.com/fohte/armyknife/compare/v0.1.890...v0.1.891) (2026-11-24)
+
+
+### Dependencies
+
+* update rust crate schemars to v1.2.3 ([#2172](https://github.com/fohte/armyknife/issues/2172)) ([4e3be1b](https://github.com/fohte/armyknife/commit/4e3be1b3195e2988ef7a4b0679561ade47a41cb4))
+
+## [0.1.890](https://github.com/fohte/armyknife/compare/v0.1.889...v0.1.890) (2026-11-24)
+
+
+### Dependencies
+
+* update rust crate notify to v8.2.2 ([#2170](https://github.com/fohte/armyknife/issues/2170)) ([c964fe6](https://github.com/fohte/armyknife/commit/c964fe602f9b2da60ec3ced7b1b27b31e4efb358))
+
+## [0.1.889](https://github.com/fohte/armyknife/compare/v0.1.888...v0.1.889) (2026-11-24)
+
+
+### Bug Fixes
+
+* **palette:** preserve keyboard selection ([#2176](https://github.com/fohte/armyknife/issues/2176)) ([767c812](https://github.com/fohte/armyknife/commit/767c812d8257dd4ac9475b457766fed78ef9e7f1))
+
+## [0.1.888](https://github.com/fohte/armyknife/compare/v0.1.887...v0.1.888) (2026-11-24)
+
+
+### Dependencies
+
+* update rust crate lazy-regex to v3.6.1 ([#891](https://github.com/fohte/armyknife/issues/891)) ([db98566](https://github.com/fohte/armyknife/commit/db985666fbbacc427c99cf03c956387339f203f9))
+
+## [0.1.887](https://github.com/fohte/armyknife/compare/v0.1.886...v0.1.887) (2026-11-24)
+
+
+### Dependencies
+
+* update rust crate clap_complete to v4.6.12 ([#2162](https://github.com/fohte/armyknife/issues/2162)) ([8a7256f](https://github.com/fohte/armyknife/commit/8a7256f3dc8b2152ec0833e67b15bf975becbe83))
+
+## [0.1.886](https://github.com/fohte/armyknife/compare/v0.1.885...v0.1.886) (2026-11-24)
+
+
+### Dependencies
+
+* update rust crate indoc to v2.0.8 ([#2164](https://github.com/fohte/armyknife/issues/2164)) ([0ef2550](https://github.com/fohte/armyknife/commit/0ef25507771f782e2251b806ce70b02cf27f69d0))
+
+## [0.1.885](https://github.com/fohte/armyknife/compare/v0.1.884...v0.1.885) (2026-11-24)
+
+
+### Dependencies
+
+* update rust crate flate2 to v1.1.11 ([#2163](https://github.com/fohte/armyknife/issues/2163)) ([0022d15](https://github.com/fohte/armyknife/commit/0022d15af77d6a4534d5dddc44d9d54341cff685))
+
+## [0.1.884](https://github.com/fohte/armyknife/compare/v0.1.883...v0.1.884) (2026-11-24)
+
+
+### Dependencies
+
+* update rust crate clap to v4.6.8 ([#2160](https://github.com/fohte/armyknife/issues/2160)) ([18b5357](https://github.com/fohte/armyknife/commit/18b53577e31505cedb5d9c121de48d82a1627108))
+
+## [0.1.883](https://github.com/fohte/armyknife/compare/v0.1.882...v0.1.883) (2026-11-24)
+
+
+### Dependencies
+
+* update dependency @fohte/ui to v0.1.8 ([#2155](https://github.com/fohte/armyknife/issues/2155)) ([6a49ef1](https://github.com/fohte/armyknife/commit/6a49ef17afc2490b607b953e9f2adcc177fbce8c))
+
+## [0.1.882](https://github.com/fohte/armyknife/compare/v0.1.881...v0.1.882) (2026-11-24)
+
+
+### Dependencies
+
+* update rust crate termimad to v0.35.5 ([#785](https://github.com/fohte/armyknife/issues/785)) ([0ca825f](https://github.com/fohte/armyknife/commit/0ca825fdcad3561b0a6f12fc7a9369376f7d307e))
+
+## [0.1.881](https://github.com/fohte/armyknife/compare/v0.1.880...v0.1.881) (2026-11-24)
+
+
+### Dependencies
+
+* update rust crate rstest to v0.28.0 ([#902](https://github.com/fohte/armyknife/issues/902)) ([5dd31d6](https://github.com/fohte/armyknife/commit/5dd31d6f6cf5ccc54b8dbcb0f1ecd63542caa3ef))
+
+## [0.1.880](https://github.com/fohte/armyknife/compare/v0.1.879...v0.1.880) (2026-11-24)
+
+
+### Dependencies
+
+* update rust crate regex to v1.13.1 ([#765](https://github.com/fohte/armyknife/issues/765)) ([5ba15cf](https://github.com/fohte/armyknife/commit/5ba15cf90e9673351d4aa2a1f60cbd9478cf5eb8))
+
+## [0.1.879](https://github.com/fohte/armyknife/compare/v0.1.878...v0.1.879) (2026-11-24)
+
+
+### Bug Fixes
+
+* **watch-web:** render Codex events by stored kind ([#2150](https://github.com/fohte/armyknife/issues/2150)) ([a7d738c](https://github.com/fohte/armyknife/commit/a7d738c23170c95fd2c2a7cac898a20b6bcf2ffd))
+
 ## [0.1.878](https://github.com/fohte/armyknife/compare/v0.1.877...v0.1.878) (2026-11-23)
 
 

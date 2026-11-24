@@ -1468,6 +1468,7 @@ mod tests {
             id: 7,
             message_id: Some(message_id.to_owned()),
             content: queued_content.to_owned(),
+            action_event_kind: None,
             attachments: Vec::<WatchWebQueuedAttachment>::new(),
             resolved: false,
             sent_at: Utc.timestamp_opt(1_000, 0).unwrap(),
@@ -1488,6 +1489,7 @@ mod tests {
             super::super::super::queued_prompt::resolve_transcript_messages(
                 &mut messages,
                 &queued_prompts,
+                crate::commands::agent::types::Engine::Claude,
             ),
         );
         resolved_ids.sort_unstable();
@@ -1530,6 +1532,7 @@ mod tests {
             id: 9,
             message_id: Some(message_id.to_owned()),
             content: queued_content.to_owned(),
+            action_event_kind: None,
             attachments: Vec::<WatchWebQueuedAttachment>::new(),
             resolved: false,
             sent_at: Utc.timestamp_opt(1_000, 0).unwrap(),
@@ -1549,6 +1552,7 @@ mod tests {
             super::super::super::queued_prompt::resolve_transcript_messages(
                 &mut messages,
                 &queued_prompts,
+                crate::commands::agent::types::Engine::Claude,
             ),
         );
         resolved_ids.sort_unstable();

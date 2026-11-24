@@ -7,6 +7,7 @@ import type {
   SessionOperation,
   SessionOperationError,
 } from '#session-operation-types'
+import { isReviewDocumentAction } from '#session-operation-types'
 
 let nextMessageOperationId = 0
 
@@ -195,6 +196,17 @@ function requestFor(operation: SessionOperation) {
           body: operation.body,
         },
       }
+    case 'review_document_action':
+      return {
+        path: 'review-document/action',
+        body: {
+          id: operation.id,
+          revision: operation.revision,
+          frontmatter: operation.frontmatter,
+          body: operation.body,
+          action: operation.action,
+        },
+      }
   }
 }
 
@@ -282,6 +294,31 @@ export function createSessionOperation(
         revision,
         frontmatter,
         body,
+      })
+    }
+    case 'review-document/action': {
+      const id = requiredString('id')
+      const revision = requiredString('revision')
+      const body = requiredString('body')
+      const frontmatter = payload['frontmatter']
+      const action = payload['action']
+      if (
+        id === null ||
+        revision === null ||
+        body === null ||
+        !isJsonValue(frontmatter) ||
+        !isReviewDocumentAction(action)
+      ) {
+        return errOperation('Invalid review document action')
+      }
+      return ok<SessionOperation, Error>({
+        type: 'review_document_action',
+        sessionId,
+        id,
+        revision,
+        frontmatter,
+        body,
+        action,
       })
     }
     case 'commands/preview':
@@ -500,13 +537,29 @@ export function submitSessionOperation(operation: SessionOperation) {
         operation.type !== 'command_preview' &&
         operation.type !== 'command_execute' &&
         operation.type !== 'review_document_save' &&
-        operation.type !== 'review_document_finish'
+        operation.type !== 'review_document_finish' &&
+        operation.type !== 'review_document_action'
       )
         return ok<unknown, SessionOperationError>(undefined)
-      return ResultAsync.fromPromise<unknown, SessionOperationError>(
+      const result = ResultAsync.fromPromise<unknown, SessionOperationError>(
         response.json(),
         toError,
       )
+      if (operation.type !== 'review_document_action') return result
+      return result.andThen((value) => {
+        if (
+          !isRecord(value) ||
+          value['success'] !== false ||
+          typeof value['error'] !== 'string'
+        ) {
+          return ok<unknown, SessionOperationError>(value)
+        }
+        const error = new Error(value['error']) as SessionOperationError
+        if (typeof value['revision'] === 'string') {
+          error.revision = value['revision']
+        }
+        return err<unknown, SessionOperationError>(error)
+      })
     },
   )
 }

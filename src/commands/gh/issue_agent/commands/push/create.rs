@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use super::PushArgs;
-use super::changeset::{ChangeSet, DetectOptions, LocalState, RemoteState};
+use super::changeset::{ChangeSet, DetectOptions, IssueAddress, LocalState, RemoteState};
 use crate::commands::gh::issue_agent::commands::common;
 use crate::commands::gh::issue_agent::models::{
     EditableIssueFields, Issue, IssueFrontmatter, IssueMetadata, NewIssue,
@@ -97,6 +97,7 @@ pub async fn run_create_with_client(
         current_user: "",
         edit_others: false,
         allow_delete: false,
+        retry_started_at: None,
     };
     let changeset = ChangeSet::detect(&local_state, &remote_state, &detect_options)?;
 
@@ -124,7 +125,17 @@ pub async fn run_create_with_client(
     let storage = IssueStorage::from_dir(&new_dir);
     if changeset.has_changes() {
         changeset
-            .apply(client, &owner, &repo_name, issue_number, &storage, &created)
+            .apply(
+                client,
+                IssueAddress {
+                    owner: &owner,
+                    repo: &repo_name,
+                    number: issue_number,
+                },
+                &storage,
+                &created,
+                true,
+            )
             .await?;
     }
 
@@ -321,6 +332,7 @@ mod tests {
                 .title("Test Issue")
                 .body("This is the body.\n")
                 .labels(vec!["bug"])
+                .assignees(vec!["testuser"])
                 .create_matching_body(serde_json::json!({
                     "title": "Test Issue",
                     "body": "This is the body.",
@@ -350,7 +362,8 @@ mod tests {
                     title: Test Issue
                     labels:
                     - bug
-                    assignees: []
+                    assignees:
+                    - testuser
                     milestone: null
                     submit: false
                     readonly:

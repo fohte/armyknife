@@ -172,7 +172,8 @@ export function AsyncActionFeedbackProvider({
         outcome.status === 'queued' ||
         outcome.status === 'closed' ||
         outcome.status === 'rewound' ||
-        outcome.status === 'ranCommand'
+        outcome.status === 'ranCommand' ||
+        outcome.status === 'reviewDocumentActionSucceeded'
       ) {
         const timer = setTimeout(() => {
           dismissToast(id)
@@ -206,6 +207,9 @@ export function AsyncActionFeedbackProvider({
           ...(options.command === undefined
             ? {}
             : { command: options.command }),
+          ...(options.reviewDocumentAction === undefined
+            ? {}
+            : { reviewDocumentAction: options.reviewDocumentAction }),
           ...(options.pullRequestNumber === undefined
             ? {}
             : { pullRequestNumber: options.pullRequestNumber }),

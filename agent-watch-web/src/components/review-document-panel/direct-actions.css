@@ -1,0 +1,138 @@
+.review-document-actions.review-document-direct-actions {
+  align-items: stretch;
+  min-height: 0;
+  flex-direction: column;
+  flex-wrap: nowrap;
+  gap: 10px;
+  padding: 10px 18px 10px;
+  border-color: #2a2a2a;
+  background: #0f0f0f;
+}
+
+.review-document-direct-button-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.review-document-direct-actions button {
+  flex: 0 0 auto;
+  height: 30px;
+  min-height: 30px;
+  border-radius: 0;
+  padding: 0 12px;
+  color: #fafafa;
+  background: transparent;
+  font-size: 12px;
+}
+
+.review-document-direct-actions .review-document-save {
+  border: 0;
+  padding: 0 12px;
+  color: #d4d4d8;
+  background: transparent;
+  font-weight: 400;
+}
+
+.review-document-direct-actions .review-document-send-back {
+  margin-left: auto;
+  padding: 0 12px;
+  border-color: #3f3f46;
+  background: transparent;
+  font-weight: 400;
+}
+
+.review-document-direct-actions .review-document-finish {
+  border-color: #fafafa;
+  padding: 0 14px;
+  color: #0a0a0a;
+  background: #fafafa;
+  font-weight: 700;
+}
+
+.review-document-direct-help {
+  margin: 0;
+  color: #8b8b94;
+  font-size: 11.5px;
+}
+
+.review-document-direct-actions .review-document-error {
+  flex: 0 0 auto;
+}
+
+.review-document-pr-stages {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+}
+
+.review-document-pr-stages li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #a1a1aa;
+}
+
+.review-document-pr-stages li[data-current='true'] {
+  color: #fafafa;
+  font-weight: 700;
+}
+
+.review-document-pr-stages li[data-complete='true'] > span:first-child,
+.review-document-pr-stages li[data-current='true'] > span:first-child {
+  border-color: #fafafa;
+}
+
+.review-document-pr-stages li[data-complete='true'] > span:first-child {
+  border-color: #a1a1aa;
+}
+
+.review-document-pr-stages li[data-current='true'] > span:first-child {
+  color: #0a0a0a;
+  background: #fafafa;
+}
+
+.review-document-pr-stages li > span:first-child {
+  box-sizing: border-box;
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #3f3f46;
+  color: #a1a1aa;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.review-document-pr-stages li > span:last-child:not(:first-child) {
+  color: #52525b;
+}
+
+.session-status-panel[data-size='phone'] .review-document-direct-actions {
+  padding-top: 10px;
+  padding-right: 16px;
+  padding-left: 16px;
+  padding-bottom: 24px;
+}
+
+.session-status-panel[data-size='phone']
+  .review-document-direct-button-row
+  button {
+  height: 44px;
+  min-height: 44px;
+  flex: 1 1 auto;
+}
+
+.session-status-panel[data-size='phone']
+  .review-document-direct-button-row
+  .review-document-send-back {
+  margin-left: 0;
+}

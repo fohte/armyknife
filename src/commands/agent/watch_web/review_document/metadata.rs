@@ -40,19 +40,19 @@ pub(super) enum ReviewDocumentKind {
 #[serde(rename_all = "camelCase")]
 pub(super) struct ReviewDocumentTarget {
     #[serde(skip_serializing_if = "Option::is_none")]
-    path: Option<String>,
+    pub(super) path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    repository: Option<String>,
+    pub(super) repository: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    branch: Option<String>,
+    pub(super) branch: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    issue_number: Option<i64>,
+    pub(super) issue_number: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pull_request_number: Option<u64>,
+    pub(super) pull_request_number: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    title: Option<String>,
+    pub(super) title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    thread_count: Option<usize>,
+    pub(super) thread_count: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -91,7 +91,7 @@ pub(super) fn summarize(
     }
 }
 
-fn classify(
+pub(super) fn classify(
     path: &Path,
     roots: &ReviewDocumentRoots,
     session_cwd: &Path,

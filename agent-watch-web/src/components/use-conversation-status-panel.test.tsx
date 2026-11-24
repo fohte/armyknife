@@ -710,7 +710,7 @@ it('saves the edited document and sends the same edits before finishing review',
         'Saved',
   )
   await act(async () => {
-    await page.getByRole('button', { name: 'Finish review' }).click()
+    await page.getByRole('button', { name: 'Finish' }).click()
   })
   await waitForState(() => requests.length === 3)
 
@@ -743,9 +743,79 @@ it('saves the edited document and sends the same edits before finishing review',
   ])
 })
 
+it('sends new issue approval through the existing review finish API', async () => {
+  const requests: { url: string; method: string; body: unknown }[] = []
+  const fetcher = vi.fn<typeof fetch>((input, init) => {
+    const url = requestUrl(input)
+    const method = init?.method ?? 'GET'
+    const body =
+      typeof init?.body === 'string' ? (JSON.parse(init.body) as unknown) : null
+    requests.push({ url, method, body })
+    return Promise.resolve(
+      Response.json(
+        method === 'GET'
+          ? {
+              id: 'fixture-new-issue',
+              revision: 'fixture-revision-a',
+              frontmatter: { title: 'Fixture issue title', submit: false },
+              body: 'Fixture issue body.',
+            }
+          : { success: true, revision: 'fixture-revision-b' },
+      ),
+    )
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  act(() => {
+    root?.render(
+      <StatusPanelHarness
+        currentSession={{ ...session, reviewDocumentId: 'fixture-new-issue' }}
+        reviewDocumentSummaries={[
+          {
+            id: 'fixture-new-issue',
+            kind: 'draft',
+            target: { repository: 'sample-owner/sample-repository' },
+            isEditor: true,
+            canSave: true,
+            canFinish: true,
+          },
+        ]}
+        statusPanelOpen
+      />,
+    )
+  })
+  await waitForState(
+    () => container.querySelector('.review-document-body') !== null,
+  )
+
+  await act(async () => {
+    await page.getByRole('checkbox', { name: 'submit' }).click()
+    await page.getByRole('button', { name: 'Finish' }).click()
+  })
+  await waitForState(() => requests.length === 2)
+
+  expect(requests).toEqual([
+    {
+      url: '/api/sessions/fixture-session/review-documents/fixture-new-issue',
+      method: 'GET',
+      body: null,
+    },
+    {
+      url: '/api/sessions/fixture-session/review-document/finish',
+      method: 'POST',
+      body: {
+        id: 'fixture-new-issue',
+        revision: 'fixture-revision-a',
+        frontmatter: { title: 'Fixture issue title', submit: true },
+        body: 'Fixture issue body.',
+      },
+    },
+  ])
+})
+
 it.each([
   { action: 'save', button: 'Save' },
-  { action: 'finish', button: 'Finish review' },
+  { action: 'finish', button: 'Finish' },
 ])(
   'shows the reload instruction and keeps edits after a $action conflict',
   async ({ action, button }) => {
