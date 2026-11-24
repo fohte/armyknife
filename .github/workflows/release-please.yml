@@ -68,12 +68,12 @@ jobs:
             exit 0
           fi
 
-          BRANCH_FILES=$(gh api --paginate --slurp \
+          BRANCH_FILES=$(gh api --paginate \
             "repos/${{ github.repository }}/compare/$BASE_SHA...$CURRENT_BASE_SHA" \
-            --jq '[.[].files[]?.filename] | unique')
-          PR_FILES=$(gh api --paginate --slurp \
+            | jq -s '[.[].files[]?.filename] | unique')
+          PR_FILES=$(gh api --paginate \
             "repos/${{ github.repository }}/pulls/$PR_NUMBER/files?per_page=100" \
-            --jq '[.[][] | .filename] | unique')
+            | jq -s '[.[][] | .filename] | unique')
           OVERLAP=$(jq -cn \
             --argjson branch_files "$BRANCH_FILES" \
             --argjson pr_files "$PR_FILES" \
