@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.911](https://github.com/fohte/armyknife/compare/v0.1.910...v0.1.911) (2026-11-24)
+
+
+### Dependencies
+
+* update rust crate zstd to v0.14.4 ([#2232](https://github.com/fohte/armyknife/issues/2232)) ([d6f3aab](https://github.com/fohte/armyknife/commit/d6f3aabbdeda4f5c774dac599d3fc4b9b70ca6f5))
+
 ## [0.1.910](https://github.com/fohte/armyknife/compare/v0.1.909...v0.1.910) (2026-11-24)
 
 
