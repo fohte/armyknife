@@ -3601,12 +3601,19 @@ mod tests {
     }
 
     #[rstest]
-    #[case::main_stop_failure(HookEvent::StopFailure, None, true)]
-    #[case::subagent_stop(HookEvent::Stop, Some("agent-fixture"), false)]
+    #[case::main_stop_failure(HookEvent::StopFailure, None, None, true)]
+    #[case::subagent_stop(HookEvent::Stop, Some("agent-fixture"), None, false)]
+    #[case::non_question_permission_request(
+        HookEvent::PermissionRequest,
+        None,
+        Some("Bash"),
+        false
+    )]
     fn response_activity_tracks_main_thread_responses_only(
         session_activity_sessions_dir: tempfile::TempDir,
         #[case] event: HookEvent,
         #[case] agent_id: Option<&str>,
+        #[case] tool_name: Option<&str>,
         #[case] should_record_response: bool,
     ) -> Result<()> {
         let sessions_dir = session_activity_sessions_dir.path();
@@ -3624,6 +3631,7 @@ mod tests {
                 "session_id": "test-123",
                 "cwd": "/tmp/test",
                 "agent_id": agent_id,
+            "tool_name": tool_name,
             }))?,
             sessions_dir,
             &SideEffects::none(),
