@@ -302,6 +302,8 @@ mod tests {
         ReviewThread {
             id: Some(node_id.to_string()),
             is_resolved,
+            diff_side: None,
+            start_diff_side: None,
             comments: CommentsNode { nodes: comments },
         }
     }

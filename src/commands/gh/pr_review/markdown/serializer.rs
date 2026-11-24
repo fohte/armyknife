@@ -215,13 +215,21 @@ fn serialize_thread(
             start_line: root.start_line,
             original_line: root.original_line,
             original_start_line: root.original_start_line,
+            diff_side: thread.diff_side,
+            start_diff_side: thread.start_diff_side,
         });
         if compressed.parse_failed {
             parse_failed_threads.push(location.clone());
         }
         output.push_str("<!-- diff -->\n");
         output.push_str("```diff\n");
-        output.push_str(&compressed.text);
+        for (index, line) in compressed.text.lines().enumerate() {
+            if compressed.highlighted_lines.contains(&index) {
+                output.push('>');
+            }
+            output.push_str(line);
+            output.push('\n');
+        }
         output.push_str("```\n");
         output.push_str("<!-- /diff -->\n");
     }
@@ -248,9 +256,7 @@ fn serialize_thread(
         && !draft.trim().is_empty()
     {
         output.push_str(draft);
-        if !draft.ends_with('\n') {
-            output.push('\n');
-        }
+        output.push('\n');
     }
 
     output
@@ -307,6 +313,8 @@ mod tests {
         ReviewThread {
             id: node_id.map(|s| s.to_string()),
             is_resolved,
+            diff_side: None,
+            start_diff_side: None,
             comments: CommentsNode { nodes: comments },
         }
     }
@@ -370,7 +378,7 @@ mod tests {
             @@ -40,3 +40,3 @@
              context
             -old
-            +new
+            >+new
             ```
             <!-- /diff -->
             <!-- comment: @reviewer 2024-01-15T10:30:00Z -->
@@ -488,6 +496,7 @@ mod tests {
             Fix this
             <!-- /comment -->
             My draft reply
+
         "#};
         assert_eq!(result, expected);
     }
@@ -587,7 +596,7 @@ mod tests {
              line 17
              line 18
              line 19
-             line 20
+            > line 20
              line 21
              line 22
              line 23

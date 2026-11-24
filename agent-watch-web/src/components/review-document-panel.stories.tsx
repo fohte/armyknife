@@ -18,6 +18,19 @@ const issueComment: ReviewDocumentSummary = {
   canFinish: true,
 }
 
+const issueBody: ReviewDocumentSummary = {
+  ...issueComment,
+  id: 'fixture-issue-body',
+  kind: 'issue_body',
+  target: {
+    repository: 'example/web-app',
+    issueNumber: 418,
+    title: '設定画面から再送の上限を変えられるようにする',
+  },
+  startedAt: Date.now() - 60_000,
+  isEditor: true,
+}
+
 const prDraft: ReviewDocumentSummary = {
   id: 'fixture-pr-draft',
   kind: 'pr_draft',
@@ -59,12 +72,6 @@ const editableReviewReplies: ReviewDocumentSummary = {
   isEditor: true,
   canSave: true,
   canFinish: true,
-}
-
-const issueBody: ReviewDocumentSummary = {
-  ...issueComment,
-  id: 'fixture-issue-body',
-  kind: 'issue_body',
 }
 
 const newIssueDraft: ReviewDocumentSummary = {
@@ -135,7 +142,7 @@ const desktopViewport = (Story: ComponentType) => (
   <div
     className="session-status-panel"
     data-size="desktop"
-    style={{ width: '640px', height: '720px', display: 'flex' }}
+    style={{ width: '640px', height: '900px', display: 'flex' }}
   >
     <Story />
   </div>
@@ -220,12 +227,95 @@ const issueBodyActionStoryArgs = {
 } satisfies Story['args']
 
 export const EditingTheReviewDocument: Story = {
-  name: 'One issue comment opens in preview with its metadata',
+  name: 'The editor shows an issue comment as raw Markdown',
   args: {
     summary: issueComment,
     summaries: [issueComment],
+    frontmatter: null,
+    view: 'edit',
+    body: `<!-- author: sample-reviewer -->\n<!-- createdAt: 2026-11-24T02:40:00Z -->\n<!-- updatedAt: 2026-11-24T02:40:00Z -->\n<!-- id: comment-node -->\n<!-- databaseId: 506 -->\n\nCould we retry the pending delivery after a short delay?`,
   },
   decorators: [desktopViewport],
+}
+
+export const IssueBodyShowsTypedMetadata: Story = {
+  name: 'An issue draft shows its title and fields above the body',
+  args: {
+    summary: issueBody,
+    summaries: [issueBody],
+    frontmatter: {
+      title: '設定画面から再送の上限を変えられるようにする',
+      labels: ['enhancement', 'settings'],
+      assignees: ['sample-assignee'],
+      parentIssue: 'example/web-app#400',
+      subIssues: ['example/web-app#419', 'example/web-app#420'],
+      submit: false,
+      readonly: { number: 418, author: 'sample-reporter' },
+    },
+    body: issueBodyText,
+  },
+  decorators: [desktopViewport],
+}
+
+export const IssueBodyEditShowsMilestone: Story = {
+  name: 'An issue body keeps its milestone visible in Edit mode',
+  args: {
+    summary: issueBody,
+    summaries: [issueBody],
+    frontmatter: {
+      title: '設定画面から再送の上限を変えられるようにする',
+      labels: ['enhancement', 'settings'],
+      assignees: ['sample-assignee'],
+      parentIssue: 'example/web-app#400',
+      subIssues: ['example/web-app#419', 'example/web-app#420'],
+      milestone: '2026 Q4',
+      submit: false,
+      readonly: { number: 418, author: 'sample-reporter' },
+    },
+    body: issueBodyText,
+    view: 'edit',
+  },
+  decorators: [desktopViewport],
+}
+
+export const MobileIssueBodyShowsTypedMetadata: Story = {
+  name: 'The mobile issue preview shows its title and fields above the body',
+  args: {
+    ...IssueBodyShowsTypedMetadata.args,
+    isMobile: true,
+  },
+  decorators: [phoneViewport],
+}
+
+export const IssueCommentShowsTheCommentBody: Story = {
+  name: 'An issue comment shows its rendered body',
+  args: {
+    summary: issueComment,
+    summaries: [issueComment],
+    frontmatter: null,
+    body: `<!-- author: sample-reviewer -->\n<!-- createdAt: 2026-11-24T02:40:00Z -->\n<!-- updatedAt: 2026-11-24T02:40:00Z -->\n<!-- id: comment-node -->\n<!-- databaseId: 506 -->\n\n再現手順を足します。\n\n· 1. 送信先を応答の遅いサーバーにする\n\n· 2. 通知を 10 件続けて送る\n\n· 3. 4 件目から届かない`,
+  },
+  decorators: [desktopViewport],
+}
+
+export const ReviewRepliesShowSeveralThreads: Story = {
+  name: 'Two review threads show their diffs, comments, and replies',
+  args: {
+    summary: editableReviewReplies,
+    summaries: [editableReviewReplies],
+    frontmatter: { submit: false },
+    body: `<!-- thread: THREAD_sample_1 path: src/preflight.ts:42 author: @sample-assignee -->\n- [ ] resolve\n<!-- diff -->\n\`\`\`diff\n@@ -39,5 +39,7 @@ export function preflight(msg) {\n   const target = msg.target;\n-  if (!target) return fail('no target');\n>+  if (target == null) {\n+    return fail('no target');\n+  }\n\`\`\`\n<!-- /diff -->\n<!-- comment: @sample-assignee 2026-01-15T10:30:00Z -->\nこの判定は null も通しますか?\n<!-- /comment -->\n通しません。手前で弾いています。\n\n<!-- thread: THREAD_sample_2 path: src/preflight.ts:57 author: @sample-assignee -->\n- [x] resolve\n<!-- diff -->\n\`\`\`diff\n@@ -55,4 +57,6 @@ export function preflight(msg) {\n   } catch (e) {\n>+    log.warn('preflight failed', e);\n+    return fail(String(e));\n   }\n\`\`\`\n<!-- /diff -->\n<!-- comment: @sample-assignee 2026-01-15T10:34:00Z -->\n失敗したときのログはどこに出ますか?\n<!-- /comment -->\n<!-- comment: @ren-o 2026-01-15T11:02:00Z -->\n送信ログと同じ場所だと追いやすいです。\n<!-- /comment -->\n送信ログに理由と一緒に出します。`,
+  },
+  decorators: [desktopViewport],
+}
+
+export const MobileReviewRepliesShowSeveralThreads: Story = {
+  name: 'The mobile preview shows multiple review thread cards',
+  args: {
+    ...ReviewRepliesShowSeveralThreads.args,
+    isMobile: true,
+  },
+  decorators: [phoneViewport],
 }
 
 export const MultipleDraftsCanBeSelected: Story = {
@@ -233,6 +323,7 @@ export const MultipleDraftsCanBeSelected: Story = {
   args: {
     summary: issueComment,
     summaries: [issueComment, waitingPrDraft, reviewReplies, queuedDraft],
+    frontmatter: null,
   },
   decorators: [desktopViewport],
 }

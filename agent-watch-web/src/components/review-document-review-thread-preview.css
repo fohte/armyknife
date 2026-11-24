@@ -1,0 +1,188 @@
+.review-document-review-threads {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.review-document-thread {
+  overflow: hidden;
+  border: 1px solid #2a2a2a;
+  background: #0a0a0a;
+}
+
+.review-document-thread-header {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px 4px 10px;
+  border-bottom: 1px solid #1f1f1f;
+  color: #a1a1aa;
+}
+
+.review-document-thread-path {
+  min-width: 0;
+  overflow: hidden;
+  color: #fafafa;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-document-thread-resolve {
+  display: inline-flex;
+  min-height: 32px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  padding: 0 6px;
+  color: #d4d4d8;
+  font-size: 12px;
+}
+
+.review-document-thread-resolve input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: #fafafa;
+}
+
+.review-document-thread-diff {
+  overflow: hidden;
+  border-bottom: 1px solid #1f1f1f;
+  padding: 4px 0;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+
+.review-document-diff-line {
+  overflow: hidden;
+  padding: 0 10px 0 8px;
+  border-left: 2px solid transparent;
+  text-overflow: ellipsis;
+  white-space: pre;
+}
+
+.review-document-diff-line--marker {
+  color: #8b8b94;
+}
+
+.review-document-diff-line--context {
+  color: #d4d4d8;
+}
+
+.review-document-diff-line--added {
+  border-left-color: #22c55e;
+  background: rgb(34 197 94 / 10%);
+  color: #86efac;
+}
+
+.review-document-diff-line--removed {
+  border-left-color: #ef4444;
+  background: rgb(239 68 68 / 10%);
+  color: #fca5a5;
+}
+
+.review-document-diff-line--focused {
+  border-left-color: #fbbf24;
+  background: #33290a;
+  color: #bbf7d0;
+}
+
+.review-document-thread-content {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+}
+
+.review-document-thread-comment {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.review-document-thread-comment-card {
+  min-width: 0;
+  flex: 1 1 auto;
+  border: 1px solid #2a2a2a;
+  padding: 6px 10px;
+  background: #161616;
+}
+
+.review-document-thread-comment-meta {
+  margin-bottom: 2px;
+}
+
+.review-document-thread-comment-body {
+  color: #d4d4d8;
+  font-size: 13px;
+}
+
+.review-document-thread-comment-body p {
+  margin: 0 0 8px;
+}
+
+.review-document-thread-comment-body p:last-child {
+  margin-bottom: 0;
+}
+
+.review-document-thread-reply {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-left: 32px;
+  color: #a1a1aa;
+  font-size: 12px;
+}
+
+.review-document-thread-reply textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 32px;
+  border: 1px solid #3f3f46;
+  border-radius: 0;
+  padding: 4px 8px;
+  color: #fafafa;
+  background: #0f0f0f;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: normal;
+  resize: none;
+}
+
+.review-document-thread-reply textarea:disabled {
+  opacity: 0.6;
+}
+
+.session-status-panel[data-size='phone'] .review-document-thread-resolve {
+  min-height: 44px;
+  font-size: 12.5px;
+}
+
+.session-status-panel[data-size='phone'] .review-document-thread-resolve input {
+  width: 20px;
+  height: 20px;
+}
+
+.session-status-panel[data-size='phone']
+  .review-document-thread-reply
+  textarea {
+  min-height: 40px;
+  font-size: 16px;
+}
+
+.session-status-panel[data-size='phone'] .review-document-thread-diff {
+  font-size: 12px;
+}
+
+.session-status-panel[data-size='phone'] .review-document-thread-comment-body {
+  font-size: 15px;
+}
+
+.session-status-panel[data-size='phone'] .review-document-thread-reply {
+  font-size: 12.5px;
+}
