@@ -276,6 +276,13 @@ fn prepare_existing_thread_actions(
 }
 
 pub async fn run_push(args: &ReplyPushArgs) -> anyhow::Result<()> {
+    run_push_with_retry(args, None).await
+}
+
+pub(super) async fn run_push_with_retry(
+    args: &ReplyPushArgs,
+    retry_started_at: Option<chrono::DateTime<chrono::Utc>>,
+) -> anyhow::Result<()> {
     let (owner, repo) = git::get_repo_owner_and_name(args.repo.as_deref())?;
 
     run_push_with_access(
@@ -283,7 +290,7 @@ pub async fn run_push(args: &ReplyPushArgs) -> anyhow::Result<()> {
         &owner,
         &repo,
         |owner, repo| ensure_no_review_access(is_vibe_enabled, load_config, owner, repo),
-        || run_push_after_access(args, &owner, &repo),
+        || run_push_after_access(args, &owner, &repo, retry_started_at),
     )
     .await
 }
@@ -292,6 +299,7 @@ async fn run_push_after_access(
     args: &ReplyPushArgs,
     owner: &str,
     repo: &str,
+    retry_started_at: Option<chrono::DateTime<chrono::Utc>>,
 ) -> anyhow::Result<()> {
     let storage = ThreadStorage::new(owner, repo, args.pr_number);
 
@@ -306,8 +314,24 @@ async fn run_push_after_access(
     // Fetch latest remote state
     let remote = fetch_pr_data(owner, repo, args.pr_number, true).await?;
 
+    let current_user = if local
+        .threads
+        .iter()
+        .any(|thread| thread.draft_reply.is_some())
+    {
+        Some(GitHubClient::get()?.get_current_user().await?)
+    } else {
+        None
+    };
+
     // Detect changes
-    let changeset = ReplyChangeSet::detect(&local, &remote, &local.frontmatter.pulled_at);
+    let changeset = ReplyChangeSet::detect_with_retry(
+        &local,
+        &remote,
+        &local.frontmatter.pulled_at,
+        current_user.as_deref().unwrap_or_default(),
+        retry_started_at,
+    );
 
     // Check for conflicts
     if changeset.has_conflicts() && !args.force {

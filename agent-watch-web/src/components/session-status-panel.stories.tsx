@@ -103,6 +103,30 @@ const reviewStatusViewport = (Story: ComponentType) => (
   </div>
 )
 
+const translationApprovalTabs = (size: 'desktop' | 'phone') =>
+  statusTabs({ size })
+    .filter((tab) => tab.id !== 'web-ui-crit')
+    .map((tab) =>
+      tab.id === 'review-document'
+        ? {
+            ...tab,
+            count: 1,
+            content: (
+              <ReviewDocumentPanel
+                summary={statusPrDraft}
+                summaries={[statusPrDraft]}
+                frontmatter={{
+                  title: '再送の上限を設定で変えられるようにする',
+                  steps: { 'ready-for-translation': false, submit: false },
+                }}
+                body={prDraftBody}
+                view="edit"
+              />
+            ),
+          }
+        : tab,
+    )
+
 const meta = {
   component: SessionStatusPanel,
   args: {
@@ -721,6 +745,15 @@ export const StatusReview: Story = {
   name: 'The desktop status panel shows the Review tab.',
 }
 
+export const StatusReviewTranslationApproval: Story = {
+  name: 'The desktop Review tab shows a PR draft awaiting translation approval.',
+  args: {
+    tabs: translationApprovalTabs('desktop'),
+    activeTabId: 'review-document',
+  },
+  decorators: [desktopStatusViewport],
+}
+
 export const StatusReviewPreview: Story = {
   ...desktopStatusStory('review-document', { reviewView: 'preview' }),
   name: 'The desktop status panel shows the Review preview.',
@@ -790,6 +823,18 @@ export const PhoneStatusReview: Story = {
     size: 'phone',
     sessionTitle: '通知の信頼性を上げる',
     tabs: phoneStatusTabs,
+    activeTabId: 'review-document',
+  },
+  decorators: [phoneStatusViewport],
+  parameters: phoneStatusStoryParameters,
+}
+
+export const PhoneStatusReviewTranslationApproval: Story = {
+  name: 'The phone Review tab shows a PR draft awaiting translation approval.',
+  args: {
+    size: 'phone',
+    sessionTitle: '通知の信頼性を上げる',
+    tabs: translationApprovalTabs('phone'),
     activeTabId: 'review-document',
   },
   decorators: [phoneStatusViewport],

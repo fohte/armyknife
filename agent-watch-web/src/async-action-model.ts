@@ -1,6 +1,9 @@
 import type { CloseWorktreeChecks } from '#session-operation-types'
 
 export type AsyncActionStatus =
+  | 'reviewDocumentActionRunning'
+  | 'reviewDocumentActionSucceeded'
+  | 'reviewDocumentActionFailed'
   | 'runningCommand'
   | 'ranCommand'
   | 'commandFailed'
@@ -21,9 +24,11 @@ export type AsyncAction = {
   id: number
   sessionId: string
   sessionTitle: string
-  kind: 'merge' | 'close' | 'command' | 'rewind'
+  kind: 'merge' | 'close' | 'command' | 'rewind' | 'review_document'
   status: AsyncActionStatus
   command?: string
+  reviewDocumentAction?:
+    'Post comment' | 'Create PR' | 'Post replies' | 'Update issue'
   commandOutputIndex?: number
   exitCode?: number
   pullRequestNumber?: number
@@ -39,6 +44,8 @@ export type AsyncAction = {
 }
 
 export type AsyncActionOutcome =
+  | { status: 'reviewDocumentActionSucceeded' }
+  | { status: 'reviewDocumentActionFailed'; error: string }
   | {
       status: 'ranCommand' | 'commandTimedOut'
       commandOutputIndex?: number
@@ -58,10 +65,11 @@ export type AsyncActionOutcome =
     }
 
 export type StartAsyncActionOptions = {
-  kind: 'merge' | 'close' | 'command' | 'rewind'
+  kind: 'merge' | 'close' | 'command' | 'rewind' | 'review_document'
   sessionId: string
   sessionTitle: string
   command?: string
+  reviewDocumentAction?: AsyncAction['reviewDocumentAction']
   pullRequestNumber?: number
   pullRequestOwner?: string
   pullRequestRepo?: string
@@ -79,7 +87,8 @@ export function isAsyncActionFailureStatus(status: AsyncActionStatus) {
     status === 'closeFailed' ||
     status === 'rewindFailed' ||
     status === 'commandFailed' ||
-    status === 'commandTimedOut'
+    status === 'commandTimedOut' ||
+    status === 'reviewDocumentActionFailed'
   )
 }
 
@@ -88,7 +97,8 @@ export function isAsyncActionRunningStatus(status: AsyncActionStatus) {
     status === 'merging' ||
     status === 'closing' ||
     status === 'rewinding' ||
-    status === 'runningCommand'
+    status === 'runningCommand' ||
+    status === 'reviewDocumentActionRunning'
   )
 }
 
@@ -107,5 +117,7 @@ export function runningStatusFor(kind: AsyncAction['kind']): AsyncActionStatus {
       return 'runningCommand'
     case 'rewind':
       return 'rewinding'
+    case 'review_document':
+      return 'reviewDocumentActionRunning'
   }
 }

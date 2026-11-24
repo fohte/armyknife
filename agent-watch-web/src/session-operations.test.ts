@@ -470,6 +470,27 @@ const requests: {
     response: { success: true, revision: 'next-fixture-revision' },
   },
   {
+    name: 'post an approved review comment',
+    operation: {
+      type: 'review_document_action',
+      sessionId: 'test-session',
+      id: 'fixture-review',
+      revision: 'fixture-revision',
+      frontmatter: { submit: false },
+      body: 'Fixture comment',
+      action: 'post_comment',
+    },
+    path: 'review-document/action',
+    body: {
+      id: 'fixture-review',
+      revision: 'fixture-revision',
+      frontmatter: { submit: false },
+      body: 'Fixture comment',
+      action: 'post_comment',
+    },
+    response: { success: true, revision: 'next-fixture-revision' },
+  },
+  {
     name: 'merge pull request',
     operation: {
       type: 'merge',
@@ -755,6 +776,26 @@ const operationFactories: [
     },
   ],
   [
+    'post an approved review comment',
+    'review-document/action',
+    {
+      id: 'fixture-review',
+      revision: 'fixture-revision',
+      frontmatter: { submit: false },
+      body: 'Fixture comment',
+      action: 'post_comment',
+    },
+    {
+      type: 'review_document_action',
+      sessionId: session.id,
+      id: 'fixture-review',
+      revision: 'fixture-revision',
+      frontmatter: { submit: false },
+      body: 'Fixture comment',
+      action: 'post_comment',
+    },
+  ],
+  [
     'rewind conversation',
     'rewind',
     { messageId: 'fixture-user-message', mode: 'conversation' },
@@ -924,6 +965,44 @@ it.each(requests.filter(({ response }) => response !== undefined))(
     expect(actual).toEqual(testCase.response)
   },
 )
+
+it('returns a direct review action failure with its updated revision', async () => {
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+    Response.json({
+      success: false,
+      error: 'The example comment could not be posted.',
+      revision: 'fixture-updated-revision',
+    }),
+  )
+  vi.stubGlobal('fetch', fetchMock)
+
+  const result = await submitSessionOperation({
+    type: 'review_document_action',
+    sessionId: session.id,
+    id: 'fixture-review-document',
+    revision: 'fixture-original-revision',
+    frontmatter: { submit: true },
+    body: 'Example comment',
+    action: 'post_comment',
+  })
+  const actual = result.match(
+    (value) => ({ type: 'success' as const, value }),
+    (error) => ({
+      type: 'error' as const,
+      message: error.message,
+      revision:
+        'revision' in error && typeof error.revision === 'string'
+          ? error.revision
+          : null,
+    }),
+  )
+
+  expect(actual).toEqual({
+    type: 'error',
+    message: 'The example comment could not be posted.',
+    revision: 'fixture-updated-revision',
+  })
+})
 
 const sessionReducerCases: [
   string,

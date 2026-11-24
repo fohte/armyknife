@@ -1,6 +1,6 @@
 use crate::commands::gh::pr_review::error::PrReviewError;
 use crate::commands::gh::pr_review::markdown::ParsedThreadsFile;
-use crate::commands::gh::pr_review::models::{PrData, ReviewThread};
+use crate::commands::gh::pr_review::models::{Comment, PrData, ReviewThread};
 use crate::infra::github::GitHubClient;
 
 /// An action to apply to GitHub during push.
@@ -34,7 +34,23 @@ pub struct ReplyChangeSet {
 
 impl ReplyChangeSet {
     /// Detect changes between local parsed data and remote state.
-    pub fn detect(local: &ParsedThreadsFile, remote: &PrData, pulled_at: &str) -> Self {
+    #[cfg(test)]
+    pub fn detect(
+        local: &ParsedThreadsFile,
+        remote: &PrData,
+        pulled_at: &str,
+        current_user: &str,
+    ) -> Self {
+        Self::detect_with_retry(local, remote, pulled_at, current_user, None)
+    }
+
+    pub fn detect_with_retry(
+        local: &ParsedThreadsFile,
+        remote: &PrData,
+        pulled_at: &str,
+        current_user: &str,
+        retry_started_at: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Self {
         let mut actions = Vec::new();
         let mut conflicts = Vec::new();
 
@@ -52,8 +68,13 @@ impl ReplyChangeSet {
             let action_start = actions.len();
 
             // Detect draft reply
+            // A retry can find the reply on GitHub while the local draft is still unchanged.
             if let Some(draft) = &local_thread.draft_reply
                 && let Some(root) = remote_thread.root_comment()
+                && !remote_thread
+                    .replies()
+                    .iter()
+                    .any(|reply| is_retry_reply(reply, draft, current_user, retry_started_at))
             {
                 actions.push(ReplyAction::PostReply {
                     thread_id: local_thread.thread_id.clone(),
@@ -74,7 +95,15 @@ impl ReplyChangeSet {
             }
 
             // New comments matter only when this thread has an action to apply.
-            if actions.len() > action_start && has_new_comments_since(remote_thread, pulled_at) {
+            if actions.len() > action_start
+                && has_new_comments_since(
+                    remote_thread,
+                    pulled_at,
+                    local_thread.draft_reply.as_deref(),
+                    current_user,
+                    retry_started_at,
+                )
+            {
                 conflicts.push(ThreadConflict {
                     thread_id: local_thread.thread_id.clone(),
                     path: local_thread.path.clone(),
@@ -194,12 +223,36 @@ impl ReplyChangeSet {
 ///
 /// Uses `chrono::DateTime` parsing to handle format differences (e.g.,
 /// fractional seconds) that would break lexicographic string comparison.
-fn has_new_comments_since(thread: &ReviewThread, pulled_at: &str) -> bool {
+fn is_retry_reply(
+    reply: &Comment,
+    draft: &str,
+    current_user: &str,
+    retry_started_at: Option<chrono::DateTime<chrono::Utc>>,
+) -> bool {
+    reply.reply_to.is_some()
+        && reply.body == draft
+        && reply.author_login() == current_user
+        && retry_started_at.is_some_and(|started_at| {
+            chrono::DateTime::parse_from_rfc3339(&reply.created_at)
+                .is_ok_and(|created_at| created_at >= started_at)
+        })
+}
+
+fn has_new_comments_since(
+    thread: &ReviewThread,
+    pulled_at: &str,
+    retry_reply_body: Option<&str>,
+    current_user: &str,
+    retry_started_at: Option<chrono::DateTime<chrono::Utc>>,
+) -> bool {
     let Ok(pulled_at_dt) = chrono::DateTime::parse_from_rfc3339(pulled_at) else {
         return false;
     };
     thread.comments.nodes.iter().any(|c| {
-        chrono::DateTime::parse_from_rfc3339(&c.created_at).is_ok_and(|dt| dt > pulled_at_dt)
+        let is_retry_reply = retry_reply_body
+            .is_some_and(|body| is_retry_reply(c, body, current_user, retry_started_at));
+        !is_retry_reply
+            && chrono::DateTime::parse_from_rfc3339(&c.created_at).is_ok_and(|dt| dt > pulled_at_dt)
     })
 }
 
@@ -232,6 +285,13 @@ mod tests {
             reply_to: None,
             pull_request_review: Some(PullRequestReview { database_id: 100 }),
         }
+    }
+
+    fn make_reply(id: i64, author: &str, created_at: &str, body: &str) -> Comment {
+        let mut comment = make_comment(id, author, created_at);
+        comment.body = body.to_string();
+        comment.reply_to = Some(crate::commands::gh::pr_review::models::comment::ReplyTo {});
+        comment
     }
 
     fn make_remote_thread(
@@ -285,7 +345,7 @@ mod tests {
             )],
         };
 
-        let changeset = ReplyChangeSet::detect(&local, &remote, "2024-01-15T10:00:00Z");
+        let changeset = ReplyChangeSet::detect(&local, &remote, "2024-01-15T10:00:00Z", "user");
         assert!(!changeset.has_changes());
         assert!(!changeset.has_conflicts());
     }
@@ -302,13 +362,138 @@ mod tests {
             )],
         };
 
-        let changeset = ReplyChangeSet::detect(&local, &remote, "2024-01-15T10:00:00Z");
+        let changeset = ReplyChangeSet::detect(&local, &remote, "2024-01-15T10:00:00Z", "user");
         assert!(changeset.has_changes());
         assert_eq!(changeset.actions.len(), 1);
         assert!(matches!(
             &changeset.actions[0],
             ReplyAction::PostReply { body, in_reply_to: 1, .. } if body == "My reply"
         ));
+    }
+
+    #[rstest]
+    #[case::reply_after_attempt_is_a_retry(
+        "2024-01-15T10:01:00Z",
+        Some("2024-01-15T10:00:00Z"),
+        false
+    )]
+    #[case::older_matching_reply_is_postable(
+        "2024-01-15T09:30:00Z",
+        Some("2024-01-15T10:00:00Z"),
+        true
+    )]
+    #[case::intentional_repeat_without_retry_is_postable("2024-01-15T09:30:00Z", None, true)]
+    fn retry_suppression_only_matches_replies_created_after_the_direct_attempt(
+        #[case] reply_created_at: &str,
+        #[case] retry_started_at: Option<&str>,
+        #[case] expected_action: bool,
+    ) {
+        let local = make_parsed_file(vec![make_local_thread("RT_abc", false, Some("My reply"))]);
+        let remote = PrData {
+            reviews: vec![],
+            threads: vec![make_remote_thread(
+                "RT_abc",
+                vec![
+                    make_comment(1, "user", "2024-01-15T09:00:00Z"),
+                    make_reply(2, "user", reply_created_at, "My reply"),
+                ],
+                false,
+            )],
+        };
+        let retry_started_at = retry_started_at.map(|timestamp| {
+            chrono::DateTime::parse_from_rfc3339(timestamp)
+                .expect("fixture retry timestamp should parse")
+                .with_timezone(&chrono::Utc)
+        });
+        let changeset = ReplyChangeSet::detect_with_retry(
+            &local,
+            &remote,
+            "2024-01-15T10:00:00Z",
+            "user",
+            retry_started_at,
+        );
+        let expected_actions = if expected_action {
+            vec![ReplyAction::PostReply {
+                thread_id: "RT_abc".to_string(),
+                in_reply_to: 1,
+                body: "My reply".to_string(),
+            }]
+        } else {
+            vec![]
+        };
+
+        assert_eq!(
+            (changeset.actions, changeset.conflicts),
+            (expected_actions, vec![])
+        );
+    }
+
+    #[rstest]
+    fn retry_after_a_posted_reply_does_not_block_thread_resolution() {
+        let local = make_parsed_file(vec![make_local_thread("RT_abc", true, Some("My reply"))]);
+        let remote = PrData {
+            reviews: vec![],
+            threads: vec![make_remote_thread(
+                "RT_abc",
+                vec![
+                    make_comment(1, "user", "2024-01-15T09:00:00Z"),
+                    make_reply(2, "user", "2024-01-15T10:01:00Z", "My reply"),
+                ],
+                false,
+            )],
+        };
+        let retry_started_at = chrono::DateTime::parse_from_rfc3339("2024-01-15T10:00:00Z")
+            .expect("fixture retry timestamp should parse")
+            .with_timezone(&chrono::Utc);
+
+        assert_eq!(
+            ReplyChangeSet::detect_with_retry(
+                &local,
+                &remote,
+                "2024-01-15T10:00:00Z",
+                "user",
+                Some(retry_started_at),
+            ),
+            ReplyChangeSet {
+                actions: vec![ReplyAction::ResolveThread {
+                    thread_id: "RT_abc".to_string(),
+                    thread_node_id: "RT_abc".to_string(),
+                }],
+                conflicts: vec![],
+            },
+        );
+    }
+
+    #[rstest]
+    fn test_identical_reply_from_another_user_is_not_treated_as_a_retry() {
+        let local = make_parsed_file(vec![make_local_thread("RT_abc", false, Some("My reply"))]);
+        let remote = PrData {
+            reviews: vec![],
+            threads: vec![make_remote_thread(
+                "RT_abc",
+                vec![
+                    make_comment(1, "user", "2024-01-15T09:00:00Z"),
+                    make_reply(2, "other", "2024-01-15T10:01:00Z", "My reply"),
+                ],
+                false,
+            )],
+        };
+
+        assert_eq!(
+            ReplyChangeSet::detect(&local, &remote, "2024-01-15T10:00:00Z", "user"),
+            ReplyChangeSet {
+                actions: vec![ReplyAction::PostReply {
+                    thread_id: "RT_abc".to_string(),
+                    in_reply_to: 1,
+                    body: "My reply".to_string(),
+                }],
+                conflicts: vec![ThreadConflict {
+                    thread_id: "RT_abc".to_string(),
+                    path: "src/main.rs".to_string(),
+                    reason: "New comments added since last pull".to_string(),
+                }],
+            },
+        );
     }
 
     #[rstest]
@@ -323,7 +508,7 @@ mod tests {
             )],
         };
 
-        let changeset = ReplyChangeSet::detect(&local, &remote, "2024-01-15T10:00:00Z");
+        let changeset = ReplyChangeSet::detect(&local, &remote, "2024-01-15T10:00:00Z", "user");
         assert!(changeset.has_changes());
         assert_eq!(changeset.actions.len(), 1);
         assert!(matches!(
@@ -344,7 +529,7 @@ mod tests {
             )],
         };
 
-        let changeset = ReplyChangeSet::detect(&local, &remote, "2024-01-15T10:00:00Z");
+        let changeset = ReplyChangeSet::detect(&local, &remote, "2024-01-15T10:00:00Z", "user");
         assert!(!changeset.has_changes());
     }
 
@@ -360,7 +545,7 @@ mod tests {
             )],
         };
 
-        let changeset = ReplyChangeSet::detect(&local, &remote, "2024-01-15T10:00:00Z");
+        let changeset = ReplyChangeSet::detect(&local, &remote, "2024-01-15T10:00:00Z", "user");
         assert_eq!(changeset.actions.len(), 2);
         assert!(matches!(
             &changeset.actions[0],
@@ -409,7 +594,7 @@ mod tests {
             )],
         };
 
-        let changeset = ReplyChangeSet::detect(&local, &remote, "2024-01-15T10:00:00Z");
+        let changeset = ReplyChangeSet::detect(&local, &remote, "2024-01-15T10:00:00Z", "user");
         assert_eq!(
             changeset,
             ReplyChangeSet {
@@ -484,7 +669,7 @@ mod tests {
         };
 
         assert_eq!(
-            ReplyChangeSet::detect(&local, &remote, "2024-01-15T10:00:00Z"),
+            ReplyChangeSet::detect(&local, &remote, "2024-01-15T10:00:00Z", "user"),
             expected
         );
     }
@@ -497,7 +682,7 @@ mod tests {
             threads: vec![],
         };
 
-        let changeset = ReplyChangeSet::detect(&local, &remote, "2024-01-15T10:00:00Z");
+        let changeset = ReplyChangeSet::detect(&local, &remote, "2024-01-15T10:00:00Z", "user");
         assert!(!changeset.has_changes());
     }
 
@@ -517,7 +702,7 @@ mod tests {
             )],
         };
 
-        let changeset = ReplyChangeSet::detect(&local, &remote, "2024-01-15T10:00:00Z");
+        let changeset = ReplyChangeSet::detect(&local, &remote, "2024-01-15T10:00:00Z", "user");
         assert!(changeset.has_conflicts());
     }
 }

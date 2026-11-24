@@ -72,6 +72,7 @@ async fn run_with_context(ctx: &IssueContext, client: &GitHubClient) -> anyhow::
         // For diff display, show all changes including other users' comments
         edit_others: true,
         allow_delete: true,
+        retry_started_at: None,
     };
     let changeset = ChangeSet::detect_with_base(
         &local_state,

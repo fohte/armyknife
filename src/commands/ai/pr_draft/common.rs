@@ -391,12 +391,28 @@ pub async fn repo_allows_japanese(
     repo: &str,
     is_private: bool,
 ) -> anyhow::Result<bool> {
-    let config = load_config()?;
     let repo_id = format!("{owner}/{repo}");
     let copier_answers_path = copier_answers_path_for_current_repo(Some(&repo_id));
+    repo_allows_japanese_with_copier_answers(
+        owner,
+        repo,
+        is_private,
+        copier_answers_path.as_deref(),
+    )
+    .await
+}
+
+pub(crate) async fn repo_allows_japanese_with_copier_answers(
+    owner: &str,
+    repo: &str,
+    is_private: bool,
+    copier_answers_path: Option<&Path>,
+) -> anyhow::Result<bool> {
+    let config = load_config()?;
+    let repo_id = format!("{owner}/{repo}");
     let language = resolve_repo_language(
         config.get_value("repo.language", Some(&repo_id)),
-        copier_answers_path.as_deref(),
+        copier_answers_path,
         || async { Ok(Some(is_private)) },
     )
     .await?;

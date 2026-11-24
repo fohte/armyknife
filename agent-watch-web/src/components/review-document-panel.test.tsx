@@ -16,6 +16,7 @@ const actionSnapshots: {
   frontmatter: JsonValue
   body: string
 }[] = []
+const directActions: string[] = []
 
 function ReviewDocumentHarness({
   status = 'idle',
@@ -59,9 +60,252 @@ function ReviewDocumentHarness({
 
 beforeEach(() => {
   actionSnapshots.length = 0
+  directActions.length = 0
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   container = document.createElement('div')
   document.body.append(container)
+})
+
+it('posts an issue comment through its action button and preserves Send back', async () => {
+  const summary = {
+    id: 'fixture-issue-comment',
+    kind: 'issue_comment' as const,
+    target: { repository: 'sample-owner/sample-repository', issueNumber: 42 },
+    isEditor: true,
+    canSave: true,
+    canFinish: true,
+  }
+  root = createRoot(container)
+  act(() =>
+    root?.render(
+      <ReviewDocumentPanel
+        summary={summary}
+        frontmatter={{ submit: false }}
+        body="Fixture comment"
+        isMobile
+        onSubmit={(action) => directActions.push(action)}
+        onFinish={() => directActions.push('send_back')}
+      />,
+    ),
+  )
+
+  await act(async () => {
+    await page.getByRole('button', { name: 'Post comment' }).click()
+  })
+  const snapshot = () => ({
+    buttons: Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '.review-document-direct-button-row button',
+      ),
+      (button) => ({
+        label: button.textContent,
+        disabled: button.disabled,
+        primary: button.classList.contains('review-document-finish'),
+      }),
+    ),
+    metadata: container.querySelector('.review-document-frontmatter'),
+    help: container.querySelector('.review-document-direct-help')?.textContent,
+    actions: directActions,
+  })
+  expect(snapshot()).toEqual({
+    buttons: [
+      { label: 'Send back', disabled: false, primary: false },
+      { label: 'Post comment', disabled: false, primary: true },
+    ],
+    metadata: null,
+    help: 'Post comment posts it to #42 right away. Send back returns your edits to the session.',
+    actions: ['post_comment'],
+  })
+})
+
+it('shows a save conflict error in the desktop direct action footer', () => {
+  root = createRoot(container)
+  act(() =>
+    root?.render(
+      <div
+        className="session-status-panel"
+        data-size="desktop"
+        style={{ width: '640px', height: '900px', display: 'flex' }}
+      >
+        <ReviewDocumentPanel
+          summary={{
+            id: 'fixture-issue-comment',
+            kind: 'issue_comment',
+            target: {
+              repository: 'sample-owner/sample-repository',
+              issueNumber: 73,
+            },
+            isEditor: true,
+            canSave: true,
+            canFinish: true,
+          }}
+          frontmatter={{ submit: false }}
+          body="Example draft body"
+          status="error"
+          error="This draft changed since you opened it. Your edits are still here; copy them before reloading to see the latest version."
+        />
+      </div>,
+    ),
+  )
+
+  const saveConflict = container.querySelector(
+    '.review-document-direct-actions [role="alert"]',
+  )
+  expect(saveConflict?.textContent ?? null).toEqual(
+    'This draft changed since you opened it. Your edits are still here; copy them before reloading to see the latest version.',
+  )
+})
+
+it.each([
+  {
+    name: 'review replies',
+    kind: 'review_replies' as const,
+    target: { pullRequestNumber: 42, threadCount: 2 },
+    label: 'Post replies',
+    action: 'post_replies',
+  },
+  {
+    name: 'an issue body',
+    kind: 'issue_body' as const,
+    target: { repository: 'sample-owner/sample-repository', issueNumber: 42 },
+    label: 'Update issue',
+    action: 'update_issue',
+  },
+])('submits the selected action for $name', async (testCase) => {
+  root = createRoot(container)
+  act(() =>
+    root?.render(
+      <ReviewDocumentPanel
+        summary={{
+          id: 'fixture-review-document',
+          kind: testCase.kind,
+          target: testCase.target,
+          isEditor: true,
+          canSave: true,
+          canFinish: true,
+        }}
+        frontmatter={{ submit: false }}
+        body="Example draft body"
+        isMobile
+        onSubmit={(action) => directActions.push(action)}
+      />,
+    ),
+  )
+
+  await act(async () => {
+    await page.getByRole('button', { name: testCase.label }).click()
+  })
+
+  expect(directActions).toEqual([testCase.action])
+})
+
+it('routes the English-repo PR draft through translation before creation', async () => {
+  const summary = {
+    id: 'fixture-pr-draft',
+    kind: 'pr_draft' as const,
+    target: {
+      repository: 'sample-owner/sample-repository',
+      branch: 'feature/example',
+    },
+    isEditor: true,
+    canSave: true,
+    canFinish: true,
+  }
+  const onApproveForTranslation = vi.fn(() =>
+    directActions.push('approve_for_translation'),
+  )
+  const onSubmit = vi.fn((action: string) => directActions.push(action))
+  root = createRoot(container)
+  act(() =>
+    root?.render(
+      <ReviewDocumentPanel
+        summary={summary}
+        frontmatter={{
+          title: '再送の上限を変える',
+          steps: { 'ready-for-translation': false, submit: false },
+        }}
+        body="日本語の PR draft"
+        onApproveForTranslation={onApproveForTranslation}
+        onSubmit={onSubmit}
+      />,
+    ),
+  )
+
+  await act(async () => {
+    await page.getByRole('button', { name: 'Approve for translation' }).click()
+  })
+  const snapshot = () => ({
+    stages: Array.from(
+      container.querySelectorAll('.review-document-pr-stages li'),
+      (stage) => ({
+        label: stage.textContent,
+        current: stage.getAttribute('aria-current'),
+      }),
+    ),
+    primary: container.querySelector('.review-document-finish')?.textContent,
+    callbacks: {
+      translation: onApproveForTranslation.mock.calls.length,
+      submit: onSubmit.mock.calls.length,
+      actions: directActions,
+    },
+  })
+  expect(snapshot()).toEqual({
+    stages: [
+      { label: '1Review—', current: 'step' },
+      { label: '2Translate—', current: 'false' },
+      { label: '3Create PR—', current: 'false' },
+    ],
+    primary: 'Approve for translation',
+    callbacks: {
+      translation: 1,
+      submit: 0,
+      actions: ['approve_for_translation'],
+    },
+  })
+})
+
+it('shows Create PR at the final stage after an English translation', async () => {
+  root = createRoot(container)
+  act(() =>
+    root?.render(
+      <ReviewDocumentPanel
+        summary={{
+          id: 'fixture-pr-draft',
+          kind: 'pr_draft',
+          target: {
+            repository: 'sample-owner/sample-repository',
+            branch: 'feature/example',
+          },
+          isEditor: true,
+          canSave: true,
+          canFinish: true,
+        }}
+        frontmatter={{
+          title: 'Make the retry limit configurable',
+          steps: { 'ready-for-translation': false, submit: false },
+        }}
+        body="The retry limit is configurable."
+        onSubmit={(action) => directActions.push(action)}
+      />,
+    ),
+  )
+
+  await act(async () => {
+    await page.getByRole('button', { name: 'Create PR' }).click()
+  })
+  const snapshot = () => ({
+    stageLabels: Array.from(
+      container.querySelectorAll('.review-document-pr-stages li'),
+      (stage) => stage.textContent,
+    ),
+    primary: container.querySelector('.review-document-finish')?.textContent,
+    actions: directActions,
+  })
+  expect(snapshot()).toEqual({
+    stageLabels: ['✓Review—', '✓Translate—', '3Create PR—'],
+    primary: 'Create PR',
+    actions: ['create_pr'],
+  })
 })
 
 afterEach(() => {
@@ -123,7 +367,7 @@ it('edits typed fields and the mobile Markdown editor before saving or finishing
   )
   await act(async () => {
     await page.getByRole('button', { name: 'Save' }).click()
-    await page.getByRole('button', { name: 'Finish review' }).click()
+    await page.getByRole('button', { name: 'Finish' }).click()
   })
 
   const snapshot = () => ({
@@ -320,7 +564,7 @@ it('shows flat tabs with square editor and queued markers for multiple drafts', 
       'review-document-tabs',
       'review-document-header',
       'review-document-content',
-      'review-document-actions',
+      'review-document-actions review-document-direct-actions',
     ],
     role: 'tablist',
     tabs: [
@@ -616,6 +860,44 @@ it('keeps the mobile preview usable when metadata fills the viewport', async () 
     previewColumnHasRoom: true,
     metadataCanScroll: true,
   })
+})
+
+it('keeps the approval checkbox available for a new issue draft', async () => {
+  const finishSnapshots: JsonValue[] = []
+  function NewIssueDraftHarness() {
+    const [frontmatter, setFrontmatter] = useState<JsonValue>({
+      title: 'Fixture issue title',
+      submit: false,
+    })
+    return (
+      <ReviewDocumentPanel
+        summary={{
+          id: 'fixture-new-issue',
+          kind: 'draft',
+          target: { repository: 'sample-owner/sample-repository' },
+          isEditor: true,
+          canSave: true,
+          canFinish: true,
+        }}
+        frontmatter={frontmatter}
+        body="Fixture issue body"
+        onFrontmatterChange={setFrontmatter}
+        onFinish={() => finishSnapshots.push(frontmatter)}
+      />
+    )
+  }
+
+  root = createRoot(container)
+  act(() => root?.render(<NewIssueDraftHarness />))
+
+  await act(async () => {
+    await page.getByRole('checkbox', { name: 'submit' }).click()
+    await page.getByRole('button', { name: 'Finish' }).click()
+  })
+
+  expect(finishSnapshots).toEqual([
+    { title: 'Fixture issue title', submit: true },
+  ])
 })
 
 it.each([

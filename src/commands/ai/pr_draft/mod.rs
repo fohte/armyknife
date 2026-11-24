@@ -7,6 +7,24 @@ mod submit;
 
 use clap::Subcommand;
 
+pub(crate) async fn submit_draft_for_review(
+    filepath: std::path::PathBuf,
+    session_cwd: &std::path::Path,
+    target_repo_id: &str,
+) -> anyhow::Result<()> {
+    submit::run_for_review(
+        &submit::SubmitArgs {
+            filepath: Some(filepath),
+            base: None,
+            draft: false,
+            no_review: false,
+        },
+        session_cwd,
+        target_repo_id,
+    )
+    .await
+}
+
 pub(crate) fn draft_dir() -> std::path::PathBuf {
     common::DraftFile::draft_dir()
 }

@@ -30,6 +30,12 @@ struct GraphQLResponse<T> {
     errors: Option<Vec<GraphQLError>>,
 }
 
+#[derive(Debug, Deserialize)]
+struct MilestoneSummary {
+    number: u64,
+    title: String,
+}
+
 /// GraphQL error returned by GitHub API.
 #[derive(Debug, Deserialize)]
 struct GraphQLError {
@@ -412,6 +418,79 @@ impl GitHubClient {
             .rest_patch(&route, &serde_json::json!({ "title": title }))
             .await?;
         Ok(())
+    }
+
+    pub async fn update_issue_assignees(
+        &self,
+        owner: &str,
+        repo: &str,
+        issue_number: u64,
+        assignees: &[String],
+    ) -> Result<()> {
+        let route = format!("/repos/{owner}/{repo}/issues/{issue_number}");
+        let _: serde_json::Value = self
+            .rest_patch(&route, &serde_json::json!({ "assignees": assignees }))
+            .await?;
+        Ok(())
+    }
+
+    /// Resolve frontmatter's milestone title to the repository-specific number accepted by REST.
+    pub async fn resolve_milestone_number(
+        &self,
+        owner: &str,
+        repo: &str,
+        title: &str,
+    ) -> Result<u64> {
+        self.find_milestone_number(owner, repo, title)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Milestone {title:?} was not found in {owner}/{repo}"))
+    }
+
+    pub async fn update_issue_milestone(
+        &self,
+        owner: &str,
+        repo: &str,
+        issue_number: u64,
+        milestone_number: Option<u64>,
+    ) -> Result<()> {
+        let route = format!("/repos/{owner}/{repo}/issues/{issue_number}");
+        let _: serde_json::Value = self
+            .rest_patch(
+                &route,
+                &serde_json::json!({ "milestone": milestone_number }),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn find_milestone_number(
+        &self,
+        owner: &str,
+        repo: &str,
+        title: &str,
+    ) -> Result<Option<u64>> {
+        let route = format!("/repos/{owner}/{repo}/milestones");
+        let mut page = 1;
+        loop {
+            let page_string = page.to_string();
+            let milestones: Vec<MilestoneSummary> = self
+                .rest_get_with_query(
+                    &route,
+                    &[
+                        ("state", "all"),
+                        ("per_page", "100"),
+                        ("page", &page_string),
+                    ],
+                )
+                .await?;
+            if let Some(milestone) = milestones.iter().find(|milestone| milestone.title == title) {
+                return Ok(Some(milestone.number));
+            }
+            if milestones.len() < 100 {
+                return Ok(None);
+            }
+            page += 1;
+        }
     }
 
     /// Add labels to an issue.
