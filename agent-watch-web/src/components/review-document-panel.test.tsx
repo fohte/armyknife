@@ -551,6 +551,10 @@ it('shows an issue comment body without its file metadata', () => {
   const snapshot = () => ({
     metadataSections: container.querySelectorAll('.review-document-frontmatter')
       .length,
+    commentHeaders: container.querySelectorAll(
+      '.review-document-comment-header',
+    ).length,
+    timestamps: container.querySelectorAll('time').length,
     message: container.querySelector('.review-document-issue-comment-body')
       ?.textContent,
     rawMetadataVisible: container
@@ -560,6 +564,8 @@ it('shows an issue comment body without its file metadata', () => {
 
   expect(snapshot()).toEqual({
     metadataSections: 0,
+    commentHeaders: 0,
+    timestamps: 0,
     message: 'Could we retry the pending delivery after a short delay?',
     rawMetadataVisible: false,
   })
