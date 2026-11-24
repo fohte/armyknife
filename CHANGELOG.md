@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.885](https://github.com/fohte/armyknife/compare/v0.1.884...v0.1.885) (2026-11-24)
+
+
+### Dependencies
+
+* update rust crate flate2 to v1.1.11 ([#2163](https://github.com/fohte/armyknife/issues/2163)) ([0022d15](https://github.com/fohte/armyknife/commit/0022d15af77d6a4534d5dddc44d9d54341cff685))
+
 ## [0.1.884](https://github.com/fohte/armyknife/compare/v0.1.883...v0.1.884) (2026-11-24)
 
 
