@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.907](https://github.com/fohte/armyknife/compare/v0.1.906...v0.1.907) (2026-11-24)
+
+
+### Dependencies
+
+* update rust crate tower-http to v0.7.1 ([#2225](https://github.com/fohte/armyknife/issues/2225)) ([6381a4a](https://github.com/fohte/armyknife/commit/6381a4a902e43ecca92c26227e747bf4a35a24ab))
+
 ## [0.1.906](https://github.com/fohte/armyknife/compare/v0.1.905...v0.1.906) (2026-11-24)
 
 
