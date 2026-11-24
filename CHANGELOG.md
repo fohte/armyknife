@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.905](https://github.com/fohte/armyknife/compare/v0.1.904...v0.1.905) (2026-11-24)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** preserve reading position ([#2213](https://github.com/fohte/armyknife/issues/2213)) ([89d1ee1](https://github.com/fohte/armyknife/commit/89d1ee100a940255e1fd2352f6589f1ab6a2d3fe))
+
 ## [0.1.904](https://github.com/fohte/armyknife/compare/v0.1.903...v0.1.904) (2026-11-24)
 
 
