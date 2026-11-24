@@ -250,6 +250,7 @@ pub(super) struct SessionSnapshot {
     title_by_id: HashMap<String, String>,
     repo_by_id: HashMap<String, String>,
     decision_counts: HashMap<String, store::AgentDecisionCounts>,
+    agent_response_timestamps: HashMap<String, DateTime<Utc>>,
     unanswered_proposal_titles: HashMap<String, String>,
     unanswered_todo_titles: HashMap<String, String>,
     folded_todo_summaries: HashMap<String, FoldedTodoSummary>,
@@ -485,6 +486,7 @@ async fn list_sessions<S: SessionSource>(
     let vibe_modes =
         session_vibe_modes(&snapshot, &response_sessions, &snapshot.repo_by_id).await?;
     let now = source.now();
+    let agent_response_timestamps = snapshot.agent_response_timestamps;
     let state_by_id = snapshot
         .web_states
         .into_iter()
@@ -623,8 +625,15 @@ async fn list_sessions<S: SessionSource>(
                 .or_else(|| todo_title.cloned())
                 .or_else(|| folded_todo_summary.and_then(|summary| summary.first_title.clone()))
                 .or_else(|| session.last_message.clone());
+            let last_conversation_activity_at = session
+                .last_prompted_at
+                .iter()
+                .chain(agent_response_timestamps.get(&session.session_id))
+                .max()
+                .copied()
+                .unwrap_or(session.created_at);
             let elapsed_seconds = now
-                .signed_duration_since(session.updated_at)
+                .signed_duration_since(last_conversation_activity_at)
                 .num_seconds()
                 .max(0) as u64;
             let decision_count = snapshot
@@ -767,6 +776,7 @@ fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
     let repo_by_id = resolve_repos_for_sessions(&sessions, &all_sessions, resolve_repo);
     let sessions_dir = store::sessions_dir()?;
     let vibe_sessions_dir = sessions_dir.clone();
+    let agent_response_timestamps = store::agent_response_timestamps_from(&sessions_dir)?;
     let decision_counts = store::agent_decision_counts_by_session_from(&sessions_dir)?;
     let mut unanswered_proposal_titles = HashMap::new();
     let visible_session_ids = all_sessions
@@ -796,6 +806,7 @@ fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
         title_by_id,
         repo_by_id,
         decision_counts,
+        agent_response_timestamps,
         unanswered_proposal_titles,
         unanswered_todo_titles,
         folded_todo_summaries,
@@ -908,6 +919,7 @@ mod tests {
         task_projects: HashMap<String, String>,
         pull_requests: HashMap<String, Vec<SessionPullRequestInfo>>,
         decision_counts: HashMap<String, store::AgentDecisionCounts>,
+        agent_response_timestamps: HashMap<String, DateTime<Utc>>,
         work_type_nav_labels: HashMap<String, String>,
         agent_statuses: HashMap<String, AgentStatusConfig>,
         message_loaders: super::super::messages::RouteLoaders,
@@ -929,6 +941,7 @@ mod tests {
                 title_by_id: self.title_by_id.clone(),
                 repo_by_id: self.repo_by_id.clone(),
                 decision_counts: self.decision_counts.clone(),
+                agent_response_timestamps: self.agent_response_timestamps.clone(),
                 unanswered_proposal_titles: self.unanswered_proposal_titles.clone(),
                 unanswered_todo_titles: self.unanswered_todo_titles.clone(),
                 folded_todo_summaries: self.folded_todo_summaries.clone(),
@@ -1203,6 +1216,7 @@ mod tests {
                     unreviewed: 2,
                 },
             )]),
+            agent_response_timestamps: HashMap::new(),
             work_type_nav_labels: HashMap::new(),
             agent_statuses: HashMap::new(),
             message_loaders: super::super::messages::RouteLoaders::new(
@@ -1299,6 +1313,53 @@ mod tests {
             vibe_mode["ancestorSessionId"] = serde_json::json!(ancestor_session_id);
         }
         expected["sessions"][0]["vibeMode"] = vibe_mode;
+
+        assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
+    }
+
+    #[rstest]
+    #[case::user_prompt_is_latest(990, 950, 110)]
+    #[case::agent_response_is_latest(900, 970, 130)]
+    #[tokio::test]
+    async fn sessions_route_elapsed_uses_latest_conversation_activity(
+        mut source: TestSessionSource,
+        #[case] prompted_at: i64,
+        #[case] responded_at: i64,
+        #[case] elapsed_seconds: u64,
+    ) {
+        source.sessions[0].status = SessionStatus::Running;
+        source.sessions[0].created_at = Utc.timestamp_opt(700, 0).unwrap();
+        source.sessions[0].updated_at = Utc.timestamp_opt(1_080, 0).unwrap();
+        source.sessions[0].last_prompted_at = Some(Utc.timestamp_opt(prompted_at, 0).unwrap());
+        source.all_sessions[0] = source.sessions[0].clone();
+        source.web_states[0].later_until = None;
+        source.web_states[0].is_today = false;
+        source.agent_response_timestamps.insert(
+            "child-session".to_string(),
+            Utc.timestamp_opt(responded_at, 0).unwrap(),
+        );
+        let mut expected = expected_response(
+            "in_progress",
+            None,
+            false,
+            ExpectedSessionDetails {
+                kind: None,
+                category_when_not_later: "in_progress",
+                is_paused: false,
+                unread: false,
+                crit_url: None,
+            },
+            ExpectedSessionResponse {
+                engine: "claude",
+                work_type: None,
+                work_type_nav_labels: serde_json::json!({}),
+                updated_at: "1970-01-01T00:18:00Z",
+                elapsed_seconds,
+                can_open_in_terminal: true,
+            },
+        );
+        expected["sessions"][0]["lastPromptedAt"] =
+            serde_json::to_value(Utc.timestamp_opt(prompted_at, 0).unwrap()).unwrap();
 
         assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
     }
@@ -2187,7 +2248,7 @@ mod tests {
                 work_type: Some("release-guide"),
                 work_type_nav_labels: serde_json::json!({"release-guide": "Guides"}),
                 updated_at: "1970-01-01T00:16:40Z",
-                elapsed_seconds: 100,
+                elapsed_seconds: 200,
                 can_open_in_terminal: true,
             },
         );
@@ -3483,7 +3544,7 @@ mod tests {
                             work_type: None,
                             work_type_nav_labels: serde_json::json!({}),
                             updated_at: "1970-01-01T00:16:41Z",
-                            elapsed_seconds: 99,
+                            elapsed_seconds: 100,
                             can_open_in_terminal: true,
                         },
                     ),

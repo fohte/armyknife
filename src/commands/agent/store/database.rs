@@ -5,11 +5,13 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, ensure};
+use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 use crate::commands::agent::error::CcError;
 use crate::commands::agent::types::Session;
 
+mod activity;
 mod agent_files;
 mod decisions;
 mod initial_prompt;
@@ -30,6 +32,7 @@ mod vibe_setting_revision;
 mod wake;
 mod web_state;
 
+pub(crate) use activity::agent_response_timestamps;
 pub(crate) use agent_files::AgentFile;
 pub(crate) use agent_files::{agent_file, agent_files, insert_agent_files};
 pub(crate) use decisions::{
@@ -302,6 +305,11 @@ impl SessionLock {
         self.connection.execute_batch("COMMIT")?;
         self.transaction_active.set(false);
         Ok(())
+    }
+
+    pub(crate) fn record_agent_response_at(&self, responded_at: DateTime<Utc>) -> Result<()> {
+        self.ensure_transaction()?;
+        activity::record_agent_response_at(&self.connection, &self.session_id, responded_at)
     }
 
     pub(crate) fn save_vibe_setting(&self, session: &Session) -> Result<String> {

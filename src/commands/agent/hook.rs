@@ -1010,6 +1010,12 @@ fn process_hook_event_impl_with_env_and_unreported_stop(
     if vibe_setting_requested {
         session_lock.save_vibe_setting(&session)?;
     } else {
+        if matches!(event, HookEvent::Stop | HookEvent::StopFailure)
+            && input.agent_id.is_none()
+            && session.status != SessionStatus::Paused
+        {
+            session_lock.record_agent_response_at(now)?;
+        }
         session_lock.save(&session)?;
     }
     drop(session_lock);
@@ -1709,6 +1715,7 @@ mod tests {
     use super::*;
     use crate::commands::agent::session_pr_context::fixed_context_capture;
     use crate::commands::agent::types::{AgentStatus, TMUX_SESSION_OPTION, WebUiRegistration};
+    use chrono::TimeZone;
     use rstest::{fixture, rstest};
 
     fn process_hook_event_without_instruction(
@@ -3512,6 +3519,64 @@ mod tests {
             !reloaded.sweep_signaled,
             "{event:?} should clear a stale sweep_signaled flag"
         );
+    }
+
+    #[test]
+    fn main_thread_stop_records_agent_response_activity() -> Result<()> {
+        let temp_dir = tempfile::TempDir::new().expect("temp directory should be created");
+        let sessions_dir = temp_dir.path();
+        save_test_session(sessions_dir, "test-123", |session| {
+            session.status = SessionStatus::Running;
+        });
+        let started_at = Utc::now();
+
+        process_hook_event_impl(
+            HookEvent::Stop,
+            create_test_input(None),
+            sessions_dir,
+            &SideEffects::none(),
+        )?;
+
+        let finished_at = Utc::now();
+        let actual = store::agent_response_timestamps_from(sessions_dir)?
+            .into_iter()
+            .map(|(session_id, timestamp)| {
+                (
+                    session_id,
+                    timestamp >= started_at && timestamp <= finished_at,
+                )
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        assert_eq!(
+            actual,
+            std::collections::HashMap::from([("test-123".to_string(), true)]),
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn stop_during_pause_preserves_the_last_agent_response_activity() -> Result<()> {
+        let temp_dir = tempfile::TempDir::new().expect("temp directory should be created");
+        let sessions_dir = temp_dir.path();
+        let mut session = create_test_session(None);
+        session.status = SessionStatus::Paused;
+        let responded_at = Utc.timestamp_opt(900, 0).single().expect("valid timestamp");
+        let session_lock = store::lock_session_for_update(sessions_dir, &session.session_id)?;
+        session_lock.record_agent_response_at(responded_at)?;
+        session_lock.save(&session)?;
+
+        process_hook_event_impl(
+            HookEvent::Stop,
+            create_test_input(None),
+            sessions_dir,
+            &SideEffects::none(),
+        )?;
+
+        assert_eq!(
+            store::agent_response_timestamps_from(sessions_dir)?,
+            std::collections::HashMap::from([("test-123".to_string(), responded_at)]),
+        );
+        Ok(())
     }
 
     #[rstest]
