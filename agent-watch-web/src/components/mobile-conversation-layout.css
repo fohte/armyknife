@@ -1,13 +1,13 @@
 .conversation-pane[data-mobile='true'] .conversation-header {
   display: grid;
-  min-height: calc(74px + max(8px, env(safe-area-inset-top)));
-  flex: 0 0 calc(74px + max(8px, env(safe-area-inset-top)));
-  grid-template-columns: 88px minmax(0, 1fr) auto;
+  min-height: calc(74px + max(6px, env(safe-area-inset-top)));
+  flex: 0 0 calc(74px + max(6px, env(safe-area-inset-top)));
+  grid-template-columns: auto minmax(0, 1fr) auto;
   grid-template-rows: 44px 24px;
   align-items: center;
-  column-gap: 4px;
+  column-gap: 6px;
   row-gap: 0;
-  padding: max(8px, env(safe-area-inset-top)) 8px 6px 0;
+  padding: max(6px, env(safe-area-inset-top)) 8px 6px 0;
   border-bottom-color: var(--aw-border);
 }
 
@@ -16,7 +16,7 @@
   min-height: 44px;
   flex: 0 0 auto;
   padding: 0;
-  border: 1px solid var(--aw-border-control);
+  border: 0;
   color: var(--aw-text-body);
 }
 
@@ -48,6 +48,12 @@
   width: 7px;
   height: 7px;
   background: var(--aw-color-error);
+}
+
+.conversation-pane[data-mobile='true']
+  .mobile-conversation-title
+  .vibe-indicator {
+  color: var(--aw-text-muted);
 }
 
 .conversation-pane[data-mobile='true'] .conversation-copy-session-id {
@@ -289,9 +295,10 @@
 .mobile-conversation-context {
   display: flex;
   min-width: 0;
+  min-height: 24px;
   grid-column: 1 / -1;
   grid-row: 2;
-  align-items: baseline;
+  align-items: center;
   gap: 6px;
   overflow: hidden;
   padding-left: 14px;

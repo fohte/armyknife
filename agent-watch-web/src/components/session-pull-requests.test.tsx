@@ -1159,6 +1159,12 @@ it('renders merge actions and unavailable reasons in the status panel list', () 
   const snapshot = () => ({
     dialogRole:
       container.querySelector('.session-pr-list')?.getAttribute('role') ?? null,
+    listLabel:
+      container.querySelector('.session-pr-list')?.getAttribute('aria-label') ??
+      null,
+    listHeading:
+      container.querySelector('.session-pr-list-title')?.textContent.trim() ??
+      null,
     mobileTrigger:
       container.querySelector('.session-pr-trigger--mobile') !== null,
     rows: Array.from(
@@ -1172,6 +1178,8 @@ it('renders merge actions and unavailable reasons in the status panel list', () 
   })
   expect(snapshot()).toEqual({
     dialogRole: null,
+    listLabel: 'Pull requests',
+    listHeading: 'Pull requests',
     mobileTrigger: false,
     rows: [
       { title: '#42 Show delivery status', action: 'CI failing' },

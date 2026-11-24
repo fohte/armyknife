@@ -67,10 +67,15 @@ export function SessionStatusPanel({
     const startPadding = Number.parseFloat(
       getComputedStyle(tabList).paddingLeft,
     )
-    setHasHiddenTabs({
+    const next = {
       left: tabList.scrollLeft > startPadding,
       right: tabList.scrollLeft + tabList.clientWidth < tabList.scrollWidth - 1,
-    })
+    }
+    setHasHiddenTabs((current) =>
+      current.left === next.left && current.right === next.right
+        ? current
+        : next,
+    )
   }, [])
 
   useEffect(() => {

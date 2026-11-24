@@ -298,13 +298,19 @@ export function SessionPullRequests({
       ref={contentRef}
       className={`session-pr-list${isMobile ? ' session-pr-list--mobile' : ''}${presentation === 'list' ? ' session-pr-list--panel' : ''}`}
       role={presentation === 'list' ? undefined : 'dialog'}
-      aria-label="Pull requests from this session"
+      aria-label={
+        presentation === 'list'
+          ? 'Pull requests'
+          : 'Pull requests from this session'
+      }
       aria-modal={presentation === 'list' ? undefined : isMobile || undefined}
       tabIndex={presentation === 'list' ? undefined : -1}
     >
       {isMobile ? (
         <h2 className="session-pr-list-title">
-          Pull requests from this session
+          {presentation === 'list'
+            ? 'Pull requests'
+            : 'Pull requests from this session'}
         </h2>
       ) : null}
       {groups.map((group) => (

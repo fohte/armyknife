@@ -1,4 +1,5 @@
 import '#components/conversation-pane-view.css'
+import '#components/mobile-conversation-layout.css'
 
 import { Button } from '@fohte/ui/button'
 import {
@@ -267,12 +268,16 @@ export function ConversationPaneHeader({
               aria-label="Back to Inbox"
               onClick={onBack}
             >
-              <ChevronLeft aria-hidden="true" size={30} strokeWidth={2.5} />
+              <ChevronLeft
+                aria-hidden="true"
+                size={30}
+                strokeWidth={2.5}
+                style={{ width: '30px', height: '30px' }}
+              />
             </Button>
-            <Button
+            <button
               className="mobile-conversation-nav-toggle cursor-pointer"
               type="button"
-              variant="plain"
               aria-label={
                 activityFailed
                   ? 'Open navigation, Activity has failed actions'
@@ -303,7 +308,7 @@ export function ConversationPaneHeader({
                   aria-hidden="true"
                 />
               ) : null}
-            </Button>
+            </button>
           </div>
           <div className="mobile-conversation-title">
             {isToday ? (
@@ -333,9 +338,17 @@ export function ConversationPaneHeader({
               }}
             >
               {statusPanelOpen ? (
-                <PanelRightClose aria-hidden="true" size={18} />
+                <PanelRightClose
+                  aria-hidden="true"
+                  size={18}
+                  style={{ width: '18px', height: '18px' }}
+                />
               ) : (
-                <PanelRightOpen aria-hidden="true" size={18} />
+                <PanelRightOpen
+                  aria-hidden="true"
+                  size={18}
+                  style={{ width: '18px', height: '18px' }}
+                />
               )}
               {pullRequests.length > 0 ? (
                 <SessionPullRequestStatusBadge

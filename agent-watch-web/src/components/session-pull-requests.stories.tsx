@@ -2,9 +2,11 @@ import type { Decorator, Meta, StoryObj } from '@storybook/react-vite'
 
 import type { AsyncActionStatus } from '#async-action-feedback'
 import { phoneTopbarPullRequests } from '#components/phone-topbar-story-fixtures'
+import { BackgroundTaskRowView } from '#components/running-task-row-view'
+import { RunningTasksPanelView } from '#components/running-tasks-panel-view'
 import { SessionPullRequests } from '#components/session-pull-requests'
 import { SessionStatusPanel } from '#components/session-status-panel'
-import type { PullRequest } from '#types'
+import type { BackgroundTask, PullRequest } from '#types'
 
 const currentBranchPullRequest: PullRequest = {
   number: 42,
@@ -102,18 +104,21 @@ const meta = {
     onOpenChange: () => undefined,
   },
   decorators: [
-    (Story) => (
-      <div
-        style={{
-          minHeight: 120,
-          padding: 16,
-          background: 'var(--aw-bg-app)',
-          color: 'var(--aw-text-primary)',
-        }}
-      >
+    (Story, context) =>
+      context.args.isMobile && context.args.presentation === 'list' ? (
         <Story />
-      </div>
-    ),
+      ) : (
+        <div
+          style={{
+            minHeight: 120,
+            padding: 16,
+            background: 'var(--aw-bg-app)',
+            color: 'var(--aw-text-primary)',
+          }}
+        >
+          <Story />
+        </div>
+      ),
   ],
 } satisfies Meta<typeof SessionPullRequests>
 
@@ -483,6 +488,12 @@ export const MergeIsQueuedInTheList: Story = {
 
 export const PhoneStatusPanelShowsPullRequestsBeforeTabs: Story = {
   name: 'The phone status panel lists pull requests above its tabs',
+  parameters: {
+    layout: 'fullscreen',
+    overflowCheck: {
+      ignoreSelectors: ['.session-status-panel-tablist'],
+    },
+  },
   args: {
     pullRequests: phoneTopbarPullRequests,
     repo: 'example/service',
@@ -493,20 +504,88 @@ export const PhoneStatusPanelShowsPullRequestsBeforeTabs: Story = {
     onMerge: () => undefined,
   },
   render: (args) => (
-    <div style={{ width: 390, height: 844 }}>
+    <div style={{ width: 390, height: 844, display: 'flex' }}>
       <SessionStatusPanel
         size="phone"
-        activeTabId="tasks"
+        sessionTitle="通知の再送処理を見直す"
+        activeTabId="running"
         onTabChange={() => undefined}
         onClose={() => undefined}
         tabs={[
           {
+            id: 'running',
+            label: 'Running',
+            count: 2,
+            content: (
+              <RunningTasksPanelView
+                subagents={
+                  [
+                    {
+                      id: 'fixture-subagent',
+                      description: '再送処理の呼び出し元を探す',
+                      elapsedSeconds: 42,
+                      kind: 'subagent',
+                      agentType: 'Explore',
+                    },
+                  ] satisfies BackgroundTask[]
+                }
+                backgroundTaskRows={[
+                  <BackgroundTaskRowView
+                    key="fixture-background-task"
+                    task={{
+                      id: 'fixture-background-task',
+                      description: 'cargo test -p service',
+                      elapsedSeconds: 65,
+                      kind: 'background_task',
+                    }}
+                    isOpen
+                    output={
+                      'running 24 tests\ntest retry::stops_after_limit ... ok\ntest retry::backs_off ... ok'
+                    }
+                    error={null}
+                    onToggle={() => undefined}
+                  />,
+                ]}
+              />
+            ),
+          },
+          {
             id: 'tasks',
             label: 'Tasks',
+            count: 13,
+            showCount: true,
+            content: <div />,
+          },
+          {
+            id: 'tree',
+            label: 'Tree',
             count: 1,
-            content: (
-              <div className="session-status-panel-empty">No tasks.</div>
-            ),
+            showCount: true,
+            countTone: 'warning',
+            content: <div />,
+          },
+          {
+            id: 'review-document',
+            label: 'Review',
+            count: 0,
+            showCount: false,
+            visible: true,
+            content: <div />,
+          },
+          {
+            id: 'decisions',
+            label: 'Decisions',
+            count: 1,
+            showCount: true,
+            countTone: 'warning',
+            content: <div />,
+          },
+          {
+            id: 'crit',
+            label: 'crit',
+            count: 1,
+            showCount: false,
+            content: <div />,
           },
         ]}
         beforeTabs={<SessionPullRequests {...args} />}

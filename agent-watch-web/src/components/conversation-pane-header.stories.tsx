@@ -278,7 +278,8 @@ export const PhoneTitleFitsOnOneLine: Story = {
   name: 'The phone header shows a short title on one line',
   args: {
     isMobile: true,
-    session: { ...session, title: '通知の再送処理を見直す' },
+    isToday: true,
+    session: { ...phoneSession, title: '通知の再送処理を見直す' },
   },
 }
 
@@ -286,11 +287,8 @@ export const PhoneTitleTruncatesAfterTwoLines: Story = {
   name: 'The phone header truncates a long title after two lines',
   args: {
     isMobile: true,
-    session: {
-      ...session,
-      title:
-        '通知の再送処理を見直して上限を設定ファイルに出し、遅延と失敗を記録して再送回数を調整する',
-    },
+    isToday: true,
+    session: { ...phoneSession },
   },
 }
 

@@ -85,7 +85,15 @@
 .conversation-pane[data-mobile='true']
   .mobile-conversation-context
   .conversation-task-link {
-  font-size: inherit;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-weight: 400;
+}
+
+.conversation-pane[data-mobile='true']
+  .mobile-conversation-context
+  .session-task-link-id {
+  font-weight: 400;
 }
 
 .conversation-pane[data-mobile='true']

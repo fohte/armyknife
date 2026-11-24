@@ -378,15 +378,30 @@
   box-sizing: border-box;
   max-height: min(36vh, 300px);
   overflow-y: auto;
-  padding: 8px 0;
+  padding: 4px 0 8px;
   border-top: 0;
   border-bottom: 1px solid var(--aw-border);
   background: var(--aw-bg-nav);
   box-shadow: none;
+  font-size: 14px;
 }
 
 .session-pr-list--panel .session-pr-list-title {
-  margin-top: 6px;
+  margin: 0 16px 2px;
+  font-size: 13px;
+}
+
+.session-pr-list--panel .session-pr-group h3 {
+  padding: 6px 16px 0;
+}
+
+.session-pr-list--panel .session-pr-row {
+  min-height: 52px;
+  padding: 4px 16px;
+}
+
+.session-pr-list--panel .session-pr-number {
+  font-size: 13px;
 }
 
 @keyframes session-pr-merge-spin {
