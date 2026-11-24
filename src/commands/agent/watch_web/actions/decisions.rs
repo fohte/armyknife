@@ -90,13 +90,30 @@ pub(super) async fn request_change(
         } else {
             session.clone()
         };
-        let content = change_message(&session, &target, &decision.title, &request.comment);
+        let body = change_message_body(&session, &target, &decision.title, &request.comment);
+        let content = format!(
+            "<{tag}>{body}</{tag}>",
+            tag = super::super::messages::action_event::DECISION_CHANGE_TAG,
+        );
         let marker = (target.engine == Engine::Claude)
             .then(|| store::ensure_watch_web_user_marker_from(&sessions_dir, &target.session_id))
             .transpose()?;
-        let content =
-            super::messages::watch_web_action_message_content(&target, marker.as_deref(), &content);
-        runtime.send_message(&target, &content)?;
+        let event_text = super::super::messages::action_event::event_text_for_kind(
+            store::WatchWebActionEventKind::DecisionChange,
+            &body,
+        );
+        super::messages::send_action_event_message(
+            &sessions_dir,
+            &target,
+            super::messages::ActionEventMessage {
+                marker: marker.as_deref(),
+                message_content: &content,
+                event_text: &event_text,
+                attachments: &[],
+                action_event_kind: store::WatchWebActionEventKind::DecisionChange,
+            },
+            |session, content| runtime.send_message(session, content),
+        )?;
         store::set_agent_decision_review_from(&sessions_dir, &id, seq, "change")?;
         Ok(ChangeOutcome::Sent)
     })
@@ -114,7 +131,7 @@ pub(super) async fn request_change(
     Ok(Json(Success::new()))
 }
 
-fn change_message(session: &Session, target: &Session, title: &str, comment: &str) -> String {
+fn change_message_body(session: &Session, target: &Session, title: &str, comment: &str) -> String {
     let session_id = &session.session_id;
     let message = if session.session_id != target.session_id {
         indoc::formatdoc! {"
@@ -129,10 +146,5 @@ fn change_message(session: &Session, target: &Session, title: &str, comment: &st
             {comment}
         "}
     };
-    format!(
-        "<{}>{}</{}>",
-        super::super::messages::action_event::DECISION_CHANGE_TAG,
-        message.trim_end(),
-        super::super::messages::action_event::DECISION_CHANGE_TAG,
-    )
+    message.trim_end().to_owned()
 }

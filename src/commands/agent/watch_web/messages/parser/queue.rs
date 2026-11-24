@@ -350,7 +350,7 @@ impl Queue {
             .into_iter()
             .filter(|queued| !queued.resolved && !delivered_prompt_ids.contains(&queued.id))
         {
-            items.push(super::super::queued_prompt::chat_item(&queued));
+            items.push(super::super::queued_prompt::chat_item(&queued, true));
         }
         items
     }
@@ -961,6 +961,7 @@ mod tests {
             id,
             message_id: Some(format!("fixture-message-{id}")),
             content: content.to_string(),
+            action_event_kind: None,
             attachments: vec![],
             resolved: false,
             sent_at: DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")

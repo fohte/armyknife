@@ -96,7 +96,8 @@ pub(super) async fn resolve_todo(
         .filter(|comment| !comment.is_empty());
     let mut stored_comment = comment.clone();
     if session.status != SessionStatus::Ended {
-        let content = todo_resolution_message(request.resolution, &todo.title, comment.as_deref());
+        let (action_event_kind, body, content) =
+            todo_resolution_message(request.resolution, &todo.title, comment.as_deref());
         let marker = if session.engine == super::super::super::types::Engine::Claude {
             let session_id = session.session_id.clone();
             let sessions_dir = sessions_dir.clone();
@@ -118,15 +119,37 @@ pub(super) async fn resolve_todo(
         stored_comment =
             attachments::append_image_previews_to_comment(stored_comment, &saved_attachments);
         let content = attachments::append_paths_to_message(content, &attachment_paths);
-        let content = super::messages::watch_web_action_message_content(
-            &session,
-            marker.as_deref(),
-            &content,
-        );
+        let event_text =
+            super::super::messages::action_event::event_text_for_kind(action_event_kind, &body);
+        let queued_attachments = saved_attachments
+            .iter()
+            .map(|attachment| match &attachment.image_source {
+                Some(source) => store::WatchWebQueuedAttachment::Image {
+                    source: source.clone(),
+                },
+                None => store::WatchWebQueuedAttachment::File {
+                    name: attachment.name.clone(),
+                },
+            })
+            .collect::<Vec<_>>();
         let runtime = state.runtime;
         let send_session = session.clone();
-        if let Err(error) =
-            run_blocking(move || runtime.send_message(&send_session, &content)).await
+        let send_sessions_dir = sessions_dir.clone();
+        if let Err(error) = run_blocking(move || {
+            super::messages::send_action_event_message(
+                &send_sessions_dir,
+                &send_session,
+                super::messages::ActionEventMessage {
+                    marker: marker.as_deref(),
+                    message_content: &content,
+                    event_text: &event_text,
+                    attachments: &queued_attachments,
+                    action_event_kind,
+                },
+                |session, content| runtime.send_message(session, content),
+            )
+        })
+        .await
         {
             remove_attachments(attachment_paths).await;
             return Err(error);
@@ -164,23 +187,25 @@ fn todo_resolution_message(
     resolution: UserTodoResolution,
     title: &str,
     comment: Option<&str>,
-) -> String {
-    let (tag, summary) = match resolution {
+) -> (store::WatchWebActionEventKind, String, String) {
+    let (kind, tag, summary) = match resolution {
         UserTodoResolution::Completed => (
+            store::WatchWebActionEventKind::TodoCompleted,
             super::super::messages::action_event::TODO_COMPLETED_TAG,
             format!("The user marked the to-do as done: {title}."),
         ),
         UserTodoResolution::Rejected => (
+            store::WatchWebActionEventKind::TodoRejected,
             super::super::messages::action_event::TODO_REJECTED_TAG,
             format!("The user rejected the to-do: {title}."),
         ),
     };
-    let mut content = format!("<{tag}>{summary}");
+    let mut body = summary;
     if let Some(comment) = comment {
-        content.push('\n');
-        content.push('\n');
-        content.push_str(comment);
+        body.push('\n');
+        body.push('\n');
+        body.push_str(comment);
     }
-    content.push_str(&format!("</{tag}>"));
-    content
+    let content = format!("<{tag}>{body}</{tag}>");
+    (kind, body, content)
 }

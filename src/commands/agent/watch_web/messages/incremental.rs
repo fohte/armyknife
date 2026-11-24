@@ -350,6 +350,7 @@ fn render_parser(
                 &mut messages,
                 input.additions.queued_prompts,
                 &resolved_ids,
+                input.engine,
             );
             Ok((
                 ConversationResponse {
@@ -449,6 +450,7 @@ mod tests {
                 id: index as i64 + 1,
                 message_id: Some((*message_id).to_owned()),
                 content: "Repeat this request.".to_owned(),
+                action_event_kind: None,
                 attachments: vec![WatchWebQueuedAttachment::File {
                     name: (*filename).to_owned(),
                 }],

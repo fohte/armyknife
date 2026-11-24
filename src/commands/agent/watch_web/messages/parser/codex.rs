@@ -643,8 +643,8 @@ mod tests {
     use super::super::cards::cards_from_sources;
     use super::{CodexParserState, parse, parse_with_skills};
     use crate::commands::agent::store::{
-        AgentTodo, PermissionRequestData, TodoResolution, WatchWebQueuedAttachment,
-        WatchWebQueuedPrompt,
+        AgentTodo, PermissionRequestData, TodoResolution, WatchWebActionEventKind,
+        WatchWebQueuedAttachment, WatchWebQueuedPrompt,
     };
     use crate::commands::agent::watch_web::messages::{
         ChatItem, EventKind, ParentSession, PeerDirection, SkillSuggestion, ToolGroupItem,
@@ -1372,6 +1372,7 @@ mod tests {
             id: 9,
             message_id: Some(message_id.to_owned()),
             content: content.to_owned(),
+            action_event_kind: None,
             attachments: Vec::<WatchWebQueuedAttachment>::new(),
             resolved: false,
             sent_at: Utc::now(),
@@ -1399,16 +1400,25 @@ mod tests {
     #[case::enabled(
         "armyknife-vibe-mode-on",
         "watch-web からユーザーが vibe mode を on にしました。",
+        WatchWebActionEventKind::VibeModeOn,
         "Vibe mode turned on"
     )]
     #[case::disabled(
         "armyknife-vibe-mode-off",
         "watch-web からユーザーが vibe mode を off にしました。祖先セッションから引き継いでいる場合、vibe mode は引き続き有効です。",
+        WatchWebActionEventKind::VibeModeOff,
         "Vibe mode turned off"
     )]
-    fn renders_vibe_mode_changes_as_armyknife_events(
+    #[case::recorded_kind_wins_over_the_transcript_tag(
+        "armyknife-todo-completed",
+        "This tag differs from the recorded event kind.",
+        WatchWebActionEventKind::VibeModeOn,
+        "Vibe mode turned on"
+    )]
+    fn renders_the_recorded_action_kind_as_an_armyknife_event(
         #[case] tag: &str,
         #[case] body: &str,
+        #[case] action_event_kind: WatchWebActionEventKind,
         #[case] expected_text: &str,
     ) {
         let message_id = "armyknife-action:fixture-message-cyan";
@@ -1422,7 +1432,8 @@ mod tests {
         let queued_prompts = [WatchWebQueuedPrompt {
             id: 7,
             message_id: Some(message_id.to_owned()),
-            content: user_message.clone(),
+            content: expected_text.to_owned(),
+            action_event_kind: Some(action_event_kind),
             attachments: Vec::<WatchWebQueuedAttachment>::new(),
             resolved: false,
             sent_at: Utc::now(),

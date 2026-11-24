@@ -3,7 +3,9 @@ use std::path::Path;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 
-use super::database::{self, WatchWebQueuedAttachment, WatchWebQueuedPrompt};
+use super::database::{
+    self, WatchWebActionEventKind, WatchWebQueuedAttachment, WatchWebQueuedPrompt,
+};
 
 pub(crate) fn ensure_watch_web_user_marker_from(
     sessions_dir: &Path,
@@ -21,6 +23,7 @@ pub(crate) fn insert_watch_web_queued_prompt_from(
     message_id: &str,
     content: &str,
     attachments: &[WatchWebQueuedAttachment],
+    action_event_kind: Option<WatchWebActionEventKind>,
     sent_at: DateTime<Utc>,
 ) -> Result<i64> {
     database::insert_watch_web_queued_prompt(
@@ -29,6 +32,7 @@ pub(crate) fn insert_watch_web_queued_prompt_from(
         message_id,
         content,
         attachments,
+        action_event_kind,
         sent_at,
     )
 }
