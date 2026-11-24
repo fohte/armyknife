@@ -1,6 +1,8 @@
-.review-document-direct-actions {
+.review-document-actions.review-document-direct-actions {
+  align-items: stretch;
   min-height: 0;
   flex-direction: column;
+  flex-wrap: nowrap;
   gap: 10px;
   padding: 10px 18px 10px;
   border-color: #2a2a2a;
@@ -34,6 +36,7 @@
 }
 
 .review-document-direct-actions .review-document-send-back {
+  margin-left: auto;
   padding: 0 12px;
   border-color: #3f3f46;
   background: transparent;
@@ -122,4 +125,10 @@
   height: 44px;
   min-height: 44px;
   flex: 1 1 auto;
+}
+
+.session-status-panel[data-size='phone']
+  .review-document-direct-button-row
+  .review-document-send-back {
+  margin-left: 0;
 }
