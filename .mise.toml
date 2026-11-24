@@ -3,7 +3,7 @@
 CARGO_TARGET_DIR = "{{config_root}}/target"
 
 [tools]
-lefthook = "2.1.14"
+lefthook = "2.2.2"
 "github:ast-grep/ast-grep" = "0.51.3"
 
 # lefthook hooks
