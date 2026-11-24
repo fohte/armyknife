@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.886](https://github.com/fohte/armyknife/compare/v0.1.885...v0.1.886) (2026-11-24)
+
+
+### Dependencies
+
+* update rust crate indoc to v2.0.8 ([#2164](https://github.com/fohte/armyknife/issues/2164)) ([0ef2550](https://github.com/fohte/armyknife/commit/0ef25507771f782e2251b806ce70b02cf27f69d0))
+
 ## [0.1.885](https://github.com/fohte/armyknife/compare/v0.1.884...v0.1.885) (2026-11-24)
 
 
