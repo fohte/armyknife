@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.904](https://github.com/fohte/armyknife/compare/v0.1.903...v0.1.904) (2026-11-24)
+
+
+### Dependencies
+
+* update react monorepo to v19.3.1 ([#2210](https://github.com/fohte/armyknife/issues/2210)) ([94c2e4d](https://github.com/fohte/armyknife/commit/94c2e4d429b3f45bbab93bdf90bf4c20d9631a11))
+
 ## [0.1.903](https://github.com/fohte/armyknife/compare/v0.1.902...v0.1.903) (2026-11-24)
 
 
