@@ -8,7 +8,7 @@ strip = "symbols"
 
 [package]
 name = "armyknife"
-version = "0.1.884"
+version = "0.1.885"
 edition = "2024"
 build = "build.rs"
 authors = ["Hayato Kawai <fohte.hk@gmail.com>"]
@@ -79,7 +79,7 @@ uuid = { version = "=1.23.5", features = ["v4"] }
 rstest = "=0.28.0"
 temp-env = "=0.3.6"
 tower = { version = "=0.5.3", features = ["util"] }
-flate2 = "=1.1.10"
+flate2 = "=1.1.11"
 wiremock = "=0.6.5"
 
 [lints.clippy]
