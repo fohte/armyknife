@@ -34,7 +34,7 @@
     "@codemirror/language": "6.13.1",
     "@codemirror/state": "6.7.6",
     "@codemirror/view": "6.43.15",
-    "@fohte/ui": "0.1.6",
+    "@fohte/ui": "0.1.8",
     "@fontsource-variable/jetbrains-mono": "5.2.8",
     "@fontsource-variable/noto-sans-jp": "5.3.1",
     "clsx": "2.1.1",
