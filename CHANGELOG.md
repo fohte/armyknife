@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.915](https://github.com/fohte/armyknife/compare/v0.1.914...v0.1.915) (2026-11-24)
+
+
+### Reverts
+
+* **gh/pr-merge:** remove --unstack ([#2252](https://github.com/fohte/armyknife/issues/2252)) ([324cb2e](https://github.com/fohte/armyknife/commit/324cb2ee5c352eb9a34b26b9da80db925cea170a))
+
 ## [0.1.914](https://github.com/fohte/armyknife/compare/v0.1.913...v0.1.914) (2026-11-24)
 
 
