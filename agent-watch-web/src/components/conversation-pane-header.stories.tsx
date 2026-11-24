@@ -32,6 +32,7 @@ const actions: SessionActions = {
 
 const meta = {
   component: ConversationPaneHeader,
+  parameters: { layout: 'fullscreen' },
   args: {
     session,
     actions,
