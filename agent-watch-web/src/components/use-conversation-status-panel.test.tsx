@@ -339,6 +339,55 @@ it('shows the PRs tab after Running and renders its merge row on mobile', () => 
   })
 })
 
+it('returns to Running when a background task starts after PRs was the only tab', () => {
+  const currentSession: Session = {
+    ...session,
+    pullRequest: {
+      number: 42,
+      state: 'Open',
+      owner: 'fixture',
+      repo: 'toolkit',
+      title: 'Improve request reliability',
+      headSha: 'fixture-head-sha',
+      ciState: 'Successful',
+      isCurrentBranch: true,
+    },
+  }
+  const backgroundTask: BackgroundTask = {
+    id: 'fixture-background-task',
+    description: 'Run the request checks',
+    elapsedSeconds: 10,
+    kind: 'background_task',
+  }
+  const selectedTab = () =>
+    container.querySelector('[role="tab"][aria-selected="true"]')
+      ?.textContent ?? null
+  const render = (backgroundTasks: readonly BackgroundTask[]) => {
+    act(() => {
+      root?.render(
+        <StatusPanelHarness
+          currentSession={currentSession}
+          backgroundTasks={backgroundTasks}
+          isMobile
+        />,
+      )
+    })
+    return selectedTab()
+  }
+
+  const selection = () => ({
+    whileRunning: render([backgroundTask]),
+    afterTaskCompletes: render([]),
+    afterTaskStartsAgain: render([backgroundTask]),
+  })
+
+  expect(selection()).toEqual({
+    whileRunning: 'Running1',
+    afterTaskCompletes: 'PRs1',
+    afterTaskStartsAgain: 'Running1',
+  })
+})
+
 it('hides the PRs tab on mobile when a session has no pull requests', () => {
   act(() => {
     root?.render(

@@ -589,7 +589,7 @@ export function useConversationStatusPanel({
       activePanelTabId !== activeTabId &&
       (activePanelTabId !== null || activeTabId !== 'pull-requests')
     ) {
-      setActivePanelTabId(activeTabId)
+      setActivePanelTabId(activeTabId === 'pull-requests' ? null : activeTabId)
     }
   }, [activePanelTabId, activeTabId])
   return {
