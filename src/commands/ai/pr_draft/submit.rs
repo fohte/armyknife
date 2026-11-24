@@ -1483,26 +1483,19 @@ mod tests {
         }
     }
 
-    async fn pull_request_update_payloads(env: &TestEnv, path: &str) -> Vec<serde_json::Value> {
+    async fn pull_request_payloads(
+        env: &TestEnv,
+        method: &str,
+        path: &str,
+    ) -> Vec<serde_json::Value> {
         env.mock
             .received_requests()
             .await
             .iter()
-            .filter(|request| request.method.as_str() == "PATCH" && request.url.path() == path)
+            .filter(|request| request.method.as_str() == method && request.url.path() == path)
             .map(|request| request.body_json::<serde_json::Value>())
             .collect::<serde_json::Result<Vec<_>>>()
-            .expect("decode update request body")
-    }
-
-    async fn pull_request_create_payloads(env: &TestEnv, path: &str) -> Vec<serde_json::Value> {
-        env.mock
-            .received_requests()
-            .await
-            .iter()
-            .filter(|request| request.method.as_str() == "POST" && request.url.path() == path)
-            .map(|request| request.body_json::<serde_json::Value>())
-            .collect::<serde_json::Result<Vec<_>>>()
-            .expect("decode pull request create request body")
+            .expect("decode pull request payload")
     }
 
     async fn stack_requests(env: &TestEnv) -> Vec<(String, String, String, serde_json::Value)> {
@@ -1673,7 +1666,7 @@ mod tests {
         )
         .await;
         let update_payloads =
-            pull_request_update_payloads(&env, "/repos/owner/repo_submit_update/pulls/42").await;
+            pull_request_payloads(&env, "PATCH", "/repos/owner/repo_submit_update/pulls/42").await;
 
         assert_eq!(
             (
@@ -1739,7 +1732,7 @@ mod tests {
         )
         .await;
         let update_payloads =
-            pull_request_update_payloads(&env, &format!("/repos/owner/{repo}/pulls/42")).await;
+            pull_request_payloads(&env, "PATCH", &format!("/repos/owner/{repo}/pulls/42")).await;
 
         assert_eq!(
             (result.map_err(|error| error.to_string()), update_payloads),
@@ -1864,7 +1857,7 @@ mod tests {
         assert_eq!(
             (
                 result.map_err(|error| error.to_string()),
-                pull_request_create_payloads(&env, "/repos/sample-owner/no-stack/pulls").await,
+                pull_request_payloads(&env, "POST", "/repos/sample-owner/no-stack/pulls").await,
                 stack_requests(&env).await,
             ),
             (
