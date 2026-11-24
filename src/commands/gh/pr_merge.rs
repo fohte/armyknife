@@ -24,6 +24,7 @@ use crate::shared::{
 
 mod checks;
 mod merge_flow;
+mod merge_queue;
 mod watch_web;
 
 #[cfg(test)]
@@ -91,6 +92,12 @@ fn ensure_repo_vibe_access_for_session(
 
 trait PrMergeClient {
     fn view_pr(&self, owner: &str, repo: &str, pr_number: u64) -> anyhow::Result<PrSnapshot>;
+    fn is_pull_request_in_merge_queue(
+        &self,
+        owner: &str,
+        repo: &str,
+        pr_number: u64,
+    ) -> anyhow::Result<bool>;
     async fn get_stack_for_pull_request(
         &self,
         owner: &str,
@@ -140,6 +147,7 @@ trait PrMergeClient {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PrSnapshot {
     state: PrState,
+    is_draft: bool,
     head_sha: String,
     head_ref_name: String,
     base_ref_name: String,
@@ -304,6 +312,9 @@ fn ensure_pr_is_open_and_safe(
     if pr.state != PrState::Open {
         bail!("PR #{pr_number} is not open (state: {:?}).", pr.state);
     }
+    if pr.is_draft {
+        bail!("PR #{pr_number} is a draft and cannot be merged.");
+    }
     if pr.head_sha.is_empty() {
         bail!("PR #{pr_number} did not report a head SHA.");
     }
@@ -329,13 +340,14 @@ impl PrMergeClient for GhCli {
             "--repo",
             repository.as_str(),
             "--json",
-            "state,headRefOid,headRefName,baseRefName,headRepository,mergeStateStatus,url",
+            "state,isDraft,headRefOid,headRefName,baseRefName,headRepository,mergeStateStatus,url",
         ];
         let output = run_gh(&args)?;
         let response: GhPrResponse = serde_json::from_slice(&output.stdout)
             .context("Failed to parse gh pr view response")?;
         Ok(PrSnapshot {
             state: parse_pr_state(&response.state)?,
+            is_draft: response.is_draft,
             head_sha: response.head_ref_oid,
             head_ref_name: response.head_ref_name,
             base_ref_name: response.base_ref_name,
@@ -345,6 +357,15 @@ impl PrMergeClient for GhCli {
             merge_state_status: response.merge_state_status.unwrap_or_default(),
             url: response.url,
         })
+    }
+
+    fn is_pull_request_in_merge_queue(
+        &self,
+        owner: &str,
+        repo: &str,
+        pr_number: u64,
+    ) -> anyhow::Result<bool> {
+        merge_queue::is_pull_request_in_merge_queue(owner, repo, pr_number)
     }
 
     async fn get_stack_for_pull_request(
@@ -429,6 +450,7 @@ impl PrMergeClient for GhCli {
 #[serde(rename_all = "camelCase")]
 struct GhPrResponse {
     state: String,
+    is_draft: bool,
     head_ref_oid: String,
     head_ref_name: String,
     base_ref_name: String,
@@ -480,6 +502,7 @@ mod tests {
     struct FakePrMergeClient {
         snapshots: RefCell<VecDeque<PrSnapshot>>,
         events: Rc<RefCell<Vec<String>>>,
+        is_in_merge_queue: bool,
         checks_error: bool,
         merge_error: bool,
         fallback_error: Option<AsyncMergeFallback>,
@@ -497,6 +520,23 @@ mod tests {
         Rc::new(RefCell::new(Vec::new()))
     }
 
+    #[test]
+    fn gh_pr_response_reads_draft_status() {
+        let response = serde_json::from_value::<GhPrResponse>(serde_json::json!({
+            "state": "OPEN",
+            "isDraft": true,
+            "headRefOid": "head-a",
+            "headRefName": "topic/example-branch",
+            "baseRefName": "main",
+            "headRepository": null,
+            "mergeStateStatus": "BLOCKED",
+            "url": "https://github.com/example-org/example-repo/pull/42",
+        }))
+        .expect("valid gh PR response");
+
+        assert_eq!((response.is_draft, response.state.as_str()), (true, "OPEN"));
+    }
+
     impl PrMergeClient for FakePrMergeClient {
         fn view_pr(
             &self,
@@ -509,6 +549,18 @@ mod tests {
                 .borrow_mut()
                 .pop_front()
                 .ok_or_else(|| anyhow::anyhow!("No fake PR snapshot remains"))
+        }
+
+        fn is_pull_request_in_merge_queue(
+            &self,
+            _owner: &str,
+            _repo: &str,
+            _pr_number: u64,
+        ) -> anyhow::Result<bool> {
+            self.events
+                .borrow_mut()
+                .push("merge-queue-status".to_string());
+            Ok(self.is_in_merge_queue)
         }
 
         async fn get_stack_for_pull_request(
@@ -616,6 +668,7 @@ mod tests {
     fn snapshot(state: PrState, head_sha: &str, merge_state_status: &str) -> PrSnapshot {
         PrSnapshot {
             state,
+            is_draft: false,
             head_sha: head_sha.to_string(),
             head_ref_name: "topic/example-branch".to_string(),
             base_ref_name: "main".to_string(),
@@ -634,6 +687,7 @@ mod tests {
         FakePrMergeClient {
             snapshots: RefCell::new(snapshots.iter().cloned().collect()),
             events,
+            is_in_merge_queue: false,
             checks_error,
             merge_error,
             fallback_error: None,
@@ -1650,6 +1704,8 @@ mod tests {
     enum UnstackScenario {
         Merge,
         NoLowerPr,
+        DraftPr,
+        QueuedPr,
         StackRemains,
         RestackedBeforeAsyncMerge,
         RestackedBeforeSyncFallback,
@@ -1662,6 +1718,8 @@ mod tests {
     #[rstest]
     #[case::merge(UnstackScenario::Merge)]
     #[case::no_lower_pr(UnstackScenario::NoLowerPr)]
+    #[case::draft_pr(UnstackScenario::DraftPr)]
+    #[case::queued_pr(UnstackScenario::QueuedPr)]
     #[case::stack_remains(UnstackScenario::StackRemains)]
     #[case::restacked_before_async_merge(UnstackScenario::RestackedBeforeAsyncMerge)]
     #[case::restacked_before_sync_fallback(UnstackScenario::RestackedBeforeSyncFallback)]
@@ -1677,14 +1735,27 @@ mod tests {
         let mut snapshots = vec![
             snapshot(PrState::Open, "head-a", "CLEAN"),
             snapshot(PrState::Open, "head-a", "CLEAN"),
+            snapshot(PrState::Open, "head-a", "CLEAN"),
         ];
         let mut client = fake_stacked_client(&snapshots, Rc::clone(&events));
         match scenario {
-            UnstackScenario::Merge | UnstackScenario::NoLowerPr => {
+            UnstackScenario::Merge => {
                 snapshots.push(snapshot(PrState::Merged, "head-a", "CLEAN"));
             }
+            UnstackScenario::NoLowerPr => {
+                snapshots.truncate(2);
+                snapshots.push(snapshot(PrState::Merged, "head-a", "CLEAN"));
+            }
+            UnstackScenario::DraftPr => {
+                if let Some(initial) = snapshots.first_mut() {
+                    initial.is_draft = true;
+                }
+            }
+            UnstackScenario::QueuedPr => {
+                client.is_in_merge_queue = true;
+            }
             UnstackScenario::StackRemains => {
-                snapshots.truncate(1);
+                snapshots.truncate(2);
                 client
                     .post_unstack_stack_responses
                     .borrow_mut()
@@ -1706,7 +1777,7 @@ mod tests {
                 ]);
             }
             UnstackScenario::BaseChangesBeforeAsyncMerge => {
-                if let Some(current) = snapshots.get_mut(1) {
+                if let Some(current) = snapshots.get_mut(2) {
                     current.base_ref_name = "trunk".to_string();
                 }
             }
@@ -1717,10 +1788,10 @@ mod tests {
                 client.fallback_error = Some(timed_out_merge_error());
             }
             UnstackScenario::HookFails => {
-                snapshots.truncate(1);
+                snapshots.truncate(2);
             }
             UnstackScenario::ChecksFail => {
-                snapshots.truncate(1);
+                snapshots.truncate(2);
                 client.checks_error = true;
             }
         }
@@ -1754,6 +1825,8 @@ mod tests {
                     "view".to_string(),
                     "stack".to_string(),
                     "stack-pull-requests".to_string(),
+                    "view".to_string(),
+                    "merge-queue-status".to_string(),
                     "unstack".to_string(),
                     "stack".to_string(),
                     "hook".to_string(),
@@ -1777,12 +1850,28 @@ mod tests {
                     "view".to_string(),
                 ],
             ),
+            UnstackScenario::DraftPr => (
+                Err("PR #42 is a draft and cannot be merged.".to_string()),
+                vec!["view".to_string()],
+            ),
+            UnstackScenario::QueuedPr => (
+                Err("PR #42 is in a merge queue; refusing to unstack.".to_string()),
+                vec![
+                    "view".to_string(),
+                    "stack".to_string(),
+                    "stack-pull-requests".to_string(),
+                    "view".to_string(),
+                    "merge-queue-status".to_string(),
+                ],
+            ),
             UnstackScenario::StackRemains => (
                 Err("PR #42 is still in a stack after unstacking; refusing to merge.".to_string()),
                 vec![
                     "view".to_string(),
                     "stack".to_string(),
                     "stack-pull-requests".to_string(),
+                    "view".to_string(),
+                    "merge-queue-status".to_string(),
                     "unstack".to_string(),
                     "stack".to_string(),
                 ],
@@ -1793,6 +1882,8 @@ mod tests {
                     "view".to_string(),
                     "stack".to_string(),
                     "stack-pull-requests".to_string(),
+                    "view".to_string(),
+                    "merge-queue-status".to_string(),
                     "unstack".to_string(),
                     "stack".to_string(),
                     "hook".to_string(),
@@ -1807,6 +1898,8 @@ mod tests {
                     "view".to_string(),
                     "stack".to_string(),
                     "stack-pull-requests".to_string(),
+                    "view".to_string(),
+                    "merge-queue-status".to_string(),
                     "unstack".to_string(),
                     "stack".to_string(),
                     "hook".to_string(),
@@ -1825,6 +1918,8 @@ mod tests {
                     "view".to_string(),
                     "stack".to_string(),
                     "stack-pull-requests".to_string(),
+                    "view".to_string(),
+                    "merge-queue-status".to_string(),
                     "unstack".to_string(),
                     "stack".to_string(),
                     "hook".to_string(),
@@ -1838,6 +1933,8 @@ mod tests {
                     "view".to_string(),
                     "stack".to_string(),
                     "stack-pull-requests".to_string(),
+                    "view".to_string(),
+                    "merge-queue-status".to_string(),
                     "unstack".to_string(),
                     "stack".to_string(),
                     "hook".to_string(),
@@ -1854,6 +1951,8 @@ mod tests {
                     "view".to_string(),
                     "stack".to_string(),
                     "stack-pull-requests".to_string(),
+                    "view".to_string(),
+                    "merge-queue-status".to_string(),
                     "unstack".to_string(),
                     "stack".to_string(),
                     "hook".to_string(),
@@ -1865,6 +1964,8 @@ mod tests {
                     "view".to_string(),
                     "stack".to_string(),
                     "stack-pull-requests".to_string(),
+                    "view".to_string(),
+                    "merge-queue-status".to_string(),
                     "unstack".to_string(),
                     "stack".to_string(),
                     "hook".to_string(),

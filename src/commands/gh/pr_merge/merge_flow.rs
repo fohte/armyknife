@@ -60,6 +60,20 @@ pub(super) async fn run_merge_with_expected_head(
                     "PR #{pr_number} cannot be merged because lower PR #{lower_pr} is not merged."
                 );
             }
+            let before_unstack = client
+                .view_pr(owner, repo, pr_number)
+                .with_context(|| format!("Failed to verify PR #{pr_number} before unstacking"))?;
+            if before_unstack.state == PrState::Merged {
+                return Ok(MergeOutcome::AlreadyMerged(before_unstack));
+            }
+            ensure_pr_is_open_and_safe(&before_unstack, pr_number, Some(&initial.head_sha))?;
+            ensure_pr_base_is_unchanged(&before_unstack, pr_number, &initial.base_ref_name)?;
+            if client
+                .is_pull_request_in_merge_queue(owner, repo, pr_number)
+                .context("Failed to inspect merge queue membership before unstacking")?
+            {
+                bail!("PR #{pr_number} is in a merge queue; refusing to unstack.");
+            }
             client
                 .unstack_pull_requests(owner, repo, stack.number)
                 .await
