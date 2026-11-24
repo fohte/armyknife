@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.888](https://github.com/fohte/armyknife/compare/v0.1.887...v0.1.888) (2026-11-24)
+
+
+### Dependencies
+
+* update rust crate lazy-regex to v3.6.1 ([#891](https://github.com/fohte/armyknife/issues/891)) ([db98566](https://github.com/fohte/armyknife/commit/db985666fbbacc427c99cf03c956387339f203f9))
+
 ## [0.1.887](https://github.com/fohte/armyknife/compare/v0.1.886...v0.1.887) (2026-11-24)
 
 
