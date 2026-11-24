@@ -7,6 +7,7 @@ import { useState } from 'react'
 import { MarkdownMessage } from '#components/markdown-message'
 import {
   parseIssueComment,
+  parseReviewMessages,
   parseReviewThreads,
   updateReviewThread,
 } from '#components/review-document-preview-data'
@@ -83,6 +84,12 @@ function AddIssueValue({
 }) {
   const [adding, setAdding] = useState(false)
   const [value, setValue] = useState('')
+  const commit = () => {
+    const nextValue = value.trim()
+    if (nextValue.length > 0) onAdd(nextValue)
+    setValue('')
+    setAdding(false)
+  }
   if (adding) {
     return (
       <input
@@ -95,6 +102,7 @@ function AddIssueValue({
         onChange={(event) => {
           setValue(event.currentTarget.value)
         }}
+        onBlur={commit}
         onKeyDown={(event) => {
           if (event.key === 'Escape') {
             setValue('')
@@ -102,11 +110,7 @@ function AddIssueValue({
           }
           if (event.key !== 'Enter') return
           event.preventDefault()
-          const nextValue = value.trim()
-          if (nextValue.length === 0) return
-          onAdd(nextValue)
-          setValue('')
-          setAdding(false)
+          commit()
         }}
       />
     )
@@ -201,6 +205,10 @@ function IssueFrontmatter({
               className="review-document-issue-add-field review-document-issue-add-field--label"
               disabled={disabled}
               placeholder="Add label"
+              onBlur={(event) => {
+                addListValue('labels', event.currentTarget.value)
+                event.currentTarget.value = ''
+              }}
               onKeyDown={(event) => {
                 if (event.key !== 'Enter') return
                 event.preventDefault()
@@ -355,6 +363,14 @@ export function ReviewDocumentPreview({
 
   if (summary?.kind === 'review_replies') {
     const threads = parseReviewThreads(body)
+    if (threads.length === 0) {
+      const messages = parseReviewMessages(body)
+      return (
+        <MarkdownMessage className="review-document-body">
+          {messages.length > 0 ? messages.join('\n\n') : body}
+        </MarkdownMessage>
+      )
+    }
     return (
       <div className="review-document-review-threads">
         {threads.map((thread) => (

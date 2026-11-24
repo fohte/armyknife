@@ -321,7 +321,10 @@ export function ReviewDocumentPanel({
           summary?.kind === 'issue_body' ||
           summary?.kind === 'review_replies'
         ) {
-          return name === 'submit'
+          return (
+            name === 'submit' ||
+            (summary.kind === 'issue_body' && name === 'milestone')
+          )
         }
         return true
       })

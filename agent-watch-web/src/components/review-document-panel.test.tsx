@@ -444,6 +444,137 @@ it('keeps malformed issue references visible as plain text', () => {
   })
 })
 
+it('saves pending issue metadata when Save is clicked', async () => {
+  const savedFrontmatters: JsonValue[] = []
+  const summary = {
+    id: 'fixture-issue-body-pending-metadata',
+    kind: 'issue_body' as const,
+    target: {
+      repository: 'example/web-app',
+      issueNumber: 412,
+    },
+    isEditor: true,
+    canSave: true,
+    canFinish: true,
+  }
+
+  function Harness() {
+    const [frontmatter, setFrontmatter] = useState<JsonValue>({
+      title: 'Fixture issue',
+      labels: [],
+      assignees: [],
+      parentIssue: '',
+      subIssues: [],
+      submit: false,
+      readonly: { number: 412, author: 'sample-reporter' },
+    })
+    const [body, setBody] = useState('Fixture issue body.')
+
+    return (
+      <ReviewDocumentPanel
+        summary={summary}
+        summaries={[summary]}
+        frontmatter={frontmatter}
+        body={body}
+        onFrontmatterChange={setFrontmatter}
+        onBodyChange={setBody}
+        onSave={() => {
+          savedFrontmatters.push(frontmatter)
+        }}
+      />
+    )
+  }
+
+  await page.viewport(640, 900)
+  root = createRoot(container)
+  act(() => root?.render(<Harness />))
+  await act(async () => {
+    await page.getByRole('textbox', { name: 'Add label' }).fill('notifications')
+    await page.getByRole('button', { name: 'Add assignee' }).click()
+    await page
+      .getByRole('textbox', { name: 'Add assignee' })
+      .fill('sample-maintainer')
+    await page.getByRole('button', { name: 'Add sub-issue' }).click()
+    await page
+      .getByRole('textbox', { name: 'Add sub-issue' })
+      .fill('example/web-app#415')
+    await page.getByRole('button', { name: 'Set parent issue' }).click()
+    await page
+      .getByRole('textbox', { name: 'Set parent issue' })
+      .fill('example/web-app#390')
+    await page.getByRole('button', { name: 'Save' }).click()
+  })
+
+  expect(savedFrontmatters).toEqual([
+    {
+      title: 'Fixture issue',
+      labels: ['notifications'],
+      assignees: ['sample-maintainer'],
+      parentIssue: 'example/web-app#390',
+      subIssues: ['example/web-app#415'],
+      submit: false,
+      readonly: { number: 412, author: 'sample-reporter' },
+    },
+  ])
+})
+
+it('keeps the issue milestone available in Edit mode', () => {
+  const summary = {
+    id: 'fixture-issue-body-milestone',
+    kind: 'issue_body' as const,
+    target: { repository: 'example/web-app', issueNumber: 412 },
+    isEditor: true,
+    canSave: true,
+    canFinish: true,
+  }
+  const frontmatter = {
+    title: 'Fixture issue',
+    labels: [],
+    assignees: [],
+    parentIssue: '',
+    subIssues: [],
+    milestone: 'Quarterly maintenance',
+    submit: false,
+    readonly: { number: 412, author: 'sample-reporter' },
+  }
+  const renderPanel = (view: 'preview' | 'edit') => (
+    <ReviewDocumentPanel
+      summary={summary}
+      summaries={[summary]}
+      frontmatter={frontmatter}
+      body="Fixture issue body."
+      view={view}
+    />
+  )
+
+  root = createRoot(container)
+  act(() => root?.render(renderPanel('preview')))
+  const previewFields = [
+    ...container.querySelectorAll(
+      '.review-document-fields .review-document-field-key',
+    ),
+  ].map((item) => item.textContent)
+  act(() => root?.render(renderPanel('edit')))
+
+  const snapshot = () => ({
+    previewFields,
+    editFields: [
+      ...container.querySelectorAll(
+        '.review-document-fields .review-document-field-key',
+      ),
+    ].map((item) => item.textContent),
+    milestone: container.querySelector<HTMLInputElement>(
+      '.review-document-fields input[aria-label="milestone"]',
+    )?.value,
+  })
+
+  expect(snapshot()).toEqual({
+    previewFields: [],
+    editFields: ['milestone', 'submit'],
+    milestone: 'Quarterly maintenance',
+  })
+})
+
 const approvalDocumentCases: {
   name: string
   summary: ReviewDocumentSummary
@@ -812,6 +943,48 @@ Please keep this delay configurable.
         reply: '',
       },
     ],
+  })
+})
+
+it('shows a PR review message when there are no inline threads', () => {
+  const summary = {
+    id: 'fixture-review-summary',
+    kind: 'review_replies' as const,
+    target: {
+      repository: 'example/web-app',
+      pullRequestNumber: 2049,
+      threadCount: 0,
+    },
+    isEditor: true,
+    canSave: true,
+    canFinish: true,
+  }
+  const body = `<!-- reviews -->
+<!-- review: @sample-reviewer state=COMMENTED 2026-11-24T00:00:00Z -->
+The overall review needs a response.
+<!-- /review -->
+<!-- /reviews -->`
+
+  root = createRoot(container)
+  act(() =>
+    root?.render(
+      <ReviewDocumentPanel
+        summary={summary}
+        summaries={[summary]}
+        frontmatter={{ submit: false }}
+        body={body}
+      />,
+    ),
+  )
+
+  const snapshot = () => ({
+    threadCards: container.querySelectorAll('.review-document-thread').length,
+    reviewBody: container.querySelector('.review-document-body')?.textContent,
+  })
+
+  expect(snapshot()).toEqual({
+    threadCards: 0,
+    reviewBody: 'The overall review needs a response.',
   })
 })
 

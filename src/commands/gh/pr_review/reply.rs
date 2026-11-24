@@ -490,11 +490,15 @@ mod pull_tests {
                 ReviewThread {
                     id: Some("RT_resolved_example".to_string()),
                     is_resolved: true,
+                    diff_side: None,
+                    start_diff_side: None,
                     comments: CommentsNode { nodes: vec![] },
                 },
                 ReviewThread {
                     id: Some("RT_active_example".to_string()),
                     is_resolved: false,
+                    diff_side: None,
+                    start_diff_side: None,
                     comments: CommentsNode { nodes: vec![] },
                 },
             ],

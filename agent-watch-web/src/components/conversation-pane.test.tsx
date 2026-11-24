@@ -6789,8 +6789,8 @@ it('returns from DraftFocus with the Back to conversation button', async () => {
   })
   const reviewLoaded = await waitForState(
     () =>
-      container.querySelector('.review-document-body')?.textContent ===
-      'Readable fixture draft',
+      container.querySelector('.review-document-issue-comment-body')
+        ?.textContent === 'Readable fixture draft',
   )
   expect(reviewLoaded).toBe(true)
   await act(async () => {
@@ -6926,8 +6926,8 @@ it('opens DraftFocus and exits Review after a draft load failure', async () => {
   })
   const reviewLoaded = await waitForState(
     () =>
-      container.querySelector('.review-document-body')?.textContent ===
-      'Readable fixture draft',
+      container.querySelector('.review-document-issue-comment-body')
+        ?.textContent === 'Readable fixture draft',
   )
   expect(reviewLoaded).toBe(true)
   await act(async () => {

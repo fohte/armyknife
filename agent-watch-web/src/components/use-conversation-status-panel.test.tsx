@@ -433,8 +433,8 @@ it('loads each selected draft and restores the previous draft when switching bac
   })
   await waitForState(
     () =>
-      container.querySelector('.review-document-body')?.textContent ===
-      'Second draft body',
+      container.querySelector('.review-document-issue-comment-body')
+        ?.textContent === 'Second draft body',
   )
   await act(async () => {
     await page

@@ -215,6 +215,8 @@ fn serialize_thread(
             start_line: root.start_line,
             original_line: root.original_line,
             original_start_line: root.original_start_line,
+            diff_side: thread.diff_side,
+            start_diff_side: thread.start_diff_side,
         });
         if compressed.parse_failed {
             parse_failed_threads.push(location.clone());
@@ -254,9 +256,7 @@ fn serialize_thread(
         && !draft.trim().is_empty()
     {
         output.push_str(draft);
-        if !draft.ends_with('\n') {
-            output.push('\n');
-        }
+        output.push('\n');
     }
 
     output
@@ -313,6 +313,8 @@ mod tests {
         ReviewThread {
             id: node_id.map(|s| s.to_string()),
             is_resolved,
+            diff_side: None,
+            start_diff_side: None,
             comments: CommentsNode { nodes: comments },
         }
     }
@@ -494,6 +496,7 @@ mod tests {
             Fix this
             <!-- /comment -->
             My draft reply
+
         "#};
         assert_eq!(result, expected);
     }

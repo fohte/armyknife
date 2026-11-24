@@ -24,6 +24,8 @@ type IssueCommentPreview = {
   body: string
 }
 
+const LEGACY_LINES_BEFORE = 5
+
 export function parseIssueComment(body: string): IssueCommentPreview {
   const lines = body.split('\n')
   const metadataKeys = new Set([
@@ -51,11 +53,29 @@ export function parseIssueComment(body: string): IssueCommentPreview {
   }
 }
 
+export function parseReviewMessages(body: string): string[] {
+  const section = /<!-- reviews -->\r?\n([\s\S]*?)\r?\n<!-- \/reviews -->/.exec(
+    body,
+  )?.[1]
+  if (section === undefined) return []
+
+  return [
+    ...section.matchAll(
+      /^<!-- review: @\S+ state=\S+ \S+ -->\r?\n([\s\S]*?)\r?\n<!-- \/review -->/gm,
+    ),
+  ].map(([, message]) => (message ?? '').replace(/\r?\n$/, ''))
+}
+
 export function parseReviewThreads(body: string): ReviewThreadPreview[] {
-  return body
+  const blocks = body
     .split(/(?=^<!-- thread: )/m)
     .filter((block) => block.startsWith('<!-- thread: '))
-    .map((block) => parseReviewThread(block))
+  return blocks
+    .map((block, index) =>
+      parseReviewThread(
+        index < blocks.length - 1 ? stripLineEnding(block, 'end') : block,
+      ),
+    )
     .filter((thread): thread is ReviewThreadPreview => thread !== null)
 }
 
@@ -76,7 +96,7 @@ function parseReviewThread(block: string): ReviewThreadPreview | null {
     )
   const comments = [
     ...block.matchAll(
-      /<!-- comment: (@\S+) (\S+) -->\r?\n([\s\S]*?)\r?\n<!-- \/comment -->/g,
+      /<!-- comment: (@\S+) (\S+) -->\r?\n([\s\S]*?)(?:\r?\n)?<!-- \/comment -->/g,
     ),
   ].map(([, author, createdAt, text]) => ({
     author: author ?? 'unknown',
@@ -90,7 +110,7 @@ function parseReviewThread(block: string): ReviewThreadPreview | null {
       : diffMatch === null
         ? header[0].length
         : diffMatch.index + diffMatch[0].length
-  const reply = block.slice(replyStart).trim()
+  const reply = stripLineEnding(block.slice(replyStart), 'both')
   const diff = diffMatch?.[1] ?? ''
 
   return {
@@ -104,14 +124,30 @@ function parseReviewThread(block: string): ReviewThreadPreview | null {
   }
 }
 
+function stripLineEnding(value: string, position: 'start' | 'end' | 'both') {
+  const withoutStart =
+    position === 'start' || position === 'both'
+      ? value.replace(/^\r?\n/, '')
+      : value
+  return position === 'end' || position === 'both'
+    ? withoutStart.replace(/\r?\n$/, '')
+    : withoutStart
+}
+
 function parseDiffLines(
   diff: string,
   focusLine: number | null,
 ): ReviewDiffLine[] {
   const lines = diff.split('\n')
   const hasExplicitFocus = lines.some((line) => line.startsWith('>'))
+  // Older compressed drafts kept five context lines before the target without a focus marker.
+  const legacyFocusIndex =
+    !hasExplicitFocus &&
+    /^\.\.\. \[\d+ lines omitted\] \.\.\.$/.test(lines[1] ?? '')
+      ? 1 + 1 + LEGACY_LINES_BEFORE
+      : null
   let newLine: number | null = null
-  return lines.map((text) => {
+  return lines.map((text, index) => {
     const focused = text.startsWith('>')
     const displayText = focused ? text.slice(1) : text
     const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(displayText)
@@ -121,16 +157,28 @@ function parseDiffLines(
     }
     if (displayText.startsWith('+') && !displayText.startsWith('+++')) {
       const lineFocused =
-        focused || (!hasExplicitFocus && newLine === focusLine)
+        focused ||
+        (!hasExplicitFocus &&
+          legacyFocusIndex === null &&
+          newLine === focusLine) ||
+        legacyFocusIndex === index
       if (newLine !== null) newLine += 1
       return { text: displayText, kind: 'added', focused: lineFocused }
     }
     if (displayText.startsWith('-') && !displayText.startsWith('---')) {
-      return { text: displayText, kind: 'removed', focused }
+      return {
+        text: displayText,
+        kind: 'removed',
+        focused: focused || legacyFocusIndex === index,
+      }
     }
     if (displayText.startsWith(' ') || displayText.length === 0) {
       const lineFocused =
-        focused || (!hasExplicitFocus && newLine === focusLine)
+        focused ||
+        (!hasExplicitFocus &&
+          legacyFocusIndex === null &&
+          newLine === focusLine) ||
+        legacyFocusIndex === index
       if (newLine !== null) newLine += 1
       return { text: displayText, kind: 'context', focused: lineFocused }
     }
@@ -145,7 +193,7 @@ export function updateReviewThread(
 ): string {
   const blocks = body.split(/(?=^<!-- thread: )/m)
   return blocks
-    .map((block) => {
+    .map((block, index) => {
       const thread = parseReviewThread(block)
       if (thread?.id !== threadId) return block
       let updated = block
@@ -170,11 +218,11 @@ export function updateReviewThread(
               ? 0
               : diffMatch.index + diffMatch[0].length
         const prefix = updated.slice(0, trailerStart).replace(/\s*$/, '')
-        const trailing = /\n*$/.exec(updated)?.[0] ?? ''
-        updated =
-          changes.reply.length === 0
-            ? `${prefix}${trailing}`
-            : `${prefix}\n${changes.reply}${trailing}`
+        const threadSeparator =
+          blocks[index + 1]?.startsWith('<!-- thread: ') === true
+            ? '\n\n'
+            : '\n'
+        updated = prefix + '\n' + changes.reply + threadSeparator
       }
       return updated
     })

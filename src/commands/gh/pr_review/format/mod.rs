@@ -242,6 +242,8 @@ mod tests {
             ReviewThread {
                 id: None,
                 is_resolved,
+                diff_side: None,
+                start_diff_side: None,
                 comments: CommentsNode { nodes: comments },
             }
         }
