@@ -86,10 +86,13 @@ async function hoverAt(x: number, y: number) {
   target.style.height = '2px'
   target.style.zIndex = '1000'
   document.body.append(target)
-  await act(async () => {
-    await userEvent.hover(target)
-  })
-  target.remove()
+  try {
+    await act(async () => {
+      await userEvent.hover(target)
+    })
+  } finally {
+    target.remove()
+  }
 }
 
 const openBesideModifier = getCommandPaletteModifierLabel(
