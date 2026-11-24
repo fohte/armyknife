@@ -456,17 +456,43 @@ mod tests {
     }
 
     #[rstest]
-    fn test_extract_draft_reply_preserves_trailing_whitespace() {
-        let reply = "Keep both lines. ";
+    fn test_parse_preserves_trailing_whitespace_in_draft_reply() {
+        let newline = char::from(10).to_string();
+        let reply = ["Keep both lines.", "Second line. "].join(&newline);
         let content = formatdoc! {r#"
+            ---
+            pr: 42
+            repo: "example/project"
+            pulled_at: "2024-01-15T10:00:00Z"
+            ---
+
+            <!-- thread: RT_abc123 path: src/main.rs:42 -->
+            - [ ] resolve
+            <!-- comment: @reviewer 2024-01-15T10:30:00Z -->
+            Review comment
             <!-- /comment -->
             {reply}
 
         "#};
 
         assert_eq!(
-            extract_draft_reply(&content),
-            Some(format!("{reply}{}", char::from(10))),
+            MarkdownParser::parse(&content).unwrap(),
+            ParsedThreadsFile {
+                frontmatter: ThreadsFrontmatter {
+                    pr: 42,
+                    repo: "example/project".to_string(),
+                    pulled_at: "2024-01-15T10:00:00Z".to_string(),
+                    submit: false,
+                },
+                reviews: vec![],
+                threads: vec![ParsedThread {
+                    thread_id: "RT_abc123".to_string(),
+                    path: "src/main.rs".to_string(),
+                    line: Some(42),
+                    resolve: false,
+                    draft_reply: Some(format!("{reply}{newline}")),
+                }],
+            },
         );
     }
 
