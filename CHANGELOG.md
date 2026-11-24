@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.909](https://github.com/fohte/armyknife/compare/v0.1.908...v0.1.909) (2026-11-24)
+
+
+### Dependencies
+
+* update rust crate uuid to v1.29.3 ([#2228](https://github.com/fohte/armyknife/issues/2228)) ([798f410](https://github.com/fohte/armyknife/commit/798f410ec6fe83d15daa4d651ac39ee187c77f61))
+
 ## [0.1.908](https://github.com/fohte/armyknife/compare/v0.1.907...v0.1.908) (2026-11-24)
 
 
