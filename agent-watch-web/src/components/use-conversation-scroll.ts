@@ -43,6 +43,10 @@ export function useConversationScroll({
   const programmaticScrollTopRef = useRef<number | null>(null)
   const suppressResizeRef = useRef(false)
   const userResizeGestureRef = useRef(false)
+  const userResizeCandidateRef = useRef<{
+    element: HTMLTextAreaElement
+    initialHeight: number
+  } | null>(null)
   const previousMessagesRef = useRef<{
     messages: readonly ChatItem[]
     start: number
@@ -76,6 +80,7 @@ export function useConversationScroll({
     programmaticScrollTopRef.current = null
     suppressResizeRef.current = false
     userResizeGestureRef.current = false
+    userResizeCandidateRef.current = null
   }, [sessionId])
 
   useLayoutEffect(() => {
@@ -118,7 +123,18 @@ export function useConversationScroll({
       return
     }
 
-    if (userLayoutChangeRef.current) {
+    const resizeCandidate = userResizeCandidateRef.current
+    if (
+      resizeCandidate !== null &&
+      Math.abs(
+        resizeCandidate.element.getBoundingClientRect().height -
+          resizeCandidate.initialHeight,
+      ) > 0.5
+    ) {
+      userResizeGestureRef.current = true
+    }
+
+    if (userLayoutChangeRef.current || userResizeGestureRef.current) {
       followLatestRef.current = isAtBottom(scrollContainer)
     } else if (
       previousMessages === null ||
@@ -177,6 +193,19 @@ export function useConversationScroll({
       if (loadingOlderRef.current || !resizedExistingChild) return
       const container = scrollRef.current
       if (container === null) return
+      const resizeCandidate = userResizeCandidateRef.current
+      if (
+        resizeCandidate !== null &&
+        entries.some((entry) =>
+          entry.target.contains(resizeCandidate.element),
+        ) &&
+        Math.abs(
+          resizeCandidate.element.getBoundingClientRect().height -
+            resizeCandidate.initialHeight,
+        ) > 0.5
+      ) {
+        userResizeGestureRef.current = true
+      }
       if (userResizeGestureRef.current) {
         followLatestRef.current = isAtBottom(container)
         return
@@ -228,13 +257,25 @@ export function useConversationScroll({
     }
     const startUserResizeGesture = (event: Event) => {
       if (!(event.target instanceof HTMLTextAreaElement)) return
-      userResizeGestureRef.current = true
-      markUserLayoutChange()
+      if (window.getComputedStyle(event.target).resize === 'none') return
+      userResizeCandidateRef.current = {
+        element: event.target,
+        initialHeight: event.target.getBoundingClientRect().height,
+      }
     }
     const finishUserResizeGesture = () => {
-      if (!userResizeGestureRef.current) return
+      const resizeCandidate = userResizeCandidateRef.current
+      const resized =
+        resizeCandidate !== null &&
+        Math.abs(
+          resizeCandidate.element.getBoundingClientRect().height -
+            resizeCandidate.initialHeight,
+        ) > 0.5
+      if (userResizeGestureRef.current || resized) {
+        markUserLayoutChange()
+      }
       userResizeGestureRef.current = false
-      markUserLayoutChange()
+      userResizeCandidateRef.current = null
     }
     scrollContainer.addEventListener('click', markUserLayoutChange, true)
     scrollContainer.addEventListener('input', markUserLayoutChange, true)
@@ -265,6 +306,7 @@ export function useConversationScroll({
       window.removeEventListener('pointerup', finishUserResizeGesture, true)
       window.removeEventListener('pointercancel', finishUserResizeGesture, true)
       userResizeGestureRef.current = false
+      userResizeCandidateRef.current = null
       if (userLayoutChangeTimeoutRef.current !== null) {
         window.clearTimeout(userLayoutChangeTimeoutRef.current)
         userLayoutChangeTimeoutRef.current = null

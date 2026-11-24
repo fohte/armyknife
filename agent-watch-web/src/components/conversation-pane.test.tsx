@@ -8758,7 +8758,7 @@ it.each([
     const scroll = requireElement(
       container.querySelector<HTMLDivElement>('.conversation-scroll'),
     )
-    mockScrollDimensions(scroll, 300, 100)
+    const setHeight = mockScrollDimensions(scroll, 300, 100)
     renderView(onAction, session, undefined, [original])
     scrollToPosition(scroll, 200)
     act(() => {
@@ -8767,6 +8767,7 @@ it.each([
       )
     })
 
+    setHeight(500)
     renderView(onAction, session, undefined, [updated])
 
     const snapshot = () => ({ scrollTop: scroll.scrollTop })
@@ -8842,6 +8843,7 @@ it('keeps a native comment resize in place while the pointer is down', () => {
     comment.dispatchEvent(new Event('pointerdown', { bubbles: true }))
   })
   setHeight(320)
+  comment.style.height = '60px'
   act(() => {
     notifyResize(
       messageElement,
@@ -8849,6 +8851,7 @@ it('keeps a native comment resize in place while the pointer is down', () => {
     )
   })
   setHeight(360)
+  comment.style.height = '80px'
   act(() => {
     notifyResize(
       messageElement,
@@ -8859,6 +8862,7 @@ it('keeps a native comment resize in place while the pointer is down', () => {
     window.dispatchEvent(new Event('pointerup'))
   })
   setHeight(380)
+  comment.style.height = '90px'
   act(() => {
     notifyResize(
       messageElement,
@@ -8868,6 +8872,44 @@ it('keeps a native comment resize in place while the pointer is down', () => {
 
   const snapshot = () => ({ scrollTop: scroll.scrollTop })
   expect(snapshot()).toEqual({ scrollTop: 200 })
+})
+
+it('keeps following after a textarea text-selection gesture', () => {
+  const todo: ChatItem = {
+    type: 'todo',
+    seq: 22,
+    title: 'Review the release checklist',
+    detail: null,
+    completed: false,
+    resolution: null,
+    comment: null,
+  }
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction, session, undefined, [todo])
+  const scroll = requireElement(
+    container.querySelector<HTMLDivElement>('.conversation-scroll'),
+  )
+  const setHeight = mockScrollDimensions(scroll, 300, 100)
+  renderView(onAction, session, undefined, [todo])
+  scrollToPosition(scroll, 200)
+
+  const comment = requireElement(
+    container.querySelector<HTMLTextAreaElement>('.chat-todo-comment'),
+  )
+  act(() => {
+    comment.dispatchEvent(new Event('pointerdown', { bubbles: true }))
+  })
+  setHeight(500)
+  renderView(onAction, session, undefined, [
+    todo,
+    { type: 'assistant', text: 'The next step is ready.' },
+  ])
+  act(() => {
+    window.dispatchEvent(new Event('pointerup'))
+  })
+
+  const snapshot = () => ({ scrollTop: scroll.scrollTop })
+  expect(snapshot()).toEqual({ scrollTop: 400 })
 })
 
 it('keeps a reader in place when an observed message grows', () => {
