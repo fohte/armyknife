@@ -344,7 +344,8 @@
   opacity: 0.6;
 }
 
-.review-document-actions .review-document-finish {
+.review-document-actions:not(.review-document-direct-actions)
+  .review-document-finish {
   border-color: #60a5fa;
   color: #fafafa;
 }
