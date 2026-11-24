@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.895](https://github.com/fohte/armyknife/compare/v0.1.894...v0.1.895) (2026-11-24)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show early quota forecasts ([#2192](https://github.com/fohte/armyknife/issues/2192)) ([86ea5ff](https://github.com/fohte/armyknife/commit/86ea5ff3e355290638648923e59101870a524f72))
+
 ## [0.1.894](https://github.com/fohte/armyknife/compare/v0.1.893...v0.1.894) (2026-11-24)
 
 
