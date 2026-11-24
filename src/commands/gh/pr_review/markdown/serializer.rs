@@ -221,7 +221,13 @@ fn serialize_thread(
         }
         output.push_str("<!-- diff -->\n");
         output.push_str("```diff\n");
-        output.push_str(&compressed.text);
+        for (index, line) in compressed.text.lines().enumerate() {
+            if compressed.highlighted_lines.contains(&index) {
+                output.push('>');
+            }
+            output.push_str(line);
+            output.push('\n');
+        }
         output.push_str("```\n");
         output.push_str("<!-- /diff -->\n");
     }
@@ -370,7 +376,7 @@ mod tests {
             @@ -40,3 +40,3 @@
              context
             -old
-            +new
+            >+new
             ```
             <!-- /diff -->
             <!-- comment: @reviewer 2024-01-15T10:30:00Z -->
@@ -587,7 +593,7 @@ mod tests {
              line 17
              line 18
              line 19
-             line 20
+            > line 20
              line 21
              line 22
              line 23

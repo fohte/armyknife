@@ -109,11 +109,12 @@ export default meta
 type Story = StoryObj<typeof meta>
 
 export const EditingTheReviewDocument: Story = {
-  name: 'One issue comment opens in preview with its metadata',
+  name: 'The editor shows an issue comment as raw Markdown',
   args: {
     summary: issueComment,
     summaries: [issueComment],
     frontmatter: null,
+    view: 'edit',
     body: `<!-- author: sample-reviewer -->\n<!-- createdAt: 2026-11-24T02:40:00Z -->\n<!-- updatedAt: 2026-11-24T02:40:00Z -->\n<!-- id: comment-node -->\n<!-- databaseId: 506 -->\n\nCould we retry the pending delivery after a short delay?`,
   },
   decorators: [desktopViewport],
@@ -164,7 +165,7 @@ export const ReviewRepliesShowSeveralThreads: Story = {
     summary: editingReviewReplies,
     summaries: [editingReviewReplies],
     frontmatter: { submit: false },
-    body: `<!-- thread: THREAD_sample_1 path: src/preflight.ts:42 author: @hina-k -->\n- [ ] resolve\n<!-- diff -->\n\`\`\`diff\n@@ -39,5 +41,7 @@ export function preflight(msg) {\n   const target = msg.target;\n-  if (!target) return fail('no target');\n+  if (target == null) {\n+    return fail('no target');\n+  }\n\`\`\`\n<!-- /diff -->\n<!-- comment: @hina-k 2026-01-15T10:30:00Z -->\nこの判定は null も通しますか?\n<!-- /comment -->\n通しません。手前で弾いています。\n\n<!-- thread: THREAD_sample_2 path: src/preflight.ts:57 author: @hina-k -->\n- [x] resolve\n<!-- diff -->\n\`\`\`diff\n@@ -55,4 +56,6 @@ export function preflight(msg) {\n   } catch (e) {\n+    log.warn('preflight failed', e);\n+    return fail(String(e));\n   }\n\`\`\`\n<!-- /diff -->\n<!-- comment: @hina-k 2026-01-15T10:34:00Z -->\n失敗したときのログはどこに出ますか?\n<!-- /comment -->\n<!-- comment: @ren-o 2026-01-15T11:02:00Z -->\n送信ログと同じ場所だと追いやすいです。\n<!-- /comment -->\n送信ログに理由と一緒に出します。`,
+    body: `<!-- thread: THREAD_sample_1 path: src/preflight.ts:42 author: @hina-k -->\n- [ ] resolve\n<!-- diff -->\n\`\`\`diff\n@@ -39,5 +39,7 @@ export function preflight(msg) {\n   const target = msg.target;\n-  if (!target) return fail('no target');\n>+  if (target == null) {\n+    return fail('no target');\n+  }\n\`\`\`\n<!-- /diff -->\n<!-- comment: @hina-k 2026-01-15T10:30:00Z -->\nこの判定は null も通しますか?\n<!-- /comment -->\n通しません。手前で弾いています。\n\n<!-- thread: THREAD_sample_2 path: src/preflight.ts:57 author: @hina-k -->\n- [x] resolve\n<!-- diff -->\n\`\`\`diff\n@@ -55,4 +57,6 @@ export function preflight(msg) {\n   } catch (e) {\n>+    log.warn('preflight failed', e);\n+    return fail(String(e));\n   }\n\`\`\`\n<!-- /diff -->\n<!-- comment: @hina-k 2026-01-15T10:34:00Z -->\n失敗したときのログはどこに出ますか?\n<!-- /comment -->\n<!-- comment: @ren-o 2026-01-15T11:02:00Z -->\n送信ログと同じ場所だと追いやすいです。\n<!-- /comment -->\n送信ログに理由と一緒に出します。`,
   },
   decorators: [desktopViewport],
 }

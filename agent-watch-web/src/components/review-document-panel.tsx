@@ -315,16 +315,26 @@ export function ReviewDocumentPanel({
     onFrontmatterChange(updateAtPath(frontmatter, path, value))
   }
   const frontmatterEntries = isJsonObject(frontmatter)
-    ? Object.entries(frontmatter).filter(
-        ([name]) => !(summary?.kind === 'pr_draft' && name === 'title'),
-      )
+    ? Object.entries(frontmatter).filter(([name]) => {
+        if (summary?.kind === 'pr_draft' && name === 'title') return false
+        if (
+          summary?.kind === 'issue_body' ||
+          summary?.kind === 'review_replies'
+        ) {
+          return name === 'submit'
+        }
+        return true
+      })
     : null
   const isIssueBody = summary?.kind === 'issue_body'
-  const showFrontmatter =
-    isIssueBody ||
-    (summary?.kind !== 'review_replies' &&
-      frontmatter !== null &&
-      (frontmatterEntries === null || frontmatterEntries.length > 0))
+  const isApprovalDocument = isIssueBody || summary?.kind === 'review_replies'
+  const showFrontmatterEntries =
+    frontmatterEntries === null || frontmatterEntries.length > 0
+  const showFrontmatter = isApprovalDocument
+    ? view === 'edit' &&
+      frontmatterEntries !== null &&
+      frontmatterEntries.length > 0
+    : frontmatter !== null && showFrontmatterEntries
 
   return (
     <article
@@ -350,48 +360,47 @@ export function ReviewDocumentPanel({
         onSelectDocument={onSelectDocument}
       />
       <div className="review-document-content">
+        {isIssueBody ? (
+          <ReviewDocumentPreview
+            mode="frontmatter"
+            summary={summary}
+            body={body}
+            frontmatter={frontmatter}
+            disabled={!canSave || busy}
+            onFrontmatterChange={onFrontmatterChange}
+          />
+        ) : null}
         {showFrontmatter ? (
-          isIssueBody ? (
-            <ReviewDocumentPreview
-              mode="frontmatter"
-              summary={summary}
-              body={body}
-              frontmatter={frontmatter}
-              disabled={!canSave || busy}
-              onFrontmatterChange={onFrontmatterChange}
-            />
-          ) : (
-            <section
-              className="review-document-frontmatter"
-              aria-label="Document metadata"
-            >
-              <h2>Frontmatter</h2>
-              {frontmatterEntries !== null ? (
-                <dl className="review-document-fields">
-                  {frontmatterEntries.map(([name, value]) => (
-                    <FieldEditor
-                      key={name}
-                      name={name}
-                      path={[name]}
-                      value={value}
-                      disabled={!canSave || busy}
-                      onChange={updateFrontmatter}
-                    />
-                  ))}
-                </dl>
-              ) : (
-                <FieldEditor
-                  name="Frontmatter"
-                  path={[]}
-                  value={frontmatter}
-                  disabled={!canSave || busy}
-                  onChange={(path, value) => {
-                    if (path.length === 0) onFrontmatterChange(value)
-                  }}
-                />
-              )}
-            </section>
-          )
+          <section
+            className="review-document-frontmatter"
+            aria-label="Document metadata"
+          >
+            <h2>Frontmatter</h2>
+            {frontmatterEntries !== null ? (
+              <dl className="review-document-fields">
+                {frontmatterEntries.map(([name, value]) => (
+                  <FieldEditor
+                    key={name}
+                    name={name}
+                    path={[name]}
+                    value={value}
+                    disabled={!canSave || busy}
+                    onChange={updateFrontmatter}
+                  />
+                ))}
+              </dl>
+            ) : (
+              <FieldEditor
+                name="Frontmatter"
+                path={[]}
+                value={frontmatter}
+                disabled={!canSave || busy}
+                onChange={(path, value) => {
+                  if (path.length === 0) onFrontmatterChange(value)
+                }}
+              />
+            )}
+          </section>
         ) : null}
 
         <section

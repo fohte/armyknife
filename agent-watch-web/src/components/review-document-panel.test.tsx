@@ -3,9 +3,10 @@ import '#index.css'
 import { act, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { page } from 'vitest/browser'
+import { page, userEvent } from 'vitest/browser'
 
 import { ReviewDocumentPanel } from '#components/review-document-panel'
+import type { ReviewDocumentSummary } from '#components/review-document-summary'
 import { SessionStatusPanel } from '#components/session-status-panel'
 import type { JsonValue } from '#types'
 
@@ -273,7 +274,9 @@ it('shows issue fields as typed metadata before the Markdown body', () => {
           submit: false,
           readonly: { number: 412, author: 'sample-reporter' },
         }}
-        body="## Summary\n\nThe fourth notification is not delivered."
+        body={`## Summary
+
+The fourth notification is not delivered.`}
       />,
     ),
   )
@@ -322,8 +325,156 @@ it('shows issue fields as typed metadata before the Markdown body', () => {
     parentIssue: 'example/web-app#390',
     subIssues: ['example/web-app#413', 'example/web-app#414'],
     submit: false,
-    body: 'Summary\\n\\nThe fourth notification is not delivered.',
+    body: `Summary
+The fourth notification is not delivered.`,
   })
+})
+
+const approvalDocumentCases: {
+  name: string
+  summary: ReviewDocumentSummary
+  frontmatter: { [key: string]: JsonValue }
+}[] = [
+  {
+    name: 'issue body',
+    summary: {
+      id: 'fixture-issue-body',
+      kind: 'issue_body',
+      target: { repository: 'example/mock-repo', issueNumber: 89 },
+      isEditor: true,
+      canSave: true,
+      canFinish: true,
+    },
+    frontmatter: {
+      title: 'Fixture issue',
+      labels: [],
+      assignees: [],
+      parentIssue: '',
+      subIssues: [],
+      submit: false,
+      readonly: { number: 89, author: 'sample-reporter' },
+    },
+  },
+  {
+    name: 'review replies',
+    summary: {
+      id: 'fixture-review-replies',
+      kind: 'review_replies',
+      target: {
+        repository: 'example/mock-repo',
+        pullRequestNumber: 21,
+        threadCount: 1,
+      },
+      isEditor: true,
+      canSave: true,
+      canFinish: true,
+    },
+    frontmatter: { submit: false },
+  },
+]
+
+it.each(approvalDocumentCases)(
+  'keeps $name approval editable in Edit',
+  async ({ summary, frontmatter }) => {
+    const savedFrontmatter: JsonValue[] = []
+
+    function Harness() {
+      const [currentFrontmatter, setFrontmatter] =
+        useState<JsonValue>(frontmatter)
+      return (
+        <ReviewDocumentPanel
+          summary={summary}
+          view="edit"
+          frontmatter={currentFrontmatter}
+          body="Fixture body."
+          onFrontmatterChange={setFrontmatter}
+          onSave={() => savedFrontmatter.push(currentFrontmatter)}
+        />
+      )
+    }
+
+    root = createRoot(container)
+    act(() => root?.render(<Harness />))
+
+    await act(async () => {
+      await page.getByRole('checkbox', { name: 'submit' }).click()
+    })
+    await act(async () => {
+      await page.getByRole('button', { name: 'Save' }).click()
+    })
+
+    expect(savedFrontmatter).toEqual([{ ...frontmatter, submit: true }])
+  },
+)
+
+it('adds issue metadata values and saves the full frontmatter', async () => {
+  const savedFrontmatter: JsonValue[] = []
+  const initialFrontmatter: JsonValue = {
+    title: 'Fixture issue',
+    labels: ['existing-label'],
+    assignees: [],
+    parentIssue: '',
+    subIssues: [],
+    submit: false,
+    readonly: { number: 89, author: 'sample-reporter' },
+  }
+  const summary = {
+    id: 'fixture-issue-body',
+    kind: 'issue_body' as const,
+    target: { repository: 'example/mock-repo', issueNumber: 89 },
+    isEditor: true,
+    canSave: true,
+    canFinish: true,
+  }
+
+  function Harness() {
+    const [frontmatter, setFrontmatter] = useState(initialFrontmatter)
+    return (
+      <ReviewDocumentPanel
+        summary={summary}
+        frontmatter={frontmatter}
+        body="Fixture body."
+        onFrontmatterChange={setFrontmatter}
+        onSave={() => savedFrontmatter.push(frontmatter)}
+      />
+    )
+  }
+
+  root = createRoot(container)
+  act(() => root?.render(<Harness />))
+
+  await act(async () => {
+    const label = page.getByRole('textbox', { name: 'Add label' })
+    await label.fill('priority-label')
+    await userEvent.keyboard('{Enter}')
+    await page.getByRole('button', { name: 'Add assignee' }).click()
+    const assignee = page.getByRole('textbox', { name: 'Add assignee' })
+    await assignee.fill('sample-owner')
+    await userEvent.keyboard('{Enter}')
+    await page.getByRole('button', { name: 'Set parent issue' }).click()
+    const parent = page.getByRole('textbox', { name: 'Set parent issue' })
+    await parent.fill('example/mock-repo#80')
+    await userEvent.keyboard('{Enter}')
+    await page.getByRole('button', { name: 'Add sub-issue' }).click()
+    const subIssue = page.getByRole('textbox', { name: 'Add sub-issue' })
+    await subIssue.fill('example/mock-repo#90')
+    await userEvent.keyboard('{Enter}')
+  })
+  await act(async () => {
+    await page.getByRole('button', { name: 'Save' }).click()
+  })
+
+  expect(savedFrontmatter).toEqual([
+    {
+      title: 'Fixture issue',
+      labels: ['existing-label', 'priority-label'],
+      assignees: ['sample-owner'],
+      parentIssue: 'example/mock-repo#80',
+      subIssues: ['example/mock-repo#90'],
+      submit: false,
+      readonly: { number: 89, author: 'sample-reporter' },
+    },
+  ])
 })
 
 it('updates parent issue using the issue frontmatter camelCase key', async () => {
@@ -439,7 +590,7 @@ it('shows each review thread with its focused diff, reviewer comment, and action
 @@ -14,5 +14,6 @@
  fn deliver() {
 -    send();
-+    retry_pending();
+>+    retry_pending();
 +    send();
  }
 \`\`\`
@@ -453,9 +604,9 @@ Retain the first send after the retry.
 - [x] resolve
 <!-- diff -->
 \`\`\`diff
-@@ -39,3 +39,4 @@
+@@ -39,3 +39,2 @@
  fn retry() {
-+    delay();
+>-    delay();
  }
 \`\`\`
 <!-- /diff -->
@@ -500,8 +651,8 @@ Please keep this delay configurable.
         body: comment.querySelector('.review-document-thread-comment-body')
           ?.textContent,
       })),
-      reply: thread.querySelector<HTMLInputElement>(
-        '.review-document-thread-reply input',
+      reply: thread.querySelector<HTMLTextAreaElement>(
+        '.review-document-thread-reply textarea',
       )?.value,
     })),
   })
@@ -532,9 +683,9 @@ Please keep this delay configurable.
         path: 'src/notifications/retry.rs:40',
         resolved: true,
         diff: [
-          { text: '@@ -39,3 +39,4 @@', focused: false },
+          { text: '@@ -39,3 +39,2 @@', focused: false },
           { text: ' fn retry() {', focused: false },
-          { text: '+    delay();', focused: true },
+          { text: '-    delay();', focused: true },
           { text: ' }', focused: false },
         ],
         comments: [
@@ -620,7 +771,7 @@ Please close the handle.
   await act(async () => {
     await page
       .getByRole('textbox', { name: 'Your reply to src/example.rs' })
-      .fill('Use a bounded retry.')
+      .fill('Use a bounded retry.\n\nKeep the limit configurable.')
   })
   await act(async () => {
     await page.getByRole('checkbox', { name: 'Resolve' }).first().click()
@@ -644,6 +795,8 @@ Please close the handle.
     'Keep this change small.',
     '<!-- /comment -->',
     'Use a bounded retry.',
+    '',
+    'Keep the limit configurable.',
     '',
     '<!-- thread: THREAD_fixture_2 path: src/other.rs:20 author: @another-reviewer -->',
     '- [ ] resolve',

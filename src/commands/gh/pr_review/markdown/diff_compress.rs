@@ -33,9 +33,12 @@ pub struct CompressInput<'a> {
 }
 
 /// Result of compressing a single `diffHunk`.
+#[derive(Debug, PartialEq, Eq)]
 pub struct CompressOutcome {
     /// Compressed diff text. Always ends with `\n`.
     pub text: String,
+    /// Line indices in `text` that contain the commented region.
+    pub highlighted_lines: Vec<usize>,
     /// True when the hunk header could not be parsed and the body was
     /// emitted verbatim (tail-truncated). Callers may use this to emit a
     /// CLI warning.
@@ -45,18 +48,20 @@ pub struct CompressOutcome {
 /// Compress a `diffHunk` to the relevant window around the commented line.
 pub fn compress_diff_hunk(input: &CompressInput) -> CompressOutcome {
     match try_compress(input) {
-        Some(text) => CompressOutcome {
+        Some((text, highlighted_lines)) => CompressOutcome {
             text,
+            highlighted_lines,
             parse_failed: false,
         },
         None => CompressOutcome {
             text: tail_only(input.diff_hunk),
+            highlighted_lines: Vec::new(),
             parse_failed: true,
         },
     }
 }
 
-fn try_compress(input: &CompressInput) -> Option<String> {
+fn try_compress(input: &CompressInput) -> Option<(String, Vec<usize>)> {
     let lines: Vec<&str> = input.diff_hunk.lines().collect();
     let header_idx = last_hunk_header(&lines)?;
 
@@ -70,7 +75,7 @@ fn try_compress(input: &CompressInput) -> Option<String> {
 
     let target_indices = locate_target(input, body, new_start, old_start);
 
-    let (keep_start, keep_end) = match target_indices {
+    let (keep_start, keep_end) = match &target_indices {
         Some(indices) => {
             // `indices` is non-empty by construction in `locate_target`.
             let min_idx = *indices.first()?;
@@ -87,6 +92,7 @@ fn try_compress(input: &CompressInput) -> Option<String> {
     };
 
     let mut out = String::new();
+    let mut highlighted_lines = Vec::new();
     out.push_str(header);
     out.push('\n');
 
@@ -94,7 +100,14 @@ fn try_compress(input: &CompressInput) -> Option<String> {
         out.push_str(&format!("... [{keep_start} lines omitted] ...\n"));
     }
 
-    for line in &body[keep_start..keep_end] {
+    for (offset, line) in body[keep_start..keep_end].iter().enumerate() {
+        let body_idx = keep_start + offset;
+        if target_indices
+            .as_ref()
+            .is_some_and(|indices| indices.contains(&body_idx))
+        {
+            highlighted_lines.push(1 + usize::from(keep_start > 0) + offset);
+        }
         out.push_str(line);
         out.push('\n');
     }
@@ -104,7 +117,7 @@ fn try_compress(input: &CompressInput) -> Option<String> {
         out.push_str(&format!("... [{omitted_after} lines omitted] ...\n"));
     }
 
-    Some(out)
+    Some((out, highlighted_lines))
 }
 
 /// Locate the body indices that match the comment line range. Returns
@@ -123,13 +136,13 @@ fn locate_target(
     // or deleted line, and the GraphQL response does not expose the side
     // directly. Try the new side first and fall back to the old side. If
     // both sides happen to contain the same line number on context lines,
-    // the new side wins — acceptable since the chosen window will still
-    // surround a real instance of that line in the hunk.
+    // the old side wins so deleted-line comments stay attached to the
+    // pre-image.
     let candidates: Vec<(i64, i64, bool)> = match (input.line, input.original_line) {
         (Some(end), _) => vec![(input.start_line.unwrap_or(end), end, true)],
         (None, Some(end)) => {
             let start = input.original_start_line.unwrap_or(end);
-            vec![(start, end, true), (start, end, false)]
+            vec![(start, end, false), (start, end, true)]
         }
         (None, None) => return None,
     };
@@ -267,8 +280,14 @@ mod tests {
              line 18
             ... [2 lines omitted] ...
         "};
-        assert_eq!(result.text, expected);
-        assert!(!result.parse_failed);
+        assert_eq!(
+            result,
+            CompressOutcome {
+                text: expected.to_string(),
+                highlighted_lines: vec![7],
+                parse_failed: false,
+            },
+        );
     }
 
     #[rstest]
@@ -377,7 +396,14 @@ mod tests {
         };
         let result = compress(&input);
 
-        assert_eq!(result.text, hunk);
+        assert_eq!(
+            result,
+            CompressOutcome {
+                text: hunk.to_string(),
+                highlighted_lines: vec![5],
+                parse_failed: false,
+            },
+        );
     }
 
     #[rstest]
@@ -400,7 +426,14 @@ mod tests {
         };
         let result = compress(&input);
 
-        assert_eq!(result.text, hunk);
+        assert_eq!(
+            result,
+            CompressOutcome {
+                text: hunk.to_string(),
+                highlighted_lines: vec![3],
+                parse_failed: false,
+            },
+        );
     }
 
     #[rstest]

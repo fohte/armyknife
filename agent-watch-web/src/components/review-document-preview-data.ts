@@ -114,27 +114,33 @@ function parseDiffLines(
   diff: string,
   focusLine: number | null,
 ): ReviewDiffLine[] {
+  const lines = diff.split('\n')
+  const hasExplicitFocus = lines.some((line) => line.startsWith('>'))
   let newLine: number | null = null
-  return diff.split('\n').map((text) => {
-    const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(text)
+  return lines.map((text) => {
+    const focused = text.startsWith('>')
+    const displayText = focused ? text.slice(1) : text
+    const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(displayText)
     if (hunk !== null) {
       newLine = Number(hunk[1])
-      return { text, kind: 'marker', focused: false }
+      return { text: displayText, kind: 'marker', focused: false }
     }
-    if (text.startsWith('+') && !text.startsWith('+++')) {
-      const focused = newLine === focusLine
+    if (displayText.startsWith('+') && !displayText.startsWith('+++')) {
+      const lineFocused =
+        focused || (!hasExplicitFocus && newLine === focusLine)
       if (newLine !== null) newLine += 1
-      return { text, kind: 'added', focused }
+      return { text: displayText, kind: 'added', focused: lineFocused }
     }
-    if (text.startsWith('-') && !text.startsWith('---')) {
-      return { text, kind: 'removed', focused: false }
+    if (displayText.startsWith('-') && !displayText.startsWith('---')) {
+      return { text: displayText, kind: 'removed', focused }
     }
-    if (text.startsWith(' ') || text.length === 0) {
-      const focused = newLine === focusLine
+    if (displayText.startsWith(' ') || displayText.length === 0) {
+      const lineFocused =
+        focused || (!hasExplicitFocus && newLine === focusLine)
       if (newLine !== null) newLine += 1
-      return { text, kind: 'context', focused }
+      return { text: displayText, kind: 'context', focused: lineFocused }
     }
-    return { text, kind: 'marker', focused: false }
+    return { text: displayText, kind: 'marker', focused }
   })
 }
 

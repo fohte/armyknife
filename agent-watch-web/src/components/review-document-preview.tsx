@@ -411,9 +411,10 @@ export function ReviewDocumentPreview({
               ))}
               <label className="review-document-thread-reply">
                 <span>Your reply</span>
-                <input
+                <textarea
                   aria-label={`Your reply to ${thread.path}`}
                   disabled={!canSave}
+                  rows={Math.max(1, thread.reply.split('\n').length)}
                   value={thread.reply}
                   onChange={(event) => {
                     onBodyChange(
