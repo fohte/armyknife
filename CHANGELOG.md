@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.914](https://github.com/fohte/armyknife/compare/v0.1.913...v0.1.914) (2026-11-24)
+
+
+### Features
+
+* **gh/pr-merge:** allow unstacking before merge ([#2247](https://github.com/fohte/armyknife/issues/2247)) ([27c92dd](https://github.com/fohte/armyknife/commit/27c92dd3ca9bb2ba6c5ac9ab968c1a6884dfe162))
+
 ## [0.1.913](https://github.com/fohte/armyknife/compare/v0.1.912...v0.1.913) (2026-11-24)
 
 
