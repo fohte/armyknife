@@ -9,6 +9,12 @@ use super::{
     MergeOutcome, PrMergeClient, PrSnapshot, ensure_pr_is_open_and_safe, unmerged_lower_pr,
 };
 
+#[derive(Clone, Copy)]
+struct StackMergeState {
+    is_stacked: bool,
+    was_unstacked: bool,
+}
+
 #[cfg(test)]
 pub(super) async fn run_merge(
     client: &impl PrMergeClient,
@@ -38,6 +44,7 @@ pub(super) async fn run_merge_with_expected_head(
         bail!("PR #{pr_number} head changed since confirmation.");
     }
 
+    let mut was_unstacked = false;
     let is_stacked = if let Some(stack) = client
         .get_stack_for_pull_request(owner, repo, pr_number)
         .await
@@ -65,12 +72,17 @@ pub(super) async fn run_merge_with_expected_head(
             {
                 bail!("PR #{pr_number} is still in a stack after unstacking; refusing to merge.");
             }
+            was_unstacked = true;
             false
         } else {
             true
         }
     } else {
         false
+    };
+    let stack_state = StackMergeState {
+        is_stacked,
+        was_unstacked,
     };
 
     let pr_number_string = pr_number.to_string();
@@ -90,6 +102,11 @@ pub(super) async fn run_merge_with_expected_head(
         return Ok(MergeOutcome::Merged(current));
     }
     ensure_pr_is_open_and_safe(&current, pr_number, Some(&initial.head_sha))?;
+    if stack_state.was_unstacked {
+        ensure_pr_is_not_stacked(client, owner, repo, pr_number)
+            .await
+            .context("Failed to verify stack membership before merge")?;
+    }
 
     let merge_result = match client
         .merge_async(owner, repo, pr_number, &initial.head_sha)
@@ -98,7 +115,13 @@ pub(super) async fn run_merge_with_expected_head(
         Ok(result) => result,
         Err(error) => {
             return recover_async_merge_error(
-                client, owner, repo, pr_number, &initial, is_stacked, error,
+                client,
+                owner,
+                repo,
+                pr_number,
+                &initial,
+                stack_state,
+                error,
             )
             .await;
         }
@@ -122,7 +145,7 @@ async fn recover_async_merge_error(
     repo: &str,
     pr_number: u64,
     initial: &PrSnapshot,
-    is_stacked: bool,
+    stack_state: StackMergeState,
     merge_error: anyhow::Error,
 ) -> anyhow::Result<MergeOutcome> {
     let Some(fallback) = merge_error.downcast_ref::<AsyncMergeFallback>().cloned() else {
@@ -131,7 +154,7 @@ async fn recover_async_merge_error(
         }
         return Err(merge_error);
     };
-    if is_stacked {
+    if stack_state.is_stacked {
         if let Some(merged) = already_merged(client, owner, repo, pr_number) {
             return Ok(MergeOutcome::Merged(merged));
         }
@@ -141,7 +164,16 @@ async fn recover_async_merge_error(
         ));
     }
 
-    fallback_to_sync_merge(client, owner, repo, pr_number, &initial.head_sha, &fallback).await
+    fallback_to_sync_merge(
+        client,
+        owner,
+        repo,
+        pr_number,
+        &initial.head_sha,
+        &fallback,
+        stack_state.was_unstacked,
+    )
+    .await
 }
 
 async fn fallback_to_sync_merge(
@@ -151,6 +183,7 @@ async fn fallback_to_sync_merge(
     pr_number: u64,
     confirmed_head_sha: &str,
     fallback: &AsyncMergeFallback,
+    verify_unstacked: bool,
 ) -> anyhow::Result<MergeOutcome> {
     let request_uuid = fallback.request_uuid();
     let before_sync = client.view_pr(owner, repo, pr_number).with_context(|| {
@@ -180,6 +213,12 @@ async fn fallback_to_sync_merge(
         );
     }
 
+    if verify_unstacked {
+        ensure_pr_is_not_stacked(client, owner, repo, pr_number)
+            .await
+            .context("Failed to verify stack membership before synchronous fallback")?;
+    }
+
     if let Err(sync_error) = client
         .merge_sync(owner, repo, pr_number, confirmed_head_sha)
         .await
@@ -201,6 +240,22 @@ async fn fallback_to_sync_merge(
         pr_number,
         before_sync,
     ))
+}
+
+async fn ensure_pr_is_not_stacked(
+    client: &impl PrMergeClient,
+    owner: &str,
+    repo: &str,
+    pr_number: u64,
+) -> anyhow::Result<()> {
+    if client
+        .get_stack_for_pull_request(owner, repo, pr_number)
+        .await?
+        .is_some()
+    {
+        bail!("PR #{pr_number} was added to a stack before merge; refusing to merge.");
+    }
+    Ok(())
 }
 
 fn pending_request_retry_note(fallback: &AsyncMergeFallback) -> String {

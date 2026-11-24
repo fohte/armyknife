@@ -1692,6 +1692,63 @@ mod tests {
                     "hook".to_string(),
                     "checks".to_string(),
                     "view".to_string(),
+                    "stack".to_string(),
+                    "merge:head-a".to_string(),
+                    "view".to_string(),
+                ],
+            ),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn run_merge_does_not_unstack_when_no_lower_pr_blocks_merge(
+        events: Rc<RefCell<Vec<String>>>,
+    ) {
+        let mut client = fake_stacked_client(
+            &[
+                snapshot(PrState::Open, "head-a", "CLEAN"),
+                snapshot(PrState::Open, "head-a", "CLEAN"),
+                snapshot(PrState::Merged, "head-a", "CLEAN"),
+            ],
+            Rc::clone(&events),
+            false,
+        );
+        client.stack_pull_requests[0].merged_at = Some("2026-01-02T03:04:05Z".to_string());
+        let mut hook = |_: &[(&str, &str)]| {
+            events.borrow_mut().push("hook".to_string());
+            Ok(())
+        };
+
+        let result = merge_flow::run_merge_with_expected_head(
+            &client,
+            &mut hook,
+            "example-org",
+            "example-repo",
+            42,
+            None,
+            true,
+        )
+        .await;
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                events.borrow().clone(),
+            ),
+            (
+                Ok(MergeOutcome::Merged(snapshot(
+                    PrState::Merged,
+                    "head-a",
+                    "CLEAN"
+                ))),
+                vec![
+                    "view".to_string(),
+                    "stack".to_string(),
+                    "stack-pull-requests".to_string(),
+                    "hook".to_string(),
+                    "checks".to_string(),
+                    "view".to_string(),
                     "merge:head-a".to_string(),
                     "view".to_string(),
                 ],

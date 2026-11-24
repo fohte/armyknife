@@ -9,6 +9,7 @@ use indoc::indoc;
 use serde::Deserialize;
 
 mod partial_graphql;
+mod rest;
 
 use super::error::{GitHubError, Result, api_error_from_response};
 #[cfg(not(test))]
@@ -159,20 +160,6 @@ impl GitHubClient {
         check_response(response).await
     }
 
-    /// Send a POST request without a body and accept an empty success response.
-    pub(crate) async fn rest_post_no_content(&self, route: &str) -> Result<()> {
-        let response = self.http.post(self.url(route)).send().await?;
-        let status = response.status();
-        if !status.is_success() {
-            let body: serde_json::Value = response
-                .json()
-                .await
-                .unwrap_or_else(|_| serde_json::json!({"message": "Unknown error"}));
-            return Err(api_error_from_response(status.as_u16(), &body).into());
-        }
-        Ok(())
-    }
-
     /// Send a PATCH request with a JSON body and deserialize the response.
     pub(crate) async fn rest_patch<T: serde::de::DeserializeOwned>(
         &self,
@@ -186,14 +173,7 @@ impl GitHubClient {
     /// Send a DELETE request. Expects 204 No Content or similar success status.
     pub(crate) async fn rest_delete(&self, route: &str) -> Result<()> {
         let response = self.http.delete(self.url(route)).send().await?;
-        let status = response.status();
-        if !status.is_success() {
-            let body: serde_json::Value = response
-                .json()
-                .await
-                .unwrap_or_else(|_| serde_json::json!({"message": "Unknown error"}));
-            return Err(api_error_from_response(status.as_u16(), &body).into());
-        }
+        rest::ensure_success(response).await?;
         Ok(())
     }
 
@@ -204,14 +184,7 @@ impl GitHubClient {
         body: &serde_json::Value,
     ) -> Result<()> {
         let response = self.http.delete(self.url(route)).json(body).send().await?;
-        let status = response.status();
-        if !status.is_success() {
-            let body: serde_json::Value = response
-                .json()
-                .await
-                .unwrap_or_else(|_| serde_json::json!({"message": "Unknown error"}));
-            return Err(api_error_from_response(status.as_u16(), &body).into());
-        }
+        rest::ensure_success(response).await?;
         Ok(())
     }
 
@@ -1189,14 +1162,7 @@ struct CreateCommentResponse {
 
 /// Check HTTP response status and deserialize JSON body, or return an error.
 async fn check_response<T: serde::de::DeserializeOwned>(response: reqwest::Response) -> Result<T> {
-    let status = response.status();
-    if !status.is_success() {
-        let body: serde_json::Value = response
-            .json()
-            .await
-            .unwrap_or_else(|_| serde_json::json!({"message": "Unknown error"}));
-        return Err(api_error_from_response(status.as_u16(), &body).into());
-    }
+    let response = rest::ensure_success(response).await?;
     let body = response.json().await?;
     Ok(body)
 }
