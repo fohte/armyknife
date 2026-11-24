@@ -106,6 +106,7 @@ export function ConversationPaneHeader({
   const pullRequestListOpen = pullRequestsOpen ?? internalPullRequestListOpen
   const setPullRequestListOpen = (open: boolean) => {
     setInternalPullRequestListOpen(open)
+    if (isMobile && !open && statusPanelOpen) onToggleStatusPanel()
   }
   const [mobileVibeOpen, setMobileVibeOpen] = useState(false)
   const parent = session.parent

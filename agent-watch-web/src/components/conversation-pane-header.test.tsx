@@ -62,15 +62,24 @@ function HeaderWithMergeBandTarget(
   const [target, setTarget] = useState<HTMLDivElement | null>(null)
   const [pullRequestTarget, setPullRequestTarget] =
     useState<HTMLDivElement | null>(null)
+  const [statusPanelOpen, setStatusPanelOpen] = useState(props.statusPanelOpen)
+  const toggleStatusPanel = () => {
+    props.onToggleStatusPanel()
+    setStatusPanelOpen((open) => !open)
+  }
   return (
     <>
       <ConversationPaneHeader
         {...props}
+        statusPanelOpen={statusPanelOpen}
+        onToggleStatusPanel={toggleStatusPanel}
         mergeBandTarget={target}
-        pullRequestListTarget={pullRequestTarget}
+        pullRequestListTarget={props.isMobile ? pullRequestTarget : null}
       />
       <div ref={setTarget} />
-      <div ref={setPullRequestTarget} />
+      {props.isMobile && statusPanelOpen ? (
+        <div ref={setPullRequestTarget} />
+      ) : null}
     </>
   )
 }
@@ -717,7 +726,7 @@ it('shows pull request status on the mobile status panel button', () => {
     ciIndicator: 'session-pr-status-ci-dot is-passed',
     count: '2',
     dedicatedPrButton: false,
-    listRows: 2,
+    listRows: 0,
   })
 })
 
@@ -916,7 +925,15 @@ it.each([
       },
     )
 
-    if (!isMobile) {
+    if (isMobile) {
+      act(() => {
+        requireElement(
+          container.querySelector<HTMLButtonElement>(
+            '.mobile-conversation-status-toggle',
+          ),
+        ).click()
+      })
+    } else {
       act(() => {
         requireElement(
           container.querySelector<HTMLButtonElement>('.session-pr-trigger'),
@@ -947,7 +964,7 @@ it.each([
     expect(snapshot()).toEqual({
       confirmationLabel: 'Merge this pull request?',
       confirmedHead: 'fixture-ready-head',
-      listOpen: isMobile ? true : 'false',
+      listOpen: isMobile ? false : 'false',
     })
   },
 )
@@ -1314,8 +1331,18 @@ it('shows mobile merge feedback after confirming from the status panel PR list',
 
   act(() => {
     requireElement(
-      container.querySelector<HTMLButtonElement>('.merge-band-action'),
+      container.querySelector<HTMLButtonElement>(
+        '.mobile-conversation-status-toggle',
+      ),
     ).click()
+  })
+  const mergeButton = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      '.session-pr-list--panel .session-pr-row button[aria-label^="Merge PR #42"]',
+    ),
+  )
+  act(() => {
+    mergeButton.click()
   })
   const confirmation = requireElement(
     container.querySelector<HTMLElement>('[role="alertdialog"]'),

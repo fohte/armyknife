@@ -97,7 +97,6 @@ type ConversationPaneViewProps = {
   statusPanelOpen?: boolean
   mobileStatusPanel?: ReactNode
   pullRequestListTarget?: HTMLElement | null
-  activityFailed?: boolean
   mobileWebUi?: ReactNode
   mobileUpdateNotice?: ReactNode
   selectedDecisionSeq?: number | null
@@ -159,7 +158,6 @@ export function ConversationPaneView({
   statusPanelOpen = false,
   mobileStatusPanel = null,
   pullRequestListTarget = null,
-  activityFailed: activityFailedOverride,
   mobileWebUi = null,
   mobileUpdateNotice,
   selectedDecisionSeq = null,
@@ -375,11 +373,9 @@ export function ConversationPaneView({
         mergeBandTarget={mergeBandTarget}
         pullRequestListTarget={pullRequestListTarget}
         activityFailed={
-          activityFailedOverride ??
           actionFeedback?.actions.some((action) =>
             isAsyncActionFailureStatus(action.status),
-          ) ??
-          false
+          ) ?? false
         }
         mobileNavOpen={mobileNavOpen}
         vibeMode={vibeMode}

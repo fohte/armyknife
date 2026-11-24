@@ -86,27 +86,10 @@ export function sessionPullRequestStatusLabel(
   pullRequests: readonly PullRequest[],
   mergeStatus: (pullRequest: PullRequest) => AsyncActionStatus | null,
 ) {
-  const currentPullRequest = getRepresentativePullRequest(pullRequests)
-  if (currentPullRequest === undefined) return null
+  const summary = pullRequestStatusSummary(pullRequests, mergeStatus)
+  if (summary.currentPullRequest === undefined) return null
 
-  const hasMergeFailure = pullRequests.some(
-    (pullRequest) =>
-      pullRequest.state === 'Open' &&
-      mergeStatus(pullRequest) === 'mergeFailed',
-  )
-  const hasMergeInProgress = pullRequests.some(
-    (pullRequest) =>
-      pullRequest.state === 'Open' &&
-      ['merging', 'queued'].includes(mergeStatus(pullRequest) ?? ''),
-  )
-  const currentStatus = mergeStatus(currentPullRequest)
-  const merged =
-    currentPullRequest.state === 'Merged' ||
-    currentStatus === 'merged' ||
-    currentStatus === 'alreadyMerged'
-  const additionalCount = Math.max(pullRequests.length - 1, 0)
-
-  return `PR #${String(currentPullRequest.number)}, ${merged ? 'merged' : currentPullRequest.state.toLowerCase()}, ${ciStateLabel(currentPullRequest.ciState)}${hasMergeInProgress ? ', a pull request is merging' : ''}${hasMergeFailure ? ', a merge failed' : ''}${additionalCount > 0 ? `. ${String(additionalCount)} more PR${additionalCount === 1 ? '' : 's'} from this session` : ''}`
+  return `PR #${String(summary.currentPullRequest.number)}, ${summary.currentPullRequestMerged ? 'merged' : summary.currentPullRequest.state.toLowerCase()}, ${ciStateLabel(summary.currentPullRequest.ciState)}${summary.hasMergeInProgress ? ', a pull request is merging' : ''}${summary.hasMergeFailure ? ', a merge failed' : ''}${summary.additionalCount > 0 ? `. ${String(summary.additionalCount)} more PR${summary.additionalCount === 1 ? '' : 's'} from this session` : ''}`
 }
 
 export function SessionPullRequestStatusBadge({
@@ -116,38 +99,25 @@ export function SessionPullRequestStatusBadge({
   pullRequests: readonly PullRequest[]
   mergeStatus: (pullRequest: PullRequest) => AsyncActionStatus | null
 }) {
-  const currentPullRequest = getRepresentativePullRequest(pullRequests)
-  if (currentPullRequest === undefined) return null
-  const hasMergeFailure = pullRequests.some(
-    (pullRequest) =>
-      pullRequest.state === 'Open' &&
-      mergeStatus(pullRequest) === 'mergeFailed',
-  )
-  const hasMergeInProgress = pullRequests.some(
-    (pullRequest) =>
-      pullRequest.state === 'Open' &&
-      ['merging', 'queued'].includes(mergeStatus(pullRequest) ?? ''),
-  )
-  const currentStatus = mergeStatus(currentPullRequest)
-  const merged =
-    currentPullRequest.state === 'Merged' ||
-    currentStatus === 'merged' ||
-    currentStatus === 'alreadyMerged'
+  const summary = pullRequestStatusSummary(pullRequests, mergeStatus)
+  if (summary.currentPullRequest === undefined) return null
 
   return (
     <span className="session-pr-status-badge" aria-hidden="true">
-      {hasMergeFailure ? (
+      {summary.hasMergeFailure ? (
         <span className="session-pr-status-mark is-failed">
           <AlertCircle aria-hidden="true" size={15} />
         </span>
-      ) : hasMergeInProgress ? (
+      ) : summary.hasMergeInProgress ? (
         <LoaderCircle className="session-pr-status-mark is-merging" size={14} />
-      ) : merged ? null : (
+      ) : summary.currentPullRequestMerged ? null : (
         <span
-          className={`session-pr-status-ci-dot ${ciStateClass(currentPullRequest.ciState)}`}
+          className={`session-pr-status-ci-dot ${ciStateClass(summary.currentPullRequest.ciState)}`}
         />
       )}
-      <span className="session-pr-status-count">{pullRequests.length}</span>
+      <span className="session-pr-status-count">
+        {summary.pullRequestCount}
+      </span>
     </span>
   )
 }
@@ -212,6 +182,41 @@ function getRepresentativePullRequest(pullRequests: readonly PullRequest[]) {
   )
 }
 
+function pullRequestStatusSummary(
+  pullRequests: readonly PullRequest[],
+  mergeStatus: (pullRequest: PullRequest) => AsyncActionStatus | null,
+) {
+  const currentPullRequest = getRepresentativePullRequest(pullRequests)
+  const currentMergeStatus =
+    currentPullRequest === undefined ? null : mergeStatus(currentPullRequest)
+  const hasMergeFailure = pullRequests.some(
+    (pullRequest) =>
+      pullRequest.state === 'Open' &&
+      mergeStatus(pullRequest) === 'mergeFailed',
+  )
+  const hasMergeInProgress = pullRequests.some(
+    (pullRequest) =>
+      pullRequest.state === 'Open' &&
+      ['merging', 'queued'].includes(mergeStatus(pullRequest) ?? ''),
+  )
+
+  return {
+    currentPullRequest,
+    currentPullRequestMerged:
+      currentPullRequest?.state === 'Merged' ||
+      ['merged', 'alreadyMerged'].includes(currentMergeStatus ?? ''),
+    hasMergeFailure,
+    hasMergeInProgress,
+    allMerged: pullRequests.every(
+      (pullRequest) =>
+        pullRequest.state === 'Merged' ||
+        ['merged', 'alreadyMerged'].includes(mergeStatus(pullRequest) ?? ''),
+    ),
+    pullRequestCount: pullRequests.length,
+    additionalCount: Math.max(pullRequests.length - 1, 0),
+  }
+}
+
 export function SessionPullRequests({
   pullRequests,
   repo,
@@ -228,40 +233,19 @@ export function SessionPullRequests({
   const triggerRef = useRef<HTMLButtonElement>(null)
   const contentRef = useRef<HTMLElement>(null)
   const actionFeedback = useOptionalAsyncActionFeedback()
-  const currentPullRequest = getRepresentativePullRequest(pullRequests)
-  const hasPullRequests =
-    pullRequests.length > 0 && currentPullRequest !== undefined
   const mergeStatusFor = (pullRequest: PullRequest) =>
     pullRequest.state === 'Merged'
       ? 'merged'
       : pullRequest.state === 'Open'
         ? (mergeStatus?.(pullRequest) ?? null)
         : null
-  const currentMergeStatus =
-    currentPullRequest === undefined ? null : mergeStatusFor(currentPullRequest)
-  const hasMergeFailure = pullRequests.some(
-    (pullRequest) =>
-      pullRequest.state === 'Open' &&
-      mergeStatusFor(pullRequest) === 'mergeFailed',
-  )
-  const hasMergeInProgress = pullRequests.some(
-    (pullRequest) =>
-      pullRequest.state === 'Open' &&
-      ['merging', 'queued'].includes(mergeStatusFor(pullRequest) ?? ''),
-  )
-  const allMerged = pullRequests.every(
-    (pullRequest) =>
-      ['merged', 'alreadyMerged'].includes(mergeStatusFor(pullRequest) ?? '') ||
-      pullRequest.state === 'Merged',
-  )
-  const currentPullRequestMerged =
-    currentPullRequest?.state === 'Merged' ||
-    ['merged', 'alreadyMerged'].includes(currentMergeStatus ?? '')
-  const additionalCount = Math.max(pullRequests.length - 1, 0)
+  const statusSummary = pullRequestStatusSummary(pullRequests, mergeStatusFor)
+  const currentPullRequest = statusSummary.currentPullRequest
+  const hasPullRequests = currentPullRequest !== undefined
   const triggerLabel =
     currentPullRequest === undefined
       ? ''
-      : `${allMerged ? `All ${String(pullRequests.length)} pull requests are merged. ` : ''}PR #${String(currentPullRequest.number)}: ${currentPullRequest.title ?? 'Untitled pull request'}, ${currentPullRequestMerged ? 'merged' : currentPullRequest.state.toLowerCase()}, ${ciStateLabel(currentPullRequest.ciState)}${hasMergeInProgress ? ', a pull request is merging' : ''}${hasMergeFailure ? ', a merge failed' : ''}${additionalCount > 0 ? `. ${String(additionalCount)} more PR${additionalCount === 1 ? '' : 's'} from this session` : ''}`
+      : `${statusSummary.allMerged ? `All ${String(statusSummary.pullRequestCount)} pull requests are merged. ` : ''}PR #${String(currentPullRequest.number)}: ${currentPullRequest.title ?? 'Untitled pull request'}, ${statusSummary.currentPullRequestMerged ? 'merged' : currentPullRequest.state.toLowerCase()}, ${ciStateLabel(currentPullRequest.ciState)}${statusSummary.hasMergeInProgress ? ', a pull request is merging' : ''}${statusSummary.hasMergeFailure ? ', a merge failed' : ''}${statusSummary.additionalCount > 0 ? `. ${String(statusSummary.additionalCount)} more PR${statusSummary.additionalCount === 1 ? '' : 's'} from this session` : ''}`
 
   useDismissableLayer(
     open,
@@ -421,7 +405,7 @@ export function SessionPullRequests({
     >
       <button
         ref={triggerRef}
-        className={`session-pr-trigger${isMobile ? ' session-pr-trigger--mobile' : ''}${open ? ' is-open' : ''}${allMerged ? ' is-all-merged' : ''}${hasMergeFailure ? ' is-merge-failed' : ''}${hasMergeInProgress ? ' is-merge-in-progress' : ''}${!isMobile && (hasMergeFailure || hasMergeInProgress) ? ' is-merge-mark-inline' : ''}`}
+        className={`session-pr-trigger${isMobile ? ' session-pr-trigger--mobile' : ''}${open ? ' is-open' : ''}${statusSummary.allMerged ? ' is-all-merged' : ''}${statusSummary.hasMergeFailure ? ' is-merge-failed' : ''}${statusSummary.hasMergeInProgress ? ' is-merge-in-progress' : ''}${!isMobile && (statusSummary.hasMergeFailure || statusSummary.hasMergeInProgress) ? ' is-merge-mark-inline' : ''}`}
         type="button"
         aria-haspopup="dialog"
         aria-expanded={open}
@@ -437,21 +421,21 @@ export function SessionPullRequests({
           size={isMobile ? 18 : 14}
           strokeWidth={1.7}
         />
-        {hasMergeFailure ? (
+        {statusSummary.hasMergeFailure ? (
           <span
             className={`session-pr-merge-mark${isMobile ? ' is-mobile' : ' is-inline'} is-failed`}
             aria-hidden="true"
           >
             <AlertCircle size={15} />
           </span>
-        ) : hasMergeInProgress ? (
+        ) : statusSummary.hasMergeInProgress ? (
           <span
             className={`session-pr-merge-mark${isMobile ? ' is-mobile' : ' is-inline'} is-merging`}
             aria-hidden="true"
           >
             <LoaderCircle size={isMobile ? 15 : 13} />
           </span>
-        ) : currentPullRequestMerged ? null : (
+        ) : statusSummary.currentPullRequestMerged ? null : (
           <span
             className={`session-pr-trigger-ci-dot ${ciStateClass(currentPullRequest.ciState)}`}
             aria-hidden="true"

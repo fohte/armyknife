@@ -77,6 +77,11 @@ export const MergeIsInProgress: Story = {
   args: { mergeStatus: (): AsyncActionStatus => 'merging' },
 }
 
+export const CiHasPassed: Story = {
+  name: 'The phone status button shows passing CI and the PR count',
+  args: { mergeStatus: noMerge },
+}
+
 export const MergeHasFailed: Story = {
   name: 'The phone status button marks a failed merge',
   args: { mergeStatus: (): AsyncActionStatus => 'mergeFailed' },
