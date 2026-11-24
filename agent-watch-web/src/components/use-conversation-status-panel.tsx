@@ -73,6 +73,8 @@ export function useConversationStatusPanel({
   const { run } = useSessionOperations()
   const actionFeedback = useOptionalAsyncActionFeedback()
   const [activePanelTabId, setActivePanelTabId] = useState<string | null>(null)
+  const [pullRequestListTarget, setPullRequestListTarget] =
+    useState<HTMLDivElement | null>(null)
   const [selectedDecisionSeq, setSelectedDecisionSeq] = useState<number | null>(
     null,
   )
@@ -165,8 +167,15 @@ export function useConversationStatusPanel({
       sessionTree === null ||
       sessionTree.length > 1)
   const sessionTasks = getSessionTasks(session)
+  const pullRequests =
+    session.pullRequests !== undefined && session.pullRequests.length > 0
+      ? session.pullRequests
+      : session.pullRequest === null
+        ? []
+        : [session.pullRequest]
   const availableTabIds = [
     ...(backgroundTasks.length === 0 ? [] : ['running']),
+    ...(isMobile && pullRequests.length > 0 ? ['pull-requests'] : []),
     ...(sessionTasks.length === 0 ? [] : ['tasks']),
     ...(treeAvailable ? ['tree'] : []),
     ...(reviewTabCount === 0 ? [] : ['review-document']),
@@ -177,6 +186,7 @@ export function useConversationStatusPanel({
     [...[...webUiTabIds].reverse(), 'review-document', 'running'].find((id) =>
       availableTabIds.includes(id),
     ) ??
+    availableTabIds.find((id) => id !== 'pull-requests') ??
     availableTabIds[0] ??
     null
   const activeTabId =
@@ -297,6 +307,17 @@ export function useConversationStatusPanel({
                 tasks={backgroundTasks}
               />
             ),
+          },
+        ]
+      : []),
+    ...(availableTabIds.includes('pull-requests')
+      ? [
+          {
+            id: 'pull-requests',
+            label: 'PRs',
+            count: pullRequests.length,
+            showCount: true,
+            content: <div ref={setPullRequestListTarget} />,
           },
         ]
       : []),
@@ -568,10 +589,16 @@ export function useConversationStatusPanel({
     })),
   ]
   useEffect(() => {
-    if (activePanelTabId !== activeTabId) setActivePanelTabId(activeTabId)
+    if (
+      activePanelTabId !== activeTabId &&
+      (activePanelTabId !== null || activeTabId !== 'pull-requests')
+    ) {
+      setActivePanelTabId(activeTabId)
+    }
   }, [activePanelTabId, activeTabId])
   return {
     activeTabId,
+    pullRequestListTarget,
     onOpenCritInFullscreen: () => {
       const critWebUi = webUis.find((webUi) => webUi.name === 'crit')
       if (critWebUi !== undefined) {

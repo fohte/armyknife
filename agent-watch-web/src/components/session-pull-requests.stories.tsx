@@ -1,7 +1,6 @@
 import type { Decorator, Meta, StoryObj } from '@storybook/react-vite'
 
 import type { AsyncActionStatus } from '#async-action-feedback'
-import { BackgroundTaskRowView } from '#components/running-task-row-view'
 import { RunningTasksPanelView } from '#components/running-tasks-panel-view'
 import { SessionPullRequests } from '#components/session-pull-requests'
 import { SessionStatusPanel } from '#components/session-status-panel'
@@ -521,110 +520,120 @@ export const MergeIsQueuedInTheList: Story = {
   decorators: [desktopMergeButtonDecorator],
 }
 
-export const PhoneStatusPanelShowsPullRequestsBeforeTabs: Story = {
-  name: 'The phone status panel lists pull requests above its tabs',
+const phoneStatusPanel = (
+  pullRequests: readonly PullRequest[],
+  mergeStatus?: (pullRequest: PullRequest) => AsyncActionStatus | null,
+  hasPullRequests = true,
+) => (
+  <div
+    className="conversation-pane"
+    data-mobile="true"
+    style={{
+      width: 390,
+      height: 844,
+      display: 'flex',
+      background: 'var(--aw-bg-app)',
+      color: 'var(--aw-text-primary)',
+    }}
+  >
+    <SessionStatusPanel
+      size="phone"
+      sessionTitle="Review the delivery retry flow"
+      activeTabId={hasPullRequests ? 'pull-requests' : 'running'}
+      onTabChange={() => undefined}
+      onClose={() => undefined}
+      tabs={[
+        {
+          id: 'running',
+          label: 'Running',
+          count: 2,
+          content: (
+            <RunningTasksPanelView
+              subagents={
+                [
+                  {
+                    id: 'fixture-subagent',
+                    description: 'Review the retry flow',
+                    elapsedSeconds: 42,
+                    kind: 'subagent',
+                    agentType: 'Explore',
+                  },
+                ] satisfies BackgroundTask[]
+              }
+              backgroundTaskRows={[]}
+            />
+          ),
+        },
+        ...(hasPullRequests
+          ? [
+              {
+                id: 'pull-requests',
+                label: 'PRs',
+                count: pullRequests.length,
+                showCount: true,
+                content: (
+                  <SessionPullRequests
+                    pullRequests={pullRequests}
+                    repo="example-org/example-repo"
+                    isMobile
+                    open={false}
+                    presentation="list"
+                    {...(mergeStatus === undefined ? {} : { mergeStatus })}
+                    onMerge={() => undefined}
+                    onOpenChange={() => undefined}
+                  />
+                ),
+              },
+            ]
+          : []),
+        {
+          id: 'tasks',
+          label: 'Tasks',
+          count: 3,
+          showCount: true,
+          content: <div />,
+        },
+      ]}
+    />
+  </div>
+)
+
+export const PhoneStatusPanelShowsPullRequests: Story = {
+  name: 'The phone status panel shows pull requests in the selected PRs tab',
   parameters: {
     layout: 'fullscreen',
     overflowCheck: {
       ignoreSelectors: ['.session-status-panel-tablist'],
     },
   },
+  render: () => phoneStatusPanel(phoneTopbarPullRequests),
+}
+
+export const PhoneStatusPanelHasNoPullRequests: Story = {
+  name: 'The phone status panel omits PRs when the session has none',
+  parameters: { layout: 'fullscreen' },
   args: {
-    pullRequests: phoneTopbarPullRequests,
-    repo: 'example/service',
+    pullRequests: [],
+    repo: 'example-org/example-repo',
     isMobile: true,
     open: false,
     presentation: 'list',
     onOpenChange: () => undefined,
-    onMerge: () => undefined,
   },
-  render: (args) => (
-    <div style={{ width: 390, height: 844, display: 'flex' }}>
-      <SessionStatusPanel
-        size="phone"
-        sessionTitle="通知の再送処理を見直す"
-        activeTabId="running"
-        onTabChange={() => undefined}
-        onClose={() => undefined}
-        tabs={[
-          {
-            id: 'running',
-            label: 'Running',
-            count: 2,
-            content: (
-              <RunningTasksPanelView
-                subagents={
-                  [
-                    {
-                      id: 'fixture-subagent',
-                      description: '再送処理の呼び出し元を探す',
-                      elapsedSeconds: 42,
-                      kind: 'subagent',
-                      agentType: 'Explore',
-                    },
-                  ] satisfies BackgroundTask[]
-                }
-                backgroundTaskRows={[
-                  <BackgroundTaskRowView
-                    key="fixture-background-task"
-                    task={{
-                      id: 'fixture-background-task',
-                      description: 'cargo test -p service',
-                      elapsedSeconds: 65,
-                      kind: 'background_task',
-                    }}
-                    isOpen
-                    output={
-                      'running 24 tests\ntest retry::stops_after_limit ... ok\ntest retry::backs_off ... ok'
-                    }
-                    error={null}
-                    onToggle={() => undefined}
-                  />,
-                ]}
-              />
-            ),
-          },
-          {
-            id: 'tasks',
-            label: 'Tasks',
-            count: 13,
-            showCount: true,
-            content: <div />,
-          },
-          {
-            id: 'tree',
-            label: 'Tree',
-            count: 1,
-            showCount: true,
-            countTone: 'warning',
-            content: <div />,
-          },
-          {
-            id: 'review-document',
-            label: 'Review',
-            count: 0,
-            showCount: false,
-            visible: true,
-            content: <div />,
-          },
-          {
-            id: 'decisions',
-            label: 'Decisions',
-            count: 1,
-            showCount: true,
-            countTone: 'warning',
-            content: <div />,
-          },
-          {
-            id: 'crit',
-            label: 'crit',
-            count: 1,
-            showCount: false,
-            content: <div />,
-          },
-        ]}
-        beforeTabs={<SessionPullRequests {...args} />}
-      />
-    </div>
-  ),
+  render: () => phoneStatusPanel([], undefined, false),
+}
+
+export const PhoneStatusPanelShowsMergeInProgress: Story = {
+  name: 'The phone PRs tab shows a merge in progress',
+  parameters: { layout: 'fullscreen' },
+  args: {
+    pullRequests: [mergeablePullRequest],
+    repo: 'example-org/example-repo',
+    isMobile: true,
+    open: false,
+    presentation: 'list',
+    mergeStatus: () => 'merging',
+    onOpenChange: () => undefined,
+  },
+  render: () => phoneStatusPanel([mergeablePullRequest], () => 'merging'),
 }

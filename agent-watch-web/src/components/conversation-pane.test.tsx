@@ -6389,6 +6389,12 @@ it('opens and closes the existing status panel over the mobile conversation', as
     backButtonFocused:
       document.activeElement ===
       container.querySelector('.session-status-panel-back'),
+    pullRequestTabs: Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '.mobile-session-status-overlay [role="tab"]',
+      ),
+      (tab) => tab.textContent,
+    ),
     pullRequestRows: Array.from(
       container.querySelectorAll<HTMLElement>(
         '.mobile-session-status-overlay .session-pr-list--panel .session-pr-row',
@@ -6398,21 +6404,26 @@ it('opens and closes the existing status panel over the mobile conversation', as
         action: row.querySelector('.pr-merge-entry')?.textContent ?? null,
       }),
     ),
-    pullRequestsBeforeTabs: (() => {
-      const pullRequestList = container.querySelector(
-        '.mobile-session-status-overlay .session-pr-list--panel',
-      )
-      const tabs = container.querySelector(
-        '.mobile-session-status-overlay .session-status-panel-tabs',
-      )
-      return (
-        pullRequestList !== null &&
-        tabs !== null &&
-        (pullRequestList.compareDocumentPosition(tabs) &
-          Node.DOCUMENT_POSITION_FOLLOWING) !==
-          0
-      )
-    })(),
+  }
+  act(() => {
+    requireElement(
+      container.querySelector<HTMLButtonElement>(
+        '.mobile-session-status-overlay #session-status-tab-pull-requests',
+      ),
+    ).click()
+  })
+  const pullRequestTab = {
+    selectedTab: container.querySelector('[role="tab"][aria-selected="true"]')
+      ?.textContent,
+    pullRequestRows: Array.from(
+      container.querySelectorAll<HTMLElement>(
+        '.mobile-session-status-overlay .session-pr-list--panel .session-pr-row',
+      ),
+      (row) => ({
+        title: row.querySelector('.session-pr-row-title')?.textContent ?? null,
+        action: row.querySelector('.pr-merge-entry')?.textContent ?? null,
+      }),
+    ),
   }
   act(() => {
     requireElement(
@@ -6427,7 +6438,7 @@ it('opens and closes the existing status panel over the mobile conversation', as
     focusRestored: document.activeElement === toggle,
   }
 
-  const snapshot = () => ({ opened, closed })
+  const snapshot = () => ({ opened, pullRequestTab, closed })
   expect(snapshot()).toEqual({
     opened: {
       overlay: true,
@@ -6435,11 +6446,15 @@ it('opens and closes the existing status panel over the mobile conversation', as
       selectedTab: 'Decisions1',
       decisionHeading: 'Decisions in this session',
       backButtonFocused: false,
+      pullRequestTabs: ['PRs2', 'Decisions1'],
+      pullRequestRows: [],
+    },
+    pullRequestTab: {
+      selectedTab: 'PRs2',
       pullRequestRows: [
         { title: '#42 Allow a bounded retry policy', action: 'Merge' },
         { title: '#43 Record retry outcomes', action: 'CI failing' },
       ],
-      pullRequestsBeforeTabs: true,
     },
     closed: { overlay: false, conversation: true, focusRestored: true },
   })

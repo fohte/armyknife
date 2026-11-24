@@ -98,8 +98,6 @@ export function ConversationPane({
   mobileUpdateNotice,
 }: ConversationPaneProps) {
   const sessionLinkTargets = useSessionLinkTargets(sessions)
-  const [pullRequestListTarget, setPullRequestListTarget] =
-    useState<HTMLDivElement | null>(null)
   const onSelectSessionRef = useRef(onSelectSession)
   onSelectSessionRef.current = onSelectSession
   const selectLinkedSession = useCallback((id: string) => {
@@ -381,6 +379,7 @@ export function ConversationPane({
     onTabChange,
     selectedDecisionSeq,
     tabs: panelTabs,
+    pullRequestListTarget,
   } = useConversationStatusPanel({
     session,
     reviewDocumentSummaries: editorReviewDocument?.summaries ?? null,
@@ -405,7 +404,6 @@ export function ConversationPane({
   })
   const statusPanel = statusPanelOpen ? (
     <SessionStatusPanel
-      beforeTabs={isMobile ? <div ref={setPullRequestListTarget} /> : undefined}
       tabs={panelTabs}
       activeTabId={activeTabId}
       onTabChange={onTabChange}
