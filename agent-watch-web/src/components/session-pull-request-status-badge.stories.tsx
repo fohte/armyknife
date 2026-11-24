@@ -2,50 +2,25 @@ import type { Meta, StoryObj } from '@storybook/react-vite'
 import { PanelRightOpen } from 'lucide-react'
 
 import type { AsyncActionStatus } from '#async-action-feedback'
+import {
+  phoneTopbarCurrentPullRequest,
+  phoneTopbarPullRequests,
+} from '#components/phone-topbar-story-fixtures'
 import { SessionPullRequestStatusBadge } from '#components/session-pull-requests'
 import type { PullRequest } from '#types'
 
-const pullRequests = [
-  {
-    number: 2050,
-    state: 'Open',
-    owner: 'example-org',
-    repo: 'example-service',
-    ciState: 'InProgress',
-    isCurrentBranch: true,
-    headSha: 'sample-phone-pr-head-sha',
-  },
-  {
-    number: 2051,
-    state: 'Open',
-    owner: 'example-org',
-    repo: 'example-service',
-    ciState: 'Successful',
-    isCurrentBranch: false,
-    headSha: 'sample-phone-pr-head-sha-2',
-  },
-  {
-    number: 2052,
-    state: 'Open',
-    owner: 'example-team',
-    repo: 'sample-infra',
-    ciState: 'Successful',
-    isCurrentBranch: false,
-    headSha: 'sample-phone-pr-head-sha-3',
-  },
-] as const
 const noMerge: (pullRequest: PullRequest) => AsyncActionStatus | null = () =>
   null
 
 const meta = {
   component: SessionPullRequestStatusBadge,
   args: {
-    pullRequests,
+    pullRequests: phoneTopbarPullRequests,
     mergeStatus: noMerge,
   },
   decorators: [
     (Story, context) => {
-      const status = context.args.mergeStatus(mergeablePullRequest)
+      const status = context.args.mergeStatus(phoneTopbarCurrentPullRequest)
       const hasMergeFailure = status === 'mergeFailed'
 
       return (
@@ -70,16 +45,6 @@ const meta = {
 
 export default meta
 type Story = StoryObj<typeof meta>
-
-const mergeablePullRequest: PullRequest = {
-  number: 2050,
-  state: 'Open',
-  owner: 'example-org',
-  repo: 'example-service',
-  ciState: 'Successful',
-  isCurrentBranch: true,
-  headSha: 'sample-phone-pr-head-sha',
-}
 
 export const MergeIsInProgress: Story = {
   name: 'The phone status button shows an active merge',

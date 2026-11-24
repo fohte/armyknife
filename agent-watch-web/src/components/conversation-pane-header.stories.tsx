@@ -1,6 +1,10 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
 
 import { ConversationPaneHeader } from '#components/conversation-pane-header'
+import {
+  phoneTopbarCurrentPullRequest,
+  phoneTopbarPullRequests,
+} from '#components/phone-topbar-story-fixtures'
 import type { Session, SessionActions } from '#types'
 
 const session: Session = {
@@ -39,48 +43,8 @@ const phoneSession: Session = {
       priority: null,
     },
   ],
-  pullRequest: {
-    number: 2050,
-    state: 'Open',
-    owner: 'example-org',
-    repo: 'example-service',
-    title: '通知の再送処理を見直して上限を設定ファイルに出す',
-    ciState: 'InProgress',
-    isCurrentBranch: true,
-    headSha: 'sample-phone-pr-head-sha',
-  },
-  pullRequests: [
-    {
-      number: 2050,
-      state: 'Open',
-      owner: 'example-org',
-      repo: 'example-service',
-      title: '通知の再送処理を見直して上限を設定ファイルに出す',
-      ciState: 'InProgress',
-      isCurrentBranch: true,
-      headSha: 'sample-phone-pr-head-sha',
-    },
-    {
-      number: 2051,
-      state: 'Open',
-      owner: 'example-org',
-      repo: 'example-service',
-      title: '通知の再送間隔を設定する',
-      ciState: 'Successful',
-      isCurrentBranch: false,
-      headSha: 'sample-phone-pr-head-sha-2',
-    },
-    {
-      number: 2052,
-      state: 'Open',
-      owner: 'example-team',
-      repo: 'sample-infra',
-      title: '再送の記録を集計する',
-      ciState: 'Successful',
-      isCurrentBranch: false,
-      headSha: 'sample-phone-pr-head-sha-3',
-    },
-  ],
+  pullRequest: phoneTopbarCurrentPullRequest,
+  pullRequests: phoneTopbarPullRequests,
 }
 
 const actions: SessionActions = {
