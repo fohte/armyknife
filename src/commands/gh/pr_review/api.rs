@@ -34,6 +34,8 @@ const GRAPHQL_QUERY: &str = indoc! {"
             nodes {
               id
               isResolved
+              diffSide
+              startDiffSide
               comments(first: 100) {
                 nodes {
                   databaseId

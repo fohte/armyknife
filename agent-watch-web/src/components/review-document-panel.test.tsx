@@ -3,9 +3,10 @@ import '#index.css'
 import { act, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { page } from 'vitest/browser'
+import { page, userEvent } from 'vitest/browser'
 
 import { ReviewDocumentPanel } from '#components/review-document-panel'
+import type { ReviewDocumentSummary } from '#components/review-document-summary'
 import { SessionStatusPanel } from '#components/session-status-panel'
 import type { JsonValue } from '#types'
 
@@ -487,6 +488,872 @@ it('shows the issue heading without a draft tab row when one draft is open', () 
     description: 'New comment on this issue',
     status: 'In the editor · 3m',
   })
+})
+
+it('shows issue fields as typed metadata before the Markdown body', () => {
+  const summary = {
+    id: 'fixture-issue-body',
+    kind: 'issue_body' as const,
+    target: {
+      repository: 'example/web-app',
+      issueNumber: 412,
+      title: 'Delivery checks fail on the fourth attempt',
+    },
+    isEditor: true,
+    canSave: true,
+    canFinish: true,
+  }
+  root = createRoot(container)
+  act(() =>
+    root?.render(
+      <ReviewDocumentPanel
+        summary={summary}
+        summaries={[summary]}
+        frontmatter={{
+          title: 'Notifications stop after several deliveries',
+          labels: ['bug', 'notifications'],
+          assignees: ['sample-maintainer'],
+          parentIssue: 'example/web-app#390',
+          subIssues: ['example/web-app#413', 'example/web-app#414'],
+          submit: false,
+          readonly: { number: 412, author: 'sample-reporter' },
+        }}
+        body={`## Summary
+
+The fourth notification is not delivered.`}
+      />,
+    ),
+  )
+
+  const fields = container.querySelector('.review-document-issue-fields')
+  const fieldRow = (name: string) => {
+    const label = [...(fields?.querySelectorAll('dt') ?? [])].find(
+      (item) => item.textContent === name,
+    )
+    return label?.nextElementSibling
+  }
+  const parentRow = fieldRow('Parent issue')
+  const parentLink = parentRow?.querySelector('a')
+  const subIssueLinks = [
+    ...(fields?.querySelectorAll(
+      '.review-document-issue-sub-items .review-document-issue-reference-link',
+    ) ?? []),
+  ]
+  const snapshot = () => ({
+    title: container.querySelector<HTMLTextAreaElement>(
+      'textarea[aria-label="Issue title"]',
+    )?.value,
+    labels: [...(fields?.querySelectorAll('.review-document-issue-chip') ?? [])]
+      .filter(
+        (item) =>
+          !item.classList.contains('review-document-issue-chip--assignee'),
+      )
+      .map((item) => item.textContent.replaceAll('×', '').trim()),
+    assignees: [
+      ...(fields?.querySelectorAll('.review-document-issue-chip--assignee') ??
+        []),
+    ].map((item) => ({
+      initial: item.querySelector('span')?.textContent,
+      name: item.textContent
+        .replace(item.querySelector('span')?.textContent ?? '', '')
+        .replaceAll('×', '')
+        .trim(),
+    })),
+    parentIssue: parentLink?.textContent,
+    parentIssueHref: parentLink?.getAttribute('href'),
+    parentIssueTarget: parentLink?.getAttribute('target'),
+    parentIssueRel: parentLink?.getAttribute('rel'),
+    setParentButton: parentRow?.querySelector(
+      'button[aria-label="Set parent issue"]',
+    )?.textContent,
+    subIssues: subIssueLinks.map((item) => ({
+      reference: item.textContent,
+      href: item.getAttribute('href'),
+      target: item.getAttribute('target'),
+      rel: item.getAttribute('rel'),
+    })),
+    submit: container.querySelector('input[aria-label="submit"]') !== null,
+    body: container.querySelector('.review-document-body')?.textContent,
+  })
+
+  expect(snapshot()).toEqual({
+    title: 'Notifications stop after several deliveries',
+    labels: ['bug', 'notifications'],
+    assignees: [{ initial: 'S', name: 'sample-maintainer' }],
+    parentIssue: 'example/web-app#390',
+    parentIssueHref: 'https://github.com/example/web-app/issues/390',
+    parentIssueTarget: '_blank',
+    parentIssueRel: 'noopener noreferrer',
+    setParentButton: 'Set parent',
+    subIssues: [
+      {
+        reference: 'example/web-app#413',
+        href: 'https://github.com/example/web-app/issues/413',
+        target: '_blank',
+        rel: 'noopener noreferrer',
+      },
+      {
+        reference: 'example/web-app#414',
+        href: 'https://github.com/example/web-app/issues/414',
+        target: '_blank',
+        rel: 'noopener noreferrer',
+      },
+    ],
+    submit: false,
+    body: `Summary
+The fourth notification is not delivered.`,
+  })
+})
+
+it('keeps malformed issue references visible as plain text', () => {
+  const summary = {
+    id: 'fixture-issue-body-malformed-references',
+    kind: 'issue_body' as const,
+    target: {
+      repository: 'example/web-app',
+      issueNumber: 412,
+      title: 'Delivery checks fail on the fourth attempt',
+    },
+    isEditor: true,
+    canSave: true,
+    canFinish: true,
+  }
+  root = createRoot(container)
+  act(() =>
+    root?.render(
+      <ReviewDocumentPanel
+        summary={summary}
+        summaries={[summary]}
+        frontmatter={{
+          title: 'Notifications stop after several deliveries',
+          labels: [],
+          assignees: [],
+          parentIssue: 'example/web-app#abc',
+          subIssues: ['malformed reference'],
+          submit: false,
+          readonly: { number: 412, author: 'sample-reporter' },
+        }}
+        body="Issue description."
+      />,
+    ),
+  )
+
+  const fields = container.querySelector('.review-document-issue-fields')
+  const fieldRow = (name: string) => {
+    const label = [...(fields?.querySelectorAll('dt') ?? [])].find(
+      (item) => item.textContent === name,
+    )
+    return label?.nextElementSibling
+  }
+  const parentRow = fieldRow('Parent issue')
+  const parentReference = parentRow?.querySelector(
+    '.review-document-issue-reference',
+  )
+  const subIssueReferences = [
+    ...(fields?.querySelectorAll(
+      '.review-document-issue-sub-items .review-document-issue-reference',
+    ) ?? []),
+  ]
+
+  const snapshot = () => ({
+    parentReference: {
+      text: parentReference?.textContent.replace('×', '').trim(),
+      tag: parentReference?.querySelector('code')?.tagName,
+      link: parentReference?.querySelector('a')?.getAttribute('href'),
+    },
+    setParentButton: parentRow?.querySelector(
+      'button[aria-label="Set parent issue"]',
+    )?.textContent,
+    subIssues: subIssueReferences.map((item) => ({
+      text: item.textContent.replace('×', '').trim(),
+      tag: item.querySelector('code')?.tagName,
+      link: item.querySelector('a')?.getAttribute('href'),
+    })),
+  })
+
+  expect(snapshot()).toEqual({
+    parentReference: {
+      text: 'example/web-app#abc',
+      tag: 'CODE',
+      link: undefined,
+    },
+    setParentButton: 'Set parent',
+    subIssues: [
+      {
+        text: 'malformed reference',
+        tag: 'CODE',
+        link: undefined,
+      },
+    ],
+  })
+})
+
+it('saves pending issue metadata when Save is clicked', async () => {
+  const savedFrontmatters: JsonValue[] = []
+  const summary = {
+    id: 'fixture-issue-body-pending-metadata',
+    kind: 'issue_body' as const,
+    target: {
+      repository: 'example/web-app',
+      issueNumber: 412,
+    },
+    isEditor: true,
+    canSave: true,
+    canFinish: true,
+  }
+
+  function Harness() {
+    const [frontmatter, setFrontmatter] = useState<JsonValue>({
+      title: 'Fixture issue',
+      labels: [],
+      assignees: [],
+      parentIssue: '',
+      subIssues: [],
+      submit: false,
+      readonly: { number: 412, author: 'sample-reporter' },
+    })
+    const [body, setBody] = useState('Fixture issue body.')
+
+    return (
+      <ReviewDocumentPanel
+        summary={summary}
+        summaries={[summary]}
+        frontmatter={frontmatter}
+        body={body}
+        onFrontmatterChange={setFrontmatter}
+        onBodyChange={setBody}
+        onSave={() => {
+          savedFrontmatters.push(frontmatter)
+        }}
+      />
+    )
+  }
+
+  await page.viewport(640, 900)
+  root = createRoot(container)
+  act(() => root?.render(<Harness />))
+  await act(async () => {
+    await page.getByRole('textbox', { name: 'Add label' }).fill('notifications')
+    await page.getByRole('button', { name: 'Add assignee' }).click()
+    await page
+      .getByRole('textbox', { name: 'Add assignee' })
+      .fill('sample-maintainer')
+    await page.getByRole('button', { name: 'Add sub-issue' }).click()
+    await page
+      .getByRole('textbox', { name: 'Add sub-issue' })
+      .fill('example/web-app#415')
+    await page.getByRole('button', { name: 'Set parent issue' }).click()
+    await page
+      .getByRole('textbox', { name: 'Set parent issue' })
+      .fill('example/web-app#390')
+    await page.getByRole('button', { name: 'Save' }).click()
+  })
+
+  expect(savedFrontmatters).toEqual([
+    {
+      title: 'Fixture issue',
+      labels: ['notifications'],
+      assignees: ['sample-maintainer'],
+      parentIssue: 'example/web-app#390',
+      subIssues: ['example/web-app#415'],
+      submit: false,
+      readonly: { number: 412, author: 'sample-reporter' },
+    },
+  ])
+})
+
+it('keeps the issue milestone available in Edit mode', () => {
+  const summary = {
+    id: 'fixture-issue-body-milestone',
+    kind: 'issue_body' as const,
+    target: { repository: 'example/web-app', issueNumber: 412 },
+    isEditor: true,
+    canSave: true,
+    canFinish: true,
+  }
+  const frontmatter = {
+    title: 'Fixture issue',
+    labels: [],
+    assignees: [],
+    parentIssue: '',
+    subIssues: [],
+    milestone: 'Quarterly maintenance',
+    submit: false,
+    readonly: { number: 412, author: 'sample-reporter' },
+  }
+  const renderPanel = (view: 'preview' | 'edit') => (
+    <ReviewDocumentPanel
+      summary={summary}
+      summaries={[summary]}
+      frontmatter={frontmatter}
+      body="Fixture issue body."
+      view={view}
+    />
+  )
+
+  root = createRoot(container)
+  act(() => root?.render(renderPanel('preview')))
+  const previewFields = [
+    ...container.querySelectorAll(
+      '.review-document-fields .review-document-field-key',
+    ),
+  ].map((item) => item.textContent)
+  act(() => root?.render(renderPanel('edit')))
+
+  const snapshot = () => ({
+    previewFields,
+    editFields: [
+      ...container.querySelectorAll(
+        '.review-document-fields .review-document-field-key',
+      ),
+    ].map((item) => item.textContent),
+    milestone: container.querySelector<HTMLInputElement>(
+      '.review-document-fields input[aria-label="milestone"]',
+    )?.value,
+  })
+
+  expect(snapshot()).toEqual({
+    previewFields: [],
+    editFields: ['milestone', 'submit'],
+    milestone: 'Quarterly maintenance',
+  })
+})
+
+const approvalDocumentCases: {
+  name: string
+  summary: ReviewDocumentSummary
+  frontmatter: { [key: string]: JsonValue }
+}[] = [
+  {
+    name: 'issue body',
+    summary: {
+      id: 'fixture-issue-body',
+      kind: 'issue_body',
+      target: { repository: 'example/mock-repo', issueNumber: 89 },
+      isEditor: true,
+      canSave: true,
+      canFinish: true,
+    },
+    frontmatter: {
+      title: 'Fixture issue',
+      labels: [],
+      assignees: [],
+      parentIssue: '',
+      subIssues: [],
+      submit: false,
+      readonly: { number: 89, author: 'sample-reporter' },
+    },
+  },
+  {
+    name: 'review replies',
+    summary: {
+      id: 'fixture-review-replies',
+      kind: 'review_replies',
+      target: {
+        repository: 'example/mock-repo',
+        pullRequestNumber: 21,
+        threadCount: 1,
+      },
+      isEditor: true,
+      canSave: true,
+      canFinish: true,
+    },
+    frontmatter: { submit: false },
+  },
+]
+
+it.each(approvalDocumentCases)(
+  'keeps $name approval editable in Edit',
+  async ({ summary, frontmatter }) => {
+    const savedFrontmatter: JsonValue[] = []
+
+    function Harness() {
+      const [currentFrontmatter, setFrontmatter] =
+        useState<JsonValue>(frontmatter)
+      return (
+        <ReviewDocumentPanel
+          summary={summary}
+          view="edit"
+          frontmatter={currentFrontmatter}
+          body="Fixture body."
+          onFrontmatterChange={setFrontmatter}
+          onSave={() => savedFrontmatter.push(currentFrontmatter)}
+        />
+      )
+    }
+
+    root = createRoot(container)
+    act(() => root?.render(<Harness />))
+
+    await act(async () => {
+      await page.getByRole('checkbox', { name: 'submit' }).click()
+    })
+    await act(async () => {
+      await page.getByRole('button', { name: 'Save' }).click()
+    })
+
+    expect(savedFrontmatter).toEqual([{ ...frontmatter, submit: true }])
+  },
+)
+
+it('adds issue metadata values and saves the full frontmatter', async () => {
+  const savedFrontmatter: JsonValue[] = []
+  const initialFrontmatter: JsonValue = {
+    title: 'Fixture issue',
+    labels: ['existing-label'],
+    assignees: [],
+    parentIssue: '',
+    subIssues: [],
+    submit: false,
+    readonly: { number: 89, author: 'sample-reporter' },
+  }
+  const summary = {
+    id: 'fixture-issue-body',
+    kind: 'issue_body' as const,
+    target: { repository: 'example/mock-repo', issueNumber: 89 },
+    isEditor: true,
+    canSave: true,
+    canFinish: true,
+  }
+
+  function Harness() {
+    const [frontmatter, setFrontmatter] = useState(initialFrontmatter)
+    return (
+      <ReviewDocumentPanel
+        summary={summary}
+        frontmatter={frontmatter}
+        body="Fixture body."
+        onFrontmatterChange={setFrontmatter}
+        onSave={() => savedFrontmatter.push(frontmatter)}
+      />
+    )
+  }
+
+  root = createRoot(container)
+  act(() => root?.render(<Harness />))
+
+  await act(async () => {
+    const label = page.getByRole('textbox', { name: 'Add label' })
+    await label.fill('priority-label')
+    await userEvent.keyboard('{Enter}')
+    await page.getByRole('button', { name: 'Add assignee' }).click()
+    const assignee = page.getByRole('textbox', { name: 'Add assignee' })
+    await assignee.fill('sample-owner')
+    await userEvent.keyboard('{Enter}')
+    await page.getByRole('button', { name: 'Set parent issue' }).click()
+    const parent = page.getByRole('textbox', { name: 'Set parent issue' })
+    await parent.fill('example/mock-repo#80')
+    await userEvent.keyboard('{Enter}')
+    await page.getByRole('button', { name: 'Add sub-issue' }).click()
+    const subIssue = page.getByRole('textbox', { name: 'Add sub-issue' })
+    await subIssue.fill('example/mock-repo#90')
+    await userEvent.keyboard('{Enter}')
+  })
+  await act(async () => {
+    await page.getByRole('button', { name: 'Save' }).click()
+  })
+
+  expect(savedFrontmatter).toEqual([
+    {
+      title: 'Fixture issue',
+      labels: ['existing-label', 'priority-label'],
+      assignees: ['sample-owner'],
+      parentIssue: 'example/mock-repo#80',
+      subIssues: ['example/mock-repo#90'],
+      submit: false,
+      readonly: { number: 89, author: 'sample-reporter' },
+    },
+  ])
+})
+
+it('updates parent issue using the issue frontmatter camelCase key', async () => {
+  const summary = {
+    id: 'fixture-issue-body',
+    kind: 'issue_body' as const,
+    target: { repository: 'example/web-app', issueNumber: 412 },
+    isEditor: true,
+    canSave: true,
+    canFinish: true,
+  }
+  const frontmatter: JsonValue = {
+    title: 'Fixture title',
+    labels: ['bug'],
+    assignees: ['sample-maintainer'],
+    parentIssue: 'example/web-app#390',
+    subIssues: ['example/web-app#413'],
+    submit: false,
+    readonly: { number: 412, author: 'sample-reporter' },
+  }
+  const changes: JsonValue[] = []
+  root = createRoot(container)
+  act(() =>
+    root?.render(
+      <ReviewDocumentPanel
+        summary={summary}
+        frontmatter={frontmatter}
+        body="Fixture body."
+        onFrontmatterChange={(value) => changes.push(value)}
+      />,
+    ),
+  )
+
+  await act(async () => {
+    await page.getByRole('button', { name: 'Clear parent issue' }).click()
+  })
+
+  expect(changes).toEqual([
+    {
+      title: 'Fixture title',
+      labels: ['bug'],
+      assignees: ['sample-maintainer'],
+      parentIssue: null,
+      subIssues: ['example/web-app#413'],
+      submit: false,
+      readonly: { number: 412, author: 'sample-reporter' },
+    },
+  ])
+})
+
+it('shows an issue comment body without its file metadata', () => {
+  const summary = {
+    id: 'fixture-issue-comment',
+    kind: 'issue_comment' as const,
+    target: { repository: 'example/web-app', issueNumber: 412 },
+    isEditor: true,
+    canSave: true,
+    canFinish: true,
+  }
+  root = createRoot(container)
+  act(() =>
+    root?.render(
+      <ReviewDocumentPanel
+        summary={summary}
+        summaries={[summary]}
+        frontmatter={null}
+        body={
+          '<!-- author: sample-reviewer -->\n<!-- createdAt: 2026-11-24T02:40:00Z -->\n<!-- updatedAt: 2026-11-24T02:40:00Z -->\n<!-- id: comment-node -->\n<!-- databaseId: 506 -->\n\nCould we retry the pending delivery after a short delay?'
+        }
+      />,
+    ),
+  )
+
+  const snapshot = () => ({
+    metadataSections: container.querySelectorAll('.review-document-frontmatter')
+      .length,
+    commentHeaders: container.querySelectorAll(
+      '.review-document-comment-header',
+    ).length,
+    timestamps: container.querySelectorAll('time').length,
+    message: container.querySelector('.review-document-issue-comment-body')
+      ?.textContent,
+    rawMetadataVisible: container
+      .querySelector('.review-document-preview-column')
+      ?.textContent.includes('databaseId'),
+  })
+
+  expect(snapshot()).toEqual({
+    metadataSections: 0,
+    commentHeaders: 0,
+    timestamps: 0,
+    message: 'Could we retry the pending delivery after a short delay?',
+    rawMetadataVisible: false,
+  })
+})
+
+it('shows each review thread with its focused diff, reviewer comment, and actions', () => {
+  const summary = {
+    id: 'fixture-review-replies',
+    kind: 'review_replies' as const,
+    target: {
+      repository: 'example/web-app',
+      pullRequestNumber: 2049,
+      threadCount: 2,
+    },
+    isEditor: true,
+    canSave: true,
+    canFinish: true,
+  }
+  const body = `<!-- thread: THREAD_sample_1 path: src/notifications/delivery.rs:15 author: @sample-reviewer -->
+- [ ] resolve
+<!-- diff -->
+\`\`\`diff
+@@ -14,5 +14,6 @@
+ fn deliver() {
+-    send();
+>+    retry_pending();
++    send();
+ }
+\`\`\`
+<!-- /diff -->
+<!-- comment: @sample-reviewer 2026-11-23T18:30:00Z -->
+Please keep the original delivery attempt after retrying.
+<!-- /comment -->
+Retain the first send after the retry.
+
+<!-- thread: THREAD_sample_2 path: src/notifications/retry.rs:40 author: @another-reviewer -->
+- [x] resolve
+<!-- diff -->
+\`\`\`diff
+@@ -39,3 +39,2 @@
+ fn retry() {
+>-    delay();
+ }
+\`\`\`
+<!-- /diff -->
+<!-- comment: @another-reviewer 2026-11-23T18:42:00Z -->
+Please keep this delay configurable.
+<!-- /comment -->`
+  root = createRoot(container)
+  act(() =>
+    root?.render(
+      <ReviewDocumentPanel
+        summary={summary}
+        summaries={[summary]}
+        frontmatter={{ submit: false }}
+        body={body}
+      />,
+    ),
+  )
+
+  const snapshot = () => ({
+    frontmatterSections: container.querySelectorAll(
+      '.review-document-frontmatter',
+    ).length,
+    threads: [
+      ...container.querySelectorAll<HTMLElement>('.review-document-thread'),
+    ].map((thread) => ({
+      path: thread.querySelector('.review-document-thread-path')?.textContent,
+      resolved: thread.querySelector<HTMLInputElement>(
+        '.review-document-thread-resolve input',
+      )?.checked,
+      diff: [...thread.querySelectorAll('.review-document-diff-line')].map(
+        (line) => ({
+          text: line.textContent,
+          focused: line.classList.contains(
+            'review-document-diff-line--focused',
+          ),
+        }),
+      ),
+      comments: [
+        ...thread.querySelectorAll('.review-document-thread-comment-card'),
+      ].map((comment) => ({
+        author: comment.querySelector('strong')?.textContent,
+        body: comment.querySelector('.review-document-thread-comment-body')
+          ?.textContent,
+      })),
+      reply: thread.querySelector<HTMLTextAreaElement>(
+        '.review-document-thread-reply textarea',
+      )?.value,
+    })),
+  })
+
+  expect(snapshot()).toEqual({
+    frontmatterSections: 0,
+    threads: [
+      {
+        path: 'src/notifications/delivery.rs:15',
+        resolved: false,
+        diff: [
+          { text: '@@ -14,5 +14,6 @@', focused: false },
+          { text: ' fn deliver() {', focused: false },
+          { text: '-    send();', focused: false },
+          { text: '+    retry_pending();', focused: true },
+          { text: '+    send();', focused: false },
+          { text: ' }', focused: false },
+        ],
+        comments: [
+          {
+            author: '@sample-reviewer',
+            body: 'Please keep the original delivery attempt after retrying.',
+          },
+        ],
+        reply: 'Retain the first send after the retry.',
+      },
+      {
+        path: 'src/notifications/retry.rs:40',
+        resolved: true,
+        diff: [
+          { text: '@@ -39,3 +39,2 @@', focused: false },
+          { text: ' fn retry() {', focused: false },
+          { text: '-    delay();', focused: true },
+          { text: ' }', focused: false },
+        ],
+        comments: [
+          {
+            author: '@another-reviewer',
+            body: 'Please keep this delay configurable.',
+          },
+        ],
+        reply: '',
+      },
+    ],
+  })
+})
+
+it('shows all PR review messages in order when there are no inline threads', () => {
+  const summary = {
+    id: 'fixture-review-summary',
+    kind: 'review_replies' as const,
+    target: {
+      repository: 'example/web-app',
+      pullRequestNumber: 2049,
+      threadCount: 0,
+    },
+    isEditor: true,
+    canSave: true,
+    canFinish: true,
+  }
+  const body = `<!-- reviews -->
+<!-- review: @sample-reviewer state=COMMENTED 2026-11-24T00:00:00Z -->
+The overall review needs a response.
+<!-- /review -->
+<!-- review: @another-reviewer state=COMMENTED 2026-11-24T00:01:00Z -->
+A second reviewer requests a follow-up.
+<!-- /review -->
+<!-- /reviews -->`
+
+  root = createRoot(container)
+  act(() =>
+    root?.render(
+      <ReviewDocumentPanel
+        summary={summary}
+        summaries={[summary]}
+        frontmatter={{ submit: false }}
+        body={body}
+      />,
+    ),
+  )
+
+  const snapshot = () => ({
+    threadCards: container.querySelectorAll('.review-document-thread').length,
+    reviewMessages: Array.from(
+      container.querySelectorAll('.review-document-body p'),
+      (paragraph) => paragraph.textContent,
+    ),
+  })
+
+  expect(snapshot()).toEqual({
+    threadCards: 0,
+    reviewMessages: [
+      'The overall review needs a response.',
+      'A second reviewer requests a follow-up.',
+    ],
+  })
+})
+
+it('updates a reply and resolve checkbox in the review threads draft', async () => {
+  const savedBodies: string[] = []
+  const summary = {
+    id: 'fixture-review-replies',
+    kind: 'review_replies' as const,
+    target: {
+      repository: 'example/web-app',
+      pullRequestNumber: 2049,
+      threadCount: 2,
+    },
+    isEditor: true,
+    canSave: true,
+    canFinish: true,
+  }
+  const originalBody = `<!-- thread: THREAD_fixture_1 path: src/example.rs:9 author: @sample-reviewer -->
+- [ ] resolve
+<!-- diff -->
+\`\`\`diff
+@@ -8,3 +8,4 @@
+ fn handle() {
++    retry();
+ }
+\`\`\`
+<!-- /diff -->
+<!-- comment: @sample-reviewer 2026-11-23T18:30:00Z -->
+Keep this change small.
+<!-- /comment -->
+Retain the current behavior.
+
+<!-- thread: THREAD_fixture_2 path: src/other.rs:20 author: @another-reviewer -->
+- [ ] resolve
+<!-- diff -->
+\`\`\`diff
+@@ -19,3 +19,4 @@
+ fn finish() {
++    close();
+ }
+\`\`\`
+<!-- /diff -->
+<!-- comment: @another-reviewer 2026-11-23T18:42:00Z -->
+Please close the handle.
+<!-- /comment -->`
+
+  function Harness() {
+    const [body, setBody] = useState(originalBody)
+    return (
+      <div
+        className="session-status-panel"
+        data-size="desktop"
+        style={{ width: '640px', height: '900px', display: 'flex' }}
+      >
+        <ReviewDocumentPanel
+          summary={summary}
+          frontmatter={{ submit: false }}
+          body={body}
+          onBodyChange={(nextBody) => {
+            setBody(nextBody)
+          }}
+          onSave={() => savedBodies.push(body)}
+        />
+      </div>
+    )
+  }
+
+  await page.viewport(640, 900)
+  root = createRoot(container)
+  act(() => root?.render(<Harness />))
+
+  await act(async () => {
+    await page
+      .getByRole('textbox', { name: 'Your reply to src/example.rs' })
+      .fill('Use a bounded retry.\n\nKeep the limit configurable.')
+  })
+  await act(async () => {
+    await page.getByRole('checkbox', { name: 'Resolve' }).first().click()
+  })
+  await act(async () => {
+    await page.getByRole('button', { name: 'Save' }).click()
+  })
+
+  const expectedBody = [
+    '<!-- thread: THREAD_fixture_1 path: src/example.rs:9 author: @sample-reviewer -->',
+    '- [x] resolve',
+    '<!-- diff -->',
+    '```diff',
+    '@@ -8,3 +8,4 @@',
+    ' fn handle() {',
+    '+    retry();',
+    ' }',
+    '```',
+    '<!-- /diff -->',
+    '<!-- comment: @sample-reviewer 2026-11-23T18:30:00Z -->',
+    'Keep this change small.',
+    '<!-- /comment -->',
+    'Use a bounded retry.',
+    '',
+    'Keep the limit configurable.',
+    '',
+    '<!-- thread: THREAD_fixture_2 path: src/other.rs:20 author: @another-reviewer -->',
+    '- [ ] resolve',
+    '<!-- diff -->',
+    '```diff',
+    '@@ -19,3 +19,4 @@',
+    ' fn finish() {',
+    '+    close();',
+    ' }',
+    '```',
+    '<!-- /diff -->',
+    '<!-- comment: @another-reviewer 2026-11-23T18:42:00Z -->',
+    'Please close the handle.',
+    '<!-- /comment -->',
+  ].join('\n')
+  expect(savedBodies).toEqual([expectedBody])
 })
 
 it('shows flat tabs with square editor and queued markers for multiple drafts', () => {

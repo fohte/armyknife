@@ -8,9 +8,10 @@ import { EditorView, keymap } from '@codemirror/view'
 import { Maximize2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 
-import { MarkdownMessage } from '#components/markdown-message'
 import { ReviewDocumentNavigation } from '#components/review-document-navigation'
 import { ReviewDocumentActions } from '#components/review-document-panel/actions'
+import { getReviewDocumentFrontmatterEntries } from '#components/review-document-panel-frontmatter'
+import { ReviewDocumentPreview } from '#components/review-document-preview'
 import type { ReviewDocumentSummary } from '#components/review-document-summary'
 import type { ReviewDocumentAction } from '#session-operation-types'
 import type { JsonValue } from '#types'
@@ -323,16 +324,19 @@ export function ReviewDocumentPanel({
   ) => {
     onFrontmatterChange(updateAtPath(frontmatter, path, value))
   }
-  const frontmatterEntries = isJsonObject(frontmatter)
-    ? Object.entries(frontmatter).filter(
-        ([name]) =>
-          (name !== 'submit' ||
-            (summary?.kind === 'draft' &&
-              summary.target.repository !== undefined)) &&
-          !(summary?.kind === 'pr_draft' && name === 'title') &&
-          !(summary?.kind === 'pr_draft' && name === 'steps'),
-      )
-    : null
+  const frontmatterEntries = getReviewDocumentFrontmatterEntries(
+    frontmatter,
+    summary,
+  )
+  const isIssueBody = summary?.kind === 'issue_body'
+  const isApprovalDocument = isIssueBody || summary?.kind === 'review_replies'
+  const showFrontmatterEntries =
+    frontmatterEntries === null || frontmatterEntries.length > 0
+  const showFrontmatter = isApprovalDocument
+    ? view === 'edit' &&
+      frontmatterEntries !== null &&
+      frontmatterEntries.length > 0
+    : frontmatter !== null && showFrontmatterEntries
 
   return (
     <article
@@ -358,7 +362,17 @@ export function ReviewDocumentPanel({
         onSelectDocument={onSelectDocument}
       />
       <div className="review-document-content">
-        {frontmatterEntries === null || frontmatterEntries.length > 0 ? (
+        {isIssueBody ? (
+          <ReviewDocumentPreview
+            mode="frontmatter"
+            summary={summary}
+            body={body}
+            frontmatter={frontmatter}
+            disabled={!canSave || busy}
+            onFrontmatterChange={onFrontmatterChange}
+          />
+        ) : null}
+        {showFrontmatter ? (
           <section
             className="review-document-frontmatter"
             aria-label="Document metadata"
@@ -443,9 +457,12 @@ export function ReviewDocumentPanel({
               />
             </div>
             <div className="review-document-preview-column">
-              <MarkdownMessage className="review-document-body">
-                {body}
-              </MarkdownMessage>
+              <ReviewDocumentPreview
+                {...(summary === undefined ? {} : { summary })}
+                body={body}
+                canSave={canSave && !busy}
+                onBodyChange={onBodyChange}
+              />
             </div>
           </div>
         </section>

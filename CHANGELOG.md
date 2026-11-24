@@ -1,5 +1,54 @@
 # Changelog
 
+## [0.1.903](https://github.com/fohte/armyknife/compare/v0.1.902...v0.1.903) (2026-11-24)
+
+
+### Dependencies
+
+* update rust crate similar to v3.2.1 ([#2219](https://github.com/fohte/armyknife/issues/2219)) ([140d8f6](https://github.com/fohte/armyknife/commit/140d8f6e2cf3039e731660316250c36807366fd0))
+
+## [0.1.902](https://github.com/fohte/armyknife/compare/v0.1.901...v0.1.902) (2026-11-24)
+
+
+### Dependencies
+
+* update dependency @fontsource-variable/jetbrains-mono to v5.3.0 ([#2205](https://github.com/fohte/armyknife/issues/2205)) ([9b58770](https://github.com/fohte/armyknife/commit/9b5877049172c5def012e243978cef53f3d5c656))
+
+## [0.1.901](https://github.com/fohte/armyknife/compare/v0.1.900...v0.1.901) (2026-11-24)
+
+
+### Dependencies
+
+* update dependency shadcn to v4.23.0 ([#2207](https://github.com/fohte/armyknife/issues/2207)) ([090b42a](https://github.com/fohte/armyknife/commit/090b42a7472a1c1a6aaca8defb5c0b77d82a0251))
+
+## [0.1.900](https://github.com/fohte/armyknife/compare/v0.1.899...v0.1.900) (2026-11-24)
+
+
+### Dependencies
+
+* update dependency tailwind-merge to v3.7.0 ([#2209](https://github.com/fohte/armyknife/issues/2209)) ([7d1772a](https://github.com/fohte/armyknife/commit/7d1772a9cc2874464f30322cceef4446c657be38))
+
+## [0.1.899](https://github.com/fohte/armyknife/compare/v0.1.898...v0.1.899) (2026-11-24)
+
+
+### Bug Fixes
+
+* **agent:** use message activity for Inbox age ([#2196](https://github.com/fohte/armyknife/issues/2196)) ([4cfa6a9](https://github.com/fohte/armyknife/commit/4cfa6a9fa6d54c6056a7df9e55a81e415e625b11))
+
+## [0.1.898](https://github.com/fohte/armyknife/compare/v0.1.897...v0.1.898) (2026-11-24)
+
+
+### Features
+
+* **agent-watch-web:** render typed draft previews ([#2182](https://github.com/fohte/armyknife/issues/2182)) ([b2d06a1](https://github.com/fohte/armyknife/commit/b2d06a1ca8867a2d09e36a4d20dd01bd58291413))
+
+## [0.1.897](https://github.com/fohte/armyknife/compare/v0.1.896...v0.1.897) (2026-11-24)
+
+
+### Features
+
+* **agent-watch-web:** add direct review actions ([#2177](https://github.com/fohte/armyknife/issues/2177)) ([367f970](https://github.com/fohte/armyknife/commit/367f97044ff66c8d190d1d5deadcc934084e7dfb))
+
 ## [0.1.896](https://github.com/fohte/armyknife/compare/v0.1.895...v0.1.896) (2026-11-24)
 
 

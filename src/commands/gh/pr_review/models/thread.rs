@@ -7,7 +7,18 @@ pub struct ReviewThread {
     /// GraphQL node ID, used for resolve mutation.
     pub id: Option<String>,
     pub is_resolved: bool,
+    #[serde(default)]
+    pub diff_side: Option<DiffSide>,
+    #[serde(default)]
+    pub start_diff_side: Option<DiffSide>,
     pub comments: CommentsNode,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum DiffSide {
+    Left,
+    Right,
 }
 
 #[derive(Debug, Clone, Deserialize)]

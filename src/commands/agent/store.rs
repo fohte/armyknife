@@ -140,6 +140,12 @@ pub(crate) fn save_session_to(sessions_dir: &Path, session: &Session) -> Result<
     database::save_session(sessions_dir, session)
 }
 
+pub(crate) fn agent_response_timestamps_from(
+    sessions_dir: &Path,
+) -> Result<HashMap<String, DateTime<Utc>>> {
+    database::agent_response_timestamps(sessions_dir)
+}
+
 pub(crate) fn mark_pending_initial_prompt(session_id: &str) -> Result<()> {
     mark_pending_initial_prompt_from(&sessions_dir()?, session_id)
 }
