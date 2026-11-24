@@ -9,6 +9,7 @@ import { Maximize2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 
 import { ReviewDocumentNavigation } from '#components/review-document-navigation'
+import { getReviewDocumentFrontmatterEntries } from '#components/review-document-panel-frontmatter'
 import { ReviewDocumentPreview } from '#components/review-document-preview'
 import type { ReviewDocumentSummary } from '#components/review-document-summary'
 import type { JsonValue } from '#types'
@@ -314,21 +315,10 @@ export function ReviewDocumentPanel({
   ) => {
     onFrontmatterChange(updateAtPath(frontmatter, path, value))
   }
-  const frontmatterEntries = isJsonObject(frontmatter)
-    ? Object.entries(frontmatter).filter(([name]) => {
-        if (summary?.kind === 'pr_draft' && name === 'title') return false
-        if (
-          summary?.kind === 'issue_body' ||
-          summary?.kind === 'review_replies'
-        ) {
-          return (
-            name === 'submit' ||
-            (summary.kind === 'issue_body' && name === 'milestone')
-          )
-        }
-        return true
-      })
-    : null
+  const frontmatterEntries = getReviewDocumentFrontmatterEntries(
+    frontmatter,
+    summary,
+  )
   const isIssueBody = summary?.kind === 'issue_body'
   const isApprovalDocument = isIssueBody || summary?.kind === 'review_replies'
   const showFrontmatterEntries =
