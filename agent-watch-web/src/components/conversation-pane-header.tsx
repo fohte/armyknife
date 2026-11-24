@@ -3,7 +3,6 @@ import '#components/conversation-pane-view.css'
 import { Button } from '@fohte/ui/button'
 import {
   ChevronLeft,
-  Menu as MenuIcon,
   PanelRightClose,
   PanelRightOpen,
   Pencil,
@@ -283,7 +282,21 @@ export function ConversationPaneHeader({
               aria-expanded={mobileNavOpen}
               onClick={onOpenNavigation}
             >
-              <MenuIcon aria-hidden="true" size={22} />
+              <svg
+                width="22"
+                height="22"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M4 5h16" />
+                <path d="M4 12h16" />
+                <path d="M4 19h16" />
+              </svg>
               {activityFailed ? (
                 <span
                   className="mobile-conversation-nav-failure"

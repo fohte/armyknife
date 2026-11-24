@@ -21,6 +21,68 @@ const session: Session = {
   pullRequest: null,
 }
 
+const phoneSession: Session = {
+  ...session,
+  vibeMode: { mode: 'enabled' },
+  title: '通知の再送処理を見直して上限を設定ファイルに出す',
+  task: {
+    id: 'sample-task-phone-topbar',
+    number: 2048,
+    title: '通知の信頼性を上げる',
+    priority: null,
+  },
+  tasks: [
+    {
+      id: 'sample-task-phone-topbar',
+      number: 2048,
+      title: '通知の信頼性を上げる',
+      priority: null,
+    },
+  ],
+  pullRequest: {
+    number: 2050,
+    state: 'Open',
+    owner: 'example-org',
+    repo: 'example-service',
+    title: '通知の再送処理を見直して上限を設定ファイルに出す',
+    ciState: 'InProgress',
+    isCurrentBranch: true,
+    headSha: 'sample-phone-pr-head-sha',
+  },
+  pullRequests: [
+    {
+      number: 2050,
+      state: 'Open',
+      owner: 'example-org',
+      repo: 'example-service',
+      title: '通知の再送処理を見直して上限を設定ファイルに出す',
+      ciState: 'InProgress',
+      isCurrentBranch: true,
+      headSha: 'sample-phone-pr-head-sha',
+    },
+    {
+      number: 2051,
+      state: 'Open',
+      owner: 'example-org',
+      repo: 'example-service',
+      title: '通知の再送間隔を設定する',
+      ciState: 'Successful',
+      isCurrentBranch: false,
+      headSha: 'sample-phone-pr-head-sha-2',
+    },
+    {
+      number: 2052,
+      state: 'Open',
+      owner: 'example-team',
+      repo: 'sample-infra',
+      title: '再送の記録を集計する',
+      ciState: 'Successful',
+      isCurrentBranch: false,
+      headSha: 'sample-phone-pr-head-sha-3',
+    },
+  ],
+}
+
 const actions: SessionActions = {
   message: true,
   answerQuestion: false,
@@ -252,7 +314,7 @@ export const PhoneTitleFitsOnOneLine: Story = {
   name: 'The phone header shows a short title on one line',
   args: {
     isMobile: true,
-    session: { ...session, title: 'Short title' },
+    session: { ...session, title: '通知の再送処理を見直す' },
   },
 }
 
@@ -263,58 +325,45 @@ export const PhoneTitleTruncatesAfterTwoLines: Story = {
     session: {
       ...session,
       title:
-        'Review the retry flow across every background task and delivery path before the next release',
+        '通知の再送処理を見直して上限を設定ファイルに出し、遅延と失敗を記録して再送回数を調整する',
     },
   },
 }
 
 export const PhoneHeaderShowsNoPullRequests: Story = {
   name: 'The phone header has no pull request status badge',
-  args: { isMobile: true, session },
+  args: {
+    isMobile: true,
+    isToday: true,
+    session: {
+      ...phoneSession,
+      vibeMode: {
+        mode: 'inherited',
+        ancestorSessionId: 'sample-parent-session',
+      },
+      pullRequest: null,
+      pullRequests: [],
+    },
+  },
 }
 
 export const PhoneHeaderShowsPullRequestStatus: Story = {
   name: 'The phone header shows pull request count and CI status',
   args: {
     isMobile: true,
-    session: {
-      ...session,
-      pullRequest: {
-        number: 42,
-        state: 'Open',
-        owner: 'example-org',
-        repo: 'example-service',
-        ciState: 'InProgress',
-        isCurrentBranch: true,
-        headSha: 'sample-head-sha',
-      },
-      pullRequests: [
-        {
-          number: 42,
-          state: 'Open',
-          owner: 'example-org',
-          repo: 'example-service',
-          ciState: 'InProgress',
-          isCurrentBranch: true,
-          headSha: 'sample-head-sha',
-        },
-        {
-          number: 43,
-          state: 'Open',
-          owner: 'example-org',
-          repo: 'example-infra',
-          ciState: 'Successful',
-          isCurrentBranch: false,
-          headSha: 'sample-other-sha',
-        },
-      ],
-    },
+    isToday: true,
+    session: phoneSession,
   },
 }
 
 export const PhoneNavigationShowsActivityFailure: Story = {
   name: 'The phone navigation button marks failed Activity actions',
-  args: { isMobile: true, activityFailed: true },
+  args: {
+    isMobile: true,
+    isToday: true,
+    activityFailed: true,
+    session: phoneSession,
+  },
 }
 
 export const PhoneHeaderShowsTheSelectedDesignState: Story = {
@@ -324,65 +373,7 @@ export const PhoneHeaderShowsTheSelectedDesignState: Story = {
     isToday: true,
     activityFailed: true,
     session: {
-      ...session,
-      vibeMode: { mode: 'enabled' },
-      title: 'Review the delivery retry policy across all services',
-      task: {
-        id: 'sample-task-phone-header',
-        number: 73,
-        title: 'Review retry behavior',
-        priority: null,
-      },
-      tasks: [
-        {
-          id: 'sample-task-phone-header',
-          number: 73,
-          title: 'Review retry behavior',
-          priority: null,
-        },
-      ],
-      pullRequest: {
-        number: 42,
-        state: 'Open',
-        owner: 'example-org',
-        repo: 'example-service',
-        title: 'Review retry behavior',
-        ciState: 'InProgress',
-        isCurrentBranch: true,
-        headSha: 'sample-head-sha',
-      },
-      pullRequests: [
-        {
-          number: 42,
-          state: 'Open',
-          owner: 'example-org',
-          repo: 'example-service',
-          title: 'Review retry behavior',
-          ciState: 'InProgress',
-          isCurrentBranch: true,
-          headSha: 'sample-head-sha',
-        },
-        {
-          number: 43,
-          state: 'Open',
-          owner: 'example-org',
-          repo: 'example-service',
-          title: 'Update delivery timeouts',
-          ciState: 'Successful',
-          isCurrentBranch: false,
-          headSha: 'sample-other-head-sha',
-        },
-        {
-          number: 44,
-          state: 'Open',
-          owner: 'example-team',
-          repo: 'sample-infra',
-          title: 'Add retry metrics',
-          ciState: 'Successful',
-          isCurrentBranch: false,
-          headSha: 'sample-infra-head-sha',
-        },
-      ],
+      ...phoneSession,
     },
   },
 }

@@ -257,6 +257,14 @@
   fill: currentColor;
 }
 
+.mobile-conversation-title .vibe-indicator {
+  color: var(--aw-text-muted);
+}
+
+.mobile-conversation-title .vibe-indicator svg {
+  stroke-width: 2;
+}
+
 .mobile-conversation-title .session-title-heading,
 .mobile-conversation-title .session-title-editor {
   min-width: 0;

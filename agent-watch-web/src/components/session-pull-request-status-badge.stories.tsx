@@ -7,22 +7,31 @@ import type { PullRequest } from '#types'
 
 const pullRequests = [
   {
-    number: 42,
+    number: 2050,
+    state: 'Open',
+    owner: 'example-org',
+    repo: 'example-service',
+    ciState: 'InProgress',
+    isCurrentBranch: true,
+    headSha: 'sample-phone-pr-head-sha',
+  },
+  {
+    number: 2051,
     state: 'Open',
     owner: 'example-org',
     repo: 'example-service',
     ciState: 'Successful',
-    isCurrentBranch: true,
-    headSha: 'sample-head-sha',
+    isCurrentBranch: false,
+    headSha: 'sample-phone-pr-head-sha-2',
   },
   {
-    number: 43,
+    number: 2052,
     state: 'Open',
-    owner: 'example-org',
-    repo: 'example-infra',
+    owner: 'example-team',
+    repo: 'sample-infra',
     ciState: 'Successful',
     isCurrentBranch: false,
-    headSha: 'sample-other-sha',
+    headSha: 'sample-phone-pr-head-sha-3',
   },
 ] as const
 const noMerge: (pullRequest: PullRequest) => AsyncActionStatus | null = () =>
@@ -63,13 +72,13 @@ export default meta
 type Story = StoryObj<typeof meta>
 
 const mergeablePullRequest: PullRequest = {
-  number: 42,
+  number: 2050,
   state: 'Open',
   owner: 'example-org',
   repo: 'example-service',
   ciState: 'Successful',
   isCurrentBranch: true,
-  headSha: 'sample-head-sha',
+  headSha: 'sample-phone-pr-head-sha',
 }
 
 export const MergeIsInProgress: Story = {
@@ -77,8 +86,8 @@ export const MergeIsInProgress: Story = {
   args: { mergeStatus: (): AsyncActionStatus => 'merging' },
 }
 
-export const CiHasPassed: Story = {
-  name: 'The phone status button shows passing CI and the PR count',
+export const CiIsRunning: Story = {
+  name: 'The phone status button shows running CI and the PR count',
   args: { mergeStatus: noMerge },
 }
 

@@ -63,6 +63,7 @@ function HeaderWithMergeBandTarget(
   const [pullRequestTarget, setPullRequestTarget] =
     useState<HTMLDivElement | null>(null)
   const [statusPanelOpen, setStatusPanelOpen] = useState(props.statusPanelOpen)
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const toggleStatusPanel = () => {
     props.onToggleStatusPanel()
     setStatusPanelOpen((open) => !open)
@@ -72,6 +73,11 @@ function HeaderWithMergeBandTarget(
       <ConversationPaneHeader
         {...props}
         statusPanelOpen={statusPanelOpen}
+        mobileNavOpen={mobileNavOpen}
+        onOpenNavigation={() => {
+          props.onOpenNavigation?.()
+          setMobileNavOpen(true)
+        }}
         onToggleStatusPanel={toggleStatusPanel}
         mergeBandTarget={target}
         pullRequestListTarget={props.isMobile ? pullRequestTarget : null}
@@ -95,6 +101,7 @@ function renderHeader(
     onLater?: () => void
     onClose?: () => void
     onToggleToday?: (isToday: boolean) => void
+    onOpenNavigation?: () => void
     onToggleStatusPanel?: () => void
     mobileActionsMenuOpen?: boolean
     isToday?: boolean
@@ -128,6 +135,9 @@ function renderHeader(
           {...(options.onToggleToday === undefined
             ? {}
             : { onToggleToday: options.onToggleToday })}
+          {...(options.onOpenNavigation === undefined
+            ? {}
+            : { onOpenNavigation: options.onOpenNavigation })}
         />
       </AsyncActionFeedbackProvider>,
     )
@@ -192,6 +202,36 @@ afterEach(() => {
   root = null
   container.remove()
   vi.unstubAllGlobals()
+})
+
+it('opens mobile navigation from the header button', () => {
+  const onOpenNavigation = vi.fn()
+  renderHeader(true, vi.fn().mockResolvedValue(true), session, {
+    onOpenNavigation,
+  })
+  const navigationButton = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Open navigation"]',
+    ),
+  )
+  const snapshot = () => ({
+    expanded: navigationButton.getAttribute('aria-expanded'),
+    onOpenNavigationCalls: onOpenNavigation.mock.calls,
+  })
+
+  expect(snapshot()).toEqual({
+    expanded: 'false',
+    onOpenNavigationCalls: [],
+  })
+
+  act(() => {
+    navigationButton.click()
+  })
+
+  expect(snapshot()).toEqual({
+    expanded: 'true',
+    onOpenNavigationCalls: [[]],
+  })
 })
 
 it.each([
