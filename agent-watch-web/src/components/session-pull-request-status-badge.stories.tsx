@@ -2,12 +2,46 @@ import type { Meta, StoryObj } from '@storybook/react-vite'
 import { PanelRightOpen } from 'lucide-react'
 
 import type { AsyncActionStatus } from '#async-action-feedback'
-import {
-  phoneTopbarCurrentPullRequest,
-  phoneTopbarPullRequests,
-} from '#components/phone-topbar-story-fixtures'
 import { SessionPullRequestStatusBadge } from '#components/session-pull-requests'
 import type { PullRequest } from '#types'
+
+const phoneTopbarCurrentPullRequest: PullRequest = {
+  number: 2050,
+  state: 'Open',
+  owner: 'example',
+  repo: 'service',
+  title: '再送処理を retry() にまとめる',
+  url: 'https://github.com/example/service/pull/2050',
+  headSha: 'sample-phone-pr-head-sha',
+  ciState: 'InProgress',
+  isCurrentBranch: true,
+}
+
+const phoneTopbarPullRequests: PullRequest[] = [
+  phoneTopbarCurrentPullRequest,
+  {
+    number: 64,
+    state: 'Open',
+    owner: 'example',
+    repo: 'infra',
+    title: '再送キューの上限を設定に出す',
+    url: 'https://github.com/example/infra/pull/64',
+    headSha: 'sample-phone-pr-head-sha-2',
+    ciState: 'Successful',
+    isCurrentBranch: false,
+  },
+  {
+    number: 2041,
+    state: 'Merged',
+    owner: 'example',
+    repo: 'service',
+    title: '再送のログを整える',
+    url: 'https://github.com/example/service/pull/2041',
+    headSha: 'sample-phone-pr-head-sha-3',
+    ciState: 'Successful',
+    isCurrentBranch: false,
+  },
+]
 
 const noMerge: (pullRequest: PullRequest) => AsyncActionStatus | null = () =>
   null
