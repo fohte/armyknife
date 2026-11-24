@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.899](https://github.com/fohte/armyknife/compare/v0.1.898...v0.1.899) (2026-11-24)
+
+
+### Bug Fixes
+
+* **agent:** use message activity for Inbox age ([#2196](https://github.com/fohte/armyknife/issues/2196)) ([4cfa6a9](https://github.com/fohte/armyknife/commit/4cfa6a9fa6d54c6056a7df9e55a81e415e625b11))
+
 ## [0.1.898](https://github.com/fohte/armyknife/compare/v0.1.897...v0.1.898) (2026-11-24)
 
 
