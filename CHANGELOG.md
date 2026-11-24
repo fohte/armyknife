@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.893](https://github.com/fohte/armyknife/compare/v0.1.892...v0.1.893) (2026-11-24)
+
+
+### Dependencies
+
+* update rust crate toml_edit to v0.25.19 ([#2179](https://github.com/fohte/armyknife/issues/2179)) ([3890abe](https://github.com/fohte/armyknife/commit/3890abe9eb86f3bf12ccc1c49926a7244c0615e3))
+
 ## [0.1.892](https://github.com/fohte/armyknife/compare/v0.1.891...v0.1.892) (2026-11-24)
 
 
