@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.916](https://github.com/fohte/armyknife/compare/v0.1.915...v0.1.916) (2026-11-24)
+
+
+### Dependencies
+
+* update @base-ui/react to v1.9.0 ([#2255](https://github.com/fohte/armyknife/issues/2255)) ([d8fd0d0](https://github.com/fohte/armyknife/commit/d8fd0d097e940b261d729171950a64bc0197a152))
+
 ## [0.1.915](https://github.com/fohte/armyknife/compare/v0.1.914...v0.1.915) (2026-11-24)
 
 
