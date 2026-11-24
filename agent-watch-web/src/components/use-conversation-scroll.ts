@@ -155,13 +155,18 @@ export function useConversationScroll({
       return
     }
 
-    const initialResizeTargets = new WeakSet<Element>()
+    const initialResizeHeights = new WeakMap<Element, number>()
     const resizeObserver = new ResizeObserver((entries) => {
       let resizedExistingChild = false
       for (const entry of entries) {
-        if (initialResizeTargets.has(entry.target)) {
-          initialResizeTargets.delete(entry.target)
-        } else {
+        const initialHeight = initialResizeHeights.get(entry.target)
+        initialResizeHeights.delete(entry.target)
+        const currentHeight =
+          entry.borderBoxSize[0]?.blockSize ?? entry.contentRect.height
+        if (
+          initialHeight === undefined ||
+          Math.abs(currentHeight - initialHeight) > 0.5
+        ) {
           resizedExistingChild = true
         }
       }
@@ -189,14 +194,21 @@ export function useConversationScroll({
     const observeChildren = (nodes: Iterable<Node>) => {
       for (const node of nodes) {
         if (!(node instanceof Element)) continue
-        initialResizeTargets.add(node)
-        resizeObserver.observe(node)
+        initialResizeHeights.set(node, node.getBoundingClientRect().height)
+        resizeObserver.observe(node, { box: 'border-box' })
       }
     }
     observeChildren(scrollContainer.children)
 
     const mutationObserver = new MutationObserver((records) => {
-      for (const record of records) observeChildren(record.addedNodes)
+      for (const record of records) {
+        for (const node of record.removedNodes) {
+          if (!(node instanceof Element)) continue
+          resizeObserver.unobserve(node)
+          initialResizeHeights.delete(node)
+        }
+        observeChildren(record.addedNodes)
+      }
     })
     mutationObserver.observe(scrollContainer, { childList: true })
 

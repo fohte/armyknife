@@ -306,23 +306,53 @@ function stubResizeObserver() {
   }
   vi.stubGlobal('ResizeObserver', ControlledResizeObserver)
 
-  return (target: Element) => {
+  return (target: Element, height = target.getBoundingClientRect().height) => {
+    const bounds = target.getBoundingClientRect()
+    const size = { inlineSize: bounds.width, blockSize: height }
     for (const observer of observers) {
       if (!observer.targets.has(target)) continue
       observer.callback(
         [
           {
             target,
-            contentRect: target.getBoundingClientRect(),
-            borderBoxSize: [],
-            contentBoxSize: [],
-            devicePixelContentBoxSize: [],
+            contentRect: new DOMRectReadOnly(
+              bounds.x,
+              bounds.y,
+              bounds.width,
+              height,
+            ),
+            borderBoxSize: [size],
+            contentBoxSize: [size],
+            devicePixelContentBoxSize: [size],
           },
         ],
         observer.instance,
       )
     }
   }
+}
+
+function mockScrollDimensions(
+  scroll: HTMLDivElement,
+  initialHeight: number,
+  clientHeight: number,
+) {
+  let height = initialHeight
+  Object.defineProperties(scroll, {
+    scrollHeight: { configurable: true, get: () => height },
+    clientHeight: { configurable: true, value: clientHeight },
+    scrollTop: { configurable: true, writable: true, value: 0 },
+  })
+  return (nextHeight: number) => {
+    height = nextHeight
+  }
+}
+
+function scrollToPosition(scroll: HTMLDivElement, scrollTop: number) {
+  act(() => {
+    scroll.scrollTop = scrollTop
+    scroll.dispatchEvent(new Event('scroll'))
+  })
 }
 
 async function waitForState(condition: () => boolean) {
@@ -8448,20 +8478,12 @@ it('follows new messages at the bottom without moving a reader who scrolled up',
   const scroll = requireElement(
     container.querySelector<HTMLDivElement>('.conversation-scroll'),
   )
-  let height = 300
-  Object.defineProperties(scroll, {
-    scrollHeight: { configurable: true, get: () => height },
-    clientHeight: { configurable: true, value: 100 },
-    scrollTop: { configurable: true, writable: true, value: 0 },
-  })
+  const setHeight = mockScrollDimensions(scroll, 300, 100)
   renderView(onAction, session, undefined, [firstMessage])
-  act(() => {
-    scroll.scrollTop = 200
-    scroll.dispatchEvent(new Event('scroll'))
-  })
+  scrollToPosition(scroll, 200)
   const initialBottom = scroll.scrollTop
 
-  height = 500
+  setHeight(500)
   renderView(onAction, session, undefined, [
     firstMessage,
     { type: 'assistant', text: 'Second message' },
@@ -8472,7 +8494,7 @@ it('follows new messages at the bottom without moving a reader who scrolled up',
     scroll.scrollTop = 40
     scroll.dispatchEvent(new Event('scroll'))
   })
-  height = 600
+  setHeight(600)
   renderView(onAction, session, undefined, [
     firstMessage,
     { type: 'assistant', text: 'Second message' },
@@ -8484,7 +8506,7 @@ it('follows new messages at the bottom without moving a reader who scrolled up',
     scroll.scrollTop = 500
     scroll.dispatchEvent(new Event('scroll'))
   })
-  height = 700
+  setHeight(700)
   renderView(onAction, session, undefined, [
     firstMessage,
     { type: 'assistant', text: 'Second message' },
@@ -8525,23 +8547,13 @@ it('keeps an expanded to-do in view when a new message arrives', () => {
   const scroll = requireElement(
     container.querySelector<HTMLDivElement>('.conversation-scroll'),
   )
-  let height = 300
-  Object.defineProperties(scroll, {
-    scrollHeight: { configurable: true, get: () => height },
-    clientHeight: { configurable: true, value: 100 },
-    scrollTop: { configurable: true, writable: true, value: 0 },
-  })
+  const setHeight = mockScrollDimensions(scroll, 300, 100)
   renderView(onAction, session, undefined, [todo])
-  act(() => {
-    scroll.scrollTop = 200
-    scroll.dispatchEvent(new Event('scroll'))
-  })
+  scrollToPosition(scroll, 200)
   const initialBottom = scroll.scrollTop
-  const todoElement = requireElement(
-    container.querySelector<HTMLElement>('.chat-todo-card'),
-  )
+  const messageElement = requireElement(scroll.lastElementChild)
   act(() => {
-    notifyResize(todoElement)
+    notifyResize(messageElement)
   })
 
   const expandButton = requireElement(
@@ -8552,13 +8564,16 @@ it('keeps an expanded to-do in view when a new message arrives', () => {
   act(() => {
     expandButton.click()
   })
-  height = 600
+  setHeight(600)
   act(() => {
-    notifyResize(todoElement)
+    notifyResize(
+      messageElement,
+      messageElement.getBoundingClientRect().height + 10,
+    )
   })
   const afterExpanding = scroll.scrollTop
 
-  height = 800
+  setHeight(800)
   renderView(onAction, session, undefined, [
     todo,
     { type: 'assistant', text: 'The next step is ready.' },
@@ -8577,6 +8592,28 @@ it('keeps an expanded to-do in view when a new message arrives', () => {
 })
 
 it.each([
+  {
+    card: 'to-do',
+    original: {
+      type: 'todo',
+      seq: 12,
+      title: 'Review the deployment sequence',
+      detail: null,
+      completed: false,
+      resolution: null,
+      comment: null,
+    } satisfies ChatItem,
+    updated: {
+      type: 'todo',
+      seq: 12,
+      title: 'Review the deployment sequence',
+      detail: null,
+      folded: true,
+      completed: false,
+      resolution: null,
+      comment: null,
+    } satisfies ChatItem,
+  },
   {
     card: 'to-do',
     original: {
@@ -8615,19 +8652,10 @@ it.each([
     const scroll = requireElement(
       container.querySelector<HTMLDivElement>('.conversation-scroll'),
     )
-    let height = 300
-    Object.defineProperties(scroll, {
-      scrollHeight: { configurable: true, get: () => height },
-      clientHeight: { configurable: true, value: 100 },
-      scrollTop: { configurable: true, writable: true, value: 0 },
-    })
+    mockScrollDimensions(scroll, 300, 100)
     renderView(onAction, session, undefined, [original])
-    act(() => {
-      scroll.scrollTop = 200
-      scroll.dispatchEvent(new Event('scroll'))
-    })
+    scrollToPosition(scroll, 200)
 
-    height = 600
     renderView(onAction, session, undefined, [updated])
 
     const snapshot = () => ({ scrollTop: scroll.scrollTop })
@@ -8643,19 +8671,11 @@ it('keeps following the bottom when a message grows after it is added', async ()
   const scroll = requireElement(
     container.querySelector<HTMLDivElement>('.conversation-scroll'),
   )
-  let height = 300
-  Object.defineProperties(scroll, {
-    scrollHeight: { configurable: true, get: () => height },
-    clientHeight: { configurable: true, value: 100 },
-    scrollTop: { configurable: true, writable: true, value: 0 },
-  })
+  const setHeight = mockScrollDimensions(scroll, 300, 100)
   renderView(onAction, session, undefined, [firstMessage])
-  act(() => {
-    scroll.scrollTop = 200
-    scroll.dispatchEvent(new Event('scroll'))
-  })
+  scrollToPosition(scroll, 200)
 
-  height = 500
+  setHeight(500)
   renderView(onAction, session, undefined, [
     firstMessage,
     { type: 'assistant', text: 'A message with an image' },
@@ -8665,12 +8685,9 @@ it('keeps following the bottom when a message grows after it is added', async ()
   })
   const afterNewMessage = scroll.scrollTop
   const lastMessage = requireElement(scroll.lastElementChild)
+  setHeight(700)
   act(() => {
-    notifyResize(lastMessage)
-  })
-  height = 700
-  act(() => {
-    notifyResize(lastMessage)
+    notifyResize(lastMessage, lastMessage.getBoundingClientRect().height + 10)
   })
 
   const snapshot = () => ({
@@ -8680,6 +8697,94 @@ it('keeps following the bottom when a message grows after it is added', async ()
   expect(snapshot()).toEqual({
     afterNewMessage: 400,
     afterMessageGrowth: 600,
+  })
+})
+
+it('keeps a reader in place when an observed message grows', () => {
+  const notifyResize = stubResizeObserver()
+  const onAction = vi.fn(() => Promise.resolve(true))
+  const message: ChatItem = { type: 'assistant', text: 'A long message' }
+  renderView(onAction, session, undefined, [message])
+  const scroll = requireElement(
+    container.querySelector<HTMLDivElement>('.conversation-scroll'),
+  )
+  const setHeight = mockScrollDimensions(scroll, 300, 100)
+  renderView(onAction, session, undefined, [message])
+  scrollToPosition(scroll, 40)
+  const lastMessage = requireElement(scroll.lastElementChild)
+  act(() => {
+    notifyResize(lastMessage)
+  })
+
+  setHeight(450)
+  act(() => {
+    notifyResize(lastMessage, lastMessage.getBoundingClientRect().height + 10)
+  })
+
+  const snapshot = () => ({ scrollTop: scroll.scrollTop })
+  expect(snapshot()).toEqual({ scrollTop: 40 })
+})
+
+it('keeps an attached proposal in place when a new message arrives', async () => {
+  const notifyResize = stubResizeObserver()
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction, session, undefined, [proposal])
+  const scroll = requireElement(
+    container.querySelector<HTMLDivElement>('.conversation-scroll'),
+  )
+  const setHeight = mockScrollDimensions(scroll, 300, 100)
+  renderView(onAction, session, undefined, [proposal])
+  scrollToPosition(scroll, 200)
+  const lastMessage = requireElement(scroll.lastElementChild)
+  act(() => {
+    notifyResize(lastMessage)
+  })
+
+  const comment = requireElement(
+    container.querySelector<HTMLTextAreaElement>('.chat-proposal-comment'),
+  )
+  const dropEvent = new Event('drop', { bubbles: true, cancelable: true })
+  Object.defineProperty(dropEvent, 'dataTransfer', {
+    value: {
+      types: ['Files'],
+      files: [new File(['payload'], 'fixture-attachment.bin')],
+      dropEffect: 'none',
+    },
+  })
+  act(() => {
+    comment.dispatchEvent(dropEvent)
+  })
+  expect(
+    await waitForState(
+      () =>
+        container.querySelector(
+          '.chat-proposal-card .attachment-preview-item span',
+        )?.textContent === 'fixture-attachment.bin',
+    ),
+  ).toBe(true)
+
+  setHeight(600)
+  act(() => {
+    notifyResize(lastMessage, lastMessage.getBoundingClientRect().height + 10)
+  })
+  const afterAttachment = scroll.scrollTop
+  setHeight(800)
+  renderView(onAction, session, undefined, [
+    proposal,
+    { type: 'assistant', text: 'The next step is ready.' },
+  ])
+
+  const snapshot = () => ({
+    attachmentName: container.querySelector(
+      '.chat-proposal-card .attachment-preview-item span',
+    )?.textContent,
+    afterAttachment,
+    afterNewMessage: scroll.scrollTop,
+  })
+  expect(snapshot()).toEqual({
+    attachmentName: 'fixture-attachment.bin',
+    afterAttachment: 200,
+    afterNewMessage: 200,
   })
 })
 
