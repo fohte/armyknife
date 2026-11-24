@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.900](https://github.com/fohte/armyknife/compare/v0.1.899...v0.1.900) (2026-11-24)
+
+
+### Dependencies
+
+* update dependency tailwind-merge to v3.7.0 ([#2209](https://github.com/fohte/armyknife/issues/2209)) ([7d1772a](https://github.com/fohte/armyknife/commit/7d1772a9cc2874464f30322cceef4446c657be38))
+
 ## [0.1.899](https://github.com/fohte/armyknife/compare/v0.1.898...v0.1.899) (2026-11-24)
 
 
