@@ -1676,9 +1676,11 @@ mod tests {
         let started_at = std::time::Instant::now();
         let mut signal = [0_u8; 1];
         let signal_bytes = loop {
-            let bytes = finish_reader
-                .read(&mut signal)
-                .expect("finish request FIFO should be readable");
+            let bytes = match finish_reader.read(&mut signal) {
+                Ok(bytes) => bytes,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => 0,
+                Err(error) => panic!("finish request FIFO read should succeed: {error}"),
+            };
             if bytes > 0 || started_at.elapsed() >= Duration::from_secs(2) {
                 break bytes;
             }
@@ -1848,9 +1850,11 @@ mod tests {
         let start = std::time::Instant::now();
         let mut finish_signal = [0_u8; 1];
         let finish_bytes_read = loop {
-            let bytes_read = finish_reader
-                .read(&mut finish_signal)
-                .expect("finish request FIFO should be readable");
+            let bytes_read = match finish_reader.read(&mut finish_signal) {
+                Ok(bytes_read) => bytes_read,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => 0,
+                Err(error) => panic!("finish request FIFO read should succeed: {error}"),
+            };
             if bytes_read > 0 || start.elapsed() >= std::time::Duration::from_secs(2) {
                 break bytes_read;
             }
