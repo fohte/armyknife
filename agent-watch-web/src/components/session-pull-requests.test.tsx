@@ -317,6 +317,10 @@ it.each([
           row
             .querySelector('.session-pr-row-mobile-state')
             ?.getAttribute('class') ?? null,
+        mobileStateRole:
+          row
+            .querySelector('.session-pr-row-mobile-state')
+            ?.getAttribute('role') ?? null,
         mobileStateAriaHidden:
           row
             .querySelector('.session-pr-row-mobile-state')
@@ -371,6 +375,7 @@ it.each([
           repo: 'example-org/example-repo',
           mobileState: isMobile ? '· Open' : null,
           mobileStateClass: isMobile ? 'session-pr-row-mobile-state' : null,
+          mobileStateRole: null,
           mobileStateAriaHidden: null,
           reason: 'CI running',
           hasAction: false,
@@ -383,6 +388,7 @@ it.each([
           repo: 'example-org/example-infra',
           mobileState: isMobile ? '· Open' : null,
           mobileStateClass: isMobile ? 'session-pr-row-mobile-state' : null,
+          mobileStateRole: null,
           mobileStateAriaHidden: null,
           reason: 'Merge',
           hasAction: true,
@@ -395,6 +401,7 @@ it.each([
           repo: 'example-org/example-infra',
           mobileState: isMobile ? '· Closed' : null,
           mobileStateClass: isMobile ? 'session-pr-row-mobile-state' : null,
+          mobileStateRole: null,
           mobileStateAriaHidden: null,
           reason: isMobile ? null : 'Closed',
           hasAction: false,
@@ -409,6 +416,7 @@ it.each([
           mobileStateClass: isMobile
             ? 'session-pr-row-mobile-state is-merged'
             : null,
+          mobileStateRole: isMobile ? 'status' : null,
           mobileStateAriaHidden: null,
           reason: isMobile ? null : '✓ Merged',
           hasAction: false,
@@ -600,6 +608,10 @@ it.each([
         row
           ?.querySelector('.session-pr-row-mobile-state')
           ?.getAttribute('class') ?? null,
+      mobileStateRole:
+        row
+          ?.querySelector('.session-pr-row-mobile-state')
+          ?.getAttribute('role') ?? null,
       ciDotClass: row?.querySelector('.session-pr-ci-dot')?.className ?? null,
       actionTag: row?.querySelector('.pr-merge-entry')?.tagName ?? null,
       hasButton: row?.querySelector('button') !== null,
@@ -616,6 +628,7 @@ it.each([
           ? 'session-pr-row-mobile-state is-merged'
           : 'session-pr-row-mobile-state'
         : null,
+      mobileStateRole: isMobile && status === 'merged' ? 'status' : null,
       ciDotClass: 'session-pr-ci-dot is-passed is-merged',
       actionTag: isMobile && status === 'merged' ? null : 'SPAN',
       hasButton: false,
@@ -647,15 +660,18 @@ it('draws the merge spinner arc over its background ring', () => {
           stroke: spinner.getAttribute('stroke'),
           strokeLinecap: spinner.getAttribute('stroke-linecap'),
           strokeWidth: spinner.getAttribute('stroke-width'),
-          ring: Array.from(spinner.querySelectorAll('circle'), (circle) => ({
-            cx: circle.getAttribute('cx'),
-            cy: circle.getAttribute('cy'),
-            r: circle.getAttribute('r'),
-            stroke: circle.getAttribute('stroke'),
+          children: Array.from(spinner.children, (child) => ({
+            tag: child.tagName.toLowerCase(),
+            attributes:
+              child.tagName.toLowerCase() === 'circle'
+                ? {
+                    cx: child.getAttribute('cx'),
+                    cy: child.getAttribute('cy'),
+                    r: child.getAttribute('r'),
+                    stroke: child.getAttribute('stroke'),
+                  }
+                : { d: child.getAttribute('d') },
           })),
-          arc: Array.from(spinner.querySelectorAll('path'), (path) =>
-            path.getAttribute('d'),
-          ),
         },
   ).toEqual({
     ariaHidden: 'true',
@@ -665,8 +681,18 @@ it('draws the merge spinner arc over its background ring', () => {
     stroke: 'currentColor',
     strokeLinecap: 'round',
     strokeWidth: '3.5',
-    ring: [{ cx: '12', cy: '12', r: '9', stroke: 'var(--aw-border-control)' }],
-    arc: ['M21 12a9 9 0 0 0-9-9'],
+    children: [
+      {
+        tag: 'circle',
+        attributes: {
+          cx: '12',
+          cy: '12',
+          r: '9',
+          stroke: 'var(--aw-border-control)',
+        },
+      },
+      { tag: 'path', attributes: { d: 'M21 12a9 9 0 0 0-9-9' } },
+    ],
   })
 })
 

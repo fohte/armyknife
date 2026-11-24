@@ -327,6 +327,7 @@ export function SessionPullRequests({
             const status = mergeStatusFor(pullRequest)
             const canRetry = canRetryMerge?.(pullRequest) ?? true
             const entryStatus = mergeEntryStatus(pullRequest, status, canRetry)
+            const isMerged = entryStatus === 'merged'
             const error = mergeError?.(pullRequest)
             return (
               <div
@@ -357,9 +358,10 @@ export function SessionPullRequests({
                     </span>
                     {isMobile ? (
                       <span
-                        className={`session-pr-row-mobile-state${pullRequest.state === 'Merged' || status === 'merged' ? ' is-merged' : ''}`}
+                        className={`session-pr-row-mobile-state${isMerged ? ' is-merged' : ''}`}
+                        role={isMerged ? 'status' : undefined}
                       >
-                        · {mobilePullRequestState(pullRequest, status)}
+                        · {mobilePullRequestState(pullRequest, entryStatus)}
                       </span>
                     ) : null}
                   </span>
@@ -486,9 +488,9 @@ function mergeEntryStatus(
 
 function mobilePullRequestState(
   pullRequest: PullRequest,
-  status: AsyncActionStatus | null,
+  status: ReturnType<typeof mergeEntryStatus>,
 ) {
-  if (pullRequest.state === 'Merged' || status === 'merged') return '✓ Merged'
+  if (status === 'merged') return '✓ Merged'
   if (status === 'alreadyMerged') return 'Already merged'
   return pullRequest.state
 }
