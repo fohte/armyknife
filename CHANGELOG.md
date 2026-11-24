@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.903](https://github.com/fohte/armyknife/compare/v0.1.902...v0.1.903) (2026-11-24)
+
+
+### Dependencies
+
+* update rust crate similar to v3.2.1 ([#2219](https://github.com/fohte/armyknife/issues/2219)) ([140d8f6](https://github.com/fohte/armyknife/commit/140d8f6e2cf3039e731660316250c36807366fd0))
+
 ## [0.1.902](https://github.com/fohte/armyknife/compare/v0.1.901...v0.1.902) (2026-11-24)
 
 
