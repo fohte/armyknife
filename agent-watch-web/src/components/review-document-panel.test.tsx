@@ -317,12 +317,16 @@ The fourth notification is not delivered.`}
     })),
     parentIssue: parentLink?.textContent,
     parentIssueHref: parentLink?.getAttribute('href'),
+    parentIssueTarget: parentLink?.getAttribute('target'),
+    parentIssueRel: parentLink?.getAttribute('rel'),
     setParentButton: parentRow?.querySelector(
       'button[aria-label="Set parent issue"]',
     )?.textContent,
     subIssues: subIssueLinks.map((item) => ({
       reference: item.textContent,
       href: item.getAttribute('href'),
+      target: item.getAttribute('target'),
+      rel: item.getAttribute('rel'),
     })),
     submit: container.querySelector('input[aria-label="submit"]') !== null,
     body: container.querySelector('.review-document-body')?.textContent,
@@ -334,20 +338,109 @@ The fourth notification is not delivered.`}
     assignees: [{ initial: 'S', name: 'sample-maintainer' }],
     parentIssue: 'example/web-app#390',
     parentIssueHref: 'https://github.com/example/web-app/issues/390',
+    parentIssueTarget: '_blank',
+    parentIssueRel: 'noopener noreferrer',
     setParentButton: 'Set parent',
     subIssues: [
       {
         reference: 'example/web-app#413',
         href: 'https://github.com/example/web-app/issues/413',
+        target: '_blank',
+        rel: 'noopener noreferrer',
       },
       {
         reference: 'example/web-app#414',
         href: 'https://github.com/example/web-app/issues/414',
+        target: '_blank',
+        rel: 'noopener noreferrer',
       },
     ],
     submit: false,
     body: `Summary
 The fourth notification is not delivered.`,
+  })
+})
+
+it('keeps malformed issue references visible as plain text', () => {
+  const summary = {
+    id: 'fixture-issue-body-malformed-references',
+    kind: 'issue_body' as const,
+    target: {
+      repository: 'example/web-app',
+      issueNumber: 412,
+      title: 'Delivery checks fail on the fourth attempt',
+    },
+    isEditor: true,
+    canSave: true,
+    canFinish: true,
+  }
+  root = createRoot(container)
+  act(() =>
+    root?.render(
+      <ReviewDocumentPanel
+        summary={summary}
+        summaries={[summary]}
+        frontmatter={{
+          title: 'Notifications stop after several deliveries',
+          labels: [],
+          assignees: [],
+          parentIssue: 'example/web-app#abc',
+          subIssues: ['malformed reference'],
+          submit: false,
+          readonly: { number: 412, author: 'sample-reporter' },
+        }}
+        body="Issue description."
+      />,
+    ),
+  )
+
+  const fields = container.querySelector('.review-document-issue-fields')
+  const fieldRow = (name: string) => {
+    const label = [...(fields?.querySelectorAll('dt') ?? [])].find(
+      (item) => item.textContent === name,
+    )
+    return label?.nextElementSibling
+  }
+  const parentRow = fieldRow('Parent issue')
+  const parentReference = parentRow?.querySelector(
+    '.review-document-issue-reference',
+  )
+  const subIssueReferences = [
+    ...(fields?.querySelectorAll(
+      '.review-document-issue-sub-items .review-document-issue-reference',
+    ) ?? []),
+  ]
+
+  const snapshot = () => ({
+    parentReference: {
+      text: parentReference?.textContent.replace('×', '').trim(),
+      tag: parentReference?.querySelector('code')?.tagName,
+      link: parentReference?.querySelector('a')?.getAttribute('href'),
+    },
+    setParentButton: parentRow?.querySelector(
+      'button[aria-label="Set parent issue"]',
+    )?.textContent,
+    subIssues: subIssueReferences.map((item) => ({
+      text: item.textContent.replace('×', '').trim(),
+      tag: item.querySelector('code')?.tagName,
+      link: item.querySelector('a')?.getAttribute('href'),
+    })),
+  })
+
+  expect(snapshot()).toEqual({
+    parentReference: {
+      text: 'example/web-app#abc',
+      tag: 'CODE',
+      link: undefined,
+    },
+    setParentButton: 'Set parent',
+    subIssues: [
+      {
+        text: 'malformed reference',
+        tag: 'CODE',
+        link: undefined,
+      },
+    ],
   })
 })
 
