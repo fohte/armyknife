@@ -106,6 +106,7 @@ pub(super) async fn execute(
         session,
         marker,
         message_id: None,
+        action_event_kind: None,
         queued_content,
         message_content: result_message,
         queued_attachments: Vec::new(),

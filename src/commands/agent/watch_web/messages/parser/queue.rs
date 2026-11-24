@@ -949,7 +949,11 @@ mod tests {
             )
             .unwrap();
         resolved_ids.extend(
-            super::super::super::queued_prompt::resolve_transcript_messages(&mut messages, prompts),
+            super::super::super::queued_prompt::resolve_transcript_messages(
+                &mut messages,
+                prompts,
+                crate::commands::agent::types::Engine::Claude,
+            ),
         );
         resolved_ids.sort_unstable();
         resolved_ids.dedup();
@@ -961,6 +965,7 @@ mod tests {
             id,
             message_id: Some(format!("fixture-message-{id}")),
             content: content.to_string(),
+            action_event_kind: None,
             attachments: vec![],
             resolved: false,
             sent_at: DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")

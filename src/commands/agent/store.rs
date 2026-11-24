@@ -29,8 +29,8 @@ pub(crate) use database::{
     AgentDecision, AgentDecisionCounts, AgentProposal, PermissionDeniedOperation,
     PermissionDeniedResolution, PermissionRequestData, PermissionRequestDecision,
     PermissionRequestResolution, PermissionRequestWait, PermissionRequestWaiter, SessionLock,
-    SessionStoreChanges, WakeLock, WatchWebPeerOutMessage, WatchWebQueuedAttachment,
-    WatchWebQueuedPrompt, WatchWebSessionState, permission_request_data,
+    SessionStoreChanges, WakeLock, WatchWebActionEventKind, WatchWebPeerOutMessage,
+    WatchWebQueuedAttachment, WatchWebQueuedPrompt, WatchWebSessionState, permission_request_data,
     resolve_permission_request, resolve_permission_request_with_answers, serialize_session,
 };
 pub(crate) use database::{AgentTodo, TodoResolution};
