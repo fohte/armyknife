@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.882](https://github.com/fohte/armyknife/compare/v0.1.881...v0.1.882) (2026-11-24)
+
+
+### Dependencies
+
+* update rust crate termimad to v0.35.5 ([#785](https://github.com/fohte/armyknife/issues/785)) ([0ca825f](https://github.com/fohte/armyknife/commit/0ca825fdcad3561b0a6f12fc7a9369376f7d307e))
+
 ## [0.1.881](https://github.com/fohte/armyknife/compare/v0.1.880...v0.1.881) (2026-11-24)
 
 
