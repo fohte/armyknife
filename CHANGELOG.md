@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.897](https://github.com/fohte/armyknife/compare/v0.1.896...v0.1.897) (2026-11-24)
+
+
+### Features
+
+* **agent-watch-web:** add direct review actions ([#2177](https://github.com/fohte/armyknife/issues/2177)) ([367f970](https://github.com/fohte/armyknife/commit/367f97044ff66c8d190d1d5deadcc934084e7dfb))
+
 ## [0.1.896](https://github.com/fohte/armyknife/compare/v0.1.895...v0.1.896) (2026-11-24)
 
 
