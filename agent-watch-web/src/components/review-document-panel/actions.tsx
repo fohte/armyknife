@@ -4,8 +4,6 @@ import type { ReviewDocumentSummary } from '#components/review-document-summary'
 import type { ReviewDocumentAction } from '#session-operation-types'
 import type { JsonValue } from '#types'
 
-export type { ReviewDocumentAction } from '#session-operation-types'
-
 type ReviewDocumentActionsProps = {
   summary?: ReviewDocumentSummary | undefined
   isMobile: boolean
@@ -217,6 +215,11 @@ export function ReviewDocumentActions({
               {primaryLabel}
             </button>
           </div>
+          {error === null ? null : (
+            <span className="review-document-error" role="alert">
+              {error}
+            </span>
+          )}
           <p className="review-document-direct-help">{directHelp}</p>
         </>
       )}

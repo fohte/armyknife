@@ -15,8 +15,6 @@ import type { ReviewDocumentSummary } from '#components/review-document-summary'
 import type { ReviewDocumentAction } from '#session-operation-types'
 import type { JsonValue } from '#types'
 
-export type { ReviewDocumentAction } from '#session-operation-types'
-
 type ReviewDocumentPanelProps = {
   summary?: ReviewDocumentSummary
   summaries?: readonly ReviewDocumentSummary[]
@@ -328,7 +326,9 @@ export function ReviewDocumentPanel({
   const frontmatterEntries = isJsonObject(frontmatter)
     ? Object.entries(frontmatter).filter(
         ([name]) =>
-          name !== 'submit' &&
+          (name !== 'submit' ||
+            (summary?.kind === 'draft' &&
+              summary.target.repository !== undefined)) &&
           !(summary?.kind === 'pr_draft' && name === 'title') &&
           !(summary?.kind === 'pr_draft' && name === 'steps'),
       )

@@ -38,6 +38,7 @@ enum ActionStatus {
 pub(super) struct ActionRecord {
     action: ReviewDocumentAction,
     path: PathBuf,
+    session_cwd: PathBuf,
     summary: ReviewDocumentSummary,
     frontmatter: serde_json::Value,
     body: String,
@@ -162,6 +163,7 @@ pub(super) async fn execute_review_document(
             let record = ActionRecord {
                 action: request.action,
                 path: marker.path,
+                session_cwd: session.cwd.clone(),
                 summary,
                 frontmatter,
                 body: request.body,
@@ -309,7 +311,18 @@ fn approved_frontmatter(
 pub(super) async fn run_action(record: &ActionRecord) -> anyhow::Result<()> {
     match record.action {
         ReviewDocumentAction::CreatePr => {
-            crate::commands::ai::pr_draft::submit_draft(record.path.clone()).await
+            let target_repo_id = record
+                .summary
+                .target
+                .repository
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("Repository is unavailable"))?;
+            crate::commands::ai::pr_draft::submit_draft_for_review(
+                record.path.clone(),
+                &record.session_cwd,
+                target_repo_id,
+            )
+            .await
         }
         ReviewDocumentAction::PostComment => {
             let (issue_number, repo) = issue_target(record)?;

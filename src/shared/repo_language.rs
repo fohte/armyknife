@@ -17,6 +17,29 @@ pub(crate) fn copier_answers_path_for_current_repo(
     Some(repo.workdir().join(".copier-answers.yml"))
 }
 
+pub(crate) fn copier_answers_path_for_repo_at(
+    cwd: &Path,
+    expected_repo_id: &str,
+) -> Option<PathBuf> {
+    copier_answers_path_for_repo_at_with(cwd, expected_repo_id, |cwd| {
+        let repo = git::open_repo_at(cwd).ok()?;
+        let (owner, name) = git::github_owner_and_repo(&repo).ok()?;
+        Some((repo.workdir().to_path_buf(), format!("{owner}/{name}")))
+    })
+}
+
+fn copier_answers_path_for_repo_at_with(
+    cwd: &Path,
+    expected_repo_id: &str,
+    resolve_repo: impl FnOnce(&Path) -> Option<(PathBuf, String)>,
+) -> Option<PathBuf> {
+    let (workdir, actual_repo_id) = resolve_repo(cwd)?;
+    if !repo_ids_match(&actual_repo_id, expected_repo_id) {
+        return None;
+    }
+    Some(workdir.join(".copier-answers.yml"))
+}
+
 fn repo_ids_match(actual: &str, expected: &str) -> bool {
     actual.eq_ignore_ascii_case(expected)
 }
@@ -53,11 +76,51 @@ fn read_copier_repo_language(answers_path: &Path) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{repo_ids_match, resolve_repo_language};
+    use super::{copier_answers_path_for_repo_at_with, repo_ids_match, resolve_repo_language};
     use indoc::indoc;
     use rstest::rstest;
     use serde_json::{Value, json};
     use std::fs;
+
+    #[rstest]
+    #[case::matching_repository("sample-owner/sample-repository", true)]
+    #[case::different_repository("sample-owner/another-repository", false)]
+    #[tokio::test]
+    async fn session_copier_answers_path_uses_the_target_worktree_and_repository_identity(
+        #[case] actual_repo_id: &str,
+        #[case] expected_match: bool,
+    ) {
+        let directory = tempfile::tempdir().expect("fixture directory should exist");
+        let session_cwd = directory.path().join("session-cwd");
+        let worktree = directory.path().join("reviewed-worktree");
+        fs::create_dir_all(&worktree).expect("reviewed worktree should be created");
+        fs::write(worktree.join(".copier-answers.yml"), "repo_language: ja\n")
+            .expect("reviewed worktree Copier answers should be written");
+        let mut resolved_cwd = None;
+
+        let copier_answers_path = copier_answers_path_for_repo_at_with(
+            &session_cwd,
+            "sample-owner/sample-repository",
+            |cwd| {
+                resolved_cwd = Some(cwd.to_path_buf());
+                Some((worktree.clone(), actual_repo_id.to_owned()))
+            },
+        );
+        let language = resolve_repo_language(None, copier_answers_path.as_deref(), || async {
+            Ok(Some(false))
+        })
+        .await
+        .expect("repo language should resolve");
+
+        assert_eq!(
+            (resolved_cwd, copier_answers_path, language),
+            (
+                Some(session_cwd),
+                expected_match.then(|| worktree.join(".copier-answers.yml")),
+                Some(json!(if expected_match { "ja" } else { "en" })),
+            ),
+        );
+    }
 
     #[rstest]
     #[case::same_id(

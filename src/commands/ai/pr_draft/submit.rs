@@ -1,7 +1,10 @@
 use clap::Args;
 use std::path::{Path, PathBuf};
 
-use super::common::{DraftFile, PrDraftError, RepoInfo, contains_japanese, repo_allows_japanese};
+use super::common::{
+    DraftFile, PrDraftError, RepoInfo, contains_japanese, repo_allows_japanese,
+    repo_allows_japanese_with_copier_answers,
+};
 use super::hooks::{HookContext, HookRunner, PRE_PR_SUBMIT_HOOK, default_runner, run_pr_hook};
 use super::stack::stack_created_pull_request;
 use crate::commands::agent::{ensure_no_review_access, is_vibe_enabled};
@@ -13,6 +16,7 @@ use crate::infra::github::{
 };
 use crate::shared::config::load_config;
 use crate::shared::human_in_the_loop::LockGuard;
+use crate::shared::repo_language::copier_answers_path_for_repo_at;
 
 mod post_submit;
 
@@ -55,31 +59,92 @@ struct PrTarget {
     is_private: bool,
 }
 
+struct ReviewRepositoryLanguageContext {
+    expected_repo_id: String,
+    copier_answers_path: Option<PathBuf>,
+}
+
+struct SubmitContext<'a, F> {
+    current_repo_identity: F,
+    review_language_context: Option<&'a ReviewRepositoryLanguageContext>,
+}
+
 pub async fn run(args: &SubmitArgs) -> anyhow::Result<()> {
+    run_with_review_language_context(args, None).await
+}
+
+pub(super) async fn run_for_review(
+    args: &SubmitArgs,
+    session_cwd: &Path,
+    expected_repo_id: &str,
+) -> anyhow::Result<()> {
+    let context = ReviewRepositoryLanguageContext {
+        expected_repo_id: expected_repo_id.to_owned(),
+        copier_answers_path: copier_answers_path_for_repo_at(session_cwd, expected_repo_id),
+    };
+    run_with_review_language_context(args, Some(context)).await
+}
+
+async fn run_with_review_language_context(
+    args: &SubmitArgs,
+    review_language_context: Option<ReviewRepositoryLanguageContext>,
+) -> anyhow::Result<()> {
     let client = GitHubClient::get()?;
     let post_submit_processor = PrSeriesPostSubmitProcessor { github: client };
     let submit_effects = SubmitEffects {
         post_submit_processor: &post_submit_processor,
         record_created_pr_url,
     };
-    run_impl_with_recording(
+    run_impl_with_review_language_context(
         args,
         client,
         default_runner(),
         write_pr_url_config,
-        read_current_repo_identity,
+        SubmitContext {
+            current_repo_identity: read_current_repo_identity,
+            review_language_context: review_language_context.as_ref(),
+        },
         &submit_effects,
         |owner, repo| ensure_no_review_access(is_vibe_enabled, load_config, owner, repo),
     )
     .await
 }
 
+#[cfg(test)]
 async fn run_impl_with_recording<P: PostSubmitProcessor, R: Fn(&str)>(
     args: &SubmitArgs,
     gh_client: &(impl PrBodyClient + PrClient + PrStackClient + RepoClient),
     run_hook: HookRunner<'_>,
     write_config: impl Fn(&str, &str) -> anyhow::Result<()>,
     current_repo_identity: impl FnOnce() -> Option<(String, String)>,
+    submit_effects: &SubmitEffects<'_, P, R>,
+    vibe_access_check: impl FnOnce(&str, &str) -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    run_impl_with_review_language_context(
+        args,
+        gh_client,
+        run_hook,
+        write_config,
+        SubmitContext {
+            current_repo_identity,
+            review_language_context: None,
+        },
+        submit_effects,
+        vibe_access_check,
+    )
+    .await
+}
+
+async fn run_impl_with_review_language_context<
+    P: PostSubmitProcessor,
+    R: Fn(&str),
+    F: FnOnce() -> Option<(String, String)>,
+>(
+    args: &SubmitArgs,
+    gh_client: &(impl PrBodyClient + PrClient + PrStackClient + RepoClient),
+    run_hook: HookRunner<'_>,
+    write_config: impl Fn(&str, &str) -> anyhow::Result<()>,
+    context: SubmitContext<'_, F>,
     submit_effects: &SubmitEffects<'_, P, R>,
     vibe_access_check: impl FnOnce(&str, &str) -> anyhow::Result<()>,
 ) -> anyhow::Result<()> {
@@ -138,7 +203,28 @@ async fn run_impl_with_recording<P: PostSubmitProcessor, R: Fn(&str)>(
     }
 
     // Reject Japanese content when the effective repository language is not Japanese.
-    let allows_japanese = repo_allows_japanese(&target.owner, &target.repo, is_private).await?;
+    let allows_japanese = match context.review_language_context {
+        Some(context) => {
+            let target_repo_id = format!("{}/{}", target.owner, target.repo);
+            if !context
+                .expected_repo_id
+                .eq_ignore_ascii_case(&target_repo_id)
+            {
+                anyhow::bail!(
+                    "The review repository does not match the PR draft target: {}",
+                    context.expected_repo_id
+                );
+            }
+            repo_allows_japanese_with_copier_answers(
+                &target.owner,
+                &target.repo,
+                is_private,
+                context.copier_answers_path.as_deref(),
+            )
+            .await?
+        }
+        None => repo_allows_japanese(&target.owner, &target.repo, is_private).await?,
+    };
     if !allows_japanese {
         if contains_japanese(&draft.frontmatter.title) {
             return Err(PrDraftError::JapaneseInTitle.into());
@@ -149,7 +235,7 @@ async fn run_impl_with_recording<P: PostSubmitProcessor, R: Fn(&str)>(
     }
 
     let target_is_current_repo = if args.filepath.is_some() {
-        current_repo_identity()
+        (context.current_repo_identity)()
             .is_some_and(|(owner, repo)| owner == target.owner && repo == target.repo)
     } else {
         true

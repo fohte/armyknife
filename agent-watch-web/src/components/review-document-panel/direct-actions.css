@@ -57,6 +57,10 @@
   font-size: 11.5px;
 }
 
+.review-document-direct-actions .review-document-error {
+  flex: 0 0 auto;
+}
+
 .review-document-pr-stages {
   display: flex;
   flex-wrap: wrap;

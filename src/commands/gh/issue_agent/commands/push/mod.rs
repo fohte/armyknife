@@ -22,7 +22,7 @@ use crate::commands::gh::issue_agent::storage::{CommentSnapshot, LocalComment};
 use crate::infra::github::GitHubClient;
 use crate::shared::human_in_the_loop::ApprovalManager;
 
-use changeset::{ChangeSet, CommentChange, DetectOptions, LocalState, RemoteState};
+use changeset::{ChangeSet, CommentChange, DetectOptions, IssueAddress, LocalState, RemoteState};
 use detect::{ConflictCheckInput, check_conflicts};
 use field_comparison::compare_issue_fields;
 
@@ -306,11 +306,14 @@ async fn run_with_context(
         changeset
             .apply(
                 client,
-                &ctx.owner,
-                &ctx.repo_name,
-                ctx.issue_number,
+                IssueAddress {
+                    owner: &ctx.owner,
+                    repo: &ctx.repo_name,
+                    number: ctx.issue_number,
+                },
                 &ctx.storage,
                 &remote.issue,
+                scope.is_none(),
             )
             .await?;
 
@@ -345,6 +348,70 @@ async fn run_with_context(
         let frontmatter = IssueFrontmatter::from_issue(&remote.issue);
         let body = remote.issue.body.as_deref().unwrap_or("");
         ctx.storage.save_base_issue(&frontmatter, body)?;
+    }
+
+    if !args.dry_run
+        && let Some(ReviewDocumentPushScope::Comment {
+            path,
+            retry_started_at,
+        }) = &scope
+    {
+        let new_remote_comments = client
+            .get_comments(&ctx.owner, &ctx.repo_name, ctx.issue_number)
+            .await?;
+        let mut advanced = advance_comment_snapshot(
+            local.base_comments.as_deref().unwrap_or_default(),
+            &local.comments,
+            &new_remote_comments,
+            &changeset.comments,
+        );
+        let mut posted_new_comment_paths = Vec::new();
+        for local_comment in local.comments.iter().filter(|comment| comment.is_new()) {
+            if let Some(remote_comment) = new_remote_comments.iter().find(|remote_comment| {
+                comment_bodies_equal(&local_comment.body, &remote_comment.body)
+                    && remote_comment
+                        .author
+                        .as_ref()
+                        .is_some_and(|author| author.login == ctx.current_user)
+                    && &remote_comment.created_at >= retry_started_at
+            }) {
+                set_comment_snapshot(&mut advanced, remote_comment);
+                posted_new_comment_paths.push(
+                    ctx.storage
+                        .dir()
+                        .join("comments")
+                        .join(&local_comment.filename),
+                );
+            }
+        }
+        ctx.storage.save_base_comments(&advanced)?;
+        for path in posted_new_comment_paths {
+            std::fs::remove_file(path)?;
+        }
+
+        if let Some(local_comment) = local.comments.iter().find(|comment| {
+            !comment.is_new()
+                && paths_match(
+                    &ctx.storage.dir().join("comments").join(&comment.filename),
+                    path,
+                )
+        }) && let Some(comment_id) = local_comment.metadata.id.as_deref()
+            && let Some(remote_comment) = new_remote_comments
+                .iter()
+                .find(|comment| comment.id == comment_id)
+        {
+            let content =
+                crate::commands::gh::issue_agent::storage::LocalComment::format_from_comment(
+                    remote_comment,
+                );
+            std::fs::write(
+                ctx.storage
+                    .dir()
+                    .join("comments")
+                    .join(&local_comment.filename),
+                content,
+            )?;
+        }
     }
 
     if scope.is_none()
@@ -384,6 +451,8 @@ fn restrict_changeset_to_review_document(
             changeset.body = None;
             changeset.title = None;
             changeset.labels = None;
+            changeset.assignees = None;
+            changeset.milestone = None;
             changeset.sub_issues = None;
             changeset.parent_issue = None;
             changeset.comments.retain(|change| {
@@ -448,14 +517,30 @@ fn advance_comment_snapshot(
         let Some(remote_comment) = remote_comments.iter().find(|c| c.id == comment_id) else {
             continue;
         };
-        if comment_bodies_equal(&local_comment.body, &remote_comment.body)
-            && let Some(base_comment) = snapshot.iter_mut().find(|c| c.id == comment_id)
-        {
-            base_comment.body = remote_comment.body.clone();
+        if comment_bodies_equal(&local_comment.body, &remote_comment.body) {
+            if let Some(base_comment) = snapshot.iter_mut().find(|c| c.id == comment_id) {
+                base_comment.body = remote_comment.body.clone();
+            } else {
+                set_comment_snapshot(&mut snapshot, remote_comment);
+            }
         }
     }
 
     snapshot
+}
+
+fn set_comment_snapshot(snapshot: &mut Vec<CommentSnapshot>, comment: &Comment) {
+    if let Some(existing) = snapshot
+        .iter_mut()
+        .find(|existing| existing.id == comment.id)
+    {
+        existing.body = comment.body.clone();
+    } else {
+        snapshot.push(CommentSnapshot {
+            id: comment.id.clone(),
+            body: comment.body.clone(),
+        });
+    }
 }
 
 /// Collect file paths that require approval for the given changeset.
@@ -470,6 +555,8 @@ fn collect_approval_paths(changeset: &ChangeSet<'_>, ctx: &IssueContext) -> Vec<
     let issue_md_changed = changeset.body.is_some()
         || changeset.title.is_some()
         || changeset.labels.is_some()
+        || changeset.assignees.is_some()
+        || changeset.milestone.is_some()
         || changeset.sub_issues.is_some()
         || changeset.parent_issue.is_some();
     if issue_md_changed {
@@ -633,6 +720,8 @@ mod tests {
                     local_sorted: vec!["sample-label".to_string()],
                     remote_sorted: vec![],
                 }),
+                assignees: None,
+                milestone: None,
                 sub_issues: Some(SubIssueChange {
                     to_add: vec!["sample-owner/sample-repo#7".to_string()],
                     to_remove: vec![],
@@ -682,6 +771,8 @@ mod tests {
                     body: None,
                     title: None,
                     labels: None,
+                    assignees: None,
+                    milestone: None,
                     sub_issues: None,
                     parent_issue: None,
                     comments: vec![CommentChange::New {
@@ -720,6 +811,8 @@ mod tests {
                         local_sorted: vec!["sample-label".to_string()],
                         remote_sorted: vec![],
                     }),
+                    assignees: None,
+                    milestone: None,
                     sub_issues: Some(SubIssueChange {
                         to_add: vec!["sample-owner/sample-repo#7".to_string()],
                         to_remove: vec![],

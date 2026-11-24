@@ -201,6 +201,7 @@ function directActionLabel(action: ReviewDocumentAction) {
 export function frontmatterForReviewFinish(
   frontmatter: JsonValue,
   translate: boolean,
+  preserveSubmit = false,
 ) {
   if (
     typeof frontmatter !== 'object' ||
@@ -210,7 +211,8 @@ export function frontmatterForReviewFinish(
     return frontmatter
   }
   const next = { ...frontmatter }
-  if (typeof next['submit'] === 'boolean') next['submit'] = false
+  if (!preserveSubmit && typeof next['submit'] === 'boolean')
+    next['submit'] = false
   const steps = next['steps']
   if (typeof steps === 'object' && steps !== null && !Array.isArray(steps)) {
     next['steps'] = {

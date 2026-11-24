@@ -67,6 +67,16 @@ const issueBody: ReviewDocumentSummary = {
   kind: 'issue_body',
 }
 
+const newIssueDraft: ReviewDocumentSummary = {
+  id: 'fixture-new-issue',
+  kind: 'draft',
+  target: { repository: 'example/web-app' },
+  startedAt: Date.now() - 60_000,
+  isEditor: true,
+  canSave: true,
+  canFinish: true,
+}
+
 const issueCommentBody = `再現手順を足します。
 
 1. 送信先を応答の遅いサーバーにする
@@ -234,6 +244,22 @@ export const WaitingDraftCanBeRead: Story = {
     summaries: [queuedDraft],
     canSave: false,
     canFinish: false,
+  },
+  decorators: [desktopViewport],
+}
+
+export const NewIssueDraftCanBeApproved: Story = {
+  name: 'A new issue draft keeps its approval field available',
+  args: {
+    summary: newIssueDraft,
+    summaries: [newIssueDraft],
+    view: 'preview',
+    frontmatter: {
+      title: 'Retry jobs after a temporary outage',
+      labels: ['bug'],
+      submit: false,
+    },
+    body: 'Describe the issue and expected behavior.',
   },
   decorators: [desktopViewport],
 }

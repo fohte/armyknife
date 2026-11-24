@@ -10,6 +10,7 @@ it.each([
       steps: { 'ready-for-translation': false, submit: true },
     },
     translate: true,
+    preserveSubmit: false,
     expected: {
       submit: false,
       steps: { 'ready-for-translation': true, submit: false },
@@ -22,11 +23,21 @@ it.each([
       steps: { 'ready-for-translation': true, submit: true },
     },
     translate: false,
+    preserveSubmit: false,
     expected: {
       submit: false,
       steps: { 'ready-for-translation': false, submit: false },
     },
   },
-])('$name', ({ frontmatter, translate, expected }) => {
-  expect(frontmatterForReviewFinish(frontmatter, translate)).toEqual(expected)
+  {
+    name: 'preserves issue approval when finishing a new issue draft',
+    frontmatter: { title: 'Fixture issue title', submit: true },
+    translate: false,
+    preserveSubmit: true,
+    expected: { title: 'Fixture issue title', submit: true },
+  },
+])('$name', ({ frontmatter, translate, preserveSubmit, expected }) => {
+  expect(
+    frontmatterForReviewFinish(frontmatter, translate, preserveSubmit),
+  ).toEqual(expected)
 })

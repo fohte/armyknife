@@ -698,14 +698,22 @@ mod tests {
         #[rstest]
         fn test_divergent_local_and_remote_values_conflict_for_every_issue_field() {
             let base_issue = factories::base_issue_content();
-            let metadata = local_metadata(&base_issue);
-            let remote_issue = factories::issue_with_fields(
+            let mut metadata = local_metadata(&base_issue);
+            metadata.assignees = vec!["local-assignee".to_string()];
+            metadata.milestone = Some("Local milestone".to_string());
+            let mut remote_issue = factories::issue_with_fields(
                 "Remote title",
                 "Remote body",
                 &["remote-label"],
                 Some(30),
                 &[31],
             );
+            remote_issue.assignees = vec![crate::commands::gh::issue_agent::models::Author {
+                login: "remote-assignee".to_string(),
+            }];
+            remote_issue.milestone = Some(crate::commands::gh::issue_agent::models::Milestone {
+                title: "Remote milestone".to_string(),
+            });
 
             assert_eq!(
                 conflicts_for(&base_issue, &metadata, "Local body", &remote_issue),
@@ -713,6 +721,8 @@ mod tests {
                     Conflict::IssueField { name: "body" },
                     Conflict::IssueField { name: "title" },
                     Conflict::IssueField { name: "labels" },
+                    Conflict::IssueField { name: "assignees" },
+                    Conflict::IssueField { name: "milestone" },
                     Conflict::IssueField { name: "sub-issues" },
                     Conflict::IssueField {
                         name: "parent issue",
@@ -724,14 +734,22 @@ mod tests {
         #[rstest]
         fn test_matching_local_and_remote_changes_do_not_conflict() {
             let base_issue = factories::base_issue_content();
-            let metadata = local_metadata(&base_issue);
-            let remote_issue = factories::issue_with_fields(
+            let mut metadata = local_metadata(&base_issue);
+            metadata.assignees = vec!["local-assignee".to_string()];
+            metadata.milestone = Some("Local milestone".to_string());
+            let mut remote_issue = factories::issue_with_fields(
                 "Local title",
                 "Local body",
                 &["local-label"],
                 Some(20),
                 &[21],
             );
+            remote_issue.assignees = vec![crate::commands::gh::issue_agent::models::Author {
+                login: "local-assignee".to_string(),
+            }];
+            remote_issue.milestone = Some(crate::commands::gh::issue_agent::models::Milestone {
+                title: "Local milestone".to_string(),
+            });
 
             assert_eq!(
                 conflicts_for(&base_issue, &metadata, "Local body", &remote_issue),

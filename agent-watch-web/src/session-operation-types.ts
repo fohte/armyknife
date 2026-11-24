@@ -3,7 +3,7 @@ import type { JsonValue, RewindMode } from '#types'
 
 type PermissionAction = 'approve' | 'reject' | 'retry' | 'dismiss'
 
-export const REVIEW_DOCUMENT_ACTIONS = [
+const REVIEW_DOCUMENT_ACTIONS = [
   'post_comment',
   'create_pr',
   'post_replies',

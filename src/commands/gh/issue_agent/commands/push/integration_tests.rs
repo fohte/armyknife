@@ -973,6 +973,172 @@ async fn test_edit_others_comment_allowed_with_flag(test_dir: TempDir) {
 
 #[rstest]
 #[tokio::test]
+async fn test_review_comment_push_refreshes_its_baseline_for_a_later_edit(test_dir: TempDir) {
+    let (mock, storage) = TestSetup::new(test_dir.path())
+        .remote_comments(vec![make_remote_comment(
+            "testuser", "IC_abc", 12345, "Original",
+        )])
+        .comments_after_initial_fetch(Some((
+            vec![make_remote_comment(
+                "testuser",
+                "IC_abc",
+                12345,
+                "Published",
+            )],
+            "2024-01-02T12:00:00Z",
+        )))
+        .build()
+        .await;
+    storage
+        .save_base_comments(&[CommentSnapshot {
+            id: "IC_abc".to_string(),
+            body: "Original".to_string(),
+        }])
+        .unwrap();
+    let comment_path = test_dir.path().join("comments/001_comment_12345.md");
+    setup_local_comment(
+        test_dir.path(),
+        "001_comment_12345.md",
+        &create_comment_file_with_updated_at(
+            "testuser",
+            "2024-01-01T12:00:00+00:00",
+            "2024-01-01T12:00:00+00:00",
+            "IC_abc",
+            12345,
+            "Published",
+        ),
+    );
+    approve_file(&comment_path);
+    let remote_repo = mock.repo("owner", "repo");
+    remote_repo.comment().update().await;
+    remote_repo.issue(123).get().await;
+
+    let context = IssueContext {
+        owner: "owner".to_string(),
+        repo_name: "repo".to_string(),
+        issue_number: 123,
+        storage: storage.clone(),
+        current_user: "testuser".to_string(),
+    };
+    let result = run_with_context(
+        &make_args(false, false, false),
+        &context,
+        &mock.client(),
+        Some(ReviewDocumentPushScope::Comment {
+            path: comment_path,
+            retry_started_at: chrono::DateTime::parse_from_rfc3339("2024-01-02T00:00:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+        }),
+    )
+    .await;
+    let mut local_comment = storage.read_comments().unwrap().remove(0);
+    local_comment.body = "Revised after posting".to_string();
+    let local_metadata = storage.read_metadata().unwrap();
+    let remote_issue = crate::commands::gh::issue_agent::testing::factories::issue_with(|issue| {
+        issue.number = 123;
+        issue.title = local_metadata.title.clone();
+        issue.body = Some(storage.read_body().unwrap());
+    });
+    let remote_comment =
+        crate::commands::gh::issue_agent::testing::factories::comment_with(|comment| {
+            comment.id = "IC_abc".to_string();
+            comment.database_id = 12345;
+            comment.author = Some(crate::commands::gh::issue_agent::models::Author {
+                login: "testuser".to_string(),
+            });
+            comment.body = "Published".to_string();
+        });
+    let local_comments = [local_comment];
+
+    assert_eq!(
+        (
+            result.map_err(|error| error.to_string()),
+            storage.read_base_comments().unwrap(),
+            check_conflicts(
+                &ConflictCheckInput {
+                    local_metadata: &local_metadata,
+                    local_body: &storage.read_body().unwrap(),
+                    local_comments: &local_comments,
+                    base_comments: storage.read_base_comments().unwrap().as_deref(),
+                    remote_issue: &remote_issue,
+                    remote_comments: &[remote_comment],
+                },
+                None,
+            ),
+        ),
+        (
+            Ok(()),
+            Some(vec![CommentSnapshot {
+                id: "IC_abc".to_string(),
+                body: "Published".to_string(),
+            }]),
+            vec![],
+        ),
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_review_new_comment_push_records_the_published_comment(test_dir: TempDir) {
+    let (mock, storage) = TestSetup::new(test_dir.path())
+        .comments_after_initial_fetch(Some((
+            vec![make_remote_comment(
+                "testuser",
+                "IC_new_comment",
+                99999,
+                "New comment",
+            )],
+            "2024-01-02T12:00:00Z",
+        )))
+        .build()
+        .await;
+    storage.save_base_comments(&[]).unwrap();
+    setup_local_comment(test_dir.path(), "new_selected.md", "New comment");
+    let comment_path = test_dir.path().join("comments/new_selected.md");
+    approve_file(&comment_path);
+    let remote_repo = mock.repo("owner", "repo");
+    remote_repo.issue(123).create_comment().await;
+
+    let context = IssueContext {
+        owner: "owner".to_string(),
+        repo_name: "repo".to_string(),
+        issue_number: 123,
+        storage: storage.clone(),
+        current_user: "testuser".to_string(),
+    };
+    let result = run_with_context(
+        &make_args(false, false, false),
+        &context,
+        &mock.client(),
+        Some(ReviewDocumentPushScope::Comment {
+            path: comment_path,
+            retry_started_at: chrono::DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+        }),
+    )
+    .await;
+
+    assert_eq!(
+        (
+            result.map_err(|error| error.to_string()),
+            storage.read_base_comments().unwrap(),
+            storage.dir().join("comments/new_selected.md").exists(),
+        ),
+        (
+            Ok(()),
+            Some(vec![CommentSnapshot {
+                id: "IC_new_comment".to_string(),
+                body: "New comment".to_string(),
+            }]),
+            false,
+        ),
+    );
+}
+
+#[rstest]
+#[tokio::test]
 async fn test_updates_metadata_after_push(test_dir: TempDir) {
     let (mock, storage) = TestSetup::new(test_dir.path())
         .remote_ts("2024-01-02T00:00:00+00:00")

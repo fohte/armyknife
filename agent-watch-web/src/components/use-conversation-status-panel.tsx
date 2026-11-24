@@ -474,7 +474,12 @@ export function useConversationStatusPanel({
                         run,
                         session.title,
                         actionFeedback,
-                        frontmatterForReviewFinish(document.frontmatter, false),
+                        frontmatterForReviewFinish(
+                          document.frontmatter,
+                          false,
+                          selectedSummary.kind === 'draft' &&
+                            selectedSummary.target.repository !== undefined,
+                        ),
                       )
                   }}
                   onApproveForTranslation={() => {

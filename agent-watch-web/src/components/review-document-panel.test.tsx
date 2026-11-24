@@ -118,6 +118,44 @@ it('posts an issue comment through its action button and preserves Send back', a
   })
 })
 
+it('shows a save conflict error in the desktop direct action footer', () => {
+  root = createRoot(container)
+  act(() =>
+    root?.render(
+      <div
+        className="session-status-panel"
+        data-size="desktop"
+        style={{ width: '640px', height: '900px', display: 'flex' }}
+      >
+        <ReviewDocumentPanel
+          summary={{
+            id: 'fixture-issue-comment',
+            kind: 'issue_comment',
+            target: {
+              repository: 'sample-owner/sample-repository',
+              issueNumber: 73,
+            },
+            isEditor: true,
+            canSave: true,
+            canFinish: true,
+          }}
+          frontmatter={{ submit: false }}
+          body="Example draft body"
+          status="error"
+          error="This draft changed since you opened it. Your edits are still here; copy them before reloading to see the latest version."
+        />
+      </div>,
+    ),
+  )
+
+  const saveConflict = container.querySelector(
+    '.review-document-direct-actions [role="alert"]',
+  )
+  expect(saveConflict?.textContent ?? null).toEqual(
+    'This draft changed since you opened it. Your edits are still here; copy them before reloading to see the latest version.',
+  )
+})
+
 it.each([
   {
     name: 'review replies',
@@ -822,6 +860,44 @@ it('keeps the mobile preview usable when metadata fills the viewport', async () 
     previewColumnHasRoom: true,
     metadataCanScroll: true,
   })
+})
+
+it('keeps the approval checkbox available for a new issue draft', async () => {
+  const finishSnapshots: JsonValue[] = []
+  function NewIssueDraftHarness() {
+    const [frontmatter, setFrontmatter] = useState<JsonValue>({
+      title: 'Fixture issue title',
+      submit: false,
+    })
+    return (
+      <ReviewDocumentPanel
+        summary={{
+          id: 'fixture-new-issue',
+          kind: 'draft',
+          target: { repository: 'sample-owner/sample-repository' },
+          isEditor: true,
+          canSave: true,
+          canFinish: true,
+        }}
+        frontmatter={frontmatter}
+        body="Fixture issue body"
+        onFrontmatterChange={setFrontmatter}
+        onFinish={() => finishSnapshots.push(frontmatter)}
+      />
+    )
+  }
+
+  root = createRoot(container)
+  act(() => root?.render(<NewIssueDraftHarness />))
+
+  await act(async () => {
+    await page.getByRole('checkbox', { name: 'submit' }).click()
+    await page.getByRole('button', { name: 'Finish' }).click()
+  })
+
+  expect(finishSnapshots).toEqual([
+    { title: 'Fixture issue title', submit: true },
+  ])
 })
 
 it.each([
