@@ -1010,7 +1010,9 @@ fn process_hook_event_impl_with_env_and_unreported_stop(
     if vibe_setting_requested {
         session_lock.save_vibe_setting(&session)?;
     } else {
-        if matches!(event, HookEvent::Stop | HookEvent::StopFailure)
+        if (matches!(event, HookEvent::Stop | HookEvent::StopFailure)
+            || (event == HookEvent::PermissionRequest
+                && input.tool_name.as_deref() == Some("AskUserQuestion")))
             && input.agent_id.is_none()
             && session.status != SessionStatus::Paused
         {
@@ -3556,6 +3558,44 @@ mod tests {
         assert_eq!(
             actual,
             std::collections::HashMap::from([("test-123".to_string(), true)]),
+        );
+        Ok(())
+    }
+
+    #[rstest]
+    fn main_thread_question_records_agent_response_activity(
+        session_activity_sessions_dir: tempfile::TempDir,
+    ) -> Result<()> {
+        let sessions_dir = session_activity_sessions_dir.path();
+        let started_at = Utc::now();
+
+        process_hook_event_impl(
+            HookEvent::PermissionRequest,
+            create_test_input_with_tool(
+                "AskUserQuestion",
+                Some(r#"{"questions":[{"question":"Which format?"}]}"#),
+            ),
+            sessions_dir,
+            &SideEffects::none(),
+        )?;
+
+        let finished_at = Utc::now();
+        let session = store::load_session_from(sessions_dir, "test-123")?
+            .expect("question session should exist");
+        let actual = (
+            session.status,
+            session.current_tool_name,
+            store::agent_response_timestamps_from(sessions_dir)?
+                .get("test-123")
+                .is_some_and(|timestamp| *timestamp >= started_at && *timestamp <= finished_at),
+        );
+        assert_eq!(
+            actual,
+            (
+                SessionStatus::WaitingInput,
+                Some("AskUserQuestion".to_string()),
+                true,
+            ),
         );
         Ok(())
     }
