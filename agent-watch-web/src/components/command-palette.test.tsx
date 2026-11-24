@@ -77,6 +77,21 @@ async function openActionsMenu() {
   })
 }
 
+async function hoverAt(x: number, y: number) {
+  const target = document.createElement('div')
+  target.style.position = 'fixed'
+  target.style.left = `${String(x)}px`
+  target.style.top = `${String(y)}px`
+  target.style.width = '2px'
+  target.style.height = '2px'
+  target.style.zIndex = '1000'
+  document.body.append(target)
+  await act(async () => {
+    await userEvent.hover(target)
+  })
+  target.remove()
+}
+
 const openBesideModifier = getCommandPaletteModifierLabel(
   getCommandPaletteShortcut(navigator.platform),
 )
@@ -762,9 +777,19 @@ it('opens the highlighted session beside from the actions submenu', async () => 
 
 it('opens the highlighted session in its terminal from the actions submenu', async () => {
   const onOpenInTerminal = vi.fn<(id: string) => void>()
-  renderPalette({ onOpenInTerminal })
+  renderPalette({ onOpenInTerminal, initialActionItemId: session.id })
+  const later = container.querySelectorAll('[role="menuitem"]')[2]
+  if (later === undefined) throw new Error('Later action was not rendered')
+  const { x, y, width, height } = later.getBoundingClientRect()
 
-  await openActionsMenu()
+  await pressKeys('{ArrowLeft}')
+  await hoverAt(x + width / 2, y + height / 2)
+  await pressKeys('{ArrowRight}')
+  await vi.waitFor(() => {
+    if (container.querySelector('[role="menu"]') === null) {
+      throw new Error('Actions menu was not rendered')
+    }
+  })
   await pressKeys(
     '{ArrowDown}',
     '{ArrowDown}',
@@ -781,6 +806,136 @@ it('opens the highlighted session in its terminal from the actions submenu', asy
     calls: [['session-alerts']],
     submenuVisible: true,
   })
+})
+
+it('highlights an action when the pointer moves over it', async () => {
+  renderPalette({ initialActionItemId: session.id })
+  const later = container.querySelectorAll('[role="menuitem"]')[2]
+  if (later === undefined) throw new Error('Later action was not rendered')
+
+  await act(async () => {
+    await userEvent.hover(later)
+  })
+
+  expect(
+    Array.from(container.querySelectorAll('[role="menuitem"]')).map((item) =>
+      item
+        .closest('.command-palette-action')
+        ?.getAttribute('data-palette-action-active'),
+    ),
+  ).toEqual(['false', 'false', 'true', 'false', 'false', 'false'])
+})
+
+it('keeps the keyboard-selected result when results change under a stationary pointer', async () => {
+  const sessions = [
+    {
+      ...session,
+      id: 'session-first',
+      title: 'Review first notification',
+      task: {
+        id: 'task-first',
+        number: 51,
+        title: 'First notification task',
+        priority: 1,
+      },
+    },
+    {
+      ...session,
+      id: 'session-second',
+      title: 'Review second notification',
+      task: {
+        id: 'task-second',
+        number: 52,
+        title: 'Second notification task',
+        priority: 2,
+      },
+    },
+    {
+      ...session,
+      id: 'session-third',
+      title: 'Review third notification',
+      task: {
+        id: 'task-third',
+        number: 53,
+        title: 'Third notification task',
+        priority: 3,
+      },
+    },
+  ] satisfies Session[]
+  renderPalette({ sessions, initialQuery: 'Review' })
+  const input = container.querySelector<HTMLInputElement>(
+    '[aria-label="Jump to a session, tq task or project, or type > for commands"]',
+  )
+  if (input === null) throw new Error('Palette input was not rendered')
+  input.setSelectionRange(0, input.value.length)
+  await act(async () => {
+    await userEvent.keyboard('#')
+  })
+  const thirdTask = container.querySelectorAll('[role="option"]')[2]
+  if (thirdTask === undefined) throw new Error('Third task was not rendered')
+  const { x, y, width, height } = thirdTask.getBoundingClientRect()
+  await act(async () => {
+    await userEvent.fill(input, 'Review')
+  })
+  await hoverAt(x + width / 2, y + height / 2)
+
+  input.setSelectionRange(0, input.value.length)
+  await act(async () => {
+    await userEvent.keyboard('#')
+  })
+
+  expect(
+    Array.from(container.querySelectorAll('[role="option"]')).map((item) => ({
+      title: item.querySelector('.command-palette-item-heading strong')
+        ?.textContent,
+      selected: item.getAttribute('aria-selected'),
+    })),
+  ).toEqual([
+    { title: '#51 First notification task', selected: 'true' },
+    { title: '#52 Second notification task', selected: 'false' },
+    { title: '#53 Third notification task', selected: 'false' },
+  ])
+})
+
+it('highlights a result when the pointer moves over it', async () => {
+  const sessions = [
+    {
+      ...session,
+      id: 'session-first',
+      title: 'Review first notification',
+      task: {
+        id: 'task-first',
+        number: 51,
+        title: 'First notification task',
+        priority: 1,
+      },
+    },
+    {
+      ...session,
+      id: 'session-second',
+      title: 'Review second notification',
+      task: {
+        id: 'task-second',
+        number: 52,
+        title: 'Second notification task',
+        priority: 2,
+      },
+    },
+  ] satisfies Session[]
+  renderPalette({ sessions, initialQuery: 'Review' })
+  const secondResult = container.querySelectorAll('[role="option"]')[1]
+  if (secondResult === undefined)
+    throw new Error('Second result was not rendered')
+
+  await act(async () => {
+    await userEvent.hover(secondResult)
+  })
+
+  expect(
+    Array.from(container.querySelectorAll('[role="option"]')).map((item) =>
+      item.getAttribute('aria-selected'),
+    ),
+  ).toEqual(['false', 'true'])
 })
 
 it('shows terminal focus progress in the actions submenu', () => {
