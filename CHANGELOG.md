@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.912](https://github.com/fohte/armyknife/compare/v0.1.911...v0.1.912) (2026-11-24)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** expand iPhone chat header ([#2242](https://github.com/fohte/armyknife/issues/2242)) ([f029609](https://github.com/fohte/armyknife/commit/f02960964a7113ae89f583a4fd3a0069952f4d25))
+
 ## [0.1.911](https://github.com/fohte/armyknife/compare/v0.1.910...v0.1.911) (2026-11-24)
 
 
