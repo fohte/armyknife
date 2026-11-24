@@ -21,8 +21,6 @@ type ReviewThreadPreview = {
 }
 
 type IssueCommentPreview = {
-  author: string
-  createdAt: string | null
   body: string
 }
 
@@ -35,12 +33,10 @@ export function parseIssueComment(body: string): IssueCommentPreview {
     'id',
     'databaseId',
   ])
-  const metadata = new Map<string, string>()
   let headerLength = 0
   for (const line of lines) {
     const match = /^<!-- ([^:]+): (.*) -->$/.exec(line)
     if (match === null || !metadataKeys.has(match[1] ?? '')) break
-    metadata.set(match[1] ?? '', match[2] ?? '')
     headerLength += 1
   }
   const bodyStart =
@@ -51,8 +47,6 @@ export function parseIssueComment(body: string): IssueCommentPreview {
         : headerLength
 
   return {
-    author: metadata.get('author') ?? 'unknown',
-    createdAt: metadata.get('createdAt') ?? null,
     body: lines.slice(bodyStart < 0 ? lines.length : bodyStart).join('\n'),
   }
 }

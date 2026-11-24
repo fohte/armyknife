@@ -264,28 +264,12 @@
   accent-color: #60a5fa;
 }
 
-.review-document-issue-comment {
-  overflow: hidden;
-  border: 1px solid #2a2a2a;
-  background: #0a0a0a;
-}
-
-.review-document-comment-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px;
-  border-bottom: 1px solid #1f1f1f;
-}
-
-.review-document-comment-header p,
 .review-document-thread-comment-meta {
   margin: 0;
   color: #a1a1aa;
   font-size: 12px;
 }
 
-.review-document-comment-header strong,
 .review-document-thread-comment-meta strong {
   color: #fafafa;
 }
@@ -331,7 +315,6 @@
   font-size: 16px;
 }
 
-.session-status-panel[data-size='phone'] .review-document-comment-header p,
 .session-status-panel[data-size='phone'] .review-document-thread-comment-meta {
   font-size: 12.5px;
 }

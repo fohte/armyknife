@@ -525,7 +525,7 @@ it('updates parent issue using the issue frontmatter camelCase key', async () =>
   ])
 })
 
-it('shows the issue comment author and message without file metadata', () => {
+it('shows an issue comment body without its file metadata', () => {
   const summary = {
     id: 'fixture-issue-comment',
     kind: 'issue_comment' as const,
@@ -551,9 +551,6 @@ it('shows the issue comment author and message without file metadata', () => {
   const snapshot = () => ({
     metadataSections: container.querySelectorAll('.review-document-frontmatter')
       .length,
-    author: container.querySelector('.review-document-comment-header strong')
-      ?.textContent,
-    dateTime: container.querySelector('time')?.getAttribute('datetime'),
     message: container.querySelector('.review-document-issue-comment-body')
       ?.textContent,
     rawMetadataVisible: container
@@ -563,8 +560,6 @@ it('shows the issue comment author and message without file metadata', () => {
 
   expect(snapshot()).toEqual({
     metadataSections: 0,
-    author: 'sample-reviewer',
-    dateTime: '2026-11-24T02:40:00Z',
     message: 'Could we retry the pending delivery after a short delay?',
     rawMetadataVisible: false,
   })

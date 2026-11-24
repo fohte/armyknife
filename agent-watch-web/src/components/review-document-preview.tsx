@@ -318,27 +318,9 @@ export function ReviewDocumentPreview({
   if (summary?.kind === 'issue_comment') {
     const comment = parseIssueComment(body)
     return (
-      <article className="review-document-issue-comment">
-        <header className="review-document-comment-header">
-          <span aria-hidden="true" className="review-document-avatar">
-            {initials(comment.author)}
-          </span>
-          <p>
-            <strong>{comment.author}</strong>
-            {comment.createdAt === null ? null : (
-              <>
-                <span aria-hidden="true"> · </span>
-                <time dateTime={comment.createdAt}>
-                  {readableTime(comment.createdAt)}
-                </time>
-              </>
-            )}
-          </p>
-        </header>
-        <MarkdownMessage className="review-document-issue-comment-body">
-          {comment.body}
-        </MarkdownMessage>
-      </article>
+      <MarkdownMessage className="review-document-issue-comment-body">
+        {comment.body}
+      </MarkdownMessage>
     )
   }
 

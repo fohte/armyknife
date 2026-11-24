@@ -22,6 +22,12 @@ const issueBody: ReviewDocumentSummary = {
   ...issueComment,
   id: 'fixture-issue-body',
   kind: 'issue_body',
+  target: {
+    repository: 'example/web-app',
+    issueNumber: 418,
+    title: '設定画面から再送の上限を変えられるようにする',
+  },
+  startedAt: Date.now() - 60_000,
   isEditor: true,
 }
 
@@ -126,15 +132,15 @@ export const IssueBodyShowsTypedMetadata: Story = {
     summary: issueBody,
     summaries: [issueBody],
     frontmatter: {
-      title: 'Notifications stop after several deliveries',
-      labels: ['bug', 'notifications'],
-      assignees: ['sample-maintainer'],
-      parentIssue: 'example/web-app#390',
-      subIssues: ['example/web-app#413', 'example/web-app#414'],
+      title: '設定画面から再送の上限を変えられるようにする',
+      labels: ['enhancement', 'settings'],
+      assignees: ['hina-k'],
+      parentIssue: 'example/web-app#400',
+      subIssues: ['example/web-app#419', 'example/web-app#420'],
       submit: false,
-      readonly: { number: 412, author: 'sample-reporter' },
+      readonly: { number: 418, author: 'sample-reporter' },
     },
-    body: `## Summary\n\nThe fourth notification is not delivered.`,
+    body: `## 背景\n\n再送の上限が 3 回で固定されていて、応答の遅い送信先では足りない。\n\n## やること\n\n- 設定画面に再送の上限の入力欄を足す\n- 既定値は 3 回のまま`,
   },
   decorators: [desktopViewport],
 }
@@ -149,12 +155,12 @@ export const MobileIssueBodyShowsTypedMetadata: Story = {
 }
 
 export const IssueCommentShowsTheCommentBody: Story = {
-  name: 'An issue comment shows its author and rendered message',
+  name: 'An issue comment shows its rendered body',
   args: {
     summary: issueComment,
     summaries: [issueComment],
     frontmatter: null,
-    body: `<!-- author: sample-reviewer -->\n<!-- createdAt: 2026-11-24T02:40:00Z -->\n<!-- updatedAt: 2026-11-24T02:40:00Z -->\n<!-- id: comment-node -->\n<!-- databaseId: 506 -->\n\nCould we retry the pending delivery after a short delay?`,
+    body: `<!-- author: sample-reviewer -->\n<!-- createdAt: 2026-11-24T02:40:00Z -->\n<!-- updatedAt: 2026-11-24T02:40:00Z -->\n<!-- id: comment-node -->\n<!-- databaseId: 506 -->\n\n再現手順を足します。\n\n· 1. 送信先を応答の遅いサーバーにする\n\n· 2. 通知を 10 件続けて送る\n\n· 3. 4 件目から届かない`,
   },
   decorators: [desktopViewport],
 }
