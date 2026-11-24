@@ -245,6 +245,423 @@ it('shows the issue heading without a draft tab row when one draft is open', () 
   })
 })
 
+it('shows issue fields as typed metadata before the Markdown body', () => {
+  const summary = {
+    id: 'fixture-issue-body',
+    kind: 'issue_body' as const,
+    target: {
+      repository: 'example/web-app',
+      issueNumber: 412,
+      title: 'Delivery checks fail on the fourth attempt',
+    },
+    isEditor: true,
+    canSave: true,
+    canFinish: true,
+  }
+  root = createRoot(container)
+  act(() =>
+    root?.render(
+      <ReviewDocumentPanel
+        summary={summary}
+        summaries={[summary]}
+        frontmatter={{
+          title: 'Notifications stop after several deliveries',
+          labels: ['bug', 'notifications'],
+          assignees: ['sample-maintainer'],
+          parentIssue: 'example/web-app#390',
+          subIssues: ['example/web-app#413', 'example/web-app#414'],
+          submit: false,
+          readonly: { number: 412, author: 'sample-reporter' },
+        }}
+        body="## Summary\n\nThe fourth notification is not delivered."
+      />,
+    ),
+  )
+
+  const fields = container.querySelector('.review-document-issue-fields')
+  const fieldValue = (name: string) => {
+    const label = [...(fields?.querySelectorAll('dt') ?? [])].find(
+      (item) => item.textContent === name,
+    )
+    return label?.nextElementSibling?.textContent.replaceAll('×', '').trim()
+  }
+  const snapshot = () => ({
+    title: container.querySelector<HTMLTextAreaElement>(
+      'textarea[aria-label="Issue title"]',
+    )?.value,
+    labels: [...(fields?.querySelectorAll('.review-document-issue-chip') ?? [])]
+      .filter(
+        (item) =>
+          !item.classList.contains('review-document-issue-chip--assignee'),
+      )
+      .map((item) => item.textContent.replaceAll('×', '').trim()),
+    assignees: [
+      ...(fields?.querySelectorAll('.review-document-issue-chip--assignee') ??
+        []),
+    ].map((item) => ({
+      initial: item.querySelector('span')?.textContent,
+      name: item.textContent
+        .replace(item.querySelector('span')?.textContent ?? '', '')
+        .replaceAll('×', '')
+        .trim(),
+    })),
+    parentIssue: fieldValue('Parent issue'),
+    subIssues: [
+      ...(fields?.querySelectorAll(
+        'dt:nth-of-type(4) + dd .review-document-issue-reference code',
+      ) ?? []),
+    ].map((item) => item.textContent),
+    submit: container.querySelector('input[aria-label="submit"]') !== null,
+    body: container.querySelector('.review-document-body')?.textContent,
+  })
+
+  expect(snapshot()).toEqual({
+    title: 'Notifications stop after several deliveries',
+    labels: ['bug', 'notifications'],
+    assignees: [{ initial: 'S', name: 'sample-maintainer' }],
+    parentIssue: 'example/web-app#390',
+    subIssues: ['example/web-app#413', 'example/web-app#414'],
+    submit: false,
+    body: 'Summary\\n\\nThe fourth notification is not delivered.',
+  })
+})
+
+it('updates parent issue using the issue frontmatter camelCase key', async () => {
+  const summary = {
+    id: 'fixture-issue-body',
+    kind: 'issue_body' as const,
+    target: { repository: 'example/web-app', issueNumber: 412 },
+    isEditor: true,
+    canSave: true,
+    canFinish: true,
+  }
+  const frontmatter: JsonValue = {
+    title: 'Fixture title',
+    labels: ['bug'],
+    assignees: ['sample-maintainer'],
+    parentIssue: 'example/web-app#390',
+    subIssues: ['example/web-app#413'],
+    submit: false,
+    readonly: { number: 412, author: 'sample-reporter' },
+  }
+  const changes: JsonValue[] = []
+  root = createRoot(container)
+  act(() =>
+    root?.render(
+      <ReviewDocumentPanel
+        summary={summary}
+        frontmatter={frontmatter}
+        body="Fixture body."
+        onFrontmatterChange={(value) => changes.push(value)}
+      />,
+    ),
+  )
+
+  await act(async () => {
+    await page.getByRole('button', { name: 'Clear parent issue' }).click()
+  })
+
+  expect(changes).toEqual([
+    {
+      title: 'Fixture title',
+      labels: ['bug'],
+      assignees: ['sample-maintainer'],
+      parentIssue: null,
+      subIssues: ['example/web-app#413'],
+      submit: false,
+      readonly: { number: 412, author: 'sample-reporter' },
+    },
+  ])
+})
+
+it('shows the issue comment author and message without file metadata', () => {
+  const summary = {
+    id: 'fixture-issue-comment',
+    kind: 'issue_comment' as const,
+    target: { repository: 'example/web-app', issueNumber: 412 },
+    isEditor: true,
+    canSave: true,
+    canFinish: true,
+  }
+  root = createRoot(container)
+  act(() =>
+    root?.render(
+      <ReviewDocumentPanel
+        summary={summary}
+        summaries={[summary]}
+        frontmatter={null}
+        body={
+          '<!-- author: sample-reviewer -->\n<!-- createdAt: 2026-11-24T02:40:00Z -->\n<!-- updatedAt: 2026-11-24T02:40:00Z -->\n<!-- id: comment-node -->\n<!-- databaseId: 506 -->\n\nCould we retry the pending delivery after a short delay?'
+        }
+      />,
+    ),
+  )
+
+  const snapshot = () => ({
+    metadataSections: container.querySelectorAll('.review-document-frontmatter')
+      .length,
+    author: container.querySelector('.review-document-comment-header strong')
+      ?.textContent,
+    dateTime: container.querySelector('time')?.getAttribute('datetime'),
+    message: container.querySelector('.review-document-issue-comment-body')
+      ?.textContent,
+    rawMetadataVisible: container
+      .querySelector('.review-document-preview-column')
+      ?.textContent.includes('databaseId'),
+  })
+
+  expect(snapshot()).toEqual({
+    metadataSections: 0,
+    author: 'sample-reviewer',
+    dateTime: '2026-11-24T02:40:00Z',
+    message: 'Could we retry the pending delivery after a short delay?',
+    rawMetadataVisible: false,
+  })
+})
+
+it('shows each review thread with its focused diff, reviewer comment, and actions', () => {
+  const summary = {
+    id: 'fixture-review-replies',
+    kind: 'review_replies' as const,
+    target: {
+      repository: 'example/web-app',
+      pullRequestNumber: 2049,
+      threadCount: 2,
+    },
+    isEditor: true,
+    canSave: true,
+    canFinish: true,
+  }
+  const body = `<!-- thread: THREAD_sample_1 path: src/notifications/delivery.rs:15 author: @sample-reviewer -->
+- [ ] resolve
+<!-- diff -->
+\`\`\`diff
+@@ -14,5 +14,6 @@
+ fn deliver() {
+-    send();
++    retry_pending();
++    send();
+ }
+\`\`\`
+<!-- /diff -->
+<!-- comment: @sample-reviewer 2026-11-23T18:30:00Z -->
+Please keep the original delivery attempt after retrying.
+<!-- /comment -->
+Retain the first send after the retry.
+
+<!-- thread: THREAD_sample_2 path: src/notifications/retry.rs:40 author: @another-reviewer -->
+- [x] resolve
+<!-- diff -->
+\`\`\`diff
+@@ -39,3 +39,4 @@
+ fn retry() {
++    delay();
+ }
+\`\`\`
+<!-- /diff -->
+<!-- comment: @another-reviewer 2026-11-23T18:42:00Z -->
+Please keep this delay configurable.
+<!-- /comment -->`
+  root = createRoot(container)
+  act(() =>
+    root?.render(
+      <ReviewDocumentPanel
+        summary={summary}
+        summaries={[summary]}
+        frontmatter={{ submit: false }}
+        body={body}
+      />,
+    ),
+  )
+
+  const snapshot = () => ({
+    frontmatterSections: container.querySelectorAll(
+      '.review-document-frontmatter',
+    ).length,
+    threads: [
+      ...container.querySelectorAll<HTMLElement>('.review-document-thread'),
+    ].map((thread) => ({
+      path: thread.querySelector('.review-document-thread-path')?.textContent,
+      resolved: thread.querySelector<HTMLInputElement>(
+        '.review-document-thread-resolve input',
+      )?.checked,
+      diff: [...thread.querySelectorAll('.review-document-diff-line')].map(
+        (line) => ({
+          text: line.textContent,
+          focused: line.classList.contains(
+            'review-document-diff-line--focused',
+          ),
+        }),
+      ),
+      comments: [
+        ...thread.querySelectorAll('.review-document-thread-comment-card'),
+      ].map((comment) => ({
+        author: comment.querySelector('strong')?.textContent,
+        body: comment.querySelector('.review-document-thread-comment-body')
+          ?.textContent,
+      })),
+      reply: thread.querySelector<HTMLInputElement>(
+        '.review-document-thread-reply input',
+      )?.value,
+    })),
+  })
+
+  expect(snapshot()).toEqual({
+    frontmatterSections: 0,
+    threads: [
+      {
+        path: 'src/notifications/delivery.rs:15',
+        resolved: false,
+        diff: [
+          { text: '@@ -14,5 +14,6 @@', focused: false },
+          { text: ' fn deliver() {', focused: false },
+          { text: '-    send();', focused: false },
+          { text: '+    retry_pending();', focused: true },
+          { text: '+    send();', focused: false },
+          { text: ' }', focused: false },
+        ],
+        comments: [
+          {
+            author: '@sample-reviewer',
+            body: 'Please keep the original delivery attempt after retrying.',
+          },
+        ],
+        reply: 'Retain the first send after the retry.',
+      },
+      {
+        path: 'src/notifications/retry.rs:40',
+        resolved: true,
+        diff: [
+          { text: '@@ -39,3 +39,4 @@', focused: false },
+          { text: ' fn retry() {', focused: false },
+          { text: '+    delay();', focused: true },
+          { text: ' }', focused: false },
+        ],
+        comments: [
+          {
+            author: '@another-reviewer',
+            body: 'Please keep this delay configurable.',
+          },
+        ],
+        reply: '',
+      },
+    ],
+  })
+})
+
+it('updates a reply and resolve checkbox in the review threads draft', async () => {
+  const savedBodies: string[] = []
+  const summary = {
+    id: 'fixture-review-replies',
+    kind: 'review_replies' as const,
+    target: {
+      repository: 'example/web-app',
+      pullRequestNumber: 2049,
+      threadCount: 2,
+    },
+    isEditor: true,
+    canSave: true,
+    canFinish: true,
+  }
+  const originalBody = `<!-- thread: THREAD_fixture_1 path: src/example.rs:9 author: @sample-reviewer -->
+- [ ] resolve
+<!-- diff -->
+\`\`\`diff
+@@ -8,3 +8,4 @@
+ fn handle() {
++    retry();
+ }
+\`\`\`
+<!-- /diff -->
+<!-- comment: @sample-reviewer 2026-11-23T18:30:00Z -->
+Keep this change small.
+<!-- /comment -->
+Retain the current behavior.
+
+<!-- thread: THREAD_fixture_2 path: src/other.rs:20 author: @another-reviewer -->
+- [ ] resolve
+<!-- diff -->
+\`\`\`diff
+@@ -19,3 +19,4 @@
+ fn finish() {
++    close();
+ }
+\`\`\`
+<!-- /diff -->
+<!-- comment: @another-reviewer 2026-11-23T18:42:00Z -->
+Please close the handle.
+<!-- /comment -->`
+
+  function Harness() {
+    const [body, setBody] = useState(originalBody)
+    return (
+      <div
+        className="session-status-panel"
+        data-size="desktop"
+        style={{ width: '640px', height: '900px', display: 'flex' }}
+      >
+        <ReviewDocumentPanel
+          summary={summary}
+          frontmatter={{ submit: false }}
+          body={body}
+          onBodyChange={(nextBody) => {
+            setBody(nextBody)
+          }}
+          onSave={() => savedBodies.push(body)}
+        />
+      </div>
+    )
+  }
+
+  await page.viewport(640, 900)
+  root = createRoot(container)
+  act(() => root?.render(<Harness />))
+
+  await act(async () => {
+    await page
+      .getByRole('textbox', { name: 'Your reply to src/example.rs' })
+      .fill('Use a bounded retry.')
+  })
+  await act(async () => {
+    await page.getByRole('checkbox', { name: 'Resolve' }).first().click()
+  })
+  await act(async () => {
+    await page.getByRole('button', { name: 'Save' }).click()
+  })
+
+  const expectedBody = [
+    '<!-- thread: THREAD_fixture_1 path: src/example.rs:9 author: @sample-reviewer -->',
+    '- [x] resolve',
+    '<!-- diff -->',
+    '```diff',
+    '@@ -8,3 +8,4 @@',
+    ' fn handle() {',
+    '+    retry();',
+    ' }',
+    '```',
+    '<!-- /diff -->',
+    '<!-- comment: @sample-reviewer 2026-11-23T18:30:00Z -->',
+    'Keep this change small.',
+    '<!-- /comment -->',
+    'Use a bounded retry.',
+    '',
+    '<!-- thread: THREAD_fixture_2 path: src/other.rs:20 author: @another-reviewer -->',
+    '- [ ] resolve',
+    '<!-- diff -->',
+    '```diff',
+    '@@ -19,3 +19,4 @@',
+    ' fn finish() {',
+    '+    close();',
+    ' }',
+    '```',
+    '<!-- /diff -->',
+    '<!-- comment: @another-reviewer 2026-11-23T18:42:00Z -->',
+    'Please close the handle.',
+    '<!-- /comment -->',
+  ].join('\n')
+  expect(savedBodies).toEqual([expectedBody])
+})
+
 it('shows flat tabs with square editor and queued markers for multiple drafts', () => {
   const summaries = [
     {

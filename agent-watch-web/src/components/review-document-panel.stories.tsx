@@ -18,6 +18,13 @@ const issueComment: ReviewDocumentSummary = {
   canFinish: true,
 }
 
+const issueBody: ReviewDocumentSummary = {
+  ...issueComment,
+  id: 'fixture-issue-body',
+  kind: 'issue_body',
+  isEditor: true,
+}
+
 const prDraft: ReviewDocumentSummary = {
   id: 'fixture-pr-draft',
   kind: 'pr_draft',
@@ -49,6 +56,13 @@ const reviewReplies: ReviewDocumentSummary = {
   canFinish: false,
 }
 
+const editingReviewReplies: ReviewDocumentSummary = {
+  ...reviewReplies,
+  isEditor: true,
+  canSave: true,
+  canFinish: true,
+}
+
 const queuedDraft: ReviewDocumentSummary = {
   id: 'fixture-queued-draft',
   kind: 'draft',
@@ -63,7 +77,7 @@ const desktopViewport = (Story: ComponentType) => (
   <div
     className="session-status-panel"
     data-size="desktop"
-    style={{ width: '640px', height: '720px', display: 'flex' }}
+    style={{ width: '640px', height: '900px', display: 'flex' }}
   >
     <Story />
   </div>
@@ -99,8 +113,69 @@ export const EditingTheReviewDocument: Story = {
   args: {
     summary: issueComment,
     summaries: [issueComment],
+    frontmatter: null,
+    body: `<!-- author: sample-reviewer -->\n<!-- createdAt: 2026-11-24T02:40:00Z -->\n<!-- updatedAt: 2026-11-24T02:40:00Z -->\n<!-- id: comment-node -->\n<!-- databaseId: 506 -->\n\nCould we retry the pending delivery after a short delay?`,
   },
   decorators: [desktopViewport],
+}
+
+export const IssueBodyShowsTypedMetadata: Story = {
+  name: 'An issue draft shows its title and fields above the body',
+  args: {
+    summary: issueBody,
+    summaries: [issueBody],
+    frontmatter: {
+      title: 'Notifications stop after several deliveries',
+      labels: ['bug', 'notifications'],
+      assignees: ['sample-maintainer'],
+      parentIssue: 'example/web-app#390',
+      subIssues: ['example/web-app#413', 'example/web-app#414'],
+      submit: false,
+      readonly: { number: 412, author: 'sample-reporter' },
+    },
+    body: `## Summary\n\nThe fourth notification is not delivered.`,
+  },
+  decorators: [desktopViewport],
+}
+
+export const MobileIssueBodyShowsTypedMetadata: Story = {
+  name: 'The mobile issue preview shows its title and fields above the body',
+  args: {
+    ...IssueBodyShowsTypedMetadata.args,
+    isMobile: true,
+  },
+  decorators: [phoneViewport],
+}
+
+export const IssueCommentShowsTheCommentBody: Story = {
+  name: 'An issue comment shows its author and rendered message',
+  args: {
+    summary: issueComment,
+    summaries: [issueComment],
+    frontmatter: null,
+    body: `<!-- author: sample-reviewer -->\n<!-- createdAt: 2026-11-24T02:40:00Z -->\n<!-- updatedAt: 2026-11-24T02:40:00Z -->\n<!-- id: comment-node -->\n<!-- databaseId: 506 -->\n\nCould we retry the pending delivery after a short delay?`,
+  },
+  decorators: [desktopViewport],
+}
+
+export const ReviewRepliesShowSeveralThreads: Story = {
+  name: 'Two review threads show their diffs, comments, and replies',
+  args: {
+    summary: editingReviewReplies,
+    summaries: [editingReviewReplies],
+    frontmatter: { submit: false },
+    body: `<!-- thread: THREAD_sample_1 path: src/preflight.ts:42 author: @hina-k -->\n- [ ] resolve\n<!-- diff -->\n\`\`\`diff\n@@ -39,5 +41,7 @@ export function preflight(msg) {\n   const target = msg.target;\n-  if (!target) return fail('no target');\n+  if (target == null) {\n+    return fail('no target');\n+  }\n\`\`\`\n<!-- /diff -->\n<!-- comment: @hina-k 2026-01-15T10:30:00Z -->\nこの判定は null も通しますか?\n<!-- /comment -->\n通しません。手前で弾いています。\n\n<!-- thread: THREAD_sample_2 path: src/preflight.ts:57 author: @hina-k -->\n- [x] resolve\n<!-- diff -->\n\`\`\`diff\n@@ -55,4 +56,6 @@ export function preflight(msg) {\n   } catch (e) {\n+    log.warn('preflight failed', e);\n+    return fail(String(e));\n   }\n\`\`\`\n<!-- /diff -->\n<!-- comment: @hina-k 2026-01-15T10:34:00Z -->\n失敗したときのログはどこに出ますか?\n<!-- /comment -->\n<!-- comment: @ren-o 2026-01-15T11:02:00Z -->\n送信ログと同じ場所だと追いやすいです。\n<!-- /comment -->\n送信ログに理由と一緒に出します。`,
+  },
+  decorators: [desktopViewport],
+}
+
+export const MobileReviewRepliesShowSeveralThreads: Story = {
+  name: 'The mobile preview shows multiple review thread cards',
+  args: {
+    ...ReviewRepliesShowSeveralThreads.args,
+    isMobile: true,
+  },
+  decorators: [phoneViewport],
 }
 
 export const MultipleDraftsCanBeSelected: Story = {
@@ -108,6 +183,7 @@ export const MultipleDraftsCanBeSelected: Story = {
   args: {
     summary: issueComment,
     summaries: [issueComment, waitingPrDraft, reviewReplies, queuedDraft],
+    frontmatter: null,
   },
   decorators: [desktopViewport],
 }

@@ -8,8 +8,8 @@ import { EditorView, keymap } from '@codemirror/view'
 import { Maximize2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 
-import { MarkdownMessage } from '#components/markdown-message'
 import { ReviewDocumentNavigation } from '#components/review-document-navigation'
+import { ReviewDocumentPreview } from '#components/review-document-preview'
 import type { ReviewDocumentSummary } from '#components/review-document-summary'
 import type { JsonValue } from '#types'
 
@@ -319,6 +319,12 @@ export function ReviewDocumentPanel({
         ([name]) => !(summary?.kind === 'pr_draft' && name === 'title'),
       )
     : null
+  const isIssueBody = summary?.kind === 'issue_body'
+  const showFrontmatter =
+    isIssueBody ||
+    (summary?.kind !== 'review_replies' &&
+      frontmatter !== null &&
+      (frontmatterEntries === null || frontmatterEntries.length > 0))
 
   return (
     <article
@@ -344,37 +350,48 @@ export function ReviewDocumentPanel({
         onSelectDocument={onSelectDocument}
       />
       <div className="review-document-content">
-        {frontmatterEntries === null || frontmatterEntries.length > 0 ? (
-          <section
-            className="review-document-frontmatter"
-            aria-label="Document metadata"
-          >
-            <h2>Frontmatter</h2>
-            {frontmatterEntries !== null ? (
-              <dl className="review-document-fields">
-                {frontmatterEntries.map(([name, value]) => (
-                  <FieldEditor
-                    key={name}
-                    name={name}
-                    path={[name]}
-                    value={value}
-                    disabled={!canSave || busy}
-                    onChange={updateFrontmatter}
-                  />
-                ))}
-              </dl>
-            ) : (
-              <FieldEditor
-                name="Frontmatter"
-                path={[]}
-                value={frontmatter}
-                disabled={!canSave || busy}
-                onChange={(path, value) => {
-                  if (path.length === 0) onFrontmatterChange(value)
-                }}
-              />
-            )}
-          </section>
+        {showFrontmatter ? (
+          isIssueBody ? (
+            <ReviewDocumentPreview
+              mode="frontmatter"
+              summary={summary}
+              body={body}
+              frontmatter={frontmatter}
+              disabled={!canSave || busy}
+              onFrontmatterChange={onFrontmatterChange}
+            />
+          ) : (
+            <section
+              className="review-document-frontmatter"
+              aria-label="Document metadata"
+            >
+              <h2>Frontmatter</h2>
+              {frontmatterEntries !== null ? (
+                <dl className="review-document-fields">
+                  {frontmatterEntries.map(([name, value]) => (
+                    <FieldEditor
+                      key={name}
+                      name={name}
+                      path={[name]}
+                      value={value}
+                      disabled={!canSave || busy}
+                      onChange={updateFrontmatter}
+                    />
+                  ))}
+                </dl>
+              ) : (
+                <FieldEditor
+                  name="Frontmatter"
+                  path={[]}
+                  value={frontmatter}
+                  disabled={!canSave || busy}
+                  onChange={(path, value) => {
+                    if (path.length === 0) onFrontmatterChange(value)
+                  }}
+                />
+              )}
+            </section>
+          )
         ) : null}
 
         <section
@@ -429,9 +446,12 @@ export function ReviewDocumentPanel({
               />
             </div>
             <div className="review-document-preview-column">
-              <MarkdownMessage className="review-document-body">
-                {body}
-              </MarkdownMessage>
+              <ReviewDocumentPreview
+                {...(summary === undefined ? {} : { summary })}
+                body={body}
+                canSave={canSave && !busy}
+                onBodyChange={onBodyChange}
+              />
             </div>
           </div>
         </section>
