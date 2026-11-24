@@ -214,24 +214,23 @@ it('opens mobile navigation from the header button', () => {
       'button[aria-label="Open navigation"]',
     ),
   )
-  const snapshot = () => ({
-    expanded: navigationButton.getAttribute('aria-expanded'),
-    onOpenNavigationCalls: onOpenNavigation.mock.calls,
-  })
+  const snapshot = () => [
+    navigationButton.getAttribute('aria-expanded'),
+    onOpenNavigation.mock.calls.length,
+  ]
 
-  expect(snapshot()).toEqual({
-    expanded: 'false',
-    onOpenNavigationCalls: [],
-  })
+  const initial = snapshot()
 
   act(() => {
     navigationButton.click()
   })
 
-  expect(snapshot()).toEqual({
-    expanded: 'true',
-    onOpenNavigationCalls: [[]],
-  })
+  expect(JSON.stringify({ initial, after: snapshot() })).toBe(
+    JSON.stringify({
+      initial: ['false', 0],
+      after: ['true', 1],
+    }),
+  )
 })
 
 it.each([
