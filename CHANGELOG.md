@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.906](https://github.com/fohte/armyknife/compare/v0.1.905...v0.1.906) (2026-11-24)
+
+
+### Dependencies
+
+* update dependency style-mod to v4.1.5 ([#2227](https://github.com/fohte/armyknife/issues/2227)) ([e9755b6](https://github.com/fohte/armyknife/commit/e9755b680bf1ebce3e06c2347cf4fc6a7c18f8de))
+* update rust crate tokio-tungstenite to v0.30.0 ([#2223](https://github.com/fohte/armyknife/issues/2223)) ([8e4db77](https://github.com/fohte/armyknife/commit/8e4db774398ecff0c92b29ed752f9e25b8a0514a))
+
 ## [0.1.905](https://github.com/fohte/armyknife/compare/v0.1.904...v0.1.905) (2026-11-24)
 
 
