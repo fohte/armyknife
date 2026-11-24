@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.892](https://github.com/fohte/armyknife/compare/v0.1.891...v0.1.892) (2026-11-24)
+
+
+### Dependencies
+
+* update rust crate unicode-width to v0.2.3 ([#2181](https://github.com/fohte/armyknife/issues/2181)) ([3a1af83](https://github.com/fohte/armyknife/commit/3a1af83a0626e30b26ad1ea1b0e458b17e1c76c0))
+
 ## [0.1.891](https://github.com/fohte/armyknife/compare/v0.1.890...v0.1.891) (2026-11-24)
 
 
