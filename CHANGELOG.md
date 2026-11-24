@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.902](https://github.com/fohte/armyknife/compare/v0.1.901...v0.1.902) (2026-11-24)
+
+
+### Dependencies
+
+* update dependency @fontsource-variable/jetbrains-mono to v5.3.0 ([#2205](https://github.com/fohte/armyknife/issues/2205)) ([9b58770](https://github.com/fohte/armyknife/commit/9b5877049172c5def012e243978cef53f3d5c656))
+
 ## [0.1.901](https://github.com/fohte/armyknife/compare/v0.1.900...v0.1.901) (2026-11-24)
 
 
