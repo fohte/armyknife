@@ -264,8 +264,8 @@ importers:
         specifier: 4.3.5
         version: 4.3.5(vite@8.3.8(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))
       '@tsconfig/node-lts':
-        specifier: 24.0.1
-        version: 24.0.1
+        specifier: 26.0.1
+        version: 26.0.1
       '@tsconfig/strictest':
         specifier: 2.0.9
         version: 2.0.9
@@ -1929,8 +1929,8 @@ packages:
   '@ts-morph/common@0.27.0':
     resolution: {integrity: sha512-Wf29UqxWDpc+i61k3oIOzcUfQt79PIT9y/MWfAGlrkjg6lBC1hwDECLXPVJAhWjiGbfBCxZd65F/LIZF3+jeJQ==}
 
-  '@tsconfig/node-lts@24.0.1':
-    resolution: {integrity: sha512-xo+1KtV5zVb90fyyeglG1n5cqg3cQXLlCkEpLptYlZUNk28xmwhuD5GmxoXwmrVtUTvaMyclun9kAd0TK7H+Pg==}
+  '@tsconfig/node-lts@26.0.1':
+    resolution: {integrity: sha512-Z8DWX8MgVR006YMHZYf7d2lzWMBfYAhW4lMyhdeMG9+KGAgbJuGYuoWOAlYipfggCkiHCAZVm/Wiw6IuG5lcnw==}
 
   '@tsconfig/strictest@2.0.9':
     resolution: {integrity: sha512-CbwIySRXoGapLZYXqQHF15cg0wQImJa25Ynmubb7816vnHqTdQrmQlSbZxkJrrBusHLbF1kFbNVn8XtxmQ3EpQ==}
@@ -5956,7 +5956,7 @@ snapshots:
       minimatch: 10.2.6
       path-browserify: 1.0.1
 
-  '@tsconfig/node-lts@24.0.1': {}
+  '@tsconfig/node-lts@26.0.1': {}
 
   '@tsconfig/strictest@2.0.9': {}
 
