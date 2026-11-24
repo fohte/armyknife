@@ -532,7 +532,7 @@ Safely squash-merge an open pull request with no merge conflicts after running t
 a gh pr-merge <pr-number> [options]
 ```
 
-When the target PR has an unmerged lower PR, `--unstack` removes the unmerged PRs from the stack before running the hook and required checks. The target merges into its existing base branch, which is the lower PR's branch in the usual stacked layout; the lower PR itself does not land on the trunk. If the hook or required checks fail, the target PR remains unmerged and out of the stack. When there is no unmerged lower PR, `--unstack` does not remove the target from the stack.
+When the target PR has an unmerged lower PR, `--unstack` removes the unmerged PRs from the stack before running the hook and required checks. Draft and merge-queued targets are rejected before the stack changes. The target merges into its existing base branch, which is the lower PR's branch in the usual stacked layout; the lower PR itself does not land on the trunk. If the hook or required checks fail, the target PR remains unmerged and out of the stack. When there is no unmerged lower PR, `--unstack` does not remove the target from the stack.
 
 | Option              | Description                                                                       |
 | ------------------- | --------------------------------------------------------------------------------- |

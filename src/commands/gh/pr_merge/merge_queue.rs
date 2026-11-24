@@ -16,9 +16,9 @@ pub(super) fn is_pull_request_in_merge_queue(
     let args = [
         "api",
         "graphql",
-        "-F",
+        "-f",
         owner_arg.as_str(),
-        "-F",
+        "-f",
         name_arg.as_str(),
         "-F",
         number_arg.as_str(),
@@ -31,17 +31,17 @@ pub(super) fn is_pull_request_in_merge_queue(
     Ok(response.data.repository.pull_request.is_in_merge_queue)
 }
 
-#[derive(serde::Deserialize)]
+#[derive(Debug, PartialEq, Eq, serde::Deserialize)]
 struct GhPrMergeQueueResponse {
     data: GhPrMergeQueueData,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(Debug, PartialEq, Eq, serde::Deserialize)]
 struct GhPrMergeQueueData {
     repository: GhPrMergeQueueRepository,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(Debug, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct GhPrMergeQueueRepository {
     pull_request: GhPrMergeQueueState,
@@ -69,9 +69,15 @@ mod tests {
         .expect("valid gh merge queue response");
 
         assert_eq!(
-            response.data.repository.pull_request,
-            GhPrMergeQueueState {
-                is_in_merge_queue: true,
+            response,
+            GhPrMergeQueueResponse {
+                data: GhPrMergeQueueData {
+                    repository: GhPrMergeQueueRepository {
+                        pull_request: GhPrMergeQueueState {
+                            is_in_merge_queue: true,
+                        },
+                    },
+                },
             },
         );
     }

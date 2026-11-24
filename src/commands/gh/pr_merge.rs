@@ -446,7 +446,7 @@ impl PrMergeClient for GhCli {
     }
 }
 
-#[derive(serde::Deserialize)]
+#[derive(Debug, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct GhPrResponse {
     state: String,
@@ -459,7 +459,7 @@ struct GhPrResponse {
     url: String,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(Debug, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct GhRepository {
     name_with_owner: String,
@@ -534,7 +534,19 @@ mod tests {
         }))
         .expect("valid gh PR response");
 
-        assert_eq!((response.is_draft, response.state.as_str()), (true, "OPEN"));
+        assert_eq!(
+            response,
+            GhPrResponse {
+                state: "OPEN".to_string(),
+                is_draft: true,
+                head_ref_oid: "head-a".to_string(),
+                head_ref_name: "topic/example-branch".to_string(),
+                base_ref_name: "main".to_string(),
+                head_repository: None,
+                merge_state_status: Some("BLOCKED".to_string()),
+                url: "https://github.com/example-org/example-repo/pull/42".to_string(),
+            },
+        );
     }
 
     impl PrMergeClient for FakePrMergeClient {
@@ -1705,6 +1717,7 @@ mod tests {
         Merge,
         NoLowerPr,
         DraftPr,
+        DraftBeforeUnstack,
         QueuedPr,
         StackRemains,
         RestackedBeforeAsyncMerge,
@@ -1719,6 +1732,7 @@ mod tests {
     #[case::merge(UnstackScenario::Merge)]
     #[case::no_lower_pr(UnstackScenario::NoLowerPr)]
     #[case::draft_pr(UnstackScenario::DraftPr)]
+    #[case::draft_before_unstack(UnstackScenario::DraftBeforeUnstack)]
     #[case::queued_pr(UnstackScenario::QueuedPr)]
     #[case::stack_remains(UnstackScenario::StackRemains)]
     #[case::restacked_before_async_merge(UnstackScenario::RestackedBeforeAsyncMerge)]
@@ -1749,6 +1763,11 @@ mod tests {
             UnstackScenario::DraftPr => {
                 if let Some(initial) = snapshots.first_mut() {
                     initial.is_draft = true;
+                }
+            }
+            UnstackScenario::DraftBeforeUnstack => {
+                if let Some(before_unstack) = snapshots.get_mut(1) {
+                    before_unstack.is_draft = true;
                 }
             }
             UnstackScenario::QueuedPr => {
@@ -1853,6 +1872,15 @@ mod tests {
             UnstackScenario::DraftPr => (
                 Err("PR #42 is a draft and cannot be merged.".to_string()),
                 vec!["view".to_string()],
+            ),
+            UnstackScenario::DraftBeforeUnstack => (
+                Err("PR #42 is a draft and cannot be merged.".to_string()),
+                vec![
+                    "view".to_string(),
+                    "stack".to_string(),
+                    "stack-pull-requests".to_string(),
+                    "view".to_string(),
+                ],
             ),
             UnstackScenario::QueuedPr => (
                 Err("PR #42 is in a merge queue; refusing to unstack.".to_string()),
