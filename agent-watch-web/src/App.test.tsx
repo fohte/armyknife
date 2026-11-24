@@ -2772,6 +2772,126 @@ it.each(['Inbox', 'Board'] as const)(
   },
 )
 
+it('opens mobile navigation from the conversation header', () => {
+  renderMobileApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-a', 'A sample conversation')],
+  })
+  clickButton('[data-session-row]')
+  clickButton('.mobile-conversation-nav-toggle')
+
+  const snapshot = () => ({
+    drawerOpen:
+      container.querySelector<HTMLDialogElement>(
+        '[aria-label="Mobile navigation"]',
+      )?.open ?? false,
+    expanded: container
+      .querySelector<HTMLButtonElement>('.mobile-conversation-nav-toggle')
+      ?.getAttribute('aria-expanded'),
+    conversationVisible:
+      container.querySelector('.conversation-pane[data-mobile="true"]') !==
+      null,
+  })
+  expect(snapshot()).toEqual({
+    drawerOpen: true,
+    expanded: 'true',
+    conversationVisible: true,
+  })
+})
+
+it('returns to Inbox after selecting Inbox from a mobile conversation', () => {
+  renderMobileApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-a', 'A sample conversation')],
+  })
+  clickButton('[data-session-row]')
+  clickButton('.mobile-conversation-nav-toggle')
+  clickButton('.mobile-nav-drawer .view-switch-button[aria-pressed="true"]')
+
+  const snapshot = () => ({
+    conversationVisible:
+      container.querySelector('.conversation-pane[data-mobile="true"]') !==
+      null,
+    drawerOpen:
+      container.querySelector<HTMLDialogElement>('.mobile-nav-drawer')?.open ??
+      false,
+    visibleTitles: readSessionTitles(),
+  })
+  expect(snapshot()).toEqual({
+    conversationVisible: false,
+    drawerOpen: false,
+    visibleTitles: ['A sample conversation'],
+  })
+})
+
+it('returns to Inbox after selecting a saved view from a mobile conversation', () => {
+  window.localStorage.setItem(
+    'agent-watch-web:saved-inbox-views',
+    JSON.stringify([{ name: 'Worker reviews', query: 'project:worker' }]),
+  )
+  renderMobileApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session(
+        'session-sample',
+        'Sample project session',
+        'needs_action',
+        8,
+        'sample',
+      ),
+      session(
+        'session-worker',
+        'Worker project session',
+        'needs_action',
+        8,
+        'worker',
+      ),
+    ],
+  })
+  clickButton('[data-session-row]')
+  clickButton('.mobile-conversation-nav-toggle')
+  clickButton('.mobile-nav-drawer .saved-view-link')
+
+  const snapshot = () => ({
+    conversationVisible:
+      container.querySelector('.conversation-pane[data-mobile="true"]') !==
+      null,
+    selectedView: container
+      .querySelector<HTMLButtonElement>('.mobile-saved-view-link')
+      ?.getAttribute('aria-pressed'),
+    visibleTitles: readSessionTitles(),
+  })
+  expect(snapshot()).toEqual({
+    conversationVisible: false,
+    selectedView: 'true',
+    visibleTitles: ['Worker project session'],
+  })
+})
+
+it('returns focus to the navigation button after closing a mobile conversation drawer', async () => {
+  renderMobileApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-a', 'A sample conversation')],
+  })
+  clickButton('[data-session-row]')
+  const navigationButton = container.querySelector<HTMLButtonElement>(
+    '.mobile-conversation-nav-toggle',
+  )
+  if (navigationButton === null) {
+    throw new Error('The conversation navigation button was not rendered')
+  }
+  await act(async () => {
+    await userEvent.click(navigationButton)
+    await userEvent.keyboard('{Escape}')
+  })
+
+  expect(document.activeElement === navigationButton).toEqual(true)
+})
+
 it.each(['Inbox', 'Board'] as const)(
   'opens the command palette from the %s header',
   async (view) => {

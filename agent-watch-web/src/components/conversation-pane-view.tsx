@@ -3,7 +3,10 @@ import '#components/conversation-pane-view.css'
 
 import { type ReactNode, useCallback, useMemo, useRef, useState } from 'react'
 
-import { useOptionalAsyncActionFeedback } from '#async-action-feedback'
+import {
+  isAsyncActionFailureStatus,
+  useOptionalAsyncActionFeedback,
+} from '#async-action-feedback'
 import { useAgentUsageContext } from '#components/agent-usage-context'
 import type {
   CommandOutputRefresh,
@@ -93,6 +96,7 @@ type ConversationPaneViewProps = {
   isMobile?: boolean
   statusPanelOpen?: boolean
   mobileStatusPanel?: ReactNode
+  pullRequestListTarget?: HTMLElement | null
   mobileWebUi?: ReactNode
   mobileUpdateNotice?: ReactNode
   selectedDecisionSeq?: number | null
@@ -104,6 +108,8 @@ type ConversationPaneViewProps = {
   onSelectDecision?: (seq: number) => void
   fileDropActive?: boolean
   onBack?: () => void
+  onOpenNavigation?: () => void
+  mobileNavOpen?: boolean
   onLater?: () => void
   onClose?: () => void
   isToday?: boolean
@@ -151,6 +157,7 @@ export function ConversationPaneView({
   isMobile = false,
   statusPanelOpen = false,
   mobileStatusPanel = null,
+  pullRequestListTarget = null,
   mobileWebUi = null,
   mobileUpdateNotice,
   selectedDecisionSeq = null,
@@ -162,6 +169,8 @@ export function ConversationPaneView({
   onSelectDecision = () => undefined,
   fileDropActive = false,
   onBack,
+  onOpenNavigation,
+  mobileNavOpen = false,
   onLater,
   onClose,
   isToday = false,
@@ -362,6 +371,13 @@ export function ConversationPaneView({
           ? {}
           : { timelineIndex: mergeTimelineIndex })}
         mergeBandTarget={mergeBandTarget}
+        pullRequestListTarget={pullRequestListTarget}
+        activityFailed={
+          actionFeedback?.actions.some((action) =>
+            isAsyncActionFailureStatus(action.status),
+          ) ?? false
+        }
+        mobileNavOpen={mobileNavOpen}
         vibeMode={vibeMode}
         actions={actions}
         isMobile={isMobile}
@@ -376,6 +392,7 @@ export function ConversationPaneView({
         onOpenTasks={onOpenTasks}
         {...(onToggleToday === undefined ? {} : { onToggleToday })}
         {...(onBack === undefined ? {} : { onBack })}
+        {...(onOpenNavigation === undefined ? {} : { onOpenNavigation })}
         {...(onLater === undefined ? {} : { onLater })}
         {...(onClose === undefined ? {} : { onClose })}
       />

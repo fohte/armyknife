@@ -1,8 +1,11 @@
 import type { Decorator, Meta, StoryObj } from '@storybook/react-vite'
 
 import type { AsyncActionStatus } from '#async-action-feedback'
+import { BackgroundTaskRowView } from '#components/running-task-row-view'
+import { RunningTasksPanelView } from '#components/running-tasks-panel-view'
 import { SessionPullRequests } from '#components/session-pull-requests'
-import type { PullRequest } from '#types'
+import { SessionStatusPanel } from '#components/session-status-panel'
+import type { BackgroundTask, PullRequest } from '#types'
 
 const currentBranchPullRequest: PullRequest = {
   number: 42,
@@ -89,6 +92,42 @@ const allMergedPullRequests: PullRequest[] = [
   })),
 ]
 
+const phoneTopbarPullRequests: PullRequest[] = [
+  {
+    number: 2050,
+    state: 'Open',
+    owner: 'example',
+    repo: 'service',
+    title: '再送処理を retry() にまとめる',
+    url: 'https://github.com/example/service/pull/2050',
+    headSha: 'sample-phone-pr-head-sha',
+    ciState: 'InProgress',
+    isCurrentBranch: true,
+  },
+  {
+    number: 64,
+    state: 'Open',
+    owner: 'example',
+    repo: 'infra',
+    title: '再送キューの上限を設定に出す',
+    url: 'https://github.com/example/infra/pull/64',
+    headSha: 'sample-phone-pr-head-sha-2',
+    ciState: 'Successful',
+    isCurrentBranch: false,
+  },
+  {
+    number: 2041,
+    state: 'Merged',
+    owner: 'example',
+    repo: 'service',
+    title: '再送のログを整える',
+    url: 'https://github.com/example/service/pull/2041',
+    headSha: 'sample-phone-pr-head-sha-3',
+    ciState: 'Successful',
+    isCurrentBranch: false,
+  },
+]
+
 const meta = {
   component: SessionPullRequests,
   parameters: { layout: 'fullscreen' },
@@ -100,18 +139,21 @@ const meta = {
     onOpenChange: () => undefined,
   },
   decorators: [
-    (Story) => (
-      <div
-        style={{
-          minHeight: 120,
-          padding: 16,
-          background: 'var(--aw-bg-app)',
-          color: 'var(--aw-text-primary)',
-        }}
-      >
+    (Story, context) =>
+      context.args.isMobile && context.args.presentation === 'list' ? (
         <Story />
-      </div>
-    ),
+      ) : (
+        <div
+          style={{
+            minHeight: 120,
+            padding: 16,
+            background: 'var(--aw-bg-app)',
+            color: 'var(--aw-text-primary)',
+          }}
+        >
+          <Story />
+        </div>
+      ),
   ],
 } satisfies Meta<typeof SessionPullRequests>
 
@@ -477,4 +519,112 @@ export const MergeIsQueuedInTheList: Story = {
     mergeStatus: (): AsyncActionStatus => 'queued',
   },
   decorators: [desktopMergeButtonDecorator],
+}
+
+export const PhoneStatusPanelShowsPullRequestsBeforeTabs: Story = {
+  name: 'The phone status panel lists pull requests above its tabs',
+  parameters: {
+    layout: 'fullscreen',
+    overflowCheck: {
+      ignoreSelectors: ['.session-status-panel-tablist'],
+    },
+  },
+  args: {
+    pullRequests: phoneTopbarPullRequests,
+    repo: 'example/service',
+    isMobile: true,
+    open: false,
+    presentation: 'list',
+    onOpenChange: () => undefined,
+    onMerge: () => undefined,
+  },
+  render: (args) => (
+    <div style={{ width: 390, height: 844, display: 'flex' }}>
+      <SessionStatusPanel
+        size="phone"
+        sessionTitle="通知の再送処理を見直す"
+        activeTabId="running"
+        onTabChange={() => undefined}
+        onClose={() => undefined}
+        tabs={[
+          {
+            id: 'running',
+            label: 'Running',
+            count: 2,
+            content: (
+              <RunningTasksPanelView
+                subagents={
+                  [
+                    {
+                      id: 'fixture-subagent',
+                      description: '再送処理の呼び出し元を探す',
+                      elapsedSeconds: 42,
+                      kind: 'subagent',
+                      agentType: 'Explore',
+                    },
+                  ] satisfies BackgroundTask[]
+                }
+                backgroundTaskRows={[
+                  <BackgroundTaskRowView
+                    key="fixture-background-task"
+                    task={{
+                      id: 'fixture-background-task',
+                      description: 'cargo test -p service',
+                      elapsedSeconds: 65,
+                      kind: 'background_task',
+                    }}
+                    isOpen
+                    output={
+                      'running 24 tests\ntest retry::stops_after_limit ... ok\ntest retry::backs_off ... ok'
+                    }
+                    error={null}
+                    onToggle={() => undefined}
+                  />,
+                ]}
+              />
+            ),
+          },
+          {
+            id: 'tasks',
+            label: 'Tasks',
+            count: 13,
+            showCount: true,
+            content: <div />,
+          },
+          {
+            id: 'tree',
+            label: 'Tree',
+            count: 1,
+            showCount: true,
+            countTone: 'warning',
+            content: <div />,
+          },
+          {
+            id: 'review-document',
+            label: 'Review',
+            count: 0,
+            showCount: false,
+            visible: true,
+            content: <div />,
+          },
+          {
+            id: 'decisions',
+            label: 'Decisions',
+            count: 1,
+            showCount: true,
+            countTone: 'warning',
+            content: <div />,
+          },
+          {
+            id: 'crit',
+            label: 'crit',
+            count: 1,
+            showCount: false,
+            content: <div />,
+          },
+        ]}
+        beforeTabs={<SessionPullRequests {...args} />}
+      />
+    </div>
+  ),
 }

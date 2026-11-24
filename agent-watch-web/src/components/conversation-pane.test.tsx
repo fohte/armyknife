@@ -6309,6 +6309,33 @@ it('opens and closes the existing status panel over the mobile conversation', as
     review: null,
     createdAt: '2026-11-11T03:25:59Z',
   }
+  const pullRequests = [
+    {
+      number: 42,
+      state: 'Open' as const,
+      owner: 'example-org',
+      repo: 'example-service',
+      title: 'Allow a bounded retry policy',
+      headSha: 'fixture-retry-head',
+      ciState: 'Successful' as const,
+      isCurrentBranch: true,
+    },
+    {
+      number: 43,
+      state: 'Open' as const,
+      owner: 'example-org',
+      repo: 'example-infra',
+      title: 'Record retry outcomes',
+      headSha: 'fixture-metrics-head',
+      ciState: 'Failed' as const,
+      isCurrentBranch: false,
+    },
+  ]
+  const sessionWithPullRequests: Session = {
+    ...session,
+    pullRequest: pullRequests[0] ?? null,
+    pullRequests,
+  }
   vi.stubGlobal(
     'fetch',
     vi
@@ -6320,7 +6347,7 @@ it('opens and closes the existing status panel over the mobile conversation', as
     const [statusPanelOpen, setStatusPanelOpen] = useState(false)
     return (
       <ConversationPane
-        session={session}
+        session={sessionWithPullRequests}
         refreshKey={0}
         sessionTreeRefreshKey={0}
         onSelectSession={() => undefined}
@@ -6362,6 +6389,30 @@ it('opens and closes the existing status panel over the mobile conversation', as
     backButtonFocused:
       document.activeElement ===
       container.querySelector('.session-status-panel-back'),
+    pullRequestRows: Array.from(
+      container.querySelectorAll<HTMLElement>(
+        '.mobile-session-status-overlay .session-pr-list--panel .session-pr-row',
+      ),
+      (row) => ({
+        title: row.querySelector('.session-pr-row-title')?.textContent ?? null,
+        action: row.querySelector('.pr-merge-entry')?.textContent ?? null,
+      }),
+    ),
+    pullRequestsBeforeTabs: (() => {
+      const pullRequestList = container.querySelector(
+        '.mobile-session-status-overlay .session-pr-list--panel',
+      )
+      const tabs = container.querySelector(
+        '.mobile-session-status-overlay .session-status-panel-tabs',
+      )
+      return (
+        pullRequestList !== null &&
+        tabs !== null &&
+        (pullRequestList.compareDocumentPosition(tabs) &
+          Node.DOCUMENT_POSITION_FOLLOWING) !==
+          0
+      )
+    })(),
   }
   act(() => {
     requireElement(
@@ -6384,8 +6435,94 @@ it('opens and closes the existing status panel over the mobile conversation', as
       selectedTab: 'Decisions1',
       decisionHeading: 'Decisions in this session',
       backButtonFocused: false,
+      pullRequestRows: [
+        { title: '#42 Allow a bounded retry policy', action: 'Merge' },
+        { title: '#43 Record retry outcomes', action: 'CI failing' },
+      ],
+      pullRequestsBeforeTabs: true,
     },
     closed: { overlay: false, conversation: true, focusRestored: true },
+  })
+})
+
+it('marks phone navigation after an Activity action fails', async () => {
+  function FailureHarness() {
+    const startAsyncAction = useAsyncActionStarter(() => undefined)
+    return (
+      <>
+        <button
+          className="create-failed-activity-action"
+          type="button"
+          onClick={() => {
+            startAsyncAction({
+              kind: 'command',
+              sessionId: session.id,
+              sessionTitle: session.title,
+              command: 'run fixture action',
+              run: () =>
+                Promise.resolve({
+                  status: 'commandFailed',
+                  exitCode: 1,
+                  error: 'The fixture action failed.',
+                }),
+            })
+          }}
+        >
+          Create failed Activity action
+        </button>
+        <ConversationPaneView
+          session={session}
+          messages={[]}
+          start={0}
+          actions={actions}
+          loading={false}
+          error={null}
+          onAction={() => Promise.resolve(true)}
+          onSelectSession={() => undefined}
+          isMobile
+        />
+      </>
+    )
+  }
+
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <AsyncActionFeedbackProvider>
+        <FailureHarness />
+      </AsyncActionFeedbackProvider>,
+    )
+  })
+  const createFailedAction = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      '.create-failed-activity-action',
+    ),
+  )
+  await act(async () => userEvent.click(createFailedAction))
+  expect(
+    await waitForState(
+      () =>
+        container
+          .querySelector<HTMLButtonElement>('.mobile-conversation-nav-toggle')
+          ?.getAttribute('aria-label') ===
+        'Open navigation, Activity has failed actions',
+    ),
+  ).toBe(true)
+
+  const navigationButton = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      '.mobile-conversation-nav-toggle',
+    ),
+  )
+  const snapshot = () => ({
+    label: navigationButton.getAttribute('aria-label'),
+    failureMark:
+      navigationButton.querySelector('.mobile-conversation-nav-failure') !==
+      null,
+  })
+  expect(snapshot()).toEqual({
+    label: 'Open navigation, Activity has failed actions',
+    failureMark: true,
   })
 })
 

@@ -20,6 +20,7 @@ export type SessionStatusPanelTab = {
 type SessionStatusPanelProps = {
   tabs: readonly SessionStatusPanelTab[]
   activeTabId: string | null
+  beforeTabs?: ReactNode
   size?: 'desktop' | 'phone'
   onTabChange: (id: string) => void
   onClose: () => void
@@ -32,6 +33,7 @@ type SessionStatusPanelProps = {
 export function SessionStatusPanel({
   tabs,
   activeTabId,
+  beforeTabs,
   size = 'desktop',
   onTabChange,
   onClose,
@@ -65,10 +67,15 @@ export function SessionStatusPanel({
     const startPadding = Number.parseFloat(
       getComputedStyle(tabList).paddingLeft,
     )
-    setHasHiddenTabs({
+    const next = {
       left: tabList.scrollLeft > startPadding,
       right: tabList.scrollLeft + tabList.clientWidth < tabList.scrollWidth - 1,
-    })
+    }
+    setHasHiddenTabs((current) =>
+      current.left === next.left && current.right === next.right
+        ? current
+        : next,
+    )
   }, [])
 
   useEffect(() => {
@@ -146,6 +153,7 @@ export function SessionStatusPanel({
           </div>
         </header>
       ) : null}
+      {beforeTabs}
       <div className="session-status-panel-tabs">
         <div
           className={`session-status-panel-tablist-wrap${hasHiddenTabs.left ? ' has-hidden-tabs-left' : ''}${hasHiddenTabs.right ? ' has-hidden-tabs-right' : ''}`}
