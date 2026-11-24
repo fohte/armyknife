@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.898](https://github.com/fohte/armyknife/compare/v0.1.897...v0.1.898) (2026-11-24)
+
+
+### Features
+
+* **agent-watch-web:** render typed draft previews ([#2182](https://github.com/fohte/armyknife/issues/2182)) ([b2d06a1](https://github.com/fohte/armyknife/commit/b2d06a1ca8867a2d09e36a4d20dd01bd58291413))
+
 ## [0.1.897](https://github.com/fohte/armyknife/compare/v0.1.896...v0.1.897) (2026-11-24)
 
 
