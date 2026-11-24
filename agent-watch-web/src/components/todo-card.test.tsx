@@ -186,7 +186,9 @@ function setTextareaValue(textarea: HTMLTextAreaElement, value: string) {
 }
 
 function normalizeBaseUiIds(markup: string | undefined) {
-  return markup?.replace(/ id="base-ui-[^"]+"/g, ' id="[generated]"')
+  return markup
+    ?.replace(/ id="base-ui-[^"]+"/g, ' id="[generated]"')
+    .replace(/\sdata-base-ui-[\w-]+=""/g, '')
 }
 
 async function pasteImage(textarea: HTMLTextAreaElement, file: File) {
