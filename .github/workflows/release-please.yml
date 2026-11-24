@@ -34,6 +34,15 @@ jobs:
           identity: ${{ github.event.repository.name }}-release-please
           domain: octo-sts.fohte.net
 
+      - name: Record default branch HEAD
+        id: base
+        env:
+          GH_TOKEN: ${{ steps.octo-sts.outputs.token }}
+          TARGET_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          SHA=$(gh api "repos/${{ github.repository }}/commits/$TARGET_BRANCH" --jq .sha)
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
       - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         id: release
         with:
@@ -41,9 +50,64 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
+      - name: Close stale release PR
+        id: stale
+        if: steps.release.outputs.prs_created == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.octo-sts.outputs.token }}
+          PR_JSON: ${{ steps.release.outputs.pr }}
+          BASE_SHA: ${{ steps.base.outputs.sha }}
+          TARGET_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          PR_NUMBER=$(echo "$PR_JSON" | jq -r '.number')
+          CURRENT_BASE_SHA=$(gh api "repos/${{ github.repository }}/commits/$TARGET_BRANCH" --jq .sha)
+
+          if [[ "$CURRENT_BASE_SHA" == "$BASE_SHA" ]]; then
+            echo "stale=false" >> "$GITHUB_OUTPUT"
+            echo "The default branch has not changed since release-please started"
+            exit 0
+          fi
+
+          # Aggregate compare files omit paths reverted within the commit range.
+          BASE_COMMIT_SHAS=$(gh api --paginate \
+            "repos/${{ github.repository }}/compare/$BASE_SHA...$CURRENT_BASE_SHA" \
+            | jq -r '.commits[].sha')
+          if [[ -z "$BASE_COMMIT_SHAS" ]]; then
+            echo "The default branch advanced but the comparison returned no commits"
+            exit 1
+          fi
+
+          BRANCH_FILES=$(
+            while IFS= read -r COMMIT_SHA; do
+              gh api "repos/${{ github.repository }}/commits/$COMMIT_SHA" \
+                | jq -r '.files[].filename' \
+                || exit 1
+            done <<< "$BASE_COMMIT_SHAS" | jq -R -s 'split("\n") | map(select(length > 0)) | unique'
+          )
+          PR_FILES=$(gh api \
+            "repos/${{ github.repository }}/pulls/$PR_NUMBER/files?per_page=100" \
+            | jq '[.[].filename] | unique')
+          OVERLAP=$(jq -cn \
+            --argjson branch_files "$BRANCH_FILES" \
+            --argjson pr_files "$PR_FILES" \
+            '$branch_files | map(select(. as $file | $pr_files | index($file)))')
+
+          if [[ "$OVERLAP" == "[]" ]]; then
+            echo "stale=false" >> "$GITHUB_OUTPUT"
+            echo "Release PR changes do not overlap with changes since the recorded master HEAD"
+            exit 0
+          fi
+
+          echo "stale=true" >> "$GITHUB_OUTPUT"
+          FILE_LIST=$(echo "$OVERLAP" | jq -r 'join(", ")')
+          gh pr comment "$PR_NUMBER" -R "${{ github.repository }}" --body "This release PR was created from an older view of $TARGET_BRANCH. While release-please was running, $TARGET_BRANCH advanced with changes to files this PR also updates: $FILE_LIST. I am closing this PR so the queued release-please run can recreate it from the latest $TARGET_BRANCH."
+          gh pr close "$PR_NUMBER" -R "${{ github.repository }}"
+          echo "::warning::Closed stale release PR $PR_NUMBER because its changes overlap with $TARGET_BRANCH updates: $FILE_LIST"
+
       # Auto-merge release PR to enable automatic releases on every merge to master
       - name: Auto-merge release PR
-        if: steps.release.outputs.prs_created == 'true'
+        if: steps.release.outputs.prs_created == 'true' && steps.stale.outputs.stale != 'true'
         env:
           GH_TOKEN: ${{ steps.octo-sts.outputs.token }}
           PR_JSON: ${{ steps.release.outputs.pr }}
