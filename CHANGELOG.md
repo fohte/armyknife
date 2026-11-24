@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.879](https://github.com/fohte/armyknife/compare/v0.1.878...v0.1.879) (2026-11-24)
+
+
+### Bug Fixes
+
+* **watch-web:** render Codex events by stored kind ([#2150](https://github.com/fohte/armyknife/issues/2150)) ([a7d738c](https://github.com/fohte/armyknife/commit/a7d738c23170c95fd2c2a7cac898a20b6bcf2ffd))
+
 ## [0.1.878](https://github.com/fohte/armyknife/compare/v0.1.877...v0.1.878) (2026-11-23)
 
 
