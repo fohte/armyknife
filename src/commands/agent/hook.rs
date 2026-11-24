@@ -3521,10 +3521,16 @@ mod tests {
         );
     }
 
-    #[test]
-    fn main_thread_stop_records_agent_response_activity() -> Result<()> {
-        let temp_dir = tempfile::TempDir::new().expect("temp directory should be created");
-        let sessions_dir = temp_dir.path();
+    #[fixture]
+    fn session_activity_sessions_dir() -> tempfile::TempDir {
+        tempfile::TempDir::new().expect("temporary session directory should be created")
+    }
+
+    #[rstest]
+    fn main_thread_stop_records_agent_response_activity(
+        session_activity_sessions_dir: tempfile::TempDir,
+    ) -> Result<()> {
+        let sessions_dir = session_activity_sessions_dir.path();
         save_test_session(sessions_dir, "test-123", |session| {
             session.status = SessionStatus::Running;
         });
@@ -3554,10 +3560,61 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn stop_during_pause_preserves_the_last_agent_response_activity() -> Result<()> {
-        let temp_dir = tempfile::TempDir::new().expect("temp directory should be created");
-        let sessions_dir = temp_dir.path();
+    #[rstest]
+    #[case::main_stop_failure(HookEvent::StopFailure, None, true)]
+    #[case::subagent_stop(HookEvent::Stop, Some("agent-fixture"), false)]
+    fn response_activity_tracks_main_thread_responses_only(
+        session_activity_sessions_dir: tempfile::TempDir,
+        #[case] event: HookEvent,
+        #[case] agent_id: Option<&str>,
+        #[case] should_record_response: bool,
+    ) -> Result<()> {
+        let sessions_dir = session_activity_sessions_dir.path();
+        let prior_response_at = Utc.timestamp_opt(800, 0).single().expect("valid timestamp");
+        let mut session = create_test_session(None);
+        session.status = SessionStatus::Running;
+        let session_lock = store::lock_session_for_update(sessions_dir, &session.session_id)?;
+        session_lock.record_agent_response_at(prior_response_at)?;
+        session_lock.save(&session)?;
+        let started_at = Utc::now();
+
+        process_hook_event_impl(
+            event,
+            serde_json::from_value(serde_json::json!({
+                "session_id": "test-123",
+                "cwd": "/tmp/test",
+                "agent_id": agent_id,
+            }))?,
+            sessions_dir,
+            &SideEffects::none(),
+        )?;
+
+        let finished_at = Utc::now();
+        let actual = store::agent_response_timestamps_from(sessions_dir)?
+            .into_iter()
+            .map(|(session_id, timestamp)| {
+                (
+                    session_id,
+                    if should_record_response {
+                        timestamp >= started_at && timestamp <= finished_at
+                    } else {
+                        timestamp == prior_response_at
+                    },
+                )
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        assert_eq!(
+            actual,
+            std::collections::HashMap::from([("test-123".to_string(), true)]),
+        );
+        Ok(())
+    }
+
+    #[rstest]
+    fn stop_during_pause_preserves_the_last_agent_response_activity(
+        session_activity_sessions_dir: tempfile::TempDir,
+    ) -> Result<()> {
+        let sessions_dir = session_activity_sessions_dir.path();
         let mut session = create_test_session(None);
         session.status = SessionStatus::Paused;
         let responded_at = Utc.timestamp_opt(900, 0).single().expect("valid timestamp");

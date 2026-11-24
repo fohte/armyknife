@@ -1318,26 +1318,30 @@ mod tests {
     }
 
     #[rstest]
-    #[case::user_prompt_is_latest(990, 950, 110)]
-    #[case::agent_response_is_latest(900, 970, 130)]
+    #[case::user_prompt_is_latest(Some(990), Some(950), 110)]
+    #[case::agent_response_is_latest(Some(900), Some(970), 130)]
+    #[case::created_at_fallback(None, None, 400)]
     #[tokio::test]
     async fn sessions_route_elapsed_uses_latest_conversation_activity(
         mut source: TestSessionSource,
-        #[case] prompted_at: i64,
-        #[case] responded_at: i64,
+        #[case] prompted_at: Option<i64>,
+        #[case] responded_at: Option<i64>,
         #[case] elapsed_seconds: u64,
     ) {
         source.sessions[0].status = SessionStatus::Running;
         source.sessions[0].created_at = Utc.timestamp_opt(700, 0).unwrap();
         source.sessions[0].updated_at = Utc.timestamp_opt(1_080, 0).unwrap();
-        source.sessions[0].last_prompted_at = Some(Utc.timestamp_opt(prompted_at, 0).unwrap());
+        source.sessions[0].last_prompted_at =
+            prompted_at.map(|timestamp| Utc.timestamp_opt(timestamp, 0).unwrap());
         source.all_sessions[0] = source.sessions[0].clone();
         source.web_states[0].later_until = None;
         source.web_states[0].is_today = false;
-        source.agent_response_timestamps.insert(
-            "child-session".to_string(),
-            Utc.timestamp_opt(responded_at, 0).unwrap(),
-        );
+        if let Some(responded_at) = responded_at {
+            source.agent_response_timestamps.insert(
+                "child-session".to_string(),
+                Utc.timestamp_opt(responded_at, 0).unwrap(),
+            );
+        }
         let mut expected = expected_response(
             "in_progress",
             None,
@@ -1358,8 +1362,10 @@ mod tests {
                 can_open_in_terminal: true,
             },
         );
-        expected["sessions"][0]["lastPromptedAt"] =
-            serde_json::to_value(Utc.timestamp_opt(prompted_at, 0).unwrap()).unwrap();
+        if let Some(prompted_at) = prompted_at {
+            expected["sessions"][0]["lastPromptedAt"] =
+                serde_json::to_value(Utc.timestamp_opt(prompted_at, 0).unwrap()).unwrap();
+        }
 
         assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
     }
