@@ -747,6 +747,67 @@ mod tests {
         assert_eq!((result, mutations), (expected_result, expected_mutations));
     }
 
+    #[tokio::test]
+    async fn review_submission_rejects_a_draft_for_a_different_repository() {
+        let _draft_directory = TestDraftDirectory::new("sample-owner", "sample-repository");
+        let draft_path = create_approved_draft(
+            "sample-owner",
+            "sample-repository",
+            "feature/review-context",
+            "Submit a sample change",
+            "Body content",
+        );
+        let args = SubmitArgs {
+            filepath: Some(draft_path),
+            base: None,
+            draft: false,
+            no_review: false,
+        };
+        let context = ReviewRepositoryLanguageContext {
+            expected_repo_id: "other-owner/other-repository".to_string(),
+            copier_answers_path: None,
+        };
+        let client = SubmitClientStub::default();
+        let submit_effects = SubmitEffects {
+            post_submit_processor: &NoopPostSubmitProcessor,
+            record_created_pr_url: noop_record_created_pr_url,
+        };
+
+        let result = super::run_impl_with_review_language_context(
+            &args,
+            &client,
+            &noop_hook,
+            noop_config,
+            SubmitContext {
+                current_repo_identity: no_current_repo,
+                review_language_context: Some(&context),
+            },
+            &submit_effects,
+            no_vibe_access,
+        )
+        .await
+        .map_err(|error| error.to_string());
+        let create_calls = client
+            .create_calls
+            .lock()
+            .expect("submit client mutex")
+            .clone();
+        let update_calls = client
+            .update_calls
+            .lock()
+            .expect("submit client mutex")
+            .clone();
+
+        assert_eq!(
+            (result, create_calls, update_calls),
+            (
+                Err("The review repository does not match the PR draft target: other-owner/other-repository".to_string()),
+                Vec::new(),
+                Vec::new(),
+            ),
+        );
+    }
+
     #[derive(Clone)]
     struct HookCall {
         name: String,
