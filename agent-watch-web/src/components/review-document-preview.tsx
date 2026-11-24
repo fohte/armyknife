@@ -36,6 +36,36 @@ function stringList(value: JsonValue | undefined): string[] {
     : []
 }
 
+function issueReferenceUrl(reference: string) {
+  const match = /^([^/]+)\/([^/#]+)#(\d+)$/.exec(reference)
+  const owner = match?.[1]
+  const repository = match?.[2]
+  const issueNumber = match?.[3]
+  if (
+    owner === undefined ||
+    repository === undefined ||
+    issueNumber === undefined
+  )
+    return null
+  return `https://github.com/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/issues/${issueNumber}`
+}
+
+function IssueReference({ reference }: { reference: string }) {
+  const href = issueReferenceUrl(reference)
+  return href === null ? (
+    <code>{reference}</code>
+  ) : (
+    <a
+      className="review-document-issue-reference-link"
+      href={href}
+      rel="noopener noreferrer"
+      target="_blank"
+    >
+      {reference}
+    </a>
+  )
+}
+
 function AddIssueValue({
   buttonLabel,
   inputLabel,
@@ -220,7 +250,7 @@ function IssueFrontmatter({
         <dd className="review-document-issue-parent">
           {parentIssue.length > 0 ? (
             <div className="review-document-issue-reference">
-              <code>{parentIssue}</code>
+              <IssueReference reference={parentIssue} />
               <button
                 aria-label="Clear parent issue"
                 disabled={disabled}
@@ -232,18 +262,17 @@ function IssueFrontmatter({
                 ×
               </button>
             </div>
-          ) : (
-            <AddIssueValue
-              buttonLabel="Set parent"
-              inputLabel="Set parent issue"
-              placeholder="owner/repo#123"
-              parent
-              disabled={disabled}
-              onAdd={(value) => {
-                update('parentIssue', value)
-              }}
-            />
-          )}
+          ) : null}
+          <AddIssueValue
+            buttonLabel="Set parent"
+            inputLabel="Set parent issue"
+            placeholder="owner/repo#123"
+            parent
+            disabled={disabled}
+            onAdd={(value) => {
+              update('parentIssue', value)
+            }}
+          />
         </dd>
         <dt>Sub-issues</dt>
         <dd className="review-document-issue-sub-items">
@@ -252,7 +281,7 @@ function IssueFrontmatter({
               key={`${subIssue}-${String(index)}`}
               className="review-document-issue-reference"
             >
-              <code>{subIssue}</code>
+              <IssueReference reference={subIssue} />
               <button
                 aria-label={`Remove sub-issue ${subIssue}`}
                 disabled={disabled}

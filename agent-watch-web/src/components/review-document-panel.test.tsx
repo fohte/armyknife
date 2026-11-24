@@ -282,12 +282,19 @@ The fourth notification is not delivered.`}
   )
 
   const fields = container.querySelector('.review-document-issue-fields')
-  const fieldValue = (name: string) => {
+  const fieldRow = (name: string) => {
     const label = [...(fields?.querySelectorAll('dt') ?? [])].find(
       (item) => item.textContent === name,
     )
-    return label?.nextElementSibling?.textContent.replaceAll('×', '').trim()
+    return label?.nextElementSibling
   }
+  const parentRow = fieldRow('Parent issue')
+  const parentLink = parentRow?.querySelector('a')
+  const subIssueLinks = [
+    ...(fields?.querySelectorAll(
+      '.review-document-issue-sub-items .review-document-issue-reference-link',
+    ) ?? []),
+  ]
   const snapshot = () => ({
     title: container.querySelector<HTMLTextAreaElement>(
       'textarea[aria-label="Issue title"]',
@@ -308,12 +315,15 @@ The fourth notification is not delivered.`}
         .replaceAll('×', '')
         .trim(),
     })),
-    parentIssue: fieldValue('Parent issue'),
-    subIssues: [
-      ...(fields?.querySelectorAll(
-        'dt:nth-of-type(4) + dd .review-document-issue-reference code',
-      ) ?? []),
-    ].map((item) => item.textContent),
+    parentIssue: parentLink?.textContent,
+    parentIssueHref: parentLink?.getAttribute('href'),
+    setParentButton: parentRow?.querySelector(
+      'button[aria-label="Set parent issue"]',
+    )?.textContent,
+    subIssues: subIssueLinks.map((item) => ({
+      reference: item.textContent,
+      href: item.getAttribute('href'),
+    })),
     submit: container.querySelector('input[aria-label="submit"]') !== null,
     body: container.querySelector('.review-document-body')?.textContent,
   })
@@ -323,7 +333,18 @@ The fourth notification is not delivered.`}
     labels: ['bug', 'notifications'],
     assignees: [{ initial: 'S', name: 'sample-maintainer' }],
     parentIssue: 'example/web-app#390',
-    subIssues: ['example/web-app#413', 'example/web-app#414'],
+    parentIssueHref: 'https://github.com/example/web-app/issues/390',
+    setParentButton: 'Set parent',
+    subIssues: [
+      {
+        reference: 'example/web-app#413',
+        href: 'https://github.com/example/web-app/issues/413',
+      },
+      {
+        reference: 'example/web-app#414',
+        href: 'https://github.com/example/web-app/issues/414',
+      },
+    ],
     submit: false,
     body: `Summary
 The fourth notification is not delivered.`,

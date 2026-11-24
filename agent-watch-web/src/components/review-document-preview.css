@@ -155,6 +155,7 @@
   background: #0a0a0a;
 }
 
+.review-document-issue-reference-link,
 .review-document-issue-reference code {
   min-width: 0;
   overflow: hidden;
@@ -163,6 +164,10 @@
   font-size: 11.5px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.review-document-issue-reference-link {
+  text-decoration: underline;
 }
 
 .review-document-issue-reference button {
