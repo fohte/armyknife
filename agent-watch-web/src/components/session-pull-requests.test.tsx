@@ -8,7 +8,10 @@ import {
   useAsyncActionStarter,
 } from '#async-action-feedback'
 import { LaterMenu } from '#components/later-menu'
-import { SessionPullRequests } from '#components/session-pull-requests'
+import {
+  SessionPullRequests,
+  SessionPullRequestStatusBadge,
+} from '#components/session-pull-requests'
 import type { PullRequest } from '#types'
 import { useInboxFilterShortcut } from '#use-inbox-filter-shortcut'
 
@@ -310,6 +313,10 @@ it.each([
         mobileState:
           row.querySelector('.session-pr-row-mobile-state')?.textContent ??
           null,
+        mobileStateClass:
+          row
+            .querySelector('.session-pr-row-mobile-state')
+            ?.getAttribute('class') ?? null,
         mobileStateAriaHidden:
           row
             .querySelector('.session-pr-row-mobile-state')
@@ -363,6 +370,7 @@ it.each([
           title: 'Show delivery status',
           repo: 'example-org/example-repo',
           mobileState: isMobile ? '· Open' : null,
+          mobileStateClass: isMobile ? 'session-pr-row-mobile-state' : null,
           mobileStateAriaHidden: null,
           reason: 'CI running',
           hasAction: false,
@@ -374,6 +382,7 @@ it.each([
           title: 'Add retry settings',
           repo: 'example-org/example-infra',
           mobileState: isMobile ? '· Open' : null,
+          mobileStateClass: isMobile ? 'session-pr-row-mobile-state' : null,
           mobileStateAriaHidden: null,
           reason: 'Merge',
           hasAction: true,
@@ -385,6 +394,7 @@ it.each([
           title: 'Close an old pull request',
           repo: 'example-org/example-infra',
           mobileState: isMobile ? '· Closed' : null,
+          mobileStateClass: isMobile ? 'session-pr-row-mobile-state' : null,
           mobileStateAriaHidden: null,
           reason: isMobile ? null : 'Closed',
           hasAction: false,
@@ -395,9 +405,12 @@ it.each([
           number: '#41',
           title: 'Record attempts',
           repo: 'example-org/example-repo',
-          mobileState: isMobile ? '· Merged' : null,
+          mobileState: isMobile ? '· ✓ Merged' : null,
+          mobileStateClass: isMobile
+            ? 'session-pr-row-mobile-state is-merged'
+            : null,
           mobileStateAriaHidden: null,
-          reason: '✓ Merged',
+          reason: isMobile ? null : '✓ Merged',
           hasAction: false,
           ciState: 'CI status unknown',
           href: 'https://github.com/example-org/example-repo/pull/41',
@@ -583,23 +596,79 @@ it.each([
       status: row?.querySelector('.session-pr-row-state')?.textContent ?? null,
       mobileState:
         row?.querySelector('.session-pr-row-mobile-state')?.textContent ?? null,
+      mobileStateClass:
+        row
+          ?.querySelector('.session-pr-row-mobile-state')
+          ?.getAttribute('class') ?? null,
       ciDotClass: row?.querySelector('.session-pr-ci-dot')?.className ?? null,
       actionTag: row?.querySelector('.pr-merge-entry')?.tagName ?? null,
       hasButton: row?.querySelector('button') !== null,
     })
     expect(snapshot()).toEqual({
-      status: expectedStatus,
+      status: isMobile && status === 'merged' ? null : expectedStatus,
       mobileState: isMobile
         ? status === 'merged'
-          ? '· Merged'
+          ? '· ✓ Merged'
           : '· Already merged'
         : null,
+      mobileStateClass: isMobile
+        ? status === 'merged'
+          ? 'session-pr-row-mobile-state is-merged'
+          : 'session-pr-row-mobile-state'
+        : null,
       ciDotClass: 'session-pr-ci-dot is-passed is-merged',
-      actionTag: 'SPAN',
+      actionTag: isMobile && status === 'merged' ? null : 'SPAN',
       hasButton: false,
     })
   },
 )
+
+it('draws the merge spinner arc over its background ring', () => {
+  act(() => {
+    root?.render(
+      <SessionPullRequestStatusBadge
+        pullRequests={pullRequests}
+        mergeStatus={() => 'merging'}
+      />,
+    )
+  })
+
+  const spinner = container.querySelector(
+    'svg.session-pr-status-mark.is-merging',
+  )
+  expect(
+    spinner === null
+      ? null
+      : {
+          ariaHidden: spinner.getAttribute('aria-hidden'),
+          viewBox: spinner.getAttribute('viewBox'),
+          width: spinner.getAttribute('width'),
+          height: spinner.getAttribute('height'),
+          stroke: spinner.getAttribute('stroke'),
+          strokeLinecap: spinner.getAttribute('stroke-linecap'),
+          strokeWidth: spinner.getAttribute('stroke-width'),
+          ring: Array.from(spinner.querySelectorAll('circle'), (circle) => ({
+            cx: circle.getAttribute('cx'),
+            cy: circle.getAttribute('cy'),
+            r: circle.getAttribute('r'),
+            stroke: circle.getAttribute('stroke'),
+          })),
+          arc: Array.from(spinner.querySelectorAll('path'), (path) =>
+            path.getAttribute('d'),
+          ),
+        },
+  ).toEqual({
+    ariaHidden: 'true',
+    viewBox: '0 0 24 24',
+    width: '15',
+    height: '15',
+    stroke: 'currentColor',
+    strokeLinecap: 'round',
+    strokeWidth: '3.5',
+    ring: [{ cx: '12', cy: '12', r: '9', stroke: 'var(--aw-border-control)' }],
+    arc: ['M21 12a9 9 0 0 0-9-9'],
+  })
+})
 
 it.each([
   {

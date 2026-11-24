@@ -150,6 +150,8 @@
 }
 
 .session-pr-status-mark.is-merging {
+  box-sizing: content-box;
+  padding: 1px;
   animation: session-pr-merge-spin 1s linear infinite;
 }
 
@@ -282,6 +284,10 @@
   white-space: nowrap;
 }
 
+.session-pr-row-mobile-state.is-merged {
+  color: var(--aw-text-secondary);
+}
+
 .session-pr-ci-dot.is-merged {
   background: var(--aw-border-emphasis);
 }
@@ -398,6 +404,10 @@
 .session-pr-list--panel .session-pr-row {
   min-height: 52px;
   padding: 4px 16px;
+}
+
+.session-pr-list--panel .session-pr-row-meta {
+  font-size: 12.5px;
 }
 
 .session-pr-list--panel .session-pr-number {
