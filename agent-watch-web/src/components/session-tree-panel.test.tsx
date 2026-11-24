@@ -214,7 +214,7 @@ it.each([
       caretMarginTop: caret === null ? null : getComputedStyle(caret).marginTop,
     })
     expect(snapshot()).toEqual({
-      rowAlignment: 'flex-start',
+      rowAlignment: 'flow-start',
       caretMarginTop: expectedMarginTop,
     })
   },
