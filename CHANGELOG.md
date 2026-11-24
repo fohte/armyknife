@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.883](https://github.com/fohte/armyknife/compare/v0.1.882...v0.1.883) (2026-11-24)
+
+
+### Dependencies
+
+* update dependency @fohte/ui to v0.1.8 ([#2155](https://github.com/fohte/armyknife/issues/2155)) ([6a49ef1](https://github.com/fohte/armyknife/commit/6a49ef17afc2490b607b953e9f2adcc177fbce8c))
+
 ## [0.1.882](https://github.com/fohte/armyknife/compare/v0.1.881...v0.1.882) (2026-11-24)
 
 
