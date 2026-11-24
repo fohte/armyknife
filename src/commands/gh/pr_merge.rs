@@ -487,7 +487,7 @@ mod tests {
         merge_queue_enabled: bool,
         stack: Option<PullRequestStack>,
         unstacked: Cell<bool>,
-        unstack_keeps_stack: bool,
+        post_unstack_stack_responses: RefCell<VecDeque<Option<PullRequestStack>>>,
         stack_pull_requests: Vec<PullRequestStackEntry>,
         merge_result: AsyncMergeResult,
     }
@@ -518,11 +518,15 @@ mod tests {
             _pr_number: u64,
         ) -> anyhow::Result<Option<PullRequestStack>> {
             self.events.borrow_mut().push("stack".to_string());
-            Ok(if self.unstacked.get() && !self.unstack_keeps_stack {
-                None
+            if self.unstacked.get() {
+                Ok(self
+                    .post_unstack_stack_responses
+                    .borrow_mut()
+                    .pop_front()
+                    .unwrap_or(None))
             } else {
-                self.stack.clone()
-            })
+                Ok(self.stack.clone())
+            }
         }
 
         async fn get_pull_requests_in_stack(
@@ -637,7 +641,7 @@ mod tests {
             merge_queue_enabled: false,
             stack: None,
             unstacked: Cell::new(false),
-            unstack_keeps_stack: false,
+            post_unstack_stack_responses: RefCell::new(VecDeque::new()),
             stack_pull_requests: Vec::new(),
             merge_result: AsyncMergeResult::Merged {
                 sha: Some("merge-a".to_string()),
@@ -648,7 +652,6 @@ mod tests {
     fn fake_stacked_client(
         snapshots: &[PrSnapshot],
         events: Rc<RefCell<Vec<String>>>,
-        unstack_keeps_stack: bool,
     ) -> FakePrMergeClient {
         let mut client = fake_client(snapshots, events, false, false);
         client.stack = Some(PullRequestStack {
@@ -656,7 +659,6 @@ mod tests {
             position: 2,
             size: 2,
         });
-        client.unstack_keeps_stack = unstack_keeps_stack;
         client.stack_pull_requests = vec![
             PullRequestStackEntry {
                 number: 41,
@@ -1644,20 +1646,93 @@ mod tests {
         );
     }
 
+    #[derive(Clone, Copy)]
+    enum UnstackScenario {
+        Merge,
+        NoLowerPr,
+        StackRemains,
+        RestackedBeforeAsyncMerge,
+        RestackedBeforeSyncFallback,
+        BaseChangesBeforeAsyncMerge,
+        BaseChangesBeforeSyncFallback,
+        HookFails,
+        ChecksFail,
+    }
+
     #[rstest]
+    #[case::merge(UnstackScenario::Merge)]
+    #[case::no_lower_pr(UnstackScenario::NoLowerPr)]
+    #[case::stack_remains(UnstackScenario::StackRemains)]
+    #[case::restacked_before_async_merge(UnstackScenario::RestackedBeforeAsyncMerge)]
+    #[case::restacked_before_sync_fallback(UnstackScenario::RestackedBeforeSyncFallback)]
+    #[case::base_changes_before_async_merge(UnstackScenario::BaseChangesBeforeAsyncMerge)]
+    #[case::base_changes_before_sync_fallback(UnstackScenario::BaseChangesBeforeSyncFallback)]
+    #[case::hook_fails(UnstackScenario::HookFails)]
+    #[case::checks_fail(UnstackScenario::ChecksFail)]
     #[tokio::test]
-    async fn run_merge_unstacks_before_hook_checks_and_merge(events: Rc<RefCell<Vec<String>>>) {
-        let client = fake_stacked_client(
-            &[
-                snapshot(PrState::Open, "head-a", "CLEAN"),
-                snapshot(PrState::Open, "head-a", "CLEAN"),
-                snapshot(PrState::Merged, "head-a", "CLEAN"),
-            ],
-            Rc::clone(&events),
-            false,
-        );
+    async fn run_merge_unstack_scenarios(
+        #[case] scenario: UnstackScenario,
+        events: Rc<RefCell<Vec<String>>>,
+    ) {
+        let mut snapshots = vec![
+            snapshot(PrState::Open, "head-a", "CLEAN"),
+            snapshot(PrState::Open, "head-a", "CLEAN"),
+        ];
+        let mut client = fake_stacked_client(&snapshots, Rc::clone(&events));
+        match scenario {
+            UnstackScenario::Merge | UnstackScenario::NoLowerPr => {
+                snapshots.push(snapshot(PrState::Merged, "head-a", "CLEAN"));
+            }
+            UnstackScenario::StackRemains => {
+                snapshots.truncate(1);
+                client
+                    .post_unstack_stack_responses
+                    .borrow_mut()
+                    .push_back(client.stack.clone());
+            }
+            UnstackScenario::RestackedBeforeAsyncMerge => {
+                client
+                    .post_unstack_stack_responses
+                    .borrow_mut()
+                    .extend([None, client.stack.clone()]);
+            }
+            UnstackScenario::RestackedBeforeSyncFallback => {
+                snapshots.push(snapshot(PrState::Open, "head-a", "CLEAN"));
+                client.fallback_error = Some(timed_out_merge_error());
+                client.post_unstack_stack_responses.borrow_mut().extend([
+                    None,
+                    None,
+                    client.stack.clone(),
+                ]);
+            }
+            UnstackScenario::BaseChangesBeforeAsyncMerge => {
+                if let Some(current) = snapshots.get_mut(1) {
+                    current.base_ref_name = "trunk".to_string();
+                }
+            }
+            UnstackScenario::BaseChangesBeforeSyncFallback => {
+                let mut before_sync = snapshot(PrState::Open, "head-a", "CLEAN");
+                before_sync.base_ref_name = "trunk".to_string();
+                snapshots.push(before_sync);
+                client.fallback_error = Some(timed_out_merge_error());
+            }
+            UnstackScenario::HookFails => {
+                snapshots.truncate(1);
+            }
+            UnstackScenario::ChecksFail => {
+                snapshots.truncate(1);
+                client.checks_error = true;
+            }
+        }
+        client.snapshots = RefCell::new(snapshots.into_iter().collect());
+        if matches!(scenario, UnstackScenario::NoLowerPr) {
+            client.stack_pull_requests[0].merged_at = Some("2026-01-02T03:04:05Z".to_string());
+        }
         let mut hook = |_: &[(&str, &str)]| {
             events.borrow_mut().push("hook".to_string());
+            if matches!(scenario, UnstackScenario::HookFails) {
+                anyhow::bail!("fake hook failed");
+            }
             Ok(())
         };
 
@@ -1672,17 +1747,9 @@ mod tests {
         )
         .await;
 
-        assert_eq!(
-            (
-                result.map_err(|error| error.to_string()),
-                events.borrow().clone(),
-            ),
-            (
-                Ok(MergeOutcome::Merged(snapshot(
-                    PrState::Merged,
-                    "head-a",
-                    "CLEAN"
-                ))),
+        let expected = match scenario {
+            UnstackScenario::Merge => (
+                Ok(MergeOutcome::Merged(snapshot(PrState::Merged, "head-a", "CLEAN"))),
                 vec![
                     "view".to_string(),
                     "stack".to_string(),
@@ -1697,51 +1764,8 @@ mod tests {
                     "view".to_string(),
                 ],
             ),
-        );
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn run_merge_does_not_unstack_when_no_lower_pr_blocks_merge(
-        events: Rc<RefCell<Vec<String>>>,
-    ) {
-        let mut client = fake_stacked_client(
-            &[
-                snapshot(PrState::Open, "head-a", "CLEAN"),
-                snapshot(PrState::Open, "head-a", "CLEAN"),
-                snapshot(PrState::Merged, "head-a", "CLEAN"),
-            ],
-            Rc::clone(&events),
-            false,
-        );
-        client.stack_pull_requests[0].merged_at = Some("2026-01-02T03:04:05Z".to_string());
-        let mut hook = |_: &[(&str, &str)]| {
-            events.borrow_mut().push("hook".to_string());
-            Ok(())
-        };
-
-        let result = merge_flow::run_merge_with_expected_head(
-            &client,
-            &mut hook,
-            "example-org",
-            "example-repo",
-            42,
-            None,
-            true,
-        )
-        .await;
-
-        assert_eq!(
-            (
-                result.map_err(|error| error.to_string()),
-                events.borrow().clone(),
-            ),
-            (
-                Ok(MergeOutcome::Merged(snapshot(
-                    PrState::Merged,
-                    "head-a",
-                    "CLEAN"
-                ))),
+            UnstackScenario::NoLowerPr => (
+                Ok(MergeOutcome::Merged(snapshot(PrState::Merged, "head-a", "CLEAN"))),
                 vec![
                     "view".to_string(),
                     "stack".to_string(),
@@ -1753,41 +1777,7 @@ mod tests {
                     "view".to_string(),
                 ],
             ),
-        );
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn run_merge_refuses_to_merge_when_unstack_keeps_pr_in_stack(
-        events: Rc<RefCell<Vec<String>>>,
-    ) {
-        let client = fake_stacked_client(
-            &[snapshot(PrState::Open, "head-a", "CLEAN")],
-            Rc::clone(&events),
-            true,
-        );
-        let mut hook = |_: &[(&str, &str)]| {
-            events.borrow_mut().push("hook".to_string());
-            Ok(())
-        };
-
-        let result = merge_flow::run_merge_with_expected_head(
-            &client,
-            &mut hook,
-            "example-org",
-            "example-repo",
-            42,
-            None,
-            true,
-        )
-        .await;
-
-        assert_eq!(
-            (
-                result.map(|_| ()).map_err(|error| error.to_string()),
-                events.borrow().clone(),
-            ),
-            (
+            UnstackScenario::StackRemains => (
                 Err("PR #42 is still in a stack after unstacking; refusing to merge.".to_string()),
                 vec![
                     "view".to_string(),
@@ -1797,6 +1787,98 @@ mod tests {
                     "stack".to_string(),
                 ],
             ),
+            UnstackScenario::RestackedBeforeAsyncMerge => (
+                Err("Failed to verify stack membership before merge: PR #42 was added to a stack before merge; refusing to merge.".to_string()),
+                vec![
+                    "view".to_string(),
+                    "stack".to_string(),
+                    "stack-pull-requests".to_string(),
+                    "unstack".to_string(),
+                    "stack".to_string(),
+                    "hook".to_string(),
+                    "checks".to_string(),
+                    "view".to_string(),
+                    "stack".to_string(),
+                ],
+            ),
+            UnstackScenario::RestackedBeforeSyncFallback => (
+                Err("Failed to verify stack membership before synchronous fallback: PR #42 was added to a stack before merge; refusing to merge.".to_string()),
+                vec![
+                    "view".to_string(),
+                    "stack".to_string(),
+                    "stack-pull-requests".to_string(),
+                    "unstack".to_string(),
+                    "stack".to_string(),
+                    "hook".to_string(),
+                    "checks".to_string(),
+                    "view".to_string(),
+                    "stack".to_string(),
+                    "merge:head-a".to_string(),
+                    "view".to_string(),
+                    "merge-queue:main".to_string(),
+                    "stack".to_string(),
+                ],
+            ),
+            UnstackScenario::BaseChangesBeforeAsyncMerge => (
+                Err("PR #42 base branch changed from `main` to `trunk` after unstacking; refusing to merge.".to_string()),
+                vec![
+                    "view".to_string(),
+                    "stack".to_string(),
+                    "stack-pull-requests".to_string(),
+                    "unstack".to_string(),
+                    "stack".to_string(),
+                    "hook".to_string(),
+                    "checks".to_string(),
+                    "view".to_string(),
+                ],
+            ),
+            UnstackScenario::BaseChangesBeforeSyncFallback => (
+                Err("Cannot fall back to synchronous merge for async merge request request-id: PR #42 base branch changed from `main` to `trunk` after unstacking; refusing to merge.".to_string()),
+                vec![
+                    "view".to_string(),
+                    "stack".to_string(),
+                    "stack-pull-requests".to_string(),
+                    "unstack".to_string(),
+                    "stack".to_string(),
+                    "hook".to_string(),
+                    "checks".to_string(),
+                    "view".to_string(),
+                    "stack".to_string(),
+                    "merge:head-a".to_string(),
+                    "view".to_string(),
+                ],
+            ),
+            UnstackScenario::HookFails => (
+                Err("fake hook failed".to_string()),
+                vec![
+                    "view".to_string(),
+                    "stack".to_string(),
+                    "stack-pull-requests".to_string(),
+                    "unstack".to_string(),
+                    "stack".to_string(),
+                    "hook".to_string(),
+                ],
+            ),
+            UnstackScenario::ChecksFail => (
+                Err("fake required checks failed".to_string()),
+                vec![
+                    "view".to_string(),
+                    "stack".to_string(),
+                    "stack-pull-requests".to_string(),
+                    "unstack".to_string(),
+                    "stack".to_string(),
+                    "hook".to_string(),
+                    "checks".to_string(),
+                ],
+            ),
+        };
+
+        assert_eq!(
+            (
+                result.map_err(|error| format!("{error:#}")),
+                events.borrow().clone(),
+            ),
+            expected,
         );
     }
 

@@ -103,6 +103,7 @@ pub(super) async fn run_merge_with_expected_head(
     }
     ensure_pr_is_open_and_safe(&current, pr_number, Some(&initial.head_sha))?;
     if stack_state.was_unstacked {
+        ensure_pr_base_is_unchanged(&current, pr_number, &initial.base_ref_name)?;
         ensure_pr_is_not_stacked(client, owner, repo, pr_number)
             .await
             .context("Failed to verify stack membership before merge")?;
@@ -171,7 +172,9 @@ async fn recover_async_merge_error(
         pr_number,
         &initial.head_sha,
         &fallback,
-        stack_state.was_unstacked,
+        stack_state
+            .was_unstacked
+            .then_some(initial.base_ref_name.as_str()),
     )
     .await
 }
@@ -183,7 +186,7 @@ async fn fallback_to_sync_merge(
     pr_number: u64,
     confirmed_head_sha: &str,
     fallback: &AsyncMergeFallback,
-    verify_unstacked: bool,
+    unstacked_base_ref: Option<&str>,
 ) -> anyhow::Result<MergeOutcome> {
     let request_uuid = fallback.request_uuid();
     let before_sync = client.view_pr(owner, repo, pr_number).with_context(|| {
@@ -197,6 +200,15 @@ async fn fallback_to_sync_merge(
     ensure_pr_is_open_and_safe(&before_sync, pr_number, Some(confirmed_head_sha)).with_context(
         || format!("Cannot fall back to synchronous merge for async merge request {request_uuid}"),
     )?;
+    if let Some(expected_base_ref) = unstacked_base_ref {
+        ensure_pr_base_is_unchanged(&before_sync, pr_number, expected_base_ref).with_context(
+            || {
+                format!(
+                    "Cannot fall back to synchronous merge for async merge request {request_uuid}"
+                )
+            },
+        )?;
+    }
     let merge_queue_enabled = client
         .branch_requires_merge_queue(owner, repo, &before_sync.base_ref_name)
         .await
@@ -213,7 +225,7 @@ async fn fallback_to_sync_merge(
         );
     }
 
-    if verify_unstacked {
+    if unstacked_base_ref.is_some() {
         ensure_pr_is_not_stacked(client, owner, repo, pr_number)
             .await
             .context("Failed to verify stack membership before synchronous fallback")?;
@@ -240,6 +252,20 @@ async fn fallback_to_sync_merge(
         pr_number,
         before_sync,
     ))
+}
+
+fn ensure_pr_base_is_unchanged(
+    pr: &PrSnapshot,
+    pr_number: u64,
+    expected_base_ref: &str,
+) -> anyhow::Result<()> {
+    if pr.base_ref_name != expected_base_ref {
+        bail!(
+            "PR #{pr_number} base branch changed from `{expected_base_ref}` to `{}` after unstacking; refusing to merge.",
+            pr.base_ref_name,
+        );
+    }
+    Ok(())
 }
 
 async fn ensure_pr_is_not_stacked(

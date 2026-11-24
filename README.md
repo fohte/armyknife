@@ -532,6 +532,8 @@ Safely squash-merge an open pull request with no merge conflicts after running t
 a gh pr-merge <pr-number> [options]
 ```
 
+With `--unstack`, the PR merges into its own base branch and lower PRs do not land on the trunk. If the hook or required checks fail, the stack stays unstacked and the PR is not merged.
+
 | Option              | Description                                                                       |
 | ------------------- | --------------------------------------------------------------------------------- |
 | `-R, --repo <repo>` | Target repository (owner/repo)                                                    |
