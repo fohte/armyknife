@@ -208,7 +208,11 @@ export function AppWorkspace({
       sessions={state.sessions}
       workTypeNavGroups={state.workTypeNavGroups}
       onViewChange={(nextView) => {
-        actions.navigate((current) => ({ ...current, view: nextView }))
+        actions.navigate((current) => ({
+          ...current,
+          view: nextView,
+          conversationOpen: state.isMobile ? false : current.conversationOpen,
+        }))
         actions.closeMobileNav()
       }}
       onSelectSavedView={actions.selectSavedViewFromNavigation}
@@ -337,13 +341,14 @@ export function AppWorkspace({
             label="Resize navigation and content"
           />
         )}
-        {state.isMobile &&
-        (!state.showMobileConversation || state.mobileNavOpen) ? (
+        {state.isMobile ? (
           <MobileNavDrawer
             onClose={actions.closeMobileNav}
             open={state.mobileNavOpen}
           >
-            {navigation}
+            {state.showMobileConversation && !state.mobileNavOpen
+              ? null
+              : navigation}
           </MobileNavDrawer>
         ) : null}
         {laterSession !== undefined ? (

@@ -313,9 +313,13 @@ function AppContent() {
       const query = savedViews.selectView(id)
       if (query === null) return
       setInboxFilterQuery(query)
-      navigate((current) => ({ ...current, view: 'inbox' }))
+      navigate((current) => ({
+        ...current,
+        view: 'inbox',
+        conversationOpen: isMobile ? false : current.conversationOpen,
+      }))
     },
-    [navigate, savedViews.selectView],
+    [isMobile, navigate, savedViews.selectView],
   )
   const { showConversation: showMobileConversation } =
     useSessionMobileNavigation({
