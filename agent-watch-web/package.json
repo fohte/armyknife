@@ -52,7 +52,7 @@
   "devDependencies": {
     "@commitlint/cli": "21.2.3",
     "@fohte/eslint-config": "0.5.1",
-    "@fohte/storybook-addon": "0.2.0",
+    "@fohte/storybook-addon": "0.2.1",
     "@ninoseki/eslint-plugin-neverthrow": "0.3.2",
     "@storybook/addon-docs": "10.6.2",
     "@storybook/addon-themes": "10.6.2",
