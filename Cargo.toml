@@ -68,7 +68,7 @@ include_dir = "=0.7.4"
 mime_guess = "=2.0.5"
 ratatui = { version = "=0.30.2", default-features = false, features = ["crossterm"] }
 crossterm = "=0.29.0"
-notify = "=8.2.0"
+notify = "=8.2.2"
 tracing = "=0.1.44"
 tracing-subscriber = { version = "=0.3.23", features = ["json", "env-filter"] }
 tracing-appender = "=0.2.5"
