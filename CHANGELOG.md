@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.901](https://github.com/fohte/armyknife/compare/v0.1.900...v0.1.901) (2026-11-24)
+
+
+### Dependencies
+
+* update dependency shadcn to v4.23.0 ([#2207](https://github.com/fohte/armyknife/issues/2207)) ([090b42a](https://github.com/fohte/armyknife/commit/090b42a7472a1c1a6aaca8defb5c0b77d82a0251))
+
 ## [0.1.900](https://github.com/fohte/armyknife/compare/v0.1.899...v0.1.900) (2026-11-24)
 
 
