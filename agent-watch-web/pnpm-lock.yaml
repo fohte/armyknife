@@ -274,13 +274,13 @@ importers:
         version: 21.2.4(conventional-commits-parser@7.1.4)(typescript@6.0.3)
       '@fohte/eslint-config':
         specifier: 0.5.1
-        version: 0.5.1(92443cf751a5be78bdd944fc6fcb0b10)
+        version: 0.5.1(18c84627a247f598ec7ab7e041c89a54)
       '@fohte/storybook-addon':
         specifier: 0.2.1
         version: 0.2.1(@storybook/addon-vitest@10.6.7(@vitest/browser-playwright@4.1.12)(@vitest/browser@4.1.12(msw@2.15.0(@types/node@24.19.2)(typescript@6.0.3))(vite@8.3.8(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))(vitest@4.1.12))(react@19.2.8)(storybook@10.6.7(@types/react@19.3.0)(prettier@3.10.1)(react@19.2.8))(vitest@4.1.12))(@vitest/browser-playwright@4.1.12)(storybook@10.6.7(@types/react@19.3.0)(prettier@3.10.1)(react@19.2.8))(vitest@4.1.12)
       '@ninoseki/eslint-plugin-neverthrow':
-        specifier: 0.3.2
-        version: 0.3.2(@typescript-eslint/parser@8.72.1(eslint@10.11.0(jiti@2.7.0)(supports-color@10.2.2))(supports-color@10.2.2)(typescript@6.0.3))(eslint@10.11.0(jiti@2.7.0)(supports-color@10.2.2))(supports-color@10.2.2)(typescript@6.0.3)
+        specifier: 0.4.0
+        version: 0.4.0(@typescript-eslint/parser@8.72.1(eslint@10.11.0(jiti@2.7.0)(supports-color@10.2.2))(supports-color@10.2.2)(typescript@6.0.3))(eslint@10.11.0(jiti@2.7.0)(supports-color@10.2.2))(supports-color@10.2.2)(typescript@6.0.3)
       '@storybook/addon-docs':
         specifier: 10.6.7
         version: 10.6.7(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(storybook@10.6.7(@types/react@19.3.0)(prettier@3.10.1)(react@19.2.8))
@@ -1102,8 +1102,8 @@ packages:
       '@emnapi/core': ^1.7.1 || 2.0.0-beta.2
       '@emnapi/runtime': ^1.7.1 || 2.0.0-beta.2
 
-  '@ninoseki/eslint-plugin-neverthrow@0.3.2':
-    resolution: {integrity: sha512-CtN6Ys/03EEkREOtcdRsCMWLuSUAqvUQ1NvriMgec3pWN+M0UEAq3z3Yjrv1xv7/BcMEsjXvHy0mPdHzvNVBLA==}
+  '@ninoseki/eslint-plugin-neverthrow@0.4.0':
+    resolution: {integrity: sha512-2RoeIpC6NGr4YSAjD2Qn/8s1v27Y6bNQ9IGVmtnQv7LlGEgaxxam/RozDSjQCoEa1eVNQ4x9mK+LJBht445m3A==}
     engines: {node: '>=24'}
     peerDependencies:
       '@typescript-eslint/parser': '>=8.0.0'
@@ -5438,7 +5438,7 @@ snapshots:
 
   '@floating-ui/utils@0.2.12': {}
 
-  '@fohte/eslint-config@0.5.1(92443cf751a5be78bdd944fc6fcb0b10)':
+  '@fohte/eslint-config@0.5.1(18c84627a247f598ec7ab7e041c89a54)':
     dependencies:
       '@eslint-community/eslint-plugin-eslint-comments': 4.8.1(eslint@10.11.0(jiti@2.7.0)(supports-color@10.2.2))
       '@eslint/eslintrc': 3.3.7(supports-color@10.2.2)
@@ -5450,7 +5450,7 @@ snapshots:
       eslint-plugin-import-x: 4.17.1(@typescript-eslint/utils@8.72.1(eslint@10.11.0(jiti@2.7.0)(supports-color@10.2.2))(supports-color@10.2.2)(typescript@6.0.3))(eslint@10.11.0(jiti@2.7.0)(supports-color@10.2.2))(supports-color@10.2.2)
       eslint-plugin-simple-import-sort: 13.0.0(eslint@10.11.0(jiti@2.7.0)(supports-color@10.2.2))
     optionalDependencies:
-      '@ninoseki/eslint-plugin-neverthrow': 0.3.2(@typescript-eslint/parser@8.72.1(eslint@10.11.0(jiti@2.7.0)(supports-color@10.2.2))(supports-color@10.2.2)(typescript@6.0.3))(eslint@10.11.0(jiti@2.7.0)(supports-color@10.2.2))(supports-color@10.2.2)(typescript@6.0.3)
+      '@ninoseki/eslint-plugin-neverthrow': 0.4.0(@typescript-eslint/parser@8.72.1(eslint@10.11.0(jiti@2.7.0)(supports-color@10.2.2))(supports-color@10.2.2)(typescript@6.0.3))(eslint@10.11.0(jiti@2.7.0)(supports-color@10.2.2))(supports-color@10.2.2)(typescript@6.0.3)
       eslint-plugin-tailwindcss: 4.4.0(eslint@10.11.0(jiti@2.7.0)(supports-color@10.2.2))(supports-color@10.2.2)(tailwindcss@4.3.5)(typescript@6.0.3)
       typescript: 6.0.3
     transitivePeerDependencies:
@@ -5660,7 +5660,7 @@ snapshots:
       '@tybys/wasm-util': 0.10.4
     optional: true
 
-  '@ninoseki/eslint-plugin-neverthrow@0.3.2(@typescript-eslint/parser@8.72.1(eslint@10.11.0(jiti@2.7.0)(supports-color@10.2.2))(supports-color@10.2.2)(typescript@6.0.3))(eslint@10.11.0(jiti@2.7.0)(supports-color@10.2.2))(supports-color@10.2.2)(typescript@6.0.3)':
+  '@ninoseki/eslint-plugin-neverthrow@0.4.0(@typescript-eslint/parser@8.72.1(eslint@10.11.0(jiti@2.7.0)(supports-color@10.2.2))(supports-color@10.2.2)(typescript@6.0.3))(eslint@10.11.0(jiti@2.7.0)(supports-color@10.2.2))(supports-color@10.2.2)(typescript@6.0.3)':
     dependencies:
       '@typescript-eslint/parser': 8.72.1(eslint@10.11.0(jiti@2.7.0)(supports-color@10.2.2))(supports-color@10.2.2)(typescript@6.0.3)
       '@typescript-eslint/utils': 8.72.1(eslint@10.11.0(jiti@2.7.0)(supports-color@10.2.2))(supports-color@10.2.2)(typescript@6.0.3)
