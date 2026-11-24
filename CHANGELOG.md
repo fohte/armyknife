@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.889](https://github.com/fohte/armyknife/compare/v0.1.888...v0.1.889) (2026-11-24)
+
+
+### Bug Fixes
+
+* **palette:** preserve keyboard selection ([#2176](https://github.com/fohte/armyknife/issues/2176)) ([767c812](https://github.com/fohte/armyknife/commit/767c812d8257dd4ac9475b457766fed78ef9e7f1))
+
 ## [0.1.888](https://github.com/fohte/armyknife/compare/v0.1.887...v0.1.888) (2026-11-24)
 
 
