@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.896](https://github.com/fohte/armyknife/compare/v0.1.895...v0.1.896) (2026-11-24)
+
+
+### Dependencies
+
+* update rust crate sha2 to v0.11.1 ([#2175](https://github.com/fohte/armyknife/issues/2175)) ([2f2db78](https://github.com/fohte/armyknife/commit/2f2db78493e3fdb3d718b5d28e76dc93ff4297fe))
+
 ## [0.1.895](https://github.com/fohte/armyknife/compare/v0.1.894...v0.1.895) (2026-11-24)
 
 
