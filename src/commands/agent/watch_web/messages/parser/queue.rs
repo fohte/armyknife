@@ -350,7 +350,7 @@ impl Queue {
             .into_iter()
             .filter(|queued| !queued.resolved && !delivered_prompt_ids.contains(&queued.id))
         {
-            items.push(super::super::queued_prompt::chat_item(&queued, true));
+            items.push(super::super::queued_prompt::chat_item(&queued));
         }
         items
     }
@@ -949,7 +949,11 @@ mod tests {
             )
             .unwrap();
         resolved_ids.extend(
-            super::super::super::queued_prompt::resolve_transcript_messages(&mut messages, prompts),
+            super::super::super::queued_prompt::resolve_transcript_messages(
+                &mut messages,
+                prompts,
+                crate::commands::agent::types::Engine::Claude,
+            ),
         );
         resolved_ids.sort_unstable();
         resolved_ids.dedup();

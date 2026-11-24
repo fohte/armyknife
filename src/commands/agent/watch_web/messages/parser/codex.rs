@@ -647,7 +647,7 @@ mod tests {
         WatchWebQueuedAttachment, WatchWebQueuedPrompt,
     };
     use crate::commands::agent::watch_web::messages::{
-        ChatItem, EventKind, ParentSession, PeerDirection, SkillSuggestion, ToolGroupItem,
+        ChatItem, Engine, EventKind, ParentSession, PeerDirection, SkillSuggestion, ToolGroupItem,
         ToolOperation, UserContentPart, queued_prompt,
     };
 
@@ -1378,8 +1378,11 @@ mod tests {
             sent_at: Utc::now(),
         }];
         let mut messages = parse(Cursor::new(transcript), None).unwrap();
-        let resolved_ids =
-            queued_prompt::resolve_transcript_messages(&mut messages, &queued_prompts);
+        let resolved_ids = queued_prompt::resolve_transcript_messages(
+            &mut messages,
+            &queued_prompts,
+            Engine::Codex,
+        );
 
         assert_eq!(
             (messages, resolved_ids),
@@ -1438,8 +1441,11 @@ mod tests {
             resolved: false,
             sent_at: Utc::now(),
         }];
-        let resolved_prompt_ids =
-            queued_prompt::resolve_transcript_messages(&mut messages, &queued_prompts);
+        let resolved_prompt_ids = queued_prompt::resolve_transcript_messages(
+            &mut messages,
+            &queued_prompts,
+            Engine::Codex,
+        );
 
         assert_eq!(
             (messages, resolved_prompt_ids),

@@ -1489,6 +1489,7 @@ mod tests {
             super::super::super::queued_prompt::resolve_transcript_messages(
                 &mut messages,
                 &queued_prompts,
+                crate::commands::agent::types::Engine::Claude,
             ),
         );
         resolved_ids.sort_unstable();
@@ -1551,6 +1552,7 @@ mod tests {
             super::super::super::queued_prompt::resolve_transcript_messages(
                 &mut messages,
                 &queued_prompts,
+                crate::commands::agent::types::Engine::Claude,
             ),
         );
         resolved_ids.sort_unstable();

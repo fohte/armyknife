@@ -418,7 +418,7 @@ fn send_via_peer_notify(
 #[cfg(test)]
 mod tests {
     use chrono::TimeZone;
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
     use serde_json::json;
     use tempfile::tempdir;
 
@@ -428,6 +428,27 @@ mod tests {
     use crate::commands::agent::peer::notify;
     use crate::commands::agent::store::{self, WatchWebActionEventKind};
     use crate::commands::agent::types::Session;
+
+    #[fixture]
+    fn sessions_dir() -> tempfile::TempDir {
+        tempdir().unwrap()
+    }
+
+    #[fixture]
+    fn codex_session() -> Session {
+        serde_json::from_value(json!({
+            "session_id": "fixture-session",
+            "engine": "codex",
+            "cwd": "/fixture/worktree",
+            "transcript_path": null,
+            "tmux_info": null,
+            "status": "running",
+            "created_at": "2026-03-14T09:26:53Z",
+            "updated_at": "2026-03-14T09:26:53Z",
+            "last_message": null,
+        }))
+        .unwrap()
+    }
 
     #[rstest]
     #[case::canonical_uuid("11111111-1111-4111-8111-111111111111", true)]
@@ -462,21 +483,12 @@ mod tests {
         );
     }
 
-    #[test]
-    fn codex_action_delivery_records_its_kind_with_the_transcript_message_id() {
-        let sessions_dir = tempdir().unwrap();
-        let session: Session = serde_json::from_value(json!({
-            "session_id": "fixture-session",
-            "engine": "codex",
-            "cwd": "/fixture/worktree",
-            "transcript_path": null,
-            "tmux_info": null,
-            "status": "running",
-            "created_at": "2026-03-14T09:26:53Z",
-            "updated_at": "2026-03-14T09:26:53Z",
-            "last_message": null,
-        }))
-        .unwrap();
+    #[rstest]
+    fn codex_action_delivery_records_its_kind_with_the_transcript_message_id(
+        sessions_dir: tempfile::TempDir,
+        codex_session: Session,
+    ) {
+        let session = codex_session;
         let message_content = "<armyknife-todo-completed>The user marked the to-do as done: Review the fixture.</armyknife-todo-completed>";
         let mut delivered_message = None;
 
@@ -529,6 +541,38 @@ mod tests {
                 },
                 "fixture-session".to_owned(),
                 "<armyknife-todo-completed>The user marked the to-do as done: Review the fixture.</armyknife-todo-completed>\n<!-- armyknife-queued-prompt-id:<message-id> -->".to_owned(),
+            ),
+        );
+    }
+
+    #[rstest]
+    fn codex_action_delivery_removes_its_record_when_delivery_fails(
+        sessions_dir: tempfile::TempDir,
+        codex_session: Session,
+    ) {
+        let message_content = "<armyknife-todo-rejected>The user rejected the to-do: Review the fixture.</armyknife-todo-rejected>";
+        let error = send_action_event_message(
+            sessions_dir.path(),
+            &codex_session,
+            ActionEventMessage {
+                marker: None,
+                message_content,
+                event_text: "The user rejected the to-do: Review the fixture.",
+                attachments: &[],
+                action_event_kind: WatchWebActionEventKind::TodoRejected,
+            },
+            |_, _| Err(anyhow::anyhow!("delivery failed")),
+        )
+        .unwrap_err();
+        let prompts =
+            store::watch_web_queued_prompts_from(sessions_dir.path(), &codex_session.session_id)
+                .unwrap();
+
+        assert_eq!(
+            (error.to_string(), prompts),
+            (
+                "delivery failed".to_owned(),
+                Vec::<store::WatchWebQueuedPrompt>::new()
             ),
         );
     }

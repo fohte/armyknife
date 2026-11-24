@@ -94,23 +94,24 @@ pub(super) async fn set_vibe(
         (VIBE_MODE_OFF_TAG, VIBE_MODE_OFF_NOTICE)
     };
     let event_message = format!("<{event_tag}>{message}</{event_tag}>");
-    let action_event_kind = (session.engine == Engine::Codex).then_some(if request.enabled {
+    let action_event_kind = if request.enabled {
         store::WatchWebActionEventKind::VibeModeOn
     } else {
         store::WatchWebActionEventKind::VibeModeOff
-    });
+    };
     let queued_content = if session.engine == Engine::Codex {
-        message.to_owned()
+        super::super::messages::action_event::event_text_for_kind(action_event_kind, message)
     } else {
         event_message.clone()
     };
+    let recorded_action_event_kind = (session.engine == Engine::Codex).then_some(action_event_kind);
     let delivery = send_queued_prompt(QueuedPromptDelivery {
         runtime: state.runtime,
         sessions_dir: sessions_dir.clone(),
         session,
         marker,
         message_id: Some(new_action_message_id()),
-        action_event_kind,
+        action_event_kind: recorded_action_event_kind,
         queued_content,
         message_content: event_message,
         queued_attachments: Vec::<store::WatchWebQueuedAttachment>::new(),
