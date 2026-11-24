@@ -8,7 +8,7 @@ strip = "symbols"
 
 [package]
 name = "armyknife"
-version = "0.1.883"
+version = "0.1.884"
 edition = "2024"
 build = "build.rs"
 authors = ["Hayato Kawai <fohte.hk@gmail.com>"]
@@ -34,7 +34,7 @@ anyhow = "=1.0.104"
 axum = { version = "=0.8.9", default-features = false, features = ["http1", "json", "query", "tokio", "ws"] }
 base64 = "=0.23.1"
 chrono = { version = "=0.4.45", features = ["serde"] }
-clap = { version = "=4.6.6", features = ["derive"] }
+clap = { version = "=4.6.8", features = ["derive"] }
 clap_complete = "=4.6.9"
 futures-util = "=0.3.34"
 reqwest = { version = "=0.13.5", default-features = false, features = ["rustls", "json", "query", "stream"] }
