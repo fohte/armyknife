@@ -571,6 +571,21 @@ mod tests {
         router_with_loaders, router_with_path_roots, router_with_session_loader,
     };
 
+    fn read_fifo_signal_or_pending(
+        reader: &mut std::fs::File,
+        signal: &mut [u8],
+    ) -> std::io::Result<usize> {
+        use std::io::Read;
+
+        reader.read(signal).or_else(|error| {
+            if error.kind() == std::io::ErrorKind::WouldBlock {
+                Ok(0)
+            } else {
+                Err(error)
+            }
+        })
+    }
+
     fn current_revision(path: &Path) -> String {
         let content = std::fs::read(path).expect("fixture document should be readable");
         review_document_revision(&content)
@@ -1594,7 +1609,6 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn direct_action_uses_the_injected_executor_once_for_a_successful_document() {
-        use std::io::Read;
         use std::os::unix::fs::OpenOptionsExt;
 
         crate::shared::testing::init_approval_dir();
@@ -1676,9 +1690,8 @@ mod tests {
         let started_at = std::time::Instant::now();
         let mut signal = [0_u8; 1];
         let signal_bytes = loop {
-            let bytes = finish_reader
-                .read(&mut signal)
-                .expect("finish request FIFO should be readable");
+            let bytes = read_fifo_signal_or_pending(&mut finish_reader, &mut signal)
+                .expect("finish request FIFO read should succeed");
             if bytes > 0 || started_at.elapsed() >= Duration::from_secs(2) {
                 break bytes;
             }
@@ -1848,9 +1861,8 @@ mod tests {
         let start = std::time::Instant::now();
         let mut finish_signal = [0_u8; 1];
         let finish_bytes_read = loop {
-            let bytes_read = finish_reader
-                .read(&mut finish_signal)
-                .expect("finish request FIFO should be readable");
+            let bytes_read = read_fifo_signal_or_pending(&mut finish_reader, &mut finish_signal)
+                .expect("finish request FIFO read should succeed");
             if bytes_read > 0 || start.elapsed() >= std::time::Duration::from_secs(2) {
                 break bytes_read;
             }
