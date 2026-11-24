@@ -42,6 +42,7 @@ export function useConversationScroll({
   const followLatestRef = useRef(true)
   const programmaticScrollTopRef = useRef<number | null>(null)
   const suppressResizeRef = useRef(false)
+  const userResizeGestureRef = useRef(false)
   const previousMessagesRef = useRef<{
     messages: readonly ChatItem[]
     start: number
@@ -74,6 +75,7 @@ export function useConversationScroll({
     }
     programmaticScrollTopRef.current = null
     suppressResizeRef.current = false
+    userResizeGestureRef.current = false
   }, [sessionId])
 
   useLayoutEffect(() => {
@@ -85,7 +87,8 @@ export function useConversationScroll({
       previousMessages !== null &&
       end > previousMessages.end &&
       start >= previousMessages.start &&
-      epoch === previousMessages.epoch
+      (epoch === previousMessages.epoch ||
+        previousMessages.messages.length === 0)
     const messageItemsChanged =
       previousMessages === null ||
       messages.length !== previousMessages.messages.length ||
@@ -117,7 +120,13 @@ export function useConversationScroll({
 
     if (userLayoutChangeRef.current) {
       followLatestRef.current = isAtBottom(scrollContainer)
-    } else if (previousMessages === null || appendedMessages) {
+    } else if (
+      previousMessages === null ||
+      appendedMessages ||
+      messageItemsChanged ||
+      start !== previousMessages.start ||
+      epoch !== previousMessages.epoch
+    ) {
       if (!followLatestRef.current) return
       if (!loadingOlder) {
         const scrollTop =
@@ -126,15 +135,6 @@ export function useConversationScroll({
         onPruneOldMessages()
       }
       return
-    } else if (
-      messageItemsChanged ||
-      start !== previousMessages.start ||
-      epoch !== previousMessages.epoch
-    ) {
-      followLatestRef.current = isAtBottom(scrollContainer)
-      if (followLatestRef.current && !loadingOlder) {
-        onPruneOldMessages()
-      }
     }
   }, [
     epoch,
@@ -177,6 +177,10 @@ export function useConversationScroll({
       if (loadingOlderRef.current || !resizedExistingChild) return
       const container = scrollRef.current
       if (container === null) return
+      if (userResizeGestureRef.current) {
+        followLatestRef.current = isAtBottom(container)
+        return
+      }
       if (userLayoutChangeRef.current) {
         userLayoutChangeRef.current = false
         if (userLayoutChangeTimeoutRef.current !== null) {
@@ -222,11 +226,28 @@ export function useConversationScroll({
         userLayoutChangeTimeoutRef.current = null
       }, 1000)
     }
+    const startUserResizeGesture = (event: Event) => {
+      if (!(event.target instanceof HTMLTextAreaElement)) return
+      userResizeGestureRef.current = true
+      markUserLayoutChange()
+    }
+    const finishUserResizeGesture = () => {
+      if (!userResizeGestureRef.current) return
+      userResizeGestureRef.current = false
+      markUserLayoutChange()
+    }
     scrollContainer.addEventListener('click', markUserLayoutChange, true)
     scrollContainer.addEventListener('input', markUserLayoutChange, true)
     scrollContainer.addEventListener('change', markUserLayoutChange, true)
     scrollContainer.addEventListener('paste', markUserLayoutChange, true)
     scrollContainer.addEventListener('drop', markUserLayoutChange, true)
+    scrollContainer.addEventListener(
+      'pointerdown',
+      startUserResizeGesture,
+      true,
+    )
+    window.addEventListener('pointerup', finishUserResizeGesture, true)
+    window.addEventListener('pointercancel', finishUserResizeGesture, true)
 
     return () => {
       resizeObserver.disconnect()
@@ -236,6 +257,14 @@ export function useConversationScroll({
       scrollContainer.removeEventListener('change', markUserLayoutChange, true)
       scrollContainer.removeEventListener('paste', markUserLayoutChange, true)
       scrollContainer.removeEventListener('drop', markUserLayoutChange, true)
+      scrollContainer.removeEventListener(
+        'pointerdown',
+        startUserResizeGesture,
+        true,
+      )
+      window.removeEventListener('pointerup', finishUserResizeGesture, true)
+      window.removeEventListener('pointercancel', finishUserResizeGesture, true)
+      userResizeGestureRef.current = false
       if (userLayoutChangeTimeoutRef.current !== null) {
         window.clearTimeout(userLayoutChangeTimeoutRef.current)
         userLayoutChangeTimeoutRef.current = null

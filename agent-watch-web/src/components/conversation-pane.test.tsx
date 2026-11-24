@@ -8528,6 +8528,112 @@ it('follows new messages at the bottom without moving a reader who scrolled up',
   })
 })
 
+it('follows the bottom when an uncached conversation loads with an epoch', async () => {
+  const firstPageMessage: ChatItem = {
+    type: 'assistant',
+    text: 'The first page is ready.',
+  }
+  let resolveMessages: ((response: Response) => void) | undefined
+  const firstPageResponse = new Promise<Response>((resolve) => {
+    resolveMessages = resolve
+  })
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.endsWith('/messages?limit=100')) {
+      return firstPageResponse
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        shouldSkipSessionTreeFetch
+        initialSessionTree={[]}
+        refreshKey={0}
+        sessionTreeRefreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+  await waitForState(() => resolveMessages !== undefined)
+  const scroll = requireElement(
+    container.querySelector<HTMLDivElement>('.conversation-scroll'),
+  )
+  const setHeight = mockScrollDimensions(scroll, 100, 100)
+  setHeight(500)
+
+  await act(async () => {
+    resolveMessages?.(
+      jsonResponse(
+        messagesResponse([firstPageMessage], [], {
+          start: 0,
+          total: 1,
+          epoch: 'fixture-epoch-amber',
+        }),
+      ),
+    )
+    await firstPageResponse
+  })
+  await waitForState(
+    () => container.querySelector('.chat-assistant-message') !== null,
+  )
+
+  const snapshot = () => ({ scrollTop: scroll.scrollTop })
+  expect(snapshot()).toEqual({ scrollTop: 400 })
+})
+
+it('keeps following when a hidden active tool becomes visible', () => {
+  const hiddenTool: ChatItem = {
+    type: 'tool_in_progress',
+    tool: 'exec',
+    target: 'Run the build command.',
+  }
+  const visibleTool: ChatItem = {
+    type: 'tool_summary',
+    summary: '1 action',
+    operations: [
+      { tool: 'exec', target: 'Run the build command.', failed: false },
+    ],
+  }
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction, { ...session, category: 'in_progress' }, undefined, [
+    hiddenTool,
+  ])
+  const scroll = requireElement(
+    container.querySelector<HTMLDivElement>('.conversation-scroll'),
+  )
+  const setHeight = mockScrollDimensions(scroll, 300, 100)
+  renderView(onAction, { ...session, category: 'in_progress' }, undefined, [
+    hiddenTool,
+  ])
+  scrollToPosition(scroll, 200)
+
+  setHeight(500)
+  renderView(onAction, { ...session, category: 'needs_action' }, undefined, [
+    visibleTool,
+  ])
+  const afterToolBecomesVisible = scroll.scrollTop
+
+  setHeight(600)
+  renderView(onAction, { ...session, category: 'needs_action' }, undefined, [
+    visibleTool,
+    { type: 'assistant', text: 'The next step is ready.' },
+  ])
+
+  const snapshot = () => ({
+    afterToolBecomesVisible,
+    afterNewMessage: scroll.scrollTop,
+  })
+  expect(snapshot()).toEqual({
+    afterToolBecomesVisible: 400,
+    afterNewMessage: 500,
+  })
+})
+
 it('keeps an expanded to-do in view when a new message arrives', () => {
   const notifyResize = stubResizeObserver()
   const todo: ChatItem = {
@@ -8655,6 +8761,11 @@ it.each([
     mockScrollDimensions(scroll, 300, 100)
     renderView(onAction, session, undefined, [original])
     scrollToPosition(scroll, 200)
+    act(() => {
+      requireElement(scroll.firstElementChild).dispatchEvent(
+        new Event('click', { bubbles: true }),
+      )
+    })
 
     renderView(onAction, session, undefined, [updated])
 
@@ -8698,6 +8809,65 @@ it('keeps following the bottom when a message grows after it is added', async ()
     afterNewMessage: 400,
     afterMessageGrowth: 600,
   })
+})
+
+it('keeps a native comment resize in place while the pointer is down', () => {
+  const notifyResize = stubResizeObserver()
+  const todo: ChatItem = {
+    type: 'todo',
+    seq: 21,
+    title: 'Review the release checklist',
+    detail: null,
+    completed: false,
+    resolution: null,
+    comment: null,
+  }
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction, session, undefined, [todo])
+  const scroll = requireElement(
+    container.querySelector<HTMLDivElement>('.conversation-scroll'),
+  )
+  const setHeight = mockScrollDimensions(scroll, 300, 100)
+  renderView(onAction, session, undefined, [todo])
+  scrollToPosition(scroll, 200)
+  const messageElement = requireElement(scroll.lastElementChild)
+  act(() => {
+    notifyResize(messageElement)
+  })
+
+  const comment = requireElement(
+    container.querySelector<HTMLTextAreaElement>('.chat-todo-comment'),
+  )
+  act(() => {
+    comment.dispatchEvent(new Event('pointerdown', { bubbles: true }))
+  })
+  setHeight(320)
+  act(() => {
+    notifyResize(
+      messageElement,
+      messageElement.getBoundingClientRect().height + 10,
+    )
+  })
+  setHeight(360)
+  act(() => {
+    notifyResize(
+      messageElement,
+      messageElement.getBoundingClientRect().height + 20,
+    )
+  })
+  act(() => {
+    window.dispatchEvent(new Event('pointerup'))
+  })
+  setHeight(380)
+  act(() => {
+    notifyResize(
+      messageElement,
+      messageElement.getBoundingClientRect().height + 30,
+    )
+  })
+
+  const snapshot = () => ({ scrollTop: scroll.scrollTop })
+  expect(snapshot()).toEqual({ scrollTop: 200 })
 })
 
 it('keeps a reader in place when an observed message grows', () => {
