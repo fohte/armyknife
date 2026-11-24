@@ -3,5 +3,6 @@
   extends: [
     'github>fohte/renovate-config:base.json5',
     'github>fohte/renovate-config:node.json5',
+    'github>fohte/renovate-config:rust.json5',
   ],
 }
