@@ -9,7 +9,6 @@ use indoc::indoc;
 use serde::Deserialize;
 
 mod partial_graphql;
-mod rest;
 
 use super::error::{GitHubError, Result, api_error_from_response};
 #[cfg(not(test))]
@@ -173,7 +172,14 @@ impl GitHubClient {
     /// Send a DELETE request. Expects 204 No Content or similar success status.
     pub(crate) async fn rest_delete(&self, route: &str) -> Result<()> {
         let response = self.http.delete(self.url(route)).send().await?;
-        rest::ensure_success(response).await?;
+        let status = response.status();
+        if !status.is_success() {
+            let body: serde_json::Value = response
+                .json()
+                .await
+                .unwrap_or_else(|_| serde_json::json!({"message": "Unknown error"}));
+            return Err(api_error_from_response(status.as_u16(), &body).into());
+        }
         Ok(())
     }
 
@@ -184,7 +190,14 @@ impl GitHubClient {
         body: &serde_json::Value,
     ) -> Result<()> {
         let response = self.http.delete(self.url(route)).json(body).send().await?;
-        rest::ensure_success(response).await?;
+        let status = response.status();
+        if !status.is_success() {
+            let body: serde_json::Value = response
+                .json()
+                .await
+                .unwrap_or_else(|_| serde_json::json!({"message": "Unknown error"}));
+            return Err(api_error_from_response(status.as_u16(), &body).into());
+        }
         Ok(())
     }
 
@@ -1162,7 +1175,14 @@ struct CreateCommentResponse {
 
 /// Check HTTP response status and deserialize JSON body, or return an error.
 async fn check_response<T: serde::de::DeserializeOwned>(response: reqwest::Response) -> Result<T> {
-    let response = rest::ensure_success(response).await?;
+    let status = response.status();
+    if !status.is_success() {
+        let body: serde_json::Value = response
+            .json()
+            .await
+            .unwrap_or_else(|_| serde_json::json!({"message": "Unknown error"}));
+        return Err(api_error_from_response(status.as_u16(), &body).into());
+    }
     let body = response.json().await?;
     Ok(body)
 }

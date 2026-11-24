@@ -1003,15 +1003,6 @@ mod tests {
         ) -> GitHubResult<()> {
             Ok(())
         }
-
-        async fn unstack_pull_requests(
-            &self,
-            _owner: &str,
-            _repo: &str,
-            _stack_number: u64,
-        ) -> GitHubResult<()> {
-            Ok(())
-        }
     }
 
     async fn setup_test_env(owner: &str, repo: &str) -> TestEnv {
