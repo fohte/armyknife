@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.891](https://github.com/fohte/armyknife/compare/v0.1.890...v0.1.891) (2026-11-24)
+
+
+### Dependencies
+
+* update rust crate schemars to v1.2.3 ([#2172](https://github.com/fohte/armyknife/issues/2172)) ([4e3be1b](https://github.com/fohte/armyknife/commit/4e3be1b3195e2988ef7a4b0679561ade47a41cb4))
+
 ## [0.1.890](https://github.com/fohte/armyknife/compare/v0.1.889...v0.1.890) (2026-11-24)
 
 
