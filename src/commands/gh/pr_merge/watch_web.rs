@@ -10,12 +10,6 @@ pub(crate) enum WatchWebPrMergeResult {
     Enqueued(String),
 }
 
-pub(super) struct MergeOptions<'a> {
-    expected_head_sha: Option<&'a str>,
-    unstack: bool,
-}
-
-#[cfg(test)]
 pub(super) async fn run_merge_and_close<C, F>(
     client: &impl PrMergeClient,
     hook_runner: &mut impl FnMut(&[(&str, &str)]) -> anyhow::Result<()>,
@@ -28,41 +22,13 @@ where
     C: FnOnce(PrSnapshot) -> F,
     F: Future<Output = anyhow::Result<()>>,
 {
-    run_merge_and_close_with_unstack(
-        client,
-        hook_runner,
-        owner,
-        repo,
-        pr_number,
-        false,
-        close_worktree,
-    )
-    .await
-}
-
-pub(super) async fn run_merge_and_close_with_unstack<C, F>(
-    client: &impl PrMergeClient,
-    hook_runner: &mut impl FnMut(&[(&str, &str)]) -> anyhow::Result<()>,
-    owner: &str,
-    repo: &str,
-    pr_number: u64,
-    unstack: bool,
-    close_worktree: C,
-) -> anyhow::Result<()>
-where
-    C: FnOnce(PrSnapshot) -> F,
-    F: Future<Output = anyhow::Result<()>>,
-{
     run_merge_and_close_with_expected_head(
         client,
         hook_runner,
         owner,
         repo,
         pr_number,
-        MergeOptions {
-            expected_head_sha: None,
-            unstack,
-        },
+        None,
         close_worktree,
     )
     .await
@@ -75,7 +41,7 @@ pub(super) async fn run_merge_and_close_with_expected_head<C, F>(
     owner: &str,
     repo: &str,
     pr_number: u64,
-    options: MergeOptions<'_>,
+    expected_head_sha: Option<&str>,
     close_worktree: C,
 ) -> anyhow::Result<MergeOutcome>
 where
@@ -88,8 +54,7 @@ where
         owner,
         repo,
         pr_number,
-        options.expected_head_sha,
-        options.unstack,
+        expected_head_sha,
     )
     .await?;
     match &outcome {
@@ -127,10 +92,7 @@ pub(crate) async fn run_watch_web_pr_merge(
         owner,
         repo,
         pr_number,
-        MergeOptions {
-            expected_head_sha: Some(expected_head_sha),
-            unstack: false,
-        },
+        Some(expected_head_sha),
         |merged_pr| async move { close_merged_head_worktree(&merged_pr).await },
     )
     .await?
