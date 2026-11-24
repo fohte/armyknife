@@ -293,26 +293,20 @@ export function SessionPullRequests({
   if (!hasPullRequests) return null
 
   const groups = pullRequestGroups(pullRequests)
+  const listTitle =
+    presentation === 'list'
+      ? 'Pull requests'
+      : 'Pull requests from this session'
   const content = (
     <section
       ref={contentRef}
       className={`session-pr-list${isMobile ? ' session-pr-list--mobile' : ''}${presentation === 'list' ? ' session-pr-list--panel' : ''}`}
       role={presentation === 'list' ? undefined : 'dialog'}
-      aria-label={
-        presentation === 'list'
-          ? 'Pull requests'
-          : 'Pull requests from this session'
-      }
+      aria-label={listTitle}
       aria-modal={presentation === 'list' ? undefined : isMobile || undefined}
       tabIndex={presentation === 'list' ? undefined : -1}
     >
-      {isMobile ? (
-        <h2 className="session-pr-list-title">
-          {presentation === 'list'
-            ? 'Pull requests'
-            : 'Pull requests from this session'}
-        </h2>
-      ) : null}
+      {isMobile ? <h2 className="session-pr-list-title">{listTitle}</h2> : null}
       {groups.map((group) => (
         <div className="session-pr-group" key={group.name}>
           <h3>{group.name}</h3>
