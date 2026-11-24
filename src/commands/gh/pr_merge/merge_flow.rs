@@ -9,6 +9,12 @@ use super::{
     MergeOutcome, PrMergeClient, PrSnapshot, ensure_pr_is_open_and_safe, unmerged_lower_pr,
 };
 
+#[derive(Clone, Copy)]
+struct StackMergeState {
+    is_stacked: bool,
+    was_unstacked: bool,
+}
+
 #[cfg(test)]
 pub(super) async fn run_merge(
     client: &impl PrMergeClient,
@@ -17,7 +23,7 @@ pub(super) async fn run_merge(
     repo: &str,
     pr_number: u64,
 ) -> anyhow::Result<MergeOutcome> {
-    run_merge_with_expected_head(client, hook_runner, owner, repo, pr_number, None).await
+    run_merge_with_expected_head(client, hook_runner, owner, repo, pr_number, None, false).await
 }
 
 pub(super) async fn run_merge_with_expected_head(
@@ -27,6 +33,7 @@ pub(super) async fn run_merge_with_expected_head(
     repo: &str,
     pr_number: u64,
     expected_head_sha: Option<&str>,
+    unstack: bool,
 ) -> anyhow::Result<MergeOutcome> {
     let initial = client.view_pr(owner, repo, pr_number)?;
     if initial.state == PrState::Merged {
@@ -37,6 +44,7 @@ pub(super) async fn run_merge_with_expected_head(
         bail!("PR #{pr_number} head changed since confirmation.");
     }
 
+    let mut was_unstacked = false;
     let is_stacked = if let Some(stack) = client
         .get_stack_for_pull_request(owner, repo, pr_number)
         .await
@@ -47,11 +55,48 @@ pub(super) async fn run_merge_with_expected_head(
             .await
             .context("Failed to inspect pull request states in the stack")?;
         if let Some(lower_pr) = unmerged_lower_pr(&stack_pull_requests, pr_number)? {
-            bail!("PR #{pr_number} cannot be merged because lower PR #{lower_pr} is not merged.");
+            if !unstack {
+                bail!(
+                    "PR #{pr_number} cannot be merged because lower PR #{lower_pr} is not merged."
+                );
+            }
+            let before_unstack = client
+                .view_pr(owner, repo, pr_number)
+                .with_context(|| format!("Failed to verify PR #{pr_number} before unstacking"))?;
+            if before_unstack.state == PrState::Merged {
+                return Ok(MergeOutcome::AlreadyMerged(before_unstack));
+            }
+            ensure_pr_is_open_and_safe(&before_unstack, pr_number, Some(&initial.head_sha))?;
+            ensure_pr_base_is_unchanged(&before_unstack, pr_number, &initial.base_ref_name)?;
+            if client
+                .is_pull_request_in_merge_queue(owner, repo, pr_number)
+                .context("Failed to inspect merge queue membership before unstacking")?
+            {
+                bail!("PR #{pr_number} is in a merge queue; refusing to unstack.");
+            }
+            client
+                .unstack_pull_requests(owner, repo, stack.number)
+                .await
+                .context("Failed to remove unmerged pull requests from the stack")?;
+            if client
+                .get_stack_for_pull_request(owner, repo, pr_number)
+                .await
+                .context("Failed to verify pull request was removed from its stack")?
+                .is_some()
+            {
+                bail!("PR #{pr_number} is still in a stack after unstacking; refusing to merge.");
+            }
+            was_unstacked = true;
+            false
+        } else {
+            true
         }
-        true
     } else {
         false
+    };
+    let stack_state = StackMergeState {
+        is_stacked,
+        was_unstacked,
     };
 
     let pr_number_string = pr_number.to_string();
@@ -71,6 +116,12 @@ pub(super) async fn run_merge_with_expected_head(
         return Ok(MergeOutcome::Merged(current));
     }
     ensure_pr_is_open_and_safe(&current, pr_number, Some(&initial.head_sha))?;
+    if stack_state.was_unstacked {
+        ensure_pr_base_is_unchanged(&current, pr_number, &initial.base_ref_name)?;
+        ensure_pr_is_not_stacked(client, owner, repo, pr_number)
+            .await
+            .context("Failed to verify stack membership before merge")?;
+    }
 
     let merge_result = match client
         .merge_async(owner, repo, pr_number, &initial.head_sha)
@@ -79,7 +130,13 @@ pub(super) async fn run_merge_with_expected_head(
         Ok(result) => result,
         Err(error) => {
             return recover_async_merge_error(
-                client, owner, repo, pr_number, &initial, is_stacked, error,
+                client,
+                owner,
+                repo,
+                pr_number,
+                &initial,
+                stack_state,
+                error,
             )
             .await;
         }
@@ -103,7 +160,7 @@ async fn recover_async_merge_error(
     repo: &str,
     pr_number: u64,
     initial: &PrSnapshot,
-    is_stacked: bool,
+    stack_state: StackMergeState,
     merge_error: anyhow::Error,
 ) -> anyhow::Result<MergeOutcome> {
     let Some(fallback) = merge_error.downcast_ref::<AsyncMergeFallback>().cloned() else {
@@ -112,7 +169,7 @@ async fn recover_async_merge_error(
         }
         return Err(merge_error);
     };
-    if is_stacked {
+    if stack_state.is_stacked {
         if let Some(merged) = already_merged(client, owner, repo, pr_number) {
             return Ok(MergeOutcome::Merged(merged));
         }
@@ -122,7 +179,18 @@ async fn recover_async_merge_error(
         ));
     }
 
-    fallback_to_sync_merge(client, owner, repo, pr_number, &initial.head_sha, &fallback).await
+    fallback_to_sync_merge(
+        client,
+        owner,
+        repo,
+        pr_number,
+        &initial.head_sha,
+        &fallback,
+        stack_state
+            .was_unstacked
+            .then_some(initial.base_ref_name.as_str()),
+    )
+    .await
 }
 
 async fn fallback_to_sync_merge(
@@ -132,6 +200,7 @@ async fn fallback_to_sync_merge(
     pr_number: u64,
     confirmed_head_sha: &str,
     fallback: &AsyncMergeFallback,
+    unstacked_base_ref: Option<&str>,
 ) -> anyhow::Result<MergeOutcome> {
     let request_uuid = fallback.request_uuid();
     let before_sync = client.view_pr(owner, repo, pr_number).with_context(|| {
@@ -145,6 +214,15 @@ async fn fallback_to_sync_merge(
     ensure_pr_is_open_and_safe(&before_sync, pr_number, Some(confirmed_head_sha)).with_context(
         || format!("Cannot fall back to synchronous merge for async merge request {request_uuid}"),
     )?;
+    if let Some(expected_base_ref) = unstacked_base_ref {
+        ensure_pr_base_is_unchanged(&before_sync, pr_number, expected_base_ref).with_context(
+            || {
+                format!(
+                    "Cannot fall back to synchronous merge for async merge request {request_uuid}"
+                )
+            },
+        )?;
+    }
     let merge_queue_enabled = client
         .branch_requires_merge_queue(owner, repo, &before_sync.base_ref_name)
         .await
@@ -159,6 +237,12 @@ async fn fallback_to_sync_merge(
             before_sync.base_ref_name,
             pending_request_retry_note(fallback),
         );
+    }
+
+    if unstacked_base_ref.is_some() {
+        ensure_pr_is_not_stacked(client, owner, repo, pr_number)
+            .await
+            .context("Failed to verify stack membership before synchronous fallback")?;
     }
 
     if let Err(sync_error) = client
@@ -182,6 +266,36 @@ async fn fallback_to_sync_merge(
         pr_number,
         before_sync,
     ))
+}
+
+fn ensure_pr_base_is_unchanged(
+    pr: &PrSnapshot,
+    pr_number: u64,
+    expected_base_ref: &str,
+) -> anyhow::Result<()> {
+    if pr.base_ref_name != expected_base_ref {
+        bail!(
+            "PR #{pr_number} base branch changed from `{expected_base_ref}` to `{}` after unstacking; refusing to merge.",
+            pr.base_ref_name,
+        );
+    }
+    Ok(())
+}
+
+async fn ensure_pr_is_not_stacked(
+    client: &impl PrMergeClient,
+    owner: &str,
+    repo: &str,
+    pr_number: u64,
+) -> anyhow::Result<()> {
+    if client
+        .get_stack_for_pull_request(owner, repo, pr_number)
+        .await?
+        .is_some()
+    {
+        bail!("PR #{pr_number} was added to a stack before merge; refusing to merge.");
+    }
+    Ok(())
 }
 
 fn pending_request_retry_note(fallback: &AsyncMergeFallback) -> String {
