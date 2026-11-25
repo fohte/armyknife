@@ -8,6 +8,7 @@ import { EditorView, keymap } from '@codemirror/view'
 import { Maximize2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 
+import { ReviewDocumentIssueReference } from '#components/review-document-issue-reference'
 import { ReviewDocumentNavigation } from '#components/review-document-navigation'
 import { ReviewDocumentActions } from '#components/review-document-panel/actions'
 import { getReviewDocumentFrontmatterEntries } from '#components/review-document-panel-frontmatter'
@@ -46,6 +47,12 @@ type JsonPathPart = string | number
 
 function isJsonObject(value: JsonValue): value is JsonObject {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function stringList(value: JsonValue | undefined): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : []
 }
 
 function updateAtPath(
@@ -330,15 +337,33 @@ export function ReviewDocumentPanel({
     frontmatter,
     summary,
   )
+  const isIssueDraftPreview =
+    summary?.kind === 'draft' &&
+    summary.target.repository !== undefined &&
+    view === 'preview'
+  const issueFields = isJsonObject(frontmatter) ? frontmatter : {}
+  const parentIssue =
+    typeof issueFields['parentIssue'] === 'string'
+      ? issueFields['parentIssue']
+      : ''
+  const subIssues = stringList(issueFields['subIssues'])
+  const hasRelatedIssueFields = parentIssue.length > 0 || subIssues.length > 0
+  const visibleFrontmatterEntries =
+    isIssueDraftPreview && frontmatterEntries !== null
+      ? frontmatterEntries.filter(
+          ([name]) => name !== 'parentIssue' && name !== 'subIssues',
+        )
+      : frontmatterEntries
   const isIssueBody = summary?.kind === 'issue_body'
   const isApprovalDocument = isIssueBody || summary?.kind === 'review_replies'
   const showFrontmatterEntries =
-    frontmatterEntries === null || frontmatterEntries.length > 0
+    visibleFrontmatterEntries === null || visibleFrontmatterEntries.length > 0
   const showFrontmatter = isApprovalDocument
     ? view === 'edit' &&
-      frontmatterEntries !== null &&
-      frontmatterEntries.length > 0
-    : frontmatter !== null && showFrontmatterEntries
+      visibleFrontmatterEntries !== null &&
+      visibleFrontmatterEntries.length > 0
+    : frontmatter !== null &&
+      (showFrontmatterEntries || (isIssueDraftPreview && hasRelatedIssueFields))
 
   return (
     <article
@@ -381,9 +406,44 @@ export function ReviewDocumentPanel({
             aria-label="Document metadata"
           >
             <h2>Frontmatter</h2>
-            {frontmatterEntries !== null ? (
+            {isIssueDraftPreview && hasRelatedIssueFields ? (
+              <dl className="review-document-issue-fields">
+                {parentIssue.length > 0 ? (
+                  <>
+                    <dt>Parent issue</dt>
+                    <dd className="review-document-issue-parent">
+                      <div className="review-document-issue-reference">
+                        <ReviewDocumentIssueReference
+                          reference={parentIssue}
+                          title={relatedIssueTitles?.[parentIssue]}
+                        />
+                      </div>
+                    </dd>
+                  </>
+                ) : null}
+                {subIssues.length > 0 ? (
+                  <>
+                    <dt>Sub-issues</dt>
+                    <dd className="review-document-issue-sub-items">
+                      {subIssues.map((subIssue, index) => (
+                        <span
+                          key={`${subIssue}-${String(index)}`}
+                          className="review-document-issue-reference"
+                        >
+                          <ReviewDocumentIssueReference
+                            reference={subIssue}
+                            title={relatedIssueTitles?.[subIssue]}
+                          />
+                        </span>
+                      ))}
+                    </dd>
+                  </>
+                ) : null}
+              </dl>
+            ) : null}
+            {visibleFrontmatterEntries !== null ? (
               <dl className="review-document-fields">
-                {frontmatterEntries.map(([name, value]) => (
+                {visibleFrontmatterEntries.map(([name, value]) => (
                   <FieldEditor
                     key={name}
                     name={name}

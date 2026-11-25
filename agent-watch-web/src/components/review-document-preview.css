@@ -75,6 +75,10 @@
   align-items: center;
 }
 
+.review-document-issue-parent > .review-document-issue-reference {
+  width: 100%;
+}
+
 .review-document-issue-chips {
   display: flex;
   min-width: 0;

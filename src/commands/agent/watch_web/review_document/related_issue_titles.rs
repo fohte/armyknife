@@ -36,23 +36,14 @@ pub(super) async fn lookup_issue_titles_with_timeout(
     frontmatter: &Value,
     lookup: IssueTitleLookup,
 ) -> HashMap<String, String> {
-    match tokio::time::timeout(
-        ISSUE_TITLE_LOOKUP_TIMEOUT,
-        lookup_issue_titles(frontmatter, lookup),
-    )
-    .await
-    {
-        Ok(titles) => titles,
-        Err(_) => {
-            tracing::debug!("timed out loading related issue titles");
-            HashMap::new()
-        }
-    }
+    let deadline = tokio::time::Instant::now() + ISSUE_TITLE_LOOKUP_TIMEOUT;
+    lookup_issue_titles_until(frontmatter, lookup, Some(deadline)).await
 }
 
-pub(super) async fn lookup_issue_titles(
+async fn lookup_issue_titles_until(
     frontmatter: &Value,
     lookup: IssueTitleLookup,
+    deadline: Option<tokio::time::Instant>,
 ) -> HashMap<String, String> {
     let references = issue_references(frontmatter);
     stream::iter(references)
@@ -65,10 +56,22 @@ pub(super) async fn lookup_issue_titles(
                     repository,
                     number,
                 } = issue;
-                let title = match lookup(owner, repository, number).await {
-                    Ok(title) => Some(title),
-                    Err(error) => {
+                let title_result = match deadline {
+                    Some(deadline) => {
+                        tokio::time::timeout_at(deadline, lookup(owner, repository, number))
+                            .await
+                            .ok()
+                    }
+                    None => Some(lookup(owner, repository, number).await),
+                };
+                let title = match title_result {
+                    Some(Ok(title)) => Some(title),
+                    Some(Err(error)) => {
                         tracing::debug!(issue = %reference, %error, "failed to load related issue title");
+                        None
+                    }
+                    None => {
+                        tracing::debug!(issue = %reference, "timed out loading related issue title");
                         None
                     }
                 };
@@ -148,12 +151,13 @@ mod tests {
             })
         });
 
-        let titles = lookup_issue_titles(
+        let titles = lookup_issue_titles_until(
             &serde_json::json!({
                 "parentIssue": "sample-owner/sample-repo#42",
                 "subIssues": ["sample-owner/sample-repo#43", "malformed reference"],
             }),
             issue_title_lookup,
+            None,
         )
         .await;
 
@@ -166,6 +170,36 @@ mod tests {
                 )]),
                 2,
             ),
+        );
+    }
+
+    #[tokio::test]
+    async fn keeps_titles_that_resolve_before_another_lookup_times_out() {
+        let issue_title_lookup: IssueTitleLookup = Arc::new(|_, _, number| {
+            Box::pin(async move {
+                match number {
+                    42 => Ok("Sample parent".to_owned()),
+                    43 => std::future::pending::<anyhow::Result<String>>().await,
+                    _ => anyhow::bail!("unexpected issue reference"),
+                }
+            })
+        });
+
+        let titles = lookup_issue_titles_with_timeout(
+            &serde_json::json!({
+                "parentIssue": "sample-owner/sample-repo#42",
+                "subIssues": ["sample-owner/sample-repo#43"],
+            }),
+            issue_title_lookup,
+        )
+        .await;
+
+        assert_eq!(
+            titles,
+            HashMap::from([(
+                "sample-owner/sample-repo#42".to_owned(),
+                "Sample parent".to_owned(),
+            )]),
         );
     }
 

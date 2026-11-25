@@ -286,6 +286,36 @@ export const IssueBodyShowsTypedMetadata: Story = {
   decorators: [desktopViewport],
 }
 
+export const NewIssueDraftShowsRelatedTitles: Story = {
+  name: 'A new issue draft shows titles beside its related references',
+  args: {
+    summary: newIssueDraft,
+    summaries: [newIssueDraft],
+    frontmatter: {
+      title: 'Sample issue title',
+      parentIssue: 'sample-owner/sample-repo#42',
+      subIssues: ['sample-owner/sample-repo#43', 'sample-owner/sample-repo#44'],
+      submit: false,
+    },
+    relatedIssueTitles: {
+      'sample-owner/sample-repo#42': 'Sample parent issue title',
+      'sample-owner/sample-repo#43': 'Sample first sub-issue title',
+      'sample-owner/sample-repo#44': 'Sample second sub-issue title',
+    },
+    body: 'Sample issue body.',
+  },
+  decorators: [desktopViewport],
+}
+
+export const MobileNewIssueDraftShowsRelatedTitles: Story = {
+  name: 'The mobile new issue draft shows titles beside its related references',
+  args: {
+    ...NewIssueDraftShowsRelatedTitles.args,
+    isMobile: true,
+  },
+  decorators: [phoneViewport],
+}
+
 export const IssueBodyEditShowsMilestone: Story = {
   name: 'An issue body keeps its milestone visible in Edit mode',
   args: {
