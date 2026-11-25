@@ -87,7 +87,25 @@ export function useDraft(storageKey: string, initialValue = '') {
     [updateDraft],
   )
 
-  return { draft, updateDraft, clearDraftIfUnchanged, storageAvailable }
+  const clearDraft = useCallback(() => {
+    updateDraft('')
+  }, [updateDraft])
+
+  const restoreDraftIfEmpty = useCallback(
+    (value: string) => {
+      if (draftRef.current === '') updateDraft(value)
+    },
+    [updateDraft],
+  )
+
+  return {
+    draft,
+    updateDraft,
+    clearDraft,
+    restoreDraftIfEmpty,
+    clearDraftIfUnchanged,
+    storageAvailable,
+  }
 }
 
 export function useComposerDraft(sessionId: string) {

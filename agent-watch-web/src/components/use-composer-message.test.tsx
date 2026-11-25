@@ -40,7 +40,8 @@ function ComposerMessageHarness({
     draft: '',
     messageEnabled: true,
     externalSending: false,
-    clearDraftIfUnchanged: () => undefined,
+    clearDraft: () => undefined,
+    restoreDraftIfEmpty: () => undefined,
     onAction,
   })
   return null

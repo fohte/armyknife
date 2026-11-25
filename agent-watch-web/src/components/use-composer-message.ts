@@ -9,7 +9,8 @@ type ComposerMessageOptions = {
   draft: string
   messageEnabled: boolean
   externalSending: boolean
-  clearDraftIfUnchanged: (sentDraft: string) => void
+  clearDraft: () => void
+  restoreDraftIfEmpty: (sentDraft: string) => void
   onAction: (
     action: string,
     payload?: Record<string, unknown>,
@@ -21,7 +22,8 @@ export function useComposerMessage({
   draft,
   messageEnabled,
   externalSending,
-  clearDraftIfUnchanged,
+  clearDraft,
+  restoreDraftIfEmpty,
   onAction,
 }: ComposerMessageOptions) {
   const attachmentState = useAttachments(sessionId)
@@ -43,6 +45,7 @@ export function useComposerMessage({
       return
     }
     const sentDraft = draft
+    clearDraft()
     sendingRef.current = true
     setSendPending(true)
     const finishSending = () => {
@@ -50,21 +53,26 @@ export function useComposerMessage({
       setSendPending(false)
     }
     try {
-      await attachmentState.sendWithAttachments(async (encodedAttachments) => {
-        const succeeded = await onAction('messages', {
-          content: sentDraft,
-          ...(encodedAttachments.length === 0
-            ? {}
-            : { attachments: encodedAttachments }),
-        })
-        if (succeeded) {
-          clearDraftIfUnchanged(sentDraft)
-          if (encodedAttachments.length > 0) {
-            attachmentState.removeAttachments(attachments.map(({ id }) => id))
+      const succeeded = await attachmentState.sendWithAttachments(
+        async (encodedAttachments) => {
+          const succeeded = await onAction('messages', {
+            content: sentDraft,
+            ...(encodedAttachments.length === 0
+              ? {}
+              : { attachments: encodedAttachments }),
+          })
+          if (succeeded) {
+            if (encodedAttachments.length > 0) {
+              attachmentState.removeAttachments(attachments.map(({ id }) => id))
+            }
           }
-        }
-        return succeeded
-      })
+          return succeeded
+        },
+      )
+      if (!succeeded) restoreDraftIfEmpty(sentDraft)
+    } catch (error) {
+      restoreDraftIfEmpty(sentDraft)
+      throw error
     } finally {
       finishSending()
     }

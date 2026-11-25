@@ -7330,7 +7330,13 @@ it('directs Codex questions and permissions to the terminal', () => {
 })
 
 it('keeps the message draft when sending fails', async () => {
-  const onAction = vi.fn(() => Promise.resolve(false))
+  let completeSend: ((succeeded: boolean) => void) | undefined
+  const onAction = vi.fn(
+    () =>
+      new Promise<boolean>((resolve) => {
+        completeSend = resolve
+      }),
+  )
   renderView(onAction)
   const textarea = requireElement(
     container.querySelector<HTMLTextAreaElement>('textarea'),
@@ -7339,7 +7345,48 @@ it('keeps the message draft when sending fails', async () => {
   act(() => {
     dispatchKey(textarea, 'Enter')
   })
+  const draftWhileSending = textarea.value
   await act(async () => {
+    completeSend?.(false)
+    await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    draftWhileSending,
+    draft: textarea.value,
+    storedDraft: window.localStorage.getItem(
+      'agent-watch-web:composer-draft:sample-session',
+    ),
+    actions: onAction.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    draftWhileSending: '',
+    draft: 'Retain this draft',
+    storedDraft: 'Retain this draft',
+    actions: [['messages', { content: 'Retain this draft' }]],
+  })
+})
+
+it('keeps text entered during a failed send', async () => {
+  let completeSend: ((succeeded: boolean) => void) | undefined
+  const onAction = vi.fn(
+    () =>
+      new Promise<boolean>((resolve) => {
+        completeSend = resolve
+      }),
+  )
+  renderView(onAction)
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  setTextareaValue(textarea, 'Original request')
+  act(() => {
+    dispatchKey(textarea, 'Enter')
+  })
+  setTextareaValue(textarea, 'New request')
+
+  await act(async () => {
+    completeSend?.(false)
     await Promise.resolve()
   })
 
@@ -7351,9 +7398,66 @@ it('keeps the message draft when sending fails', async () => {
     actions: onAction.mock.calls,
   })
   expect(snapshot()).toEqual({
-    draft: 'Retain this draft',
-    storedDraft: 'Retain this draft',
-    actions: [['messages', { content: 'Retain this draft' }]],
+    draft: 'New request',
+    storedDraft: 'New request',
+    actions: [['messages', { content: 'Original request' }]],
+  })
+})
+
+it('clears an IME composition restored after submitting from the send button', async () => {
+  let completeSend: ((succeeded: boolean) => void) | undefined
+  const onAction = vi.fn(
+    () =>
+      new Promise<boolean>((resolve) => {
+        completeSend = resolve
+      }),
+  )
+  renderView(onAction)
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  const sentDraft = 'Composed request'
+  setTextareaValue(textarea, sentDraft)
+  act(() => {
+    textarea.dispatchEvent(
+      new CompositionEvent('compositionstart', { bubbles: true }),
+    )
+  })
+  const sendButton = requireElement(
+    container.querySelector<HTMLButtonElement>('[aria-label="Send message"]'),
+  )
+
+  act(() => {
+    sendButton.click()
+  })
+  const draftWhileSending = textarea.value
+  act(() => {
+    textarea.dispatchEvent(
+      new CompositionEvent('compositionend', {
+        bubbles: true,
+        data: sentDraft,
+      }),
+    )
+    setTextareaValue(textarea, sentDraft)
+  })
+  await act(async () => {
+    completeSend?.(true)
+    await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    draftWhileSending,
+    draft: textarea.value,
+    storedDraft: window.localStorage.getItem(
+      'agent-watch-web:composer-draft:sample-session',
+    ),
+    actions: onAction.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    draftWhileSending: '',
+    draft: '',
+    storedDraft: null,
+    actions: [['messages', { content: sentDraft }]],
   })
 })
 
@@ -8613,7 +8717,7 @@ it('blocks duplicate sends and shows their pending status', async () => {
       actionCalls: [['messages', { content: 'Send once' }]],
       buttonDisabled: true,
       defaultPrevented: [true, true],
-      draft: 'Send once',
+      draft: '',
       status: 'Sending…',
     },
     afterSend: {
