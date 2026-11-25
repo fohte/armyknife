@@ -179,7 +179,7 @@ pub(in crate::commands::agent::watch_web::messages) fn cards_from_sources(
         let resolved = matches!(&proposal.item, ChatItem::Proposal { resolved: true, .. });
         TimedCard::new(
             CardKind::Proposal,
-            Some(proposal.created_at),
+            Some(proposal.resolved_at.unwrap_or(proposal.created_at)),
             proposal.seq,
             !resolved,
             proposal.item.clone(),
@@ -188,7 +188,7 @@ pub(in crate::commands::agent::watch_web::messages) fn cards_from_sources(
     cards.extend(todos.iter().map(|todo| {
         TimedCard::new(
             CardKind::Todo,
-            Some(todo.created_at),
+            Some(todo.completed_at.unwrap_or(todo.created_at)),
             todo.seq,
             todo.completed_at.is_none(),
             ChatItem::Todo {
@@ -416,6 +416,7 @@ mod tests {
             ProposalItem {
                 seq: 1,
                 created_at: timestamp("2026-06-01T12:01:00Z"),
+                resolved_at: Some(timestamp("2026-06-01T12:02:30Z")),
                 item: ChatItem::Proposal {
                     seq: 1,
                     title: "A resolved proposal".to_string(),
@@ -439,6 +440,7 @@ mod tests {
             ProposalItem {
                 seq: 2,
                 created_at: timestamp("2026-06-01T12:00:10Z"),
+                resolved_at: None,
                 item: ChatItem::Proposal {
                     seq: 2,
                     title: "A pending proposal".to_string(),
@@ -459,6 +461,7 @@ mod tests {
             ProposalItem {
                 seq: 3,
                 created_at: timestamp("2026-06-01T12:00:30Z"),
+                resolved_at: None,
                 item: ChatItem::Proposal {
                     seq: 3,
                     title: "A later pending proposal".to_string(),
@@ -485,7 +488,7 @@ mod tests {
                 detail: None,
                 folded: false,
                 added_folded: false,
-                created_at: timestamp("2026-06-01T12:02:00Z"),
+                created_at: timestamp("2026-06-01T11:59:00Z"),
                 completed_at: Some(timestamp("2026-06-01T12:03:00Z")),
                 resolution: Some(TodoResolution::Completed),
                 comment: None,
@@ -610,7 +613,6 @@ mod tests {
             ChatItem::Assistant {
                 text: "before".to_string(),
             },
-            proposals[0].item.clone(),
             ChatItem::Decision {
                 seq: 1,
                 title: "A pending decision".to_string(),
@@ -620,6 +622,7 @@ mod tests {
                 review: None,
                 created_at: "2026-06-01T12:01:30Z".to_string(),
             },
+            proposals[0].item.clone(),
             ChatItem::Todo {
                 seq: 1,
                 title: "A completed todo".to_string(),

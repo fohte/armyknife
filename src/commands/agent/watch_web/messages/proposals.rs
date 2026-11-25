@@ -5,10 +5,11 @@ use super::ChatItem;
 use crate::commands::agent::proposal::{ProposalAnswer, ProposalBody};
 use crate::commands::agent::store::AgentProposal;
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ProposalItem {
     pub(super) seq: i64,
     pub(super) created_at: DateTime<Utc>,
+    pub(super) resolved_at: Option<DateTime<Utc>>,
     pub(super) item: ChatItem,
 }
 
@@ -24,6 +25,7 @@ pub(super) fn proposal_chat_item(proposal: &AgentProposal) -> Result<ProposalIte
     Ok(ProposalItem {
         seq: proposal.seq,
         created_at: proposal.created_at,
+        resolved_at: proposal.resolved_at,
         item: ChatItem::Proposal {
             seq: proposal.seq,
             title: body.title,

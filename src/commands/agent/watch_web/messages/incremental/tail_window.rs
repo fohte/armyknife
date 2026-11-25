@@ -5,6 +5,7 @@ use super::super::cache::{MessageCache, TailWindowParserState, TranscriptFingerp
 use super::super::log_tail_window_fallback;
 use super::super::parser;
 use super::super::parser::cards::filter_additional_cards_after_tail_window;
+use super::super::proposals::ProposalItem;
 use super::super::{
     ChatItem, ConversationResponse, Engine, TranscriptInput, open_seekable_transcript,
 };
@@ -288,21 +289,7 @@ pub(super) fn render_tail_window_parser(
     input: &TranscriptInput<'_>,
 ) -> Result<(ConversationResponse, Vec<i64>)> {
     let decisions = filter_decisions_after_tail_window(input.additions.decisions, state.cutoff);
-    let proposals = input
-        .additions
-        .proposals
-        .iter()
-        .filter(|proposal| {
-            matches!(
-                &proposal.item,
-                ChatItem::Proposal {
-                    resolved: false,
-                    ..
-                }
-            ) || proposal.created_at >= state.cutoff
-        })
-        .cloned()
-        .collect::<Vec<_>>();
+    let proposals = filter_proposals_after_tail_window(input.additions.proposals, state.cutoff);
     let todos = filter_todos_after_tail_window(input.additions.todos, state.cutoff);
     let peer_out_messages = input
         .additions
@@ -360,13 +347,35 @@ fn filter_decisions_after_tail_window(
         .collect()
 }
 
+fn filter_proposals_after_tail_window(
+    proposals: &[ProposalItem],
+    cutoff: chrono::DateTime<chrono::Utc>,
+) -> Vec<ProposalItem> {
+    proposals
+        .iter()
+        .filter(|proposal| {
+            matches!(
+                &proposal.item,
+                ChatItem::Proposal {
+                    resolved: false,
+                    ..
+                }
+            ) || proposal.resolved_at.unwrap_or(proposal.created_at) >= cutoff
+        })
+        .cloned()
+        .collect()
+}
+
 fn filter_todos_after_tail_window(
     todos: &[AgentTodo],
     cutoff: chrono::DateTime<chrono::Utc>,
 ) -> Vec<AgentTodo> {
     todos
         .iter()
-        .filter(|todo| todo.completed_at.is_none() || todo.created_at >= cutoff)
+        .filter(|todo| {
+            todo.completed_at
+                .is_none_or(|completed_at| completed_at >= cutoff)
+        })
         .cloned()
         .collect()
 }
@@ -410,10 +419,13 @@ mod tests {
     use chrono::{DateTime, Utc};
 
     use super::{
-        filter_decisions_after_tail_window, filter_todos_after_tail_window,
-        parse_tail_window_or_full,
+        filter_decisions_after_tail_window, filter_proposals_after_tail_window,
+        filter_todos_after_tail_window, parse_tail_window_or_full,
     };
+    use crate::commands::agent::proposal::ProposalOption;
     use crate::commands::agent::store::{AgentDecision, AgentTodo, TodoResolution};
+    use crate::commands::agent::watch_web::messages::ChatItem;
+    use crate::commands::agent::watch_web::messages::proposals::ProposalItem;
 
     fn timestamp(value: &str) -> DateTime<Utc> {
         DateTime::parse_from_rfc3339(value)
@@ -435,7 +447,7 @@ mod tests {
     }
 
     #[test]
-    fn tail_window_omits_old_decisions_but_keeps_unresolved_todos() {
+    fn tail_window_keeps_pending_cards_and_recently_resolved_cards() {
         let decisions = [
             AgentDecision {
                 session_id: "fixture-session".to_string(),
@@ -492,10 +504,63 @@ mod tests {
                 detail: None,
                 folded: false,
                 added_folded: false,
-                created_at: timestamp("2026-06-01T12:00:00Z"),
+                created_at: timestamp("2026-06-01T11:59:57Z"),
                 completed_at: Some(timestamp("2026-06-01T12:00:01Z")),
                 resolution: Some(TodoResolution::Completed),
                 comment: None,
+            },
+        ];
+        let proposals = [
+            ProposalItem {
+                seq: 1,
+                created_at: timestamp("2026-06-01T11:59:57Z"),
+                resolved_at: None,
+                item: ChatItem::Proposal {
+                    seq: 1,
+                    title: "A pending proposal".to_string(),
+                    summary: None,
+                    options: vec![ProposalOption {
+                        label: "Option A".to_string(),
+                        description: None,
+                        pros: Vec::new(),
+                        cons: Vec::new(),
+                        recommended: false,
+                    }],
+                    answer: None,
+                    resolved: false,
+                    resolution: None,
+                    comment: None,
+                },
+            },
+            ProposalItem {
+                seq: 2,
+                created_at: timestamp("2026-06-01T11:59:58Z"),
+                resolved_at: Some(timestamp("2026-06-01T11:59:59Z")),
+                item: ChatItem::Proposal {
+                    seq: 2,
+                    title: "An old resolved proposal".to_string(),
+                    summary: None,
+                    options: Vec::new(),
+                    answer: None,
+                    resolved: true,
+                    resolution: None,
+                    comment: None,
+                },
+            },
+            ProposalItem {
+                seq: 3,
+                created_at: timestamp("2026-06-01T11:59:56Z"),
+                resolved_at: Some(timestamp("2026-06-01T12:00:01Z")),
+                item: ChatItem::Proposal {
+                    seq: 3,
+                    title: "A recently resolved proposal".to_string(),
+                    summary: None,
+                    options: Vec::new(),
+                    answer: None,
+                    resolved: true,
+                    resolution: None,
+                    comment: None,
+                },
             },
         ];
         let cutoff = timestamp("2026-06-01T12:00:00Z");
@@ -503,10 +568,12 @@ mod tests {
         assert_eq!(
             (
                 filter_decisions_after_tail_window(&decisions, cutoff),
+                filter_proposals_after_tail_window(&proposals, cutoff),
                 filter_todos_after_tail_window(&todos, cutoff),
             ),
             (
                 vec![decisions[1].clone()],
+                vec![proposals[0].clone(), proposals[2].clone()],
                 vec![todos[0].clone(), todos[2].clone()],
             ),
         );

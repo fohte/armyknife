@@ -1011,6 +1011,7 @@ mod tests {
                     created_at: DateTime::parse_from_rfc3339("2026-06-01T12:30:00Z")
                         .unwrap()
                         .with_timezone(&Utc),
+                    resolved_at: None,
                     item: proposal.clone(),
                 }],
             )
@@ -1043,7 +1044,7 @@ mod tests {
     }
 
     #[test]
-    fn resolved_proposal_keeps_its_timeline_position_while_pending_proposal_is_pinned() {
+    fn resolved_proposal_uses_its_resolution_time_while_pending_proposal_is_pinned() {
         let transcript = [
             json!({
                 "uuid": "fixture-assistant-before",
@@ -1145,11 +1146,13 @@ mod tests {
                     ProposalItem {
                         seq: 1,
                         created_at: created_at("2026-06-01T12:01:00Z"),
+                        resolved_at: Some(created_at("2026-06-01T12:06:00Z")),
                         item: unplaced_proposal.clone(),
                     },
                     ProposalItem {
                         seq: 2,
                         created_at: created_at("2026-06-01T12:03:30Z"),
+                        resolved_at: None,
                         item: recorded_proposal.clone(),
                     },
                 ],
@@ -1163,7 +1166,6 @@ mod tests {
                     ChatItem::Assistant {
                         text: "before".to_string(),
                     },
-                    unplaced_proposal,
                     ChatItem::Assistant {
                         text: "middle".to_string(),
                     },
@@ -1178,6 +1180,7 @@ mod tests {
                     ChatItem::Assistant {
                         text: "after".to_string(),
                     },
+                    unplaced_proposal,
                     recorded_proposal,
                 ],
                 Vec::new(),
@@ -1217,6 +1220,7 @@ mod tests {
             created_at: DateTime::parse_from_rfc3339("2026-06-01T12:01:00Z")
                 .unwrap()
                 .with_timezone(&Utc),
+            resolved_at: None,
             item: proposal.clone(),
         };
 
