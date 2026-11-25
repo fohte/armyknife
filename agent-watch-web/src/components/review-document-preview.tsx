@@ -332,6 +332,12 @@ function readableTime(value: string | null) {
   return date === undefined || time === undefined ? value : `${date} ${time}`
 }
 
+function resizeTextarea(textarea: HTMLTextAreaElement) {
+  const borderHeight = textarea.offsetHeight - textarea.clientHeight
+  textarea.style.height = 'auto'
+  textarea.style.height = `${String(textarea.scrollHeight + borderHeight)}px`
+}
+
 export function ReviewDocumentPreview({
   summary,
   body,
@@ -441,9 +447,13 @@ export function ReviewDocumentPreview({
                 <textarea
                   aria-label={`Your reply to ${thread.path}`}
                   disabled={!canSave}
+                  ref={(textarea) => {
+                    if (textarea !== null) resizeTextarea(textarea)
+                  }}
                   rows={Math.max(1, thread.reply.split('\n').length)}
                   value={thread.reply}
                   onChange={(event) => {
+                    resizeTextarea(event.currentTarget)
                     onBodyChange(
                       updateReviewThread(body, thread.id, {
                         reply: event.currentTarget.value,

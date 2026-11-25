@@ -1356,6 +1356,92 @@ Please close the handle.
   expect(savedBodies).toEqual([expectedBody])
 })
 
+it('shows wrapped mobile review replies without an inner textarea scroll', async () => {
+  await page.viewport(390, 844)
+  container.style.width = '390px'
+  container.style.height = '844px'
+  container.style.display = 'flex'
+  root = createRoot(container)
+  act(() =>
+    root?.render(
+      <div
+        className="session-status-panel"
+        data-size="phone"
+        style={{ width: '390px', height: '844px', display: 'flex' }}
+      >
+        <ReviewDocumentPanel
+          summary={{
+            id: 'fixture-review-replies',
+            kind: 'review_replies',
+            target: {
+              repository: 'example/web-app',
+              pullRequestNumber: 2049,
+              threadCount: 1,
+            },
+            startedAt: Date.now(),
+            isEditor: true,
+            canSave: true,
+            canFinish: true,
+          }}
+          frontmatter={{ submit: false }}
+          body={`<!-- thread: THREAD_sample_1 path: src/preflight.ts:42 author: @sample-reviewer -->
+- [ ] resolve
+<!-- diff -->
+\`\`\`diff
+@@ -39,5 +39,7 @@
+   const target = msg.target;
+-  if (!target) return fail('no target');
+>+ if (target == null) {
++    return fail('no target');
++  }
+\`\`\`
+<!-- /diff -->
+<!-- comment: @sample-reviewer 2026-01-15T10:30:00Z -->
+Could this accept null?
+<!-- /comment -->
+This is checked before processing.
+Empty values are rejected here, and only valid values continue.
+Boundary cases are covered by the tests.
+This reply records why the check runs before processing.
+It also explains how invalid values are handled.
+The caller can follow the same rule for each input.
+No later step needs to repeat this validation.
+The tests cover the boundary values and expected errors.
+The result stays consistent across the related handlers.
+The reply remains readable when it wraps on a phone.`}
+          isMobile
+        />
+      </div>,
+    ),
+  )
+
+  const content = container.querySelector<HTMLElement>(
+    '.review-document-content',
+  )
+  const preview = container.querySelector<HTMLElement>(
+    '.review-document-preview-column',
+  )
+  const reply = container.querySelector<HTMLTextAreaElement>(
+    '.review-document-thread-reply textarea',
+  )
+  if (content === null || preview === null || reply === null) {
+    throw new Error('The mobile review reply preview was not rendered.')
+  }
+
+  const snapshot = () => ({
+    contentCanScroll: content.scrollHeight > content.clientHeight,
+    previewOverflowY: getComputedStyle(preview).overflowY,
+    replyOverflowY: getComputedStyle(reply).overflowY,
+    replyTextFits: reply.scrollHeight <= reply.clientHeight,
+  })
+  expect(snapshot()).toEqual({
+    contentCanScroll: true,
+    previewOverflowY: 'visible',
+    replyOverflowY: 'hidden',
+    replyTextFits: true,
+  })
+})
+
 it('shows flat tabs with square editor and queued markers for multiple drafts', () => {
   const summaries = [
     {
