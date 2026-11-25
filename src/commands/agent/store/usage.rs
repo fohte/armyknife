@@ -1,16 +1,34 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use rusqlite::{TransactionBehavior, params};
+use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
 use super::database;
 use crate::commands::agent::types::Engine;
-use crate::commands::agent::usage::model::{EngineQuota, SessionUsage};
+use crate::commands::agent::usage::model::{
+    EngineQuota, RateLimitWindow, RateLimits, SessionUsage,
+};
 
 pub(crate) fn record_usage_from(sessions_dir: &Path, usage: &SessionUsage) -> Result<()> {
     let mut connection = database::open_usage_connection(sessions_dir)?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let usage_json = serde_json::to_string(usage).context("serializing session usage")?;
+    let incoming_rate_limits = usage.rate_limits.clone();
+    let has_rate_limit_update = incoming_rate_limits.has_any();
+    let previous_usage = transaction
+        .query_row(
+            "SELECT data FROM agent_session_usage WHERE session_id = ?1",
+            params![usage.session_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .map(|data| serde_json::from_str::<SessionUsage>(&data))
+        .transpose()
+        .context("deserializing previous session usage")?;
+    let mut usage = usage.clone();
+    if let Some(previous_usage) = previous_usage {
+        merge_usage(&mut usage, previous_usage);
+    }
+    let usage_json = serde_json::to_string(&usage).context("serializing session usage")?;
     let observed_at = usage.observed_at.timestamp_micros();
     transaction.execute(
         "INSERT INTO agent_session_usage (session_id, engine, data, observed_at)
@@ -28,10 +46,23 @@ pub(crate) fn record_usage_from(sessions_dir: &Path, usage: &SessionUsage) -> Re
         ],
     )?;
 
-    if usage.rate_limits.has_any() {
+    if has_rate_limit_update {
+        let previous_quota = transaction
+            .query_row(
+                "SELECT data FROM agent_engine_quota WHERE engine = ?1",
+                params![engine_name(usage.engine)],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .map(|data| serde_json::from_str::<EngineQuota>(&data))
+            .transpose()
+            .context("deserializing previous engine quota")?;
+        let rate_limits = previous_quota
+            .map(|quota| merge_rate_limits(incoming_rate_limits.clone(), quota.rate_limits))
+            .unwrap_or(incoming_rate_limits);
         let quota = EngineQuota {
             engine: usage.engine,
-            rate_limits: usage.rate_limits.clone(),
+            rate_limits,
             observed_at: usage.observed_at,
         };
         let quota_json = serde_json::to_string(&quota).context("serializing engine quota")?;
@@ -48,6 +79,36 @@ pub(crate) fn record_usage_from(sessions_dir: &Path, usage: &SessionUsage) -> Re
 
     transaction.commit()?;
     Ok(())
+}
+
+fn merge_usage(current: &mut SessionUsage, previous: SessionUsage) {
+    current.model = current.model.take().or(previous.model);
+    current.effort = current.effort.take().or(previous.effort);
+    current.context = current.context.take().or(previous.context);
+    current.version = current.version.take().or(previous.version);
+    current.rate_limits = merge_rate_limits(current.rate_limits.clone(), previous.rate_limits);
+}
+
+fn merge_rate_limits(current: RateLimits, previous: RateLimits) -> RateLimits {
+    fn merge_window(
+        current: Option<RateLimitWindow>,
+        previous: Option<RateLimitWindow>,
+    ) -> Option<RateLimitWindow> {
+        match (current, previous) {
+            (Some(mut current), Some(previous)) => {
+                current.resets_at = current.resets_at.or(previous.resets_at);
+                Some(current)
+            }
+            (Some(current), None) => Some(current),
+            (None, Some(previous)) => Some(previous),
+            (None, None) => None,
+        }
+    }
+
+    RateLimits {
+        five_hour: merge_window(current.five_hour, previous.five_hour),
+        seven_day: merge_window(current.seven_day, previous.seven_day),
+    }
 }
 
 pub(crate) fn usage_snapshots_from(sessions_dir: &Path) -> Result<Vec<SessionUsage>> {
@@ -143,6 +204,8 @@ mod tests {
         update.rate_limits = RateLimits::default();
         update.observed_at += chrono::Duration::seconds(1);
         record_usage_from(sessions_dir.path(), &update).expect("latest usage should be recorded");
+        let mut expected_update = update;
+        expected_update.rate_limits = usage().rate_limits;
 
         assert_eq!(
             (
@@ -150,7 +213,7 @@ mod tests {
                 engine_quotas_from(sessions_dir.path()).expect("engine quota should load"),
             ),
             (
-                vec![update],
+                vec![expected_update],
                 vec![crate::commands::agent::usage::model::EngineQuota {
                     engine: Engine::Claude,
                     rate_limits: usage().rate_limits,
