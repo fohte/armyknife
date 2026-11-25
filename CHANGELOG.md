@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.928](https://github.com/fohte/armyknife/compare/v0.1.927...v0.1.928) (2026-11-25)
+
+
+### Bug Fixes
+
+* **agent/resume:** resume in the stored directory ([#2276](https://github.com/fohte/armyknife/issues/2276)) ([6ebc47c](https://github.com/fohte/armyknife/commit/6ebc47c9f1222884e448afc6509fda4b9e525489))
+
 ## [0.1.927](https://github.com/fohte/armyknife/compare/v0.1.926...v0.1.927) (2026-11-25)
 
 
