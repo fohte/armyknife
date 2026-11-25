@@ -18,6 +18,7 @@ mod archive;
 mod database;
 mod peer_out_messages;
 mod queued_prompts;
+mod todos;
 mod usage;
 
 pub(crate) use archive::{ArchiveLogContext, archive_codex_thread_before_delete_with};
@@ -45,6 +46,7 @@ pub(crate) use queued_prompts::{
     mark_watch_web_queued_prompts_resolved_from, watch_web_queued_prompt_message_id_exists_from,
     watch_web_queued_prompts_from,
 };
+pub(crate) use todos::{resolve_agent_todo_at, resolve_agent_todo_from_at};
 pub(crate) use usage::{engine_quotas_from, record_usage_from, usage_snapshots_from};
 
 /// Threshold in seconds for sort stability.
@@ -754,15 +756,6 @@ pub(crate) fn lock_agent_todo_resolution(
     session_id: &str,
 ) -> Result<std::fs::File> {
     database::lock_agent_todo_resolution(sessions_dir, session_id)
-}
-
-pub(crate) fn resolve_agent_todo(
-    session_id: &str,
-    seq: i64,
-    resolution: TodoResolution,
-    comment: Option<&str>,
-) -> Result<bool> {
-    resolve_agent_todo_from(&sessions_dir()?, session_id, seq, resolution, comment)
 }
 
 pub(crate) fn watch_web_session_states_from(

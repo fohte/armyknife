@@ -2,6 +2,7 @@ use axum::http::StatusCode;
 use indoc::indoc;
 use rstest::rstest;
 use serde_json::json;
+use std::sync::{Arc, Mutex};
 use tower::ServiceExt;
 
 use super::{ActionContext, action_context, post, response_snapshot, session};
@@ -98,14 +99,25 @@ async fn folding_a_completed_todo_returns_conflict(action_context: ActionContext
 #[tokio::test]
 async fn completing_a_todo_notifies_the_session_before_persisting(action_context: ActionContext) {
     action_context.save_session(&session("sample-session"));
+    let sessions_dir = action_context.temp_dir.path().join("sessions");
     store::add_agent_todo_in(
-        &action_context.temp_dir.path().join("sessions"),
+        &sessions_dir,
         "sample-session",
         "Check the page",
         Some("Use a phone"),
         false,
     )
     .unwrap();
+    let notification_observation = Arc::new(Mutex::new(None));
+    let observation = Arc::clone(&notification_observation);
+    let observed_sessions_dir = sessions_dir.clone();
+    action_context.set_after_message(move || {
+        let notification_at = chrono::Utc::now();
+        let completed_at = store::agent_todos_from(&observed_sessions_dir, "sample-session")
+            .unwrap()[0]
+            .completed_at;
+        *observation.lock().unwrap() = Some((notification_at, completed_at));
+    });
 
     let response = action_context
         .router()
@@ -115,11 +127,11 @@ async fn completing_a_todo_notifies_the_session_before_persisting(action_context
         ))
         .await
         .unwrap();
-    let todos = store::agent_todos_from(
-        &action_context.temp_dir.path().join("sessions"),
-        "sample-session",
-    )
-    .unwrap();
+    let todos = store::agent_todos_from(&sessions_dir, "sample-session").unwrap();
+    let (notification_at, completed_at_when_notified) = notification_observation
+        .lock()
+        .unwrap()
+        .expect("message should observe the pending todo");
     let sent_content = action_context.runtime.calls.lock().unwrap()[0]["content"]
         .as_str()
         .unwrap()
@@ -132,6 +144,10 @@ async fn completing_a_todo_notifies_the_session_before_persisting(action_context
         (
             response_snapshot(response, &action_context).await,
             action_message_id,
+            completed_at_when_notified.is_none()
+                && todos[0]
+                    .completed_at
+                    .is_some_and(|completed_at| completed_at <= notification_at),
             todos
                 .iter()
                 .map(|todo| (
@@ -155,6 +171,7 @@ async fn completing_a_todo_notifies_the_session_before_persisting(action_context
                     "}.trim_end(),
                 }],
             }),
+            true,
             true,
             vec![(
                 "Check the page",

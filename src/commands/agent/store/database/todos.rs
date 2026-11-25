@@ -236,6 +236,24 @@ pub(crate) fn resolve_agent_todo(
     resolution: TodoResolution,
     comment: Option<&str>,
 ) -> Result<bool> {
+    resolve_agent_todo_at(
+        sessions_dir,
+        session_id,
+        seq,
+        resolution,
+        comment,
+        Utc::now(),
+    )
+}
+
+pub(crate) fn resolve_agent_todo_at(
+    sessions_dir: &Path,
+    session_id: &str,
+    seq: i64,
+    resolution: TodoResolution,
+    comment: Option<&str>,
+    completed_at: DateTime<Utc>,
+) -> Result<bool> {
     validate_session_id(session_id)?;
     let mut connection = open_connection(sessions_dir)?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -243,7 +261,7 @@ pub(crate) fn resolve_agent_todo(
         "UPDATE agent_todo SET completed_at = ?1, resolution = ?2, comment = ?3
          WHERE session_id = ?4 AND seq = ?5 AND completed_at IS NULL",
         params![
-            Utc::now().to_rfc3339(),
+            completed_at.to_rfc3339(),
             resolution.as_str(),
             comment,
             session_id,
@@ -269,7 +287,8 @@ mod tests {
 
     use super::{
         AgentTodo, TodoResolution, add_agent_todo, agent_todos, incomplete_agent_todo_titles,
-        lock_agent_todo_resolution, open_connection, resolve_agent_todo, set_agent_todo_folded,
+        lock_agent_todo_resolution, open_connection, resolve_agent_todo, resolve_agent_todo_at,
+        set_agent_todo_folded,
     };
     use crate::commands::agent::store::session_store_revision_from;
 
@@ -446,6 +465,55 @@ mod tests {
                     ("session-b".to_string(), "Other".to_string(), true),
                 ],
             ),
+        );
+    }
+
+    #[rstest]
+    fn stores_the_completion_time_supplied_by_the_watch_web_action(sessions_dir: TempDir) {
+        create_session(sessions_dir.path(), "session-a");
+        let seq = add_agent_todo(sessions_dir.path(), "session-a", "First", None, false)
+            .expect("todo should save");
+        let completed_at = Utc
+            .with_ymd_and_hms(2026, 1, 2, 3, 4, 5)
+            .single()
+            .expect("fixture time should be valid");
+        resolve_agent_todo_at(
+            sessions_dir.path(),
+            "session-a",
+            seq,
+            TodoResolution::Completed,
+            None,
+            completed_at,
+        )
+        .expect("todo should complete");
+
+        let epoch = Utc
+            .timestamp_opt(0, 0)
+            .single()
+            .expect("epoch should be valid");
+        let todo = agent_todos(sessions_dir.path(), "session-a")
+            .expect("todo should load")
+            .into_iter()
+            .map(|todo| AgentTodo {
+                created_at: epoch,
+                ..todo
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            todo,
+            vec![AgentTodo {
+                session_id: "session-a".to_string(),
+                seq,
+                title: "First".to_string(),
+                detail: None,
+                folded: false,
+                added_folded: false,
+                created_at: epoch,
+                completed_at: Some(completed_at),
+                resolution: Some(TodoResolution::Completed),
+                comment: None,
+            }],
         );
     }
 

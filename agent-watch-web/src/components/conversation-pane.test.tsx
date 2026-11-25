@@ -13,6 +13,11 @@ import { renderConversationMessage } from '#components/conversation-message'
 import { ConversationMessageRow } from '#components/conversation-message-row'
 import { ConversationPane } from '#components/conversation-pane'
 import { ConversationPaneView } from '#components/conversation-pane-view'
+import {
+  clearOffscreenConversationScrollCompensation,
+  type ConversationAnchorSpacing,
+  readConversationChildLayout,
+} from '#components/conversation-scroll-anchor'
 import { InboxConversationPanes } from '#components/inbox-conversation-panes'
 import { MarkdownSessionLinksProvider } from '#components/markdown-message'
 import { formatMessageTime } from '#components/message-time'
@@ -8754,11 +8759,20 @@ it('keeps the answered proposal in place as the conversation continues', () => {
   })
 })
 
-it('follows the bottom when an uncached conversation loads with an epoch', async () => {
-  const firstPageMessage: ChatItem = {
-    type: 'assistant',
-    text: 'The first page is ready.',
+it('follows the bottom when an uncached conversation with a pending card loads', async () => {
+  const pendingProposal: ChatItem = {
+    ...proposal,
+    seq: 64,
+    title: 'Choose a recovery strategy',
+    summary: 'Review the available recovery steps.',
   }
+  const firstPageMessages: ChatItem[] = [
+    ...Array.from({ length: 12 }, () => ({
+      type: 'assistant' as const,
+      text: 'Earlier history fills the conversation. '.repeat(10),
+    })),
+    pendingProposal,
+  ]
   let resolveMessages: ((response: Response) => void) | undefined
   const firstPageResponse = new Promise<Response>((resolve) => {
     resolveMessages = resolve
@@ -8795,9 +8809,9 @@ it('follows the bottom when an uncached conversation loads with an epoch', async
   await act(async () => {
     resolveMessages?.(
       jsonResponse(
-        messagesResponse([firstPageMessage], [], {
+        messagesResponse(firstPageMessages, [], {
           start: 0,
-          total: 1,
+          total: firstPageMessages.length,
           epoch: 'fixture-epoch-amber',
         }),
       ),
@@ -8805,11 +8819,192 @@ it('follows the bottom when an uncached conversation loads with an epoch', async
     await firstPageResponse
   })
   await waitForState(
-    () => container.querySelector('.chat-assistant-message') !== null,
+    () => container.querySelector('.chat-proposal-card') !== null,
   )
 
   const snapshot = () => ({ scrollTop: scroll.scrollTop })
   expect(snapshot()).toEqual({ scrollTop: 400 })
+})
+
+it('keeps a full-height resolved todo at the bottom without spacer padding', () => {
+  const earlierContext: ChatItem = {
+    type: 'assistant',
+    text: 'Earlier timeline context. '.repeat(40),
+  }
+  const pendingTodo: ChatItem = {
+    type: 'todo',
+    seq: 64,
+    title: 'Review the recovery plan',
+    detail: 'Review the recovery steps before proceeding. '.repeat(40),
+    completed: false,
+    resolution: null,
+    comment: null,
+  }
+  const messages = [earlierContext, pendingTodo]
+  renderConversationMessages(messages, 5)
+  const scroll = requireElement(
+    container.querySelector<HTMLDivElement>('.conversation-scroll'),
+  )
+  scroll.style.height = '360px'
+  scroll.style.flex = 'none'
+  renderConversationMessages(messages.slice(), 5)
+  act(() => {
+    requireElement(
+      scroll.querySelector<HTMLButtonElement>('.collapsible-text__toggle'),
+    ).click()
+  })
+  scrollToPosition(scroll, scroll.scrollHeight - scroll.clientHeight)
+  const pendingCardRect = requireElement(
+    scroll.querySelector<HTMLElement>('.chat-todo-card'),
+  ).getBoundingClientRect()
+  const earlierContextVisible = (() => {
+    const rect = requireElement(
+      scroll.querySelector<HTMLElement>('.chat-assistant-message'),
+    ).getBoundingClientRect()
+    const bounds = scroll.getBoundingClientRect()
+    return rect.top < bounds.bottom && rect.bottom > bounds.top
+  })()
+  const initialState = {
+    todoFillsViewport: pendingCardRect.height >= scroll.clientHeight,
+    todoVisible:
+      pendingCardRect.top < scroll.getBoundingClientRect().bottom &&
+      pendingCardRect.bottom > scroll.getBoundingClientRect().top,
+    earlierContextVisible,
+    atBottom:
+      scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight <= 24,
+  }
+
+  const resolvedTodo: ChatItem = {
+    ...pendingTodo,
+    completed: true,
+    resolution: 'completed',
+  }
+  renderConversationMessages([earlierContext, resolvedTodo], 5)
+
+  const card = requireElement(
+    scroll.querySelector<HTMLElement>('.chat-todo-card'),
+  )
+  const bounds = scroll.getBoundingClientRect()
+  const paddingBottom = Number.parseFloat(
+    window.getComputedStyle(scroll).paddingBottom,
+  )
+  const rowGap = Number.parseFloat(window.getComputedStyle(scroll).rowGap)
+  const snapshot = () => ({
+    cardVisible:
+      card.getBoundingClientRect().top < bounds.bottom &&
+      card.getBoundingClientRect().bottom > bounds.top,
+    blankSpaceAfterCard: Math.round(
+      bounds.bottom -
+        paddingBottom -
+        rowGap -
+        card.getBoundingClientRect().bottom,
+    ),
+    hasExtraPadding:
+      scroll.style.getPropertyValue(
+        '--conversation-anchor-extra-padding-bottom',
+      ) !== '',
+  })
+  const result = () => ({ initialState, afterResolution: snapshot() })
+  const expected = {
+    initialState: {
+      todoFillsViewport: true,
+      todoVisible: true,
+      earlierContextVisible: false,
+      atBottom: true,
+    },
+    afterResolution: {
+      cardVisible: true,
+      blankSpaceAfterCard: 0,
+      hasExtraPadding: false,
+    },
+  }
+  expect(result()).toEqual(expected)
+})
+
+it('preserves visible rows when clearing compensation above the scroll limit', () => {
+  const scroll = document.createElement('div')
+  scroll.style.cssText =
+    'display: flex; flex-direction: column; height: 200px; width: 400px; overflow-y: auto'
+  const children = Array.from({ length: 10 }, (_, index) => {
+    const child = document.createElement('div')
+    child.style.cssText =
+      'box-sizing: border-box; flex: 0 0 100px; height: 100px'
+    child.textContent = `Timeline row ${String(index)}`
+    scroll.append(child)
+    return child
+  })
+  const compensatedChild = children[1]
+  if (compensatedChild === undefined) throw new Error('Expected a timeline row')
+  compensatedChild.style.marginBlockStart = '120px'
+  const anchorOffsets = new Map<HTMLElement, ConversationAnchorSpacing>([
+    [
+      compensatedChild,
+      {
+        offset: 120,
+        baseMarginBlockStart: 0,
+        originalMarginBlockStart: '',
+      },
+    ],
+  ])
+  container.append(scroll)
+
+  scroll.scrollTop = scroll.scrollHeight - scroll.clientHeight - 30
+  const bounds = scroll.getBoundingClientRect()
+  const visibleBefore = children.flatMap((child) => {
+    const rect = child.getBoundingClientRect()
+    return rect.top < bounds.bottom && rect.bottom > bounds.top
+      ? [{ element: child, top: rect.top }]
+      : []
+  })
+  const compensationOffscreenBefore =
+    compensatedChild.getBoundingClientRect().bottom <= bounds.top
+  const distanceFromScrollLimit =
+    scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight
+  clearOffscreenConversationScrollCompensation(
+    scroll,
+    readConversationChildLayout(scroll),
+    anchorOffsets,
+    0,
+    new Set(),
+    false,
+    (element, scrollTop) => {
+      element.scrollTop = scrollTop
+    },
+  )
+  const visibleAfter = new Map(
+    children.flatMap((child) => {
+      const rect = child.getBoundingClientRect()
+      return rect.top < bounds.bottom && rect.bottom > bounds.top
+        ? [[child, rect.top] as const]
+        : []
+    }),
+  )
+
+  const actual = () => ({
+    compensationOffscreenBefore,
+    distanceFromScrollLimit,
+    compensationCleared:
+      compensatedChild.style.marginBlockStart === '' &&
+      anchorOffsets.size === 0,
+    visibleRowsBefore: visibleBefore.map(({ element }) =>
+      children.indexOf(element),
+    ),
+    visibleRowsStillVisible: visibleBefore.map(({ element }) =>
+      visibleAfter.has(element),
+    ),
+    visibleRowTopDeltas: visibleBefore.map(({ element, top }) =>
+      Math.round((visibleAfter.get(element) ?? top) - top),
+    ),
+  })
+  const expected = {
+    compensationOffscreenBefore: true,
+    distanceFromScrollLimit: 30,
+    compensationCleared: true,
+    visibleRowsBefore: [7, 8, 9],
+    visibleRowsStillVisible: [true, true, true],
+    visibleRowTopDeltas: [0, 0, 0],
+  }
+  expect(actual()).toEqual(expected)
 })
 
 it('keeps following when a hidden active tool becomes visible', () => {
@@ -12490,6 +12685,618 @@ it('keeps a question answer draft when a preceding conversation row arrives', ()
     'Use the bounded option',
   )
 })
+
+it.each([
+  {
+    cardType: 'proposal',
+    atBottom: false,
+    nearBottom: false,
+    resolution: 'completed',
+    resolvedSeq: 62,
+    cleanupTrigger: 'response',
+  },
+  {
+    cardType: 'proposal',
+    atBottom: true,
+    nearBottom: false,
+    resolution: 'completed',
+    resolvedSeq: 62,
+    cleanupTrigger: 'response',
+  },
+  {
+    cardType: 'todo',
+    atBottom: false,
+    nearBottom: false,
+    resolution: 'completed',
+    resolvedSeq: 62,
+    cleanupTrigger: 'response',
+  },
+  {
+    cardType: 'todo',
+    atBottom: true,
+    nearBottom: false,
+    resolution: 'completed',
+    resolvedSeq: 62,
+    cleanupTrigger: 'response',
+  },
+  {
+    cardType: 'todo',
+    atBottom: false,
+    nearBottom: false,
+    resolution: 'rejected',
+    resolvedSeq: 62,
+    cleanupTrigger: 'response',
+  },
+  {
+    cardType: 'todo',
+    atBottom: true,
+    nearBottom: false,
+    resolution: 'rejected',
+    resolvedSeq: 62,
+    cleanupTrigger: 'response',
+  },
+  {
+    cardType: 'proposal',
+    atBottom: true,
+    nearBottom: false,
+    resolution: 'completed',
+    resolvedSeq: 63,
+    cleanupTrigger: 'response',
+  },
+  {
+    cardType: 'todo',
+    atBottom: true,
+    nearBottom: false,
+    resolution: 'completed',
+    resolvedSeq: 63,
+    cleanupTrigger: 'response',
+  },
+  {
+    cardType: 'todo',
+    atBottom: true,
+    nearBottom: false,
+    resolution: 'rejected',
+    resolvedSeq: 63,
+    cleanupTrigger: 'response',
+  },
+  {
+    cardType: 'todo',
+    atBottom: false,
+    nearBottom: false,
+    resolution: 'completed',
+    resolvedSeq: 62,
+    cleanupTrigger: 'scroll',
+  },
+  {
+    cardType: 'todo',
+    atBottom: false,
+    nearBottom: false,
+    resolution: 'completed',
+    resolvedSeq: 62,
+    cleanupTrigger: 'response',
+    viewportHeight: 560,
+    requiresOffscreenCleanup: true,
+  },
+  {
+    cardType: 'todo',
+    atBottom: true,
+    nearBottom: false,
+    resolution: 'completed',
+    resolvedSeq: 63,
+    cleanupTrigger: 'scroll',
+    resolutionScrollDistance: 10,
+    requiresBottomPaddingCleanup: true,
+  },
+  {
+    cardType: 'todo',
+    atBottom: false,
+    nearBottom: true,
+    resolution: 'completed',
+    resolvedSeq: 62,
+    cleanupTrigger: 'response',
+  },
+] as const)(
+  'keeps the remaining $cardType cards in place when resolving card $resolvedSeq as $resolution atBottom=$atBottom nearBottom=$nearBottom cleanup=$cleanupTrigger viewportHeight=$viewportHeight',
+  ({
+    cardType,
+    atBottom,
+    nearBottom,
+    resolution,
+    resolvedSeq,
+    cleanupTrigger,
+    viewportHeight,
+    resolutionScrollDistance: requestedResolutionScrollDistance,
+    requiresOffscreenCleanup,
+    requiresBottomPaddingCleanup,
+  }) => {
+    container.style.cssText = 'width: 900px; height: 700px'
+    const detail =
+      'Review the selected configuration before continuing. '.repeat(10)
+    const conversationStart = 5
+    const messages: ChatItem[] = [
+      { type: 'assistant', text: 'Earlier context. '.repeat(35) },
+      ...[1, 2, 3].map((index) =>
+        cardType === 'proposal'
+          ? {
+              ...proposal,
+              seq: 60 + index,
+              title: `Choose setting ${String(index)}`,
+              summary: detail,
+            }
+          : {
+              type: 'todo' as const,
+              seq: 60 + index,
+              title: `Review setting ${String(index)}`,
+              detail,
+              completed: false,
+              resolution: null,
+              comment: null,
+            },
+      ),
+    ]
+    renderConversationMessages(messages, conversationStart)
+
+    const scroll = requireElement(
+      container.querySelector<HTMLDivElement>('.conversation-scroll'),
+    )
+    scroll.style.height = `${String(viewportHeight ?? 360)}px`
+    scroll.style.flex = 'none'
+    renderConversationMessages(messages.slice(), conversationStart)
+
+    const moveScrollWithoutDispatch = (scrollTop: number) => {
+      act(() => {
+        scroll.scrollTop = scrollTop
+      })
+    }
+    const dispatchScroll = () => {
+      void act(() => scroll.dispatchEvent(new Event('scroll')))
+    }
+    const setScrollPosition = (scrollTop: number) => {
+      moveScrollWithoutDispatch(scrollTop)
+      dispatchScroll()
+    }
+    const dispatchUserScrollInput = () => {
+      void act(() =>
+        scroll.dispatchEvent(
+          new WheelEvent('wheel', { bubbles: true, deltaY: -1 }),
+        ),
+      )
+    }
+    const bottom = scroll.scrollHeight - scroll.clientHeight
+    const scrollPosition = nearBottom
+      ? Math.max(0, bottom - 40)
+      : Math.min(180, bottom)
+    setScrollPosition(atBottom ? bottom : scrollPosition)
+    const getPendingCards = () =>
+      Array.from(
+        scroll.querySelectorAll<HTMLElement>(
+          '.chat-proposal-card, .chat-todo-card',
+        ),
+      )
+        .map((element) => {
+          const rect = element.getBoundingClientRect()
+          return {
+            element,
+            title: element.querySelector('h3')?.textContent,
+            top: Math.round(rect.top),
+            height: rect.height,
+          }
+        })
+        .filter(
+          ({ title }) =>
+            title?.startsWith(
+              cardType === 'proposal' ? 'Choose setting' : 'Review setting',
+            ) === true,
+        )
+    const before = getPendingCards().filter(
+      ({ title }) =>
+        title !==
+        `${cardType === 'proposal' ? 'Choose' : 'Review'} setting ${String(resolvedSeq - 60)}`,
+    )
+    const atBottomNow = () =>
+      scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight <= 24
+    const wasAtBottom = atBottomNow()
+    const scrollBounds = scroll.getBoundingClientRect()
+    const intersectsViewport = (top: number, height: number) =>
+      top < scrollBounds.bottom && top + height > scrollBounds.top
+    const initiallyVisible = before.map(({ top, height }) =>
+      intersectsViewport(top, height),
+    )
+    const getOverlappingChildren = () => {
+      const children = Array.from(scroll.children).filter(
+        (child): child is HTMLElement => child instanceof HTMLElement,
+      )
+      const overlappingChildren: string[] = []
+      const describeChild = (child: HTMLElement) =>
+        child.querySelector('h3')?.textContent ?? child.textContent.slice(0, 40)
+      for (const [leftIndex, left] of children.entries()) {
+        const leftRect = left.getBoundingClientRect()
+        for (const [rightIndex, right] of children.entries()) {
+          if (rightIndex <= leftIndex) continue
+          const rightRect = right.getBoundingClientRect()
+          if (
+            leftRect.left < rightRect.right &&
+            rightRect.left < leftRect.right &&
+            leftRect.top < rightRect.bottom &&
+            rightRect.top < leftRect.bottom
+          ) {
+            overlappingChildren.push(
+              `${describeChild(left)}:${String(Math.round(leftRect.top))} overlaps ${describeChild(right)}:${String(Math.round(rightRect.top))}`,
+            )
+          }
+        }
+      }
+      return overlappingChildren
+    }
+    const getScrollCompensation = () => ({
+      hasChildMarginBlockStart: Array.from(scroll.children).some(
+        (child) =>
+          child instanceof HTMLElement && child.style.marginBlockStart !== '',
+      ),
+      hasExtraPaddingBottom:
+        scroll.style.getPropertyValue(
+          '--conversation-anchor-extra-padding-bottom',
+        ) !== '',
+    })
+    const isResolvedMessage = (
+      message: ChatItem,
+    ): message is Extract<ChatItem, { type: 'proposal' | 'todo' }> =>
+      (message.type === 'proposal' || message.type === 'todo') &&
+      message.type === cardType &&
+      message.seq === resolvedSeq
+    const resolved = messages.find(isResolvedMessage)
+    if (resolved === undefined) throw new Error('Expected the card to resolve')
+    const settled: ChatItem =
+      resolved.type === 'proposal'
+        ? { ...resolved, answer: { choice: 0, comment: null } }
+        : {
+            ...resolved,
+            completed: true,
+            resolution,
+          }
+    const isCard = (
+      message: ChatItem,
+    ): message is Extract<ChatItem, { type: 'proposal' | 'todo' }> =>
+      message.type === 'proposal' || message.type === 'todo'
+    const remainingCards = messages.filter(
+      (message): message is Extract<ChatItem, { type: 'proposal' | 'todo' }> =>
+        isCard(message) && !isResolvedMessage(message),
+    )
+    const surroundingMessages = messages.filter((message) => !isCard(message))
+    const originalRemainingTops = before.map(({ top }) => top)
+    const stages: number[][] = []
+    const stageVisibility: boolean[][] = []
+    const bottomStates: boolean[] = []
+    const compensationStates: ReturnType<typeof getScrollCompensation>[] = []
+    const recordRemainingTops = () => {
+      const rects = before.map(({ element }) => element.getBoundingClientRect())
+      stages.push(rects.map(({ top }) => Math.round(top)))
+      stageVisibility.push(
+        rects.map(({ top, height }) => intersectsViewport(top, height)),
+      )
+      bottomStates.push(atBottomNow())
+      compensationStates.push(getScrollCompensation())
+    }
+    const optimisticMessages = messages.map((message) =>
+      isResolvedMessage(message) ? settled : message,
+    )
+    renderConversationMessages(optimisticMessages, conversationStart)
+    recordRemainingTops()
+    const afterOptimisticUpdate = getOverlappingChildren()
+    renderConversationMessages(
+      [...surroundingMessages, settled, ...remainingCards],
+      conversationStart,
+    )
+    recordRemainingTops()
+    const afterServerResponse = getOverlappingChildren()
+    let userScrollPreservedReadingPosition: boolean | null = null
+    let compensationAfterResolutionScroll: ReturnType<
+      typeof getScrollCompensation
+    > | null = null
+    const isScrollCleanup = ['scroll'].includes(cleanupTrigger)
+    const extraPaddingAfterServerResponse =
+      Number.parseFloat(
+        scroll.style.getPropertyValue(
+          '--conversation-anchor-extra-padding-bottom',
+        ),
+      ) || 0
+    const requestedScrollDistance =
+      requestedResolutionScrollDistance ??
+      (atBottom && isScrollCleanup && extraPaddingAfterServerResponse > 0
+        ? extraPaddingAfterServerResponse + 32
+        : atBottom
+          ? 40
+          : 20)
+    const resolutionScrollDistance = Math.min(
+      requestedScrollDistance,
+      scroll.scrollTop,
+    )
+    if (isScrollCleanup) {
+      const anchorTitle = before[0]?.title
+      const getAnchorTop = () =>
+        getPendingCards()
+          .find(({ title }) => title === anchorTitle)
+          ?.element.getBoundingClientRect().top
+      if (atBottom && requestedResolutionScrollDistance !== undefined) {
+        moveScrollWithoutDispatch(scroll.scrollHeight - scroll.clientHeight)
+      }
+      const anchorTopBeforeUserScroll = getAnchorTop()
+      const previousScrollTop = scroll.scrollTop
+      dispatchUserScrollInput()
+      setScrollPosition(previousScrollTop - resolutionScrollDistance)
+      compensationAfterResolutionScroll = getScrollCompensation()
+      const anchorTopAfterUserScroll = getAnchorTop()
+      userScrollPreservedReadingPosition =
+        anchorTopBeforeUserScroll !== undefined &&
+        anchorTopAfterUserScroll !== undefined &&
+        Math.abs(
+          anchorTopAfterUserScroll -
+            anchorTopBeforeUserScroll -
+            resolutionScrollDistance,
+        ) <= 0.5
+    }
+    const notification: ChatItem = {
+      type: 'assistant',
+      text: 'The selection was recorded.',
+    }
+    const updatedMessages = [
+      ...surroundingMessages,
+      settled,
+      notification,
+      ...remainingCards,
+    ]
+    renderConversationMessages(updatedMessages, conversationStart)
+    recordRemainingTops()
+    const afterNotification = getOverlappingChildren()
+    const nextResponse: ChatItem = {
+      type: 'assistant',
+      text: 'The next step is ready.',
+    }
+    const withNextResponse = [
+      ...surroundingMessages,
+      settled,
+      notification,
+      nextResponse,
+      ...remainingCards,
+    ]
+    renderConversationMessages(withNextResponse, conversationStart)
+    recordRemainingTops()
+    const afterNextResponse = getOverlappingChildren()
+    const olderContext: ChatItem = {
+      type: 'assistant',
+      text: 'Earlier context has loaded.',
+    }
+    renderConversationMessages(
+      [olderContext, ...withNextResponse],
+      conversationStart - 1,
+    )
+    recordRemainingTops()
+    const afterDeltaLoad = getOverlappingChildren()
+    const remainedAtBottomAfterStages = atBottomNow()
+    const compensationBeforeOffscreenScroll = getScrollCompensation()
+    const visibleCompensatedCardBeforeOffscreenScroll = before.some(
+      ({ element }) => {
+        const rect = element.getBoundingClientRect()
+        const marginBlockStart =
+          Number.parseFloat(element.style.marginBlockStart) || 0
+        const compensationTop = rect.top - marginBlockStart
+        return (
+          element.style.marginBlockStart !== '' &&
+          intersectsViewport(compensationTop, marginBlockStart)
+        )
+      },
+    )
+
+    const getVisibleChildren = () =>
+      Array.from(scroll.children).flatMap((child, index) => {
+        if (!(child instanceof HTMLElement)) return []
+        const rect = child.getBoundingClientRect()
+        if (!intersectsViewport(rect.top, rect.height)) return []
+        return [
+          {
+            element: child,
+            index,
+            label:
+              child.querySelector('h3')?.textContent ??
+              child.textContent.slice(0, 40),
+            top: Math.round(rect.top),
+          },
+        ]
+      })
+    const offscreenCleanupSteps: {
+      visibleChildrenBefore: { index: number; label: string }[]
+      visibleChildrenStillVisible: boolean[]
+      visibleTopDeltas: (number | null)[]
+    }[] = []
+    for (let attempt = 0; attempt <= scroll.children.length; attempt += 1) {
+      const compensation = getScrollCompensation()
+      if (
+        !compensation.hasChildMarginBlockStart &&
+        !compensation.hasExtraPaddingBottom
+      ) {
+        break
+      }
+      const maxScrollTop = scroll.scrollHeight - scroll.clientHeight
+      const marginChildren = Array.from(scroll.children).filter(
+        (child): child is HTMLElement =>
+          child instanceof HTMLElement && child.style.marginBlockStart !== '',
+      )
+      const extraPaddingBottom =
+        Number.parseFloat(
+          scroll.style.getPropertyValue(
+            '--conversation-anchor-extra-padding-bottom',
+          ),
+        ) || 0
+      const marginScrollTargets = marginChildren.flatMap((child) => {
+        const { top, height } = child.getBoundingClientRect()
+        const compensation =
+          Number.parseFloat(child.style.marginBlockStart) || 0
+        return [
+          scroll.scrollTop + top - compensation - scrollBounds.bottom - 1,
+          scroll.scrollTop + top + height - scrollBounds.top + 1,
+        ]
+      })
+      const maxBeforeBottom = Math.max(0, maxScrollTop - 32)
+      const feasibleMarginTarget = marginScrollTargets
+        .filter((target) => target >= 0 && target <= maxBeforeBottom)
+        .sort(
+          (left, right) =>
+            Math.abs(left - scroll.scrollTop) -
+            Math.abs(right - scroll.scrollTop),
+        )[0]
+      const targetScrollTop =
+        marginChildren.length > 0
+          ? (feasibleMarginTarget ?? maxBeforeBottom)
+          : Math.max(0, maxScrollTop - extraPaddingBottom - 32)
+      dispatchUserScrollInput()
+      moveScrollWithoutDispatch(targetScrollTop)
+      const visibleBeforeCleanup = getVisibleChildren()
+      dispatchScroll()
+      const visibleAfterCleanup = getVisibleChildren()
+      const visibleAfterByElement = new Map(
+        visibleAfterCleanup.map((child) => [child.element, child]),
+      )
+      offscreenCleanupSteps.push({
+        visibleChildrenBefore: visibleBeforeCleanup.map(({ index, label }) => ({
+          index,
+          label,
+        })),
+        visibleChildrenStillVisible: visibleBeforeCleanup.map((child) =>
+          visibleAfterByElement.has(child.element),
+        ),
+        visibleTopDeltas: visibleBeforeCleanup.map((child) => {
+          const after = visibleAfterByElement.get(child.element)
+          return after === undefined ? null : after.top - child.top
+        }),
+      })
+    }
+    const afterUserScroll = getOverlappingChildren()
+    const compensationAfterOffscreenScroll = getScrollCompensation()
+    const expectedBottomAfterResolutionScroll =
+      wasAtBottom && (!isScrollCleanup || resolutionScrollDistance <= 24)
+    const result = () => ({
+      remainingCardCount: before.length,
+      remainedAtBottom: remainedAtBottomAfterStages,
+      bottomStates,
+      userScrollPreservedReadingPosition,
+      stageTopDeltas: stages.map((stage) =>
+        stage.map((top, cardIndex) => {
+          if (initiallyVisible[cardIndex] !== true) return null
+          return top - (originalRemainingTops[cardIndex] ?? 0)
+        }),
+      ),
+      stageVisibleStates: stageVisibility.map((stage) =>
+        stage.map((visible, cardIndex) =>
+          initiallyVisible[cardIndex] === true ? visible : null,
+        ),
+      ),
+      offscreenCleanup: {
+        requiredCleanupAssertions:
+          requiresOffscreenCleanup === true
+            ? {
+                compensationPresentBeforeScroll:
+                  compensationBeforeOffscreenScroll.hasChildMarginBlockStart ||
+                  compensationBeforeOffscreenScroll.hasExtraPaddingBottom,
+                compensationRangeVisible:
+                  visibleCompensatedCardBeforeOffscreenScroll,
+                visibleChildrenObserved: offscreenCleanupSteps.some(
+                  ({ visibleChildrenBefore }) =>
+                    visibleChildrenBefore.length > 0,
+                ),
+              }
+            : null,
+        requiredBottomPaddingCleanup:
+          requiresBottomPaddingCleanup === true
+            ? {
+                paddingPresentAfterServerResponse:
+                  compensationStates[1]?.hasExtraPaddingBottom === true,
+                paddingRemovedAfterUserScroll:
+                  compensationAfterResolutionScroll?.hasExtraPaddingBottom ===
+                  resolutionScrollDistance > 24,
+                positionPreserved: userScrollPreservedReadingPosition === true,
+              }
+            : null,
+        visibleChildStates: offscreenCleanupSteps.map((step) => ({
+          visibleChildrenBefore: step.visibleChildrenBefore,
+          visibleChildrenStillVisible: step.visibleChildrenStillVisible,
+          visibleTopDeltas: step.visibleTopDeltas,
+        })),
+        compensation: compensationAfterOffscreenScroll,
+      },
+      layoutIntegrity: [
+        afterOptimisticUpdate,
+        afterServerResponse,
+        afterNotification,
+        afterNextResponse,
+        afterDeltaLoad,
+        afterUserScroll,
+      ],
+    })
+    const expectedResult = () => ({
+      remainingCardCount: 2,
+      remainedAtBottom: expectedBottomAfterResolutionScroll,
+      bottomStates: [
+        wasAtBottom,
+        wasAtBottom,
+        ...Array.from({ length: 3 }, () => expectedBottomAfterResolutionScroll),
+      ],
+      userScrollPreservedReadingPosition: isScrollCleanup ? true : null,
+      stageTopDeltas: Array.from({ length: 5 }, (_, stageIndex) =>
+        originalRemainingTops.map((_, cardIndex) => {
+          if (initiallyVisible[cardIndex] !== true) return null
+          const expectedScrollDelta =
+            isScrollCleanup && stageIndex >= 2
+              ? Math.round(resolutionScrollDistance)
+              : 0
+          return expectedScrollDelta
+        }),
+      ),
+      stageVisibleStates: Array.from({ length: 5 }, (_, stageIndex) =>
+        originalRemainingTops.map((_, cardIndex) => {
+          if (initiallyVisible[cardIndex] !== true) return null
+          const expectedScrollDelta =
+            isScrollCleanup && stageIndex >= 2
+              ? Math.round(resolutionScrollDistance)
+              : 0
+          const expectedTop =
+            (originalRemainingTops[cardIndex] ?? 0) + expectedScrollDelta
+          return intersectsViewport(expectedTop, before[cardIndex]?.height ?? 0)
+        }),
+      ),
+      offscreenCleanup: {
+        requiredCleanupAssertions:
+          requiresOffscreenCleanup === true
+            ? {
+                compensationPresentBeforeScroll: true,
+                compensationRangeVisible: true,
+                visibleChildrenObserved: true,
+              }
+            : null,
+        requiredBottomPaddingCleanup:
+          requiresBottomPaddingCleanup === true
+            ? {
+                paddingPresentAfterServerResponse: true,
+                paddingRemovedAfterUserScroll: resolutionScrollDistance > 24,
+                positionPreserved: true,
+              }
+            : null,
+        visibleChildStates: offscreenCleanupSteps.map((step) => ({
+          visibleChildrenBefore: step.visibleChildrenBefore,
+          visibleChildrenStillVisible: step.visibleChildrenBefore.map(
+            () => true,
+          ),
+          visibleTopDeltas: step.visibleChildrenBefore.map(() => 0),
+        })),
+        compensation: {
+          hasChildMarginBlockStart: false,
+          hasExtraPaddingBottom: false,
+        },
+      },
+      layoutIntegrity: Array.from({ length: 6 }, () => []),
+    })
+    expect(result()).toEqual(expectedResult())
+  },
+)
 
 it.each([
   { formFactor: 'desktop', isMobile: false },

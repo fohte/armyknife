@@ -15,6 +15,18 @@
   flex-shrink: 0;
 }
 
+/* Resolved cards change timeline position, so browser anchoring must not follow them. */
+.conversation-scroll > .chat-proposal-card,
+.conversation-scroll > .chat-todo-card {
+  overflow-anchor: none;
+}
+
+.conversation-scroll::after {
+  content: '';
+  flex: 0 0 var(--conversation-anchor-extra-padding-bottom, 0px);
+  pointer-events: none;
+}
+
 .conversation-header {
   display: flex;
   min-height: 56px;
