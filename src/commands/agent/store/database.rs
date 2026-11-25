@@ -60,8 +60,8 @@ pub(crate) use permission_requests::{
 };
 pub(crate) use proposals::{AgentProposal, ProposalResolution};
 pub(crate) use proposals::{
-    add_agent_proposal, agent_proposals, lock_agent_proposal_resolution, resolve_agent_proposal,
-    unanswered_agent_proposal_bodies, write_agent_proposal_answer_at,
+    add_agent_proposal, agent_proposals, edit_agent_proposal, lock_agent_proposal_resolution,
+    resolve_agent_proposal, unanswered_agent_proposal_bodies, write_agent_proposal_answer_at,
 };
 pub(crate) use queued_prompts::{
     WatchWebActionEventKind, WatchWebQueuedAttachment, WatchWebQueuedPrompt,
@@ -77,8 +77,8 @@ pub(crate) use replacements::{
 pub(crate) use session_closures::{clear_session_closed, closed_session_ids, mark_session_closed};
 pub(crate) use todos::{AgentTodo, TodoResolution};
 pub(crate) use todos::{
-    add_agent_todo, agent_todos, incomplete_agent_todo_titles, lock_agent_todo_resolution,
-    resolve_agent_todo, set_agent_todo_folded,
+    add_agent_todo, agent_todos, edit_agent_todo, incomplete_agent_todo_titles,
+    lock_agent_todo_resolution, resolve_agent_todo, set_agent_todo_folded,
 };
 pub(crate) use unreported_stop_checks::check_unreported_stop;
 pub(crate) use web_state::WatchWebSessionState;

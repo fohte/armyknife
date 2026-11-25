@@ -133,6 +133,9 @@ function requestFor(operation: SessionOperation) {
         body: {
           choice: operation.choice,
           comment: operation.comment,
+          ...(operation.expectedBody === undefined
+            ? {}
+            : { expectedBody: operation.expectedBody }),
           ...(operation.attachments === undefined
             ? {}
             : { attachments: operation.attachments }),
@@ -144,6 +147,12 @@ function requestFor(operation: SessionOperation) {
         body: {
           resolution: operation.resolution,
           comment: operation.comment,
+          ...(operation.expectedTitle === undefined
+            ? {}
+            : {
+                expectedTitle: operation.expectedTitle,
+                expectedDetail: operation.expectedDetail,
+              }),
           ...(operation.attachments === undefined
             ? {}
             : { attachments: operation.attachments }),
@@ -443,7 +452,10 @@ export function createSessionOperation(
       if (
         proposal !== null &&
         (typeof payload['choice'] === 'number' || payload['choice'] === null) &&
-        (typeof payload['comment'] === 'string' || payload['comment'] === null)
+        (typeof payload['comment'] === 'string' ||
+          payload['comment'] === null) &&
+        (payload['expectedBody'] === undefined ||
+          isJsonValue(payload['expectedBody']))
       ) {
         return ok<SessionOperation, Error>({
           type: 'proposal_answer',
@@ -451,6 +463,9 @@ export function createSessionOperation(
           seq: proposal,
           choice: payload['choice'],
           comment: payload['comment'],
+          ...(isJsonValue(payload['expectedBody'])
+            ? { expectedBody: payload['expectedBody'] }
+            : {}),
           ...(Array.isArray(payload['attachments'])
             ? { attachments: payload['attachments'] }
             : {}),
@@ -461,6 +476,10 @@ export function createSessionOperation(
         todo !== null &&
         (payload['resolution'] === 'completed' ||
           payload['resolution'] === 'rejected') &&
+        (payload['expectedTitle'] === undefined ||
+          (typeof payload['expectedTitle'] === 'string' &&
+            (payload['expectedDetail'] === null ||
+              typeof payload['expectedDetail'] === 'string'))) &&
         (payload['comment'] === null ||
           typeof payload['comment'] === 'string' ||
           payload['comment'] === undefined)
@@ -470,6 +489,15 @@ export function createSessionOperation(
           sessionId,
           seq: todo,
           resolution: payload['resolution'],
+          ...(typeof payload['expectedTitle'] === 'string'
+            ? {
+                expectedTitle: payload['expectedTitle'],
+                expectedDetail:
+                  typeof payload['expectedDetail'] === 'string'
+                    ? payload['expectedDetail']
+                    : null,
+              }
+            : {}),
           comment:
             typeof payload['comment'] === 'string' ? payload['comment'] : null,
           ...(Array.isArray(payload['attachments'])

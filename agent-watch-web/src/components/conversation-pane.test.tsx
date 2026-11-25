@@ -4378,7 +4378,7 @@ it('posts a proposal answer to its sequence route and refreshes the conversation
     post: {
       url: '/api/sessions/sample-session/proposals/3/answer',
       method: 'POST',
-      body: '{"choice":1,"comment":null,"attachments":[{"name":"screen.png","mimeType":"image/png","size":5,"data":"aW1hZ2U="}]}',
+      body: '{"choice":1,"comment":null,"expectedBody":{"title":"When should the setting take effect?","summary":"Choose how the change is introduced.","options":[{"label":"Use the existing flow","description":"Explain the change before applying it.","pros":["Small change"],"cons":["Adds one step"],"recommended":true},{"label":"Show the choice earlier","description":null,"pros":[],"cons":[],"recommended":false}]},"attachments":[{"name":"screen.png","mimeType":"image/png","size":5,"data":"aW1hZ2U="}]}',
     },
     placeholder: 'Message session',
     status: 'Proposal · chose Show the choice earlier',
@@ -4485,7 +4485,7 @@ it('posts a todo rejection to its resolution route with the comment', async () =
     {
       url: '/api/sessions/sample-session/todos/4/resolve',
       method: 'POST',
-      body: '{"resolution":"rejected","comment":"The page is readable.","attachments":[{"name":"screen.png","mimeType":"image/png","size":5,"data":"aW1hZ2U="}]}',
+      body: '{"resolution":"rejected","comment":"The page is readable.","expectedTitle":"Check the page on a phone","expectedDetail":"Confirm the action remains visible.","attachments":[{"name":"screen.png","mimeType":"image/png","size":5,"data":"aW1hZ2U="}]}',
     },
   ])
 })

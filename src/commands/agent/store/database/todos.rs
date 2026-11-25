@@ -91,6 +91,29 @@ pub(crate) fn add_agent_todo(
     Ok(seq)
 }
 
+pub(crate) fn edit_agent_todo(
+    sessions_dir: &Path,
+    session_id: &str,
+    seq: i64,
+    title: &str,
+    detail: Option<&str>,
+    folded: bool,
+) -> Result<bool> {
+    validate_session_id(session_id)?;
+    let mut connection = open_connection(sessions_dir)?;
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let changed = transaction.execute(
+        "UPDATE agent_todo SET title = ?1, detail = ?2, folded = ?3
+         WHERE session_id = ?4 AND seq = ?5 AND completed_at IS NULL",
+        params![title, detail, folded, session_id, seq],
+    )?;
+    if changed > 0 {
+        increment_revision(&transaction)?;
+    }
+    transaction.commit()?;
+    Ok(changed > 0)
+}
+
 pub(crate) fn agent_todos(sessions_dir: &Path, session_id: &str) -> Result<Vec<AgentTodo>> {
     validate_session_id(session_id)?;
     if !sessions_dir.exists() {

@@ -290,6 +290,78 @@ it('renders the proposal heading, recommended option, and pros and cons', () => 
   })
 })
 
+it('clears a selected option when the proposal is edited', async () => {
+  const cardProps = props({ sessionId: 'session-edit' })
+  renderCard(cardProps)
+  await userEvent.click(
+    requireElement(
+      container.querySelector<HTMLLabelElement>('.chat-proposal-option-label'),
+    ),
+  )
+  const selectedBeforeEdit = Array.from(
+    container.querySelectorAll<HTMLInputElement>('.chat-proposal-option input'),
+    (input) => input.checked,
+  )
+
+  renderCard({ ...cardProps, options: [...cardProps.options].reverse() })
+
+  const snapshot = () => ({
+    options: Array.from(
+      container.querySelectorAll<HTMLDivElement>('.chat-proposal-option'),
+      (option) => ({
+        label: option.querySelector('.chat-proposal-option-label')?.textContent,
+        checked: option.querySelector<HTMLInputElement>('input')?.checked,
+      }),
+    ),
+    chooseDisabled: requireElement(
+      container.querySelector<HTMLButtonElement>(
+        '.chat-proposal-actions button',
+      ),
+    ).disabled,
+  })
+
+  const getSnapshot = () => ({ selectedBeforeEdit, afterEdit: snapshot() })
+
+  expect(getSnapshot()).toEqual({
+    selectedBeforeEdit: [true, false],
+    afterEdit: {
+      options: [
+        { label: 'Show the choice earlier', checked: false },
+        { label: 'Use the existing flow', checked: false },
+      ],
+      chooseDisabled: true,
+    },
+  })
+})
+
+it('does not restore a choice without proposal content identity', () => {
+  const sessionId = 'session-legacy-choice'
+  const choiceStorageKey = `agent-watch-web:card-draft:${JSON.stringify([
+    'proposal',
+    sessionId,
+    7,
+    'choice',
+  ])}`
+  window.localStorage.setItem(choiceStorageKey, '1')
+  renderCard(props({ sessionId }))
+
+  const snapshot = () => ({
+    selected: Array.from(
+      container.querySelectorAll<HTMLInputElement>(
+        '.chat-proposal-option input',
+      ),
+      (input) => input.checked,
+    ),
+    chooseDisabled: requireElement(
+      container.querySelector<HTMLButtonElement>(
+        '.chat-proposal-actions button',
+      ),
+    ).disabled,
+  })
+
+  expect(snapshot()).toEqual({ selected: [false, false], chooseDisabled: true })
+})
+
 it('renders proposal summaries, descriptions, and withdrawal comments as markdown', () => {
   renderCard(
     props({
@@ -724,7 +796,11 @@ it('restores a proposal comment after reload and clears it after sending', async
       [{ choice: 1, comment: 'Keep the new choice easy to compare.' }],
     ],
     storedDraftBeforeReload: 'Keep the new choice easy to compare.',
-    storedChoiceBeforeReload: '1',
+    storedChoiceBeforeReload: `${JSON.stringify([
+      cardProps.title,
+      cardProps.summary,
+      cardProps.options,
+    ])}:1`,
     storedDraft: null,
     storedChoiceDraft: null,
   })

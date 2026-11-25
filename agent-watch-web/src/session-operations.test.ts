@@ -284,9 +284,52 @@ const requests: {
       seq: 3,
       choice: 0,
       comment: null,
+      expectedBody: {
+        title: 'Choose a format',
+        summary: null,
+        options: [
+          {
+            label: 'Compact',
+            description: null,
+            pros: [],
+            cons: [],
+            recommended: false,
+          },
+          {
+            label: 'Readable',
+            description: null,
+            pros: [],
+            cons: [],
+            recommended: false,
+          },
+        ],
+      },
     },
     path: 'proposals/3/answer',
-    body: { choice: 0, comment: null },
+    body: {
+      choice: 0,
+      comment: null,
+      expectedBody: {
+        title: 'Choose a format',
+        summary: null,
+        options: [
+          {
+            label: 'Compact',
+            description: null,
+            pros: [],
+            cons: [],
+            recommended: false,
+          },
+          {
+            label: 'Readable',
+            description: null,
+            pros: [],
+            cons: [],
+            recommended: false,
+          },
+        ],
+      },
+    },
   },
   {
     name: 'answer proposal with an attachment',
@@ -327,9 +370,16 @@ const requests: {
       seq: 4,
       resolution: 'completed',
       comment: 'Done',
+      expectedTitle: 'Check the page',
+      expectedDetail: null,
     },
     path: 'todos/4/resolve',
-    body: { resolution: 'completed', comment: 'Done' },
+    body: {
+      resolution: 'completed',
+      comment: 'Done',
+      expectedTitle: 'Check the page',
+      expectedDetail: null,
+    },
   },
   {
     name: 'resolve todo with an attachment',

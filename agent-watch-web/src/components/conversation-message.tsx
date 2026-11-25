@@ -264,6 +264,11 @@ export function renderConversationMessage({
           onAction(`proposals/${String(message.seq)}/answer`, {
             choice: answer.choice,
             comment: answer.comment,
+            expectedBody: {
+              title: message.title,
+              summary: message.summary,
+              options: message.options,
+            },
             ...(attachments === undefined ? {} : { attachments }),
           })
         }
@@ -285,6 +290,8 @@ export function renderConversationMessage({
           onAction(`todos/${String(message.seq)}/resolve`, {
             resolution,
             comment,
+            expectedTitle: message.title,
+            expectedDetail: message.detail,
             ...(attachments === undefined ? {} : { attachments }),
           })
         }
