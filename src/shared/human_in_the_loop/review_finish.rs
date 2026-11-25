@@ -195,15 +195,7 @@ pub(crate) fn wait_for_finish_ack(reader: &mut File, timeout: Duration) -> io::R
 /// Ask an active review to finish and wait for its completion handler.
 ///
 /// Returns `false` when no review currently owns the document.
-pub fn request_review_finish(document_path: &Path) -> super::Result<bool> {
-    request_review_finish_with_reason(document_path, ReviewFinishReason::ExternalRequest)
-}
-
-pub(crate) fn request_review_finish_after_push(document_path: &Path) -> super::Result<bool> {
-    request_review_finish_with_reason(document_path, ReviewFinishReason::RepliesPushed)
-}
-
-fn request_review_finish_with_reason(
+pub(crate) fn request_review_finish(
     document_path: &Path,
     reason: ReviewFinishReason,
 ) -> super::Result<bool> {
@@ -325,7 +317,8 @@ mod tests {
         let expected = false;
 
         assert_eq!(
-            request_review_finish(&document_path).expect("request finish"),
+            request_review_finish(&document_path, ReviewFinishReason::ExternalRequest)
+                .expect("request finish"),
             expected
         );
     }
@@ -372,7 +365,8 @@ mod tests {
             .expect("review actor ready");
 
         let outcome = (
-            request_review_finish(&symlink_path).map_err(|_| ()),
+            request_review_finish(&symlink_path, ReviewFinishReason::ExternalRequest)
+                .map_err(|_| ()),
             review_actor
                 .join()
                 .expect("review actor thread")
@@ -415,7 +409,8 @@ mod tests {
             .expect("review actor ready");
 
         let outcome = (
-            request_review_finish_after_push(&document_path).map_err(|_| ()),
+            request_review_finish(&document_path, ReviewFinishReason::RepliesPushed)
+                .map_err(|_| ()),
             review_actor
                 .join()
                 .expect("review actor thread")

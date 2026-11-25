@@ -9,9 +9,11 @@ use super::storage::ThreadStorage;
 use crate::infra::git;
 use crate::shared::config::load_config;
 use crate::shared::human_in_the_loop::{
-    CleanupGuard, Document, DocumentSchema, FifoSignalGuard, Result as HilResult,
-    ReviewFinishReason, ReviewHandler, complete_review, start_review_with_completion,
+    CleanupGuard, Document, DocumentSchema, FifoSignalGuard, HumanInTheLoopError,
+    Result as HilResult, ReviewFinishReason, ReviewHandler, complete_review,
+    start_review_with_completion,
 };
+use crate::shared::yaml_frontmatter;
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct ReviewArgs {
@@ -144,6 +146,17 @@ impl ReviewHandler<ThreadsFrontmatter> for PrReviewReplyHandler {
         reason: ReviewFinishReason,
     ) -> HilResult<()> {
         if reason == ReviewFinishReason::RepliesPushed {
+            let content = std::fs::read_to_string(&document.path)?;
+            let updated_content = yaml_frontmatter::reset_bool_fields(&content, &["submit"]);
+            if document.frontmatter.submit && updated_content == content {
+                return Err(HumanInTheLoopError::CommandFailed(format!(
+                    "Failed to reset submit in frontmatter at {}",
+                    document.path.display(),
+                )));
+            }
+            if updated_content != content {
+                std::fs::write(&document.path, updated_content)?;
+            }
             document.remove_approval()?;
             return Ok(());
         }
@@ -214,7 +227,7 @@ pub fn run_review_complete(args: &ReviewCompleteArgs) -> anyhow::Result<()> {
         repo_slug: args.repo.clone(),
     };
 
-    let _finish_reason = complete_review::<ThreadsFrontmatter, _, _>(
+    complete_review::<ThreadsFrontmatter, _, _>(
         &args.filepath,
         args.window_title.as_deref(),
         &handler,
@@ -285,6 +298,11 @@ mod tests {
     #[rstest::rstest]
     #[case::approved(true, None, ReplyReviewOutcome::Approved)]
     #[case::not_approved(false, None, ReplyReviewOutcome::NotApproved)]
+    #[case::external_finish_not_approved(
+        false,
+        Some(ReviewFinishReason::ExternalRequest),
+        ReplyReviewOutcome::NotApproved
+    )]
     #[case::finished_by_push(
         false,
         Some(ReviewFinishReason::RepliesPushed),
@@ -322,5 +340,57 @@ mod tests {
         )
         .expect("threads document should parse");
         assert_eq!(reply_review_outcome(&document, finish_reason), expected);
+    }
+
+    #[rstest::rstest]
+    fn push_completion_resets_submit_and_removes_approval() {
+        use tempfile::TempDir;
+
+        crate::shared::testing::init_approval_dir();
+        let temp_dir = TempDir::new().expect("temporary review directory");
+        let path = temp_dir.path().join("threads.md");
+        let content = indoc! {"
+            ---
+            pr: 42
+            repo: example/repo
+            pulled_at: '2024-01-15T10:00:00Z'
+            submit: true
+            ---
+            Draft reply
+        "};
+        std::fs::write(&path, content).expect("write approved reply document");
+        let document = Document::<ThreadsFrontmatter>::from_path(path.clone())
+            .expect("load approved reply document");
+        document.save_approval().expect("save approval");
+        let handler = PrReviewReplyHandler {
+            pr_number: 42,
+            repo_slug: "example/repo".to_string(),
+        };
+
+        let outcome = (
+            handler
+                .on_review_finished(&document, ReviewFinishReason::RepliesPushed)
+                .map_err(|error| error.to_string()),
+            std::fs::read_to_string(path).expect("read reset reply document"),
+            document.approval_manager().exists(),
+        );
+
+        assert_eq!(
+            outcome,
+            (
+                Ok(()),
+                indoc! {"
+                    ---
+                    pr: 42
+                    repo: example/repo
+                    pulled_at: '2024-01-15T10:00:00Z'
+                    submit: false
+                    ---
+                    Draft reply
+                "}
+                .to_string(),
+                false,
+            ),
+        );
     }
 }

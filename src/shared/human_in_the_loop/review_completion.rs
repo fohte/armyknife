@@ -54,7 +54,7 @@ pub(crate) fn complete_review<S, H, E>(
     finish_fifo_path: Option<&Path>,
     cleanup_guard: CleanupGuard,
     mut done_fifo_guard: Option<&mut FifoSignalGuard>,
-) -> Result<Option<ReviewFinishReason>>
+) -> Result<()>
 where
     S: DocumentSchema,
     H: ReviewHandler<S>,
@@ -79,7 +79,7 @@ where
 
     if !editor_succeeded && finish_reason.is_none() {
         eprintln!("Editor exited with non-zero status");
-        return Ok(None);
+        return Ok(());
     }
 
     let handler_result =
@@ -98,7 +98,7 @@ where
         }
     }
     handler_result?;
-    Ok(finish_reason)
+    Ok(())
 }
 
 fn finalize_finish_request(
@@ -328,7 +328,7 @@ mod tests {
                 done_signal,
             ),
             (
-                Ok(Some(finish_reason)),
+                Ok(()),
                 1,
                 vec![(document_path, true, saved_document.to_string())],
                 vec![finish_reason],

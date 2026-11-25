@@ -194,7 +194,7 @@ pub fn run_complete(args: &ReviewCompleteArgs) -> anyhow::Result<()> {
 
     let config = load_config()?;
 
-    let _finish_reason = complete_review::<Frontmatter, _, _>(
+    complete_review::<Frontmatter, _, _>(
         &args.filepath,
         args.window_title.as_deref(),
         &PrDraftReviewHandler,

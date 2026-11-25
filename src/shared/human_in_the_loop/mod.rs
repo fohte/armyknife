@@ -25,11 +25,11 @@ pub(crate) use pending_review::{
     review_document_path,
 };
 pub(crate) use review_completion::complete_review;
+pub use review_finish::ReviewFinishReason;
 pub(crate) use review_finish::{
     ReviewDocumentOperationLock, finish_ack_fifo_path, finish_request_fifo_path, open_fifo_reader,
-    request_review_finish_after_push, signal_review_finish_and_wait,
+    request_review_finish, signal_review_finish_and_wait,
 };
-pub use review_finish::{ReviewFinishReason, request_review_finish};
 use review_finish::{
     create_fifo_at_path, path_with_suffix, remove_fifo_if_present, try_read_fifo_signal_byte,
 };

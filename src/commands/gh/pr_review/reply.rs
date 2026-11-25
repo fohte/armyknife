@@ -14,7 +14,7 @@ use crate::commands::agent::{ensure_no_review_access, is_vibe_enabled};
 use crate::infra::git;
 use crate::infra::github::GitHubClient;
 use crate::shared::config::load_config;
-use crate::shared::human_in_the_loop::{Document, request_review_finish_after_push};
+use crate::shared::human_in_the_loop::{Document, ReviewFinishReason, request_review_finish};
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct ReplyPullArgs {
@@ -78,7 +78,7 @@ fn push_plan(changeset: &ReplyChangeSet, dry_run: bool) -> PushPlan {
 }
 
 fn request_reply_review_finish_after_push(path: &std::path::Path) -> anyhow::Result<bool> {
-    request_review_finish_after_push(path).map_err(Into::into)
+    request_review_finish(path, ReviewFinishReason::RepliesPushed).map_err(Into::into)
 }
 
 fn verify_push_approval(path: &std::path::Path, content: &str) -> anyhow::Result<()> {
