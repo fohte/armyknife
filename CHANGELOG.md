@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.921](https://github.com/fohte/armyknife/compare/v0.1.920...v0.1.921) (2026-11-25)
+
+
+### Bug Fixes
+
+* **agent/watch-web:** show full review replies ([#2266](https://github.com/fohte/armyknife/issues/2266)) ([8356349](https://github.com/fohte/armyknife/commit/8356349a24639d8a904fb2eb30032f3d6385720a))
+
 ## [0.1.920](https://github.com/fohte/armyknife/compare/v0.1.919...v0.1.920) (2026-11-25)
 
 
