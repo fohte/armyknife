@@ -12575,13 +12575,32 @@ it.each([
   {
     cardType: 'todo',
     atBottom: false,
+    nearBottom: false,
+    resolution: 'completed',
+    resolvedSeq: 62,
+    cleanupTrigger: 'response',
+    viewportHeight: 560,
+    requiresOffscreenCleanup: true,
+  },
+  {
+    cardType: 'todo',
+    atBottom: true,
+    nearBottom: false,
+    resolution: 'completed',
+    resolvedSeq: 63,
+    cleanupTrigger: 'scroll',
+    requiresBottomPaddingCleanup: true,
+  },
+  {
+    cardType: 'todo',
+    atBottom: false,
     nearBottom: true,
     resolution: 'completed',
     resolvedSeq: 62,
     cleanupTrigger: 'response',
   },
 ] as const)(
-  'keeps the remaining $cardType cards in place when resolving card $resolvedSeq as $resolution atBottom=$atBottom nearBottom=$nearBottom cleanup=$cleanupTrigger',
+  'keeps the remaining $cardType cards in place when resolving card $resolvedSeq as $resolution atBottom=$atBottom nearBottom=$nearBottom cleanup=$cleanupTrigger viewportHeight=$viewportHeight',
   ({
     cardType,
     atBottom,
@@ -12589,6 +12608,9 @@ it.each([
     resolution,
     resolvedSeq,
     cleanupTrigger,
+    viewportHeight,
+    requiresOffscreenCleanup,
+    requiresBottomPaddingCleanup,
   }) => {
     container.style.cssText = 'width: 900px; height: 700px'
     const detail =
@@ -12620,7 +12642,7 @@ it.each([
     const scroll = requireElement(
       container.querySelector<HTMLDivElement>('.conversation-scroll'),
     )
-    scroll.style.height = '360px'
+    scroll.style.height = `${String(viewportHeight ?? 360)}px`
     scroll.style.flex = 'none'
     renderConversationMessages(messages.slice(), conversationStart)
 
@@ -12748,6 +12770,7 @@ it.each([
     const stages: number[][] = []
     const stageVisibility: boolean[][] = []
     const bottomStates: boolean[] = []
+    const compensationStates: ReturnType<typeof getScrollCompensation>[] = []
     const recordRemainingTops = () => {
       const rects = before.map(({ element }) => element.getBoundingClientRect())
       stages.push(rects.map(({ top }) => Math.round(top)))
@@ -12755,6 +12778,7 @@ it.each([
         rects.map(({ top, height }) => intersectsViewport(top, height)),
       )
       bottomStates.push(atBottomNow())
+      compensationStates.push(getScrollCompensation())
     }
     const optimisticMessages = messages.map((message) =>
       isResolvedMessage(message) ? settled : message,
@@ -12769,6 +12793,9 @@ it.each([
     recordRemainingTops()
     const afterServerResponse = getOverlappingChildren()
     let userScrollPreservedReadingPosition: boolean | null = null
+    let compensationAfterResolutionScroll: ReturnType<
+      typeof getScrollCompensation
+    > | null = null
     const isScrollCleanup = ['scroll'].includes(cleanupTrigger)
     const extraPaddingAfterServerResponse =
       Number.parseFloat(
@@ -12796,12 +12823,16 @@ it.each([
       const previousScrollTop = scroll.scrollTop
       dispatchUserScrollInput()
       setScrollPosition(previousScrollTop - resolutionScrollDistance)
+      compensationAfterResolutionScroll = getScrollCompensation()
       const anchorTopAfterUserScroll = getAnchorTop()
       userScrollPreservedReadingPosition =
         anchorTopBeforeUserScroll !== undefined &&
         anchorTopAfterUserScroll !== undefined &&
-        Math.round(anchorTopAfterUserScroll - anchorTopBeforeUserScroll) ===
-          resolutionScrollDistance
+        Math.abs(
+          anchorTopAfterUserScroll -
+            anchorTopBeforeUserScroll -
+            resolutionScrollDistance,
+        ) <= 0.5
     }
     const notification: ChatItem = {
       type: 'assistant',
@@ -12841,6 +12872,19 @@ it.each([
     recordRemainingTops()
     const afterDeltaLoad = getOverlappingChildren()
     const remainedAtBottomAfterStages = atBottomNow()
+    const compensationBeforeOffscreenScroll = getScrollCompensation()
+    const visibleCompensatedCardBeforeOffscreenScroll = before.some(
+      ({ element }) => {
+        const rect = element.getBoundingClientRect()
+        const marginBlockStart =
+          Number.parseFloat(element.style.marginBlockStart) || 0
+        const compensationTop = rect.top - marginBlockStart
+        return (
+          element.style.marginBlockStart !== '' &&
+          intersectsViewport(compensationTop, marginBlockStart)
+        )
+      },
+    )
 
     const getVisibleChildren = () =>
       Array.from(scroll.children).flatMap((child, index) => {
@@ -12945,6 +12989,31 @@ it.each([
         ),
       ),
       offscreenCleanup: {
+        requiredCleanupAssertions:
+          requiresOffscreenCleanup === true
+            ? {
+                compensationPresentBeforeScroll:
+                  compensationBeforeOffscreenScroll.hasChildMarginBlockStart ||
+                  compensationBeforeOffscreenScroll.hasExtraPaddingBottom,
+                compensationRangeVisible:
+                  visibleCompensatedCardBeforeOffscreenScroll,
+                visibleChildrenObserved: offscreenCleanupSteps.some(
+                  ({ visibleChildrenBefore }) =>
+                    visibleChildrenBefore.length > 0,
+                ),
+              }
+            : null,
+        requiredBottomPaddingCleanup:
+          requiresBottomPaddingCleanup === true
+            ? {
+                paddingPresentAfterServerResponse:
+                  compensationStates[1]?.hasExtraPaddingBottom === true,
+                paddingRemovedAfterUserScroll:
+                  compensationAfterResolutionScroll?.hasExtraPaddingBottom ===
+                  false,
+                positionPreserved: userScrollPreservedReadingPosition === true,
+              }
+            : null,
         visibleChildStates: offscreenCleanupSteps.map((step) => ({
           visibleChildrenBefore: step.visibleChildrenBefore,
           visibleChildrenStillVisible: step.visibleChildrenStillVisible,
@@ -12974,7 +13043,9 @@ it.each([
         originalRemainingTops.map((_, cardIndex) => {
           if (initiallyVisible[cardIndex] !== true) return null
           const expectedScrollDelta =
-            isScrollCleanup && stageIndex >= 2 ? resolutionScrollDistance : 0
+            isScrollCleanup && stageIndex >= 2
+              ? Math.round(resolutionScrollDistance)
+              : 0
           return expectedScrollDelta
         }),
       ),
@@ -12982,13 +13053,31 @@ it.each([
         originalRemainingTops.map((_, cardIndex) => {
           if (initiallyVisible[cardIndex] !== true) return null
           const expectedScrollDelta =
-            isScrollCleanup && stageIndex >= 2 ? resolutionScrollDistance : 0
+            isScrollCleanup && stageIndex >= 2
+              ? Math.round(resolutionScrollDistance)
+              : 0
           const expectedTop =
             (originalRemainingTops[cardIndex] ?? 0) + expectedScrollDelta
           return intersectsViewport(expectedTop, before[cardIndex]?.height ?? 0)
         }),
       ),
       offscreenCleanup: {
+        requiredCleanupAssertions:
+          requiresOffscreenCleanup === true
+            ? {
+                compensationPresentBeforeScroll: true,
+                compensationRangeVisible: true,
+                visibleChildrenObserved: true,
+              }
+            : null,
+        requiredBottomPaddingCleanup:
+          requiresBottomPaddingCleanup === true
+            ? {
+                paddingPresentAfterServerResponse: true,
+                paddingRemovedAfterUserScroll: true,
+                positionPreserved: true,
+              }
+            : null,
         visibleChildStates: offscreenCleanupSteps.map((step) => ({
           visibleChildrenBefore: step.visibleChildrenBefore,
           visibleChildrenStillVisible: step.visibleChildrenBefore.map(

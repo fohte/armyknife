@@ -267,13 +267,17 @@ export function preserveConversationChildren(
     if (!visible && !(preferPendingCards && isPending)) continue
 
     const previousOffset = anchorOffsets.get(child.element)
-    const offset = Math.max(
-      previousOffset?.offset ?? 0,
+    const offset =
       (previousOffset?.offset ?? 0) +
-        previousChild.top -
-        child.element.getBoundingClientRect().top,
-    )
-    if (offset <= 0.5) continue
+      previousChild.top -
+      child.element.getBoundingClientRect().top
+    if (offset <= 0.5) {
+      if (previousOffset !== undefined) {
+        restoreConversationAnchorSpacing(child.element, previousOffset)
+        anchorOffsets.delete(child.element)
+      }
+      continue
+    }
     const spacing = previousOffset ?? {
       offset: 0,
       baseMarginBlockStart:
