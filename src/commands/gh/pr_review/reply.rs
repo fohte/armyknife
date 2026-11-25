@@ -14,7 +14,7 @@ use crate::commands::agent::{ensure_no_review_access, is_vibe_enabled};
 use crate::infra::git;
 use crate::infra::github::GitHubClient;
 use crate::shared::config::load_config;
-use crate::shared::human_in_the_loop::Document;
+use crate::shared::human_in_the_loop::{Document, request_review_finish};
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct ReplyPullArgs {
@@ -374,6 +374,10 @@ async fn run_push_after_access(
 
     let updated_content = MarkdownSerializer::serialize(&updated_remote, &frontmatter);
     storage.write_threads(&updated_content)?;
+
+    if let Err(error) = request_review_finish(&storage.threads_path()) {
+        eprintln!("Warning: Failed to finish the open PR reply review: {error}");
+    }
 
     println!("\nPush complete.");
 

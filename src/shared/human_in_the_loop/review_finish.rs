@@ -167,3 +167,109 @@ pub(crate) fn wait_for_finish_ack(reader: &mut File, timeout: Duration) -> io::R
         std::thread::sleep(super::FIFO_POLL_INTERVAL);
     }
 }
+
+/// Ask an active review to finish and wait for its completion handler.
+///
+/// Returns `false` when no review currently owns the document.
+pub(crate) fn request_review_finish(document_path: &Path) -> super::Result<bool> {
+    let operation_lock = match ReviewDocumentOperationLock::acquire(document_path) {
+        Ok(operation_lock) => operation_lock,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.into()),
+    };
+
+    if !operation_lock.is_active(document_path) {
+        return Ok(false);
+    }
+
+    let mut ack_reader = open_fifo_reader(&finish_ack_fifo_path(document_path))?;
+    super::try_signal_fifo(&finish_request_fifo_path(document_path))?;
+    drop(operation_lock);
+
+    match wait_for_finish_ack(&mut ack_reader, FINISH_ACK_TIMEOUT)? {
+        b'0' => Ok(true),
+        b'1' => {
+            Err(io::Error::other("review completion handler rejected the finish request").into())
+        }
+        acknowledgement => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("unexpected review finish acknowledgement: {acknowledgement}"),
+        )
+        .into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc;
+    use std::thread;
+
+    use rstest::{fixture, rstest};
+    use tempfile::TempDir;
+
+    #[fixture]
+    fn review_document() -> (TempDir, PathBuf) {
+        let temp_dir = TempDir::new().expect("tempdir");
+        let document_path = temp_dir.path().join("review.md");
+        fs::write(&document_path, "review").expect("write document");
+        (temp_dir, document_path)
+    }
+
+    #[rstest]
+    fn request_review_finish_returns_false_when_no_review_is_active(
+        review_document: (TempDir, PathBuf),
+    ) {
+        let (_temp_dir, document_path) = review_document;
+
+        assert!(!request_review_finish(&document_path).expect("request finish"));
+    }
+
+    #[rstest]
+    fn request_review_finish_signals_active_review_and_waits_for_acknowledgement(
+        review_document: (TempDir, PathBuf),
+    ) {
+        let (_temp_dir, document_path) = review_document;
+        let _review_lock = super::super::LockGuard::acquire(&document_path).expect("review lock");
+        let finish_fifo_path = finish_request_fifo_path(&document_path);
+        let ack_fifo_path = finish_ack_fifo_path(&document_path);
+        create_fifo_at_path(&finish_fifo_path).expect("create finish fifo");
+        create_fifo_at_path(&ack_fifo_path).expect("create acknowledgement fifo");
+
+        let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
+        let review_actor = thread::spawn(move || -> super::super::Result<()> {
+            let mut finish_reader = open_fifo_reader(&finish_fifo_path)?;
+            ready_sender
+                .send(())
+                .map_err(|error| io::Error::other(error.to_string()))?;
+            let deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                if try_read_fifo_signal(&mut finish_reader)? {
+                    break;
+                }
+                if Instant::now() >= deadline {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "finish request was not received",
+                    )
+                    .into());
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+            super::super::try_signal_fifo_with_byte(&ack_fifo_path, b'0')?;
+            Ok(())
+        });
+        ready_receiver
+            .recv_timeout(Duration::from_secs(2))
+            .expect("review actor ready");
+
+        let outcome = (
+            request_review_finish(&document_path).expect("request finish"),
+            review_actor
+                .join()
+                .expect("review actor thread")
+                .map_err(|error| format!("{error:#}")),
+        );
+        assert_eq!(outcome, (true, Ok(())));
+    }
+}
