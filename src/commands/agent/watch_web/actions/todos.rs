@@ -14,12 +14,36 @@ use super::{
 pub(super) struct ResolveRequest {
     resolution: UserTodoResolution,
     comment: Option<String>,
-    #[serde(rename = "expectedTitle")]
-    expected_title: String,
-    #[serde(rename = "expectedDetail")]
-    expected_detail: Option<String>,
+    #[serde(
+        rename = "expectedTitle",
+        default,
+        deserialize_with = "deserialize_present"
+    )]
+    expected_title: Option<String>,
+    #[serde(
+        rename = "expectedDetail",
+        default,
+        deserialize_with = "deserialize_present_nullable"
+    )]
+    expected_detail: Option<Option<String>>,
     #[serde(default)]
     attachments: Vec<attachments::Request>,
+}
+
+fn deserialize_present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
+fn deserialize_present_nullable<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
 }
 
 #[derive(Debug, Deserialize)]
@@ -85,7 +109,15 @@ pub(super) async fn resolve_todo(
     if todo.completed_at.is_some() {
         return Err(ApiError::conflict("todo is not pending"));
     }
-    if todo.title != request.expected_title || todo.detail != request.expected_detail {
+    if request
+        .expected_title
+        .as_ref()
+        .is_some_and(|expected_title| &todo.title != expected_title)
+        || request
+            .expected_detail
+            .as_ref()
+            .is_some_and(|expected_detail| &todo.detail != expected_detail)
+    {
         return Err(ApiError::conflict(
             "todo changed; reload it before resolving",
         ));

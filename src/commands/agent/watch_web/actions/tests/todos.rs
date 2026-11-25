@@ -167,6 +167,63 @@ async fn completing_a_todo_notifies_the_session_before_persisting(action_context
 
 #[rstest]
 #[tokio::test]
+async fn todo_resolution_without_expected_content_is_accepted(action_context: ActionContext) {
+    action_context.save_session(&session("sample-session"));
+    let sessions_dir = action_context.temp_dir.path().join("sessions");
+    store::add_agent_todo_in(
+        &sessions_dir,
+        "sample-session",
+        "Check the page",
+        Some("Use a phone"),
+        false,
+    )
+    .unwrap();
+
+    let response = action_context
+        .router()
+        .oneshot(post(
+            "/sessions/sample-session/todos/1/resolve",
+            json!({ "resolution": "completed", "comment": null }),
+        ))
+        .await
+        .unwrap();
+    let todos = store::agent_todos_from(&sessions_dir, "sample-session").unwrap();
+
+    assert_eq!(
+        (
+            response_snapshot(response, &action_context).await,
+            todos
+                .iter()
+                .map(|todo| (
+                    todo.title.as_str(),
+                    todo.detail.as_deref(),
+                    todo.resolution,
+                    todo.comment.as_deref(),
+                ))
+                .collect::<Vec<_>>(),
+        ),
+        (
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": { "ok": true },
+                "calls": [{
+                    "kind": "message",
+                    "sessionId": "sample-session",
+                    "content": "<armyknife-todo-completed>The user marked the to-do as done: Check the page.</armyknife-todo-completed>",
+                }],
+            }),
+            vec![(
+                "Check the page",
+                Some("Use a phone"),
+                Some(store::TodoResolution::Completed),
+                None,
+            )],
+        ),
+    );
+}
+
+#[rstest]
+#[tokio::test]
 async fn stale_todo_resolution_is_rejected_after_the_todo_is_edited(action_context: ActionContext) {
     action_context.save_session(&session("sample-session"));
     let sessions_dir = action_context.temp_dir.path().join("sessions");

@@ -83,6 +83,48 @@ async fn chosen_option_is_notified_before_the_answer_is_stored(action_context: A
 
 #[rstest]
 #[tokio::test]
+async fn proposal_answer_without_expected_body_is_accepted(action_context: ActionContext) {
+    action_context.save_session(&session("sample-session"));
+    add_proposal(&action_context, "sample-session");
+
+    let response = action_context
+        .router()
+        .oneshot(post(
+            "/sessions/sample-session/proposals/1/answer",
+            json!({ "choice": 0, "comment": null }),
+        ))
+        .await
+        .unwrap();
+    let proposals = store::agent_proposals_from(
+        &action_context.temp_dir.path().join("sessions"),
+        "sample-session",
+    )
+    .unwrap();
+
+    assert_eq!(
+        (
+            response_snapshot(response, &action_context).await,
+            proposals[0].answer.as_deref(),
+            proposals[0].resolved_at.is_some(),
+        ),
+        (
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": { "ok": true },
+                "calls": [{
+                    "kind": "message",
+                    "sessionId": "sample-session",
+                    "content": "Proposal 1 \"Pick a format\": chose A (Format A).",
+                }],
+            }),
+            Some(r#"{"choice":0,"comment":null}"#),
+            true,
+        ),
+    );
+}
+
+#[rstest]
+#[tokio::test]
 async fn stale_proposal_answer_is_rejected_after_the_proposal_is_edited(
     action_context: ActionContext,
 ) {

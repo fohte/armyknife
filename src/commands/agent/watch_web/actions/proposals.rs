@@ -21,10 +21,22 @@ use super::{
 pub(super) struct AnswerRequest {
     choice: serde_json::Value,
     comment: Option<String>,
-    #[serde(rename = "expectedBody")]
-    expected_body: ProposalBody,
+    #[serde(
+        rename = "expectedBody",
+        default,
+        deserialize_with = "deserialize_present"
+    )]
+    expected_body: Option<ProposalBody>,
     #[serde(default)]
     attachments: Vec<attachments::Request>,
+}
+
+fn deserialize_present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
 }
 
 pub(super) async fn answer_proposal(
@@ -67,7 +79,11 @@ pub(super) async fn answer_proposal(
     let body: ProposalBody = serde_json::from_str(&proposal.body)
         .context("parsing stored proposal body")
         .map_err(ApiError::internal)?;
-    if body != request.expected_body {
+    if request
+        .expected_body
+        .as_ref()
+        .is_some_and(|expected_body| &body != expected_body)
+    {
         return Err(ApiError::conflict(
             "proposal changed; reload it before answering",
         ));
