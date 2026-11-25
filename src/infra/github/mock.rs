@@ -441,6 +441,39 @@ impl GitHubMockServer {
             .await;
     }
 
+    /// Mock the GraphQL query used to monitor a reply review.
+    pub async fn graphql_reply_review_status(
+        &self,
+        state: &str,
+        merged_at: Option<&str>,
+        thread_nodes: Vec<serde_json::Value>,
+    ) {
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(body_string_contains(
+                "reviewThreads(first: 100, after: $threadCursor)",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": {
+                    "repository": {
+                        "pullRequest": {
+                            "state": state,
+                            "mergedAt": merged_at,
+                            "reviewThreads": {
+                                "pageInfo": {
+                                    "hasNextPage": false,
+                                    "endCursor": null
+                                },
+                                "nodes": thread_nodes
+                            }
+                        }
+                    }
+                }
+            })))
+            .mount(&self.server)
+            .await;
+    }
+
     async fn mount_graphql_batch_pull_request(
         &self,
         pull_request: serde_json::Value,

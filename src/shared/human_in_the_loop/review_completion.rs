@@ -80,12 +80,9 @@ where
 
     let handler_result =
         Document::<S>::from_path(document_path.to_path_buf()).and_then(|document| {
-            match finish_signal {
-                Some(signal) if signal == ReviewFinishReason::RepliesPushed.signal_byte() => {
-                    handler
-                        .on_review_finished(&document, ReviewFinishReason::from_signal_byte(signal))
-                }
-                Some(_) => handler.on_watch_web_review_complete(&document),
+            match finish_signal.and_then(ReviewFinishReason::from_completion_signal) {
+                Some(reason) => handler.on_review_finished(&document, reason),
+                None if finish_signal.is_some() => handler.on_watch_web_review_complete(&document),
                 None => handler.on_review_complete(&document),
             }
         });
@@ -429,6 +426,9 @@ mod tests {
     #[case::watch_web_finish(b'0', false, None, b'0', b'0')]
     #[case::watch_web_action_finish(b'1', false, None, b'0', b'1')]
     #[case::replies_pushed(b'p', false, None, b'0', b'p')]
+    #[case::reply_threads_resolved(b't', false, None, b'0', b't')]
+    #[case::pull_request_closed(b'c', false, None, b'0', b'c')]
+    #[case::pull_request_merged(b'm', false, None, b'0', b'm')]
     #[case::failed_watch_web_action(
         b'1',
         true,
@@ -512,23 +512,15 @@ mod tests {
             .expect("finished document observations should be readable")
             .clone();
 
-        let expected_watch_web_documents =
-            if finish_signal == ReviewFinishReason::RepliesPushed.signal_byte() {
-                Vec::new()
-            } else {
-                vec![(document_path.clone(), true, saved_document.to_string())]
-            };
-        let expected_finished_documents =
-            if finish_signal == ReviewFinishReason::RepliesPushed.signal_byte() {
-                vec![(
-                    document_path,
-                    ReviewFinishReason::RepliesPushed,
-                    true,
-                    saved_document.to_string(),
-                )]
-            } else {
-                Vec::new()
-            };
+        let completion_reason = ReviewFinishReason::from_completion_signal(finish_signal);
+        let expected_watch_web_documents = if completion_reason.is_none() {
+            vec![(document_path.clone(), true, saved_document.to_string())]
+        } else {
+            Vec::new()
+        };
+        let expected_finished_documents = completion_reason
+            .map(|reason| vec![(document_path, reason, true, saved_document.to_string())])
+            .unwrap_or_default();
         let expected_result = expected_error.map_or(Ok(()), |error| Err(error.to_owned()));
 
         assert_eq!(
