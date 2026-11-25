@@ -39,6 +39,7 @@ pub(super) mod permission_notification;
 mod permission_request;
 mod permission_retry;
 mod prompt_skill;
+mod session_env;
 mod session_lifecycle;
 mod session_metadata;
 mod session_start;
@@ -484,6 +485,8 @@ fn process_hook_event_impl_with_env_and_unreported_stop(
     env: EnvVars,
     mut notify_unreported_stop: impl FnMut(&Session, &HookInput, &Path) -> Result<()>,
 ) -> Result<ProcessResult> {
+    session_env::refresh(input.engine, &input.session_id);
+
     // Claude's SessionEnd confirms termination; Codex's hook does not because
     // the app-server also fires it during daemon shutdown.
     //
@@ -1719,6 +1722,95 @@ mod tests {
     use crate::commands::agent::types::{AgentStatus, TMUX_SESSION_OPTION, WebUiRegistration};
     use chrono::TimeZone;
     use rstest::{fixture, rstest};
+
+    #[derive(Clone, Copy)]
+    enum TestClaudeConfigDir {
+        Default,
+        Custom,
+        Empty,
+    }
+
+    #[rstest]
+    #[case::claude_refreshes_existing_directory(Engine::Claude, true, TestClaudeConfigDir::Default, (true, true))]
+    #[case::claude_refreshes_custom_config_directory(Engine::Claude, true, TestClaudeConfigDir::Custom, (true, true))]
+    #[case::empty_custom_config_directory_falls_back(Engine::Claude, true, TestClaudeConfigDir::Empty, (true, true))]
+    #[case::codex_leaves_directory_unchanged(Engine::Codex, true, TestClaudeConfigDir::Default, (true, false))]
+    #[case::missing_directory_stays_absent(Engine::Claude, false, TestClaudeConfigDir::Default, (false, false))]
+    fn hook_refreshes_only_existing_claude_session_env(
+        #[case] engine: Engine,
+        #[case] create_session_env: bool,
+        #[case] config_dir_kind: TestClaudeConfigDir,
+        #[case] expected_state: (bool, bool),
+    ) {
+        use std::fs::{self, File, FileTimes};
+        use std::time::{Duration, SystemTime};
+
+        let home_dir = tempfile::TempDir::new().expect("home directory should be created");
+        let sessions_dir = tempfile::TempDir::new().expect("sessions directory should be created");
+        let session_id = "fixture-session";
+        let default_config_dir = home_dir.path().join(".claude");
+        let custom_config_dir = home_dir.path().join("custom-claude");
+        let config_root = match config_dir_kind {
+            TestClaudeConfigDir::Default | TestClaudeConfigDir::Empty => &default_config_dir,
+            TestClaudeConfigDir::Custom => &custom_config_dir,
+        };
+        let session_env_dir = config_root.join("session-env").join(session_id);
+        let old_time = SystemTime::now() - Duration::from_secs(60 * 60 * 24);
+        if create_session_env {
+            fs::create_dir_all(&session_env_dir).expect("session env should be created");
+            File::open(&session_env_dir)
+                .expect("session env directory should open")
+                .set_times(FileTimes::new().set_modified(old_time))
+                .expect("old timestamp should be set");
+        }
+        let mut session = create_test_session(None);
+        session.session_id = session_id.to_string();
+        store::save_session_to(sessions_dir.path(), &session).expect("session should be saved");
+        let mut input = create_test_input(None);
+        input.session_id = session_id.to_string();
+        input.engine = engine;
+        let home = home_dir.path().to_str().expect("home path should be UTF-8");
+        let custom_config = custom_config_dir
+            .to_str()
+            .expect("custom config path should be UTF-8");
+        let config_dir_override = match config_dir_kind {
+            TestClaudeConfigDir::Default => None,
+            TestClaudeConfigDir::Custom => Some(custom_config),
+            TestClaudeConfigDir::Empty => Some(""),
+        };
+
+        let result = temp_env::with_vars(
+            [
+                ("HOME", Some(home)),
+                ("CLAUDE_CONFIG_DIR", config_dir_override),
+            ],
+            || {
+                process_hook_event_impl(
+                    HookEvent::UserPromptSubmit,
+                    input,
+                    sessions_dir.path(),
+                    &SideEffects::none(),
+                )
+            },
+        )
+        .expect("hook should succeed");
+        let refresh_state = match fs::symlink_metadata(&session_env_dir) {
+            Ok(metadata) => (
+                true,
+                metadata
+                    .modified()
+                    .expect("session env timestamp should be available")
+                    > old_time,
+            ),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (false, false),
+            Err(error) => panic!("session env should be inspectable: {error}"),
+        };
+
+        assert_eq!(
+            (result, refresh_state),
+            (ProcessResult::SessionSaved, expected_state)
+        );
+    }
 
     fn process_hook_event_without_instruction(
         event: HookEvent,

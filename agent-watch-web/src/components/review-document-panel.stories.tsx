@@ -107,17 +107,41 @@ The retry limit is fixed at 3, which is too few for slow destinations.
 
 - Make the limit configurable with the retry setting`
 
-const reviewRepliesBody = `### src/preflight.ts:42
+const reviewRepliesBody = `<!-- thread: THREAD_sample_1 path: src/preflight.ts:42 author: @sample-assignee -->
+- [ ] resolve
+<!-- diff -->
+\`\`\`diff
+@@ -39,5 +39,7 @@ export function preflight(msg) {
+   const target = msg.target;
+-  if (!target) return fail('no target');
+>+ if (target == null) {
++    return fail('no target');
++  }
+\`\`\`
+<!-- /diff -->
+<!-- comment: @sample-assignee 2026-01-15T10:30:00Z -->
+この判定は null も通しますか?
+<!-- /comment -->
+通しません。対象の処理より前に検証しています。
+空値はそこで除外し、有効な値だけ後続へ渡します。
+関連する境界値もテストで確認します。
 
-> この判定は null も通しますか?
-
-通しません。手前で弾いています。
-
-### src/preflight.ts:57
-
-> 失敗したときのログはどこに出ますか?
-
-送信ログに理由と一緒に出します。`
+<!-- thread: THREAD_sample_2 path: src/preflight.ts:57 author: @sample-assignee -->
+- [ ] resolve
+<!-- diff -->
+\`\`\`diff
+@@ -55,4 +57,6 @@ export function preflight(msg) {
+   } catch (e) {
+>+    log.warn('preflight failed', e);
++    return fail(String(e));
+   }
+\`\`\`
+<!-- /diff -->
+<!-- comment: @sample-assignee 2026-01-15T10:34:00Z -->
+失敗したときのログはどこに出ますか?
+<!-- /comment -->
+送信ログに理由と一緒に出します。
+原因を追うときに、送信ログだけで発生箇所まで確認できます。`
 
 const issueBodyText = `## 背景
 
@@ -454,13 +478,32 @@ export const MobileCommentCanBePostedImmediately: Story = {
 }
 
 export const RepliesCanBePostedImmediately: Story = {
-  name: 'Review replies can be posted or sent back',
+  name: 'A PR review reply preview fills the desktop panel.',
   args: reviewRepliesActionStoryArgs,
-  decorators: [designComparisonViewport],
+  decorators: [desktopViewport],
+}
+
+export const ReviewReplyEditFillsDesktopPanel: Story = {
+  name: 'A PR review reply draft fills the desktop editor.',
+  args: {
+    ...reviewRepliesActionStoryArgs,
+    view: 'edit',
+  },
+  decorators: [desktopViewport],
+}
+
+export const MobileReviewReplyEditFillsPanel: Story = {
+  name: 'The iPhone PR review reply draft fills the editor.',
+  args: {
+    ...reviewRepliesActionStoryArgs,
+    isMobile: true,
+    view: 'edit',
+  },
+  decorators: [phoneViewport],
 }
 
 export const MobileRepliesCanBePostedImmediately: Story = {
-  name: 'The iPhone review replies can be posted or sent back.',
+  name: 'The iPhone PR review reply preview fills the panel.',
   args: {
     ...reviewRepliesActionStoryArgs,
     isMobile: true,

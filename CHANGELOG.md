@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.1.921](https://github.com/fohte/armyknife/compare/v0.1.920...v0.1.921) (2026-11-25)
+
+
+### Bug Fixes
+
+* **agent/watch-web:** show full review replies ([#2266](https://github.com/fohte/armyknife/issues/2266)) ([8356349](https://github.com/fohte/armyknife/commit/8356349a24639d8a904fb2eb30032f3d6385720a))
+
+## [0.1.920](https://github.com/fohte/armyknife/compare/v0.1.919...v0.1.920) (2026-11-25)
+
+
+### Bug Fixes
+
+* **agent:** fall back to Claude's session ID ([#2263](https://github.com/fohte/armyknife/issues/2263)) ([95e4fa1](https://github.com/fohte/armyknife/commit/95e4fa1ae54573adc047acb8fd7c05db563ca56b))
+
+## [0.1.919](https://github.com/fohte/armyknife/compare/v0.1.918...v0.1.919) (2026-11-25)
+
+
+### Bug Fixes
+
+* **agent:** use Claude Code ID for self lookup ([#2262](https://github.com/fohte/armyknife/issues/2262)) ([3498397](https://github.com/fohte/armyknife/commit/3498397b84e838e26b62645b19294ec6383748dd))
+
 ## [0.1.918](https://github.com/fohte/armyknife/compare/v0.1.917...v0.1.918) (2026-11-25)
 
 

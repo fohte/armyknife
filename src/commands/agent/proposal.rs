@@ -150,12 +150,15 @@ fn withdraw_proposal(
 }
 
 fn add() -> Result<()> {
+    add_from_input(std::io::stdin().lock())
+}
+
+fn add_from_input(input: impl Read) -> Result<()> {
     let session_id = EnvVars::load()
         .own_session_id()
         .ok_or(CcError::SelfSessionUnknown)?;
     let sessions_dir = store::sessions_dir()?;
-    let stdin = std::io::stdin();
-    let seq = record_proposal(&sessions_dir, &session_id, stdin.lock())?;
+    let seq = record_proposal(&sessions_dir, &session_id, input)?;
     println!("Recorded proposal {seq}");
     Ok(())
 }
@@ -204,14 +207,16 @@ fn validate_body(body: &ProposalBody) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     use clap::Parser;
     use rstest::{fixture, rstest};
     use serde_json::Value;
     use tempfile::TempDir;
 
-    use super::{ProposalCommands, edit_proposal, record_proposal, withdraw_proposal};
+    use super::{
+        ProposalCommands, add_from_input, edit_proposal, record_proposal, withdraw_proposal,
+    };
     use crate::commands::agent::store::{self, ProposalResolution};
 
     #[derive(Parser)]
@@ -222,19 +227,76 @@ mod tests {
 
     #[fixture]
     fn sessions_dir() -> TempDir {
-        tempfile::tempdir().expect("temporary sessions directory should be created")
+        let sessions_dir =
+            tempfile::tempdir().expect("temporary sessions directory should be created");
+        for session_id in ["session-a", "session-b"] {
+            save_test_session(sessions_dir.path(), session_id);
+        }
+        sessions_dir
     }
 
-    fn stored_proposal_bodies(sessions_dir: &Path) -> Vec<String> {
+    fn save_test_session(sessions_dir: &Path, session_id: &str) {
+        let session = serde_json::from_value(serde_json::json!({
+            "session_id": session_id,
+            "cwd": "/tmp/fixture-worktree",
+            "status": "running",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+        }))
+        .expect("test session should deserialize");
+        store::save_session_to(sessions_dir, &session).expect("test session should save");
+    }
+
+    struct ProposalAddContext {
+        _cache_home: TempDir,
+        cache_home_path: String,
+        sessions_dir: PathBuf,
+    }
+
+    #[fixture]
+    fn proposal_add_context() -> ProposalAddContext {
+        let cache_home = tempfile::tempdir().expect("temporary cache home should be created");
+        let cache_home_path = cache_home
+            .path()
+            .to_str()
+            .expect("cache path should be valid UTF-8")
+            .to_string();
+        let sessions_dir = cache_home.path().join("armyknife/cc/sessions");
+        ProposalAddContext {
+            _cache_home: cache_home,
+            cache_home_path,
+            sessions_dir,
+        }
+    }
+
+    const VALID_PROPOSAL_INPUT: &str =
+        r#"{"title":"Pick a format","options":[{"label":"Format A"},{"label":"Format B"}]}"#;
+
+    fn add_proposal_for_session(
+        context: &ProposalAddContext,
+        session_id: &str,
+    ) -> anyhow::Result<()> {
+        temp_env::with_vars(
+            [
+                ("XDG_CACHE_HOME", Some(context.cache_home_path.as_str())),
+                ("ARMYKNIFE_SESSION_ID", None::<&str>),
+                ("CLAUDE_CODE_SESSION_ID", Some(session_id)),
+                ("CODEX_SESSION_ID", None::<&str>),
+            ],
+            || add_from_input(std::io::Cursor::new(VALID_PROPOSAL_INPUT)),
+        )
+    }
+
+    fn stored_proposal_bodies(sessions_dir: &Path, session_id: &str) -> Vec<String> {
         crate::commands::agent::store::session_store_revision_from(sessions_dir)
             .expect("session store should initialize");
         let connection = rusqlite::Connection::open(sessions_dir.join("sessions.db"))
             .expect("session database should open");
         let mut statement = connection
-            .prepare("SELECT body FROM agent_proposal WHERE session_id = 'session-a' ORDER BY seq")
+            .prepare("SELECT body FROM agent_proposal WHERE session_id = ?1 ORDER BY seq")
             .expect("proposal query should prepare");
         statement
-            .query_map([], |row| row.get(0))
+            .query_map([session_id], |row| row.get(0))
             .expect("proposals should query")
             .collect::<rusqlite::Result<Vec<_>>>()
             .expect("proposal bodies should load")
@@ -496,7 +558,7 @@ mod tests {
             std::io::Cursor::new(input),
         )
         .expect("valid proposal should save");
-        let bodies = stored_proposal_bodies(sessions_dir.path())
+        let bodies = stored_proposal_bodies(sessions_dir.path(), "session-a")
             .iter()
             .map(|body| serde_json::from_str::<Value>(body))
             .collect::<serde_json::Result<Vec<_>>>()
@@ -566,12 +628,43 @@ mod tests {
             "session-a",
             std::io::Cursor::new(input),
         );
-        let proposals = stored_proposal_bodies(sessions_dir.path());
+        let proposals = stored_proposal_bodies(sessions_dir.path(), "session-a");
         let error = result.err().map(|error| format!("{error:#}"));
 
         assert_eq!(
             (error, proposals),
             (Some(expected_error.to_string()), Vec::new())
+        );
+    }
+
+    #[rstest]
+    fn add_records_a_proposal_for_the_claude_code_session_id(
+        proposal_add_context: ProposalAddContext,
+    ) {
+        save_test_session(&proposal_add_context.sessions_dir, "claude-session");
+        add_proposal_for_session(&proposal_add_context, "claude-session")
+            .expect("proposal should be saved for the Claude Code session");
+
+        let actual = stored_proposal_bodies(&proposal_add_context.sessions_dir, "claude-session");
+        assert_eq!(
+            actual,
+            vec![r#"{"title":"Pick a format","summary":null,"options":[{"label":"Format A","description":null,"pros":[],"cons":[],"recommended":false},{"label":"Format B","description":null,"pros":[],"cons":[],"recommended":false}]}"#.to_string()],
+        );
+    }
+
+    #[rstest]
+    fn add_rejects_an_untracked_claude_code_session_id(proposal_add_context: ProposalAddContext) {
+        let result = add_proposal_for_session(&proposal_add_context, "untracked-session")
+            .map_err(|error| error.to_string());
+        let proposals =
+            stored_proposal_bodies(&proposal_add_context.sessions_dir, "untracked-session");
+
+        assert_eq!(
+            (result, proposals),
+            (
+                Err("session not found: untracked-session".to_string()),
+                Vec::new(),
+            ),
         );
     }
 }

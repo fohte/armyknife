@@ -719,6 +719,7 @@ mod tests {
                     ),
                 ),
                 ("ARMYKNIFE_SESSION_ID", None::<&str>),
+                ("CLAUDE_CODE_SESSION_ID", None::<&str>),
                 ("CODEX_SESSION_ID", None::<&str>),
                 ("ARMYKNIFE_ANCESTOR_SESSION_IDS", Some("root")),
             ],
