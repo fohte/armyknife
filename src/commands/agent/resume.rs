@@ -1,7 +1,7 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use clap::Args;
 use thiserror::Error;
@@ -52,14 +52,25 @@ pub fn run(args: &ResumeArgs) -> Result<()> {
 
     let sessions_dir = store::sessions_dir()?;
     let session_id = resolve_resume_session_id(&sessions_dir, &requested_session_id)?;
-    let stored_engine =
-        store::load_session_from(&sessions_dir, &session_id)?.map(|session| session.engine);
+    let stored_session = store::load_session_from(&sessions_dir, &session_id)?;
+    if let Some(session) = &stored_session {
+        validate_session_working_directory(&session.cwd)?;
+    }
+    let stored_engine = stored_session.as_ref().map(|session| session.engine);
     let engine = resolve_resume_engine(args.engine, stored_engine);
 
     let (binary_name, resume_args) = resume_binary_and_args(engine, &session_id);
 
     let binary_path = find_command_path(binary_name)
         .ok_or_else(|| anyhow::anyhow!("Could not find '{binary_name}' command in PATH"))?;
+    let binary_path = if binary_path.is_absolute() {
+        binary_path
+    } else {
+        absolute_resume_binary_path(binary_path, &std::env::current_dir()?)
+    };
+    if let Some(session) = &stored_session {
+        set_session_working_directory(&session.cwd, |cwd| std::env::set_current_dir(cwd))?;
+    }
 
     let ancestor_session_ids = args
         .ancestor_session_ids
@@ -101,6 +112,37 @@ fn resolve_resume_engine(explicit: Option<Engine>, stored: Option<Engine>) -> En
 
 fn resolve_resume_session_id(sessions_dir: &Path, session_id: &str) -> Result<String> {
     store::resolve_current_session_id_from(sessions_dir, session_id)
+}
+
+fn validate_session_working_directory(cwd: &Path) -> Result<()> {
+    if !cwd.is_dir() {
+        bail!(
+            "Session working directory does not exist: {}",
+            cwd.display()
+        );
+    }
+    Ok(())
+}
+
+fn absolute_resume_binary_path(path: PathBuf, invoking_cwd: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path
+    } else {
+        invoking_cwd.join(path)
+    }
+}
+
+fn set_session_working_directory(
+    cwd: &Path,
+    set_current_dir: impl FnOnce(&Path) -> std::io::Result<()>,
+) -> Result<()> {
+    validate_session_working_directory(cwd)?;
+    set_current_dir(cwd).with_context(|| {
+        format!(
+            "Failed to change to session working directory {}",
+            cwd.display()
+        )
+    })
 }
 
 fn resume_environment_variables(
@@ -337,6 +379,8 @@ pub(crate) enum RespawnError {
     PaneStateUnreadable,
     #[error("Failed to build resume command")]
     CommandBuildFailed,
+    #[error("Session working directory does not exist: {0}")]
+    WorkingDirectoryUnavailable(PathBuf),
     #[error("Failed to respawn pane: {0}")]
     RespawnFailed(String),
 }
@@ -357,8 +401,8 @@ pub(crate) fn respawn_paused_session(session: &Session) -> Result<String, Respaw
     respawn_paused_session_with(
         session,
         tmux::get_pane_current_command_for_socket,
-        |socket_path, pane_id, command| {
-            tmux::respawn_pane_for_socket(socket_path, pane_id, command)
+        |socket_path, pane_id, cwd, command| {
+            tmux::respawn_pane_for_socket(socket_path, pane_id, cwd, command)
                 .map_err(|error| error.to_string())
         },
     )
@@ -367,18 +411,24 @@ pub(crate) fn respawn_paused_session(session: &Session) -> Result<String, Respaw
 fn respawn_paused_session_with(
     session: &Session,
     get_pane_current_command: impl FnOnce(Option<&str>, &str) -> Option<String>,
-    respawn_pane: impl FnOnce(Option<&str>, &str, &str) -> std::result::Result<(), String>,
+    respawn_pane: impl FnOnce(Option<&str>, &str, &Path, &str) -> std::result::Result<(), String>,
 ) -> Result<String, RespawnError> {
     let tmux_info = session.tmux_info.as_ref().ok_or(RespawnError::NoTmuxPane)?;
     if session.status != SessionStatus::Paused {
         return Err(RespawnError::NotPaused);
+    }
+    if !session.cwd.is_dir() {
+        return Err(RespawnError::WorkingDirectoryUnavailable(
+            session.cwd.clone(),
+        ));
     }
     let socket_path = tmux_info.socket_path.as_deref();
     let pane_current_command = get_pane_current_command(socket_path, &tmux_info.pane_id);
     check_idle_at_shell_prompt(pane_current_command.as_deref())?;
 
     let wrapped = build_resume_command().ok_or(RespawnError::CommandBuildFailed)?;
-    respawn_pane(socket_path, &tmux_info.pane_id, &wrapped).map_err(RespawnError::RespawnFailed)?;
+    respawn_pane(socket_path, &tmux_info.pane_id, &session.cwd, &wrapped)
+        .map_err(RespawnError::RespawnFailed)?;
 
     Ok(tmux_info.pane_id.clone())
 }
@@ -594,7 +644,7 @@ mod tests {
     }
 
     mod codex_resume_status_tests {
-        use std::path::{Path, PathBuf};
+        use std::path::Path;
 
         use rstest::{fixture, rstest};
         use tempfile::TempDir;
@@ -623,7 +673,7 @@ mod tests {
                 crit_not_waiting_urls: Default::default(),
                 web_uis: Vec::new(),
                 pending_human_review_ids: Default::default(),
-                cwd: PathBuf::from("/tmp/test"),
+                cwd: std::env::temp_dir(),
                 transcript_path: None,
                 tty: None,
                 tmux_info: None,
@@ -901,11 +951,9 @@ mod tests {
     }
 
     mod respawn_paused_session_guard_tests {
-        use chrono::Utc;
-        use std::path::PathBuf;
-
         use super::*;
         use crate::commands::agent::types::TmuxInfo;
+        use chrono::Utc;
 
         fn session(status: SessionStatus, tmux_info: Option<TmuxInfo>) -> Session {
             Session {
@@ -923,7 +971,7 @@ mod tests {
                 crit_not_waiting_urls: Default::default(),
                 web_uis: Vec::new(),
                 pending_human_review_ids: Default::default(),
-                cwd: PathBuf::from("/tmp/test"),
+                cwd: std::env::temp_dir(),
                 transcript_path: None,
                 tty: None,
                 tmux_info,
@@ -995,10 +1043,12 @@ mod tests {
                         .push((socket_path.map(str::to_string), pane_id.to_string()));
                     Some("zsh".to_string())
                 },
-                |socket_path, pane_id, _command| {
-                    respawn_calls
-                        .borrow_mut()
-                        .push((socket_path.map(str::to_string), pane_id.to_string()));
+                |socket_path, pane_id, cwd, _command| {
+                    respawn_calls.borrow_mut().push((
+                        socket_path.map(str::to_string),
+                        pane_id.to_string(),
+                        cwd.to_path_buf(),
+                    ));
                     Ok(())
                 },
             );
@@ -1012,9 +1062,116 @@ mod tests {
                 (
                     Ok("%0".to_string()),
                     vec![(Some(socket_path.to_string()), "%0".to_string())],
-                    vec![(Some(socket_path.to_string()), "%0".to_string())],
+                    vec![(
+                        Some(socket_path.to_string()),
+                        "%0".to_string(),
+                        std::env::temp_dir(),
+                    )],
                 ),
             );
         }
+
+        #[test]
+        fn missing_working_directory_prevents_respawn() {
+            let directory = tempfile::tempdir().unwrap();
+            let missing_cwd = directory.path().join("missing");
+            let mut session = session(SessionStatus::Paused, Some(some_tmux_info()));
+            session.cwd = missing_cwd.clone();
+            let pane_command_queried = std::cell::Cell::new(false);
+            let respawn_called = std::cell::Cell::new(false);
+
+            let result = respawn_paused_session_with(
+                &session,
+                |_, _| {
+                    pane_command_queried.set(true);
+                    Some("zsh".to_string())
+                },
+                |_, _, _, _| {
+                    respawn_called.set(true);
+                    Ok(())
+                },
+            );
+
+            assert_eq!(
+                (result, pane_command_queried.get(), respawn_called.get(),),
+                (
+                    Err(RespawnError::WorkingDirectoryUnavailable(missing_cwd)),
+                    false,
+                    false,
+                ),
+            );
+        }
+    }
+
+    #[test]
+    fn resume_uses_the_recorded_working_directory() {
+        let directory = tempfile::tempdir().unwrap();
+        let actual_cwd = std::cell::RefCell::new(None);
+
+        let result = set_session_working_directory(directory.path(), |cwd| {
+            *actual_cwd.borrow_mut() = Some(cwd.to_path_buf());
+            Ok(())
+        });
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                actual_cwd.into_inner()
+            ),
+            (Ok(()), Some(directory.path().to_path_buf()))
+        );
+    }
+
+    #[test]
+    fn resume_does_not_start_when_the_recorded_working_directory_is_missing() {
+        let directory = tempfile::tempdir().unwrap();
+        let missing_cwd = directory.path().join("missing");
+        let set_current_dir_called = std::cell::Cell::new(false);
+
+        let result = set_session_working_directory(&missing_cwd, |_| {
+            set_current_dir_called.set(true);
+            Ok(())
+        });
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                set_current_dir_called.get(),
+            ),
+            (
+                Err(format!(
+                    "Session working directory does not exist: {}",
+                    missing_cwd.display()
+                )),
+                false,
+            ),
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resume_preserves_the_agent_symlink_path() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("agent-target");
+        let link = directory.path().join("claude");
+        std::fs::write(&target, "fixture executable").unwrap();
+        symlink(&target, &link).unwrap();
+
+        let result = absolute_resume_binary_path(link.clone(), Path::new("/"));
+
+        assert_eq!(result, link);
+    }
+
+    #[test]
+    fn resume_resolves_relative_agent_paths_from_the_invoking_directory() {
+        let relative_path = PathBuf::from("relative/bin/claude");
+        let invoking_cwd = Path::new("/invoking/directory");
+        let expected_path = invoking_cwd.join(&relative_path);
+
+        let result = absolute_resume_binary_path(relative_path, invoking_cwd);
+
+        assert_eq!(result, expected_path);
     }
 }
