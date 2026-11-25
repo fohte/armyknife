@@ -397,8 +397,14 @@ async fn unavailable_or_invalid_proposal_answers_are_rejected(
     add_proposal(&action_context, "sample-session");
     let sessions_dir = action_context.temp_dir.path().join("sessions");
     if let Some(answer) = initial_answer {
-        store::write_agent_proposal_answer_from(&sessions_dir, "sample-session", 1, answer)
-            .unwrap();
+        store::write_agent_proposal_answer_at_from(
+            &sessions_dir,
+            "sample-session",
+            1,
+            answer,
+            chrono::Utc::now(),
+        )
+        .unwrap();
     }
 
     let response = action_context

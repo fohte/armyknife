@@ -247,8 +247,14 @@ mod tests {
     fn rejects_withdrawing_an_answered_or_withdrawn_proposal(sessions_dir: TempDir) {
         let answered = store::add_agent_proposal_in(sessions_dir.path(), "session-a", "{}")
             .expect("proposal should save");
-        store::write_agent_proposal_answer_from(sessions_dir.path(), "session-a", answered, "{}")
-            .expect("answer should save");
+        store::write_agent_proposal_answer_at_from(
+            sessions_dir.path(),
+            "session-a",
+            answered,
+            "{}",
+            chrono::Utc::now(),
+        )
+        .expect("answer should save");
         let withdrawn = store::add_agent_proposal_in(sessions_dir.path(), "session-a", "{}")
             .expect("proposal should save");
         withdraw_proposal(sessions_dir.path(), "session-a", withdrawn, None)
@@ -275,9 +281,14 @@ mod tests {
         withdraw_proposal(sessions_dir.path(), "session-a", seq, None)
             .expect("proposal should be withdrawn");
 
-        let answer_after_withdrawal =
-            store::write_agent_proposal_answer_from(sessions_dir.path(), "session-a", seq, "{}")
-                .expect("withdrawn proposal answer should be rejected");
+        let answer_after_withdrawal = store::write_agent_proposal_answer_at_from(
+            sessions_dir.path(),
+            "session-a",
+            seq,
+            "{}",
+            chrono::Utc::now(),
+        )
+        .expect("withdrawn proposal answer should be rejected");
         assert!(!answer_after_withdrawal);
     }
 

@@ -8680,6 +8680,80 @@ it('follows new messages at the bottom without moving a reader who scrolled up',
   })
 })
 
+it('keeps the answered proposal in place as the conversation continues', () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  const firstMessage: ChatItem = {
+    type: 'assistant',
+    text: 'Earlier message',
+  }
+  const latestMessage: ChatItem = {
+    type: 'assistant',
+    text: 'Latest message',
+  }
+  const pendingProposal: ChatItem = {
+    type: 'proposal',
+    seq: 1,
+    title: 'Choose a response',
+    summary: null,
+    options: [
+      {
+        label: 'Option A',
+        description: null,
+        pros: [],
+        cons: [],
+        recommended: false,
+      },
+    ],
+    answer: null,
+    resolved: false,
+    resolution: null,
+    comment: null,
+  }
+  const resolvedProposal: ChatItem = {
+    ...pendingProposal,
+    answer: { choice: 0, comment: null },
+    resolved: true,
+  }
+  renderView(onAction, session, undefined, [
+    firstMessage,
+    latestMessage,
+    pendingProposal,
+  ])
+  const scroll = requireElement(
+    container.querySelector<HTMLDivElement>('.conversation-scroll'),
+  )
+  const setHeight = mockScrollDimensions(scroll, 300, 100)
+  renderView(onAction, session, undefined, [
+    firstMessage,
+    latestMessage,
+    pendingProposal,
+  ])
+  scrollToPosition(scroll, 100)
+  const proposalRow = requireElement(
+    scroll.querySelector<HTMLElement>('.chat-proposal-card'),
+  )
+
+  setHeight(500)
+  renderView(onAction, session, undefined, [
+    firstMessage,
+    latestMessage,
+    resolvedProposal,
+    { type: 'assistant', text: 'The answer is being used' },
+  ])
+
+  const snapshot = () => ({
+    scrollTop: scroll.scrollTop,
+    proposalPosition: Array.from(scroll.children).indexOf(proposalRow),
+    proposalPreserved:
+      scroll.querySelector('.chat-proposal-card') === proposalRow,
+  })
+  expect(snapshot()).toEqual({
+    scrollTop: 100,
+    proposalPosition: 2,
+    proposalPreserved: true,
+  })
+})
+
 it('follows the bottom when an uncached conversation loads with an epoch', async () => {
   const firstPageMessage: ChatItem = {
     type: 'assistant',

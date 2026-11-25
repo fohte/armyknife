@@ -171,19 +171,20 @@ pub(crate) fn resolve_agent_proposal(
     Ok(changed > 0)
 }
 
-pub(crate) fn write_agent_proposal_answer(
+pub(crate) fn write_agent_proposal_answer_at(
     sessions_dir: &Path,
     session_id: &str,
     seq: i64,
     answer: &str,
+    resolved_at: DateTime<Utc>,
 ) -> Result<bool> {
     validate_session_id(session_id)?;
     let mut connection = open_connection(sessions_dir)?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let changed = transaction.execute(
-        "UPDATE agent_proposal SET answer = ?1, resolved_at = COALESCE(resolved_at, ?2)
+        "UPDATE agent_proposal SET answer = ?1, resolved_at = ?2
          WHERE session_id = ?3 AND seq = ?4 AND answer IS NULL AND resolved_at IS NULL",
-        params![answer, Utc::now().to_rfc3339(), session_id, seq],
+        params![answer, resolved_at.to_rfc3339(), session_id, seq],
     )?;
     if changed > 0 {
         increment_revision(&transaction)?;
@@ -201,7 +202,7 @@ mod tests {
 
     use super::{
         AgentProposal, add_agent_proposal, agent_proposals, lock_agent_proposal_resolution,
-        unanswered_agent_proposal_bodies,
+        unanswered_agent_proposal_bodies, write_agent_proposal_answer_at,
     };
     #[fixture]
     fn sessions_dir() -> TempDir {
@@ -296,6 +297,37 @@ mod tests {
                     ("session-a".to_string(), "second body".to_string()),
                     ("session-b".to_string(), "other body".to_string()),
                 ],
+            ),
+        );
+    }
+
+    #[rstest]
+    fn records_the_supplied_answer_resolution_time(sessions_dir: TempDir) {
+        add_agent_proposal(sessions_dir.path(), "session-a", "body").expect("proposal should save");
+        let resolved_at = Utc
+            .with_ymd_and_hms(2026, 6, 1, 12, 0, 1)
+            .single()
+            .expect("test timestamp should be valid");
+
+        let updated = write_agent_proposal_answer_at(
+            sessions_dir.path(),
+            "session-a",
+            1,
+            "{\"choice\":0}",
+            resolved_at,
+        )
+        .expect("answer should save");
+        let proposals = agent_proposals(sessions_dir.path(), "session-a")
+            .expect("proposal should load")
+            .into_iter()
+            .map(|proposal| (proposal.seq, proposal.answer, proposal.resolved_at))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            (updated, proposals),
+            (
+                true,
+                vec![(1, Some("{\"choice\":0}".to_string()), Some(resolved_at))],
             ),
         );
     }
