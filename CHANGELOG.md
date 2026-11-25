@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.917](https://github.com/fohte/armyknife/compare/v0.1.916...v0.1.917) (2026-11-25)
+
+
+### Bug Fixes
+
+* **agent/watch-web:** keep resolved cards in place ([#2258](https://github.com/fohte/armyknife/issues/2258)) ([3f23264](https://github.com/fohte/armyknife/commit/3f2326413ef75782b21ae4d521b970df98ee0a8a))
+
 ## [0.1.916](https://github.com/fohte/armyknife/compare/v0.1.915...v0.1.916) (2026-11-24)
 
 
