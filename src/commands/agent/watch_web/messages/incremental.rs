@@ -345,7 +345,6 @@ fn render_parser(
             let resolved_ids = super::queued_prompt::resolve_transcript_messages(
                 &mut messages,
                 input.additions.queued_prompts,
-                input.engine,
             );
             super::queued_prompt::append_unresolved_prompts(
                 &mut messages,
@@ -373,7 +372,6 @@ pub(super) fn render_claude_parser(
     resolved_ids.extend(super::queued_prompt::resolve_transcript_messages(
         &mut messages,
         input.additions.queued_prompts,
-        input.engine,
     ));
     resolved_ids.sort_unstable();
     resolved_ids.dedup();
