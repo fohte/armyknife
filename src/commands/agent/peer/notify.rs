@@ -24,7 +24,7 @@ use crate::commands::agent::peer_message::{PEER_MESSAGE_END_TAG, PEER_MESSAGE_ST
 use crate::commands::agent::store;
 use crate::commands::agent::types::{Engine, Session, SessionStatus};
 use crate::infra::notification::{self, Notification};
-use crate::shared::env_var::{EnvVars, SessionIdSource};
+use crate::shared::env_var::{EnvVars, OwnSessionIdSource};
 use crate::shared::log::short_run_id;
 use crate::shared::sanitize::strip_angle_brackets;
 
@@ -231,10 +231,12 @@ fn delivery_output(session_id: &str, delivery: &Delivery) -> String {
 fn resolve_sender() -> Option<(String, Option<Engine>)> {
     let env = EnvVars::load();
     let (id, source) = env.own_session_id_with_source()?;
+    // The armyknife hook ID has no engine hint. Provider IDs retain the
+    // engine-specific fallback used when the session is not in the store.
     let engine_hint = match source {
-        SessionIdSource::Armyknife => None,
-        SessionIdSource::ClaudeCode => Some(Engine::Claude),
-        SessionIdSource::Codex => Some(Engine::Codex),
+        OwnSessionIdSource::Armyknife => None,
+        OwnSessionIdSource::ClaudeCode => Some(Engine::Claude),
+        OwnSessionIdSource::Codex => Some(Engine::Codex),
     };
     Some((id, engine_hint))
 }

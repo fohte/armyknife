@@ -235,18 +235,21 @@ mod tests {
     }
 
     #[rstest]
-    #[case::codex_root_without_thread(Engine::Codex, None, Some("codex-session"), None)]
+    #[case::codex_root_without_thread(Engine::Codex, None, None, Some("codex-session"), None)]
     #[case::codex_root_with_matching_thread_id(
         Engine::Codex,
+        None,
         None,
         Some("codex-session"),
         Some("codex-session")
     )]
-    #[case::empty_thread_id(Engine::Codex, None, Some("codex-session"), Some(""))]
-    #[case::claude_session(Engine::Claude, Some("codex-session"), None, None)]
+    #[case::empty_thread_id(Engine::Codex, None, None, Some("codex-session"), Some(""))]
+    #[case::claude_hook_session(Engine::Claude, Some("codex-session"), None, None, None)]
+    #[case::claude_code_session_id(Engine::Claude, None, Some("codex-session"), None, None)]
     #[case::thread_id_without_session_id(
         Engine::Claude,
         Some("codex-session"),
+        None,
         None,
         Some("codex-subagent-thread")
     )]
@@ -254,6 +257,7 @@ mod tests {
         configured_status_home: TempDir,
         #[case] engine: Engine,
         #[case] armyknife_session_id: Option<&str>,
+        #[case] claude_code_session_id: Option<&str>,
         #[case] codex_session_id: Option<&str>,
         #[case] codex_thread_id: Option<&str>,
     ) {
@@ -282,6 +286,7 @@ mod tests {
                 ("XDG_CACHE_HOME", Some(xdg_cache_home)),
                 ("XDG_CONFIG_HOME", Some(xdg_config_home)),
                 ("ARMYKNIFE_SESSION_ID", armyknife_session_id),
+                ("CLAUDE_CODE_SESSION_ID", claude_code_session_id),
                 ("CODEX_SESSION_ID", codex_session_id),
                 ("CODEX_THREAD_ID", codex_thread_id),
             ],

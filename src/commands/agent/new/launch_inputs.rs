@@ -51,7 +51,8 @@ pub(super) fn build_env_vars(
             "1".to_string(),
         ));
     }
-    // Preserve parent attribution when `--parent-session-id` is omitted.
+    // The shared resolver keeps Claude Code's ambient ID available after its
+    // hook-written CLAUDE_ENV_FILE value is cleaned up.
     let parent_id = common.parent_session_id.clone().or(own_session_id);
     if let Some(ref parent_id) = parent_id {
         let ancestor_chain = build_ancestor_chain(parent_id)?;

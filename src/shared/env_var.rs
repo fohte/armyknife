@@ -41,15 +41,14 @@ pub struct EnvVars {
     /// Used by `claude -p` invocations to prevent infinite recursion.
     pub skip_hooks: bool,
 
-    /// Session ID of the current Claude Code session.
+    /// Session ID set by the armyknife Claude Code hook.
     pub session_id: Option<String>,
 
-    /// Session ID exported by Claude Code when armyknife's SessionStart hook
-    /// did not set `ARMYKNIFE_SESSION_ID` in the shell environment.
+    /// Session ID provided by Claude Code to its child processes.
     pub claude_code_session_id: Option<String>,
 
-    /// Session ID of the current Codex session. Not an `ARMYKNIFE_*` variable:
-    /// Codex exports it to every command it runs.
+    /// Stable session ID shared by Codex's root and subagent threads. Codex
+    /// exports it to every command it runs, unlike `CODEX_THREAD_ID`.
     pub codex_session_id: Option<String>,
 
     /// Thread ID of the current Codex thread, which may be a subagent thread.
@@ -115,27 +114,25 @@ impl EnvVars {
     }
 
     /// Session ID of the session this process runs in, whichever engine hosts
-    /// it. The armyknife value wins when present, then the hosting CLI's
-    /// ambient variable is used as a fallback.
+    /// it. Resolution order is armyknife's hook value, Claude Code's ambient
+    /// ID, then Codex's ambient ID.
     pub fn own_session_id(&self) -> Option<String> {
         self.own_session_id_with_source().map(|(id, _)| id)
     }
 
-    /// Resolves this process's session ID together with the environment
-    /// variable that supplied it, for callers that need an engine hint.
-    pub(crate) fn own_session_id_with_source(&self) -> Option<(String, SessionIdSource)> {
+    pub(crate) fn own_session_id_with_source(&self) -> Option<(String, OwnSessionIdSource)> {
         self.session_id
-            .as_ref()
-            .map(|id| (id.clone(), SessionIdSource::Armyknife))
+            .clone()
+            .map(|id| (id, OwnSessionIdSource::Armyknife))
             .or_else(|| {
                 self.claude_code_session_id
-                    .as_ref()
-                    .map(|id| (id.clone(), SessionIdSource::ClaudeCode))
+                    .clone()
+                    .map(|id| (id, OwnSessionIdSource::ClaudeCode))
             })
             .or_else(|| {
                 self.codex_session_id
-                    .as_ref()
-                    .map(|id| (id.clone(), SessionIdSource::Codex))
+                    .clone()
+                    .map(|id| (id, OwnSessionIdSource::Codex))
             })
     }
 
@@ -261,8 +258,8 @@ impl EnvVars {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SessionIdSource {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OwnSessionIdSource {
     Armyknife,
     ClaudeCode,
     Codex,
@@ -290,7 +287,12 @@ mod tests {
         Some("codex-id"),
         Some("claude-id")
     )]
-    #[case::empty_armyknife_falls_back(Some(""), None, Some("codex-id"), Some("codex-id"))]
+    #[case::empty_armyknife_falls_back(
+        Some(""),
+        Some("claude-id"),
+        Some("codex-id"),
+        Some("claude-id")
+    )]
     #[case::empty_claude_code_falls_back(None, Some(""), Some("codex-id"), Some("codex-id"))]
     #[case::none(None, None, None, None)]
     fn own_session_id_cases(
