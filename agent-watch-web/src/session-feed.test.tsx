@@ -202,10 +202,58 @@ it('requests deltas and restores the ordered full session response', async () =>
           workTypeNavLabels: { 'type-a': 'Updated Type A' },
           sessions: [updatedSessionC, elapsedSessionB],
         },
-        changedSessionIds: ['session-c'],
+        changedSessionIds: ['session-c', 'session-b'],
       },
     ],
   })
+})
+
+it('marks sessions changed when the store revision advances without a session delta', async () => {
+  const source = new FakeEventSource()
+  const firstReceived = deferred<undefined>()
+  const secondReceived = deferred<undefined>()
+  const changedSessionIds: string[][] = []
+  const sessionA = session('session-a', 'First session', 10)
+  const fetcher = vi
+    .fn()
+    .mockResolvedValueOnce(
+      jsonResponse({
+        mode: 'full',
+        token: 'snapshot-1',
+        revision: 1,
+        sessions: [sessionA],
+      }),
+    )
+    .mockResolvedValueOnce(
+      jsonResponse({
+        mode: 'delta',
+        token: 'snapshot-2',
+        revision: 2,
+        updatedSessions: [],
+        removedSessionIds: [],
+        sessionOrder: ['session-a'],
+      }),
+    )
+
+  const stop = startSessionFeed(
+    (_response, changedIds) => {
+      changedSessionIds.push([...changedIds])
+      if (changedSessionIds.length === 1) {
+        firstReceived.resolve(undefined)
+      } else {
+        secondReceived.resolve(undefined)
+      }
+    },
+    () => {},
+    { fetcher, createEventSource: () => source },
+  )
+
+  await firstReceived.promise
+  source.emit('sessions')
+  await secondReceived.promise
+  stop()
+
+  expect(changedSessionIds).toEqual([['session-a'], ['session-a']])
 })
 
 it('preserves a launch ID from a newly started session in the feed', async () => {
