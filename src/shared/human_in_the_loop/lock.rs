@@ -70,6 +70,20 @@ impl LockGuard {
                 &Self::lock_path(document_path),
                 is_process_alive,
                 AdvisoryLockMode::NonBlocking,
+                |record, is_alive| record.has_live_holder(is_alive),
+                |_| (),
+            ),
+            LockState::Active
+        )
+    }
+
+    pub(crate) fn is_review_child_running(document_path: &Path) -> bool {
+        matches!(
+            inspect_lock(
+                &Self::lock_path(document_path),
+                is_process_alive,
+                AdvisoryLockMode::NonBlocking,
+                |record, is_alive| record.has_live_review_child(is_alive),
                 |_| (),
             ),
             LockState::Active
@@ -192,12 +206,26 @@ impl LockRecord {
     }
 
     fn has_live_holder(&self, mut is_alive: impl FnMut(u32) -> bool) -> bool {
-        self.pids.iter().any(|pid| {
-            self.process_start_times.get(pid).map_or_else(
-                || is_alive(*pid),
-                |start_time| process_start_time_matches(*pid, start_time),
-            )
-        })
+        self.pids
+            .iter()
+            .copied()
+            .any(|pid| self.holder_is_alive(pid, &mut is_alive))
+    }
+
+    fn has_live_review_child(&self, mut is_alive: impl FnMut(u32) -> bool) -> bool {
+        // The launcher acquires first; CleanupGuard appends review child PIDs.
+        self.pids
+            .iter()
+            .copied()
+            .skip(1)
+            .any(|pid| self.holder_is_alive(pid, &mut is_alive))
+    }
+
+    fn holder_is_alive(&self, pid: u32, is_alive: &mut impl FnMut(u32) -> bool) -> bool {
+        self.process_start_times.get(&pid).map_or_else(
+            || is_alive(pid),
+            |start_time| process_start_time_matches(pid, start_time),
+        )
     }
 }
 
@@ -227,6 +255,7 @@ fn inspect_lock<T>(
     path: &Path,
     mut is_alive: impl FnMut(u32) -> bool,
     lock_mode: AdvisoryLockMode,
+    mut has_live_holder: impl FnMut(&LockRecord, &mut dyn FnMut(u32) -> bool) -> bool,
     mut on_stale: impl FnMut(&File) -> T,
 ) -> LockState<T> {
     for _ in 0..8 {
@@ -254,7 +283,7 @@ fn inspect_lock<T>(
             continue;
         }
 
-        return if record.has_live_holder(&mut is_alive) {
+        return if has_live_holder(&record, &mut is_alive) {
             LockState::Active
         } else {
             LockState::Stale(on_stale(&file))
@@ -310,20 +339,26 @@ fn try_remove_stale_lock(path: &Path) -> StaleRemoval {
 }
 
 fn try_remove_stale_lock_with(path: &Path, is_alive: impl FnMut(u32) -> bool) -> StaleRemoval {
-    match inspect_lock(path, is_alive, AdvisoryLockMode::Blocking, |file| {
-        if !same_file_at_path(file, path) {
-            return StaleRemoval::Active;
-        }
-
-        match fs::remove_file(path) {
-            Ok(()) => {
-                sync_parent_dir(path);
-                StaleRemoval::Removed
+    match inspect_lock(
+        path,
+        is_alive,
+        AdvisoryLockMode::Blocking,
+        |record, is_alive| record.has_live_holder(is_alive),
+        |file| {
+            if !same_file_at_path(file, path) {
+                return StaleRemoval::Active;
             }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => StaleRemoval::Replaced,
-            Err(_) => StaleRemoval::Active,
-        }
-    }) {
+
+            match fs::remove_file(path) {
+                Ok(()) => {
+                    sync_parent_dir(path);
+                    StaleRemoval::Removed
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => StaleRemoval::Replaced,
+                Err(_) => StaleRemoval::Active,
+            }
+        },
+    ) {
         LockState::Missing => StaleRemoval::Replaced,
         LockState::Active => StaleRemoval::Active,
         LockState::Stale(removal) => removal,
@@ -707,6 +742,7 @@ mod tests {
             &lock_path,
             |pid| pid == u32::MAX,
             AdvisoryLockMode::Blocking,
+            |record, is_alive| record.has_live_holder(is_alive),
             |_| (),
         );
         release_holder_with(&lock_path, parent_guard.lock_id(), u32::MAX, |_| false);

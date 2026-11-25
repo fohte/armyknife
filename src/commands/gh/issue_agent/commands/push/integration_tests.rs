@@ -9,6 +9,9 @@ use crate::commands::gh::issue_agent::models::IssueFrontmatter;
 use crate::commands::gh::issue_agent::storage::{CommentSnapshot, IssueContent, IssueStorage};
 use crate::commands::gh::issue_agent::testing::factories;
 use crate::infra::github::{GitHubMockServer, RemoteComment};
+use crate::shared::human_in_the_loop::{
+    ReviewDocumentAction, ReviewDocumentActionResult, document_hash, save_action_result,
+};
 use indoc::formatdoc;
 use rstest::{fixture, rstest};
 use tempfile::TempDir;
@@ -57,6 +60,25 @@ async fn comment_write_requests(
                 request.method.to_string(),
                 serde_json::from_slice(&request.body).ok(),
             )
+        })
+        .collect()
+}
+
+async fn mutation_requests(mock: &GitHubMockServer) -> Vec<(String, String)> {
+    mock.received_requests()
+        .await
+        .into_iter()
+        .filter_map(|request| {
+            let path = request.url.path();
+            let is_mutation = if path == "/graphql" {
+                serde_json::from_slice::<serde_json::Value>(&request.body)
+                    .ok()
+                    .and_then(|body| body.get("query")?.as_str().map(str::to_owned))
+                    .is_some_and(|query| query.trim_start().starts_with("mutation"))
+            } else {
+                request.method.as_str() != "GET"
+            };
+            is_mutation.then(|| (request.method.to_string(), path.to_owned()))
         })
         .collect()
 }
@@ -147,6 +169,133 @@ async fn test_no_changes(test_dir: TempDir) {
     )
     .await;
     assert!(result.is_ok());
+}
+
+#[rstest]
+#[case::issue_comment(ReviewDocumentAction::PostComment, "comments/new_example.md")]
+#[case::issue_body(ReviewDocumentAction::UpdateIssue, "issue.md")]
+#[tokio::test]
+async fn completed_watch_web_issue_actions_are_not_pushed_again(
+    test_dir: TempDir,
+    #[case] action: ReviewDocumentAction,
+    #[case] relative_path: &str,
+) {
+    let (mock, storage) = TestSetup::new(test_dir.path()).build().await;
+    let document_path = storage.dir().join(relative_path);
+    let document_hash = if document_path.exists() {
+        document_hash(&document_path).expect("review document hash should be computed")
+    } else {
+        "missing-document-hash".to_owned()
+    };
+    let action_result = ReviewDocumentActionResult::new(
+        action,
+        true,
+        "Operation result.".to_owned(),
+        document_hash,
+        None,
+    );
+    save_action_result(&document_path, &action_result)
+        .expect("watch-web action result should be saved");
+    let context = IssueContext {
+        owner: "owner".to_owned(),
+        repo_name: "repo".to_owned(),
+        issue_number: 123,
+        storage,
+        current_user: "testuser".to_owned(),
+    };
+
+    let result = run_with_context(
+        &make_args(false, false, false),
+        &context,
+        &mock.client(),
+        None,
+    )
+    .await
+    .map_err(|error| error.to_string());
+    let writes = mutation_requests(&mock).await;
+
+    assert_eq!((result, writes), (Ok(()), Vec::new()));
+}
+
+#[rstest]
+#[tokio::test]
+async fn completed_watch_web_issue_action_advances_converged_issue_snapshot(test_dir: TempDir) {
+    let (mock, storage) = TestSetup::new(test_dir.path())
+        .remote_title("Converged title")
+        .local_title("Converged title")
+        .build()
+        .await;
+    let issue_path = storage.dir().join("issue.md");
+    write_local_issue(
+        &storage,
+        &issue_frontmatter("Converged title", &["bug"]),
+        "Body",
+    );
+    storage
+        .save_base_issue(&issue_frontmatter("Original title", &["bug"]), "Body")
+        .unwrap();
+    save_action_result(
+        &issue_path,
+        &ReviewDocumentActionResult::new(
+            ReviewDocumentAction::UpdateIssue,
+            true,
+            "Issue body updated.".to_owned(),
+            document_hash(&issue_path).expect("review document hash should be computed"),
+            None,
+        ),
+    )
+    .expect("watch-web action result should be saved");
+
+    let context = IssueContext {
+        owner: "owner".to_owned(),
+        repo_name: "repo".to_owned(),
+        issue_number: 123,
+        storage: storage.clone(),
+        current_user: "testuser".to_owned(),
+    };
+    let client = mock.client();
+    let first_result = run_with_context(&make_args(false, false, false), &context, &client, None)
+        .await
+        .map_err(|error| error.to_string());
+    let base_title_after_convergence = storage
+        .read_base_issue()
+        .unwrap()
+        .expect("issue baseline should exist")
+        .frontmatter
+        .fields
+        .title;
+
+    write_local_issue(
+        &storage,
+        &issue_frontmatter("Follow-up title", &["bug"]),
+        "Body",
+    );
+    approve_file(&issue_path);
+    let repo = mock.repo("owner", "repo");
+    repo.issue(123).update().await;
+    repo.issue(123).get().await;
+    let second_result = run_with_context(&make_args(false, false, false), &context, &client, None)
+        .await
+        .map_err(|error| error.to_string());
+    let writes = mutation_requests(&mock).await;
+
+    assert_eq!(
+        (
+            first_result,
+            base_title_after_convergence,
+            second_result,
+            writes,
+        ),
+        (
+            Ok(()),
+            "Converged title".to_owned(),
+            Ok(()),
+            vec![(
+                "PATCH".to_owned(),
+                "/repos/owner/repo/issues/123".to_owned(),
+            )],
+        ),
+    );
 }
 
 #[rstest]

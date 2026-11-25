@@ -97,8 +97,8 @@ impl ReviewHandler<ThreadsFrontmatter> for PrReviewReplyHandler {
     }
 
     fn on_review_complete(&self, document: &Document<ThreadsFrontmatter>) -> HilResult<()> {
+        document.persist_approval_state()?;
         if document.frontmatter.is_approved() {
-            document.save_approval()?;
             println!(
                 "{}",
                 formatdoc! {"
@@ -111,11 +111,17 @@ impl ReviewHandler<ThreadsFrontmatter> for PrReviewReplyHandler {
                 }
             );
         } else {
-            document.remove_approval()?;
             println!("Not approved. Set 'submit: true' and save to approve.");
         }
 
         Ok(())
+    }
+
+    fn on_watch_web_review_complete(
+        &self,
+        document: &Document<ThreadsFrontmatter>,
+    ) -> HilResult<()> {
+        document.persist_approval_state()
     }
 }
 
@@ -164,7 +170,7 @@ pub fn run_review(args: &ReviewArgs) -> anyhow::Result<()> {
 
 pub fn run_review_complete(args: &ReviewCompleteArgs) -> anyhow::Result<()> {
     // Create FIFO guard first to ensure signaling even if load_config fails
-    let _fifo_guard = args.done_fifo.as_deref().map(FifoSignalGuard::new);
+    let mut fifo_guard = args.done_fifo.as_deref().map(FifoSignalGuard::new);
     let cleanup_guard = CleanupGuard::from_launcher_args(
         &args.filepath,
         args.review_lock_id.as_deref(),
@@ -178,14 +184,18 @@ pub fn run_review_complete(args: &ReviewCompleteArgs) -> anyhow::Result<()> {
         repo_slug: args.repo.clone(),
     };
 
-    complete_review::<ThreadsFrontmatter, _, _>(
+    let completed_by_watch_web = complete_review::<ThreadsFrontmatter, _, _>(
         &args.filepath,
         args.window_title.as_deref(),
         &handler,
         &config.editor,
         args.finish_fifo.as_deref(),
-        cleanup_guard,
+        &cleanup_guard,
     )?;
+
+    if completed_by_watch_web && let Some(fifo_guard) = fifo_guard.as_mut() {
+        fifo_guard.set_signal(b'1');
+    }
 
     Ok(())
 }

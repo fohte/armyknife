@@ -64,6 +64,14 @@ impl<S: DocumentSchema> Document<S> {
         self.approval_manager().remove()
     }
 
+    pub(crate) fn persist_approval_state(&self) -> Result<()> {
+        if self.frontmatter.is_approved() {
+            self.save_approval()
+        } else {
+            self.remove_approval()
+        }
+    }
+
     /// Verify that the document has been approved and not modified since.
     pub fn verify_approval(&self) -> Result<()> {
         self.approval_manager().verify()

@@ -85,15 +85,15 @@ pub(crate) fn open_fifo_reader(fifo_path: &Path) -> super::Result<File> {
     Ok(file)
 }
 
-pub(super) fn try_read_fifo_signal(file: &mut File) -> super::Result<bool> {
+pub(super) fn try_read_fifo_byte(file: &mut File) -> super::Result<Option<u8>> {
     let mut byte = [0_u8; 1];
     match file.read(&mut byte) {
-        Ok(bytes_read) => Ok(bytes_read > 0),
+        Ok(bytes_read) => Ok((bytes_read > 0).then_some(byte[0])),
         Err(error)
             if error.kind() == io::ErrorKind::WouldBlock
                 || error.kind() == io::ErrorKind::Interrupted =>
         {
-            Ok(false)
+            Ok(None)
         }
         Err(error) => Err(error.into()),
     }

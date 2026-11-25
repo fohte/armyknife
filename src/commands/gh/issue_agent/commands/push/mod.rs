@@ -8,7 +8,7 @@ mod field_comparison;
 mod integration_tests;
 mod links;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 
@@ -20,7 +20,10 @@ use crate::commands::gh::issue_agent::body_compare::comment_bodies_equal;
 use crate::commands::gh::issue_agent::models::{Comment, IssueFrontmatter, IssueMetadata};
 use crate::commands::gh::issue_agent::storage::{CommentSnapshot, LocalComment};
 use crate::infra::github::GitHubClient;
-use crate::shared::human_in_the_loop::ApprovalManager;
+use crate::shared::human_in_the_loop::{
+    ApprovalManager, ReviewDocumentAction, successful_action_result,
+    successful_action_results_in_directory,
+};
 
 use changeset::{ChangeSet, CommentChange, DetectOptions, IssueAddress, LocalState, RemoteState};
 use detect::{ConflictCheckInput, check_conflicts};
@@ -296,6 +299,13 @@ async fn run_with_context(
     // Display and apply changes
     let has_changes = changeset.has_changes();
     changeset.display()?;
+
+    if !args.dry_run {
+        report_completed_watch_web_actions(
+            &ctx.storage.dir().join("issue.md"),
+            &ctx.storage.dir().join("comments"),
+        )?;
+    }
 
     // Verify approval before applying (skip for dry-run)
     if !args.dry_run && has_changes {
@@ -645,6 +655,27 @@ fn print_result(dry_run: bool, has_changes: bool) {
     } else {
         println!("No changes to push.");
     }
+}
+
+fn report_completed_watch_web_actions(
+    issue_path: &Path,
+    comments_dir: &Path,
+) -> anyhow::Result<()> {
+    let mut completed_results = Vec::new();
+    if let Some(result) = successful_action_result(issue_path, ReviewDocumentAction::UpdateIssue)? {
+        completed_results.push(result);
+    }
+    completed_results.extend(successful_action_results_in_directory(
+        comments_dir,
+        ReviewDocumentAction::PostComment,
+    )?);
+    if completed_results.is_empty() {
+        return Ok(());
+    }
+    for result in completed_results {
+        result.print_for_agent();
+    }
+    Ok(())
 }
 
 #[cfg(test)]

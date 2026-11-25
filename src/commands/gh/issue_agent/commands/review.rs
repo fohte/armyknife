@@ -103,20 +103,24 @@ impl ReviewHandler<SubmitSchema> for IssueReviewHandler {
     }
 
     fn on_review_complete(&self, document: &Document<SubmitSchema>) -> HilResult<()> {
+        persist_review_approval(document)?;
         if document.frontmatter.is_approved() {
-            // Strip the temporary frontmatter before saving approval hash.
-            // The hash must match the file content at push time, so we save
-            // the hash of the file *after* stripping.
-            strip_temporary_frontmatter(&document.path)?;
-            document.save_approval()?;
             println!("Approved.");
         } else {
-            strip_temporary_frontmatter(&document.path)?;
-            document.remove_approval()?;
             println!("Not approved. Set 'submit: true' in the frontmatter to approve.");
         }
         Ok(())
     }
+
+    fn on_watch_web_review_complete(&self, document: &Document<SubmitSchema>) -> HilResult<()> {
+        persist_review_approval(document)
+    }
+}
+
+fn persist_review_approval(document: &Document<SubmitSchema>) -> HilResult<()> {
+    // The approval hash must match the document after temporary frontmatter is removed.
+    strip_temporary_frontmatter(&document.path)?;
+    document.persist_approval_state()
 }
 
 /// Check if a file has YAML frontmatter (starts with `---\n`).
@@ -259,7 +263,7 @@ pub fn run(args: &ReviewArgs) -> anyhow::Result<()> {
 
 pub fn run_complete(args: &ReviewCompleteArgs) -> anyhow::Result<()> {
     // Create FIFO guard first to ensure signaling even if load_config fails
-    let _fifo_guard = args.done_fifo.as_deref().map(FifoSignalGuard::new);
+    let mut fifo_guard = args.done_fifo.as_deref().map(FifoSignalGuard::new);
     let cleanup_guard = CleanupGuard::from_launcher_args(
         &args.path,
         args.review_lock_id.as_deref(),
@@ -268,14 +272,18 @@ pub fn run_complete(args: &ReviewCompleteArgs) -> anyhow::Result<()> {
 
     let config = load_config()?;
 
-    complete_review::<SubmitSchema, _, _>(
+    let completed_by_watch_web = complete_review::<SubmitSchema, _, _>(
         &args.path,
         args.window_title.as_deref(),
         &IssueReviewHandler,
         &config.editor,
         args.finish_fifo.as_deref(),
-        cleanup_guard,
+        &cleanup_guard,
     )?;
+
+    if completed_by_watch_web && let Some(fifo_guard) = fifo_guard.as_mut() {
+        fifo_guard.set_signal(b'1');
+    }
 
     Ok(())
 }

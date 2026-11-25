@@ -2,7 +2,7 @@ use axum::http::StatusCode;
 
 use crate::shared::human_in_the_loop::{
     FINISH_ACK_TIMEOUT, ReviewDocumentOperationLock, finish_ack_fifo_path,
-    finish_request_fifo_path, open_fifo_reader, wait_for_finish_ack,
+    finish_request_fifo_path, open_fifo_reader, try_signal_fifo_with_byte, wait_for_finish_ack,
 };
 
 use super::{
@@ -15,7 +15,7 @@ pub(super) async fn save_document_for_session(
     load_review_queue: ReviewQueueLoader,
     session_id: String,
     request: ReviewDocumentEditRequest,
-    finishing: bool,
+    finish_signal: Option<u8>,
 ) -> Result<String, StatusCode> {
     tokio::task::spawn_blocking(move || {
         let session = load_session(&session_id)
@@ -67,7 +67,7 @@ pub(super) async fn save_document_for_session(
         if !is_fifo(&fifo_path) {
             return Err(StatusCode::CONFLICT);
         }
-        let mut ack_reader = if finishing {
+        let mut ack_reader = if finish_signal.is_some() {
             Some(
                 open_fifo_reader(&finish_ack_fifo_path(&marker.path)).map_err(|error| {
                     tracing::warn!(%error, "failed to open review finish acknowledgement FIFO");
@@ -80,8 +80,8 @@ pub(super) async fn save_document_for_session(
         let content = render_review_document(&marker.path, request.frontmatter, &request.body)?;
         let revision = review_document_revision(content.as_bytes());
         overwrite_review_document(&marker.path, content.as_bytes(), &request.revision)?;
-        if finishing {
-            crate::shared::human_in_the_loop::try_signal_fifo(&fifo_path).map_err(|error| {
+        if let Some(signal) = finish_signal {
+            try_signal_fifo_with_byte(&fifo_path, signal).map_err(|error| {
                 tracing::warn!(%error, "failed to signal review finish request");
                 StatusCode::INTERNAL_SERVER_ERROR
             })?;

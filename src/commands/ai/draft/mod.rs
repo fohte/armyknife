@@ -152,7 +152,7 @@ fn run_complete(args: &DraftArgs) -> anyhow::Result<()> {
         &DraftHandler,
         &config.editor,
         args.finish_fifo.as_deref(),
-        cleanup_guard,
+        &cleanup_guard,
     )?;
 
     Ok(())
