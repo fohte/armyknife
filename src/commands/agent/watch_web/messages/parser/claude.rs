@@ -1450,11 +1450,18 @@ mod tests {
         );
     }
 
-    #[test]
-    fn resolves_a_human_origin_vibe_notice_from_the_recorded_kind() {
+    #[rstest]
+    #[case::tagged_notice(
+        "<armyknife-vibe-mode-on>watch-web からユーザーが vibe mode を on にしました。</armyknife-vibe-mode-on>"
+    )]
+    #[case::slash_command_markup(indoc! {r#"
+        <command-message>synthetic action notice</command-message>
+        <command-name>/vibe-on</command-name>
+        <command-args>fixture-argument</command-args>
+    "#})]
+    fn resolves_a_human_origin_action_from_its_recorded_kind(#[case] queued_content: &str) {
         let user_marker = "⟦armyknife-user:fixture-marker-violet⟧";
         let message_id = "armyknife-action:fixture-message-teal";
-        let queued_content = "<armyknife-vibe-mode-on>watch-web からユーザーが vibe mode を on にしました。</armyknife-vibe-mode-on>";
         let delivered_content = crate::commands::agent::watch_web_user_marker::prefix_message(
             user_marker,
             &super::super::super::queued_prompt::add_id_marker(queued_content, message_id),

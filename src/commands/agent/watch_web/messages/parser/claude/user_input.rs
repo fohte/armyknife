@@ -21,6 +21,8 @@ pub(super) fn is_tool_result_only_user_record(record: &Value) -> bool {
 }
 
 pub(super) fn slash_command_text(text: &str) -> Option<String> {
+    let message_id = super::super::super::queued_prompt::id_from_content(text);
+    let text = super::super::super::queued_prompt::strip_id_marker(text);
     let command = text
         .split_once("<command-name>")?
         .1
@@ -39,10 +41,16 @@ pub(super) fn slash_command_text(text: &str) -> Option<String> {
         .split_once("<command-args>")
         .and_then(|(_, value)| value.split_once("</command-args>"))
         .map_or("", |(args, _)| args.trim());
-    Some(if args.is_empty() {
+    let command_text = if args.is_empty() {
         command
     } else {
         format!("{command} {args}")
+    };
+    Some(match message_id {
+        Some(message_id) => {
+            super::super::super::queued_prompt::add_id_marker(&command_text, message_id)
+        }
+        None => command_text,
     })
 }
 
