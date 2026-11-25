@@ -68,9 +68,6 @@ where
             ReviewEditorOutcome::Exited(_) => None,
         },
     };
-    if let (Some(signal), Some(done_fifo_guard)) = (finish_signal, done_fifo_guard.as_mut()) {
-        done_fifo_guard.set_signal(signal);
-    }
     let editor_succeeded = match editor_outcome {
         ReviewEditorOutcome::Exited(status) => status.success(),
         ReviewEditorOutcome::FinishRequested(_) => true,
@@ -84,9 +81,11 @@ where
     let handler_result =
         Document::<S>::from_path(document_path.to_path_buf()).and_then(|document| {
             match finish_signal {
-                Some(b'1') => handler.on_watch_web_review_complete(&document),
-                Some(signal) => handler
-                    .on_review_finished(&document, ReviewFinishReason::from_signal_byte(signal)),
+                Some(signal) if signal == ReviewFinishReason::RepliesPushed.signal_byte() => {
+                    handler
+                        .on_review_finished(&document, ReviewFinishReason::from_signal_byte(signal))
+                }
+                Some(_) => handler.on_watch_web_review_complete(&document),
                 None => handler.on_review_complete(&document),
             }
         });
@@ -97,6 +96,11 @@ where
         {
             tracing::warn!(%error, "failed to acknowledge review finish result");
         }
+    }
+    if handler_result.is_ok()
+        && let (Some(signal), Some(done_fifo_guard)) = (finish_signal, done_fifo_guard.as_mut())
+    {
+        done_fifo_guard.set_signal(signal);
     }
     handler_result?;
     Ok(())
@@ -260,9 +264,13 @@ mod tests {
         }
     }
 
+    type FinishedReviewObservation = (PathBuf, ReviewFinishReason, bool, String);
+
     struct FinishTestHandler {
         completed_documents: Arc<std::sync::Mutex<Vec<(PathBuf, bool, String)>>>,
         watch_web_documents: Arc<std::sync::Mutex<Vec<(PathBuf, bool, String)>>>,
+        finished_documents: Arc<std::sync::Mutex<Vec<FinishedReviewObservation>>>,
+        fail_watch_web: bool,
     }
 
     impl ReviewHandler<FinishTestSchema> for FinishTestHandler {
@@ -287,6 +295,23 @@ mod tests {
             Ok(())
         }
 
+        fn on_review_finished(
+            &self,
+            document: &Document<FinishTestSchema>,
+            reason: ReviewFinishReason,
+        ) -> Result<()> {
+            self.finished_documents
+                .lock()
+                .expect("finished document observations should be writable")
+                .push((
+                    document.path.clone(),
+                    reason,
+                    document.frontmatter.approved,
+                    std::fs::read_to_string(&document.path)?,
+                ));
+            Ok(())
+        }
+
         fn on_watch_web_review_complete(
             &self,
             document: &Document<FinishTestSchema>,
@@ -299,7 +324,11 @@ mod tests {
                     document.frontmatter.approved,
                     std::fs::read_to_string(&document.path)?,
                 ));
-            Ok(())
+            if self.fail_watch_web {
+                Err(std::io::Error::other("watch-web action failed").into())
+            } else {
+                Ok(())
+            }
         }
     }
 
@@ -383,11 +412,22 @@ mod tests {
     }
 
     #[rstest]
-    #[case::plain_finish(b'0', false)]
-    #[case::action_finish(b'1', true)]
-    fn finish_request_stops_editor_and_runs_watch_web_handler(
+    #[case::watch_web_finish(b'0', false, None, b'0', b'0')]
+    #[case::watch_web_action_finish(b'1', false, None, b'0', b'1')]
+    #[case::replies_pushed(b'p', false, None, b'0', b'p')]
+    #[case::failed_watch_web_action(
+        b'1',
+        true,
+        Some("IO error: watch-web action failed"),
+        b'1',
+        b'0'
+    )]
+    fn finish_request_stops_editor_and_dispatches_completion_handler(
         #[case] finish_signal: u8,
-        #[case] action_requested: bool,
+        #[case] fail_watch_web: bool,
+        #[case] expected_error: Option<&str>,
+        #[case] expected_ack_signal: u8,
+        #[case] expected_done_signal: u8,
         review_document: ReviewDocumentFixture,
     ) {
         let document_path = review_document.path;
@@ -402,6 +442,10 @@ mod tests {
             .expect("review process should be registered");
         let finish_fifo_path = super::super::finish_request_fifo_path(&document_path);
         create_fifo_at_path(&finish_fifo_path).expect("finish FIFO should be created");
+        let done_fifo_path = document_path.with_extension("done");
+        create_fifo_at_path(&done_fifo_path).expect("done FIFO should be created");
+        let mut done_reader = open_fifo_reader(&done_fifo_path).expect("done reader should open");
+        let mut done_signal = FifoSignalGuard::new(&done_fifo_path);
         create_fifo_at_path(&finish_ack_fifo_path(&document_path))
             .expect("acknowledgement FIFO should be created");
         let mut ack_reader = open_fifo_reader(&finish_ack_fifo_path(&document_path))
@@ -414,9 +458,12 @@ mod tests {
         };
         let completed_documents = Arc::new(std::sync::Mutex::new(Vec::new()));
         let watch_web_documents = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let finished_documents = Arc::new(std::sync::Mutex::new(Vec::new()));
         let handler = FinishTestHandler {
             completed_documents: completed_documents.clone(),
             watch_web_documents: watch_web_documents.clone(),
+            finished_documents: finished_documents.clone(),
+            fail_watch_web,
         };
 
         let result = complete_review::<FinishTestSchema, _, _>(
@@ -426,13 +473,18 @@ mod tests {
             &runner,
             Some(&finish_fifo_path),
             &cleanup_guard,
-            None,
+            Some(&mut done_signal),
         )
         .map_err(|error| error.to_string());
+        drop(done_signal);
         let mut ack_signal = [0_u8; 1];
         let ack_bytes_read = ack_reader
             .read(&mut ack_signal)
             .expect("review process should acknowledge the request");
+        let mut done_signal_byte = [0_u8; 1];
+        let done_bytes_read = done_reader
+            .read(&mut done_signal_byte)
+            .expect("review process should signal completion");
         let completed_documents = completed_documents
             .lock()
             .expect("completed document observations should be readable")
@@ -441,17 +493,29 @@ mod tests {
             .lock()
             .expect("watch-web document observations should be readable")
             .clone();
+        let finished_documents = finished_documents
+            .lock()
+            .expect("finished document observations should be readable")
+            .clone();
 
-        let expected_completed_documents = if action_requested {
-            Vec::new()
-        } else {
-            vec![(document_path.clone(), true, saved_document.to_string())]
-        };
-        let expected_watch_web_documents = if action_requested {
-            vec![(document_path, true, saved_document.to_string())]
-        } else {
-            Vec::new()
-        };
+        let expected_watch_web_documents =
+            if finish_signal == ReviewFinishReason::RepliesPushed.signal_byte() {
+                Vec::new()
+            } else {
+                vec![(document_path.clone(), true, saved_document.to_string())]
+            };
+        let expected_finished_documents =
+            if finish_signal == ReviewFinishReason::RepliesPushed.signal_byte() {
+                vec![(
+                    document_path,
+                    ReviewFinishReason::RepliesPushed,
+                    true,
+                    saved_document.to_string(),
+                )]
+            } else {
+                Vec::new()
+            };
+        let expected_result = expected_error.map_or(Ok(()), |error| Err(error.to_owned()));
 
         assert_eq!(
             (
@@ -459,16 +523,22 @@ mod tests {
                 termination_count.load(Ordering::SeqCst),
                 completed_documents,
                 watch_web_documents,
+                finished_documents,
                 ack_bytes_read,
                 ack_signal,
+                done_bytes_read,
+                done_signal_byte,
             ),
             (
-                Ok(()),
+                expected_result,
                 1,
-                expected_completed_documents,
+                Vec::new(),
                 expected_watch_web_documents,
+                expected_finished_documents,
                 1,
-                *b"0",
+                [expected_ack_signal],
+                1,
+                [expected_done_signal],
             ),
         );
     }
@@ -490,9 +560,12 @@ mod tests {
         };
         let completed_documents = Arc::new(std::sync::Mutex::new(Vec::new()));
         let watch_web_documents = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let finished_documents = Arc::new(std::sync::Mutex::new(Vec::new()));
         let handler = FinishTestHandler {
             completed_documents: completed_documents.clone(),
             watch_web_documents: watch_web_documents.clone(),
+            finished_documents,
+            fail_watch_web: false,
         };
 
         let result = complete_review::<FinishTestSchema, _, _>(

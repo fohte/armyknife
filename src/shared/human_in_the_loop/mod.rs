@@ -354,7 +354,8 @@ where
     // Reuse the in-memory `post_edit` for the document parse to avoid a
     // second read of the same file.
     let document = Document::<S>::from_content(document_path.to_path_buf(), &post_edit)?;
-    let finish_reason = (completion_signal == b'p').then_some(ReviewFinishReason::RepliesPushed);
+    let finish_reason = (completion_signal == ReviewFinishReason::RepliesPushed.signal_byte())
+        .then_some(ReviewFinishReason::RepliesPushed);
     Ok(Some(ReviewResult {
         document,
         finish_reason,
