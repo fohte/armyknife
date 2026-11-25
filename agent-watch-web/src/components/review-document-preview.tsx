@@ -5,6 +5,7 @@ import { File } from 'lucide-react'
 import { useLayoutEffect, useRef, useState } from 'react'
 
 import { MarkdownMessage } from '#components/markdown-message'
+import { ReviewDocumentIssueReference } from '#components/review-document-issue-reference'
 import {
   parseIssueComment,
   parseReviewMessages,
@@ -16,6 +17,7 @@ import type { JsonValue } from '#types'
 
 type ReviewDocumentPreviewProps = {
   summary?: ReviewDocumentSummary
+  relatedIssueTitles?: Readonly<Record<string, string>> | undefined
   body: string
   frontmatter?: JsonValue
   mode?: 'body' | 'frontmatter'
@@ -35,36 +37,6 @@ function stringList(value: JsonValue | undefined): string[] {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === 'string')
     : []
-}
-
-function issueReferenceUrl(reference: string) {
-  const match = /^([^/]+)\/([^/#]+)#(\d+)$/.exec(reference)
-  const owner = match?.[1]
-  const repository = match?.[2]
-  const issueNumber = match?.[3]
-  if (
-    owner === undefined ||
-    repository === undefined ||
-    issueNumber === undefined
-  )
-    return null
-  return `https://github.com/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/issues/${issueNumber}`
-}
-
-function IssueReference({ reference }: { reference: string }) {
-  const href = issueReferenceUrl(reference)
-  return href === null ? (
-    <code>{reference}</code>
-  ) : (
-    <a
-      className="review-document-issue-reference-link"
-      href={href}
-      rel="noopener noreferrer"
-      target="_blank"
-    >
-      {reference}
-    </a>
-  )
 }
 
 function AddIssueValue({
@@ -132,10 +104,12 @@ function AddIssueValue({
 
 function IssueFrontmatter({
   frontmatter,
+  relatedIssueTitles,
   disabled,
   onChange,
 }: {
   frontmatter: JsonValue
+  relatedIssueTitles: Readonly<Record<string, string>>
   disabled: boolean
   onChange: (frontmatter: JsonValue) => void
 }) {
@@ -258,7 +232,10 @@ function IssueFrontmatter({
         <dd className="review-document-issue-parent">
           {parentIssue.length > 0 ? (
             <div className="review-document-issue-reference">
-              <IssueReference reference={parentIssue} />
+              <ReviewDocumentIssueReference
+                reference={parentIssue}
+                title={relatedIssueTitles[parentIssue]}
+              />
               <button
                 aria-label="Clear parent issue"
                 disabled={disabled}
@@ -289,7 +266,10 @@ function IssueFrontmatter({
               key={`${subIssue}-${String(index)}`}
               className="review-document-issue-reference"
             >
-              <IssueReference reference={subIssue} />
+              <ReviewDocumentIssueReference
+                reference={subIssue}
+                title={relatedIssueTitles[subIssue]}
+              />
               <button
                 aria-label={`Remove sub-issue ${subIssue}`}
                 disabled={disabled}
@@ -385,6 +365,7 @@ function ReviewThreadReplyTextarea({
 
 export function ReviewDocumentPreview({
   summary,
+  relatedIssueTitles = {},
   body,
   frontmatter = null,
   mode = 'body',
@@ -397,6 +378,7 @@ export function ReviewDocumentPreview({
     return summary?.kind === 'issue_body' ? (
       <IssueFrontmatter
         frontmatter={frontmatter}
+        relatedIssueTitles={relatedIssueTitles}
         disabled={disabled}
         onChange={onFrontmatterChange}
       />

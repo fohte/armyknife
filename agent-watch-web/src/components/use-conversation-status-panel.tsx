@@ -426,6 +426,9 @@ export function useConversationStatusPanel({
                   isMobile={isMobile}
                   canSave={selectedSummary.canSave}
                   canFinish={selectedSummary.canFinish}
+                  relatedIssueTitles={
+                    reviewDocumentState.document.relatedIssueTitles
+                  }
                   frontmatter={reviewDocumentState.document.frontmatter}
                   body={reviewDocumentState.document.body}
                   status={reviewDocumentState.saveStatus}

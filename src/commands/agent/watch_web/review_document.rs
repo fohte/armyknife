@@ -21,8 +21,12 @@ use crate::shared::human_in_the_loop::{
 
 mod execute;
 mod metadata;
+mod related_issue_titles;
 mod save;
 use metadata::{ReviewDocumentRoots, ReviewDocumentSummary, summarize};
+use related_issue_titles::{
+    IssueTitleLookup, github_issue_title_lookup, lookup_issue_titles_with_timeout,
+};
 
 type SessionLoader = Arc<dyn Fn(&str) -> anyhow::Result<Option<Session>> + Send + Sync>;
 type ReviewQueueLoader = Arc<dyn Fn(&Session) -> ReviewDocumentQueue + Send + Sync>;
@@ -40,6 +44,8 @@ struct ReviewDocumentResponse {
     revision: String,
     frontmatter: serde_json::Value,
     body: String,
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    related_issue_titles: HashMap<String, String>,
     #[serde(flatten)]
     summary: ReviewDocumentSummary,
 }
@@ -64,6 +70,7 @@ pub(super) fn router() -> Router {
         store::load_session,
         review_document_queue,
         ReviewDocumentRoots::default(),
+        github_issue_title_lookup(),
     )
 }
 
@@ -83,6 +90,7 @@ fn router_with_loaders(
         load_session,
         load_review_queue,
         ReviewDocumentRoots::default(),
+        no_issue_title_lookup(),
     )
 }
 
@@ -92,19 +100,31 @@ fn router_with_path_roots(
     load_review_queue: impl Fn(&Session) -> ReviewDocumentQueue + Send + Sync + 'static,
     roots: ReviewDocumentRoots,
 ) -> Router {
-    router_with_dependencies(load_session, load_review_queue, roots)
+    router_with_dependencies(
+        load_session,
+        load_review_queue,
+        roots,
+        no_issue_title_lookup(),
+    )
+}
+
+#[cfg(test)]
+fn no_issue_title_lookup() -> IssueTitleLookup {
+    Arc::new(|_, _, _| Box::pin(async { anyhow::bail!("lookup disabled in test") }))
 }
 
 fn router_with_dependencies(
     load_session: impl Fn(&str) -> anyhow::Result<Option<Session>> + Send + Sync + 'static,
     load_review_queue: impl Fn(&Session) -> ReviewDocumentQueue + Send + Sync + 'static,
     roots: ReviewDocumentRoots,
+    issue_title_lookup: IssueTitleLookup,
 ) -> Router {
     router_with_action_executor(
         load_session,
         load_review_queue,
         roots,
         Arc::new(|record| Box::pin(async move { execute::run_action(&record).await })),
+        issue_title_lookup,
     )
 }
 
@@ -115,7 +135,13 @@ fn router_with_injected_action_executor(
     roots: ReviewDocumentRoots,
     executor: execute::ActionExecutor,
 ) -> Router {
-    router_with_action_executor(load_session, load_review_queue, roots, executor)
+    router_with_action_executor(
+        load_session,
+        load_review_queue,
+        roots,
+        executor,
+        no_issue_title_lookup(),
+    )
 }
 
 fn router_with_action_executor(
@@ -123,6 +149,7 @@ fn router_with_action_executor(
     load_review_queue: impl Fn(&Session) -> ReviewDocumentQueue + Send + Sync + 'static,
     roots: ReviewDocumentRoots,
     executor: execute::ActionExecutor,
+    issue_title_lookup: IssueTitleLookup,
 ) -> Router {
     Router::new()
         .route("/sessions/{id}/review-document", get(get_review_document))
@@ -161,16 +188,18 @@ fn router_with_action_executor(
                 records: HashMap::new(),
                 executor,
             })) as ReviewDocumentActionRegistry,
+            issue_title_lookup,
         ))
 }
 
 async fn get_review_document(
-    State((load_session, load_review_queue, _, roots, _)): State<(
+    State((load_session, load_review_queue, _, roots, _, issue_title_lookup)): State<(
         SessionLoader,
         ReviewQueueLoader,
         ReviewDocumentEditLock,
         ReviewDocumentRoots,
         ReviewDocumentActionRegistry,
+        IssueTitleLookup,
     )>,
     RoutePath(session_id): RoutePath<String>,
 ) -> Result<Json<ReviewDocumentResponse>, StatusCode> {
@@ -205,16 +234,20 @@ async fn get_review_document(
         StatusCode::INTERNAL_SERVER_ERROR
     })??;
 
-    response.map(Json).ok_or(StatusCode::NOT_FOUND)
+    let mut response = response.ok_or(StatusCode::NOT_FOUND)?;
+    response.related_issue_titles =
+        lookup_issue_titles_with_timeout(&response.frontmatter, issue_title_lookup).await;
+    Ok(Json(response))
 }
 
 async fn get_review_documents(
-    State((load_session, load_review_queue, _, roots, _)): State<(
+    State((load_session, load_review_queue, _, roots, _, _)): State<(
         SessionLoader,
         ReviewQueueLoader,
         ReviewDocumentEditLock,
         ReviewDocumentRoots,
         ReviewDocumentActionRegistry,
+        IssueTitleLookup,
     )>,
     RoutePath(session_id): RoutePath<String>,
 ) -> Result<Json<Vec<ReviewDocumentSummary>>, StatusCode> {
@@ -247,12 +280,13 @@ async fn get_review_documents(
 }
 
 async fn get_review_document_by_id(
-    State((load_session, load_review_queue, _, roots, _)): State<(
+    State((load_session, load_review_queue, _, roots, _, issue_title_lookup)): State<(
         SessionLoader,
         ReviewQueueLoader,
         ReviewDocumentEditLock,
         ReviewDocumentRoots,
         ReviewDocumentActionRegistry,
+        IssueTitleLookup,
     )>,
     RoutePath((session_id, document_id)): RoutePath<(String, String)>,
 ) -> Result<Json<ReviewDocumentResponse>, StatusCode> {
@@ -282,16 +316,20 @@ async fn get_review_document_by_id(
         StatusCode::INTERNAL_SERVER_ERROR
     })??;
 
+    let mut response = response;
+    response.related_issue_titles =
+        lookup_issue_titles_with_timeout(&response.frontmatter, issue_title_lookup).await;
     Ok(Json(response))
 }
 
 async fn save_review_document(
-    State((load_session, load_review_queue, edit_lock, _, _)): State<(
+    State((load_session, load_review_queue, edit_lock, _, _, _)): State<(
         SessionLoader,
         ReviewQueueLoader,
         ReviewDocumentEditLock,
         ReviewDocumentRoots,
         ReviewDocumentActionRegistry,
+        IssueTitleLookup,
     )>,
     RoutePath(session_id): RoutePath<String>,
     axum::Json(request): axum::Json<ReviewDocumentEditRequest>,
@@ -307,12 +345,13 @@ async fn save_review_document(
 }
 
 async fn finish_review_document(
-    State((load_session, load_review_queue, edit_lock, _, _)): State<(
+    State((load_session, load_review_queue, edit_lock, _, _, _)): State<(
         SessionLoader,
         ReviewQueueLoader,
         ReviewDocumentEditLock,
         ReviewDocumentRoots,
         ReviewDocumentActionRegistry,
+        IssueTitleLookup,
     )>,
     RoutePath(session_id): RoutePath<String>,
     axum::Json(request): axum::Json<ReviewDocumentEditRequest>,
@@ -333,12 +372,13 @@ async fn finish_review_document(
 }
 
 async fn save_review_document_by_id(
-    State((load_session, load_review_queue, edit_lock, _, _)): State<(
+    State((load_session, load_review_queue, edit_lock, _, _, _)): State<(
         SessionLoader,
         ReviewQueueLoader,
         ReviewDocumentEditLock,
         ReviewDocumentRoots,
         ReviewDocumentActionRegistry,
+        IssueTitleLookup,
     )>,
     RoutePath((session_id, document_id)): RoutePath<(String, String)>,
     axum::Json(request): axum::Json<ReviewDocumentEditRequest>,
@@ -356,12 +396,13 @@ async fn save_review_document_by_id(
 }
 
 async fn finish_review_document_by_id(
-    State((load_session, load_review_queue, edit_lock, _, _)): State<(
+    State((load_session, load_review_queue, edit_lock, _, _, _)): State<(
         SessionLoader,
         ReviewQueueLoader,
         ReviewDocumentEditLock,
         ReviewDocumentRoots,
         ReviewDocumentActionRegistry,
+        IssueTitleLookup,
     )>,
     RoutePath((session_id, document_id)): RoutePath<(String, String)>,
     axum::Json(request): axum::Json<ReviewDocumentEditRequest>,
@@ -537,6 +578,7 @@ fn load_review_document(
         revision,
         frontmatter,
         body,
+        related_issue_titles: HashMap::new(),
         summary,
     })
 }
@@ -548,6 +590,7 @@ fn review_document_revision(content: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
+    use std::collections::HashMap;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -565,11 +608,58 @@ mod tests {
     use crate::commands::agent::types::{Engine, Session, SessionStatus};
     use crate::shared::human_in_the_loop::LockGuard;
 
+    use super::metadata::{ReviewDocumentKind, ReviewDocumentTarget};
+    use super::related_issue_titles::IssueTitleLookup;
     use super::{
-        ReviewDocumentOperationLock, ReviewDocumentRoots, finish_ack_fifo_path,
-        finish_request_fifo_path, review_document_revision, router_with_injected_action_executor,
+        ReviewDocumentOperationLock, ReviewDocumentResponse, ReviewDocumentRoots,
+        ReviewDocumentSummary, finish_ack_fifo_path, finish_request_fifo_path,
+        review_document_revision, router_with_dependencies, router_with_injected_action_executor,
         router_with_loaders, router_with_path_roots, router_with_session_loader,
     };
+
+    #[test]
+    fn serializes_related_issue_titles_for_the_review_preview() {
+        let response = ReviewDocumentResponse {
+            revision: "fixture-revision".to_owned(),
+            frontmatter: serde_json::json!({
+                "parentIssue": "sample-owner/sample-repo#42",
+            }),
+            body: "Sample issue body.".to_owned(),
+            related_issue_titles: HashMap::from([(
+                "sample-owner/sample-repo#42".to_owned(),
+                "Sample parent issue".to_owned(),
+            )]),
+            summary: ReviewDocumentSummary {
+                id: "fixture-review".to_owned(),
+                kind: ReviewDocumentKind::Draft,
+                target: ReviewDocumentTarget::default(),
+                started_at: None,
+                is_editor: false,
+                can_save: false,
+                can_finish: false,
+            },
+        };
+
+        assert_eq!(
+            serde_json::to_value(response).expect("response should serialize"),
+            serde_json::json!({
+                "id": "fixture-review",
+                "revision": "fixture-revision",
+                "frontmatter": {
+                    "parentIssue": "sample-owner/sample-repo#42",
+                },
+                "body": "Sample issue body.",
+                "relatedIssueTitles": {
+                    "sample-owner/sample-repo#42": "Sample parent issue",
+                },
+                "kind": "draft",
+                "target": {},
+                "isEditor": false,
+                "canSave": false,
+                "canFinish": false,
+            }),
+        );
+    }
 
     fn read_fifo_signal_or_pending(
         reader: &mut std::fs::File,
@@ -837,6 +927,86 @@ mod tests {
                     "isEditor": true,
                     "canSave": false,
                     "canFinish": false,
+                }),
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::active("/sessions/fixture-session/review-document")]
+    #[case::by_id("/sessions/fixture-session/review-documents/fixture-review")]
+    #[tokio::test]
+    async fn includes_related_issue_titles_in_document_get_responses(
+        #[case] route: &str,
+        active_review_document: ActiveReviewDocument,
+    ) {
+        let document_path = &active_review_document.document_path;
+        std::fs::write(
+            document_path,
+            indoc! {"
+                ---
+                parentIssue: sample-owner/sample-repo#42
+                subIssues:
+                  - sample-owner/sample-repo#43
+                ---
+                Fixture issue body.
+            "},
+        )
+        .expect("fixture issue document should be writable");
+        let session = active_review_document.session.clone();
+        let issue_title_lookup: IssueTitleLookup = Arc::new(|owner, repository, number| {
+            Box::pin(async move {
+                match (owner.as_str(), repository.as_str(), number) {
+                    ("sample-owner", "sample-repo", 42) => Ok("Sample parent title".to_owned()),
+                    ("sample-owner", "sample-repo", 43) => Ok("Sample sub-issue title".to_owned()),
+                    _ => anyhow::bail!("unexpected issue reference"),
+                }
+            })
+        });
+        let app = router_with_dependencies(
+            move |_| Ok(Some(session.clone())),
+            |_| ReviewDocumentQueue::Unmanaged,
+            ReviewDocumentRoots::default(),
+            issue_title_lookup,
+        );
+        let response = app
+            .oneshot(
+                Request::get(route)
+                    .body(Body::empty())
+                    .expect("request should be valid"),
+            )
+            .await
+            .expect("request should complete");
+        let status = response.status();
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should be readable");
+
+        assert_eq!(
+            (
+                status,
+                serde_json::from_slice::<serde_json::Value>(&body)
+                    .expect("response should be JSON"),
+            ),
+            (
+                StatusCode::OK,
+                serde_json::json!({
+                    "id": "fixture-review",
+                    "revision": current_revision(document_path),
+                    "frontmatter": {
+                        "parentIssue": "sample-owner/sample-repo#42",
+                        "subIssues": ["sample-owner/sample-repo#43"],
+                    },
+                    "body": "Fixture issue body.\n",
+                    "relatedIssueTitles": {
+                        "sample-owner/sample-repo#42": "Sample parent title",
+                        "sample-owner/sample-repo#43": "Sample sub-issue title",
+                    },
+                    "kind": "draft",
+                    "target": { "path": "fixture-document.md" },
+                    "isEditor": true,
+                    "canSave": true,
+                    "canFinish": true,
                 }),
             ),
         );

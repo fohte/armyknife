@@ -276,9 +276,44 @@ export const IssueBodyShowsTypedMetadata: Story = {
       submit: false,
       readonly: { number: 418, author: 'sample-reporter' },
     },
+    relatedIssueTitles: {
+      'example/web-app#400': '遅延した通知を再送する',
+      'example/web-app#419': '保留中の通知配信を再試行する',
+      'example/web-app#420': '通知配信の試行回数を記録する',
+    },
     body: issueBodyText,
   },
   decorators: [desktopViewport],
+}
+
+export const NewIssueDraftShowsRelatedTitles: Story = {
+  name: 'A new issue draft shows titles beside its related references',
+  args: {
+    summary: newIssueDraft,
+    summaries: [newIssueDraft],
+    frontmatter: {
+      title: 'Sample issue title',
+      parentIssue: 'sample-owner/sample-repo#42',
+      subIssues: ['sample-owner/sample-repo#43', 'sample-owner/sample-repo#44'],
+      submit: false,
+    },
+    relatedIssueTitles: {
+      'sample-owner/sample-repo#42': 'Sample parent issue title',
+      'sample-owner/sample-repo#43': 'Sample first sub-issue title',
+      'sample-owner/sample-repo#44': 'Sample second sub-issue title',
+    },
+    body: 'Sample issue body.',
+  },
+  decorators: [desktopViewport],
+}
+
+export const MobileNewIssueDraftShowsRelatedTitles: Story = {
+  name: 'The mobile new issue draft shows titles beside its related references',
+  args: {
+    ...NewIssueDraftShowsRelatedTitles.args,
+    isMobile: true,
+  },
+  decorators: [phoneViewport],
 }
 
 export const IssueBodyEditShowsMilestone: Story = {

@@ -509,6 +509,10 @@ it('shows issue fields as typed metadata before the Markdown body', () => {
       <ReviewDocumentPanel
         summary={summary}
         summaries={[summary]}
+        relatedIssueTitles={{
+          'example/web-app#390': 'Retry notifications after a delivery failure',
+          'example/web-app#413': 'Retry pending notification deliveries',
+        }}
         frontmatter={{
           title: 'Notifications stop after several deliveries',
           labels: ['bug', 'notifications'],
@@ -560,6 +564,9 @@ The fourth notification is not delivered.`}
         .trim(),
     })),
     parentIssue: parentLink?.textContent,
+    parentIssueTitle: parentRow?.querySelector(
+      '.review-document-issue-reference-title',
+    )?.textContent,
     parentIssueHref: parentLink?.getAttribute('href'),
     parentIssueTarget: parentLink?.getAttribute('target'),
     parentIssueRel: parentLink?.getAttribute('rel'),
@@ -568,6 +575,9 @@ The fourth notification is not delivered.`}
     )?.textContent,
     subIssues: subIssueLinks.map((item) => ({
       reference: item.textContent,
+      title: item.parentElement?.querySelector(
+        '.review-document-issue-reference-title',
+      )?.textContent,
       href: item.getAttribute('href'),
       target: item.getAttribute('target'),
       rel: item.getAttribute('rel'),
@@ -581,6 +591,7 @@ The fourth notification is not delivered.`}
     labels: ['bug', 'notifications'],
     assignees: [{ initial: 'S', name: 'sample-maintainer' }],
     parentIssue: 'example/web-app#390',
+    parentIssueTitle: 'Retry notifications after a delivery failure',
     parentIssueHref: 'https://github.com/example/web-app/issues/390',
     parentIssueTarget: '_blank',
     parentIssueRel: 'noopener noreferrer',
@@ -588,12 +599,14 @@ The fourth notification is not delivered.`}
     subIssues: [
       {
         reference: 'example/web-app#413',
+        title: 'Retry pending notification deliveries',
         href: 'https://github.com/example/web-app/issues/413',
         target: '_blank',
         rel: 'noopener noreferrer',
       },
       {
         reference: 'example/web-app#414',
+        title: undefined,
         href: 'https://github.com/example/web-app/issues/414',
         target: '_blank',
         rel: 'noopener noreferrer',
@@ -628,11 +641,12 @@ it('keeps malformed issue references visible as plain text', () => {
           title: 'Notifications stop after several deliveries',
           labels: [],
           assignees: [],
-          parentIssue: 'example/web-app#abc',
+          parentIssue: '__proto__',
           subIssues: ['malformed reference'],
           submit: false,
           readonly: { number: 412, author: 'sample-reporter' },
         }}
+        relatedIssueTitles={{}}
         body="Issue description."
       />,
     ),
@@ -673,7 +687,7 @@ it('keeps malformed issue references visible as plain text', () => {
 
   expect(snapshot()).toEqual({
     parentReference: {
-      text: 'example/web-app#abc',
+      text: '__proto__',
       tag: 'CODE',
       link: undefined,
     },
@@ -686,6 +700,113 @@ it('keeps malformed issue references visible as plain text', () => {
       },
     ],
   })
+})
+
+it.each([
+  {
+    name: 'Preview shows linked titles without relation controls',
+    view: 'preview' as const,
+    expected: {
+      parentIssue: {
+        reference: 'sample-owner/sample-repo#42',
+        title: 'Sample parent title',
+        href: 'https://github.com/sample-owner/sample-repo/issues/42',
+      },
+      subIssues: [
+        {
+          reference: 'sample-owner/sample-repo#43',
+          title: 'Sample sub-issue title',
+          href: 'https://github.com/sample-owner/sample-repo/issues/43',
+        },
+      ],
+      issueControls: [],
+    },
+  },
+  {
+    name: 'Edit keeps relation fields editable',
+    view: 'edit' as const,
+    expected: {
+      parentIssue: 'sample-owner/sample-repo#42',
+      subIssues: ['sample-owner/sample-repo#43'],
+    },
+  },
+])('renders a new issue draft where $name', ({ view, expected }) => {
+  const summary = {
+    id: 'fixture-new-issue-related-titles',
+    kind: 'draft' as const,
+    target: { repository: 'sample-owner/sample-repo' },
+    isEditor: true,
+    canSave: true,
+    canFinish: true,
+  }
+  const panelProps = {
+    summary,
+    relatedIssueTitles: {
+      'sample-owner/sample-repo#42': 'Sample parent title',
+      'sample-owner/sample-repo#43': 'Sample sub-issue title',
+    },
+    frontmatter: {
+      title: 'Sample issue title',
+      parentIssue: 'sample-owner/sample-repo#42',
+      subIssues: ['sample-owner/sample-repo#43'],
+      submit: false,
+    },
+    body: 'Sample issue body.',
+  }
+  root = createRoot(container)
+  act(() => root?.render(<ReviewDocumentPanel {...panelProps} view={view} />))
+
+  const snapshot = () => {
+    if (view === 'edit') {
+      return {
+        parentIssue: container.querySelector<HTMLInputElement>(
+          'input[aria-label="parentIssue"]',
+        )?.value,
+        subIssues: [
+          ...container.querySelectorAll<HTMLInputElement>(
+            '.review-document-array input',
+          ),
+        ].map((input) => input.value),
+      }
+    }
+
+    const fields = container.querySelector('.review-document-issue-fields')
+    const fieldRow = (name: string) => {
+      const label = [...(fields?.querySelectorAll('dt') ?? [])].find(
+        (item) => item.textContent === name,
+      )
+      return label?.nextElementSibling
+    }
+    const parentRow = fieldRow('Parent issue')
+    const parentLink = parentRow?.querySelector('a')
+    const subIssueLinks = [
+      ...(fields?.querySelectorAll(
+        '.review-document-issue-sub-items .review-document-issue-reference-link',
+      ) ?? []),
+    ]
+
+    return {
+      parentIssue: {
+        reference: parentLink?.textContent,
+        title: parentRow?.querySelector(
+          '.review-document-issue-reference-title',
+        )?.textContent,
+        href: parentLink?.getAttribute('href'),
+      },
+      subIssues: subIssueLinks.map((link) => ({
+        reference: link.textContent,
+        title: link.parentElement?.querySelector(
+          '.review-document-issue-reference-title',
+        )?.textContent,
+        href: link.getAttribute('href'),
+      })),
+      issueControls: [...(fields?.querySelectorAll('button') ?? [])].map(
+        (button) => button.getAttribute('aria-label'),
+      ),
+    }
+  }
+
+  expect(snapshot()).toEqual(expected)
 })
 
 it('saves pending issue metadata when Save is clicked', async () => {

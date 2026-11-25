@@ -77,6 +77,11 @@ export const IssueFrontmatterFields: Story = {
       parentIssue: 'example/web-app#390',
       subIssues: ['example/web-app#413', 'example/web-app#414'],
     },
+    relatedIssueTitles: {
+      'example/web-app#390': 'Retry notifications after a delivery failure',
+      'example/web-app#413': 'Retry pending notification deliveries',
+      'example/web-app#414': 'Record notification delivery attempts',
+    },
   },
 }
 
