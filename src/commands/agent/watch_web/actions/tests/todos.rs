@@ -298,6 +298,64 @@ async fn stale_todo_resolution_is_rejected_after_the_todo_is_edited(action_conte
 
 #[rstest]
 #[tokio::test]
+async fn stale_todo_resolution_rejects_null_detail_when_the_todo_has_detail(
+    action_context: ActionContext,
+) {
+    action_context.save_session(&session("sample-session"));
+    let sessions_dir = action_context.temp_dir.path().join("sessions");
+    store::add_agent_todo_in(
+        &sessions_dir,
+        "sample-session",
+        "Check the page",
+        Some("Use a phone"),
+        false,
+    )
+    .unwrap();
+
+    let response = action_context
+        .router()
+        .oneshot(post(
+            "/sessions/sample-session/todos/1/resolve",
+            json!({
+                "resolution": "completed",
+                "comment": null,
+                "expectedTitle": "Check the page",
+                "expectedDetail": null,
+            }),
+        ))
+        .await
+        .unwrap();
+    let todos = store::agent_todos_from(&sessions_dir, "sample-session").unwrap();
+    let calls = action_context.runtime.calls.lock().unwrap().clone();
+
+    assert_eq!(
+        (
+            response_snapshot(response, &action_context).await,
+            todos
+                .iter()
+                .map(|todo| (
+                    todo.title.as_str(),
+                    todo.detail.as_deref(),
+                    todo.completed_at,
+                    todo.resolution,
+                ))
+                .collect::<Vec<_>>(),
+            calls,
+        ),
+        (
+            json!({
+                "status": StatusCode::CONFLICT.as_u16(),
+                "body": { "error": "todo changed; reload it before resolving" },
+                "calls": [],
+            }),
+            vec![("Check the page", Some("Use a phone"), None, None,)],
+            Vec::new(),
+        ),
+    );
+}
+
+#[rstest]
+#[tokio::test]
 async fn resolving_a_todo_saves_and_forwards_image_attachments(action_context: ActionContext) {
     action_context.save_session(&session("sample-session"));
     store::add_agent_todo_in(

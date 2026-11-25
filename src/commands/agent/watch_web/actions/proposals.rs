@@ -10,6 +10,7 @@ use super::super::super::{
     types::{Engine, SessionStatus},
 };
 use super::super::attachments;
+use super::request_fields::deserialize_present;
 use super::{
     ActionState, ApiError, Success, load_session,
     messages::{remove_attachments, watch_web_message_content},
@@ -29,14 +30,6 @@ pub(super) struct AnswerRequest {
     expected_body: Option<ProposalBody>,
     #[serde(default)]
     attachments: Vec<attachments::Request>,
-}
-
-fn deserialize_present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-    T: Deserialize<'de>,
-{
-    T::deserialize(deserializer).map(Some)
 }
 
 pub(super) async fn answer_proposal(

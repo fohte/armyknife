@@ -4,6 +4,7 @@ use serde::Deserialize;
 
 use super::super::super::{store, types::SessionStatus};
 use super::super::attachments;
+use super::request_fields::{deserialize_present, deserialize_present_nullable};
 use super::{
     ActionState, ApiError, Success, load_session, messages::remove_attachments,
     resolve_sessions_dir, run_blocking,
@@ -28,22 +29,6 @@ pub(super) struct ResolveRequest {
     expected_detail: Option<Option<String>>,
     #[serde(default)]
     attachments: Vec<attachments::Request>,
-}
-
-fn deserialize_present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-    T: Deserialize<'de>,
-{
-    T::deserialize(deserializer).map(Some)
-}
-
-fn deserialize_present_nullable<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-    T: Deserialize<'de>,
-{
-    Option::<T>::deserialize(deserializer).map(Some)
 }
 
 #[derive(Debug, Deserialize)]
