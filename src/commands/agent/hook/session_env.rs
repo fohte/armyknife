@@ -1,5 +1,5 @@
 use std::fs::{self, File, FileTimes};
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 use std::time::SystemTime;
 
 use crate::commands::agent::types::Engine;
@@ -9,13 +9,14 @@ pub(super) fn refresh(engine: Engine, session_id: &str) {
         return;
     }
 
-    let Some(home_dir) = crate::shared::dirs::home_dir() else {
+    let Some(config_dir) = std::env::var_os("CLAUDE_CONFIG_DIR")
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| crate::shared::dirs::home_dir().map(|home_dir| home_dir.join(".claude")))
+    else {
         return;
     };
-    let session_env_dir = home_dir
-        .join(".claude")
-        .join("session-env")
-        .join(session_id);
+    let session_env_dir = config_dir.join("session-env").join(session_id);
     let Ok(metadata) = fs::symlink_metadata(&session_env_dir) else {
         return;
     };
@@ -50,9 +51,10 @@ mod tests {
             .expect("old timestamp should be set");
         let home = home_dir.path().to_str().expect("home path should be UTF-8");
 
-        temp_env::with_vars([("HOME", Some(home))], || {
-            refresh(Engine::Claude, "../../outside-session");
-        });
+        temp_env::with_vars(
+            [("HOME", Some(home)), ("CLAUDE_CONFIG_DIR", None::<&str>)],
+            || refresh(Engine::Claude, "../../outside-session"),
+        );
         let modified = fs::metadata(&outside_dir)
             .expect("outside directory should remain")
             .modified()

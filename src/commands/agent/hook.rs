@@ -1724,12 +1724,14 @@ mod tests {
     use rstest::{fixture, rstest};
 
     #[rstest]
-    #[case::claude_refreshes_existing_directory(Engine::Claude, true, (true, true))]
-    #[case::codex_leaves_directory_unchanged(Engine::Codex, true, (true, false))]
-    #[case::missing_directory_stays_absent(Engine::Claude, false, (false, false))]
+    #[case::claude_refreshes_existing_directory(Engine::Claude, true, false, (true, true))]
+    #[case::claude_refreshes_custom_config_directory(Engine::Claude, true, true, (true, true))]
+    #[case::codex_leaves_directory_unchanged(Engine::Codex, true, false, (true, false))]
+    #[case::missing_directory_stays_absent(Engine::Claude, false, false, (false, false))]
     fn hook_refreshes_only_existing_claude_session_env(
         #[case] engine: Engine,
         #[case] create_session_env: bool,
+        #[case] use_custom_config_dir: bool,
         #[case] expected_state: (bool, bool),
     ) {
         use std::fs::{self, File, FileTimes};
@@ -1738,11 +1740,14 @@ mod tests {
         let home_dir = tempfile::TempDir::new().expect("home directory should be created");
         let sessions_dir = tempfile::TempDir::new().expect("sessions directory should be created");
         let session_id = "fixture-session";
-        let session_env_dir = home_dir
-            .path()
-            .join(".claude")
-            .join("session-env")
-            .join(session_id);
+        let default_config_dir = home_dir.path().join(".claude");
+        let custom_config_dir = home_dir.path().join("custom-claude");
+        let config_dir = if use_custom_config_dir {
+            &custom_config_dir
+        } else {
+            &default_config_dir
+        };
+        let session_env_dir = config_dir.join("session-env").join(session_id);
         let old_time = SystemTime::now() - Duration::from_secs(60 * 60 * 24);
         if create_session_env {
             fs::create_dir_all(&session_env_dir).expect("session env should be created");
@@ -1758,15 +1763,27 @@ mod tests {
         input.session_id = session_id.to_string();
         input.engine = engine;
         let home = home_dir.path().to_str().expect("home path should be UTF-8");
+        let custom_config = custom_config_dir
+            .to_str()
+            .expect("custom config path should be UTF-8");
 
-        let result = temp_env::with_vars([("HOME", Some(home))], || {
-            process_hook_event_impl(
-                HookEvent::UserPromptSubmit,
-                input,
-                sessions_dir.path(),
-                &SideEffects::none(),
-            )
-        })
+        let result = temp_env::with_vars(
+            [
+                ("HOME", Some(home)),
+                (
+                    "CLAUDE_CONFIG_DIR",
+                    use_custom_config_dir.then_some(custom_config),
+                ),
+            ],
+            || {
+                process_hook_event_impl(
+                    HookEvent::UserPromptSubmit,
+                    input,
+                    sessions_dir.path(),
+                    &SideEffects::none(),
+                )
+            },
+        )
         .expect("hook should succeed");
         let refresh_state = match fs::symlink_metadata(&session_env_dir) {
             Ok(metadata) => (
