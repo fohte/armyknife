@@ -62,6 +62,24 @@ fn has_classifier_verdict(reason: Option<&str>) -> bool {
     })
 }
 
+fn same_tool_input(tool_name: &str, denied_input: &Value, retry_input: &Value) -> bool {
+    if tool_name != "Bash" {
+        return denied_input == retry_input;
+    }
+
+    // A Bash retry may reword its UI description without changing the command.
+    let (Some(denied_input), Some(retry_input)) =
+        (denied_input.as_object(), retry_input.as_object())
+    else {
+        return denied_input == retry_input;
+    };
+    let mut denied_input = denied_input.clone();
+    let mut retry_input = retry_input.clone();
+    denied_input.remove("description");
+    retry_input.remove("description");
+    denied_input == retry_input
+}
+
 pub(crate) fn add_permission_denied(
     sessions_dir: &Path,
     session_id: &str,
@@ -227,7 +245,9 @@ pub(crate) fn resolve_matching_unclassified_permission_denials(
             let (seq, stored_input, reason) = row?;
             let stored_input: Value =
                 serde_json::from_str(&stored_input).context("parsing denied tool input")?;
-            if stored_input == *tool_input && !has_classifier_verdict(reason.as_deref()) {
+            if same_tool_input(tool_name, &stored_input, tool_input)
+                && !has_classifier_verdict(reason.as_deref())
+            {
                 matching_seqs.push(seq);
             }
         }

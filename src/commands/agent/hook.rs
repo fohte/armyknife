@@ -2639,6 +2639,7 @@ mod tests {
         event_session_id: &'static str,
         tool_name: &'static str,
         tool_input: serde_json::Value,
+        denied_tool_input: Option<serde_json::Value>,
         reason: &'static str,
         denial_count: usize,
         expected: Vec<(i64, bool, Option<store::PermissionDeniedResolution>)>,
@@ -2651,6 +2652,7 @@ mod tests {
         event_session_id: "retry-session",
         tool_name: "Bash",
         tool_input: serde_json::json!({"command": "printf fixture"}),
+        denied_tool_input: None,
         reason: "Classifier unavailable",
         denial_count: 1,
         expected: vec![(1, true, Some(store::PermissionDeniedResolution::Approved))],
@@ -2661,6 +2663,7 @@ mod tests {
         event_session_id: "retry-session",
         tool_name: "Bash",
         tool_input: serde_json::json!({"command": "printf fixture"}),
+        denied_tool_input: None,
         reason: "Classifier unavailable",
         denial_count: 1,
         expected: vec![(1, true, Some(store::PermissionDeniedResolution::Approved))],
@@ -2671,6 +2674,7 @@ mod tests {
         event_session_id: "retry-session",
         tool_name: "Bash",
         tool_input: serde_json::json!({"command": "printf fixture"}),
+        denied_tool_input: None,
         reason: "Classifier unavailable",
         denial_count: 2,
         expected: vec![
@@ -2684,6 +2688,7 @@ mod tests {
         event_session_id: "other-session",
         tool_name: "Bash",
         tool_input: serde_json::json!({"command": "printf fixture"}),
+        denied_tool_input: None,
         reason: "Classifier unavailable",
         denial_count: 1,
         expected: vec![(1, false, None)],
@@ -2694,6 +2699,7 @@ mod tests {
         event_session_id: "retry-session",
         tool_name: "Bash",
         tool_input: serde_json::json!({"command": "printf other"}),
+        denied_tool_input: None,
         reason: "Classifier unavailable",
         denial_count: 1,
         expected: vec![(1, false, None)],
@@ -2704,6 +2710,7 @@ mod tests {
         event_session_id: "retry-session",
         tool_name: "Read",
         tool_input: serde_json::json!({"command": "printf fixture"}),
+        denied_tool_input: None,
         reason: "Classifier unavailable",
         denial_count: 1,
         expected: vec![(1, false, None)],
@@ -2714,6 +2721,7 @@ mod tests {
         event_session_id: "retry-session",
         tool_name: "Bash",
         tool_input: serde_json::json!({"command": "printf fixture"}),
+        denied_tool_input: None,
         reason: "Classifier unavailable",
         denial_count: 1,
         expected: vec![(1, false, None)],
@@ -2724,16 +2732,55 @@ mod tests {
         event_session_id: "retry-session",
         tool_name: "Bash",
         tool_input: serde_json::json!({"command": "printf fixture"}),
+        denied_tool_input: None,
         reason: "[Destructive Operation]",
         denial_count: 1,
         expected: vec![(1, false, None)],
+    })]
+    #[case::claude_bash_reworded_description(PermissionDeniedRetryCase {
+        event: HookEvent::PostToolUse,
+        engine: Engine::Claude,
+        event_session_id: "retry-session",
+        tool_name: "Bash",
+        tool_input: serde_json::json!({
+            "command": "printf fixture",
+            "description": "Print the fixture",
+        }),
+        denied_tool_input: Some(serde_json::json!({
+            "command": "printf fixture",
+            "description": "Run the fixture command",
+        })),
+        reason: "Classifier unavailable",
+        denial_count: 1,
+        expected: vec![(1, true, Some(store::PermissionDeniedResolution::Approved))],
+    })]
+    #[case::codex_bash_reworded_description(PermissionDeniedRetryCase {
+        event: HookEvent::PostToolUse,
+        engine: Engine::Codex,
+        event_session_id: "retry-session",
+        tool_name: "Bash",
+        tool_input: serde_json::json!({
+            "command": "printf fixture",
+            "description": "Print the fixture",
+        }),
+        denied_tool_input: Some(serde_json::json!({
+            "command": "printf fixture",
+            "description": "Run the fixture command",
+        })),
+        reason: "Classifier unavailable",
+        denial_count: 1,
+        expected: vec![(1, true, Some(store::PermissionDeniedResolution::Approved))],
     })]
     fn matching_successful_retry_resolves_only_unclassified_denials(
         #[case] scenario: PermissionDeniedRetryCase,
     ) {
         let temp_dir = tempfile::TempDir::new().expect("temp dir");
         let sessions_dir = temp_dir.path();
-        let denied_input = serde_json::json!({"command": "printf fixture"});
+        let default_denied_input = serde_json::json!({"command": "printf fixture"});
+        let denied_input = scenario
+            .denied_tool_input
+            .as_ref()
+            .unwrap_or(&default_denied_input);
         for seq in 1..=scenario.denial_count {
             let tool_use_id = format!("denied-tool-call-{seq}");
             store::add_permission_denied_from(
@@ -2741,7 +2788,7 @@ mod tests {
                 "retry-session",
                 Some(&tool_use_id),
                 "Bash",
-                &denied_input,
+                denied_input,
                 Some(scenario.reason),
             )
             .expect("denial should be recorded");
