@@ -268,13 +268,14 @@ pub fn run_complete(args: &ReviewCompleteArgs) -> anyhow::Result<()> {
 
     let config = load_config()?;
 
-    complete_review::<SubmitSchema, _, _>(
+    let _finish_reason = complete_review::<SubmitSchema, _, _>(
         &args.path,
         args.window_title.as_deref(),
         &IssueReviewHandler,
         &config.editor,
         args.finish_fifo.as_deref(),
         cleanup_guard,
+        None,
     )?;
 
     Ok(())

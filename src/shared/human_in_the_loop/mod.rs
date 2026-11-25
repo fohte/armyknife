@@ -27,10 +27,11 @@ pub(crate) use pending_review::{
 pub(crate) use review_completion::complete_review;
 pub(crate) use review_finish::{
     ReviewDocumentOperationLock, finish_ack_fifo_path, finish_request_fifo_path, open_fifo_reader,
-    request_review_finish, signal_review_finish_and_wait,
+    request_review_finish_after_push, signal_review_finish_and_wait,
 };
+pub use review_finish::{ReviewFinishReason, request_review_finish};
 use review_finish::{
-    create_fifo_at_path, path_with_suffix, remove_fifo_if_present, try_read_fifo_signal,
+    create_fifo_at_path, path_with_suffix, remove_fifo_if_present, try_read_fifo_signal_byte,
 };
 
 pub use approval::{ApprovalManager, TEST_APPROVAL_DIR_OVERRIDE};
@@ -90,6 +91,15 @@ pub trait ReviewHandler<S: DocumentSchema> {
     fn on_review_complete(&self, _document: &Document<S>) -> Result<()> {
         Ok(())
     }
+
+    /// Called when an external action finishes the review.
+    fn on_review_finished(
+        &self,
+        document: &Document<S>,
+        _reason: ReviewFinishReason,
+    ) -> Result<()> {
+        self.on_review_complete(document)
+    }
 }
 
 /// Start a review session in a tmux floating pane or configured terminal window.
@@ -114,6 +124,27 @@ pub fn start_review<S, H>(
     editor_config: &EditorConfig,
     notifications_enabled: bool,
 ) -> Result<Option<Document<S>>>
+where
+    S: DocumentSchema,
+    H: ReviewHandler<S>,
+{
+    start_review_with_completion(
+        document_path,
+        window_title,
+        handler,
+        editor_config,
+        notifications_enabled,
+    )
+    .map(|review| review.map(|review| review.document))
+}
+
+pub(crate) fn start_review_with_completion<S, H>(
+    document_path: &Path,
+    window_title: &str,
+    handler: &H,
+    editor_config: &EditorConfig,
+    notifications_enabled: bool,
+) -> Result<Option<ReviewResult<S>>>
 where
     S: DocumentSchema,
     H: ReviewHandler<S>,
@@ -173,7 +204,7 @@ fn start_review_with_launcher<S, L, P>(
     document_path: &Path,
     launch_review: L,
     is_session_alive: P,
-) -> Result<Option<Document<S>>>
+) -> Result<Option<ReviewResult<S>>>
 where
     S: DocumentSchema,
     L: FnOnce(&Path, &Path, &str) -> Result<Option<String>>,
@@ -194,6 +225,11 @@ struct ReviewLaunch {
     queue_key: Option<String>,
 }
 
+pub(crate) struct ReviewResult<S> {
+    pub(crate) document: Document<S>,
+    pub(crate) finish_reason: Option<ReviewFinishReason>,
+}
+
 impl ReviewLaunch {
     #[cfg(test)]
     fn without_queue(session: Option<String>) -> Self {
@@ -209,7 +245,7 @@ fn start_review_with_marker<S, L, P>(
     pending_review_marker: Option<&str>,
     launch_review: L,
     is_session_alive: P,
-) -> Result<Option<Document<S>>>
+) -> Result<Option<ReviewResult<S>>>
 where
     S: DocumentSchema,
     L: FnOnce(&Path, &Path, &Path, &str) -> Result<ReviewLaunch>,
@@ -256,19 +292,19 @@ where
         lock_guard.lock_id(),
     )?;
 
-    {
+    let completion_signal = {
         let _pending_review = pending_review::PendingReviewGuard::for_current_session(
             pending_review_marker,
             document_path,
             review.queue_key.as_deref(),
         );
         if let Some(session) = review.session.as_deref() {
-            wait_for_fifo_signal_or_session_exit(done_fifo_reader, session, is_session_alive)?;
+            wait_for_fifo_signal_or_session_exit(done_fifo_reader, session, is_session_alive)?
         } else {
             // GUI terminal launches have no tmux pane to monitor.
-            wait_for_fifo_signal(done_fifo_reader, &done_fifo_path)?;
+            wait_for_fifo_signal(done_fifo_reader, &done_fifo_path)?
         }
-    }
+    };
 
     drop(finish_fifo_reader);
     finish_fifo_cleanup.disarm();
@@ -292,7 +328,12 @@ where
     // Reuse the in-memory `post_edit` for the document parse to avoid a
     // second read of the same file.
     let document = Document::<S>::from_content(document_path.to_path_buf(), &post_edit)?;
-    Ok(Some(document))
+    let finish_reason = (completion_signal == ReviewFinishReason::RepliesPushed.signal_byte())
+        .then_some(ReviewFinishReason::RepliesPushed);
+    Ok(Some(ReviewResult {
+        document,
+        finish_reason,
+    }))
 }
 
 fn editor_already_open_message(lock_path: &Path) -> String {
@@ -343,7 +384,7 @@ fn create_fifo_with_suffix(document_path: &Path, suffix: &str) -> Result<PathBuf
 /// blocking mode. The blocking `open` itself will wait until a writer connects,
 /// and the subsequent `read` will return the signal byte.
 #[cfg(unix)]
-fn wait_for_fifo_signal(file: std::fs::File, fifo_path: &Path) -> Result<()> {
+fn wait_for_fifo_signal(file: std::fs::File, fifo_path: &Path) -> Result<u8> {
     use std::io::{self, Read};
     use std::os::unix::io::AsRawFd;
 
@@ -360,7 +401,7 @@ fn wait_for_fifo_signal(file: std::fs::File, fifo_path: &Path) -> Result<()> {
     let mut buf = [0u8; 1];
     loop {
         match file.read(&mut buf) {
-            Ok(n) if n > 0 => break,
+            Ok(n) if n > 0 => return Ok(buf[0]),
             Ok(_) => {
                 // Ok(0) = spurious EOF (macOS: no writer connected yet).
                 // Re-open in blocking mode; the open itself blocks until a writer connects.
@@ -370,10 +411,9 @@ fn wait_for_fifo_signal(file: std::fs::File, fifo_path: &Path) -> Result<()> {
                 file = std::fs::File::open(fifo_path)?;
             }
             Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-            Err(_) => break,
+            Err(error) => return Err(error.into()),
         }
     }
-    Ok(())
 }
 
 /// Wait for the completion signal while periodically checking the editor session.
@@ -382,7 +422,7 @@ fn wait_for_fifo_signal_or_session_exit(
     file: std::fs::File,
     session: &str,
     is_session_alive: impl FnMut(&str) -> Result<bool>,
-) -> Result<()> {
+) -> Result<u8> {
     wait_for_fifo_signal_or_session_exit_with_interval(
         file,
         session,
@@ -396,7 +436,7 @@ fn wait_for_fifo_signal_or_session_exit_with_interval(
     session: &str,
     check_interval: Duration,
     mut is_session_alive: impl FnMut(&str) -> Result<bool>,
-) -> Result<()> {
+) -> Result<u8> {
     use std::time::Instant;
 
     let mut next_session_check = Instant::now();
@@ -407,11 +447,13 @@ fn wait_for_fifo_signal_or_session_exit_with_interval(
                 Ok(true) => consecutive_check_failures = 0,
                 Ok(false) => {
                     consecutive_check_failures = 0;
-                    return Ok(if try_read_fifo_signal(file)? {
-                        FifoPollAction::Signaled
-                    } else {
-                        FifoPollAction::Abort(HumanInTheLoopError::ReviewSessionClosed)
-                    });
+                    return Ok(
+                        if let Some(signal_byte) = try_read_fifo_signal_byte(file)? {
+                            FifoPollAction::Signaled(signal_byte)
+                        } else {
+                            FifoPollAction::Abort(HumanInTheLoopError::ReviewSessionClosed)
+                        },
+                    );
                 }
                 Err(error) => {
                     consecutive_check_failures += 1;
@@ -435,24 +477,24 @@ fn wait_for_fifo_signal_or_session_exit_with_interval(
 
 enum FifoPollAction {
     Continue,
-    Signaled,
+    Signaled(u8),
     Abort(HumanInTheLoopError),
 }
 
 fn poll_fifo_signal(
     mut file: std::fs::File,
     mut check: impl FnMut(&mut std::fs::File) -> Result<FifoPollAction>,
-) -> Result<()> {
+) -> Result<u8> {
     use std::thread::sleep;
 
     loop {
-        if try_read_fifo_signal(&mut file)? {
-            return Ok(());
+        if let Some(signal_byte) = try_read_fifo_signal_byte(&mut file)? {
+            return Ok(signal_byte);
         }
 
         match check(&mut file)? {
             FifoPollAction::Continue => sleep(FIFO_POLL_INTERVAL),
-            FifoPollAction::Signaled => return Ok(()),
+            FifoPollAction::Signaled(signal_byte) => return Ok(signal_byte),
             FifoPollAction::Abort(error) => return Err(error),
         }
     }
@@ -485,6 +527,7 @@ fn wait_for_fifo_signal_with_timeout(
             Ok(FifoPollAction::Continue)
         }
     })
+    .map(|_| ())
 }
 
 /// RAII guard that removes the FIFO file on drop.
@@ -530,19 +573,29 @@ impl Drop for FifoCleanupGuard {
 /// to ensure signaling even if later initialization (e.g., config loading) fails.
 pub struct FifoSignalGuard {
     fifo_path: PathBuf,
+    signal_byte: u8,
 }
 
 impl FifoSignalGuard {
     pub fn new(fifo_path: &Path) -> Self {
         Self {
             fifo_path: fifo_path.to_path_buf(),
+            signal_byte: b'0',
         }
+    }
+
+    pub(crate) fn set_signal_byte(&mut self, signal_byte: u8) {
+        self.signal_byte = signal_byte;
     }
 }
 
 impl Drop for FifoSignalGuard {
     fn drop(&mut self) {
-        signal_fifo(&self.fifo_path);
+        if self.signal_byte == b'0' {
+            signal_fifo(&self.fifo_path);
+        } else {
+            let _ = try_signal_fifo_with_byte(&self.fifo_path, self.signal_byte);
+        }
     }
 }
 
@@ -681,7 +734,7 @@ mod tests {
     fn wait_for_fifo_signal_or_session_exit_prefers_a_completion_signal(
         fifo_reader: FifoReaderFixture,
     ) {
-        signal_fifo(&fifo_reader.fifo_path);
+        try_signal_fifo_with_byte(&fifo_reader.fifo_path, b'p').expect("signal FIFO");
 
         let result =
             wait_for_fifo_signal_or_session_exit(fifo_reader.reader, "review-session", |_| {
@@ -689,7 +742,7 @@ mod tests {
             })
             .map_err(|error| error.to_string());
 
-        assert_eq!(result, Ok(()));
+        assert_eq!(result, Ok(b'p'));
     }
 
     #[rstest]
@@ -704,7 +757,7 @@ mod tests {
             })
             .map_err(|error| error.to_string());
 
-        assert_eq!(result, Ok(()));
+        assert_eq!(result, Ok(b'0'));
     }
 
     #[rstest]
@@ -724,7 +777,7 @@ mod tests {
             .map_err(|error| error.to_string());
         writer.join().expect("writer thread");
 
-        assert_eq!(result, Ok(()));
+        assert_eq!(result, Ok(b'0'));
     }
 
     #[rstest]
@@ -752,7 +805,7 @@ mod tests {
         )
         .map_err(|error| error.to_string());
 
-        assert_eq!((result, checks.get()), (Ok(()), 2));
+        assert_eq!((result, checks.get()), (Ok(b'0'), 2));
     }
 
     #[rstest]
@@ -782,7 +835,7 @@ mod tests {
         )
         .map_err(|error| error.to_string());
 
-        assert_eq!((result, checks.get()), (Ok(()), 5));
+        assert_eq!((result, checks.get()), (Ok(b'0'), 5));
     }
 
     #[rstest]
@@ -867,7 +920,7 @@ mod tests {
             |_| Ok(true),
         )
         .expect("start review")
-        .map(|document| (document.path, document.frontmatter));
+        .map(|review| (review.document.path, review.document.frontmatter));
 
         assert_eq!(
             (
@@ -876,6 +929,26 @@ mod tests {
                 LockGuard::is_locked(&document_path),
             ),
             (Some((document_path, ReviewTestSchema)), true, false,),
+        );
+    }
+
+    #[rstest]
+    fn start_review_preserves_a_push_finish_signal(review_document: ReviewDocumentFixture) {
+        let document_path = review_document.path;
+        let result = start_review_with_launcher::<ReviewTestSchema, _, _>(
+            &document_path,
+            |_, done_fifo_path, _| {
+                try_signal_fifo_with_byte(done_fifo_path, b'p')?;
+                Ok(None)
+            },
+            |_| Ok(true),
+        )
+        .expect("start review")
+        .map(|review| (review.finish_reason, review.document.frontmatter));
+
+        assert_eq!(
+            result,
+            Some((Some(ReviewFinishReason::RepliesPushed), ReviewTestSchema)),
         );
     }
 
@@ -904,7 +977,7 @@ mod tests {
             |_| Ok(true),
         )
         .expect("start review")
-        .map(|document| (document.path, document.frontmatter));
+        .map(|review| (review.document.path, review.document.frontmatter));
 
         assert_eq!(
             (
@@ -924,7 +997,7 @@ mod tests {
             |_, _, _| Err(HumanInTheLoopError::CommandFailed("launch failed".into())),
             |_| Ok(true),
         )
-        .map(|document| document.map(|document| document.path))
+        .map(|review| review.map(|review| review.document.path))
         .map_err(|error| error.to_string());
 
         assert_eq!(
@@ -951,7 +1024,7 @@ mod tests {
             |_| Ok(true),
         )
         .expect("start review")
-        .map(|document| (document.path, document.frontmatter));
+        .map(|review| (review.document.path, review.document.frontmatter));
         let lock_after_start_review = LockGuard::is_locked(&document_path);
         drop(newer_review_lock);
 
@@ -984,7 +1057,7 @@ mod tests {
             |_| Ok(true),
         )
         .expect("skip existing review")
-        .map(|document| document.path);
+        .map(|review| review.document.path);
         let lock_contents = std::fs::read_to_string(lock_path).expect("read existing lock");
 
         assert_eq!(

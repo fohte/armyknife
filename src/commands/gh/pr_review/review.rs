@@ -9,8 +9,8 @@ use super::storage::ThreadStorage;
 use crate::infra::git;
 use crate::shared::config::load_config;
 use crate::shared::human_in_the_loop::{
-    CleanupGuard, Document, DocumentSchema, FifoSignalGuard, Result as HilResult, ReviewHandler,
-    complete_review, start_review,
+    CleanupGuard, Document, DocumentSchema, FifoSignalGuard, Result as HilResult,
+    ReviewFinishReason, ReviewHandler, complete_review, start_review_with_completion,
 };
 
 #[derive(Args, Clone, PartialEq, Eq)]
@@ -62,6 +62,26 @@ pub struct ReviewCompleteArgs {
 struct PrReviewReplyHandler {
     pr_number: u64,
     repo_slug: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReplyReviewOutcome {
+    Approved,
+    NotApproved,
+    FinishedByPush,
+}
+
+fn reply_review_outcome(
+    document: &Document<ThreadsFrontmatter>,
+    finish_reason: Option<ReviewFinishReason>,
+) -> ReplyReviewOutcome {
+    if finish_reason == Some(ReviewFinishReason::RepliesPushed) {
+        ReplyReviewOutcome::FinishedByPush
+    } else if document.frontmatter.is_approved() {
+        ReplyReviewOutcome::Approved
+    } else {
+        ReplyReviewOutcome::NotApproved
+    }
 }
 
 impl ReviewHandler<ThreadsFrontmatter> for PrReviewReplyHandler {
@@ -117,6 +137,19 @@ impl ReviewHandler<ThreadsFrontmatter> for PrReviewReplyHandler {
 
         Ok(())
     }
+
+    fn on_review_finished(
+        &self,
+        document: &Document<ThreadsFrontmatter>,
+        reason: ReviewFinishReason,
+    ) -> HilResult<()> {
+        if reason == ReviewFinishReason::RepliesPushed {
+            document.remove_approval()?;
+            return Ok(());
+        }
+
+        self.on_review_complete(document)
+    }
 }
 
 pub fn run_review(args: &ReviewArgs) -> anyhow::Result<()> {
@@ -139,32 +172,35 @@ pub fn run_review(args: &ReviewArgs) -> anyhow::Result<()> {
 
     use crate::shared::human_in_the_loop::exit_code;
 
-    let document = exit_code::exit_on_review_failure(start_review::<ThreadsFrontmatter, _>(
-        &threads_path,
-        &window_title,
-        &handler,
-        &config.editor,
-        config.notification.enabled,
-    ))?;
+    let review =
+        exit_code::exit_on_review_failure(start_review_with_completion::<ThreadsFrontmatter, _>(
+            &threads_path,
+            &window_title,
+            &handler,
+            &config.editor,
+            config.notification.enabled,
+        ))?;
 
-    if document.is_none() {
+    let Some(review) = review else {
         std::process::exit(exit_code::ALREADY_OPEN);
-    }
+    };
 
-    let approved = document
-        .as_ref()
-        .is_some_and(|d| d.frontmatter.is_approved());
-    if !approved {
-        eprintln!("Review not approved.");
-        std::process::exit(exit_code::NOT_APPROVED);
+    match reply_review_outcome(&review.document, review.finish_reason) {
+        ReplyReviewOutcome::FinishedByPush => {
+            println!("Reply review finished because push succeeded.");
+            Ok(())
+        }
+        ReplyReviewOutcome::Approved => Ok(()),
+        ReplyReviewOutcome::NotApproved => {
+            eprintln!("Review not approved.");
+            std::process::exit(exit_code::NOT_APPROVED);
+        }
     }
-
-    Ok(())
 }
 
 pub fn run_review_complete(args: &ReviewCompleteArgs) -> anyhow::Result<()> {
     // Create FIFO guard first to ensure signaling even if load_config fails
-    let _fifo_guard = args.done_fifo.as_deref().map(FifoSignalGuard::new);
+    let mut fifo_guard = args.done_fifo.as_deref().map(FifoSignalGuard::new);
     let cleanup_guard = CleanupGuard::from_launcher_args(
         &args.filepath,
         args.review_lock_id.as_deref(),
@@ -178,13 +214,14 @@ pub fn run_review_complete(args: &ReviewCompleteArgs) -> anyhow::Result<()> {
         repo_slug: args.repo.clone(),
     };
 
-    complete_review::<ThreadsFrontmatter, _, _>(
+    let _finish_reason = complete_review::<ThreadsFrontmatter, _, _>(
         &args.filepath,
         args.window_title.as_deref(),
         &handler,
         &config.editor,
         args.finish_fifo.as_deref(),
         cleanup_guard,
+        fifo_guard.as_mut(),
     )?;
 
     Ok(())
@@ -193,6 +230,7 @@ pub fn run_review_complete(args: &ReviewCompleteArgs) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use indoc::indoc;
 
     #[cfg(unix)]
     #[rstest::rstest]
@@ -242,5 +280,47 @@ mod tests {
             (PrReviewReplyHandler::NOTIFICATION_COMMAND_NAME, args_str),
             ("pr-review", expected),
         );
+    }
+
+    #[rstest::rstest]
+    #[case::approved(true, None, ReplyReviewOutcome::Approved)]
+    #[case::not_approved(false, None, ReplyReviewOutcome::NotApproved)]
+    #[case::finished_by_push(
+        false,
+        Some(ReviewFinishReason::RepliesPushed),
+        ReplyReviewOutcome::FinishedByPush
+    )]
+    fn reply_review_outcome_reports_push_completion(
+        #[case] approved: bool,
+        #[case] finish_reason: Option<ReviewFinishReason>,
+        #[case] expected: ReplyReviewOutcome,
+    ) {
+        let content = if approved {
+            indoc! {"
+                ---
+                pr: 42
+                repo: example/repo
+                pulled_at: '2024-01-15T10:00:00Z'
+                submit: true
+                ---
+                Draft reply
+            "}
+        } else {
+            indoc! {"
+                ---
+                pr: 42
+                repo: example/repo
+                pulled_at: '2024-01-15T10:00:00Z'
+                submit: false
+                ---
+                Draft reply
+            "}
+        };
+        let document = Document::<ThreadsFrontmatter>::from_content(
+            std::path::PathBuf::from("threads.md"),
+            content,
+        )
+        .expect("threads document should parse");
+        assert_eq!(reply_review_outcome(&document, finish_reason), expected);
     }
 }

@@ -146,13 +146,14 @@ fn run_complete(args: &DraftArgs) -> anyhow::Result<()> {
 
     let config = load_config()?;
 
-    complete_review::<EmptySchema, _, _>(
+    let _finish_reason = complete_review::<EmptySchema, _, _>(
         &args.path,
         args.title.as_deref(),
         &DraftHandler,
         &config.editor,
         args.finish_fifo.as_deref(),
         cleanup_guard,
+        None,
     )?;
 
     Ok(())

@@ -9,6 +9,30 @@ use super::LockGuard;
 
 pub(crate) const FINISH_ACK_TIMEOUT: Duration = Duration::from_secs(5);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReviewFinishReason {
+    /// A review was finished by a generic external request.
+    ExternalRequest,
+    /// A PR reply push finished the review.
+    RepliesPushed,
+}
+
+impl ReviewFinishReason {
+    pub(crate) const fn signal_byte(self) -> u8 {
+        match self {
+            Self::ExternalRequest => b'0',
+            Self::RepliesPushed => b'p',
+        }
+    }
+
+    pub(crate) const fn from_signal_byte(byte: u8) -> Self {
+        match byte {
+            b'p' => Self::RepliesPushed,
+            _ => Self::ExternalRequest,
+        }
+    }
+}
+
 pub(crate) fn finish_request_fifo_path(document_path: &Path) -> PathBuf {
     path_with_suffix(document_path, ".finish")
 }
@@ -85,15 +109,15 @@ pub(crate) fn open_fifo_reader(fifo_path: &Path) -> super::Result<File> {
     Ok(file)
 }
 
-pub(super) fn try_read_fifo_signal(file: &mut File) -> super::Result<bool> {
+pub(super) fn try_read_fifo_signal_byte(file: &mut File) -> super::Result<Option<u8>> {
     let mut byte = [0_u8; 1];
     match file.read(&mut byte) {
-        Ok(bytes_read) => Ok(bytes_read > 0),
+        Ok(bytes_read) => Ok((bytes_read > 0).then_some(byte[0])),
         Err(error)
             if error.kind() == io::ErrorKind::WouldBlock
                 || error.kind() == io::ErrorKind::Interrupted =>
         {
-            Ok(false)
+            Ok(None)
         }
         Err(error) => Err(error.into()),
     }
@@ -171,7 +195,18 @@ pub(crate) fn wait_for_finish_ack(reader: &mut File, timeout: Duration) -> io::R
 /// Ask an active review to finish and wait for its completion handler.
 ///
 /// Returns `false` when no review currently owns the document.
-pub(crate) fn request_review_finish(document_path: &Path) -> super::Result<bool> {
+pub fn request_review_finish(document_path: &Path) -> super::Result<bool> {
+    request_review_finish_with_reason(document_path, ReviewFinishReason::ExternalRequest)
+}
+
+pub(crate) fn request_review_finish_after_push(document_path: &Path) -> super::Result<bool> {
+    request_review_finish_with_reason(document_path, ReviewFinishReason::RepliesPushed)
+}
+
+fn request_review_finish_with_reason(
+    document_path: &Path,
+    reason: ReviewFinishReason,
+) -> super::Result<bool> {
     let mut document_paths = vec![document_path.to_path_buf()];
     if let Ok(canonical_path) = fs::canonicalize(document_path)
         && canonical_path != document_path
@@ -180,7 +215,7 @@ pub(crate) fn request_review_finish(document_path: &Path) -> super::Result<bool>
     }
 
     for document_path in document_paths {
-        if request_review_finish_at_path(&document_path)? {
+        if request_review_finish_at_path(&document_path, reason)? {
             return Ok(true);
         }
     }
@@ -188,7 +223,10 @@ pub(crate) fn request_review_finish(document_path: &Path) -> super::Result<bool>
     Ok(false)
 }
 
-fn request_review_finish_at_path(document_path: &Path) -> super::Result<bool> {
+fn request_review_finish_at_path(
+    document_path: &Path,
+    reason: ReviewFinishReason,
+) -> super::Result<bool> {
     let operation_lock = match ReviewDocumentOperationLock::acquire(document_path) {
         Ok(operation_lock) => operation_lock,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
@@ -200,10 +238,11 @@ fn request_review_finish_at_path(document_path: &Path) -> super::Result<bool> {
     }
 
     let mut ack_reader = open_fifo_reader(&finish_ack_fifo_path(document_path))?;
-    match signal_review_finish_and_wait(
+    match signal_review_finish_and_wait_with_reason(
         operation_lock,
         &finish_request_fifo_path(document_path),
         &mut ack_reader,
+        reason,
     )? {
         b'0' => Ok(true),
         b'1' => {
@@ -222,7 +261,21 @@ pub(crate) fn signal_review_finish_and_wait(
     finish_fifo_path: &Path,
     ack_reader: &mut File,
 ) -> io::Result<u8> {
-    super::try_signal_fifo(finish_fifo_path)?;
+    signal_review_finish_and_wait_with_reason(
+        operation_lock,
+        finish_fifo_path,
+        ack_reader,
+        ReviewFinishReason::ExternalRequest,
+    )
+}
+
+fn signal_review_finish_and_wait_with_reason(
+    operation_lock: ReviewDocumentOperationLock,
+    finish_fifo_path: &Path,
+    ack_reader: &mut File,
+    reason: ReviewFinishReason,
+) -> io::Result<u8> {
+    super::try_signal_fifo_with_byte(finish_fifo_path, reason.signal_byte())?;
     drop(operation_lock);
     wait_for_finish_ack(ack_reader, FINISH_ACK_TIMEOUT)
 }
@@ -269,12 +322,11 @@ mod tests {
         review_document: (TempDir, PathBuf),
     ) {
         let (_temp_dir, document_path) = review_document;
+        let expected = false;
 
         assert_eq!(
-            request_review_finish(&document_path)
-                .expect("request finish")
-                .then_some(()),
-            None
+            request_review_finish(&document_path).expect("request finish"),
+            expected
         );
     }
 
@@ -300,7 +352,7 @@ mod tests {
                 .map_err(|error| io::Error::other(error.to_string()))?;
             let deadline = Instant::now() + Duration::from_secs(2);
             loop {
-                if try_read_fifo_signal(&mut finish_reader)? {
+                if try_read_fifo_signal_byte(&mut finish_reader)?.is_some() {
                     break;
                 }
                 if Instant::now() >= deadline {
@@ -327,5 +379,48 @@ mod tests {
                 .map_err(|error| format!("{error:#}")),
         );
         assert_eq!(outcome, (expected, Ok(())));
+    }
+
+    #[rstest]
+    fn request_review_finish_after_push_identifies_the_completion_reason(
+        active_review: ActiveReview,
+    ) {
+        let document_path = active_review.document_path;
+        let finish_fifo_path = finish_request_fifo_path(&document_path);
+        let ack_fifo_path = finish_ack_fifo_path(&document_path);
+        let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
+        let review_actor = thread::spawn(move || -> super::super::Result<u8> {
+            let mut finish_reader = open_fifo_reader(&finish_fifo_path)?;
+            ready_sender
+                .send(())
+                .map_err(|error| io::Error::other(error.to_string()))?;
+            let deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                if let Some(signal_byte) = try_read_fifo_signal_byte(&mut finish_reader)? {
+                    super::super::try_signal_fifo_with_byte(&ack_fifo_path, b'0')?;
+                    return Ok(signal_byte);
+                }
+                if Instant::now() >= deadline {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "finish request was not received",
+                    )
+                    .into());
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+        });
+        ready_receiver
+            .recv_timeout(Duration::from_secs(2))
+            .expect("review actor ready");
+
+        let outcome = (
+            request_review_finish_after_push(&document_path).map_err(|_| ()),
+            review_actor
+                .join()
+                .expect("review actor thread")
+                .map_err(|_| ()),
+        );
+        assert_eq!(outcome, (Ok(true), Ok(b'p')));
     }
 }

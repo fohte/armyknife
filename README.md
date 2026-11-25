@@ -509,13 +509,14 @@ action; `--force` overrides the conflict. Approval (`submit: true`) is required
 only when changes are applied, so `--dry-run` and no-change pushes skip approval.
 `--no-review` skips editor approval when vibe mode is enabled and the target
 repository is allowed.
-After an applied push refreshes the local file, an open reply review for that
-file is asked to finish. A failed finish request prints a warning without
-changing the push result; dry-run and no-change pushes do not request a finish.
+After a successful push command, including a no-change push, an open reply
+review for that file is asked to finish. The review reports that the push
+finished it and exits successfully. A failed finish request prints a warning
+without changing the push result; dry-run does not request a finish.
 
 ##### `a gh pr-review reply review`
 
-Open the local threads.md in an editor for review. Setting `submit: true` in the frontmatter and saving marks the replies as approved. Run `reply push` afterwards to push. Exits 0 if approved, 1 if not, 2 if editor already open, 3 if terminal launch fails, 4 if the review editor session ends before completion.
+Open the local threads.md in an editor for review. Setting `submit: true` in the frontmatter and saving marks the replies as approved. Run `reply push` afterwards to push. Exits 0 if approved or finished by a successful push, 1 if not, 2 if editor already open, 3 if terminal launch fails, 4 if the review editor session ends before completion.
 
 Requires `reply pull` to have been run first.
 

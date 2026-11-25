@@ -52,7 +52,7 @@ pub fn run_editor(
 
 pub(crate) enum ReviewEditorOutcome {
     Exited(ExitStatus),
-    FinishRequested,
+    FinishRequested(super::ReviewFinishReason),
 }
 
 pub(super) trait ReviewEditorChild {
@@ -93,9 +93,11 @@ pub(super) fn wait_for_editor_or_finish_request(
     finish_fifo_reader: &mut std::fs::File,
 ) -> super::Result<ReviewEditorOutcome> {
     loop {
-        if super::try_read_fifo_signal(finish_fifo_reader)? {
+        if let Some(signal_byte) = super::try_read_fifo_signal_byte(finish_fifo_reader)? {
             child.terminate_and_wait()?;
-            return Ok(ReviewEditorOutcome::FinishRequested);
+            return Ok(ReviewEditorOutcome::FinishRequested(
+                super::ReviewFinishReason::from_signal_byte(signal_byte),
+            ));
         }
         if let Some(status) = child.try_wait()? {
             return Ok(ReviewEditorOutcome::Exited(status));
