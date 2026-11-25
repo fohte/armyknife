@@ -63,7 +63,11 @@ pub fn run(args: &ResumeArgs) -> Result<()> {
 
     let binary_path = find_command_path(binary_name)
         .ok_or_else(|| anyhow::anyhow!("Could not find '{binary_name}' command in PATH"))?;
-    let binary_path = absolute_resume_binary_path(binary_name, binary_path)?;
+    let binary_path = if binary_path.is_absolute() {
+        binary_path
+    } else {
+        absolute_resume_binary_path(binary_path, &std::env::current_dir()?)
+    };
     if let Some(session) = &stored_session {
         set_session_working_directory(&session.cwd, |cwd| std::env::set_current_dir(cwd))?;
     }
@@ -120,9 +124,12 @@ fn validate_session_working_directory(cwd: &Path) -> Result<()> {
     Ok(())
 }
 
-fn absolute_resume_binary_path(binary_name: &str, path: PathBuf) -> Result<PathBuf> {
-    std::path::absolute(path)
-        .with_context(|| format!("Could not resolve '{binary_name}' command path in PATH"))
+fn absolute_resume_binary_path(path: PathBuf, invoking_cwd: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path
+    } else {
+        invoking_cwd.join(path)
+    }
 }
 
 fn set_session_working_directory(
@@ -1152,20 +1159,19 @@ mod tests {
         std::fs::write(&target, "fixture executable").unwrap();
         symlink(&target, &link).unwrap();
 
-        let result =
-            absolute_resume_binary_path("claude", link.clone()).map_err(|error| error.to_string());
+        let result = absolute_resume_binary_path(link.clone(), Path::new("/"));
 
-        assert_eq!(result, Ok(link));
+        assert_eq!(result, link);
     }
 
     #[test]
     fn resume_resolves_relative_agent_paths_from_the_invoking_directory() {
         let relative_path = PathBuf::from("relative/bin/claude");
-        let expected_path = std::env::current_dir().unwrap().join(&relative_path);
+        let invoking_cwd = Path::new("/invoking/directory");
+        let expected_path = invoking_cwd.join(&relative_path);
 
-        let result =
-            absolute_resume_binary_path("claude", relative_path).map_err(|error| error.to_string());
+        let result = absolute_resume_binary_path(relative_path, invoking_cwd);
 
-        assert_eq!(result, Ok(expected_path));
+        assert_eq!(result, expected_path);
     }
 }
