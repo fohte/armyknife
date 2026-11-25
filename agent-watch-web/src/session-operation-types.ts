@@ -76,6 +76,7 @@ export type SessionOperation =
       seq: number
       choice: number | null
       comment: string | null
+      expectedBody?: JsonValue
       attachments?: unknown[]
     }
   | {
@@ -84,6 +85,8 @@ export type SessionOperation =
       seq: number
       resolution: 'completed' | 'rejected'
       comment: string | null
+      expectedTitle?: string
+      expectedDetail?: string | null
       attachments?: unknown[]
     }
   | {
@@ -195,10 +198,10 @@ function operationKey(operation: SessionOperation) {
     return `${operation.sessionId}:${operation.type}:${JSON.stringify([operation.messageText, operation.commands])}`
   }
   if (operation.type === 'proposal_answer') {
-    return `${operation.sessionId}:proposal_answer:${String(operation.seq)}:${String(operation.choice)}:${operation.comment ?? ''}`
+    return `${operation.sessionId}:proposal_answer:${String(operation.seq)}:${String(operation.choice)}:${operation.comment ?? ''}${operation.expectedBody === undefined ? '' : `:${JSON.stringify(operation.expectedBody)}`}`
   }
   if (operation.type === 'todo_resolve') {
-    return `${operation.sessionId}:todo_resolve:${String(operation.seq)}:${operation.resolution}:${operation.comment ?? ''}`
+    return `${operation.sessionId}:todo_resolve:${String(operation.seq)}:${operation.resolution}:${operation.comment ?? ''}${operation.expectedTitle === undefined ? '' : `:${JSON.stringify([operation.expectedTitle, operation.expectedDetail])}`}`
   }
   if (operation.type === 'todo_fold') {
     return `${operation.sessionId}:todo_fold:${String(operation.seq)}:${String(operation.folded)}`

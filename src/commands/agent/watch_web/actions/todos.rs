@@ -14,6 +14,10 @@ use super::{
 pub(super) struct ResolveRequest {
     resolution: UserTodoResolution,
     comment: Option<String>,
+    #[serde(rename = "expectedTitle")]
+    expected_title: String,
+    #[serde(rename = "expectedDetail")]
+    expected_detail: Option<String>,
     #[serde(default)]
     attachments: Vec<attachments::Request>,
 }
@@ -80,6 +84,11 @@ pub(super) async fn resolve_todo(
         .ok_or_else(|| ApiError::conflict("todo is not pending"))?;
     if todo.completed_at.is_some() {
         return Err(ApiError::conflict("todo is not pending"));
+    }
+    if todo.title != request.expected_title || todo.detail != request.expected_detail {
+        return Err(ApiError::conflict(
+            "todo changed; reload it before resolving",
+        ));
     }
     let attachments = attachments::validate(request.attachments, vec![])
         .map_err(|error| ApiError::bad_request(error.to_string()))?;

@@ -21,6 +21,8 @@ use super::{
 pub(super) struct AnswerRequest {
     choice: serde_json::Value,
     comment: Option<String>,
+    #[serde(rename = "expectedBody")]
+    expected_body: ProposalBody,
     #[serde(default)]
     attachments: Vec<attachments::Request>,
 }
@@ -65,6 +67,11 @@ pub(super) async fn answer_proposal(
     let body: ProposalBody = serde_json::from_str(&proposal.body)
         .context("parsing stored proposal body")
         .map_err(ApiError::internal)?;
+    if body != request.expected_body {
+        return Err(ApiError::conflict(
+            "proposal changed; reload it before answering",
+        ));
+    }
     let choice = if request.choice.is_null() {
         None
     } else {
