@@ -3,9 +3,11 @@ use super::error::CheckPrReviewError;
 use super::models::{PrData, Review, ReviewThread};
 use crate::infra::github::GitHubClient;
 use crate::infra::github::PrState;
+use crate::shared::human_in_the_loop::ReviewFinishReason;
 use indoc::indoc;
 use serde::Deserialize;
 use serde_json::json;
+use std::collections::HashSet;
 
 // Note: comments(first: 100) doesn't paginate, so threads with 100+ comments
 // will be truncated. This is an acceptable limitation as such threads are rare.
@@ -123,7 +125,28 @@ struct PageInfo {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ReplyReviewStatus {
     pub state: PrState,
-    pub resolved_thread_ids: std::collections::HashSet<String>,
+    pub resolved_thread_ids: HashSet<String>,
+}
+
+impl ReplyReviewStatus {
+    pub(super) fn completion_reason(
+        &self,
+        drafted_thread_ids: &HashSet<String>,
+    ) -> Option<ReviewFinishReason> {
+        match &self.state {
+            PrState::Merged => Some(ReviewFinishReason::PullRequestMerged),
+            PrState::Closed => Some(ReviewFinishReason::PullRequestClosed),
+            PrState::Open
+                if !drafted_thread_ids.is_empty()
+                    && drafted_thread_ids
+                        .iter()
+                        .all(|thread_id| self.resolved_thread_ids.contains(thread_id)) =>
+            {
+                Some(ReviewFinishReason::ReplyThreadsResolved)
+            }
+            PrState::Open => None,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -150,6 +173,7 @@ struct ReplyReviewPullRequest {
 enum PullRequestState {
     Open,
     Closed,
+    Merged,
 }
 
 #[derive(Debug, Deserialize)]
@@ -235,15 +259,6 @@ pub async fn fetch_pr_data(
 }
 
 pub(super) async fn fetch_reply_review_status(
-    owner: &str,
-    repo: &str,
-    pr_number: u64,
-) -> Result<ReplyReviewStatus> {
-    let client = GitHubClient::get()?;
-    fetch_reply_review_status_with_client(client, owner, repo, pr_number).await
-}
-
-async fn fetch_reply_review_status_with_client(
     client: &GitHubClient,
     owner: &str,
     repo: &str,
@@ -278,6 +293,7 @@ async fn fetch_reply_review_status_with_client(
             match pull_request.state {
                 PullRequestState::Open => PrState::Open,
                 PullRequestState::Closed => PrState::Closed,
+                PullRequestState::Merged => PrState::Merged,
             }
         };
         if pull_request_state
@@ -348,6 +364,8 @@ mod tests {
         mock.graphql_reply_review_status(
             "OPEN",
             None,
+            None,
+            false,
             vec![
                 json!({"id": "PRRT_fake_resolved", "isResolved": true}),
                 json!({"id": "PRRT_fake_unresolved", "isResolved": false}),
@@ -355,18 +373,76 @@ mod tests {
         )
         .await;
 
-        let actual =
-            fetch_reply_review_status_with_client(&mock.client(), "sample-org", "sample-repo", 17)
-                .await
-                .expect("reply review status should be fetched");
+        let actual = fetch_reply_review_status(&mock.client(), "sample-org", "sample-repo", 17)
+            .await
+            .expect("reply review status should be fetched");
 
         assert_eq!(
             actual,
             ReplyReviewStatus {
                 state: PrState::Open,
-                resolved_thread_ids: std::collections::HashSet::from([
-                    "PRRT_fake_resolved".to_string(),
-                ]),
+                resolved_thread_ids: HashSet::from(["PRRT_fake_resolved".to_string()]),
+            },
+        );
+    }
+
+    #[tokio::test]
+    async fn reply_review_status_fetches_later_thread_pages() {
+        let mock = GitHubMockServer::start().await;
+        mock.graphql_reply_review_status(
+            "OPEN",
+            None,
+            Some("next-page"),
+            true,
+            vec![json!({"id": "PRRT_fake_first", "isResolved": false})],
+        )
+        .await;
+        mock.graphql_reply_review_status_page(
+            Some("next-page"),
+            "OPEN",
+            None,
+            None,
+            false,
+            vec![json!({"id": "PRRT_fake_second", "isResolved": true})],
+        )
+        .await;
+
+        let actual = fetch_reply_review_status(&mock.client(), "sample-org", "sample-repo", 17)
+            .await
+            .expect("all review thread pages should be fetched");
+
+        assert_eq!(
+            actual,
+            ReplyReviewStatus {
+                state: PrState::Open,
+                resolved_thread_ids: HashSet::from(["PRRT_fake_second".to_string()]),
+            },
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::open("OPEN", None, PrState::Open)]
+    #[case::closed("CLOSED", None, PrState::Closed)]
+    #[case::merged("MERGED", Some("2026-01-01T00:00:00Z"), PrState::Merged)]
+    #[tokio::test]
+    async fn reply_review_status_deserializes_pull_request_states(
+        #[case] state: &str,
+        #[case] merged_at: Option<&str>,
+        #[case] expected_state: PrState,
+    ) {
+        let mock = GitHubMockServer::start().await;
+        mock.graphql_reply_review_status(state, merged_at, None, false, Vec::new())
+            .await;
+
+        let actual = fetch_reply_review_status(&mock.client(), "sample-org", "sample-repo", 17)
+            .await
+            .expect("pull request state should be deserialized");
+
+        assert_eq!(
+            actual,
+            ReplyReviewStatus {
+                state: expected_state,
+                resolved_thread_ids: HashSet::new(),
             },
         );
     }

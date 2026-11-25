@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::ffi::OsString;
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -10,7 +11,7 @@ use super::api::{ReplyReviewStatus, fetch_reply_review_status};
 use super::markdown::{MarkdownParser, serializer::ThreadsFrontmatter};
 use super::storage::ThreadStorage;
 use crate::infra::git;
-use crate::infra::github::PrState;
+use crate::infra::github::GitHubClient;
 use crate::shared::config::load_config;
 use crate::shared::human_in_the_loop::{
     CleanupGuard, Document, DocumentSchema, FifoSignalGuard, HumanInTheLoopError,
@@ -100,27 +101,7 @@ fn reply_review_outcome(
     }
 }
 
-fn reply_review_completion_reason(
-    status: Option<&ReplyReviewStatus>,
-    drafted_thread_ids: &HashSet<String>,
-) -> Option<ReviewFinishReason> {
-    let status = status?;
-    match &status.state {
-        PrState::Merged => Some(ReviewFinishReason::PullRequestMerged),
-        PrState::Closed => Some(ReviewFinishReason::PullRequestClosed),
-        PrState::Open
-            if !drafted_thread_ids.is_empty()
-                && drafted_thread_ids
-                    .iter()
-                    .all(|thread_id| status.resolved_thread_ids.contains(thread_id)) =>
-        {
-            Some(ReviewFinishReason::ReplyThreadsResolved)
-        }
-        PrState::Open => None,
-    }
-}
-
-fn drafted_thread_ids(path: &Path) -> HashSet<String> {
+pub(super) fn drafted_thread_ids(path: &Path) -> HashSet<String> {
     let result = std::fs::read_to_string(path)
         .map_err(anyhow::Error::from)
         .and_then(|content| MarkdownParser::parse(&content).map_err(Into::into));
@@ -145,9 +126,41 @@ async fn monitor_reply_review_completion(
     document_path: PathBuf,
     drafted_thread_ids: HashSet<String>,
 ) {
+    monitor_reply_review_completion_with(
+        owner.clone(),
+        repo.clone(),
+        pr_number,
+        drafted_thread_ids,
+        REPLY_REVIEW_STATUS_POLL_INTERVAL,
+        || {
+            let owner = owner.clone();
+            let repo = repo.clone();
+            async move {
+                let client = GitHubClient::get()?;
+                fetch_reply_review_status(client, &owner, &repo, pr_number).await
+            }
+        },
+        |reason| request_review_finish(&document_path, reason).map_err(Into::into),
+    )
+    .await;
+}
+
+pub(super) async fn monitor_reply_review_completion_with<F, Fut, Finish>(
+    owner: String,
+    repo: String,
+    pr_number: u64,
+    drafted_thread_ids: HashSet<String>,
+    poll_interval: Duration,
+    mut fetch_status: F,
+    mut finish_review: Finish,
+) where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = anyhow::Result<ReplyReviewStatus>>,
+    Finish: FnMut(ReviewFinishReason) -> anyhow::Result<bool>,
+{
     loop {
-        tokio::time::sleep(REPLY_REVIEW_STATUS_POLL_INTERVAL).await;
-        let status = match fetch_reply_review_status(&owner, &repo, pr_number).await {
+        tokio::time::sleep(poll_interval).await;
+        let status = match fetch_status().await {
             Ok(status) => status,
             Err(error) => {
                 tracing::warn!(
@@ -160,16 +173,14 @@ async fn monitor_reply_review_completion(
                 continue;
             }
         };
-        let Some(reason) = reply_review_completion_reason(Some(&status), &drafted_thread_ids)
-        else {
+        let Some(reason) = status.completion_reason(&drafted_thread_ids) else {
             continue;
         };
 
-        match request_review_finish(&document_path, reason) {
+        match finish_review(reason) {
             Ok(true) => return,
             Ok(false) => {}
             Err(error) => tracing::warn!(
-                path = %document_path.display(),
                 %error,
                 "Failed to finish PR reply review; will retry"
             ),
@@ -242,44 +253,27 @@ impl ReviewHandler<ThreadsFrontmatter> for PrReviewReplyHandler {
         document: &Document<ThreadsFrontmatter>,
         reason: ReviewFinishReason,
     ) -> HilResult<()> {
-        if reason == ReviewFinishReason::RepliesPushed {
-            let content = std::fs::read_to_string(&document.path)?;
-            let updated_content = yaml_frontmatter::reset_bool_fields(&content, &["submit"]);
-            if document.frontmatter.submit && updated_content == content {
-                return Err(HumanInTheLoopError::CommandFailed(format!(
-                    "Failed to reset submit in frontmatter at {}",
-                    document.path.display(),
-                )));
+        match reason {
+            ReviewFinishReason::ExternalRequest => self.on_review_complete(document),
+            ReviewFinishReason::RepliesPushed
+            | ReviewFinishReason::ReplyThreadsResolved
+            | ReviewFinishReason::PullRequestClosed
+            | ReviewFinishReason::PullRequestMerged => {
+                let content = std::fs::read_to_string(&document.path)?;
+                let updated_content = yaml_frontmatter::reset_bool_fields(&content, &["submit"]);
+                if document.frontmatter.submit && updated_content == content {
+                    return Err(HumanInTheLoopError::CommandFailed(format!(
+                        "Failed to reset submit in frontmatter at {}",
+                        document.path.display(),
+                    )));
+                }
+                if updated_content != content {
+                    std::fs::write(&document.path, updated_content)?;
+                }
+                document.remove_approval()?;
+                Ok(())
             }
-            if updated_content != content {
-                std::fs::write(&document.path, updated_content)?;
-            }
-            document.remove_approval()?;
-            return Ok(());
         }
-
-        if matches!(
-            reason,
-            ReviewFinishReason::ReplyThreadsResolved
-                | ReviewFinishReason::PullRequestClosed
-                | ReviewFinishReason::PullRequestMerged
-        ) {
-            let content = std::fs::read_to_string(&document.path)?;
-            let updated_content = yaml_frontmatter::reset_bool_fields(&content, &["submit"]);
-            if document.frontmatter.submit && updated_content == content {
-                return Err(HumanInTheLoopError::CommandFailed(format!(
-                    "Failed to reset submit in frontmatter at {}",
-                    document.path.display(),
-                )));
-            }
-            if updated_content != content {
-                std::fs::write(&document.path, updated_content)?;
-            }
-            document.remove_approval()?;
-            return Ok(());
-        }
-
-        self.on_review_complete(document)
     }
 }
 
@@ -385,6 +379,7 @@ pub fn run_review_complete(args: &ReviewCompleteArgs) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::infra::github::PrState;
     use indoc::indoc;
 
     #[cfg(unix)]
@@ -549,17 +544,50 @@ mod tests {
         };
         let drafted_thread_ids = drafted_ids.iter().map(|id| (*id).to_string()).collect();
 
-        assert_eq!(
-            reply_review_completion_reason(Some(&status), &drafted_thread_ids),
-            expected,
-        );
+        assert_eq!(status.completion_reason(&drafted_thread_ids), expected);
     }
 
-    #[test]
-    fn reply_review_completion_ignores_github_fetch_failure() {
+    #[tokio::test]
+    async fn monitor_retries_fetch_errors_until_drafts_are_resolved() {
+        let drafted_thread_ids = HashSet::from(["PRRT_fake_first".to_string()]);
+        let mut fetch_count = 0;
+        let mut fetch_results = std::collections::VecDeque::from([
+            Err(anyhow::anyhow!("transient GitHub failure")),
+            Ok(ReplyReviewStatus {
+                state: PrState::Open,
+                resolved_thread_ids: HashSet::new(),
+            }),
+            Ok(ReplyReviewStatus {
+                state: PrState::Open,
+                resolved_thread_ids: drafted_thread_ids.clone(),
+            }),
+        ]);
+        let mut finish_reasons = Vec::new();
+
+        monitor_reply_review_completion_with(
+            "sample-org".to_string(),
+            "sample-repo".to_string(),
+            17,
+            drafted_thread_ids,
+            Duration::ZERO,
+            || {
+                fetch_count += 1;
+                std::future::ready(
+                    fetch_results
+                        .pop_front()
+                        .unwrap_or_else(|| Err(anyhow::anyhow!("no response available"))),
+                )
+            },
+            |reason| {
+                finish_reasons.push(reason);
+                Ok(true)
+            },
+        )
+        .await;
+
         assert_eq!(
-            reply_review_completion_reason(None, &HashSet::from(["PRRT_fake_first".to_string()])),
-            None,
+            (fetch_count, finish_reasons),
+            (3, vec![ReviewFinishReason::ReplyThreadsResolved]),
         );
     }
 

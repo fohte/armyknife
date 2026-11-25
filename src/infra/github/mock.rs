@@ -41,6 +41,7 @@ use wiremock::matchers::{body_json, body_string_contains, method, path, path_reg
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 mod pr_number;
+mod reply_review;
 
 use super::client::GitHubClient;
 
@@ -438,39 +439,6 @@ impl GitHubMockServer {
     /// Mock a batched pull request query that also requests the latest CI state.
     pub async fn graphql_batch_pull_request_with_ci(&self, pull_request: serde_json::Value) {
         self.mount_graphql_batch_pull_request(pull_request, true)
-            .await;
-    }
-
-    /// Mock the GraphQL query used to monitor a reply review.
-    pub async fn graphql_reply_review_status(
-        &self,
-        state: &str,
-        merged_at: Option<&str>,
-        thread_nodes: Vec<serde_json::Value>,
-    ) {
-        Mock::given(method("POST"))
-            .and(path("/graphql"))
-            .and(body_string_contains(
-                "reviewThreads(first: 100, after: $threadCursor)",
-            ))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "data": {
-                    "repository": {
-                        "pullRequest": {
-                            "state": state,
-                            "mergedAt": merged_at,
-                            "reviewThreads": {
-                                "pageInfo": {
-                                    "hasNextPage": false,
-                                    "endCursor": null
-                                },
-                                "nodes": thread_nodes
-                            }
-                        }
-                    }
-                }
-            })))
-            .mount(&self.server)
             .await;
     }
 

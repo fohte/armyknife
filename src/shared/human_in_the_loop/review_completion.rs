@@ -423,18 +423,40 @@ mod tests {
     }
 
     #[rstest]
-    #[case::watch_web_finish(b'0', false, None, b'0', b'0')]
-    #[case::watch_web_action_finish(b'1', false, None, b'0', b'1')]
-    #[case::replies_pushed(b'p', false, None, b'0', b'p')]
-    #[case::reply_threads_resolved(b't', false, None, b'0', b't')]
-    #[case::pull_request_closed(b'c', false, None, b'0', b'c')]
-    #[case::pull_request_merged(b'm', false, None, b'0', b'm')]
+    #[case::watch_web_finish(b'0', false, None, b'0', b'0', None)]
+    #[case::watch_web_action_finish(b'1', false, None, b'0', b'1', None)]
+    #[case::replies_pushed(b'p', false, None, b'0', b'p', Some(ReviewFinishReason::RepliesPushed))]
+    #[case::reply_threads_resolved(
+        b't',
+        false,
+        None,
+        b'0',
+        b't',
+        Some(ReviewFinishReason::ReplyThreadsResolved)
+    )]
+    #[case::pull_request_closed(
+        b'c',
+        false,
+        None,
+        b'0',
+        b'c',
+        Some(ReviewFinishReason::PullRequestClosed)
+    )]
+    #[case::pull_request_merged(
+        b'm',
+        false,
+        None,
+        b'0',
+        b'm',
+        Some(ReviewFinishReason::PullRequestMerged)
+    )]
     #[case::failed_watch_web_action(
         b'1',
         true,
         Some("IO error: watch-web action failed"),
         b'1',
-        b'0'
+        b'0',
+        None
     )]
     fn finish_request_stops_editor_and_dispatches_completion_handler(
         #[case] finish_signal: u8,
@@ -442,6 +464,7 @@ mod tests {
         #[case] expected_error: Option<&str>,
         #[case] expected_ack_signal: u8,
         #[case] expected_done_signal: u8,
+        #[case] expected_finish_reason: Option<ReviewFinishReason>,
         review_document: ReviewDocumentFixture,
     ) {
         let document_path = review_document.path;
@@ -512,13 +535,12 @@ mod tests {
             .expect("finished document observations should be readable")
             .clone();
 
-        let completion_reason = ReviewFinishReason::from_completion_signal(finish_signal);
-        let expected_watch_web_documents = if completion_reason.is_none() {
+        let expected_watch_web_documents = if expected_finish_reason.is_none() {
             vec![(document_path.clone(), true, saved_document.to_string())]
         } else {
             Vec::new()
         };
-        let expected_finished_documents = completion_reason
+        let expected_finished_documents = expected_finish_reason
             .map(|reason| vec![(document_path, reason, true, saved_document.to_string())])
             .unwrap_or_default();
         let expected_result = expected_error.map_or(Ok(()), |error| Err(error.to_owned()));

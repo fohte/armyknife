@@ -516,7 +516,7 @@ without changing the push result; dry-run does not request a finish.
 
 ##### `a gh pr-review reply review`
 
-Open the local threads.md in an editor for review. Setting `submit: true` in the frontmatter and saving marks the replies as approved. Run `reply push` afterwards to push. Exits 0 if approved or finished by a successful push, 1 if not, 2 if editor already open, 3 if terminal launch fails, 4 if the review editor session ends before completion.
+Open the local threads.md in an editor for review. Setting `submit: true` in the frontmatter and saving marks the replies as approved. Run `reply push` afterwards to push. While the review waits, it checks GitHub every five minutes and finishes successfully if the PR is merged or closed, or every thread with a local draft reply is resolved. These automatic finishes are reported separately from approval. Exits 0 if approved or finished by a successful push or an automatic finish, 1 if not approved, 2 if editor already open, 3 if terminal launch fails, 4 if the review editor session ends before completion.
 
 Requires `reply pull` to have been run first.
 
