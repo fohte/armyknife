@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.930](https://github.com/fohte/armyknife/compare/v0.1.929...v0.1.930) (2026-11-25)
+
+
+### Bug Fixes
+
+* **gh/pr-review:** finish when thread or PR ends ([#2285](https://github.com/fohte/armyknife/issues/2285)) ([673ecf6](https://github.com/fohte/armyknife/commit/673ecf63dcc60f5bee431ea8037152e90be010bd))
+
 ## [0.1.929](https://github.com/fohte/armyknife/compare/v0.1.928...v0.1.929) (2026-11-25)
 
 
