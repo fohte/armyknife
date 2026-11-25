@@ -729,6 +729,24 @@ pub(crate) fn resolve_agent_todo_from(
     database::resolve_agent_todo(sessions_dir, session_id, seq, resolution, comment)
 }
 
+pub(crate) fn resolve_agent_todo_from_at(
+    sessions_dir: &Path,
+    session_id: &str,
+    seq: i64,
+    resolution: TodoResolution,
+    comment: Option<&str>,
+    completed_at: DateTime<Utc>,
+) -> Result<bool> {
+    database::resolve_agent_todo_at(
+        sessions_dir,
+        session_id,
+        seq,
+        resolution,
+        comment,
+        completed_at,
+    )
+}
+
 pub(crate) fn lock_agent_todo_resolution(
     sessions_dir: &Path,
     session_id: &str,
@@ -736,13 +754,21 @@ pub(crate) fn lock_agent_todo_resolution(
     database::lock_agent_todo_resolution(sessions_dir, session_id)
 }
 
-pub(crate) fn resolve_agent_todo(
+pub(crate) fn resolve_agent_todo_at(
     session_id: &str,
     seq: i64,
     resolution: TodoResolution,
     comment: Option<&str>,
+    completed_at: DateTime<Utc>,
 ) -> Result<bool> {
-    resolve_agent_todo_from(&sessions_dir()?, session_id, seq, resolution, comment)
+    resolve_agent_todo_from_at(
+        &sessions_dir()?,
+        session_id,
+        seq,
+        resolution,
+        comment,
+        completed_at,
+    )
 }
 
 pub(crate) fn watch_web_session_states_from(

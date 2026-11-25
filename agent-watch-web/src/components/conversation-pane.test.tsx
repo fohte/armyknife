@@ -12492,6 +12492,151 @@ it('keeps a question answer draft when a preceding conversation row arrives', ()
 })
 
 it.each([
+  { cardType: 'proposal', atBottom: false, resolution: 'completed' },
+  { cardType: 'proposal', atBottom: true, resolution: 'completed' },
+  { cardType: 'todo', atBottom: false, resolution: 'completed' },
+  { cardType: 'todo', atBottom: true, resolution: 'completed' },
+  { cardType: 'todo', atBottom: false, resolution: 'rejected' },
+  { cardType: 'todo', atBottom: true, resolution: 'rejected' },
+] as const)(
+  'keeps the remaining $cardType cards in place when resolving a middle card as $resolution atBottom=$atBottom',
+  ({ cardType, atBottom, resolution }) => {
+    container.style.cssText = 'width: 900px; height: 700px'
+    const detail =
+      'Review the selected configuration before continuing. '.repeat(10)
+    const messages: ChatItem[] = [1, 2, 3].map((index) =>
+      cardType === 'proposal'
+        ? {
+            ...proposal,
+            seq: 60 + index,
+            title: `Choose setting ${String(index)}`,
+            summary: detail,
+          }
+        : {
+            type: 'todo',
+            seq: 60 + index,
+            title: `Review setting ${String(index)}`,
+            detail,
+            completed: false,
+            resolution: null,
+            comment: null,
+          },
+    )
+    renderConversationMessages(messages, 0)
+
+    const scroll = requireElement(
+      container.querySelector<HTMLDivElement>('.conversation-scroll'),
+    )
+    scroll.style.height = '360px'
+    scroll.style.flex = 'none'
+    renderConversationMessages(messages.slice(), 0)
+
+    const setScrollPosition = (scrollTop: number) => {
+      act(() => {
+        scroll.scrollTop = scrollTop
+        scroll.dispatchEvent(new Event('scroll'))
+      })
+    }
+    const bottom = scroll.scrollHeight - scroll.clientHeight
+    setScrollPosition(atBottom ? bottom : Math.min(180, bottom))
+    const resolvedSeq = atBottom ? 62 : 63
+    const getPendingCards = () =>
+      Array.from(
+        scroll.querySelectorAll<HTMLElement>(
+          '.chat-proposal-card, .chat-todo-card',
+        ),
+      )
+        .map((element) => ({
+          element,
+          title: element.querySelector('h3')?.textContent,
+          top: Math.round(element.getBoundingClientRect().top),
+          visible: (() => {
+            const card = element.getBoundingClientRect()
+            const bounds = scroll.getBoundingClientRect()
+            return card.top < bounds.bottom && card.bottom > bounds.top
+          })(),
+        }))
+        .filter(
+          ({ title }) =>
+            title?.startsWith(
+              cardType === 'proposal' ? 'Choose setting' : 'Review setting',
+            ) === true,
+        )
+    const before = getPendingCards().filter(
+      ({ title, visible }) =>
+        title !==
+          `${cardType === 'proposal' ? 'Choose' : 'Review'} setting ${String(resolvedSeq - 60)}` &&
+        visible,
+    )
+    const atBottomNow = () =>
+      scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight <= 24
+    const wasAtBottom = atBottomNow()
+    const isResolvedMessage = (
+      message: ChatItem,
+    ): message is Extract<ChatItem, { type: 'proposal' | 'todo' }> =>
+      (message.type === 'proposal' || message.type === 'todo') &&
+      message.type === cardType &&
+      message.seq === resolvedSeq
+    const resolved = messages.find(isResolvedMessage)
+    if (resolved === undefined) throw new Error('Expected the card to resolve')
+    const settled: ChatItem =
+      resolved.type === 'proposal'
+        ? { ...resolved, answer: { choice: 0, comment: null } }
+        : {
+            ...resolved,
+            completed: true,
+            resolution,
+          }
+    const remaining = messages.filter((message) => !isResolvedMessage(message))
+    const originalRemainingTops = before.map(({ top }) => top)
+    const stages: number[][] = []
+    const bottomStates: boolean[] = []
+    const recordRemainingTops = () => {
+      stages.push(
+        before.map(({ element }) =>
+          Math.round(element.getBoundingClientRect().top),
+        ),
+      )
+      bottomStates.push(atBottomNow())
+    }
+    const optimisticMessages = messages.map((message) =>
+      isResolvedMessage(message) ? settled : message,
+    )
+    renderConversationMessages(optimisticMessages, 0)
+    recordRemainingTops()
+    renderConversationMessages([settled, ...remaining], 0)
+    recordRemainingTops()
+    const notification: ChatItem = {
+      type: 'assistant',
+      text: 'The selection was recorded.',
+    }
+    const updatedMessages = [settled, notification, ...remaining]
+    renderConversationMessages(updatedMessages, 0)
+    recordRemainingTops()
+    renderConversationMessages(updatedMessages.slice(), 0)
+    recordRemainingTops()
+
+    const result = () => ({
+      visibleCardCount: before.length,
+      remainedAtBottom: atBottomNow(),
+      bottomStates,
+      stageTopDeltas: stages.map((stage) =>
+        stage.map((top, index) => top - (originalRemainingTops[index] ?? 0)),
+      ),
+    })
+    const expectedResult = () => ({
+      visibleCardCount: atBottom ? 1 : 2,
+      remainedAtBottom: wasAtBottom,
+      bottomStates: Array.from({ length: 4 }, () => wasAtBottom),
+      stageTopDeltas: Array.from({ length: 4 }, () =>
+        originalRemainingTops.map(() => 0),
+      ),
+    })
+    expect(result()).toEqual(expectedResult())
+  },
+)
+
+it.each([
   { formFactor: 'desktop', isMobile: false },
   { formFactor: 'mobile', isMobile: true },
 ])(

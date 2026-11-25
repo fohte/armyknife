@@ -13,6 +13,92 @@ type UseConversationScrollOptions = {
   olderCursor?: string | undefined
 }
 
+type ConversationChildLayout = {
+  element: HTMLElement
+  top: number
+  height: number
+}
+
+function readConversationChildLayout(
+  scrollContainer: HTMLDivElement,
+): ConversationChildLayout[] {
+  return Array.from(scrollContainer.children).flatMap((child) =>
+    child instanceof HTMLElement
+      ? [
+          {
+            element: child,
+            top: child.getBoundingClientRect().top,
+            height: child.getBoundingClientRect().height,
+          },
+        ]
+      : [],
+  )
+}
+
+function hasConversationLayoutChanged(
+  previous: readonly ConversationChildLayout[],
+  current: readonly ConversationChildLayout[],
+): boolean {
+  const currentPositions = new Map(
+    current.map(({ element }, index) => [element, index]),
+  )
+  return previous.some(({ element, height }, index) => {
+    const currentIndex = currentPositions.get(element)
+    if (currentIndex === undefined) return false
+    const currentChild = current[currentIndex]
+    return (
+      currentIndex !== index ||
+      currentChild === undefined ||
+      Math.abs(currentChild.height - height) > 0.5
+    )
+  })
+}
+
+function preserveConversationChildPosition(
+  scrollContainer: HTMLDivElement,
+  previous: readonly ConversationChildLayout[],
+  current: readonly ConversationChildLayout[],
+): number | null {
+  const bounds = scrollContainer.getBoundingClientRect()
+  const currentByElement = new Map(
+    current.map((child) => [child.element, child]),
+  )
+  const previousSharedElements = previous
+    .filter(({ element }) => currentByElement.has(element))
+    .map(({ element }) => element)
+  const previousOrder = new Map(
+    previousSharedElements.map((element, index) => [element, index]),
+  )
+  const currentOrder = new Map(
+    current
+      .filter(({ element }) => previousOrder.has(element))
+      .map(({ element }, index) => [element, index]),
+  )
+  const hasKeptItsRelativeOrder = (element: HTMLElement) =>
+    previousOrder.get(element) === currentOrder.get(element)
+  const isVisible = ({ top, height }: ConversationChildLayout) =>
+    top < bounds.bottom && top + height > bounds.top
+  const anchor =
+    previous.findLast(({ element, height, ...layout }) => {
+      const currentChild = currentByElement.get(element)
+      return (
+        currentChild !== undefined &&
+        hasKeptItsRelativeOrder(element) &&
+        isVisible({ element, height, ...layout }) &&
+        Math.abs(currentChild.height - height) <= 0.5
+      )
+    }) ??
+    previous.findLast(
+      ({ element, ...layout }) =>
+        currentByElement.has(element) && isVisible({ element, ...layout }),
+    )
+  if (anchor === undefined) return null
+  const currentAnchor = currentByElement.get(anchor.element)
+  if (currentAnchor === undefined) return null
+  const offset = currentAnchor.top - anchor.top
+  return Math.abs(offset) > 0.5 ? scrollContainer.scrollTop + offset : null
+}
+
 function isAtBottom(scrollContainer: HTMLDivElement) {
   return (
     scrollContainer.scrollHeight -
@@ -53,6 +139,8 @@ export function useConversationScroll({
     end: number
     epoch: string | undefined
   } | null>(null)
+  const previousChildLayoutRef = useRef<readonly ConversationChildLayout[]>([])
+  const anchorExtraPaddingBottomRef = useRef(0)
   const userLayoutChangeRef = useRef(false)
   const userLayoutChangeTimeoutRef = useRef<number | null>(null)
   const loadingOlderRef = useRef(loadingOlder)
@@ -72,6 +160,9 @@ export function useConversationScroll({
     pendingScrollAnchorRef.current = null
     followLatestRef.current = true
     previousMessagesRef.current = null
+    previousChildLayoutRef.current = []
+    scrollRef.current?.style.removeProperty('padding-bottom')
+    anchorExtraPaddingBottomRef.current = 0
     userLayoutChangeRef.current = false
     if (userLayoutChangeTimeoutRef.current !== null) {
       window.clearTimeout(userLayoutChangeTimeoutRef.current)
@@ -87,6 +178,12 @@ export function useConversationScroll({
     const scrollContainer = scrollRef.current
     if (scrollContainer === null) return
     const previousMessages = previousMessagesRef.current
+    const previousChildLayout = previousChildLayoutRef.current
+    const currentChildLayout = readConversationChildLayout(scrollContainer)
+    const conversationLayoutChanged = hasConversationLayoutChanged(
+      previousChildLayout,
+      currentChildLayout,
+    )
     const end = start + messages.length
     const appendedMessages =
       previousMessages !== null &&
@@ -120,6 +217,34 @@ export function useConversationScroll({
           userLayoutChangeTimeoutRef.current = null
         }
       }
+      previousChildLayoutRef.current =
+        readConversationChildLayout(scrollContainer)
+      return
+    }
+
+    if (conversationLayoutChanged) {
+      const desiredScrollTop = preserveConversationChildPosition(
+        scrollContainer,
+        previousChildLayout,
+        currentChildLayout,
+      )
+      if (desiredScrollTop !== null) {
+        setAnchoredScrollTop(scrollContainer, desiredScrollTop)
+        const scrollTopShortfall = desiredScrollTop - scrollContainer.scrollTop
+        if (scrollTopShortfall > 0.5) {
+          // The resolved card can leave the tail and reduce the available scroll range.
+          const basePaddingBottom =
+            Number.parseFloat(
+              window.getComputedStyle(scrollContainer).paddingBottom,
+            ) - anchorExtraPaddingBottomRef.current
+          anchorExtraPaddingBottomRef.current += scrollTopShortfall
+          scrollContainer.style.paddingBottom = `${String(basePaddingBottom + anchorExtraPaddingBottomRef.current)}px`
+          setAnchoredScrollTop(scrollContainer, desiredScrollTop)
+        }
+      }
+      previousChildLayoutRef.current =
+        readConversationChildLayout(scrollContainer)
+      followLatestRef.current = isAtBottom(scrollContainer)
       return
     }
 
@@ -143,15 +268,27 @@ export function useConversationScroll({
       start !== previousMessages.start ||
       epoch !== previousMessages.epoch
     ) {
-      if (!followLatestRef.current) return
+      if (!followLatestRef.current) {
+        previousChildLayoutRef.current =
+          readConversationChildLayout(scrollContainer)
+        return
+      }
+      if (appendedMessages && anchorExtraPaddingBottomRef.current > 0) {
+        scrollContainer.style.removeProperty('padding-bottom')
+        anchorExtraPaddingBottomRef.current = 0
+      }
       if (!loadingOlder) {
         const scrollTop =
           scrollContainer.scrollHeight - scrollContainer.clientHeight
         scrollContainer.scrollTop = scrollTop
         onPruneOldMessages()
       }
+      previousChildLayoutRef.current =
+        readConversationChildLayout(scrollContainer)
       return
     }
+    previousChildLayoutRef.current =
+      readConversationChildLayout(scrollContainer)
   }, [
     epoch,
     loadingOlder,
@@ -334,9 +471,15 @@ export function useConversationScroll({
     if (scrollContainer === null) return
     if (programmaticScrollTopRef.current === scrollContainer.scrollTop) {
       programmaticScrollTopRef.current = null
+      previousChildLayoutRef.current =
+        readConversationChildLayout(scrollContainer)
       return
     }
     programmaticScrollTopRef.current = null
+    if (anchorExtraPaddingBottomRef.current > 0) {
+      scrollContainer.style.removeProperty('padding-bottom')
+      anchorExtraPaddingBottomRef.current = 0
+    }
     const pendingAnchor = pendingScrollAnchorRef.current
     if (pendingAnchor !== null) {
       pendingScrollAnchorRef.current = {
@@ -346,6 +489,8 @@ export function useConversationScroll({
         epoch: pendingAnchor.epoch,
       }
     }
+    previousChildLayoutRef.current =
+      readConversationChildLayout(scrollContainer)
     followLatestRef.current = isAtBottom(scrollContainer)
     if (followLatestRef.current) onPruneOldMessages()
     if (scrollContainer.scrollTop <= 120) loadOlder()

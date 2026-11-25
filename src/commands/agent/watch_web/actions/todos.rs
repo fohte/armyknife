@@ -1,5 +1,6 @@
 use axum::Json;
 use axum::extract::{Path as RoutePath, State};
+use chrono::Utc;
 use serde::Deserialize;
 
 use super::super::super::{store, types::SessionStatus};
@@ -95,6 +96,7 @@ pub(super) async fn resolve_todo(
         .map(|comment| comment.trim().to_string())
         .filter(|comment| !comment.is_empty());
     let mut stored_comment = comment.clone();
+    let completed_at = Utc::now();
     if session.status != SessionStatus::Ended {
         let (action_event_kind, body, content) =
             todo_resolution_message(request.resolution, &todo.title, comment.as_deref());
@@ -159,14 +161,21 @@ pub(super) async fn resolve_todo(
     let session_id = session.session_id;
     let configured_sessions_dir = state.sessions_dir;
     let resolved = run_blocking(move || match configured_sessions_dir {
-        Some(sessions_dir) => store::resolve_agent_todo_from(
+        Some(sessions_dir) => store::resolve_agent_todo_from_at(
             &sessions_dir,
             &session_id,
             seq,
             resolution,
             stored_comment.as_deref(),
+            completed_at,
         ),
-        None => store::resolve_agent_todo(&session_id, seq, resolution, stored_comment.as_deref()),
+        None => store::resolve_agent_todo_at(
+            &session_id,
+            seq,
+            resolution,
+            stored_comment.as_deref(),
+            completed_at,
+        ),
     })
     .await
     .map_err(|error| {
