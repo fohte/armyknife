@@ -114,8 +114,8 @@ impl EnvVars {
     }
 
     /// Session ID of the session this process runs in, whichever engine hosts
-    /// it. Prefer armyknife's hook value, then the provider-specific ambient
-    /// IDs so a nested provider can override an inherited parent ID.
+    /// it. Resolution order is armyknife's hook value, Claude Code's ambient
+    /// ID, then Codex's ambient ID.
     pub fn own_session_id(&self) -> Option<String> {
         self.own_session_id_with_source().map(|(id, _)| id)
     }
