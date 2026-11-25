@@ -369,20 +369,13 @@ export function startSessionFeed(
                       ...body.sessions.map((session) => session.id),
                     ]),
                   ]
-                : revisionChanged
-                  ? [
-                      ...new Set([
-                        ...body.updatedSessions.map((session) => session.id),
-                        ...body.removedSessionIds,
-                        ...body.sessionOrder,
-                      ]),
-                    ]
-                  : [
-                      ...new Set([
-                        ...body.updatedSessions.map((session) => session.id),
-                        ...body.removedSessionIds,
-                      ]),
-                    ]
+                : [
+                    ...new Set([
+                      ...body.updatedSessions.map((session) => session.id),
+                      ...body.removedSessionIds,
+                      ...(revisionChanged ? body.sessionOrder : []),
+                    ]),
+                  ]
             onSessions(currentSessions.response, changedSessionIds)
             requestError = false
             clearRequestRetry()

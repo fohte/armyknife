@@ -71,6 +71,7 @@ export function ProposalCard({
     null,
   )
   const latestAnswer = answer ?? submittedAnswer
+  // Legacy indexes cannot prove they belong to the displayed proposal version.
   const hasCurrentChoice = choiceDraft.draft.startsWith(choiceDraftPrefix)
   const savedChoice = Number(choiceDraft.draft.slice(choiceDraftPrefix.length))
   const selectedChoice =
