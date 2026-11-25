@@ -131,8 +131,11 @@ export function useConversationScroll({
     const previousMessages = previousMessagesRef.current
     const previousChildLayout = previousChildLayoutRef.current
     if (userScrollInputRef.current) {
+      const userScrolledUp =
+        scrollContainer.scrollTop < previousScrollTopRef.current - 0.5
       userScrollInputRef.current = false
-      followLatestRef.current = isConversationAtBottom(scrollContainer)
+      followLatestRef.current =
+        !userScrolledUp && isConversationAtBottom(scrollContainer)
     }
     const currentChildLayout = readConversationChildLayout(scrollContainer)
     const scrollBounds = scrollContainer.getBoundingClientRect()
@@ -268,6 +271,7 @@ export function useConversationScroll({
         current: currentChildLayout,
         recentResolutionCards,
         preferPendingCards: preservePendingCards,
+        followLatest: followLatestRef.current,
         previousScrollTop: previousScrollTopRef.current,
         extraPaddingBottom: anchorExtraPaddingBottomRef.current,
         setScrollTop: setAnchoredScrollTop,
@@ -378,6 +382,9 @@ export function useConversationScroll({
       return
     }
     programmaticScrollTopRef.current = null
+    const userScrolledUp =
+      userScrollInputRef.current &&
+      scrollContainer.scrollTop < previousScrollTopRef.current - 0.5
     userScrollInputRef.current = false
     if (
       hasConversationScrollCompensation(
@@ -386,7 +393,8 @@ export function useConversationScroll({
         anchorExtraPaddingBottomRef.current,
       )
     ) {
-      const wasAtBottom = isConversationAtBottom(scrollContainer)
+      const wasAtBottom =
+        !userScrolledUp && isConversationAtBottom(scrollContainer)
       anchorExtraPaddingBottomRef.current =
         clearOffscreenConversationScrollCompensation(
           scrollContainer,
@@ -410,7 +418,8 @@ export function useConversationScroll({
     previousChildLayoutRef.current =
       readConversationChildLayout(scrollContainer)
     previousScrollTopRef.current = scrollContainer.scrollTop
-    followLatestRef.current = isConversationAtBottom(scrollContainer)
+    followLatestRef.current =
+      !userScrolledUp && isConversationAtBottom(scrollContainer)
     if (followLatestRef.current) onPruneOldMessages()
     if (scrollContainer.scrollTop <= 120) loadOlder()
   }, [loadOlder, onPruneOldMessages, setAnchoredScrollTop])

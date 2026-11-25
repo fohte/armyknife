@@ -23,6 +23,7 @@ type PreserveConversationScrollPositionOptions = {
   current: readonly ConversationChildLayout[]
   recentResolutionCards: ReadonlySet<HTMLElement>
   preferPendingCards: boolean
+  followLatest: boolean
   previousScrollTop: number
   extraPaddingBottom: number
   setScrollTop: (scrollContainer: HTMLDivElement, scrollTop: number) => void
@@ -84,6 +85,9 @@ export function hasConversationChildrenInsertedBeforePendingCards(
   previous: readonly ConversationChildLayout[],
   current: readonly ConversationChildLayout[],
 ): boolean {
+  if (!previous.some(({ element }) => isPendingConversationCard(element))) {
+    return false
+  }
   const previousElements = new Set(previous.map(({ element }) => element))
   let pendingCardFollows = false
   for (const { element } of current.toReversed()) {
@@ -187,6 +191,7 @@ export function preserveConversationScrollPosition({
   current,
   recentResolutionCards,
   preferPendingCards,
+  followLatest,
   previousScrollTop,
   extraPaddingBottom: initialExtraPaddingBottom,
   setScrollTop,
@@ -200,6 +205,15 @@ export function preserveConversationScrollPosition({
     preferPendingCards,
   )
   let desiredScrollTop = scrollAnchor?.scrollTop ?? previousScrollTop
+  const maximumScrollTop =
+    scrollContainer.scrollHeight - scrollContainer.clientHeight
+  if (
+    scrollAnchor === null &&
+    followLatest &&
+    desiredScrollTop > maximumScrollTop
+  ) {
+    desiredScrollTop = maximumScrollTop
+  }
   let extraPaddingBottom = initialExtraPaddingBottom
   const setScrollTopWithPadding = (scrollTop: number) => {
     setScrollTop(scrollContainer, scrollTop)
@@ -366,6 +380,7 @@ export function clearOffscreenConversationScrollCompensation(
   }
 
   const bounds = scrollContainer.getBoundingClientRect()
+  const previousScrollTop = scrollContainer.scrollTop
   let removedAboveViewport = 0
   const clearOffsets = [...anchorOffsets].flatMap(([element, spacing]) => {
     if (!scrollContainer.contains(element)) return [element]
@@ -413,10 +428,7 @@ export function clearOffscreenConversationScrollCompensation(
   }
 
   if (removedAboveViewport > 0.5) {
-    setScrollTop(
-      scrollContainer,
-      scrollContainer.scrollTop - removedAboveViewport,
-    )
+    setScrollTop(scrollContainer, previousScrollTop - removedAboveViewport)
   }
   return remainingExtraPaddingBottom
 }

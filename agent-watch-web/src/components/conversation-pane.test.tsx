@@ -13,6 +13,11 @@ import { renderConversationMessage } from '#components/conversation-message'
 import { ConversationMessageRow } from '#components/conversation-message-row'
 import { ConversationPane } from '#components/conversation-pane'
 import { ConversationPaneView } from '#components/conversation-pane-view'
+import {
+  clearOffscreenConversationScrollCompensation,
+  type ConversationAnchorSpacing,
+  readConversationChildLayout,
+} from '#components/conversation-scroll-anchor'
 import { InboxConversationPanes } from '#components/inbox-conversation-panes'
 import { MarkdownSessionLinksProvider } from '#components/markdown-message'
 import { formatMessageTime } from '#components/message-time'
@@ -8754,11 +8759,20 @@ it('keeps the answered proposal in place as the conversation continues', () => {
   })
 })
 
-it('follows the bottom when an uncached conversation loads with an epoch', async () => {
-  const firstPageMessage: ChatItem = {
-    type: 'assistant',
-    text: 'The first page is ready.',
+it('follows the bottom when an uncached conversation with a pending card loads', async () => {
+  const pendingProposal: ChatItem = {
+    ...proposal,
+    seq: 64,
+    title: 'Choose a recovery strategy',
+    summary: 'Review the available recovery steps.',
   }
+  const firstPageMessages: ChatItem[] = [
+    ...Array.from({ length: 12 }, () => ({
+      type: 'assistant' as const,
+      text: 'Earlier history fills the conversation. '.repeat(10),
+    })),
+    pendingProposal,
+  ]
   let resolveMessages: ((response: Response) => void) | undefined
   const firstPageResponse = new Promise<Response>((resolve) => {
     resolveMessages = resolve
@@ -8795,9 +8809,9 @@ it('follows the bottom when an uncached conversation loads with an epoch', async
   await act(async () => {
     resolveMessages?.(
       jsonResponse(
-        messagesResponse([firstPageMessage], [], {
+        messagesResponse(firstPageMessages, [], {
           start: 0,
-          total: 1,
+          total: firstPageMessages.length,
           epoch: 'fixture-epoch-amber',
         }),
       ),
@@ -8805,11 +8819,192 @@ it('follows the bottom when an uncached conversation loads with an epoch', async
     await firstPageResponse
   })
   await waitForState(
-    () => container.querySelector('.chat-assistant-message') !== null,
+    () => container.querySelector('.chat-proposal-card') !== null,
   )
 
   const snapshot = () => ({ scrollTop: scroll.scrollTop })
   expect(snapshot()).toEqual({ scrollTop: 400 })
+})
+
+it('keeps a full-height resolved todo at the bottom without spacer padding', () => {
+  const earlierContext: ChatItem = {
+    type: 'assistant',
+    text: 'Earlier timeline context. '.repeat(40),
+  }
+  const pendingTodo: ChatItem = {
+    type: 'todo',
+    seq: 64,
+    title: 'Review the recovery plan',
+    detail: 'Review the recovery steps before proceeding. '.repeat(40),
+    completed: false,
+    resolution: null,
+    comment: null,
+  }
+  const messages = [earlierContext, pendingTodo]
+  renderConversationMessages(messages, 5)
+  const scroll = requireElement(
+    container.querySelector<HTMLDivElement>('.conversation-scroll'),
+  )
+  scroll.style.height = '360px'
+  scroll.style.flex = 'none'
+  renderConversationMessages(messages.slice(), 5)
+  act(() => {
+    requireElement(
+      scroll.querySelector<HTMLButtonElement>('.collapsible-text__toggle'),
+    ).click()
+  })
+  scrollToPosition(scroll, scroll.scrollHeight - scroll.clientHeight)
+  const pendingCardRect = requireElement(
+    scroll.querySelector<HTMLElement>('.chat-todo-card'),
+  ).getBoundingClientRect()
+  const earlierContextVisible = (() => {
+    const rect = requireElement(
+      scroll.querySelector<HTMLElement>('.chat-assistant-message'),
+    ).getBoundingClientRect()
+    const bounds = scroll.getBoundingClientRect()
+    return rect.top < bounds.bottom && rect.bottom > bounds.top
+  })()
+  const initialState = {
+    todoFillsViewport: pendingCardRect.height >= scroll.clientHeight,
+    todoVisible:
+      pendingCardRect.top < scroll.getBoundingClientRect().bottom &&
+      pendingCardRect.bottom > scroll.getBoundingClientRect().top,
+    earlierContextVisible,
+    atBottom:
+      scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight <= 24,
+  }
+
+  const resolvedTodo: ChatItem = {
+    ...pendingTodo,
+    completed: true,
+    resolution: 'completed',
+  }
+  renderConversationMessages([earlierContext, resolvedTodo], 5)
+
+  const card = requireElement(
+    scroll.querySelector<HTMLElement>('.chat-todo-card'),
+  )
+  const bounds = scroll.getBoundingClientRect()
+  const paddingBottom = Number.parseFloat(
+    window.getComputedStyle(scroll).paddingBottom,
+  )
+  const rowGap = Number.parseFloat(window.getComputedStyle(scroll).rowGap)
+  const snapshot = () => ({
+    cardVisible:
+      card.getBoundingClientRect().top < bounds.bottom &&
+      card.getBoundingClientRect().bottom > bounds.top,
+    blankSpaceAfterCard: Math.round(
+      bounds.bottom -
+        paddingBottom -
+        rowGap -
+        card.getBoundingClientRect().bottom,
+    ),
+    hasExtraPadding:
+      scroll.style.getPropertyValue(
+        '--conversation-anchor-extra-padding-bottom',
+      ) !== '',
+  })
+  const result = () => ({ initialState, afterResolution: snapshot() })
+  const expected = {
+    initialState: {
+      todoFillsViewport: true,
+      todoVisible: true,
+      earlierContextVisible: false,
+      atBottom: true,
+    },
+    afterResolution: {
+      cardVisible: true,
+      blankSpaceAfterCard: 0,
+      hasExtraPadding: false,
+    },
+  }
+  expect(result()).toEqual(expected)
+})
+
+it('preserves visible rows when clearing compensation above the scroll limit', () => {
+  const scroll = document.createElement('div')
+  scroll.style.cssText =
+    'display: flex; flex-direction: column; height: 200px; width: 400px; overflow-y: auto'
+  const children = Array.from({ length: 10 }, (_, index) => {
+    const child = document.createElement('div')
+    child.style.cssText =
+      'box-sizing: border-box; flex: 0 0 100px; height: 100px'
+    child.textContent = `Timeline row ${String(index)}`
+    scroll.append(child)
+    return child
+  })
+  const compensatedChild = children[1]
+  if (compensatedChild === undefined) throw new Error('Expected a timeline row')
+  compensatedChild.style.marginBlockStart = '120px'
+  const anchorOffsets = new Map<HTMLElement, ConversationAnchorSpacing>([
+    [
+      compensatedChild,
+      {
+        offset: 120,
+        baseMarginBlockStart: 0,
+        originalMarginBlockStart: '',
+      },
+    ],
+  ])
+  container.append(scroll)
+
+  scroll.scrollTop = scroll.scrollHeight - scroll.clientHeight - 30
+  const bounds = scroll.getBoundingClientRect()
+  const visibleBefore = children.flatMap((child) => {
+    const rect = child.getBoundingClientRect()
+    return rect.top < bounds.bottom && rect.bottom > bounds.top
+      ? [{ element: child, top: rect.top }]
+      : []
+  })
+  const compensationOffscreenBefore =
+    compensatedChild.getBoundingClientRect().bottom <= bounds.top
+  const distanceFromScrollLimit =
+    scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight
+  clearOffscreenConversationScrollCompensation(
+    scroll,
+    readConversationChildLayout(scroll),
+    anchorOffsets,
+    0,
+    new Set(),
+    false,
+    (element, scrollTop) => {
+      element.scrollTop = scrollTop
+    },
+  )
+  const visibleAfter = new Map(
+    children.flatMap((child) => {
+      const rect = child.getBoundingClientRect()
+      return rect.top < bounds.bottom && rect.bottom > bounds.top
+        ? [[child, rect.top] as const]
+        : []
+    }),
+  )
+
+  const actual = () => ({
+    compensationOffscreenBefore,
+    distanceFromScrollLimit,
+    compensationCleared:
+      compensatedChild.style.marginBlockStart === '' &&
+      anchorOffsets.size === 0,
+    visibleRowsBefore: visibleBefore.map(({ element }) =>
+      children.indexOf(element),
+    ),
+    visibleRowsStillVisible: visibleBefore.map(({ element }) =>
+      visibleAfter.has(element),
+    ),
+    visibleRowTopDeltas: visibleBefore.map(({ element, top }) =>
+      Math.round((visibleAfter.get(element) ?? top) - top),
+    ),
+  })
+  const expected = {
+    compensationOffscreenBefore: true,
+    distanceFromScrollLimit: 30,
+    compensationCleared: true,
+    visibleRowsBefore: [7, 8, 9],
+    visibleRowsStillVisible: [true, true, true],
+    visibleRowTopDeltas: [0, 0, 0],
+  }
+  expect(actual()).toEqual(expected)
 })
 
 it('keeps following when a hidden active tool becomes visible', () => {
@@ -12589,6 +12784,7 @@ it.each([
     resolution: 'completed',
     resolvedSeq: 63,
     cleanupTrigger: 'scroll',
+    resolutionScrollDistance: 10,
     requiresBottomPaddingCleanup: true,
   },
   {
@@ -12609,6 +12805,7 @@ it.each([
     resolvedSeq,
     cleanupTrigger,
     viewportHeight,
+    resolutionScrollDistance: requestedResolutionScrollDistance,
     requiresOffscreenCleanup,
     requiresBottomPaddingCleanup,
   }) => {
@@ -12661,7 +12858,7 @@ it.each([
     const dispatchUserScrollInput = () => {
       void act(() =>
         scroll.dispatchEvent(
-          new WheelEvent('wheel', { bubbles: true, deltaY: 1 }),
+          new WheelEvent('wheel', { bubbles: true, deltaY: -1 }),
         ),
       )
     }
@@ -12804,11 +13001,12 @@ it.each([
         ),
       ) || 0
     const requestedScrollDistance =
-      atBottom && isScrollCleanup && extraPaddingAfterServerResponse > 0
+      requestedResolutionScrollDistance ??
+      (atBottom && isScrollCleanup && extraPaddingAfterServerResponse > 0
         ? extraPaddingAfterServerResponse + 32
         : atBottom
           ? 40
-          : 20
+          : 20)
     const resolutionScrollDistance = Math.min(
       requestedScrollDistance,
       scroll.scrollTop,
@@ -12819,6 +13017,9 @@ it.each([
         getPendingCards()
           .find(({ title }) => title === anchorTitle)
           ?.element.getBoundingClientRect().top
+      if (atBottom && requestedResolutionScrollDistance !== undefined) {
+        moveScrollWithoutDispatch(scroll.scrollHeight - scroll.clientHeight)
+      }
       const anchorTopBeforeUserScroll = getAnchorTop()
       const previousScrollTop = scroll.scrollTop
       dispatchUserScrollInput()
@@ -12971,7 +13172,8 @@ it.each([
     }
     const afterUserScroll = getOverlappingChildren()
     const compensationAfterOffscreenScroll = getScrollCompensation()
-    const expectedBottomAfterResolutionScroll = wasAtBottom && !isScrollCleanup
+    const expectedBottomAfterResolutionScroll =
+      wasAtBottom && (!isScrollCleanup || resolutionScrollDistance <= 24)
     const result = () => ({
       remainingCardCount: before.length,
       remainedAtBottom: remainedAtBottomAfterStages,
@@ -13010,7 +13212,7 @@ it.each([
                   compensationStates[1]?.hasExtraPaddingBottom === true,
                 paddingRemovedAfterUserScroll:
                   compensationAfterResolutionScroll?.hasExtraPaddingBottom ===
-                  false,
+                  resolutionScrollDistance > 24,
                 positionPreserved: userScrollPreservedReadingPosition === true,
               }
             : null,
@@ -13074,7 +13276,7 @@ it.each([
           requiresBottomPaddingCleanup === true
             ? {
                 paddingPresentAfterServerResponse: true,
-                paddingRemovedAfterUserScroll: true,
+                paddingRemovedAfterUserScroll: resolutionScrollDistance > 24,
                 positionPreserved: true,
               }
             : null,
