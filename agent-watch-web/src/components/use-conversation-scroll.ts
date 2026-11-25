@@ -2,7 +2,7 @@ import { useCallback, useLayoutEffect, useRef } from 'react'
 
 import {
   clearConversationAnchorOffsets,
-  clearConversationScrollCompensation,
+  clearOffscreenConversationScrollCompensation,
   type ConversationAnchorSpacing,
   type ConversationChildLayout,
   hasConversationChildrenInsertedBeforePendingCards,
@@ -134,7 +134,7 @@ export function useConversationScroll({
       userScrollInputRef.current = false
       followLatestRef.current = isConversationAtBottom(scrollContainer)
     }
-    let currentChildLayout = readConversationChildLayout(scrollContainer)
+    const currentChildLayout = readConversationChildLayout(scrollContainer)
     const scrollBounds = scrollContainer.getBoundingClientRect()
     const hasVisiblePendingCard = previousChildLayout.some(
       ({ cardResolution, top, height }) =>
@@ -196,33 +196,26 @@ export function useConversationScroll({
         (message, index) => message !== previousMessages.messages[index],
       )
     previousMessagesRef.current = { messages, start, end, epoch }
-
-    const hasScrollCompensation = hasConversationScrollCompensation(
-      scrollContainer,
-      conversationAnchorOffsetsRef.current,
-      anchorExtraPaddingBottomRef.current,
-    )
-    if (appendedMessages && hasScrollCompensation) {
-      clearConversationScrollCompensation(
-        scrollContainer,
-        previousChildLayout,
-        conversationAnchorOffsetsRef.current,
-        recentResolutionCardsRef.current,
-        followLatestRef.current,
-        setAnchoredScrollTop,
-      )
-      anchorExtraPaddingBottomRef.current = 0
-      previousChildLayoutRef.current =
-        readConversationChildLayout(scrollContainer)
-      previousScrollTopRef.current = scrollContainer.scrollTop
-      followLatestRef.current = isConversationAtBottom(scrollContainer)
-      if (followLatestRef.current && !loadingOlder) onPruneOldMessages()
-      return
-    }
-
-    if (conversationLayoutChanged && pendingScrollAnchorRef.current === null) {
-      clearConversationAnchorOffsets(conversationAnchorOffsetsRef.current)
-      currentChildLayout = readConversationChildLayout(scrollContainer)
+    const clearOffscreenCompensation = () => {
+      if (
+        !hasConversationScrollCompensation(
+          scrollContainer,
+          conversationAnchorOffsetsRef.current,
+          anchorExtraPaddingBottomRef.current,
+        )
+      ) {
+        return
+      }
+      anchorExtraPaddingBottomRef.current =
+        clearOffscreenConversationScrollCompensation(
+          scrollContainer,
+          readConversationChildLayout(scrollContainer),
+          conversationAnchorOffsetsRef.current,
+          anchorExtraPaddingBottomRef.current,
+          recentResolutionCardsRef.current,
+          false,
+          setAnchoredScrollTop,
+        )
     }
 
     const anchor = pendingScrollAnchorRef.current
@@ -250,7 +243,6 @@ export function useConversationScroll({
           readConversationChildLayout(scrollContainer),
           recentResolutionCards,
           preservePendingCards,
-          followLatestRef.current,
         )
         preserveConversationChildren(
           previousChildLayout,
@@ -262,6 +254,7 @@ export function useConversationScroll({
           conversationAnchorOffsetsRef.current,
         )
       }
+      clearOffscreenCompensation()
       previousChildLayoutRef.current =
         readConversationChildLayout(scrollContainer)
       previousScrollTopRef.current = scrollContainer.scrollTop
@@ -269,22 +262,18 @@ export function useConversationScroll({
     }
 
     if (conversationLayoutChanged) {
-      const wasAtBottom =
-        followLatestRef.current &&
-        !(conversationResolutionChanged && userLayoutChangeRef.current)
       anchorExtraPaddingBottomRef.current = preserveConversationScrollPosition({
         scrollContainer,
         previous: previousChildLayout,
         current: currentChildLayout,
         recentResolutionCards,
         preferPendingCards: preservePendingCards,
-        followLatest: followLatestRef.current,
-        wasAtBottom,
         previousScrollTop: previousScrollTopRef.current,
         extraPaddingBottom: anchorExtraPaddingBottomRef.current,
         setScrollTop: setAnchoredScrollTop,
         anchorOffsets: conversationAnchorOffsetsRef.current,
       })
+      clearOffscreenCompensation()
       previousChildLayoutRef.current =
         readConversationChildLayout(scrollContainer)
       previousScrollTopRef.current = scrollContainer.scrollTop
@@ -313,16 +302,11 @@ export function useConversationScroll({
       epoch !== previousMessages.epoch
     ) {
       if (!followLatestRef.current) {
+        clearOffscreenCompensation()
         previousChildLayoutRef.current =
           readConversationChildLayout(scrollContainer)
         previousScrollTopRef.current = scrollContainer.scrollTop
         return
-      }
-      if (appendedMessages && anchorExtraPaddingBottomRef.current > 0) {
-        scrollContainer.style.removeProperty(
-          '--conversation-anchor-extra-padding-bottom',
-        )
-        anchorExtraPaddingBottomRef.current = 0
       }
       if (!loadingOlder) {
         const scrollTop =
@@ -330,11 +314,13 @@ export function useConversationScroll({
         scrollContainer.scrollTop = scrollTop
         onPruneOldMessages()
       }
+      clearOffscreenCompensation()
       previousChildLayoutRef.current =
         readConversationChildLayout(scrollContainer)
       previousScrollTopRef.current = scrollContainer.scrollTop
       return
     }
+    clearOffscreenCompensation()
     previousChildLayoutRef.current =
       readConversationChildLayout(scrollContainer)
     previousScrollTopRef.current = scrollContainer.scrollTop
@@ -401,15 +387,16 @@ export function useConversationScroll({
       )
     ) {
       const wasAtBottom = isConversationAtBottom(scrollContainer)
-      clearConversationScrollCompensation(
-        scrollContainer,
-        readConversationChildLayout(scrollContainer),
-        conversationAnchorOffsetsRef.current,
-        recentResolutionCardsRef.current,
-        wasAtBottom,
-        setAnchoredScrollTop,
-      )
-      anchorExtraPaddingBottomRef.current = 0
+      anchorExtraPaddingBottomRef.current =
+        clearOffscreenConversationScrollCompensation(
+          scrollContainer,
+          readConversationChildLayout(scrollContainer),
+          conversationAnchorOffsetsRef.current,
+          anchorExtraPaddingBottomRef.current,
+          recentResolutionCardsRef.current,
+          wasAtBottom,
+          setAnchoredScrollTop,
+        )
     }
     const pendingAnchor = pendingScrollAnchorRef.current
     if (pendingAnchor !== null) {
