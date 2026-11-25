@@ -1356,6 +1356,114 @@ Please close the handle.
   expect(savedBodies).toEqual([expectedBody])
 })
 
+it('shows wrapped mobile review replies without an inner textarea scroll', async () => {
+  const localContainer = document.createElement('div')
+  document.body.append(localContainer)
+  const localRoot = createRoot(localContainer)
+  const summary = {
+    id: 'fixture-review-replies',
+    kind: 'review_replies' as const,
+    target: {
+      repository: 'example/web-app',
+      pullRequestNumber: 2049,
+      threadCount: 1,
+    },
+    startedAt: Date.parse('2026-01-15T10:30:00Z'),
+    isEditor: true,
+    canSave: true,
+    canFinish: true,
+  }
+  const initialBody = `<!-- thread: THREAD_sample_1 path: src/preflight.ts:42 author: @sample-reviewer -->
+- [ ] resolve
+<!-- diff -->
+\`\`\`diff
+@@ -39,5 +39,7 @@
+   const target = msg.target;
+-  if (!target) return fail('no target');
+>+ if (target == null) {
++    return fail('no target');
++  }
+\`\`\`
+<!-- /diff -->
+<!-- comment: @sample-reviewer 2026-01-15T10:30:00Z -->
+Could this accept null?
+<!-- /comment -->
+Initial reply.`
+  const editedReply = `This reply grows after it is edited on a phone.
+Every wrapped line remains visible inside the field.
+The reply field grows to fit long lines at the current width.
+Further viewport changes keep the complete text readable.
+No later step needs to repeat this validation.
+The tests cover the boundary values and expected errors.
+The result stays consistent across the related handlers.
+The caller can follow the same rule for each input.
+This reply remains readable when its lines wrap on a phone.`
+
+  function Harness() {
+    const [body, setBody] = useState(initialBody)
+    return (
+      <div
+        className="session-status-panel"
+        data-size="phone"
+        style={{ width: '390px', height: '844px', display: 'flex' }}
+      >
+        <ReviewDocumentPanel
+          summary={summary}
+          frontmatter={{ submit: false }}
+          body={body}
+          isMobile
+          onBodyChange={setBody}
+        />
+      </div>
+    )
+  }
+
+  try {
+    act(() => {
+      localRoot.render(<Harness />)
+    })
+
+    const content = localContainer.querySelector<HTMLElement>(
+      '.review-document-content',
+    )
+    const preview = localContainer.querySelector<HTMLElement>(
+      '.review-document-preview-column',
+    )
+    const reply = localContainer.querySelector<HTMLTextAreaElement>(
+      '.review-document-thread-reply textarea',
+    )
+    if (content === null || preview === null || reply === null) {
+      throw new Error('The mobile review reply preview was not rendered.')
+    }
+
+    await act(async () => {
+      await page
+        .getByRole('textbox', { name: 'Your reply to src/preflight.ts' })
+        .fill(editedReply)
+    })
+
+    const snapshot = () => ({
+      contentCanScroll: content.scrollHeight > content.clientHeight,
+      previewOverflowY: getComputedStyle(preview).overflowY,
+      replyOverflowY: getComputedStyle(reply).overflowY,
+      replyTextFits: reply.scrollHeight <= reply.clientHeight,
+      replyValue: reply.value,
+    })
+    expect(snapshot()).toEqual({
+      contentCanScroll: true,
+      previewOverflowY: 'visible',
+      replyOverflowY: 'hidden',
+      replyTextFits: true,
+      replyValue: editedReply,
+    })
+  } finally {
+    act(() => {
+      localRoot.unmount()
+    })
+    localContainer.remove()
+  }
+})
+
 it('shows flat tabs with square editor and queued markers for multiple drafts', () => {
   const summaries = [
     {
@@ -1707,26 +1815,197 @@ it('keeps the mobile preview usable when metadata fills the viewport', async () 
   const bodyEditor = container.querySelector<HTMLElement>(
     '.review-document-body-editor',
   )
+  const content = container.querySelector<HTMLElement>(
+    '.review-document-content',
+  )
   const metadata = container.querySelector<HTMLElement>(
     '.review-document-frontmatter',
   )
   const previewColumn = container.querySelector<HTMLElement>(
     '.review-document-preview-column',
   )
-  if (bodyEditor === null || metadata === null || previewColumn === null) {
+  if (
+    bodyEditor === null ||
+    content === null ||
+    metadata === null ||
+    previewColumn === null
+  ) {
     throw new Error('The mobile review editor layout was not rendered.')
   }
 
   const snapshot = () => ({
-    bodyEditorHasRoom: bodyEditor.getBoundingClientRect().height >= 320,
-    previewColumnHasRoom: previewColumn.getBoundingClientRect().height >= 240,
-    metadataCanScroll: metadata.scrollHeight > metadata.clientHeight,
+    contentOverflowY: getComputedStyle(content).overflowY,
+    contentCanScroll: content.scrollHeight > content.clientHeight,
+    metadataOverflowY: getComputedStyle(metadata).overflowY,
+    previewOverflowY: getComputedStyle(previewColumn).overflowY,
+    bodyEditorCanGrow: bodyEditor.scrollHeight <= content.scrollHeight,
   })
   expect(snapshot()).toEqual({
-    bodyEditorHasRoom: true,
-    previewColumnHasRoom: true,
-    metadataCanScroll: true,
+    contentOverflowY: 'auto',
+    contentCanScroll: true,
+    metadataOverflowY: 'visible',
+    previewOverflowY: 'visible',
+    bodyEditorCanGrow: true,
   })
+})
+
+it.each([
+  {
+    view: 'preview' as const,
+    contentOverflowY: 'auto',
+    contentCanScroll: true,
+    metadataOverflowY: 'visible',
+    metadataCanScroll: false,
+  },
+  {
+    view: 'edit' as const,
+    contentOverflowY: 'hidden',
+    contentCanScroll: false,
+    metadataOverflowY: 'auto',
+    metadataCanScroll: true,
+  },
+])(
+  'keeps long issue metadata reachable in mobile $view mode',
+  async ({
+    view,
+    contentOverflowY,
+    contentCanScroll,
+    metadataOverflowY,
+    metadataCanScroll,
+  }) => {
+    await page.viewport(390, 844)
+    container.style.width = '390px'
+    container.style.height = '844px'
+    container.style.display = 'flex'
+    root = createRoot(container)
+    act(() =>
+      root?.render(
+        <div
+          className="session-status-panel"
+          data-size="phone"
+          style={{ width: '390px', height: '844px', display: 'flex' }}
+        >
+          <ReviewDocumentPanel
+            summary={{
+              id: 'fixture-issue-body',
+              kind: 'issue_body',
+              target: {
+                repository: 'example/web-app',
+                issueNumber: 418,
+                title: 'Configure retry limits',
+              },
+              startedAt: Date.now(),
+              isEditor: true,
+              canSave: true,
+              canFinish: true,
+            }}
+            frontmatter={{
+              title: 'Configure retry limits',
+              labels: Array.from(
+                { length: 40 },
+                (_, index) => `sample-label-${String(index + 1)}`,
+              ),
+              submit: false,
+            }}
+            body="## Summary\n\nThe retry limit can be configured."
+            isMobile
+            view={view}
+          />
+        </div>,
+      ),
+    )
+
+    const content = container.querySelector<HTMLElement>(
+      '.review-document-content',
+    )
+    const metadata = container.querySelector<HTMLElement>(
+      '.review-document-issue-frontmatter',
+    )
+    if (content === null || metadata === null) {
+      throw new Error('The mobile issue metadata layout was not rendered.')
+    }
+
+    const snapshot = () => ({
+      contentOverflowY: getComputedStyle(content).overflowY,
+      contentCanScroll: content.scrollHeight > content.clientHeight,
+      metadataOverflowY: getComputedStyle(metadata).overflowY,
+      metadataCanScroll: metadata.scrollHeight > metadata.clientHeight,
+    })
+    expect(snapshot()).toEqual({
+      contentOverflowY,
+      contentCanScroll,
+      metadataOverflowY,
+      metadataCanScroll,
+    })
+  },
+)
+
+it('keeps overflowing issue preview content horizontally reachable on mobile', () => {
+  const localContainer = document.createElement('div')
+  document.body.append(localContainer)
+  const localRoot = createRoot(localContainer)
+  const overflowingLabel = 'samplelabel'.repeat(24)
+
+  try {
+    act(() => {
+      localRoot.render(
+        <div
+          className="session-status-panel"
+          data-size="phone"
+          style={{ width: '390px', height: '844px', display: 'flex' }}
+        >
+          <ReviewDocumentPanel
+            summary={{
+              id: 'fixture-issue-body',
+              kind: 'issue_body',
+              target: {
+                repository: 'example/web-app',
+                issueNumber: 418,
+                title: 'Configure retry limits',
+              },
+              startedAt: Date.parse('2026-01-15T10:30:00Z'),
+              isEditor: true,
+              canSave: true,
+              canFinish: true,
+            }}
+            frontmatter={{
+              title: 'Configure retry limits',
+              labels: [overflowingLabel],
+              submit: false,
+            }}
+            body="## Summary\n\nDetails."
+            isMobile
+            view="preview"
+          />
+        </div>,
+      )
+    })
+
+    const content = localContainer.querySelector<HTMLElement>(
+      '.review-document-content',
+    )
+    if (content === null) {
+      throw new Error('The mobile issue preview was not rendered.')
+    }
+
+    content.scrollLeft = content.scrollWidth
+    const snapshot = () => ({
+      contentHasOverflowX: content.scrollWidth > content.clientWidth,
+      contentOverflowX: getComputedStyle(content).overflowX,
+      canReachRightEdge:
+        content.scrollLeft === content.scrollWidth - content.clientWidth,
+    })
+    expect(snapshot()).toEqual({
+      contentHasOverflowX: true,
+      contentOverflowX: 'auto',
+      canReachRightEdge: true,
+    })
+  } finally {
+    act(() => {
+      localRoot.unmount()
+    })
+    localContainer.remove()
+  }
 })
 
 it('keeps the approval checkbox available for a new issue draft', async () => {

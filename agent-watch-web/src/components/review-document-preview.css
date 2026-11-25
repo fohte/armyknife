@@ -299,7 +299,9 @@
   font-size: 14px;
 }
 
-.session-status-panel[data-size='phone'] .review-document-issue-frontmatter {
+.session-status-panel[data-size='phone']
+  .review-document-panel[data-view='edit']
+  .review-document-issue-frontmatter {
   max-height: 45%;
   flex: 0 1 auto;
   padding-inline: 16px;

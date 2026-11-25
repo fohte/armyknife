@@ -2,7 +2,7 @@ import '#components/review-document-preview.css'
 import '#components/review-document-review-thread-preview.css'
 
 import { File } from 'lucide-react'
-import { useState } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 
 import { MarkdownMessage } from '#components/markdown-message'
 import {
@@ -332,6 +332,57 @@ function readableTime(value: string | null) {
   return date === undefined || time === undefined ? value : `${date} ${time}`
 }
 
+function resizeTextarea(textarea: HTMLTextAreaElement) {
+  const borderHeight = textarea.offsetHeight - textarea.clientHeight
+  textarea.style.height = 'auto'
+  textarea.style.height = `${String(textarea.scrollHeight + borderHeight)}px`
+}
+
+function ReviewThreadReplyTextarea({
+  canSave,
+  path,
+  reply,
+  onChange,
+}: {
+  canSave: boolean
+  path: string
+  reply: string
+  onChange: (reply: string) => void
+}) {
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  useLayoutEffect(() => {
+    const textarea = textareaRef.current
+    if (textarea === null || typeof ResizeObserver === 'undefined') return
+
+    const resizeObserver = new ResizeObserver(() => {
+      resizeTextarea(textarea)
+    })
+    resizeObserver.observe(textarea)
+    return () => {
+      resizeObserver.disconnect()
+    }
+  }, [])
+
+  useLayoutEffect(() => {
+    const textarea = textareaRef.current
+    if (textarea !== null) resizeTextarea(textarea)
+  }, [reply])
+
+  return (
+    <textarea
+      aria-label={`Your reply to ${path}`}
+      disabled={!canSave}
+      ref={textareaRef}
+      rows={Math.max(1, reply.split('\n').length)}
+      value={reply}
+      onChange={(event) => {
+        onChange(event.currentTarget.value)
+      }}
+    />
+  )
+}
+
 export function ReviewDocumentPreview({
   summary,
   body,
@@ -438,15 +489,14 @@ export function ReviewDocumentPreview({
               ))}
               <label className="review-document-thread-reply">
                 <span>Your reply</span>
-                <textarea
-                  aria-label={`Your reply to ${thread.path}`}
-                  disabled={!canSave}
-                  rows={Math.max(1, thread.reply.split('\n').length)}
-                  value={thread.reply}
-                  onChange={(event) => {
+                <ReviewThreadReplyTextarea
+                  canSave={canSave}
+                  path={thread.path}
+                  reply={thread.reply}
+                  onChange={(reply) => {
                     onBodyChange(
                       updateReviewThread(body, thread.id, {
-                        reply: event.currentTarget.value,
+                        reply,
                       }),
                     )
                   }}
