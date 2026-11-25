@@ -10,11 +10,9 @@ use serde_json::Value;
 
 use crate::commands::agent::store;
 use crate::commands::agent::types::{Engine, Session};
+use crate::shared::env_var::EnvVars;
 
 use self::model::{ModelIdentity, coauthor_trailer};
-
-const CLAUDE_CODE_SESSION_ID_ENV: &str = "CLAUDE_CODE_SESSION_ID";
-const CODEX_SESSION_ID_ENV: &str = "CODEX_SESSION_ID";
 
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
 enum Provider {
@@ -111,7 +109,7 @@ fn print_json(value: &Value) -> Result<()> {
 }
 
 fn run_prepare_commit_msg(args: &GitHookArgs) -> Result<()> {
-    let session_id = session_id_from_env();
+    let session_id = EnvVars::load().own_session_id();
     run_prepare_commit_msg_with_sources(args, session_id.as_deref(), store::load_session)
 }
 
@@ -158,22 +156,6 @@ fn prepare_message_file(
     })?;
     let updated = prepare(&message_text)?;
     write_message_atomically(&args.message_file, &updated)
-}
-
-fn session_id_from_env() -> Option<String> {
-    resolve_session_id(
-        std::env::var(CLAUDE_CODE_SESSION_ID_ENV).ok(),
-        std::env::var(CODEX_SESSION_ID_ENV).ok(),
-    )
-}
-
-fn resolve_session_id(
-    claude_session_id: Option<String>,
-    codex_session_id: Option<String>,
-) -> Option<String> {
-    claude_session_id
-        .filter(|session_id| !session_id.is_empty())
-        .or_else(|| codex_session_id.filter(|session_id| !session_id.is_empty()))
 }
 
 fn session_coauthor_trailer(session: &Session) -> Option<String> {
@@ -238,7 +220,7 @@ mod tests {
     use std::io::Write;
 
     use super::{
-        AttributionCommands, GitHookArgs, Provider, process_pre_tool_use, resolve_session_id, run,
+        AttributionCommands, GitHookArgs, Provider, process_pre_tool_use, run,
         run_prepare_commit_msg_with_sources,
     };
     use crate::commands::agent::types::{Engine, Session};
@@ -251,33 +233,6 @@ mod tests {
     #[fixture]
     fn hook_dir() -> TempDir {
         tempfile::tempdir().expect("create temporary hook directory")
-    }
-
-    #[rstest]
-    #[case::claude_session(Some("fixture-claude-session"), None, Some("fixture-claude-session"))]
-    #[case::codex_session(None, Some("fixture-codex-session"), Some("fixture-codex-session"))]
-    #[case::claude_session_takes_precedence(
-        Some("fixture-claude-session"),
-        Some("fixture-codex-session"),
-        Some("fixture-claude-session")
-    )]
-    #[case::empty_claude_id_falls_back(
-        Some(""),
-        Some("fixture-codex-session"),
-        Some("fixture-codex-session")
-    )]
-    #[case::no_session_id(None, None, None)]
-    fn session_id_resolution_uses_available_provider_id(
-        #[case] claude_session_id: Option<&str>,
-        #[case] codex_session_id: Option<&str>,
-        #[case] expected: Option<&str>,
-    ) {
-        let actual = resolve_session_id(
-            claude_session_id.map(str::to_owned),
-            codex_session_id.map(str::to_owned),
-        );
-
-        assert_eq!(actual.as_deref(), expected);
     }
 
     fn session(engine: Engine, model: Option<&str>, effort: Option<&str>) -> Session {

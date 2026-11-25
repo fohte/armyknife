@@ -119,12 +119,15 @@ fn withdraw_proposal(
 }
 
 fn add() -> Result<()> {
+    add_from_input(std::io::stdin().lock())
+}
+
+fn add_from_input(input: impl Read) -> Result<()> {
     let session_id = EnvVars::load()
         .own_session_id()
         .ok_or(CcError::SelfSessionUnknown)?;
     let sessions_dir = store::sessions_dir()?;
-    let stdin = std::io::stdin();
-    let seq = record_proposal(&sessions_dir, &session_id, stdin.lock())?;
+    let seq = record_proposal(&sessions_dir, &session_id, input)?;
     println!("Recorded proposal {seq}");
     Ok(())
 }
@@ -175,7 +178,7 @@ mod tests {
     use serde_json::Value;
     use tempfile::TempDir;
 
-    use super::{ProposalCommands, record_proposal, withdraw_proposal};
+    use super::{ProposalCommands, add_from_input, record_proposal, withdraw_proposal};
     use crate::commands::agent::store::{self, ProposalResolution};
 
     #[derive(Parser)]
@@ -189,16 +192,16 @@ mod tests {
         tempfile::tempdir().expect("temporary sessions directory should be created")
     }
 
-    fn stored_proposal_bodies(sessions_dir: &Path) -> Vec<String> {
+    fn stored_proposal_bodies(sessions_dir: &Path, session_id: &str) -> Vec<String> {
         crate::commands::agent::store::session_store_revision_from(sessions_dir)
             .expect("session store should initialize");
         let connection = rusqlite::Connection::open(sessions_dir.join("sessions.db"))
             .expect("session database should open");
         let mut statement = connection
-            .prepare("SELECT body FROM agent_proposal WHERE session_id = 'session-a' ORDER BY seq")
+            .prepare("SELECT body FROM agent_proposal WHERE session_id = ?1 ORDER BY seq")
             .expect("proposal query should prepare");
         statement
-            .query_map([], |row| row.get(0))
+            .query_map([session_id], |row| row.get(0))
             .expect("proposals should query")
             .collect::<rusqlite::Result<Vec<_>>>()
             .expect("proposal bodies should load")
@@ -319,7 +322,7 @@ mod tests {
             std::io::Cursor::new(input),
         )
         .expect("valid proposal should save");
-        let bodies = stored_proposal_bodies(sessions_dir.path())
+        let bodies = stored_proposal_bodies(sessions_dir.path(), "session-a")
             .iter()
             .map(|body| serde_json::from_str::<Value>(body))
             .collect::<serde_json::Result<Vec<_>>>()
@@ -389,12 +392,43 @@ mod tests {
             "session-a",
             std::io::Cursor::new(input),
         );
-        let proposals = stored_proposal_bodies(sessions_dir.path());
+        let proposals = stored_proposal_bodies(sessions_dir.path(), "session-a");
         let error = result.err().map(|error| format!("{error:#}"));
 
         assert_eq!(
             (error, proposals),
             (Some(expected_error.to_string()), Vec::new())
+        );
+    }
+
+    #[rstest]
+    fn add_records_a_proposal_for_the_claude_code_session_id() {
+        let cache_home = tempfile::tempdir().expect("temporary cache home should be created");
+        let sessions_dir = cache_home.path().join("armyknife/cc/sessions");
+        let cache_home_path = cache_home
+            .path()
+            .to_str()
+            .expect("cache path should be valid UTF-8");
+        let input =
+            r#"{"title":"Pick a format","options":[{"label":"Format A"},{"label":"Format B"}]}"#;
+
+        temp_env::with_vars(
+            [
+                ("XDG_CACHE_HOME", Some(cache_home_path)),
+                ("ARMYKNIFE_SESSION_ID", None::<&str>),
+                ("CLAUDE_CODE_SESSION_ID", Some("claude-session")),
+                ("CODEX_SESSION_ID", None::<&str>),
+            ],
+            || {
+                add_from_input(std::io::Cursor::new(input))
+                    .expect("proposal should be saved for the Claude Code session");
+            },
+        );
+
+        let actual = stored_proposal_bodies(&sessions_dir, "claude-session");
+        assert_eq!(
+            actual,
+            vec![r#"{"title":"Pick a format","summary":null,"options":[{"label":"Format A","description":null,"pros":[],"cons":[],"recommended":false},{"label":"Format B","description":null,"pros":[],"cons":[],"recommended":false}]}"#.to_string()],
         );
     }
 }
