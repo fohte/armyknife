@@ -5,9 +5,16 @@ export type ConversationChildLayout = {
   cardResolution: 'pending' | 'resolved' | null
 }
 
-export type ConversationAnchorOffset = {
+export type ConversationAnchorSpacing = {
   offset: number
-  originalTranslate: string
+  baseMarginBlockStart: number
+  originalMarginBlockStart: string
+}
+
+export type ConversationScrollAnchor = {
+  element: HTMLElement
+  top: number
+  scrollTop: number
 }
 
 export function readConversationChildLayout(
@@ -107,48 +114,58 @@ export function preserveConversationChildPosition(
   previous: readonly ConversationChildLayout[],
   current: readonly ConversationChildLayout[],
   recentResolutionCards: ReadonlySet<HTMLElement>,
-): number | null {
+  preferPendingCards: boolean,
+  followLatest: boolean,
+): ConversationScrollAnchor | null {
   const bounds = scrollContainer.getBoundingClientRect()
   const currentByElement = new Map(
     current.map((child) => [child.element, child]),
   )
-  const previousSharedElements = previous
-    .filter(({ element }) => currentByElement.has(element))
-    .map(({ element }) => element)
-  const previousOrder = new Map(
-    previousSharedElements.map((element, index) => [element, index]),
-  )
-  const currentOrder = new Map(
-    current
-      .filter(({ element }) => previousOrder.has(element))
-      .map(({ element }, index) => [element, index]),
-  )
-  const hasKeptItsRelativeOrder = (element: HTMLElement) =>
-    previousOrder.get(element) === currentOrder.get(element)
-  const isVisible = ({ top, height }: ConversationChildLayout) =>
+  const isVisible = ({
+    top,
+    height,
+  }: Pick<ConversationChildLayout, 'top' | 'height'>) =>
     top < bounds.bottom && top + height > bounds.top
-  const anchor =
-    previous.findLast(({ element, height, ...layout }) => {
-      const currentChild = currentByElement.get(element)
-      return (
-        currentChild !== undefined &&
-        !recentResolutionCards.has(element) &&
-        hasKeptItsRelativeOrder(element) &&
-        isVisible({ element, height, ...layout }) &&
-        Math.abs(currentChild.height - height) <= 0.5
-      )
-    }) ??
-    previous.findLast(
-      ({ element, ...layout }) =>
-        currentByElement.has(element) &&
-        !recentResolutionCards.has(element) &&
-        isVisible({ element, ...layout }),
-    )
-  if (anchor === undefined) return null
-  const currentAnchor = currentByElement.get(anchor.element)
-  if (currentAnchor === undefined) return null
-  const offset = currentAnchor.top - anchor.top
-  return Math.abs(offset) > 0.5 ? scrollContainer.scrollTop + offset : null
+  const pendingAnchors = previous.filter(({ element, ...layout }) => {
+    const currentChild = currentByElement.get(element)
+    if (
+      currentChild === undefined ||
+      recentResolutionCards.has(element) ||
+      !isPendingConversationCard(element)
+    ) {
+      return false
+    }
+    return followLatest || isVisible(layout)
+  })
+  const candidates =
+    preferPendingCards && pendingAnchors.length > 0
+      ? pendingAnchors
+      : previous.filter(({ element, ...layout }) => {
+          const currentChild = currentByElement.get(element)
+          return (
+            currentChild !== undefined &&
+            !recentResolutionCards.has(element) &&
+            isVisible(layout)
+          )
+        })
+  const anchor = candidates.reduce<{
+    child: ConversationChildLayout
+    offset: number
+  } | null>((maximum, child) => {
+    const currentChild = currentByElement.get(child.element)
+    const offset =
+      currentChild === undefined ? null : currentChild.top - child.top
+    return offset === null || (maximum !== null && offset <= maximum.offset)
+      ? maximum
+      : { child, offset }
+  }, null)
+  return anchor === null
+    ? null
+    : {
+        element: anchor.child.element,
+        top: anchor.child.top,
+        scrollTop: scrollContainer.scrollTop + anchor.offset,
+      }
 }
 
 export function preserveConversationChildren(
@@ -156,58 +173,65 @@ export function preserveConversationChildren(
   current: readonly ConversationChildLayout[],
   scrollContainer: HTMLDivElement,
   recentResolutionCards: ReadonlySet<HTMLElement>,
-  anchorOffsets: Map<HTMLElement, ConversationAnchorOffset>,
+  preferPendingCards: boolean,
+  anchorOffsets: Map<HTMLElement, ConversationAnchorSpacing>,
 ) {
   const bounds = scrollContainer.getBoundingClientRect()
-  const currentByElement = new Map(
-    current.map((child) => [child.element, child]),
+  const previousByElement = new Map(
+    previous.map((child) => [child.element, child]),
   )
-  for (const child of previous) {
-    const visible =
-      child.top < bounds.bottom && child.top + child.height > bounds.top
+  for (const child of current) {
+    const previousChild = previousByElement.get(child.element)
     if (
-      (!visible && !isPendingConversationCard(child.element)) ||
+      previousChild === undefined ||
       recentResolutionCards.has(child.element)
     ) {
       continue
     }
-    const currentChild = currentByElement.get(child.element)
-    if (currentChild === undefined) continue
+    const isPending = isPendingConversationCard(child.element)
+    const visible =
+      previousChild.top < bounds.bottom &&
+      previousChild.top + previousChild.height > bounds.top
+    if (!visible && !(preferPendingCards && isPending)) continue
+
     const previousOffset = anchorOffsets.get(child.element)
-    if (previousOffset === undefined) {
-      if (window.getComputedStyle(child.element).translate !== 'none') continue
-      if (Math.abs(child.top - currentChild.top) <= 0.5) continue
-      const offset = child.top - currentChild.top
-      anchorOffsets.set(child.element, {
-        offset,
-        originalTranslate: child.element.style.translate,
-      })
-      child.element.style.translate = `0 ${String(offset)}px`
-      continue
-    }
-    const offset = previousOffset.offset + child.top - currentChild.top
+    const offset =
+      (previousOffset?.offset ?? 0) +
+      previousChild.top -
+      child.element.getBoundingClientRect().top
     if (Math.abs(offset) <= 0.5) {
-      restoreConversationAnchorOffset(child.element, previousOffset)
-      anchorOffsets.delete(child.element)
+      if (previousOffset !== undefined) {
+        restoreConversationAnchorSpacing(child.element, previousOffset)
+        anchorOffsets.delete(child.element)
+      }
       continue
     }
-    anchorOffsets.set(child.element, { ...previousOffset, offset })
-    child.element.style.translate = `0 ${String(offset)}px`
+    if (offset < 0) continue
+    const spacing = previousOffset ?? {
+      offset: 0,
+      baseMarginBlockStart:
+        Number.parseFloat(
+          window.getComputedStyle(child.element).marginBlockStart,
+        ) || 0,
+      originalMarginBlockStart: child.element.style.marginBlockStart,
+    }
+    anchorOffsets.set(child.element, { ...spacing, offset })
+    child.element.style.marginBlockStart = `${String(spacing.baseMarginBlockStart + offset)}px`
   }
 }
 
 export function clearConversationAnchorOffset(
   element: HTMLElement,
-  anchorOffsets: Map<HTMLElement, ConversationAnchorOffset>,
+  anchorOffsets: Map<HTMLElement, ConversationAnchorSpacing>,
 ) {
   const offset = anchorOffsets.get(element)
   if (offset === undefined) return
-  restoreConversationAnchorOffset(element, offset)
+  restoreConversationAnchorSpacing(element, offset)
   anchorOffsets.delete(element)
 }
 
 export function clearConversationAnchorOffsets(
-  anchorOffsets: Map<HTMLElement, ConversationAnchorOffset>,
+  anchorOffsets: Map<HTMLElement, ConversationAnchorSpacing>,
 ) {
   for (const element of anchorOffsets.keys()) {
     clearConversationAnchorOffset(element, anchorOffsets)
@@ -233,13 +257,13 @@ function isPendingConversationCard(element: HTMLElement): boolean {
   )
 }
 
-function restoreConversationAnchorOffset(
+function restoreConversationAnchorSpacing(
   element: HTMLElement,
-  offset: ConversationAnchorOffset,
+  offset: ConversationAnchorSpacing,
 ) {
-  if (offset.originalTranslate === '') {
-    element.style.removeProperty('translate')
+  if (offset.originalMarginBlockStart === '') {
+    element.style.removeProperty('margin-block-start')
   } else {
-    element.style.translate = offset.originalTranslate
+    element.style.marginBlockStart = offset.originalMarginBlockStart
   }
 }

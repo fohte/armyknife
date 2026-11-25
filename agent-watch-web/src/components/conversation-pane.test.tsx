@@ -12603,6 +12603,37 @@ it.each([
     const atBottomNow = () =>
       scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight <= 24
     const wasAtBottom = atBottomNow()
+    const getLayoutIntegrity = () => {
+      const children = Array.from(scroll.children).filter(
+        (child): child is HTMLElement => child instanceof HTMLElement,
+      )
+      const overlappingChildren: string[] = []
+      const describeChild = (child: HTMLElement) =>
+        child.querySelector('h3')?.textContent ?? child.textContent.slice(0, 40)
+      for (const [leftIndex, left] of children.entries()) {
+        const leftRect = left.getBoundingClientRect()
+        for (const [rightIndex, right] of children.entries()) {
+          if (rightIndex <= leftIndex) continue
+          const rightRect = right.getBoundingClientRect()
+          if (
+            leftRect.left < rightRect.right &&
+            rightRect.left < leftRect.right &&
+            leftRect.top < rightRect.bottom &&
+            rightRect.top < leftRect.bottom
+          ) {
+            overlappingChildren.push(
+              `${describeChild(left)}:${String(Math.round(leftRect.top))} overlaps ${describeChild(right)}:${String(Math.round(rightRect.top))}`,
+            )
+          }
+        }
+      }
+      return {
+        overlappingChildren,
+        translatedChildren: children.flatMap((child, index) =>
+          child.style.translate === '' ? [] : [index],
+        ),
+      }
+    }
     const isResolvedMessage = (
       message: ChatItem,
     ): message is Extract<ChatItem, { type: 'proposal' | 'todo' }> =>
@@ -12636,8 +12667,10 @@ it.each([
     )
     renderConversationMessages(optimisticMessages, conversationStart)
     recordRemainingTops()
+    const afterOptimisticUpdate = getLayoutIntegrity()
     renderConversationMessages([settled, ...remaining], conversationStart)
     recordRemainingTops()
+    const afterServerResponse = getLayoutIntegrity()
     const notification: ChatItem = {
       type: 'assistant',
       text: 'The selection was recorded.',
@@ -12645,6 +12678,7 @@ it.each([
     const updatedMessages = [settled, notification, ...remaining]
     renderConversationMessages(updatedMessages, conversationStart)
     recordRemainingTops()
+    const afterNotification = getLayoutIntegrity()
     const nextResponse: ChatItem = {
       type: 'assistant',
       text: 'The next step is ready.',
@@ -12652,6 +12686,7 @@ it.each([
     const withNextResponse = [settled, notification, nextResponse, ...remaining]
     renderConversationMessages(withNextResponse, conversationStart)
     recordRemainingTops()
+    const afterNextResponse = getLayoutIntegrity()
     const olderContext: ChatItem = {
       type: 'assistant',
       text: 'Earlier context has loaded.',
@@ -12661,6 +12696,9 @@ it.each([
       conversationStart - 1,
     )
     recordRemainingTops()
+    const afterDeltaLoad = getLayoutIntegrity()
+    setScrollPosition(Math.max(0, scroll.scrollTop - 20))
+    const afterUserScroll = getLayoutIntegrity()
 
     const result = () => ({
       remainingCardCount: before.length,
@@ -12669,6 +12707,14 @@ it.each([
       stageTopDeltas: stages.map((stage) =>
         stage.map((top, index) => top - (originalRemainingTops[index] ?? 0)),
       ),
+      layoutIntegrity: [
+        afterOptimisticUpdate,
+        afterServerResponse,
+        afterNotification,
+        afterNextResponse,
+        afterDeltaLoad,
+        afterUserScroll,
+      ],
     })
     const expectedResult = () => ({
       remainingCardCount: 2,
@@ -12677,6 +12723,10 @@ it.each([
       stageTopDeltas: Array.from({ length: 5 }, () =>
         originalRemainingTops.map(() => 0),
       ),
+      layoutIntegrity: Array.from({ length: 6 }, () => ({
+        overlappingChildren: [],
+        translatedChildren: [],
+      })),
     })
     expect(result()).toEqual(expectedResult())
   },
