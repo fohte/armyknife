@@ -300,13 +300,11 @@ async fn run_with_context(
     let has_changes = changeset.has_changes();
     changeset.display()?;
 
-    let reported_watch_web_action = !args.dry_run
-        && report_completed_watch_web_actions(
+    if !args.dry_run {
+        report_completed_watch_web_actions(
             &ctx.storage.dir().join("issue.md"),
             &ctx.storage.dir().join("comments"),
         )?;
-    if reported_watch_web_action && !has_changes {
-        return Ok(());
     }
 
     // Verify approval before applying (skip for dry-run)
@@ -662,7 +660,7 @@ fn print_result(dry_run: bool, has_changes: bool) {
 fn report_completed_watch_web_actions(
     issue_path: &Path,
     comments_dir: &Path,
-) -> anyhow::Result<bool> {
+) -> anyhow::Result<()> {
     let mut completed_results = Vec::new();
     if let Some(result) = successful_action_result(issue_path, ReviewDocumentAction::UpdateIssue)? {
         completed_results.push(result);
@@ -672,12 +670,12 @@ fn report_completed_watch_web_actions(
         ReviewDocumentAction::PostComment,
     )?);
     if completed_results.is_empty() {
-        return Ok(false);
+        return Ok(());
     }
     for result in completed_results {
         result.print_for_agent();
     }
-    Ok(true)
+    Ok(())
 }
 
 #[cfg(test)]

@@ -219,6 +219,87 @@ async fn completed_watch_web_issue_actions_are_not_pushed_again(
 
 #[rstest]
 #[tokio::test]
+async fn completed_watch_web_issue_action_advances_converged_issue_snapshot(test_dir: TempDir) {
+    let (mock, storage) = TestSetup::new(test_dir.path())
+        .remote_title("Converged title")
+        .local_title("Converged title")
+        .build()
+        .await;
+    let issue_path = storage.dir().join("issue.md");
+    write_local_issue(
+        &storage,
+        &issue_frontmatter("Converged title", &["bug"]),
+        "Body",
+    );
+    storage
+        .save_base_issue(&issue_frontmatter("Original title", &["bug"]), "Body")
+        .unwrap();
+    save_action_result(
+        &issue_path,
+        &ReviewDocumentActionResult::new(
+            ReviewDocumentAction::UpdateIssue,
+            true,
+            "Issue body updated.".to_owned(),
+            document_hash(&issue_path).expect("review document hash should be computed"),
+            None,
+        ),
+    )
+    .expect("watch-web action result should be saved");
+
+    let context = IssueContext {
+        owner: "owner".to_owned(),
+        repo_name: "repo".to_owned(),
+        issue_number: 123,
+        storage: storage.clone(),
+        current_user: "testuser".to_owned(),
+    };
+    let client = mock.client();
+    let first_result = run_with_context(&make_args(false, false, false), &context, &client, None)
+        .await
+        .map_err(|error| error.to_string());
+    let base_title_after_convergence = storage
+        .read_base_issue()
+        .unwrap()
+        .expect("issue baseline should exist")
+        .frontmatter
+        .fields
+        .title;
+
+    write_local_issue(
+        &storage,
+        &issue_frontmatter("Follow-up title", &["bug"]),
+        "Body",
+    );
+    approve_file(&issue_path);
+    let repo = mock.repo("owner", "repo");
+    repo.issue(123).update().await;
+    repo.issue(123).get().await;
+    let second_result = run_with_context(&make_args(false, false, false), &context, &client, None)
+        .await
+        .map_err(|error| error.to_string());
+    let writes = mutation_requests(&mock).await;
+
+    assert_eq!(
+        (
+            first_result,
+            base_title_after_convergence,
+            second_result,
+            writes,
+        ),
+        (
+            Ok(()),
+            "Converged title".to_owned(),
+            Ok(()),
+            vec![(
+                "PATCH".to_owned(),
+                "/repos/owner/repo/issues/123".to_owned(),
+            )],
+        ),
+    );
+}
+
+#[rstest]
+#[tokio::test]
 async fn test_no_changes_dry_run(test_dir: TempDir) {
     let (mock, storage) = TestSetup::new(test_dir.path()).build().await;
     // No API calls should be made in dry run with no changes
