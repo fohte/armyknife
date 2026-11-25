@@ -1,5 +1,18 @@
 import { useCallback, useLayoutEffect, useRef } from 'react'
 
+import {
+  clearConversationAnchorOffset,
+  clearConversationAnchorOffsets,
+  type ConversationAnchorOffset,
+  type ConversationChildLayout,
+  hasConversationChildrenInsertedBeforePendingCards,
+  hasConversationResolutionChanged,
+  movedConversationChildren,
+  newlyResolvedConversationCards,
+  preserveConversationChildPosition,
+  preserveConversationChildren,
+  readConversationChildLayout,
+} from '#components/conversation-scroll-anchor'
 import type { ChatItem } from '#types'
 
 type UseConversationScrollOptions = {
@@ -11,92 +24,6 @@ type UseConversationScrollOptions = {
   start: number
   epoch?: string | undefined
   olderCursor?: string | undefined
-}
-
-type ConversationChildLayout = {
-  element: HTMLElement
-  top: number
-  height: number
-}
-
-function readConversationChildLayout(
-  scrollContainer: HTMLDivElement,
-): ConversationChildLayout[] {
-  return Array.from(scrollContainer.children).flatMap((child) =>
-    child instanceof HTMLElement
-      ? [
-          {
-            element: child,
-            top: child.getBoundingClientRect().top,
-            height: child.getBoundingClientRect().height,
-          },
-        ]
-      : [],
-  )
-}
-
-function hasConversationLayoutChanged(
-  previous: readonly ConversationChildLayout[],
-  current: readonly ConversationChildLayout[],
-): boolean {
-  const currentPositions = new Map(
-    current.map(({ element }, index) => [element, index]),
-  )
-  return previous.some(({ element, height }, index) => {
-    const currentIndex = currentPositions.get(element)
-    if (currentIndex === undefined) return false
-    const currentChild = current[currentIndex]
-    return (
-      currentIndex !== index ||
-      currentChild === undefined ||
-      Math.abs(currentChild.height - height) > 0.5
-    )
-  })
-}
-
-function preserveConversationChildPosition(
-  scrollContainer: HTMLDivElement,
-  previous: readonly ConversationChildLayout[],
-  current: readonly ConversationChildLayout[],
-): number | null {
-  const bounds = scrollContainer.getBoundingClientRect()
-  const currentByElement = new Map(
-    current.map((child) => [child.element, child]),
-  )
-  const previousSharedElements = previous
-    .filter(({ element }) => currentByElement.has(element))
-    .map(({ element }) => element)
-  const previousOrder = new Map(
-    previousSharedElements.map((element, index) => [element, index]),
-  )
-  const currentOrder = new Map(
-    current
-      .filter(({ element }) => previousOrder.has(element))
-      .map(({ element }, index) => [element, index]),
-  )
-  const hasKeptItsRelativeOrder = (element: HTMLElement) =>
-    previousOrder.get(element) === currentOrder.get(element)
-  const isVisible = ({ top, height }: ConversationChildLayout) =>
-    top < bounds.bottom && top + height > bounds.top
-  const anchor =
-    previous.findLast(({ element, height, ...layout }) => {
-      const currentChild = currentByElement.get(element)
-      return (
-        currentChild !== undefined &&
-        hasKeptItsRelativeOrder(element) &&
-        isVisible({ element, height, ...layout }) &&
-        Math.abs(currentChild.height - height) <= 0.5
-      )
-    }) ??
-    previous.findLast(
-      ({ element, ...layout }) =>
-        currentByElement.has(element) && isVisible({ element, ...layout }),
-    )
-  if (anchor === undefined) return null
-  const currentAnchor = currentByElement.get(anchor.element)
-  if (currentAnchor === undefined) return null
-  const offset = currentAnchor.top - anchor.top
-  return Math.abs(offset) > 0.5 ? scrollContainer.scrollTop + offset : null
 }
 
 function isAtBottom(scrollContainer: HTMLDivElement) {
@@ -140,6 +67,11 @@ export function useConversationScroll({
     epoch: string | undefined
   } | null>(null)
   const previousChildLayoutRef = useRef<readonly ConversationChildLayout[]>([])
+  const previousScrollTopRef = useRef(0)
+  const conversationAnchorOffsetsRef = useRef(
+    new Map<HTMLElement, ConversationAnchorOffset>(),
+  )
+  const recentResolutionCardsRef = useRef(new Set<HTMLElement>())
   const anchorExtraPaddingBottomRef = useRef(0)
   const userLayoutChangeRef = useRef(false)
   const userLayoutChangeTimeoutRef = useRef<number | null>(null)
@@ -161,6 +93,9 @@ export function useConversationScroll({
     followLatestRef.current = true
     previousMessagesRef.current = null
     previousChildLayoutRef.current = []
+    previousScrollTopRef.current = 0
+    clearConversationAnchorOffsets(conversationAnchorOffsetsRef.current)
+    recentResolutionCardsRef.current.clear()
     scrollRef.current?.style.removeProperty('padding-bottom')
     anchorExtraPaddingBottomRef.current = 0
     userLayoutChangeRef.current = false
@@ -180,10 +115,44 @@ export function useConversationScroll({
     const previousMessages = previousMessagesRef.current
     const previousChildLayout = previousChildLayoutRef.current
     const currentChildLayout = readConversationChildLayout(scrollContainer)
-    const conversationLayoutChanged = hasConversationLayoutChanged(
+    const movedChildren = movedConversationChildren(
       previousChildLayout,
       currentChildLayout,
     )
+    const resolvedCards = newlyResolvedConversationCards(
+      previousChildLayout,
+      currentChildLayout,
+    )
+    const currentChildrenByElement = new Map(
+      currentChildLayout.map((child) => [child.element, child]),
+    )
+    const becamePendingCards = new Set(
+      previousChildLayout.flatMap((previousChild) => {
+        const currentChild = currentChildrenByElement.get(previousChild.element)
+        return previousChild.cardResolution === 'resolved' &&
+          currentChild?.cardResolution === 'pending'
+          ? [previousChild.element]
+          : []
+      }),
+    )
+    for (const element of becamePendingCards) {
+      recentResolutionCardsRef.current.delete(element)
+    }
+    for (const element of resolvedCards) {
+      recentResolutionCardsRef.current.add(element)
+    }
+    const recentResolutionCards = new Set(recentResolutionCardsRef.current)
+    const conversationResolutionChanged = hasConversationResolutionChanged(
+      previousChildLayout,
+      currentChildLayout,
+    )
+    const conversationLayoutChanged =
+      movedChildren.size > 0 ||
+      conversationResolutionChanged ||
+      hasConversationChildrenInsertedBeforePendingCards(
+        previousChildLayout,
+        currentChildLayout,
+      )
     const end = start + messages.length
     const appendedMessages =
       previousMessages !== null &&
@@ -217,33 +186,64 @@ export function useConversationScroll({
           userLayoutChangeTimeoutRef.current = null
         }
       }
-      previousChildLayoutRef.current =
-        readConversationChildLayout(scrollContainer)
-      return
-    }
-
-    if (conversationLayoutChanged) {
-      const desiredScrollTop = preserveConversationChildPosition(
-        scrollContainer,
-        previousChildLayout,
-        currentChildLayout,
-      )
-      if (desiredScrollTop !== null) {
-        setAnchoredScrollTop(scrollContainer, desiredScrollTop)
-        const scrollTopShortfall = desiredScrollTop - scrollContainer.scrollTop
-        if (scrollTopShortfall > 0.5) {
-          // The resolved card can leave the tail and reduce the available scroll range.
-          const basePaddingBottom =
-            Number.parseFloat(
-              window.getComputedStyle(scrollContainer).paddingBottom,
-            ) - anchorExtraPaddingBottomRef.current
-          anchorExtraPaddingBottomRef.current += scrollTopShortfall
-          scrollContainer.style.paddingBottom = `${String(basePaddingBottom + anchorExtraPaddingBottomRef.current)}px`
-          setAnchoredScrollTop(scrollContainer, desiredScrollTop)
+      if (conversationLayoutChanged) {
+        preserveConversationChildren(
+          previousChildLayout,
+          readConversationChildLayout(scrollContainer),
+          scrollContainer,
+          recentResolutionCards,
+          conversationAnchorOffsetsRef.current,
+        )
+        for (const element of movedChildren) {
+          recentResolutionCardsRef.current.delete(element)
         }
       }
       previousChildLayoutRef.current =
         readConversationChildLayout(scrollContainer)
+      previousScrollTopRef.current = scrollContainer.scrollTop
+      return
+    }
+
+    if (conversationLayoutChanged) {
+      const anchoredScrollTop = preserveConversationChildPosition(
+        scrollContainer,
+        previousChildLayout,
+        currentChildLayout,
+        recentResolutionCards,
+      )
+      const currentMaximum =
+        scrollContainer.scrollHeight - scrollContainer.clientHeight
+      const wasAtBottom =
+        followLatestRef.current &&
+        !(conversationResolutionChanged && userLayoutChangeRef.current)
+      const desiredScrollTop = wasAtBottom
+        ? Math.max(previousScrollTopRef.current, currentMaximum)
+        : (anchoredScrollTop ?? previousScrollTopRef.current)
+      setAnchoredScrollTop(scrollContainer, desiredScrollTop)
+      const scrollTopShortfall = desiredScrollTop - scrollContainer.scrollTop
+      if (scrollTopShortfall > 0.5) {
+        // The resolved card can leave the tail and reduce the available scroll range.
+        const basePaddingBottom =
+          Number.parseFloat(
+            window.getComputedStyle(scrollContainer).paddingBottom,
+          ) - anchorExtraPaddingBottomRef.current
+        anchorExtraPaddingBottomRef.current += scrollTopShortfall
+        scrollContainer.style.paddingBottom = `${String(basePaddingBottom + anchorExtraPaddingBottomRef.current)}px`
+        setAnchoredScrollTop(scrollContainer, desiredScrollTop)
+      }
+      preserveConversationChildren(
+        previousChildLayout,
+        readConversationChildLayout(scrollContainer),
+        scrollContainer,
+        recentResolutionCards,
+        conversationAnchorOffsetsRef.current,
+      )
+      for (const element of movedChildren) {
+        recentResolutionCardsRef.current.delete(element)
+      }
+      previousChildLayoutRef.current =
+        readConversationChildLayout(scrollContainer)
+      previousScrollTopRef.current = scrollContainer.scrollTop
       followLatestRef.current = isAtBottom(scrollContainer)
       return
     }
@@ -271,6 +271,7 @@ export function useConversationScroll({
       if (!followLatestRef.current) {
         previousChildLayoutRef.current =
           readConversationChildLayout(scrollContainer)
+        previousScrollTopRef.current = scrollContainer.scrollTop
         return
       }
       if (appendedMessages && anchorExtraPaddingBottomRef.current > 0) {
@@ -285,10 +286,12 @@ export function useConversationScroll({
       }
       previousChildLayoutRef.current =
         readConversationChildLayout(scrollContainer)
+      previousScrollTopRef.current = scrollContainer.scrollTop
       return
     }
     previousChildLayoutRef.current =
       readConversationChildLayout(scrollContainer)
+    previousScrollTopRef.current = scrollContainer.scrollTop
   }, [
     epoch,
     loadingOlder,
@@ -376,6 +379,13 @@ export function useConversationScroll({
           if (!(node instanceof Element)) continue
           resizeObserver.unobserve(node)
           initialResizeHeights.delete(node)
+          if (node instanceof HTMLElement && !scrollContainer.contains(node)) {
+            clearConversationAnchorOffset(
+              node,
+              conversationAnchorOffsetsRef.current,
+            )
+            recentResolutionCardsRef.current.delete(node)
+          }
         }
         observeChildren(record.addedNodes)
       }
@@ -473,6 +483,7 @@ export function useConversationScroll({
       programmaticScrollTopRef.current = null
       previousChildLayoutRef.current =
         readConversationChildLayout(scrollContainer)
+      previousScrollTopRef.current = scrollContainer.scrollTop
       return
     }
     programmaticScrollTopRef.current = null
@@ -491,6 +502,7 @@ export function useConversationScroll({
     }
     previousChildLayoutRef.current =
       readConversationChildLayout(scrollContainer)
+    previousScrollTopRef.current = scrollContainer.scrollTop
     followLatestRef.current = isAtBottom(scrollContainer)
     if (followLatestRef.current) onPruneOldMessages()
     if (scrollContainer.scrollTop <= 120) loadOlder()

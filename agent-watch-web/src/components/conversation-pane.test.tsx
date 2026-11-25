@@ -12492,18 +12492,57 @@ it('keeps a question answer draft when a preceding conversation row arrives', ()
 })
 
 it.each([
-  { cardType: 'proposal', atBottom: false, resolution: 'completed' },
-  { cardType: 'proposal', atBottom: true, resolution: 'completed' },
-  { cardType: 'todo', atBottom: false, resolution: 'completed' },
-  { cardType: 'todo', atBottom: true, resolution: 'completed' },
-  { cardType: 'todo', atBottom: false, resolution: 'rejected' },
-  { cardType: 'todo', atBottom: true, resolution: 'rejected' },
+  {
+    cardType: 'proposal',
+    atBottom: false,
+    resolution: 'completed',
+    resolvedSeq: 62,
+  },
+  {
+    cardType: 'proposal',
+    atBottom: true,
+    resolution: 'completed',
+    resolvedSeq: 62,
+  },
+  {
+    cardType: 'todo',
+    atBottom: false,
+    resolution: 'completed',
+    resolvedSeq: 62,
+  },
+  {
+    cardType: 'todo',
+    atBottom: true,
+    resolution: 'completed',
+    resolvedSeq: 62,
+  },
+  {
+    cardType: 'todo',
+    atBottom: false,
+    resolution: 'rejected',
+    resolvedSeq: 62,
+  },
+  { cardType: 'todo', atBottom: true, resolution: 'rejected', resolvedSeq: 62 },
+  {
+    cardType: 'proposal',
+    atBottom: true,
+    resolution: 'completed',
+    resolvedSeq: 63,
+  },
+  {
+    cardType: 'todo',
+    atBottom: true,
+    resolution: 'completed',
+    resolvedSeq: 63,
+  },
+  { cardType: 'todo', atBottom: true, resolution: 'rejected', resolvedSeq: 63 },
 ] as const)(
-  'keeps the remaining $cardType cards in place when resolving a middle card as $resolution atBottom=$atBottom',
-  ({ cardType, atBottom, resolution }) => {
+  'keeps the remaining $cardType cards in place when resolving card $resolvedSeq as $resolution atBottom=$atBottom',
+  ({ cardType, atBottom, resolution, resolvedSeq }) => {
     container.style.cssText = 'width: 900px; height: 700px'
     const detail =
       'Review the selected configuration before continuing. '.repeat(10)
+    const conversationStart = 5
     const messages: ChatItem[] = [1, 2, 3].map((index) =>
       cardType === 'proposal'
         ? {
@@ -12522,14 +12561,14 @@ it.each([
             comment: null,
           },
     )
-    renderConversationMessages(messages, 0)
+    renderConversationMessages(messages, conversationStart)
 
     const scroll = requireElement(
       container.querySelector<HTMLDivElement>('.conversation-scroll'),
     )
     scroll.style.height = '360px'
     scroll.style.flex = 'none'
-    renderConversationMessages(messages.slice(), 0)
+    renderConversationMessages(messages.slice(), conversationStart)
 
     const setScrollPosition = (scrollTop: number) => {
       act(() => {
@@ -12539,7 +12578,6 @@ it.each([
     }
     const bottom = scroll.scrollHeight - scroll.clientHeight
     setScrollPosition(atBottom ? bottom : Math.min(180, bottom))
-    const resolvedSeq = atBottom ? 62 : 63
     const getPendingCards = () =>
       Array.from(
         scroll.querySelectorAll<HTMLElement>(
@@ -12550,11 +12588,6 @@ it.each([
           element,
           title: element.querySelector('h3')?.textContent,
           top: Math.round(element.getBoundingClientRect().top),
-          visible: (() => {
-            const card = element.getBoundingClientRect()
-            const bounds = scroll.getBoundingClientRect()
-            return card.top < bounds.bottom && card.bottom > bounds.top
-          })(),
         }))
         .filter(
           ({ title }) =>
@@ -12563,10 +12596,9 @@ it.each([
             ) === true,
         )
     const before = getPendingCards().filter(
-      ({ title, visible }) =>
+      ({ title }) =>
         title !==
-          `${cardType === 'proposal' ? 'Choose' : 'Review'} setting ${String(resolvedSeq - 60)}` &&
-        visible,
+        `${cardType === 'proposal' ? 'Choose' : 'Review'} setting ${String(resolvedSeq - 60)}`,
     )
     const atBottomNow = () =>
       scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight <= 24
@@ -12602,22 +12634,36 @@ it.each([
     const optimisticMessages = messages.map((message) =>
       isResolvedMessage(message) ? settled : message,
     )
-    renderConversationMessages(optimisticMessages, 0)
+    renderConversationMessages(optimisticMessages, conversationStart)
     recordRemainingTops()
-    renderConversationMessages([settled, ...remaining], 0)
+    renderConversationMessages([settled, ...remaining], conversationStart)
     recordRemainingTops()
     const notification: ChatItem = {
       type: 'assistant',
       text: 'The selection was recorded.',
     }
     const updatedMessages = [settled, notification, ...remaining]
-    renderConversationMessages(updatedMessages, 0)
+    renderConversationMessages(updatedMessages, conversationStart)
     recordRemainingTops()
-    renderConversationMessages(updatedMessages.slice(), 0)
+    const nextResponse: ChatItem = {
+      type: 'assistant',
+      text: 'The next step is ready.',
+    }
+    const withNextResponse = [settled, notification, nextResponse, ...remaining]
+    renderConversationMessages(withNextResponse, conversationStart)
+    recordRemainingTops()
+    const olderContext: ChatItem = {
+      type: 'assistant',
+      text: 'Earlier context has loaded.',
+    }
+    renderConversationMessages(
+      [olderContext, ...withNextResponse],
+      conversationStart - 1,
+    )
     recordRemainingTops()
 
     const result = () => ({
-      visibleCardCount: before.length,
+      remainingCardCount: before.length,
       remainedAtBottom: atBottomNow(),
       bottomStates,
       stageTopDeltas: stages.map((stage) =>
@@ -12625,10 +12671,10 @@ it.each([
       ),
     })
     const expectedResult = () => ({
-      visibleCardCount: atBottom ? 1 : 2,
+      remainingCardCount: 2,
       remainedAtBottom: wasAtBottom,
-      bottomStates: Array.from({ length: 4 }, () => wasAtBottom),
-      stageTopDeltas: Array.from({ length: 4 }, () =>
+      bottomStates: Array.from({ length: 5 }, () => wasAtBottom),
+      stageTopDeltas: Array.from({ length: 5 }, () =>
         originalRemainingTops.map(() => 0),
       ),
     })
