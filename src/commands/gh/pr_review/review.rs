@@ -123,14 +123,14 @@ async fn monitor_reply_review_completion(
     owner: String,
     repo: String,
     pr_number: u64,
+    threads_path: PathBuf,
     document_path: PathBuf,
-    drafted_thread_ids: HashSet<String>,
 ) {
     monitor_reply_review_completion_with(
         owner.clone(),
         repo.clone(),
         pr_number,
-        drafted_thread_ids,
+        threads_path,
         REPLY_REVIEW_STATUS_POLL_INTERVAL,
         || {
             let owner = owner.clone();
@@ -140,23 +140,32 @@ async fn monitor_reply_review_completion(
                 fetch_reply_review_status(client, &owner, &repo, pr_number).await
             }
         },
-        |reason| request_review_finish(&document_path, reason).map_err(Into::into),
+        |reason| {
+            let document_path = document_path.clone();
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    request_review_finish(&document_path, reason).map_err(Into::into)
+                })
+                .await?
+            }
+        },
     )
     .await;
 }
 
-pub(super) async fn monitor_reply_review_completion_with<F, Fut, Finish>(
+pub(super) async fn monitor_reply_review_completion_with<F, Fut, Finish, FinishFut>(
     owner: String,
     repo: String,
     pr_number: u64,
-    drafted_thread_ids: HashSet<String>,
+    threads_path: PathBuf,
     poll_interval: Duration,
     mut fetch_status: F,
     mut finish_review: Finish,
 ) where
     F: FnMut() -> Fut,
     Fut: Future<Output = anyhow::Result<ReplyReviewStatus>>,
-    Finish: FnMut(ReviewFinishReason) -> anyhow::Result<bool>,
+    Finish: FnMut(ReviewFinishReason) -> FinishFut,
+    FinishFut: Future<Output = anyhow::Result<bool>>,
 {
     loop {
         tokio::time::sleep(poll_interval).await;
@@ -173,11 +182,12 @@ pub(super) async fn monitor_reply_review_completion_with<F, Fut, Finish>(
                 continue;
             }
         };
+        let drafted_thread_ids = drafted_thread_ids(&threads_path);
         let Some(reason) = status.completion_reason(&drafted_thread_ids) else {
             continue;
         };
 
-        match finish_review(reason) {
+        match finish_review(reason).await {
             Ok(true) => return,
             Ok(false) => {}
             Err(error) => tracing::warn!(
@@ -300,7 +310,7 @@ pub async fn run_review(args: &ReviewArgs) -> anyhow::Result<()> {
         repo,
         args.pr_number,
         threads_path.clone(),
-        drafted_thread_ids(&threads_path),
+        threads_path.clone(),
     ));
 
     use crate::shared::human_in_the_loop::exit_code;
@@ -381,6 +391,30 @@ mod tests {
     use super::*;
     use crate::infra::github::PrState;
     use indoc::indoc;
+
+    fn write_review_threads(path: &Path, thread_ids: &[&str]) {
+        let mut content = indoc! {"
+            ---
+            pr: 17
+            repo: sample-org/sample-repo
+            pulled_at: '2024-01-15T10:00:00Z'
+            submit: false
+            ---
+        "}
+        .to_string();
+        for thread_id in thread_ids {
+            content.push_str(&formatdoc! {"
+                <!-- thread: {thread_id} path: src/lib.rs:10 -->
+                - [ ] resolve
+                <!-- comment: @reviewer 2024-01-15T10:30:00Z -->
+                Review comment
+                <!-- /comment -->
+                Draft response
+            "});
+            content.push('\n');
+        }
+        std::fs::write(path, content).expect("write review threads");
+    }
 
     #[cfg(unix)]
     #[rstest::rstest]
@@ -548,18 +582,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn monitor_retries_fetch_errors_until_drafts_are_resolved() {
-        let drafted_thread_ids = HashSet::from(["PRRT_fake_first".to_string()]);
+    async fn monitor_retries_fetch_errors_and_reads_drafts_after_startup() {
+        let temp_dir = tempfile::TempDir::new().expect("temporary review directory");
+        let threads_path = temp_dir.path().join("threads.md");
+        write_review_threads(&threads_path, &[]);
         let mut fetch_count = 0;
         let mut fetch_results = std::collections::VecDeque::from([
             Err(anyhow::anyhow!("transient GitHub failure")),
+            Ok(ReplyReviewStatus {
+                state: PrState::Open,
+                resolved_thread_ids: HashSet::from(["PRRT_fake_unrelated".to_string()]),
+            }),
             Ok(ReplyReviewStatus {
                 state: PrState::Open,
                 resolved_thread_ids: HashSet::new(),
             }),
             Ok(ReplyReviewStatus {
                 state: PrState::Open,
-                resolved_thread_ids: drafted_thread_ids.clone(),
+                resolved_thread_ids: HashSet::from(["PRRT_fake_first".to_string()]),
+            }),
+            Ok(ReplyReviewStatus {
+                state: PrState::Closed,
+                resolved_thread_ids: HashSet::new(),
             }),
         ]);
         let mut finish_reasons = Vec::new();
@@ -568,10 +612,13 @@ mod tests {
             "sample-org".to_string(),
             "sample-repo".to_string(),
             17,
-            drafted_thread_ids,
+            threads_path.clone(),
             Duration::ZERO,
             || {
                 fetch_count += 1;
+                if fetch_count == 3 {
+                    write_review_threads(&threads_path, &["PRRT_fake_first"]);
+                }
                 std::future::ready(
                     fetch_results
                         .pop_front()
@@ -580,14 +627,68 @@ mod tests {
             },
             |reason| {
                 finish_reasons.push(reason);
-                Ok(true)
+                std::future::ready(Ok(true))
             },
         )
         .await;
 
         assert_eq!(
             (fetch_count, finish_reasons),
-            (3, vec![ReviewFinishReason::ReplyThreadsResolved]),
+            (4, vec![ReviewFinishReason::ReplyThreadsResolved]),
+        );
+    }
+
+    #[tokio::test]
+    async fn monitor_reloads_drafts_added_while_review_is_open() {
+        let temp_dir = tempfile::TempDir::new().expect("temporary review directory");
+        let threads_path = temp_dir.path().join("threads.md");
+        write_review_threads(&threads_path, &["PRRT_fake_first"]);
+        let first_thread = "PRRT_fake_first".to_string();
+        let second_thread = "PRRT_fake_second".to_string();
+        let mut fetch_count = 0;
+        let mut fetch_results = std::collections::VecDeque::from([
+            Ok(ReplyReviewStatus {
+                state: PrState::Open,
+                resolved_thread_ids: HashSet::from([first_thread.clone()]),
+            }),
+            Ok(ReplyReviewStatus {
+                state: PrState::Open,
+                resolved_thread_ids: HashSet::from([first_thread.clone(), second_thread.clone()]),
+            }),
+            Ok(ReplyReviewStatus {
+                state: PrState::Closed,
+                resolved_thread_ids: HashSet::new(),
+            }),
+        ]);
+        let mut finish_reasons = Vec::new();
+
+        monitor_reply_review_completion_with(
+            "sample-org".to_string(),
+            "sample-repo".to_string(),
+            17,
+            threads_path.clone(),
+            Duration::ZERO,
+            || {
+                fetch_count += 1;
+                if fetch_count == 1 {
+                    write_review_threads(&threads_path, &["PRRT_fake_first", "PRRT_fake_second"]);
+                }
+                std::future::ready(
+                    fetch_results
+                        .pop_front()
+                        .unwrap_or_else(|| Err(anyhow::anyhow!("no response available"))),
+                )
+            },
+            |reason| {
+                finish_reasons.push(reason);
+                std::future::ready(Ok(true))
+            },
+        )
+        .await;
+
+        assert_eq!(
+            (fetch_count, finish_reasons),
+            (2, vec![ReviewFinishReason::ReplyThreadsResolved]),
         );
     }
 
