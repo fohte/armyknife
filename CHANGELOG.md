@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.923](https://github.com/fohte/armyknife/compare/v0.1.922...v0.1.923) (2026-11-25)
+
+
+### Bug Fixes
+
+* **agent/watch-web:** report review action results ([#2268](https://github.com/fohte/armyknife/issues/2268)) ([06aa794](https://github.com/fohte/armyknife/commit/06aa794cb0dd63630f2bd66367dd6b0ceb46c4e7))
+
+## [0.1.922](https://github.com/fohte/armyknife/compare/v0.1.921...v0.1.922) (2026-11-25)
+
+
+### Bug Fixes
+
+* **agent/peer:** inherit vibe on adoption ([#2269](https://github.com/fohte/armyknife/issues/2269)) ([14f45a7](https://github.com/fohte/armyknife/commit/14f45a716fc82b527d6939db126798a13108daeb))
+
 ## [0.1.921](https://github.com/fohte/armyknife/compare/v0.1.920...v0.1.921) (2026-11-25)
 
 

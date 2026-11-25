@@ -8,7 +8,7 @@ use std::ffi::OsStr;
 use std::io::{self, Read};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Child, Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -32,6 +32,14 @@ pub use snapshot::{
 pub(crate) use snapshot::{
     WorktreeProcessInspection, current_caller_pane_pid, inspect_worktree_processes,
 };
+
+pub(crate) fn new_command(program: impl AsRef<OsStr>) -> Command {
+    command::new(program)
+}
+
+pub(crate) fn spawn(mut command: Command) -> io::Result<Child> {
+    command.spawn()
+}
 
 /// Upper bound on how long we sleep between exit checks in [`run_with_timeout`].
 const MAX_POLL_INTERVAL: Duration = Duration::from_millis(20);

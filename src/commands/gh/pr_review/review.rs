@@ -119,8 +119,8 @@ impl ReviewHandler<ThreadsFrontmatter> for PrReviewReplyHandler {
     }
 
     fn on_review_complete(&self, document: &Document<ThreadsFrontmatter>) -> HilResult<()> {
+        document.persist_approval_state()?;
         if document.frontmatter.is_approved() {
-            document.save_approval()?;
             println!(
                 "{}",
                 formatdoc! {"
@@ -133,11 +133,17 @@ impl ReviewHandler<ThreadsFrontmatter> for PrReviewReplyHandler {
                 }
             );
         } else {
-            document.remove_approval()?;
             println!("Not approved. Set 'submit: true' and save to approve.");
         }
 
         Ok(())
+    }
+
+    fn on_watch_web_review_complete(
+        &self,
+        document: &Document<ThreadsFrontmatter>,
+    ) -> HilResult<()> {
+        document.persist_approval_state()
     }
 
     fn on_review_finished(
@@ -233,7 +239,7 @@ pub fn run_review_complete(args: &ReviewCompleteArgs) -> anyhow::Result<()> {
         &handler,
         &config.editor,
         args.finish_fifo.as_deref(),
-        cleanup_guard,
+        &cleanup_guard,
         fifo_guard.as_mut(),
     )?;
 
@@ -316,7 +322,7 @@ mod tests {
         let content = if approved {
             indoc! {"
                 ---
-                pr: 42
+                pr: 123
                 repo: example/repo
                 pulled_at: '2024-01-15T10:00:00Z'
                 submit: true
@@ -326,7 +332,7 @@ mod tests {
         } else {
             indoc! {"
                 ---
-                pr: 42
+                pr: 123
                 repo: example/repo
                 pulled_at: '2024-01-15T10:00:00Z'
                 submit: false
@@ -339,6 +345,7 @@ mod tests {
             content,
         )
         .expect("threads document should parse");
+
         assert_eq!(reply_review_outcome(&document, finish_reason), expected);
     }
 
@@ -351,7 +358,7 @@ mod tests {
         let path = temp_dir.path().join("threads.md");
         let content = indoc! {"
             ---
-            pr: 42
+            pr: 123
             repo: example/repo
             pulled_at: '2024-01-15T10:00:00Z'
             submit: true
@@ -363,7 +370,7 @@ mod tests {
             .expect("load approved reply document");
         document.save_approval().expect("save approval");
         let handler = PrReviewReplyHandler {
-            pr_number: 42,
+            pr_number: 123,
             repo_slug: "example/repo".to_string(),
         };
 
@@ -381,7 +388,7 @@ mod tests {
                 Ok(()),
                 indoc! {"
                     ---
-                    pr: 42
+                    pr: 123
                     repo: example/repo
                     pulled_at: '2024-01-15T10:00:00Z'
                     submit: false

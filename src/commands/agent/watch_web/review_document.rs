@@ -297,14 +297,9 @@ async fn save_review_document(
     axum::Json(request): axum::Json<ReviewDocumentEditRequest>,
 ) -> Result<axum::Json<ReviewDocumentSaved>, StatusCode> {
     let _edit_guard = edit_lock.lock().await;
-    let revision = save::save_document_for_session(
-        load_session,
-        load_review_queue,
-        session_id,
-        request,
-        false,
-    )
-    .await?;
+    let revision =
+        save::save_document_for_session(load_session, load_review_queue, session_id, request, None)
+            .await?;
     Ok(axum::Json(ReviewDocumentSaved {
         success: true,
         revision,
@@ -323,9 +318,14 @@ async fn finish_review_document(
     axum::Json(request): axum::Json<ReviewDocumentEditRequest>,
 ) -> Result<axum::Json<ReviewDocumentSaved>, StatusCode> {
     let _edit_guard = edit_lock.lock().await;
-    let revision =
-        save::save_document_for_session(load_session, load_review_queue, session_id, request, true)
-            .await?;
+    let revision = save::save_document_for_session(
+        load_session,
+        load_review_queue,
+        session_id,
+        request,
+        Some(b'0'),
+    )
+    .await?;
     Ok(axum::Json(ReviewDocumentSaved {
         success: true,
         revision,
@@ -350,7 +350,7 @@ async fn save_review_document_by_id(
         session_id,
         document_id,
         request,
-        false,
+        None,
     )
     .await
 }
@@ -373,7 +373,7 @@ async fn finish_review_document_by_id(
         session_id,
         document_id,
         request,
-        true,
+        Some(b'0'),
     )
     .await
 }
@@ -385,7 +385,7 @@ async fn save_review_document_for_id(
     session_id: String,
     document_id: String,
     request: ReviewDocumentEditRequest,
-    finishing: bool,
+    finish_signal: Option<u8>,
 ) -> Result<axum::Json<ReviewDocumentSaved>, StatusCode> {
     if request.id != document_id {
         return Err(StatusCode::CONFLICT);
@@ -396,7 +396,7 @@ async fn save_review_document_for_id(
         load_review_queue,
         session_id,
         request,
-        finishing,
+        finish_signal,
     )
     .await?;
     Ok(axum::Json(ReviewDocumentSaved {
@@ -589,6 +589,43 @@ mod tests {
     fn current_revision(path: &Path) -> String {
         let content = std::fs::read(path).expect("fixture document should be readable");
         review_document_revision(&content)
+    }
+
+    async fn wait_for_file(path: &Path, timeout: Duration) -> bool {
+        let started_at = std::time::Instant::now();
+        while !path.exists() {
+            if started_at.elapsed() >= timeout {
+                return false;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        true
+    }
+
+    fn terminate_test_worker(worker: &mut std::process::Child) {
+        if let Ok(process_group) = i32::try_from(worker.id()) {
+            // SAFETY: the worker owns a dedicated process group for this test.
+            let _ = unsafe { libc::kill(-process_group, libc::SIGKILL) };
+        }
+        let _ = worker.kill();
+        let _ = worker.wait();
+    }
+
+    async fn wait_for_test_worker(worker: &mut std::process::Child) -> bool {
+        let started_at = std::time::Instant::now();
+        loop {
+            if let Some(status) = worker
+                .try_wait()
+                .expect("test worker should be inspectable")
+            {
+                return status.success();
+            }
+            if started_at.elapsed() >= Duration::from_secs(15) {
+                terminate_test_worker(worker);
+                return false;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
     }
 
     struct ActiveReviewDocument {
@@ -1661,7 +1698,7 @@ mod tests {
                         release.notified().await;
                         Err(anyhow::anyhow!("Temporary submission failure"))
                     } else {
-                        Ok(())
+                        Ok("Pull request replies posted.".to_owned())
                     }
                 })
             }),
@@ -1703,7 +1740,7 @@ mod tests {
             std::fs::remove_file(&finish_fifo)
                 .expect("review process should close the finish request FIFO");
             drop(operation_lock);
-            crate::shared::human_in_the_loop::signal_fifo(&finish_ack_fifo);
+            crate::shared::human_in_the_loop::signal_fifo_with_byte(&finish_ack_fifo, b'0');
         }
         drop(review_lock);
         tokio::time::timeout(Duration::from_secs(2), action_started.notified())
@@ -1737,6 +1774,15 @@ mod tests {
             .expect("first response body should be read");
         let first_json = serde_json::from_slice::<serde_json::Value>(&first_body)
             .expect("first response should be JSON");
+        let failed_document_hash = crate::shared::human_in_the_loop::document_hash(&document_path)
+            .expect("failed document hash should be computed");
+        let failed_action_result =
+            crate::shared::human_in_the_loop::action_result_after_review_completion(
+                b'1',
+                &document_path,
+            )
+            .expect("failed action result should be readable")
+            .expect("failed action result should be saved");
         let retry_response = app
             .clone()
             .oneshot(
@@ -1772,8 +1818,10 @@ mod tests {
         assert_eq!(
             (
                 signal_bytes,
+                signal[0],
                 first_status,
                 first_json,
+                failed_action_result,
                 returned_while_running,
                 second_status,
                 retry_status,
@@ -1784,12 +1832,20 @@ mod tests {
             ),
             (
                 1,
+                b'1',
                 StatusCode::OK,
                 serde_json::json!({
                     "success": false,
                     "revision": current_revision(&document_path),
                     "error": "Temporary submission failure",
                 }),
+                crate::shared::human_in_the_loop::ReviewDocumentActionResult::new(
+                    crate::shared::human_in_the_loop::ReviewDocumentAction::PostComment,
+                    false,
+                    "Temporary submission failure".to_owned(),
+                    failed_document_hash.clone(),
+                    Some(failed_document_hash),
+                ),
                 true,
                 StatusCode::CONFLICT,
                 StatusCode::OK,
@@ -1803,6 +1859,493 @@ mod tests {
                     "revision": current_revision(&document_path),
                 }),
                 2,
+            ),
+        );
+    }
+
+    #[cfg(unix)]
+    #[rstest]
+    #[case::pr_draft(
+        "pr_draft",
+        "create_pr",
+        "owner/repository/topic.md",
+        serde_json::json!({
+            "title": "Example title",
+            "steps": { "submit": false, "ready-for-translation": false }
+        }),
+        "https://example.invalid/pull/42"
+    )]
+    #[case::issue_comment(
+        "issue_comment",
+        "post_comment",
+        "owner/repository/7319/comments/new_example.md",
+        serde_json::json!({ "submit": false }),
+        "Issue comment posted."
+    )]
+    #[case::pr_replies(
+        "pr_replies",
+        "post_replies",
+        "owner/repository/42/threads.md",
+        serde_json::json!({
+            "pr": 42,
+            "repo": "owner/repository",
+            "pulled_at": "2026-01-01T00:00:00Z",
+            "submit": false
+        }),
+        "Pull request replies posted."
+    )]
+    #[case::issue_body(
+        "issue_body",
+        "update_issue",
+        "owner/repository/7319/issue.md",
+        serde_json::json!({
+            "title": "Example issue",
+            "readonly": { "number": 7319 },
+            "submit": false
+        }),
+        "Issue body updated."
+    )]
+    #[tokio::test]
+    async fn web_action_result_is_saved_for_each_review_document(
+        #[case] kind: &str,
+        #[case] action: &str,
+        #[case] relative_path: &str,
+        #[case] frontmatter: serde_json::Value,
+        #[case] result_message: &str,
+    ) {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        use crate::shared::human_in_the_loop::{
+            ReviewDocumentAction, ReviewDocumentActionResult,
+            action_result_after_review_completion, document_hash,
+        };
+
+        crate::shared::testing::init_approval_dir();
+        let temp_dir = TempDir::new().expect("fixture directory should be created");
+        let roots = ReviewDocumentRoots {
+            pr_draft: temp_dir.path().join("pr-body-draft"),
+            issue_agent: temp_dir.path().join("gh-issue-agent"),
+            pr_review: temp_dir.path().join("gh-pr-review"),
+        };
+        let root = match kind {
+            "pr_draft" => &roots.pr_draft,
+            "issue_comment" | "issue_body" => &roots.issue_agent,
+            "pr_replies" => &roots.pr_review,
+            _ => unreachable!(),
+        };
+        let document_path = root.join(relative_path);
+        std::fs::create_dir_all(document_path.parent().expect("document has a parent"))
+            .expect("document directory should be created");
+        std::fs::write(&document_path, "Fixture review document.")
+            .expect("review document should be written");
+        create_fixture_fifo(&finish_request_fifo_path(&document_path));
+        create_fixture_fifo(&finish_ack_fifo_path(&document_path));
+        let review_lock = LockGuard::acquire(&document_path)
+            .expect("review lock should be acquired for the fixture document");
+        let mut session = session_with_review(&document_path);
+        session.cwd = temp_dir.path().to_path_buf();
+        let executor_result_message = result_message.to_owned();
+        let app = router_with_injected_action_executor(
+            move |_| Ok(Some(session.clone())),
+            |_| ReviewDocumentQueue::Unmanaged,
+            roots,
+            Arc::new(move |_| {
+                let result_message = executor_result_message.clone();
+                Box::pin(async move { Ok(result_message) })
+            }),
+        );
+        let finish_fifo = finish_request_fifo_path(&document_path);
+        let finish_ack_fifo = finish_ack_fifo_path(&document_path);
+        let mut finish_reader = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(&finish_fifo)
+            .expect("finish request reader should be opened");
+        let request_body = serde_json::json!({
+            "id": "fixture-review",
+            "revision": current_revision(&document_path),
+            "frontmatter": frontmatter,
+            "body": "Approved fixture document.",
+            "action": action,
+        });
+        let request = Request::post("/sessions/fixture-session/review-document/action")
+            .header("content-type", "application/json")
+            .body(Body::from(request_body.to_string()))
+            .expect("action request should be valid");
+        let app = app.clone();
+        let action_task = tokio::spawn(async move { app.oneshot(request).await });
+        let started_at = std::time::Instant::now();
+        let mut signal = [0_u8; 1];
+        let signal_bytes = loop {
+            let bytes = read_fifo_signal_or_pending(&mut finish_reader, &mut signal)
+                .expect("finish FIFO read should succeed");
+            if bytes > 0 || started_at.elapsed() >= Duration::from_secs(2) {
+                break bytes;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
+        if signal_bytes > 0 {
+            let operation_lock = ReviewDocumentOperationLock::acquire(&document_path)
+                .expect("review process should acquire the operation lock");
+            std::fs::remove_file(&finish_fifo).expect("finish FIFO should be removed");
+            drop(operation_lock);
+            crate::shared::human_in_the_loop::signal_fifo_with_byte(&finish_ack_fifo, b'0');
+        }
+        drop(review_lock);
+        let response = action_task
+            .await
+            .expect("action task should not panic")
+            .expect("action request should complete");
+        let response_status = response.status();
+        let response_body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("action response body should be read");
+        let response_json = serde_json::from_slice::<serde_json::Value>(&response_body)
+            .expect("action response should be JSON");
+        let saved_hash = document_hash(&document_path).expect("saved document hash should exist");
+        let saved_result = action_result_after_review_completion(b'1', &document_path)
+            .expect("saved result should be readable");
+        let action = match action {
+            "create_pr" => ReviewDocumentAction::CreatePr,
+            "post_comment" => ReviewDocumentAction::PostComment,
+            "post_replies" => ReviewDocumentAction::PostReplies,
+            "update_issue" => ReviewDocumentAction::UpdateIssue,
+            _ => unreachable!(),
+        };
+
+        assert_eq!(
+            (
+                signal_bytes,
+                signal[0],
+                response_status,
+                response_json,
+                saved_result,
+            ),
+            (
+                1,
+                b'1',
+                StatusCode::OK,
+                serde_json::json!({
+                    "success": true,
+                    "revision": current_revision(&document_path),
+                }),
+                Some(ReviewDocumentActionResult::new(
+                    action,
+                    true,
+                    result_message.to_owned(),
+                    saved_hash.clone(),
+                    Some(saved_hash),
+                )),
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::snapshot_saved(false)]
+    #[case::snapshot_staging_path_too_long(true)]
+    #[tokio::test]
+    async fn web_action_waits_for_the_review_child_and_reports_its_result(
+        #[case] snapshot_staging_path_too_long: bool,
+    ) {
+        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::process::CommandExt;
+        use std::process::Stdio;
+        use std::sync::Mutex;
+        use std::sync::atomic::AtomicBool;
+
+        use crate::shared::human_in_the_loop::{
+            ReviewDocumentAction, ReviewDocumentActionResult,
+            action_result_after_review_completion, document_hash,
+        };
+
+        crate::shared::testing::init_approval_dir();
+        let temp_dir = TempDir::new().expect("fixture directory should be created");
+        let roots = ReviewDocumentRoots {
+            pr_draft: temp_dir.path().join("pr-body-draft"),
+            issue_agent: temp_dir.path().join("gh-issue-agent"),
+            pr_review: temp_dir.path().join("gh-pr-review"),
+        };
+        let document_name = if snapshot_staging_path_too_long {
+            // The unique snapshot staging suffix exceeds NAME_MAX while the review lock fits.
+            format!("{}.md", "x".repeat(190))
+        } else {
+            "comment.md".to_owned()
+        };
+        let document_path = roots
+            .issue_agent
+            .join("owner/repository/7319/comments")
+            .join(document_name);
+        std::fs::create_dir_all(document_path.parent().expect("document has a parent"))
+            .expect("document directory should be created");
+        let original_document = indoc! {"
+            ---
+            submit: false
+            ---
+            Original comment.
+        "};
+        std::fs::write(&document_path, original_document)
+            .expect("review document should be written");
+        let ready_file = temp_dir.path().join("review-child-ready");
+        let release_file = temp_dir.path().join("review-child-release");
+        let finished_file = temp_dir.path().join("review-child-finished");
+        let output_file = temp_dir.path().join("agent-output");
+        let mut review_parent_command =
+            crate::infra::process::new_command(std::env::current_exe().expect("test binary path"));
+        review_parent_command
+            .args([
+                "--exact",
+                "shared::human_in_the_loop::tests::watch_web_review_parent_worker",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("ARMYKNIFE_REVIEW_TEST_DOCUMENT", &document_path)
+            .env("ARMYKNIFE_REVIEW_TEST_READY_FILE", &ready_file)
+            .env("ARMYKNIFE_REVIEW_TEST_RELEASE_FILE", &release_file)
+            .env("ARMYKNIFE_REVIEW_TEST_FINISHED_FILE", &finished_file)
+            .env("ARMYKNIFE_REVIEW_TEST_OUTPUT_FILE", &output_file)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        review_parent_command.process_group(0);
+        let mut review_parent = crate::infra::process::spawn(review_parent_command)
+            .expect("review parent worker should start");
+        let child_ready = wait_for_file(&ready_file, Duration::from_secs(5)).await;
+        if !child_ready {
+            terminate_test_worker(&mut review_parent);
+        }
+        assert!(
+            child_ready,
+            "review child should wait for the finish signal"
+        );
+
+        let mut session = session_with_review(&document_path);
+        session.cwd = temp_dir.path().to_path_buf();
+        let action_lock_state = Arc::new(Mutex::new(None));
+        let approved_document_state = Arc::new(Mutex::new(None));
+        let action_started = Arc::new(AtomicBool::new(false));
+        let executor_lock_state = action_lock_state.clone();
+        let executor_approved_document_state = approved_document_state.clone();
+        let executor_action_started = action_started.clone();
+        let executor_path = document_path.clone();
+        let app = router_with_injected_action_executor(
+            move |_| Ok(Some(session.clone())),
+            |_| ReviewDocumentQueue::Unmanaged,
+            roots,
+            Arc::new(move |_| {
+                executor_action_started.store(true, std::sync::atomic::Ordering::SeqCst);
+                let competing_lock = LockGuard::acquire(&executor_path);
+                let lock_state = (
+                    LockGuard::is_locked(&executor_path),
+                    competing_lock.is_err(),
+                );
+                drop(competing_lock);
+                *executor_lock_state
+                    .lock()
+                    .expect("action lock state should be writable") = Some(lock_state);
+                let mut snapshot_file = executor_path.as_os_str().to_os_string();
+                snapshot_file.push(".watch-web-action-snapshot");
+                let snapshot_mode = std::fs::metadata(PathBuf::from(snapshot_file))
+                    .expect("approved document snapshot should exist")
+                    .permissions()
+                    .mode()
+                    & 0o777;
+                let approved_document = (
+                    document_hash(&executor_path).expect("approved document hash should be read"),
+                    current_revision(&executor_path),
+                    snapshot_mode,
+                );
+                *executor_approved_document_state
+                    .lock()
+                    .expect("approved document state should be writable") = Some(approved_document);
+                std::fs::remove_file(&executor_path)
+                    .expect("successful comment action should remove the local draft");
+                Box::pin(async { Ok("Issue comment posted.".to_owned()) })
+            }),
+        );
+        let request = Request::post("/sessions/fixture-session/review-document/action")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                    "id": "fixture-review",
+                    "revision": current_revision(&document_path),
+                    "frontmatter": { "submit": false },
+                    "body": "Approved fixture document.",
+                    "action": "post_comment",
+                })
+                .to_string(),
+            ))
+            .expect("action request should be valid");
+        let app = app.clone();
+        let mut action_task = tokio::spawn(async move { app.oneshot(request).await });
+        let review_child_finished = wait_for_file(&finished_file, Duration::from_secs(5)).await;
+        let early_response = tokio::time::timeout(Duration::from_secs(2), &mut action_task).await;
+        let action_completed_before_release = early_response.is_ok();
+        let executor_started_before_release =
+            action_started.load(std::sync::atomic::Ordering::SeqCst);
+        let release_written = std::fs::write(&release_file, "release").is_ok();
+        if !release_written {
+            terminate_test_worker(&mut review_parent);
+        }
+        let response = match early_response {
+            Ok(result) => result
+                .expect("action request task should not panic")
+                .expect("action request should complete"),
+            Err(_) => action_task
+                .await
+                .expect("action request task should not panic")
+                .expect("action request should complete"),
+        };
+        let response_status = response.status();
+        let response_body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("action response body should be readable");
+        let response_json = serde_json::from_slice::<serde_json::Value>(&response_body)
+            .unwrap_or_else(|error| {
+                panic!("action response should be JSON ({response_status}): {error}")
+            });
+        let executor_started_after_response =
+            action_started.load(std::sync::atomic::Ordering::SeqCst);
+        let mut action_result_file = document_path.as_os_str().to_os_string();
+        action_result_file.push(".watch-web-action-result");
+        let action_result_saved = PathBuf::from(action_result_file).exists();
+        if !action_result_saved {
+            terminate_test_worker(&mut review_parent);
+        }
+        let review_parent_succeeded = wait_for_test_worker(&mut review_parent).await;
+        let mut snapshot_file = document_path.as_os_str().to_os_string();
+        snapshot_file.push(".watch-web-action-snapshot");
+        let snapshot_removed_after_review = !PathBuf::from(snapshot_file).exists();
+        let editor_can_reacquire_lock = LockGuard::acquire(&document_path).is_ok();
+        let printed_output = std::fs::read_to_string(&output_file)
+            .expect("review process output should be captured");
+        let action_result = if action_result_saved {
+            action_result_after_review_completion(b'1', &document_path)
+                .expect("action result should be readable")
+        } else {
+            None
+        };
+        let approved_document_snapshot = approved_document_state
+            .lock()
+            .expect("approved document state should be readable")
+            .take();
+        let expected_revision = approved_document_snapshot
+            .as_ref()
+            .map(|(_, revision, _)| revision.clone())
+            .unwrap_or_else(|| current_revision(&document_path));
+        let actual_snapshot_mode = approved_document_snapshot
+            .as_ref()
+            .map(|(_, _, snapshot_mode)| *snapshot_mode);
+        let (expected_action_result, expected_lock_state, expected_snapshot_mode) =
+            if snapshot_staging_path_too_long {
+                let approved_hash =
+                    document_hash(&document_path).expect("approved document hash should exist");
+                (
+                    Some(ReviewDocumentActionResult::new(
+                        ReviewDocumentAction::PostComment,
+                        false,
+                        "Could not save the approved review document snapshot.".to_owned(),
+                        approved_hash.clone(),
+                        Some(approved_hash),
+                    )),
+                    None,
+                    None,
+                )
+            } else {
+                let (resulting_hash, _, snapshot_mode) = approved_document_snapshot
+                    .as_ref()
+                    .expect("executor should observe the approved document");
+                (
+                    Some(ReviewDocumentActionResult::new(
+                        ReviewDocumentAction::PostComment,
+                        true,
+                        "Issue comment posted.".to_owned(),
+                        resulting_hash.clone(),
+                        None,
+                    )),
+                    Some((true, true)),
+                    Some(*snapshot_mode),
+                )
+            };
+        let action_lock_state = action_lock_state
+            .lock()
+            .expect("action lock state should be readable")
+            .take();
+        let expected_response_json = if snapshot_staging_path_too_long {
+            serde_json::json!({
+                "success": false,
+                "revision": expected_revision,
+                "error": "Could not save the approved review document snapshot.",
+            })
+        } else {
+            serde_json::json!({
+                "success": true,
+                "revision": expected_revision,
+            })
+        };
+        let expected_output = if snapshot_staging_path_too_long {
+            indoc! {"
+                Watch-web issue comment failed: Could not save the approved review document snapshot.
+                Retry this action from the watch-web review screen.
+                @@ -1,4 +1,4 @@
+                 ---
+                -submit: false
+                +submit: true
+                 ---
+                -Original comment.
+                +Approved fixture document.
+            "}
+        } else {
+            indoc! {"
+                Watch-web issue comment succeeded: Issue comment posted.
+                No further submit or push command is needed.
+                @@ -1,4 +1,4 @@
+                 ---
+                -submit: false
+                +submit: true
+                 ---
+                -Original comment.
+                +Approved fixture document.
+            "}
+        };
+
+        assert_eq!(
+            (
+                child_ready,
+                review_child_finished,
+                action_completed_before_release,
+                executor_started_before_release,
+                release_written,
+                response_status,
+                response_json,
+                (
+                    executor_started_after_response,
+                    action_lock_state,
+                    action_result,
+                ),
+                (
+                    review_parent_succeeded,
+                    actual_snapshot_mode,
+                    snapshot_removed_after_review,
+                ),
+                editor_can_reacquire_lock,
+                printed_output,
+            ),
+            (
+                true,
+                true,
+                snapshot_staging_path_too_long,
+                false,
+                true,
+                StatusCode::OK,
+                expected_response_json,
+                (
+                    !snapshot_staging_path_too_long,
+                    expected_lock_state,
+                    expected_action_result,
+                ),
+                (true, expected_snapshot_mode, true),
+                true,
+                expected_output.to_owned(),
             ),
         );
     }
@@ -1876,7 +2419,7 @@ mod tests {
             std::fs::remove_file(&finish_fifo_path)
                 .expect("review process should close the finish FIFO");
             drop(review_operation_lock);
-            crate::shared::human_in_the_loop::signal_fifo(&finish_ack_path);
+            crate::shared::human_in_the_loop::signal_fifo_with_byte(&finish_ack_path, b'0');
         }
         let response = finish_task
             .await

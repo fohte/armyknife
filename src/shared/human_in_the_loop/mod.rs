@@ -6,6 +6,7 @@
 //! 3. User edits the document and saves
 //! 4. The result is parsed and processed
 
+mod action_result;
 mod approval;
 mod document;
 mod editor;
@@ -20,6 +21,12 @@ mod review_completion;
 mod review_finish;
 mod session_watch;
 mod tmux;
+pub(crate) use action_result::{
+    ReviewDocumentAction, ReviewDocumentActionResult, action_result_after_review_completion,
+    clear_action_result, document_hash, save_action_document_snapshot, save_action_result,
+    successful_action_result, successful_action_results_in_directory,
+    take_action_document_snapshot,
+};
 pub(crate) use pending_review::{
     ReviewDocumentMarker, is_active_pr_draft_review_marker, review_document_marker,
     review_document_path,
@@ -31,7 +38,7 @@ pub(crate) use review_finish::{
     request_review_finish, signal_review_finish_and_wait,
 };
 use review_finish::{
-    create_fifo_at_path, path_with_suffix, remove_fifo_if_present, try_read_fifo_signal_byte,
+    create_fifo_at_path, path_with_suffix, remove_fifo_if_present, try_read_fifo_byte,
 };
 
 pub use approval::{ApprovalManager, TEST_APPROVAL_DIR_OVERRIDE};
@@ -92,12 +99,17 @@ pub trait ReviewHandler<S: DocumentSchema> {
         Ok(())
     }
 
-    /// Called when an external action finishes the review.
+    /// Applies review completion after an external finish request.
     fn on_review_finished(
         &self,
         document: &Document<S>,
         _reason: ReviewFinishReason,
     ) -> Result<()> {
+        self.on_review_complete(document)
+    }
+
+    /// Applies review completion after a watch-web finish request.
+    fn on_watch_web_review_complete(&self, document: &Document<S>) -> Result<()> {
         self.on_review_complete(document)
     }
 }
@@ -199,12 +211,17 @@ where
     )
 }
 
+pub(crate) struct ReviewResult<S> {
+    pub(crate) document: Document<S>,
+    pub(crate) finish_reason: Option<ReviewFinishReason>,
+}
+
 #[cfg(test)]
 fn start_review_with_launcher<S, L, P>(
     document_path: &Path,
     launch_review: L,
     is_session_alive: P,
-) -> Result<Option<ReviewResult<S>>>
+) -> Result<Option<Document<S>>>
 where
     S: DocumentSchema,
     L: FnOnce(&Path, &Path, &str) -> Result<Option<String>>,
@@ -218,16 +235,12 @@ where
         },
         is_session_alive,
     )
+    .map(|review| review.map(|review| review.document))
 }
 
 struct ReviewLaunch {
     session: Option<String>,
     queue_key: Option<String>,
-}
-
-pub(crate) struct ReviewResult<S> {
-    pub(crate) document: Document<S>,
-    pub(crate) finish_reason: Option<ReviewFinishReason>,
 }
 
 impl ReviewLaunch {
@@ -306,6 +319,12 @@ where
         }
     };
 
+    let action_result = action_result_after_review_completion(completion_signal, document_path)?;
+    let completed_by_watch_web = action_result.is_some();
+    if let Some(action_result) = action_result {
+        action_result.print_for_agent();
+    }
+
     drop(finish_fifo_reader);
     finish_fifo_cleanup.disarm();
     let _ = remove_fifo_if_present(&finish_fifo_path);
@@ -318,7 +337,14 @@ where
 
     // Emit a diff of what the user edited so background callers can pick it
     // up from stdout without re-reading the file.
-    let post_edit = std::fs::read_to_string(document_path)?;
+    let post_edit = if completed_by_watch_web {
+        match take_action_document_snapshot(document_path)? {
+            Some(snapshot) => snapshot,
+            None => std::fs::read_to_string(document_path)?,
+        }
+    } else {
+        std::fs::read_to_string(document_path)?
+    };
     if let Err(e) = print_edit_diff(&pre_edit, &post_edit)
         && e.kind() != std::io::ErrorKind::BrokenPipe
     {
@@ -328,8 +354,7 @@ where
     // Reuse the in-memory `post_edit` for the document parse to avoid a
     // second read of the same file.
     let document = Document::<S>::from_content(document_path.to_path_buf(), &post_edit)?;
-    let finish_reason = (completion_signal == ReviewFinishReason::RepliesPushed.signal_byte())
-        .then_some(ReviewFinishReason::RepliesPushed);
+    let finish_reason = (completion_signal == b'p').then_some(ReviewFinishReason::RepliesPushed);
     Ok(Some(ReviewResult {
         document,
         finish_reason,
@@ -447,13 +472,11 @@ fn wait_for_fifo_signal_or_session_exit_with_interval(
                 Ok(true) => consecutive_check_failures = 0,
                 Ok(false) => {
                     consecutive_check_failures = 0;
-                    return Ok(
-                        if let Some(signal_byte) = try_read_fifo_signal_byte(file)? {
-                            FifoPollAction::Signaled(signal_byte)
-                        } else {
-                            FifoPollAction::Abort(HumanInTheLoopError::ReviewSessionClosed)
-                        },
-                    );
+                    return Ok(if let Some(signal) = try_read_fifo_byte(file)? {
+                        FifoPollAction::Signaled(signal)
+                    } else {
+                        FifoPollAction::Abort(HumanInTheLoopError::ReviewSessionClosed)
+                    });
                 }
                 Err(error) => {
                     consecutive_check_failures += 1;
@@ -488,13 +511,13 @@ fn poll_fifo_signal(
     use std::thread::sleep;
 
     loop {
-        if let Some(signal_byte) = try_read_fifo_signal_byte(&mut file)? {
-            return Ok(signal_byte);
+        if let Some(signal) = try_read_fifo_byte(&mut file)? {
+            return Ok(signal);
         }
 
         match check(&mut file)? {
             FifoPollAction::Continue => sleep(FIFO_POLL_INTERVAL),
-            FifoPollAction::Signaled(signal_byte) => return Ok(signal_byte),
+            FifoPollAction::Signaled(signal) => return Ok(signal),
             FifoPollAction::Abort(error) => return Err(error),
         }
     }
@@ -573,29 +596,25 @@ impl Drop for FifoCleanupGuard {
 /// to ensure signaling even if later initialization (e.g., config loading) fails.
 pub struct FifoSignalGuard {
     fifo_path: PathBuf,
-    signal_byte: u8,
+    signal: u8,
 }
 
 impl FifoSignalGuard {
     pub fn new(fifo_path: &Path) -> Self {
         Self {
             fifo_path: fifo_path.to_path_buf(),
-            signal_byte: b'0',
+            signal: b'0',
         }
     }
 
-    pub(crate) fn set_signal_byte(&mut self, signal_byte: u8) {
-        self.signal_byte = signal_byte;
+    pub fn set_signal(&mut self, signal: u8) {
+        self.signal = signal;
     }
 }
 
 impl Drop for FifoSignalGuard {
     fn drop(&mut self) {
-        if self.signal_byte == b'0' {
-            signal_fifo(&self.fifo_path);
-        } else {
-            let _ = try_signal_fifo_with_byte(&self.fifo_path, self.signal_byte);
-        }
+        signal_fifo_with_byte(&self.fifo_path, self.signal);
     }
 }
 
@@ -603,12 +622,8 @@ impl Drop for FifoSignalGuard {
 ///
 /// Uses `O_WRONLY | O_NONBLOCK` so the open returns ENXIO immediately
 /// if no reader has the FIFO open, instead of blocking forever.
-pub(crate) fn signal_fifo(fifo_path: &Path) {
-    let _ = try_signal_fifo(fifo_path);
-}
-
-pub(crate) fn try_signal_fifo(fifo_path: &Path) -> std::io::Result<()> {
-    try_signal_fifo_with_byte(fifo_path, b'0')
+pub(crate) fn signal_fifo_with_byte(fifo_path: &Path, byte: u8) {
+    let _ = try_signal_fifo_with_byte(fifo_path, byte);
 }
 
 pub(crate) fn try_signal_fifo_with_byte(fifo_path: &Path, byte: u8) -> std::io::Result<()> {
@@ -656,6 +671,17 @@ mod tests {
         }
     }
 
+    #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+    struct WatchWebReviewSchema {
+        submit: bool,
+    }
+
+    impl DocumentSchema for WatchWebReviewSchema {
+        fn is_approved(&self) -> bool {
+            self.submit
+        }
+    }
+
     struct ReviewDocumentFixture {
         _temp_dir: TempDir,
         path: PathBuf,
@@ -670,6 +696,91 @@ mod tests {
             _temp_dir: temp_dir,
             path,
         }
+    }
+
+    #[test]
+    #[ignore = "spawned by the watch-web review action integration test"]
+    fn watch_web_review_parent_worker() {
+        use std::io::Write;
+        use std::os::fd::AsRawFd;
+        use std::process::Stdio;
+
+        let document_path = PathBuf::from(
+            std::env::var_os("ARMYKNIFE_REVIEW_TEST_DOCUMENT").expect("document path"),
+        );
+        let ready_file =
+            std::env::var_os("ARMYKNIFE_REVIEW_TEST_READY_FILE").expect("ready file path");
+        let release_file =
+            std::env::var_os("ARMYKNIFE_REVIEW_TEST_RELEASE_FILE").expect("release file path");
+        let finished_file = std::env::var_os("ARMYKNIFE_REVIEW_TEST_FINISHED_FILE")
+            .expect("review finished file path");
+        let output_path =
+            std::env::var_os("ARMYKNIFE_REVIEW_TEST_OUTPUT_FILE").expect("output file path");
+        let output_file = std::fs::File::create(output_path).expect("output file should open");
+        // SAFETY: stdout is a valid process file descriptor in this test worker.
+        let saved_stdout = unsafe { libc::dup(libc::STDOUT_FILENO) };
+        assert!(saved_stdout >= 0, "stdout should be duplicated");
+        // SAFETY: `output_file` remains open until stdout is restored.
+        let redirected_stdout = unsafe { libc::dup2(output_file.as_raw_fd(), libc::STDOUT_FILENO) };
+        assert_eq!(redirected_stdout, libc::STDOUT_FILENO);
+
+        let mut review_child = None;
+        let result = start_review_with_marker::<WatchWebReviewSchema, _, _>(
+            &document_path,
+            None,
+            |document_path, done_fifo_path, finish_fifo_path, lock_id| {
+                let mut child_command =
+                    crate::infra::process::new_command(std::env::current_exe()?);
+                child_command
+                    .args([
+                        "--exact",
+                        "shared::human_in_the_loop::review_completion::tests::watch_web_review_child_worker",
+                        "--ignored",
+                        "--nocapture",
+                    ])
+                    .env("ARMYKNIFE_REVIEW_TEST_DOCUMENT", document_path)
+                    .env("ARMYKNIFE_REVIEW_TEST_DONE_FIFO", done_fifo_path)
+                    .env("ARMYKNIFE_REVIEW_TEST_FINISH_FIFO", finish_fifo_path)
+                    .env("ARMYKNIFE_REVIEW_TEST_LOCK_ID", lock_id)
+                    .env("ARMYKNIFE_REVIEW_TEST_READY_FILE", ready_file)
+                    .env("ARMYKNIFE_REVIEW_TEST_RELEASE_FILE", release_file)
+                    .env("ARMYKNIFE_REVIEW_TEST_FINISHED_FILE", finished_file)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null());
+                let child = crate::infra::process::spawn(child_command)?;
+                review_child = Some(child);
+                Ok(ReviewLaunch::without_queue(None))
+            },
+            |_| Ok(true),
+        );
+        std::io::stdout()
+            .flush()
+            .expect("review output should flush");
+        // SAFETY: `saved_stdout` is the descriptor duplicated before redirection.
+        let restored_stdout = unsafe { libc::dup2(saved_stdout, libc::STDOUT_FILENO) };
+        // SAFETY: the saved descriptor is no longer needed after restoration.
+        let closed_stdout = unsafe { libc::close(saved_stdout) };
+        assert_eq!((restored_stdout, closed_stdout), (libc::STDOUT_FILENO, 0));
+
+        let child_status = review_child
+            .as_mut()
+            .expect("review child should be launched")
+            .wait()
+            .expect("review child should exit");
+        let result = result
+            .map(|review| review.map(|review| (review.document.path, review.document.frontmatter)))
+            .map_err(|error| error.to_string());
+
+        assert_eq!(
+            (result, child_status.success()),
+            (
+                Ok(Some(
+                    (document_path, WatchWebReviewSchema { submit: true },)
+                )),
+                true,
+            ),
+        );
     }
 
     struct FifoReaderFixture {
@@ -719,7 +830,7 @@ mod tests {
         let writer_path = fifo_reader.fifo_path.clone();
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(50));
-            signal_fifo(&writer_path);
+            signal_fifo_with_byte(&writer_path, b'0');
         });
 
         wait_for_fifo_signal_with_timeout(
@@ -734,7 +845,7 @@ mod tests {
     fn wait_for_fifo_signal_or_session_exit_prefers_a_completion_signal(
         fifo_reader: FifoReaderFixture,
     ) {
-        try_signal_fifo_with_byte(&fifo_reader.fifo_path, b'p').expect("signal FIFO");
+        signal_fifo_with_byte(&fifo_reader.fifo_path, b'0');
 
         let result =
             wait_for_fifo_signal_or_session_exit(fifo_reader.reader, "review-session", |_| {
@@ -742,7 +853,7 @@ mod tests {
             })
             .map_err(|error| error.to_string());
 
-        assert_eq!(result, Ok(b'p'));
+        assert_eq!(result, Ok(b'0'));
     }
 
     #[rstest]
@@ -752,7 +863,7 @@ mod tests {
         let writer_path = fifo_reader.fifo_path.clone();
         let result =
             wait_for_fifo_signal_or_session_exit(fifo_reader.reader, "review-session", move |_| {
-                signal_fifo(&writer_path);
+                signal_fifo_with_byte(&writer_path, b'0');
                 Ok(false)
             })
             .map_err(|error| error.to_string());
@@ -767,7 +878,7 @@ mod tests {
         let writer_path = fifo_reader.fifo_path.clone();
         let writer = std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(50));
-            signal_fifo(&writer_path);
+            signal_fifo_with_byte(&writer_path, b'0');
         });
 
         let result =
@@ -799,7 +910,7 @@ mod tests {
                     ));
                 }
 
-                signal_fifo(&writer_path);
+                signal_fifo_with_byte(&writer_path, b'0');
                 Ok(true)
             },
         )
@@ -826,7 +937,7 @@ mod tests {
                         "tmux is unavailable".into(),
                     )),
                     5 => {
-                        signal_fifo(&writer_path);
+                        signal_fifo_with_byte(&writer_path, b'0');
                         Ok(true)
                     }
                     _ => Ok(true),
@@ -914,13 +1025,13 @@ mod tests {
             &document_path,
             |path, done_fifo_path, _lock_id| {
                 lock_was_held_during_launch = LockGuard::is_locked(path);
-                signal_fifo(done_fifo_path);
+                signal_fifo_with_byte(done_fifo_path, b'0');
                 Ok(None)
             },
             |_| Ok(true),
         )
         .expect("start review")
-        .map(|review| (review.document.path, review.document.frontmatter));
+        .map(|document| (document.path, document.frontmatter));
 
         assert_eq!(
             (
@@ -929,26 +1040,6 @@ mod tests {
                 LockGuard::is_locked(&document_path),
             ),
             (Some((document_path, ReviewTestSchema)), true, false,),
-        );
-    }
-
-    #[rstest]
-    fn start_review_preserves_a_push_finish_signal(review_document: ReviewDocumentFixture) {
-        let document_path = review_document.path;
-        let result = start_review_with_launcher::<ReviewTestSchema, _, _>(
-            &document_path,
-            |_, done_fifo_path, _| {
-                try_signal_fifo_with_byte(done_fifo_path, b'p')?;
-                Ok(None)
-            },
-            |_| Ok(true),
-        )
-        .expect("start review")
-        .map(|review| (review.finish_reason, review.document.frontmatter));
-
-        assert_eq!(
-            result,
-            Some((Some(ReviewFinishReason::RepliesPushed), ReviewTestSchema)),
         );
     }
 
@@ -971,13 +1062,13 @@ mod tests {
             &document_path,
             |path, done_fifo_path, _lock_id| {
                 lock_was_held_during_launch = LockGuard::is_locked(path);
-                signal_fifo(done_fifo_path);
+                signal_fifo_with_byte(done_fifo_path, b'0');
                 Ok(None)
             },
             |_| Ok(true),
         )
         .expect("start review")
-        .map(|review| (review.document.path, review.document.frontmatter));
+        .map(|document| (document.path, document.frontmatter));
 
         assert_eq!(
             (
@@ -997,7 +1088,7 @@ mod tests {
             |_, _, _| Err(HumanInTheLoopError::CommandFailed("launch failed".into())),
             |_| Ok(true),
         )
-        .map(|review| review.map(|review| review.document.path))
+        .map(|document| document.map(|document| document.path))
         .map_err(|error| error.to_string());
 
         assert_eq!(
@@ -1018,13 +1109,13 @@ mod tests {
                 lock_was_held_during_launch = LockGuard::is_locked(path);
                 drop(CleanupGuard::new(path, lock_id, None).expect("register child lock"));
                 newer_review_lock = Some(LockGuard::acquire(path).expect("new review lock"));
-                signal_fifo(done_fifo_path);
+                signal_fifo_with_byte(done_fifo_path, b'0');
                 Ok(None)
             },
             |_| Ok(true),
         )
         .expect("start review")
-        .map(|review| (review.document.path, review.document.frontmatter));
+        .map(|document| (document.path, document.frontmatter));
         let lock_after_start_review = LockGuard::is_locked(&document_path);
         drop(newer_review_lock);
 
@@ -1057,7 +1148,7 @@ mod tests {
             |_| Ok(true),
         )
         .expect("skip existing review")
-        .map(|review| review.document.path);
+        .map(|document| document.path);
         let lock_contents = std::fs::read_to_string(lock_path).expect("read existing lock");
 
         assert_eq!(

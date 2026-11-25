@@ -6,7 +6,6 @@ use std::process::{Child, Command, ExitStatus};
 
 use indoc::formatdoc;
 
-use crate::shared::command;
 use crate::shared::config::Terminal;
 
 /// Options for launching a terminal window.
@@ -52,7 +51,7 @@ pub fn run_editor(
 
 pub(crate) enum ReviewEditorOutcome {
     Exited(ExitStatus),
-    FinishRequested(super::ReviewFinishReason),
+    FinishRequested(u8),
 }
 
 pub(super) trait ReviewEditorChild {
@@ -84,7 +83,11 @@ pub(super) fn run_editor_for_review(
     finish_fifo_path: &Path,
 ) -> super::Result<ReviewEditorOutcome> {
     let mut finish_fifo_reader = super::open_fifo_reader(finish_fifo_path)?;
-    let mut child = editor_command_with_args(editor_command, file_path, window_title).spawn()?;
+    let mut child = crate::infra::process::spawn(editor_command_with_args(
+        editor_command,
+        file_path,
+        window_title,
+    ))?;
     wait_for_editor_or_finish_request(&mut child, &mut finish_fifo_reader)
 }
 
@@ -93,11 +96,9 @@ pub(super) fn wait_for_editor_or_finish_request(
     finish_fifo_reader: &mut std::fs::File,
 ) -> super::Result<ReviewEditorOutcome> {
     loop {
-        if let Some(signal_byte) = super::try_read_fifo_signal_byte(finish_fifo_reader)? {
+        if let Some(signal) = super::try_read_fifo_byte(finish_fifo_reader)? {
             child.terminate_and_wait()?;
-            return Ok(ReviewEditorOutcome::FinishRequested(
-                super::ReviewFinishReason::from_signal_byte(signal_byte),
-            ));
+            return Ok(ReviewEditorOutcome::FinishRequested(signal));
         }
         if let Some(status) = child.try_wait()? {
             return Ok(ReviewEditorOutcome::Exited(status));
@@ -111,7 +112,7 @@ fn editor_command_with_args(
     file_path: &Path,
     window_title: Option<&str>,
 ) -> Command {
-    let mut cmd = command::new(editor_command);
+    let mut cmd = crate::infra::process::new_command(editor_command);
 
     // Apply nvim-specific titlestring option
     if (editor_command == "nvim" || editor_command.ends_with("/nvim"))
@@ -163,7 +164,7 @@ fn launch_wezterm(
     // is already running; invoking the `wezterm` CLI on macOS does not, so the
     // review window would attach to an existing session.
     let mut cmd = if cfg!(target_os = "macos") {
-        let mut c = command::new("open");
+        let mut c = crate::infra::process::new_command("open");
         c.args(["-n", "-a", "WezTerm", "--args"]);
         c
     } else {
@@ -290,7 +291,9 @@ fn launch_ghostty_macos(
             return prevWin & "," & newWinId
         end tell"#};
 
-    let output = command::new("osascript").args(["-e", &script]).output()?;
+    let output = crate::infra::process::new_command("osascript")
+        .args(["-e", &script])
+        .output()?;
 
     if !output.status.success() {
         return Err(std::io::Error::other(
@@ -327,7 +330,7 @@ fn launch_ghostty_macos(
             end try
         end tell'"};
 
-    let mut watcher = command::new("bash");
+    let mut watcher = crate::infra::process::new_command("bash");
     watcher
         .args(["-c", &watcher_sh])
         .stdout(std::process::Stdio::null())
