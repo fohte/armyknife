@@ -46,6 +46,7 @@ mod tests {
         temp_env::with_vars(
             [
                 ("ARMYKNIFE_SESSION_ID", None::<&str>),
+                ("CLAUDE_CODE_SESSION_ID", None::<&str>),
                 ("CODEX_SESSION_ID", None::<&str>),
             ],
             || {

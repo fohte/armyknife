@@ -55,6 +55,12 @@ pub(crate) fn add_agent_proposal(sessions_dir: &Path, session_id: &str, body: &s
     validate_session_id(session_id)?;
     let mut connection = open_connection(sessions_dir)?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let session_exists: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sessions WHERE session_id = ?1)",
+        [session_id],
+        |row| row.get(0),
+    )?;
+    anyhow::ensure!(session_exists, "session not found: {session_id}");
     let now = Utc::now().to_rfc3339();
     let seq: i64 = transaction.query_row(
         "SELECT COALESCE(MAX(seq), 0) + 1 FROM agent_proposal WHERE session_id = ?1",
@@ -227,7 +233,21 @@ mod tests {
     };
     #[fixture]
     fn sessions_dir() -> TempDir {
-        tempfile::tempdir().expect("temporary sessions directory should be created")
+        let sessions_dir =
+            tempfile::tempdir().expect("temporary sessions directory should be created");
+        for session_id in ["session-a", "session-b"] {
+            let session = serde_json::from_value(serde_json::json!({
+                "session_id": session_id,
+                "cwd": "/tmp/fixture-worktree",
+                "status": "running",
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z",
+            }))
+            .expect("test session should deserialize");
+            crate::commands::agent::store::save_session_to(sessions_dir.path(), &session)
+                .expect("test session should save");
+        }
+        sessions_dir
     }
 
     fn normalize_timestamps(mut proposals: Vec<AgentProposal>) -> Vec<AgentProposal> {
@@ -323,6 +343,22 @@ mod tests {
     }
 
     #[rstest]
+    fn rejects_adding_a_proposal_for_an_untracked_session(sessions_dir: TempDir) {
+        let result = add_agent_proposal(sessions_dir.path(), "untracked-session", "body")
+            .map_err(|error| error.to_string());
+        let proposals = agent_proposals(sessions_dir.path(), "untracked-session")
+            .expect("proposals should load");
+
+        assert_eq!(
+            (result, proposals),
+            (
+                Err("session not found: untracked-session".to_string()),
+                Vec::new(),
+            ),
+        );
+    }
+
+    #[rstest]
     fn records_the_supplied_answer_resolution_time(sessions_dir: TempDir) {
         add_agent_proposal(sessions_dir.path(), "session-a", "body").expect("proposal should save");
         let resolved_at = Utc
@@ -376,20 +412,6 @@ mod tests {
 
     #[rstest]
     fn deleting_a_session_removes_its_proposals(sessions_dir: TempDir) {
-        let session: crate::commands::agent::types::Session =
-            serde_json::from_value(serde_json::json!({
-                "session_id": "session-a",
-                "cwd": "/fixture/worktree",
-                "transcript_path": null,
-                "tmux_info": null,
-                "status": "stopped",
-                "created_at": "2026-03-14T09:26:53Z",
-                "updated_at": "2026-03-14T09:26:53Z",
-                "last_message": null,
-            }))
-            .expect("test session should deserialize");
-        crate::commands::agent::store::save_session_to(sessions_dir.path(), &session)
-            .expect("session should save");
         add_agent_proposal(sessions_dir.path(), "session-a", "body").expect("proposal should save");
 
         crate::commands::agent::store::delete_session_from_with_storage(
