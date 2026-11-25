@@ -41,6 +41,7 @@ use wiremock::matchers::{body_json, body_string_contains, method, path, path_reg
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 mod pr_number;
+mod reply_review;
 
 use super::client::GitHubClient;
 

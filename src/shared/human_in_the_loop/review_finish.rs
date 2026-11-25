@@ -13,6 +13,9 @@ pub(crate) const FINISH_ACK_TIMEOUT: Duration = Duration::from_secs(5);
 pub enum ReviewFinishReason {
     ExternalRequest,
     RepliesPushed,
+    ReplyThreadsResolved,
+    PullRequestClosed,
+    PullRequestMerged,
 }
 
 impl ReviewFinishReason {
@@ -20,13 +23,26 @@ impl ReviewFinishReason {
         match self {
             Self::ExternalRequest => b'0',
             Self::RepliesPushed => b'p',
+            Self::ReplyThreadsResolved => b't',
+            Self::PullRequestClosed => b'c',
+            Self::PullRequestMerged => b'm',
         }
     }
 
     pub(crate) fn from_signal_byte(signal: u8) -> Self {
         match signal {
             b'p' => Self::RepliesPushed,
+            b't' => Self::ReplyThreadsResolved,
+            b'c' => Self::PullRequestClosed,
+            b'm' => Self::PullRequestMerged,
             _ => Self::ExternalRequest,
+        }
+    }
+
+    pub(crate) fn from_completion_signal(signal: u8) -> Option<Self> {
+        match signal {
+            b'p' | b't' | b'c' | b'm' => Some(Self::from_signal_byte(signal)),
+            _ => None,
         }
     }
 }
