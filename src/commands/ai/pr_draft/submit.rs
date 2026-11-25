@@ -64,9 +64,16 @@ struct ReviewRepositoryLanguageContext {
     copier_answers_path: Option<PathBuf>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SubmitLockPolicy {
+    RequireUnlocked,
+    OwnedByReview,
+}
+
 struct SubmitContext<'a, F> {
     current_repo_identity: F,
     review_language_context: Option<&'a ReviewRepositoryLanguageContext>,
+    lock_policy: SubmitLockPolicy,
 }
 
 pub async fn run(args: &SubmitArgs) -> anyhow::Result<()> {
@@ -78,7 +85,7 @@ pub async fn run(args: &SubmitArgs) -> anyhow::Result<()> {
         result.print_for_agent();
         return Ok(());
     }
-    run_with_review_language_context(args, None)
+    run_with_review_language_context(args, None, SubmitLockPolicy::RequireUnlocked)
         .await
         .map(|_| ())
 }
@@ -92,12 +99,13 @@ pub(super) async fn run_for_review(
         expected_repo_id: expected_repo_id.to_owned(),
         copier_answers_path: copier_answers_path_for_repo_at(session_cwd, expected_repo_id),
     };
-    run_with_review_language_context(args, Some(context)).await
+    run_with_review_language_context(args, Some(context), SubmitLockPolicy::OwnedByReview).await
 }
 
 async fn run_with_review_language_context(
     args: &SubmitArgs,
     review_language_context: Option<ReviewRepositoryLanguageContext>,
+    lock_policy: SubmitLockPolicy,
 ) -> anyhow::Result<String> {
     let client = GitHubClient::get()?;
     let post_submit_processor = PrSeriesPostSubmitProcessor { github: client };
@@ -113,6 +121,7 @@ async fn run_with_review_language_context(
         SubmitContext {
             current_repo_identity: read_current_repo_identity,
             review_language_context: review_language_context.as_ref(),
+            lock_policy,
         },
         &submit_effects,
         |owner, repo| ensure_no_review_access(is_vibe_enabled, load_config, owner, repo),
@@ -138,6 +147,7 @@ async fn run_impl_with_recording<P: PostSubmitProcessor, R: Fn(&str)>(
         SubmitContext {
             current_repo_identity,
             review_language_context: None,
+            lock_policy: SubmitLockPolicy::RequireUnlocked,
         },
         submit_effects,
         vibe_access_check,
@@ -192,7 +202,8 @@ async fn run_impl_with_review_language_context<
 
     // Check for a live review holder before submitting.
     let lock_path = LockGuard::lock_path(&draft_path);
-    if LockGuard::is_locked(&draft_path) {
+    if context.lock_policy == SubmitLockPolicy::RequireUnlocked && LockGuard::is_locked(&draft_path)
+    {
         anyhow::bail!(
             "Please close the editor before submitting the PR (lock: {}).",
             lock_path.display()
@@ -827,6 +838,7 @@ mod tests {
             SubmitContext {
                 current_repo_identity: no_current_repo,
                 review_language_context: Some(&context),
+                lock_policy: SubmitLockPolicy::RequireUnlocked,
             },
             &submit_effects,
             no_vibe_access,
@@ -850,6 +862,101 @@ mod tests {
                 Err("The review repository does not match the PR draft target: other-owner/other-repository".to_string()),
                 Vec::new(),
                 Vec::new(),
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn review_submission_succeeds_while_the_launcher_lock_is_active() {
+        let _draft_directory =
+            TestDraftDirectory::new("review-lock-owner", "review-lock-repository");
+        let draft_path = create_approved_draft(
+            "review-lock-owner",
+            "review-lock-repository",
+            "feature/review-submit-lock",
+            "Submit a sample change",
+            "Body content",
+        );
+        let launcher_lock =
+            LockGuard::acquire(&draft_path).expect("review launcher lock should be acquired");
+        let lock_was_active = LockGuard::is_locked(&draft_path);
+        let args = SubmitArgs {
+            filepath: Some(draft_path),
+            base: None,
+            draft: false,
+            no_review: false,
+        };
+        let review_context = ReviewRepositoryLanguageContext {
+            expected_repo_id: "review-lock-owner/review-lock-repository".to_string(),
+            copier_answers_path: None,
+        };
+        let client = SubmitClientStub {
+            lock_path_at_create: Some(
+                args.filepath
+                    .as_ref()
+                    .expect("draft path should be explicit")
+                    .clone(),
+            ),
+            ..SubmitClientStub::default()
+        };
+        let submit_effects = SubmitEffects {
+            post_submit_processor: &NoopPostSubmitProcessor,
+            record_created_pr_url: noop_record_created_pr_url,
+        };
+
+        let result = super::run_impl_with_review_language_context(
+            &args,
+            &client,
+            &noop_hook,
+            noop_config,
+            SubmitContext {
+                current_repo_identity: no_current_repo,
+                review_language_context: Some(&review_context),
+                lock_policy: SubmitLockPolicy::OwnedByReview,
+            },
+            &submit_effects,
+            no_vibe_access,
+        )
+        .await
+        .map_err(|error| error.to_string());
+        let create_calls = client
+            .create_calls
+            .lock()
+            .expect("submit client mutex")
+            .clone();
+        let update_calls = client
+            .update_calls
+            .lock()
+            .expect("submit client mutex")
+            .clone();
+        let lock_states_at_create = client
+            .lock_states_at_create
+            .lock()
+            .expect("lock state mutex")
+            .clone();
+        drop(launcher_lock);
+
+        assert_eq!(
+            (
+                lock_was_active,
+                result,
+                create_calls,
+                update_calls,
+                lock_states_at_create,
+            ),
+            (
+                true,
+                Ok("https://github.com/sample-owner/sample-repository/pull/1".to_string()),
+                vec![(
+                    "review-lock-owner".to_string(),
+                    "review-lock-repository".to_string(),
+                    "Submit a sample change".to_string(),
+                    "feature/review-submit-lock".to_string(),
+                    None,
+                    false,
+                )],
+                Vec::new(),
+                vec![true],
             ),
         );
     }
@@ -928,6 +1035,8 @@ mod tests {
         create_calls: Mutex<Vec<CreatePrCall>>,
         update_calls: Mutex<Vec<u64>>,
         existing_pr_number: Option<u64>,
+        lock_path_at_create: Option<PathBuf>,
+        lock_states_at_create: Mutex<Vec<bool>>,
     }
 
     impl RepoClient for SubmitClientStub {
@@ -960,6 +1069,12 @@ mod tests {
                     params.base,
                     params.draft,
                 ));
+            if let Some(lock_path) = &self.lock_path_at_create {
+                self.lock_states_at_create
+                    .lock()
+                    .expect("lock state mutex")
+                    .push(LockGuard::is_locked(lock_path));
+            }
             Ok(CreatedPullRequest {
                 number: 1,
                 url: "https://github.com/sample-owner/sample-repository/pull/1".to_string(),
