@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.924](https://github.com/fohte/armyknife/compare/v0.1.923...v0.1.924) (2026-11-25)
+
+
+### Bug Fixes
+
+* **agent/watch-web:** keep conversation stable ([#2271](https://github.com/fohte/armyknife/issues/2271)) ([de34b1a](https://github.com/fohte/armyknife/commit/de34b1a932326e07de4cc31c74a4fc00ffdb7b6e))
+
 ## [0.1.923](https://github.com/fohte/armyknife/compare/v0.1.922...v0.1.923) (2026-11-25)
 
 
