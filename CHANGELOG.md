@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.920](https://github.com/fohte/armyknife/compare/v0.1.919...v0.1.920) (2026-11-25)
+
+
+### Bug Fixes
+
+* **agent:** fall back to Claude's session ID ([#2263](https://github.com/fohte/armyknife/issues/2263)) ([95e4fa1](https://github.com/fohte/armyknife/commit/95e4fa1ae54573adc047acb8fd7c05db563ca56b))
+
 ## [0.1.919](https://github.com/fohte/armyknife/compare/v0.1.918...v0.1.919) (2026-11-25)
 
 
