@@ -143,6 +143,7 @@ async fn monitor_reply_review_completion(
         |reason| {
             let document_path = document_path.clone();
             async move {
+                // Resolved threads and closed PRs make local replies obsolete, so unsaved edits do not block completion.
                 tokio::task::spawn_blocking(move || {
                     request_review_finish(&document_path, reason).map_err(Into::into)
                 })
