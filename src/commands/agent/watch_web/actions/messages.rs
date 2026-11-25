@@ -369,38 +369,39 @@ pub(super) fn send_action_event_message(
     deliver: impl FnOnce(&Session, &str) -> Result<()>,
 ) -> Result<()> {
     let message_id = action_event::new_action_message_id();
-    let (stored_content, stored_kind) = match session.engine {
-        Engine::Codex => (message.event_text, Some(message.action_event_kind)),
-        Engine::Claude => (message.message_content, None),
-    };
-    let queued_prompt_id = if session.engine == Engine::Codex {
-        Some(store::insert_watch_web_queued_prompt_from(
-            sessions_dir,
-            &session.session_id,
-            &message_id,
-            stored_content,
-            message.attachments,
-            stored_kind,
-            Utc::now(),
-        )?)
-    } else {
-        None
-    };
+    let queued_prompt_id = store::insert_watch_web_queued_prompt_from(
+        sessions_dir,
+        &session.session_id,
+        &message_id,
+        message.event_text,
+        message.attachments,
+        Some(message.action_event_kind),
+        Utc::now(),
+    )?;
     let content = watch_web_message_content(session, message.marker, message.message_content);
     let content = queued_prompt::add_id_marker(&content, &message_id);
     if let Err(error) = deliver(session, &content) {
-        if let Some(id) = queued_prompt_id
-            && let Err(cleanup_error) = store::delete_watch_web_queued_prompts_from(
-                sessions_dir,
-                &session.session_id,
-                &[id],
-            )
-        {
+        if let Err(cleanup_error) = store::delete_watch_web_queued_prompts_from(
+            sessions_dir,
+            &session.session_id,
+            &[queued_prompt_id],
+        ) {
             tracing::warn!(
                 session_id = %session.session_id,
                 error = %cleanup_error,
                 "failed to remove unsent watch-web action event"
             );
+            if let Err(resolve_error) = store::mark_watch_web_queued_prompts_resolved_from(
+                sessions_dir,
+                &session.session_id,
+                &[queued_prompt_id],
+            ) {
+                tracing::warn!(
+                    session_id = %session.session_id,
+                    error = %resolve_error,
+                    "failed to resolve unsent watch-web action event"
+                );
+            }
         }
         return Err(error);
     }
@@ -427,7 +428,7 @@ mod tests {
     };
     use crate::commands::agent::peer::notify;
     use crate::commands::agent::store::{self, WatchWebActionEventKind};
-    use crate::commands::agent::types::Session;
+    use crate::commands::agent::types::{Engine, Session};
 
     #[fixture]
     fn sessions_dir() -> tempfile::TempDir {
@@ -484,11 +485,15 @@ mod tests {
     }
 
     #[rstest]
-    fn codex_action_delivery_records_its_kind_with_the_transcript_message_id(
+    #[case::claude(Engine::Claude)]
+    #[case::codex(Engine::Codex)]
+    fn action_delivery_records_its_kind_with_the_transcript_message_id(
         sessions_dir: tempfile::TempDir,
         codex_session: Session,
+        #[case] engine: Engine,
     ) {
-        let session = codex_session;
+        let mut session = codex_session;
+        session.engine = engine;
         let message_content = "<armyknife-todo-completed>The user marked the to-do as done: Review the fixture.</armyknife-todo-completed>";
         let mut delivered_message = None;
 

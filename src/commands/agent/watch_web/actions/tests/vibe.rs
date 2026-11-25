@@ -37,10 +37,19 @@ async fn enabling_vibe_updates_session_and_sends_a_queued_prompt(action_context:
         ))
         .await
         .unwrap();
+    let queued_prompts = store::watch_web_queued_prompts_from(
+        &action_context.temp_dir.path().join("sessions"),
+        "fixture-session",
+    )
+    .unwrap();
     let actual = (
         response_snapshot(response, &action_context).await,
         action_context.load_session("fixture-session").vibe_enabled,
         normalized_queued_prompts(&action_context, "fixture-session", None),
+        queued_prompts
+            .iter()
+            .map(|prompt| prompt.action_event_kind)
+            .collect::<Vec<_>>(),
     );
 
     assert_eq!(
@@ -62,9 +71,10 @@ async fn enabling_vibe_updates_session_and_sends_a_queued_prompt(action_context:
             true,
             json!([{
                 "id": "<prompt-id>",
-                "content": "<armyknife-vibe-mode-on>watch-web からユーザーが vibe mode を on にしました。</armyknife-vibe-mode-on>",
+                "content": "Vibe mode turned on",
                 "sentAt": "<sent-at>",
             }]),
+            vec![Some(WatchWebActionEventKind::VibeModeOn)],
         ),
     );
 }
@@ -537,7 +547,7 @@ async fn disabling_vibe_reports_inherited_ancestor_state(action_context: ActionC
             false,
             json!([{
                 "id": "<prompt-id>",
-                "content": "<armyknife-vibe-mode-off>watch-web からユーザーが vibe mode を off にしました。祖先セッションから引き継いでいる場合、vibe mode は引き続き有効です。</armyknife-vibe-mode-off>",
+                "content": "Vibe mode turned off",
                 "sentAt": "<sent-at>",
             }]),
         ),

@@ -949,11 +949,7 @@ mod tests {
             )
             .unwrap();
         resolved_ids.extend(
-            super::super::super::queued_prompt::resolve_transcript_messages(
-                &mut messages,
-                prompts,
-                crate::commands::agent::types::Engine::Claude,
-            ),
+            super::super::super::queued_prompt::resolve_transcript_messages(&mut messages, prompts),
         );
         resolved_ids.sort_unstable();
         resolved_ids.dedup();

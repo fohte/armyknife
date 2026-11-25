@@ -63,11 +63,6 @@ enum CodexEffect {
         timestamp: Option<DateTime<Utc>>,
         rewind_id: Option<String>,
     },
-    ArmyknifeEvent {
-        text: CodexText,
-        timestamp: Option<DateTime<Utc>>,
-        queued_prompt_id: Option<String>,
-    },
     Thinking {
         text: CodexText,
     },
@@ -340,31 +335,11 @@ impl CodexParserState {
                 match item.get("type").and_then(Value::as_str) {
                     Some("UserMessage") => {
                         if let Some(text) = item.get("content").and_then(value_text) {
-                            let queued_prompt_id =
-                                super::super::queued_prompt::id_from_content(&text)
-                                    .map(str::to_owned);
-                            let content_without_id =
-                                super::super::queued_prompt::strip_id_marker(&text);
-                            if let Some((tag, body)) =
-                                super::super::tagged_message::tagged_body(&content_without_id)
-                                && let Some(event_text) = super::super::action_event::event_text(
-                                    tag,
-                                    body,
-                                    queued_prompt_id.as_deref(),
-                                )
-                            {
-                                effects.push(CodexEffect::ArmyknifeEvent {
-                                    text: CodexText::new(event_text)?,
-                                    timestamp,
-                                    queued_prompt_id,
-                                });
-                            } else {
-                                effects.push(CodexEffect::UserMessage {
-                                    text: CodexText::new(text)?,
-                                    timestamp,
-                                    rewind_id: self.current_turn_id.clone(),
-                                });
-                            }
+                            effects.push(CodexEffect::UserMessage {
+                                text: CodexText::new(text)?,
+                                timestamp,
+                                rewind_id: self.current_turn_id.clone(),
+                            });
                         }
                     }
                     Some("CommandExecution") | Some("commandExecution") => {
@@ -437,23 +412,6 @@ impl CodexParserState {
                             *timestamp,
                             rewind_id.clone(),
                         );
-                    }
-                    CodexEffect::ArmyknifeEvent {
-                        text,
-                        timestamp,
-                        queued_prompt_id,
-                    } => {
-                        tools.flush_into(&mut items);
-                        let mut text = classifier::one_line(&text.decode()?);
-                        if let Some(message_id) = queued_prompt_id {
-                            text = super::super::queued_prompt::add_id_marker(&text, message_id);
-                        }
-                        items.push(ChatItem::Event {
-                            kind: EventKind::Armyknife,
-                            text,
-                            failed: false,
-                            timestamp: timestamp.map(|timestamp| timestamp.to_rfc3339()),
-                        });
                     }
                     CodexEffect::Thinking { text } => {
                         tools.record_thinking(text.decode()?, None);
@@ -647,7 +605,7 @@ mod tests {
         WatchWebQueuedAttachment, WatchWebQueuedPrompt,
     };
     use crate::commands::agent::watch_web::messages::{
-        ChatItem, Engine, EventKind, ParentSession, PeerDirection, SkillSuggestion, ToolGroupItem,
+        ChatItem, EventKind, ParentSession, PeerDirection, SkillSuggestion, ToolGroupItem,
         ToolOperation, UserContentPart, queued_prompt,
     };
 
@@ -1289,7 +1247,10 @@ mod tests {
     #[rstest]
     #[case::completion("armyknife-todo-completed", "Fixture action text.")]
     #[case::rejection("armyknife-todo-rejected", "Fixture rejection text.")]
-    fn renders_tagged_todo_messages_as_armyknife_events(#[case] tag: &str, #[case] body: &str) {
+    fn keeps_unrecorded_tagged_todo_messages_as_user_content(
+        #[case] tag: &str,
+        #[case] body: &str,
+    ) {
         let queued_prompt_marker =
             "<!-- armyknife-queued-prompt-id:armyknife-action:fixture-message-gold -->";
         let content = format!("<{tag}>{body}</{tag}>\n{queued_prompt_marker}");
@@ -1305,11 +1266,12 @@ mod tests {
 
         assert_eq!(
             parse(Cursor::new(transcript), None).unwrap(),
-            vec![ChatItem::Event {
-                kind: EventKind::Armyknife,
-                text: format!("{body}\n{queued_prompt_marker}"),
-                failed: false,
+            vec![ChatItem::User {
+                rewind_id: None,
+                text: format!("<{tag}>{body}</{tag}>\n{queued_prompt_marker}"),
+                queued_prompt_id: None,
                 timestamp: Some("2026-06-01T12:05:00+00:00".to_string()),
+                from: None,
             }],
         );
     }
@@ -1378,11 +1340,8 @@ mod tests {
             sent_at: Utc::now(),
         }];
         let mut messages = parse(Cursor::new(transcript), None).unwrap();
-        let resolved_ids = queued_prompt::resolve_transcript_messages(
-            &mut messages,
-            &queued_prompts,
-            Engine::Codex,
-        );
+        let resolved_ids =
+            queued_prompt::resolve_transcript_messages(&mut messages, &queued_prompts);
 
         assert_eq!(
             (messages, resolved_ids),
@@ -1441,11 +1400,8 @@ mod tests {
             resolved: false,
             sent_at: Utc::now(),
         }];
-        let resolved_prompt_ids = queued_prompt::resolve_transcript_messages(
-            &mut messages,
-            &queued_prompts,
-            Engine::Codex,
-        );
+        let resolved_prompt_ids =
+            queued_prompt::resolve_transcript_messages(&mut messages, &queued_prompts);
 
         assert_eq!(
             (messages, resolved_prompt_ids),

@@ -335,8 +335,8 @@ mod tests {
     }
     use crate::commands::agent::proposal::ProposalOption;
     use crate::commands::agent::store::{
-        AgentDecision, AgentTodo, PermissionRequestData, TodoResolution, WatchWebQueuedAttachment,
-        WatchWebQueuedPrompt,
+        AgentDecision, AgentTodo, PermissionRequestData, TodoResolution, WatchWebActionEventKind,
+        WatchWebQueuedAttachment, WatchWebQueuedPrompt,
     };
     use crate::commands::agent::watch_web::messages::{
         ChatItem, ParentSession, PeerDirection, QuestionChoice, SkillSuggestion, ToolOperation,
@@ -1450,11 +1450,18 @@ mod tests {
         );
     }
 
-    #[test]
-    fn resolves_a_human_origin_vibe_notice_as_an_event() {
+    #[rstest]
+    #[case::tagged_notice(
+        "<armyknife-vibe-mode-on>watch-web からユーザーが vibe mode を on にしました。</armyknife-vibe-mode-on>"
+    )]
+    #[case::slash_command_markup(indoc! {r#"
+        <command-message>synthetic action notice</command-message>
+        <command-name>/vibe-on</command-name>
+        <command-args>fixture-argument</command-args>
+    "#})]
+    fn resolves_a_human_origin_action_from_its_recorded_kind(#[case] queued_content: &str) {
         let user_marker = "⟦armyknife-user:fixture-marker-violet⟧";
         let message_id = "armyknife-action:fixture-message-teal";
-        let queued_content = "<armyknife-vibe-mode-on>watch-web からユーザーが vibe mode を on にしました。</armyknife-vibe-mode-on>";
         let delivered_content = crate::commands::agent::watch_web_user_marker::prefix_message(
             user_marker,
             &super::super::super::queued_prompt::add_id_marker(queued_content, message_id),
@@ -1471,8 +1478,8 @@ mod tests {
         let queued_prompt = WatchWebQueuedPrompt {
             id: 7,
             message_id: Some(message_id.to_owned()),
-            content: queued_content.to_owned(),
-            action_event_kind: None,
+            content: "Vibe mode turned on".to_owned(),
+            action_event_kind: Some(WatchWebActionEventKind::VibeModeOn),
             attachments: Vec::<WatchWebQueuedAttachment>::new(),
             resolved: false,
             sent_at: Utc.timestamp_opt(1_000, 0).unwrap(),
@@ -1493,7 +1500,6 @@ mod tests {
             super::super::super::queued_prompt::resolve_transcript_messages(
                 &mut messages,
                 &queued_prompts,
-                crate::commands::agent::types::Engine::Claude,
             ),
         );
         resolved_ids.sort_unstable();
@@ -1556,7 +1562,6 @@ mod tests {
             super::super::super::queued_prompt::resolve_transcript_messages(
                 &mut messages,
                 &queued_prompts,
-                crate::commands::agent::types::Engine::Claude,
             ),
         );
         resolved_ids.sort_unstable();

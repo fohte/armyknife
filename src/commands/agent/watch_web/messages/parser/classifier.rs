@@ -5,7 +5,7 @@ use crate::commands::agent::peer_message::{
 };
 
 use super::super::action_event;
-use super::super::tagged_message::{tagged_action_body, tagged_body};
+use super::super::tagged_message::tagged_body;
 
 mod system_record;
 
@@ -44,30 +44,17 @@ pub(super) fn classify_inbound(
     text: &str,
     user_marker: Option<&str>,
 ) -> MessageKind {
-    classify_inbound_with_action_tags(record, text, user_marker, true)
+    classify_inbound_with_tags(record, text, user_marker)
 }
 
 pub(super) fn classify_codex_inbound(record: &Value, text: &str) -> MessageKind {
-    let is_hidden_tool_result = record.get("sourceToolAssistantUUID").is_some()
-        || record
-            .get("toolUseResult")
-            .is_some_and(|result| !result.is_null());
-    if !is_hidden_tool_result
-        && super::super::queued_prompt::id_from_content(text)
-            .is_some_and(action_event::is_action_message_id)
-    {
-        return MessageKind::User {
-            text: text.to_owned(),
-        };
-    }
-    classify_inbound_with_action_tags(record, text, None, false)
+    classify_inbound_with_tags(record, text, None)
 }
 
-fn classify_inbound_with_action_tags(
+fn classify_inbound_with_tags(
     record: &Value,
     text: &str,
     user_marker: Option<&str>,
-    classify_action_tags: bool,
 ) -> MessageKind {
     if record.get("sourceToolAssistantUUID").is_some()
         || record
@@ -77,8 +64,7 @@ fn classify_inbound_with_action_tags(
         return MessageKind::Hidden;
     }
 
-    let content_without_id = super::super::queued_prompt::strip_id_marker(text);
-    let tagged = tagged_body(text).or_else(|| tagged_action_body(&content_without_id));
+    let tagged = tagged_body(text);
     if tagged.is_some_and(|(tag, _)| is_hidden_tag(tag)) {
         return MessageKind::Hidden;
     }
@@ -108,26 +94,9 @@ fn classify_inbound_with_action_tags(
 
     if let Some((tag, body)) = tagged {
         if action_event::is_action_event_tag(tag) {
-            if !classify_action_tags {
-                return MessageKind::User {
-                    text: text.to_owned(),
-                };
-            }
-            return action_event::event_text(
-                tag,
-                body,
-                super::super::queued_prompt::id_from_content(text),
-            )
-            .map_or_else(
-                || MessageKind::User {
-                    text: text.to_owned(),
-                },
-                |text| MessageKind::Event {
-                    kind: EventKind::Armyknife,
-                    text,
-                    failed: false,
-                },
-            );
+            return MessageKind::User {
+                text: text.to_owned(),
+            };
         }
         return event(tag, body, record);
     }
@@ -448,24 +417,7 @@ fn peer_message_text(message: &ExtractedPeerMessage) -> String {
 }
 
 fn marked_user_message_body(body: String) -> MessageKind {
-    let queued_prompt_id = super::super::queued_prompt::id_from_content(&body).map(str::to_owned);
-    let body_without_id = super::super::queued_prompt::strip_id_marker(&body);
-    match tagged_action_body(&body_without_id).and_then(|(tag, event_body)| {
-        action_event::event_text(tag, event_body, queued_prompt_id.as_deref())
-    }) {
-        Some(text) => {
-            let text = match queued_prompt_id {
-                Some(message_id) => super::super::queued_prompt::add_id_marker(&text, &message_id),
-                None => text,
-            };
-            MessageKind::Event {
-                kind: EventKind::Armyknife,
-                text,
-                failed: false,
-            }
-        }
-        _ => MessageKind::User { text: body },
-    }
+    MessageKind::User { text: body }
 }
 
 #[cfg(test)]
@@ -581,7 +533,7 @@ mod tests {
             .to_owned(),
         },
     )]
-    #[case::human_vibe_notice_is_an_event(
+    #[case::human_vibe_notice_stays_user_content(
         json!({"type":"user","origin":{"kind":"human"}}),
         indoc! {"
             ⟦armyknife-user:fixture-marker-violet⟧
@@ -590,11 +542,12 @@ mod tests {
             <!-- armyknife-queued-prompt-id:armyknife-action:fixture-message-teal -->
         "},
         Some("⟦armyknife-user:fixture-marker-violet⟧"),
-        MessageKind::Event {
-            kind: EventKind::Armyknife,
-            text: "Vibe mode turned on\n<!-- armyknife-queued-prompt-id:armyknife-action:fixture-message-teal -->"
-                .to_owned(),
-            failed: false,
+        MessageKind::User {
+            text: indoc! {"
+                <armyknife-vibe-mode-on>watch-web からユーザーが vibe mode を on にしました。</armyknife-vibe-mode-on>
+                <!-- armyknife-queued-prompt-id:armyknife-action:fixture-message-teal -->
+            "}
+            .to_owned(),
         },
     )]
     #[case::human_tagged_text_stays_user(json!({"type":"user","origin":{"kind":"human"}}), "<task-notification>Human supplied text.</task-notification>", None, MessageKind::User { text: "<task-notification>Human supplied text.</task-notification>".to_owned() })]
@@ -651,7 +604,7 @@ mod tests {
         }
     )]
     #[case::delegation_event(json!({"type":"user","isMeta":true}), "<delegation-update>Worker completed its fictional task.</delegation-update>", None, MessageKind::Event { kind: EventKind::Armyknife, text: "Worker completed its fictional task.".to_owned(), failed: false })]
-    #[case::marked_armyknife_action_is_an_event(
+    #[case::marked_armyknife_action_stays_user_content(
         json!({"type":"user","isMeta":true,"origin":{"kind":"peer","from":"unknown"}}),
         indoc! {"
             ⟦armyknife-user:fixture-marker-cobalt⟧
@@ -662,9 +615,14 @@ mod tests {
             <!-- armyknife-queued-prompt-id:armyknife-action:fixture-message-gold -->
         "},
         Some("⟦armyknife-user:fixture-marker-cobalt⟧"),
-        MessageKind::Event { kind: EventKind::Armyknife, text: "Investigate failed fixture tasks. A failed attempt is still informative.\n<!-- armyknife-queued-prompt-id:armyknife-action:fixture-message-gold -->".to_owned(), failed: false },
+        MessageKind::User { text: indoc! {"
+            <armyknife-todo-completed>Investigate failed fixture tasks.
+
+            A failed attempt is still informative.</armyknife-todo-completed>
+            <!-- armyknife-queued-prompt-id:armyknife-action:fixture-message-gold -->
+        "}.to_owned() },
     )]
-    #[case::marked_decision_change_is_an_event(
+    #[case::marked_decision_change_stays_user_content(
         json!({"type":"user","origin":{"kind":"peer","from":"unknown"}}),
         indoc! {"
             ⟦armyknife-user:fixture-marker-cobalt⟧
@@ -675,9 +633,14 @@ mod tests {
             <!-- armyknife-queued-prompt-id:armyknife-action:fixture-message-lime -->
         "},
         Some("⟦armyknife-user:fixture-marker-cobalt⟧"),
-        MessageKind::Event { kind: EventKind::Armyknife, text: "Change requested for the fixture decision. Please use the second fictional option.\n<!-- armyknife-queued-prompt-id:armyknife-action:fixture-message-lime -->".to_owned(), failed: false },
+        MessageKind::User { text: indoc! {"
+            <armyknife-decision-change>Change requested for the fixture decision.
+
+            Please use the second fictional option.</armyknife-decision-change>
+            <!-- armyknife-queued-prompt-id:armyknife-action:fixture-message-lime -->
+        "}.to_owned() },
     )]
-    #[case::marked_todo_rejection_with_attachment_paths_is_an_event(
+    #[case::marked_todo_rejection_keeps_transcript_attachment_paths(
         json!({"type":"user","origin":{"kind":"peer","from":"unknown"}}),
         indoc! {"
             ⟦armyknife-user:fixture-marker-cobalt⟧
@@ -689,13 +652,15 @@ mod tests {
             <!-- armyknife-queued-prompt-id:armyknife-action:fixture-message-violet -->
         "},
         Some("⟦armyknife-user:fixture-marker-cobalt⟧"),
-        MessageKind::Event {
-            kind: EventKind::Armyknife,
-            text: "The user rejected the to-do: Review the fixture.\n<!-- armyknife-queued-prompt-id:armyknife-action:fixture-message-violet -->".to_owned(),
-            failed: false,
-        },
+        MessageKind::User { text: indoc! {"
+            <armyknife-todo-rejected>The user rejected the to-do: Review the fixture.</armyknife-todo-rejected>
+
+            Attached file(s):
+            - attachment-store/fixture.gif
+            <!-- armyknife-queued-prompt-id:armyknife-action:fixture-message-violet -->
+        "}.to_owned() },
     )]
-    #[case::marked_decision_change_with_attachment_paths_is_an_event(
+    #[case::marked_decision_change_keeps_transcript_attachment_paths(
         json!({"type":"user","origin":{"kind":"peer","from":"unknown"}}),
         indoc! {"
             ⟦armyknife-user:fixture-marker-cobalt⟧
@@ -707,13 +672,15 @@ mod tests {
             <!-- armyknife-queued-prompt-id:armyknife-action:fixture-message-amber -->
         "},
         Some("⟦armyknife-user:fixture-marker-cobalt⟧"),
-        MessageKind::Event {
-            kind: EventKind::Armyknife,
-            text: "Change requested for the fixture decision.\n<!-- armyknife-queued-prompt-id:armyknife-action:fixture-message-amber -->".to_owned(),
-            failed: false,
-        },
+        MessageKind::User { text: indoc! {"
+            <armyknife-decision-change>Change requested for the fixture decision.</armyknife-decision-change>
+
+            Attached file(s):
+            - attachment-store/fixture.gif
+            <!-- armyknife-queued-prompt-id:armyknife-action:fixture-message-amber -->
+        "}.to_owned() },
     )]
-    #[case::marked_vibe_mode_on_is_an_event(
+    #[case::marked_vibe_mode_on_stays_user_content(
         json!({"type":"user","origin":{"kind":"peer","from":"unknown"}}),
         indoc! {"
             ⟦armyknife-user:fixture-marker-cobalt⟧
@@ -722,9 +689,12 @@ mod tests {
             <!-- armyknife-queued-prompt-id:armyknife-action:fixture-message-cyan -->
         "},
         Some("⟦armyknife-user:fixture-marker-cobalt⟧"),
-        MessageKind::Event { kind: EventKind::Armyknife, text: "Vibe mode turned on\n<!-- armyknife-queued-prompt-id:armyknife-action:fixture-message-cyan -->".to_owned(), failed: false },
+        MessageKind::User { text: indoc! {"
+            <armyknife-vibe-mode-on>watch-web からユーザーが vibe mode を on にしました。</armyknife-vibe-mode-on>
+            <!-- armyknife-queued-prompt-id:armyknife-action:fixture-message-cyan -->
+        "}.to_owned() },
     )]
-    #[case::marked_vibe_mode_off_is_an_event(
+    #[case::marked_vibe_mode_off_stays_user_content(
         json!({"type":"user","origin":{"kind":"peer","from":"unknown"}}),
         indoc! {"
             ⟦armyknife-user:fixture-marker-cobalt⟧
@@ -733,7 +703,10 @@ mod tests {
             <!-- armyknife-queued-prompt-id:armyknife-action:fixture-message-amber -->
         "},
         Some("⟦armyknife-user:fixture-marker-cobalt⟧"),
-        MessageKind::Event { kind: EventKind::Armyknife, text: "Vibe mode turned off\n<!-- armyknife-queued-prompt-id:armyknife-action:fixture-message-amber -->".to_owned(), failed: false },
+        MessageKind::User { text: indoc! {"
+            <armyknife-vibe-mode-off>watch-web からユーザーが vibe mode を off にしました。祖先セッションから引き継いでいる場合、vibe mode は引き続き有効です。</armyknife-vibe-mode-off>
+            <!-- armyknife-queued-prompt-id:armyknife-action:fixture-message-amber -->
+        "}.to_owned() },
     )]
     #[case::marked_vibe_tag_with_user_text_stays_user(
         json!({"type":"user","origin":{"kind":"peer","from":"unknown"}}),
