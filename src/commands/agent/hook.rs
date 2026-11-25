@@ -2638,6 +2638,7 @@ mod tests {
         engine: Engine,
         event_session_id: &'static str,
         tool_name: &'static str,
+        denied_tool_name: Option<&'static str>,
         tool_input: serde_json::Value,
         denied_tool_input: Option<serde_json::Value>,
         reason: &'static str,
@@ -2651,6 +2652,7 @@ mod tests {
         engine: Engine::Claude,
         event_session_id: "retry-session",
         tool_name: "Bash",
+        denied_tool_name: None,
         tool_input: serde_json::json!({"command": "printf fixture"}),
         denied_tool_input: None,
         reason: "Classifier unavailable",
@@ -2662,6 +2664,7 @@ mod tests {
         engine: Engine::Codex,
         event_session_id: "retry-session",
         tool_name: "Bash",
+        denied_tool_name: None,
         tool_input: serde_json::json!({"command": "printf fixture"}),
         denied_tool_input: None,
         reason: "Classifier unavailable",
@@ -2673,6 +2676,7 @@ mod tests {
         engine: Engine::Claude,
         event_session_id: "retry-session",
         tool_name: "Bash",
+        denied_tool_name: None,
         tool_input: serde_json::json!({"command": "printf fixture"}),
         denied_tool_input: None,
         reason: "Classifier unavailable",
@@ -2687,6 +2691,7 @@ mod tests {
         engine: Engine::Claude,
         event_session_id: "other-session",
         tool_name: "Bash",
+        denied_tool_name: None,
         tool_input: serde_json::json!({"command": "printf fixture"}),
         denied_tool_input: None,
         reason: "Classifier unavailable",
@@ -2698,6 +2703,7 @@ mod tests {
         engine: Engine::Claude,
         event_session_id: "retry-session",
         tool_name: "Bash",
+        denied_tool_name: None,
         tool_input: serde_json::json!({"command": "printf other"}),
         denied_tool_input: None,
         reason: "Classifier unavailable",
@@ -2709,6 +2715,7 @@ mod tests {
         engine: Engine::Claude,
         event_session_id: "retry-session",
         tool_name: "Read",
+        denied_tool_name: None,
         tool_input: serde_json::json!({"command": "printf fixture"}),
         denied_tool_input: None,
         reason: "Classifier unavailable",
@@ -2720,6 +2727,7 @@ mod tests {
         engine: Engine::Claude,
         event_session_id: "retry-session",
         tool_name: "Bash",
+        denied_tool_name: None,
         tool_input: serde_json::json!({"command": "printf fixture"}),
         denied_tool_input: None,
         reason: "Classifier unavailable",
@@ -2731,6 +2739,7 @@ mod tests {
         engine: Engine::Claude,
         event_session_id: "retry-session",
         tool_name: "Bash",
+        denied_tool_name: None,
         tool_input: serde_json::json!({"command": "printf fixture"}),
         denied_tool_input: None,
         reason: "[Destructive Operation]",
@@ -2742,6 +2751,7 @@ mod tests {
         engine: Engine::Claude,
         event_session_id: "retry-session",
         tool_name: "Bash",
+        denied_tool_name: None,
         tool_input: serde_json::json!({
             "command": "printf fixture",
             "description": "Print the fixture",
@@ -2759,6 +2769,7 @@ mod tests {
         engine: Engine::Codex,
         event_session_id: "retry-session",
         tool_name: "Bash",
+        denied_tool_name: None,
         tool_input: serde_json::json!({
             "command": "printf fixture",
             "description": "Print the fixture",
@@ -2771,6 +2782,24 @@ mod tests {
         denial_count: 1,
         expected: vec![(1, true, Some(store::PermissionDeniedResolution::Approved))],
     })]
+    #[case::non_bash_input_remains_exact(PermissionDeniedRetryCase {
+        event: HookEvent::PostToolUse,
+        engine: Engine::Claude,
+        event_session_id: "retry-session",
+        tool_name: "Agent",
+        denied_tool_name: Some("Agent"),
+        tool_input: serde_json::json!({
+            "description": "Inspect the project",
+            "prompt": "Summarize the project structure",
+        }),
+        denied_tool_input: Some(serde_json::json!({
+            "description": "Review the repository",
+            "prompt": "Summarize the project structure",
+        })),
+        reason: "Classifier unavailable",
+        denial_count: 1,
+        expected: vec![(1, false, None)],
+    })]
     fn matching_successful_retry_resolves_only_unclassified_denials(
         #[case] scenario: PermissionDeniedRetryCase,
     ) {
@@ -2781,13 +2810,14 @@ mod tests {
             .denied_tool_input
             .as_ref()
             .unwrap_or(&default_denied_input);
+        let denied_tool_name = scenario.denied_tool_name.unwrap_or("Bash");
         for seq in 1..=scenario.denial_count {
             let tool_use_id = format!("denied-tool-call-{seq}");
             store::add_permission_denied_from(
                 sessions_dir,
                 "retry-session",
                 Some(&tool_use_id),
-                "Bash",
+                denied_tool_name,
                 denied_input,
                 Some(scenario.reason),
             )
