@@ -22,9 +22,9 @@ mod review_finish;
 mod session_watch;
 mod tmux;
 pub(crate) use action_result::{
-    ReviewDocumentAction, ReviewDocumentActionResult, clear_action_result, document_hash,
-    save_action_result, successful_action_result, successful_action_results_in_directory,
-    wait_for_action_result,
+    ReviewDocumentAction, ReviewDocumentActionResult, action_result_after_review_completion,
+    clear_action_result, document_hash, save_action_result, successful_action_result,
+    successful_action_results_in_directory,
 };
 pub(crate) use pending_review::{
     ReviewDocumentMarker, is_active_pr_draft_review_marker, review_document_marker,
@@ -37,7 +37,6 @@ pub(crate) use review_finish::{
 };
 use review_finish::{
     create_fifo_at_path, path_with_suffix, remove_fifo_if_present, try_read_fifo_byte,
-    try_read_fifo_signal,
 };
 
 pub use approval::{ApprovalManager, TEST_APPROVAL_DIR_OVERRIDE};
@@ -98,7 +97,7 @@ pub trait ReviewHandler<S: DocumentSchema> {
         Ok(())
     }
 
-    /// Records approval after watch-web has prepared an action for execution.
+    /// Applies review completion after a watch-web finish request.
     fn on_watch_web_review_complete(&self, document: &Document<S>) -> Result<()> {
         self.on_review_complete(document)
     }
@@ -282,8 +281,10 @@ where
         }
     };
 
-    if completion_signal == b'1' {
-        wait_for_action_result(document_path)?.print_for_agent();
+    if let Some(action_result) =
+        action_result_after_review_completion(completion_signal, document_path)?
+    {
+        action_result.print_for_agent();
     }
 
     drop(finish_fifo_reader);
@@ -574,10 +575,6 @@ impl Drop for FifoSignalGuard {
 /// if no reader has the FIFO open, instead of blocking forever.
 pub(crate) fn signal_fifo_with_byte(fifo_path: &Path, byte: u8) {
     let _ = try_signal_fifo_with_byte(fifo_path, byte);
-}
-
-pub(crate) fn try_signal_fifo(fifo_path: &Path) -> std::io::Result<()> {
-    try_signal_fifo_with_byte(fifo_path, b'0')
 }
 
 pub(crate) fn try_signal_fifo_with_byte(fifo_path: &Path, byte: u8) -> std::io::Result<()> {

@@ -85,10 +85,6 @@ pub(crate) fn open_fifo_reader(fifo_path: &Path) -> super::Result<File> {
     Ok(file)
 }
 
-pub(super) fn try_read_fifo_signal(file: &mut File) -> super::Result<bool> {
-    Ok(try_read_fifo_byte(file)?.is_some())
-}
-
 pub(super) fn try_read_fifo_byte(file: &mut File) -> super::Result<Option<u8>> {
     let mut byte = [0_u8; 1];
     match file.read(&mut byte) {

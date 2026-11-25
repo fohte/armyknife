@@ -78,8 +78,8 @@ impl ReviewHandler<Frontmatter> for PrDraftReviewHandler {
     }
 
     fn on_review_complete(&self, document: &Document<Frontmatter>) -> HilResult<()> {
+        document.persist_approval_state()?;
         if document.frontmatter.is_approved() {
-            document.save_approval()?;
             println!(
                 "{}",
                 formatdoc! {"
@@ -89,7 +89,6 @@ impl ReviewHandler<Frontmatter> for PrDraftReviewHandler {
                 "}
             );
         } else {
-            document.remove_approval()?;
             println!("PR not approved. Set 'steps.submit: true' and save to approve.");
         }
 
@@ -97,12 +96,7 @@ impl ReviewHandler<Frontmatter> for PrDraftReviewHandler {
     }
 
     fn on_watch_web_review_complete(&self, document: &Document<Frontmatter>) -> HilResult<()> {
-        if document.frontmatter.is_approved() {
-            document.save_approval()?;
-        } else {
-            document.remove_approval()?;
-        }
-        Ok(())
+        document.persist_approval_state()
     }
 }
 

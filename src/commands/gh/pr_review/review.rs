@@ -97,8 +97,8 @@ impl ReviewHandler<ThreadsFrontmatter> for PrReviewReplyHandler {
     }
 
     fn on_review_complete(&self, document: &Document<ThreadsFrontmatter>) -> HilResult<()> {
+        document.persist_approval_state()?;
         if document.frontmatter.is_approved() {
-            document.save_approval()?;
             println!(
                 "{}",
                 formatdoc! {"
@@ -111,7 +111,6 @@ impl ReviewHandler<ThreadsFrontmatter> for PrReviewReplyHandler {
                 }
             );
         } else {
-            document.remove_approval()?;
             println!("Not approved. Set 'submit: true' and save to approve.");
         }
 
@@ -122,12 +121,7 @@ impl ReviewHandler<ThreadsFrontmatter> for PrReviewReplyHandler {
         &self,
         document: &Document<ThreadsFrontmatter>,
     ) -> HilResult<()> {
-        if document.frontmatter.is_approved() {
-            document.save_approval()?;
-        } else {
-            document.remove_approval()?;
-        }
-        Ok(())
+        document.persist_approval_state()
     }
 }
 

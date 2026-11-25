@@ -683,48 +683,8 @@ fn report_completed_watch_web_actions(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shared::human_in_the_loop::{
-        ReviewDocumentActionResult, document_hash, save_action_result, successful_action_result,
-    };
     use rstest::rstest;
     use tempfile::TempDir;
-
-    #[rstest]
-    #[case::issue_comment(ReviewDocumentAction::PostComment, "comments/new_example.md")]
-    #[case::issue_body(ReviewDocumentAction::UpdateIssue, "issue.md")]
-    fn issue_push_reports_watch_web_actions_without_pushing_twice(
-        #[case] action: ReviewDocumentAction,
-        #[case] relative_path: &str,
-    ) {
-        let directory = TempDir::new().expect("fixture directory should be created");
-        let issue_path = directory.path().join("issue.md");
-        let comments_dir = directory.path().join("comments");
-        let document_path = directory.path().join(relative_path);
-        std::fs::create_dir_all(document_path.parent().expect("document has a parent"))
-            .expect("document directory should be created");
-        std::fs::write(&document_path, "Approved fixture document.")
-            .expect("review document should be written");
-        let result = ReviewDocumentActionResult::new(
-            action,
-            true,
-            "Operation result.".to_owned(),
-            document_hash(&document_path).expect("document hash should be computed"),
-            None,
-        );
-        save_action_result(&document_path, &result).expect("action result should be saved");
-
-        let observed = report_completed_watch_web_actions(&issue_path, &comments_dir)
-            .expect("completed action result should be reported");
-
-        assert_eq!(
-            (
-                observed,
-                successful_action_result(&document_path, action)
-                    .expect("successful action result should remain available"),
-            ),
-            (true, Some(result)),
-        );
-    }
 
     mod advance_comment_snapshot_tests {
         use super::*;

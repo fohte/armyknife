@@ -78,7 +78,9 @@ pub async fn run(args: &SubmitArgs) -> anyhow::Result<()> {
         result.print_for_agent();
         return Ok(());
     }
-    run_with_review_language_context(args, None, None).await
+    run_with_review_language_context(args, None)
+        .await
+        .map(|_| ())
 }
 
 pub(super) async fn run_for_review(
@@ -90,30 +92,18 @@ pub(super) async fn run_for_review(
         expected_repo_id: expected_repo_id.to_owned(),
         copier_answers_path: copier_answers_path_for_repo_at(session_cwd, expected_repo_id),
     };
-    let pr_url = std::sync::Mutex::new(None);
-    let capture_pr_url = |url: &str| {
-        if let Ok(mut pr_url) = pr_url.lock() {
-            *pr_url = Some(url.to_owned());
-        }
-    };
-    run_with_review_language_context(args, Some(context), Some(&capture_pr_url)).await?;
-    pr_url
-        .into_inner()
-        .map_err(|error| anyhow::anyhow!("Failed to capture submitted pull request URL: {error}"))?
-        .ok_or_else(|| anyhow::anyhow!("Pull request submission completed without a URL"))
+    run_with_review_language_context(args, Some(context)).await
 }
 
 async fn run_with_review_language_context(
     args: &SubmitArgs,
     review_language_context: Option<ReviewRepositoryLanguageContext>,
-    capture_created_pr_url: Option<&(dyn Fn(&str) + Send + Sync)>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<String> {
     let client = GitHubClient::get()?;
     let post_submit_processor = PrSeriesPostSubmitProcessor { github: client };
     let submit_effects = SubmitEffects {
         post_submit_processor: &post_submit_processor,
         record_created_pr_url,
-        capture_created_pr_url,
     };
     run_impl_with_review_language_context(
         args,
@@ -139,7 +129,7 @@ async fn run_impl_with_recording<P: PostSubmitProcessor, R: Fn(&str)>(
     current_repo_identity: impl FnOnce() -> Option<(String, String)>,
     submit_effects: &SubmitEffects<'_, P, R>,
     vibe_access_check: impl FnOnce(&str, &str) -> anyhow::Result<()>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<String> {
     run_impl_with_review_language_context(
         args,
         gh_client,
@@ -167,7 +157,7 @@ async fn run_impl_with_review_language_context<
     context: SubmitContext<'_, F>,
     submit_effects: &SubmitEffects<'_, P, R>,
     vibe_access_check: impl FnOnce(&str, &str) -> anyhow::Result<()>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<String> {
     // Get draft path and target repo info
     let (draft_path, target) = match &args.filepath {
         Some(path) => {
@@ -368,10 +358,6 @@ async fn run_impl_with_review_language_context<
     };
 
     (submit_effects.record_created_pr_url)(&pr_url);
-    if let Some(capture_created_pr_url) = submit_effects.capture_created_pr_url {
-        capture_created_pr_url(&pr_url);
-    }
-
     if target_is_current_repo {
         let config_key = format!("branch.{}.pr-url", target.branch);
         if let Err(error) = write_config(&config_key, &pr_url) {
@@ -400,7 +386,7 @@ async fn run_impl_with_review_language_context<
     // Cleanup
     draft.cleanup()?;
 
-    Ok(())
+    Ok(pr_url)
 }
 
 fn write_pr_url_config(key: &str, url: &str) -> anyhow::Result<()> {
@@ -575,7 +561,6 @@ mod tests {
         let submit_effects = SubmitEffects {
             post_submit_processor,
             record_created_pr_url: noop_record_created_pr_url,
-            capture_created_pr_url: None,
         };
         super::run_impl_with_recording(
             args,
@@ -587,6 +572,7 @@ mod tests {
             vibe_access_check,
         )
         .await
+        .map(|_| ())
     }
 
     /// Captures every hook invocation so tests can assert on hook name, env,
@@ -831,7 +817,6 @@ mod tests {
         let submit_effects = SubmitEffects {
             post_submit_processor: &NoopPostSubmitProcessor,
             record_created_pr_url: noop_record_created_pr_url,
-            capture_created_pr_url: None,
         };
 
         let result = super::run_impl_with_review_language_context(
@@ -2195,16 +2180,9 @@ mod tests {
             record_created_pr_url_in(sessions_dir, "sample-session", pr_url)
                 .expect("successful submit should record its pull request URL");
         };
-        let captured_pr_url = Mutex::new(None);
-        let capture_created_pr_url = |pr_url: &str| {
-            *captured_pr_url
-                .lock()
-                .expect("captured pull request URL mutex") = Some(pr_url.to_owned());
-        };
         let submit_effects = SubmitEffects {
             post_submit_processor: &NoopPostSubmitProcessor,
             record_created_pr_url: record_pr_url,
-            capture_created_pr_url: Some(&capture_created_pr_url),
         };
         let result = super::run_impl_with_recording(
             &args,
@@ -2232,23 +2210,17 @@ mod tests {
             .clone();
         let pr_url =
             format!("https://github.com/sample-owner/sample-repository/pull/{pull_request_number}");
-        let captured_pr_url = captured_pr_url
-            .into_inner()
-            .expect("captured pull request URL mutex");
-
         assert_eq!(
             (
                 result.map_err(|error| error.to_string()),
                 created_prs,
                 updated_prs,
-                captured_pr_url,
                 (session.pr_context, session.created_pr_urls),
             ),
             (
-                Ok(()),
+                Ok(pr_url.clone()),
                 expected_create_calls,
                 expected_update_calls,
-                Some(pr_url.clone()),
                 (
                     Some(SessionPrContext {
                         owner: "sample-owner".to_string(),

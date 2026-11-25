@@ -42,7 +42,6 @@ pub(super) trait PostSubmitProcessor {
 pub(super) struct SubmitEffects<'a, P, R> {
     pub(super) post_submit_processor: &'a P,
     pub(super) record_created_pr_url: R,
-    pub(super) capture_created_pr_url: Option<&'a (dyn Fn(&str) + Send + Sync)>,
 }
 
 pub(super) struct PrSeriesPostSubmitProcessor<'a> {

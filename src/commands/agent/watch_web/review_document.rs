@@ -297,14 +297,9 @@ async fn save_review_document(
     axum::Json(request): axum::Json<ReviewDocumentEditRequest>,
 ) -> Result<axum::Json<ReviewDocumentSaved>, StatusCode> {
     let _edit_guard = edit_lock.lock().await;
-    let revision = save::save_document_for_session(
-        load_session,
-        load_review_queue,
-        session_id,
-        request,
-        false,
-    )
-    .await?;
+    let revision =
+        save::save_document_for_session(load_session, load_review_queue, session_id, request, None)
+            .await?;
     Ok(axum::Json(ReviewDocumentSaved {
         success: true,
         revision,
@@ -323,9 +318,14 @@ async fn finish_review_document(
     axum::Json(request): axum::Json<ReviewDocumentEditRequest>,
 ) -> Result<axum::Json<ReviewDocumentSaved>, StatusCode> {
     let _edit_guard = edit_lock.lock().await;
-    let revision =
-        save::save_document_for_session(load_session, load_review_queue, session_id, request, true)
-            .await?;
+    let revision = save::save_document_for_session(
+        load_session,
+        load_review_queue,
+        session_id,
+        request,
+        Some(b'0'),
+    )
+    .await?;
     Ok(axum::Json(ReviewDocumentSaved {
         success: true,
         revision,
@@ -350,7 +350,7 @@ async fn save_review_document_by_id(
         session_id,
         document_id,
         request,
-        false,
+        None,
     )
     .await
 }
@@ -373,7 +373,7 @@ async fn finish_review_document_by_id(
         session_id,
         document_id,
         request,
-        true,
+        Some(b'0'),
     )
     .await
 }
@@ -385,7 +385,7 @@ async fn save_review_document_for_id(
     session_id: String,
     document_id: String,
     request: ReviewDocumentEditRequest,
-    finishing: bool,
+    finish_signal: Option<u8>,
 ) -> Result<axum::Json<ReviewDocumentSaved>, StatusCode> {
     if request.id != document_id {
         return Err(StatusCode::CONFLICT);
@@ -396,7 +396,7 @@ async fn save_review_document_for_id(
         load_review_queue,
         session_id,
         request,
-        finishing,
+        finish_signal,
     )
     .await?;
     Ok(axum::Json(ReviewDocumentSaved {
@@ -1740,8 +1740,12 @@ mod tests {
         let failed_document_hash = crate::shared::human_in_the_loop::document_hash(&document_path)
             .expect("failed document hash should be computed");
         let failed_action_result =
-            crate::shared::human_in_the_loop::wait_for_action_result(&document_path)
-                .expect("failed action result should be saved");
+            crate::shared::human_in_the_loop::action_result_after_review_completion(
+                b'1',
+                &document_path,
+            )
+            .expect("failed action result should be readable")
+            .expect("failed action result should be saved");
         let retry_response = app
             .clone()
             .oneshot(
@@ -1777,6 +1781,7 @@ mod tests {
         assert_eq!(
             (
                 signal_bytes,
+                signal[0],
                 first_status,
                 first_json,
                 failed_action_result,
@@ -1790,6 +1795,7 @@ mod tests {
             ),
             (
                 1,
+                b'1',
                 StatusCode::OK,
                 serde_json::json!({
                     "success": false,
@@ -1873,7 +1879,8 @@ mod tests {
         use std::os::unix::fs::OpenOptionsExt;
 
         use crate::shared::human_in_the_loop::{
-            ReviewDocumentAction, ReviewDocumentActionResult, document_hash, wait_for_action_result,
+            ReviewDocumentAction, ReviewDocumentActionResult,
+            action_result_after_review_completion, document_hash,
         };
 
         crate::shared::testing::init_approval_dir();
@@ -1959,8 +1966,8 @@ mod tests {
         let response_json = serde_json::from_slice::<serde_json::Value>(&response_body)
             .expect("action response should be JSON");
         let saved_hash = document_hash(&document_path).expect("saved document hash should exist");
-        let saved_result =
-            Some(wait_for_action_result(&document_path).expect("saved result should be readable"));
+        let saved_result = action_result_after_review_completion(b'1', &document_path)
+            .expect("saved result should be readable");
         let action = match action {
             "create_pr" => ReviewDocumentAction::CreatePr,
             "post_comment" => ReviewDocumentAction::PostComment,
@@ -1970,9 +1977,16 @@ mod tests {
         };
 
         assert_eq!(
-            (signal_bytes, response_status, response_json, saved_result),
+            (
+                signal_bytes,
+                signal[0],
+                response_status,
+                response_json,
+                saved_result,
+            ),
             (
                 1,
+                b'1',
                 StatusCode::OK,
                 serde_json::json!({
                     "success": true,

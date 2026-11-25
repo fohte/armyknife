@@ -61,7 +61,7 @@ impl ReviewDocumentActionResult {
     }
 
     pub(crate) fn print_for_agent(&self) {
-        println!("{}", self.agent_message());
+        println!("{self}");
     }
 
     fn agent_message(&self) -> String {
@@ -91,6 +91,12 @@ impl ReviewDocumentActionResult {
             }
             Err(_) => false,
         }
+    }
+}
+
+impl std::fmt::Display for ReviewDocumentActionResult {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.agent_message().fmt(formatter)
     }
 }
 
@@ -207,6 +213,17 @@ pub(crate) fn wait_for_action_result(
     }
 }
 
+pub(crate) fn action_result_after_review_completion(
+    completion_signal: u8,
+    document_path: &Path,
+) -> std::io::Result<Option<ReviewDocumentActionResult>> {
+    if completion_signal == b'1' {
+        wait_for_action_result(document_path).map(Some)
+    } else {
+        Ok(None)
+    }
+}
+
 fn content_hash(content: &[u8]) -> String {
     let mut digest = Sha256::new();
     digest.update(content);
@@ -224,8 +241,8 @@ fn remove_if_present(path: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ReviewDocumentAction, ReviewDocumentActionResult, document_hash, save_action_result,
-        successful_action_result,
+        ReviewDocumentAction, ReviewDocumentActionResult, action_result_after_review_completion,
+        document_hash, save_action_result, successful_action_result,
     };
     use rstest::rstest;
     use std::fs;
@@ -295,6 +312,94 @@ mod tests {
     }
 
     #[rstest]
+    #[case::issue_comment(ReviewDocumentAction::PostComment)]
+    #[case::pr_draft(ReviewDocumentAction::CreatePr)]
+    #[case::pr_replies(ReviewDocumentAction::PostReplies)]
+    #[case::issue_body(ReviewDocumentAction::UpdateIssue)]
+    fn post_action_document_hash_keeps_a_successful_result_available(
+        #[case] action: ReviewDocumentAction,
+    ) {
+        let directory = TempDir::new().expect("fixture directory should be created");
+        let document_path = directory.path().join("review.md");
+        fs::write(&document_path, "Approved document.")
+            .expect("fixture document should be written");
+        let original_hash =
+            document_hash(&document_path).expect("document hash should be computed");
+        fs::write(&document_path, "Updated after action.")
+            .expect("post-action document should be written");
+        let post_action_hash =
+            document_hash(&document_path).expect("document hash should be computed");
+        let result = ReviewDocumentActionResult::new(
+            action,
+            true,
+            "Operation result.".to_owned(),
+            original_hash,
+            Some(post_action_hash),
+        );
+        save_action_result(&document_path, &result).expect("action result should be saved");
+
+        assert_eq!(
+            successful_action_result(&document_path, action)
+                .expect("post-action result should be read"),
+            Some(result),
+        );
+    }
+
+    #[rstest]
+    #[case::issue_comment(ReviewDocumentAction::PostComment)]
+    #[case::pr_draft(ReviewDocumentAction::CreatePr)]
+    #[case::pr_replies(ReviewDocumentAction::PostReplies)]
+    #[case::issue_body(ReviewDocumentAction::UpdateIssue)]
+    fn failed_action_result_is_not_used_for_idempotency(#[case] action: ReviewDocumentAction) {
+        let directory = TempDir::new().expect("fixture directory should be created");
+        let document_path = directory.path().join("review.md");
+        fs::write(&document_path, "Approved document.")
+            .expect("fixture document should be written");
+        let result = ReviewDocumentActionResult::new(
+            action,
+            false,
+            "Temporary failure.".to_owned(),
+            document_hash(&document_path).expect("document hash should be computed"),
+            None,
+        );
+        save_action_result(&document_path, &result).expect("action result should be saved");
+
+        assert_eq!(
+            successful_action_result(&document_path, action)
+                .expect("failed action result should be read"),
+            None,
+        );
+    }
+
+    #[rstest]
+    #[case::plain_finish(b'0', false)]
+    #[case::action_finish(b'1', true)]
+    fn only_action_completion_waits_for_a_result(
+        #[case] completion_signal: u8,
+        #[case] has_action_result: bool,
+    ) {
+        let directory = TempDir::new().expect("fixture directory should be created");
+        let document_path = directory.path().join("review.md");
+        fs::write(&document_path, "Approved document.")
+            .expect("fixture document should be written");
+        let result = ReviewDocumentActionResult::new(
+            ReviewDocumentAction::CreatePr,
+            true,
+            "https://example.invalid/pull/42".to_owned(),
+            document_hash(&document_path).expect("document hash should be computed"),
+            None,
+        );
+        if has_action_result {
+            save_action_result(&document_path, &result).expect("action result should be saved");
+        }
+
+        let observed = action_result_after_review_completion(completion_signal, &document_path)
+            .expect("completion result should be read");
+
+        assert_eq!(observed, has_action_result.then_some(result));
+    }
+
+    #[rstest]
     #[case::issue_comment(
         ReviewDocumentAction::PostComment,
         "Watch-web issue comment succeeded: Operation result.\nNo further submit or push command is needed."
@@ -323,7 +428,7 @@ mod tests {
             None,
         );
 
-        assert_eq!(result.agent_message(), expected);
+        assert_eq!(result.to_string(), expected);
     }
 
     #[rstest]
@@ -355,6 +460,6 @@ mod tests {
             None,
         );
 
-        assert_eq!(result.agent_message(), expected);
+        assert_eq!(result.to_string(), expected);
     }
 }

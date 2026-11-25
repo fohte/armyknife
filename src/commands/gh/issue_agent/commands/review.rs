@@ -103,31 +103,24 @@ impl ReviewHandler<SubmitSchema> for IssueReviewHandler {
     }
 
     fn on_review_complete(&self, document: &Document<SubmitSchema>) -> HilResult<()> {
+        persist_review_approval(document)?;
         if document.frontmatter.is_approved() {
-            // Strip the temporary frontmatter before saving approval hash.
-            // The hash must match the file content at push time, so we save
-            // the hash of the file *after* stripping.
-            strip_temporary_frontmatter(&document.path)?;
-            document.save_approval()?;
             println!("Approved.");
         } else {
-            strip_temporary_frontmatter(&document.path)?;
-            document.remove_approval()?;
             println!("Not approved. Set 'submit: true' in the frontmatter to approve.");
         }
         Ok(())
     }
 
     fn on_watch_web_review_complete(&self, document: &Document<SubmitSchema>) -> HilResult<()> {
-        if document.frontmatter.is_approved() {
-            strip_temporary_frontmatter(&document.path)?;
-            document.save_approval()?;
-        } else {
-            strip_temporary_frontmatter(&document.path)?;
-            document.remove_approval()?;
-        }
-        Ok(())
+        persist_review_approval(document)
     }
+}
+
+fn persist_review_approval(document: &Document<SubmitSchema>) -> HilResult<()> {
+    // The approval hash must match the document after temporary frontmatter is removed.
+    strip_temporary_frontmatter(&document.path)?;
+    document.persist_approval_state()
 }
 
 /// Check if a file has YAML frontmatter (starts with `---\n`).

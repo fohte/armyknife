@@ -116,7 +116,7 @@ pub(super) async fn execute_review_document(
                         frontmatter: frontmatter.clone(),
                         body: request.body.clone(),
                     },
-                    true,
+                    Some(b'1'),
                 )
                 .await?;
                 let updated = ActionRecord {
@@ -160,7 +160,7 @@ pub(super) async fn execute_review_document(
                     frontmatter: frontmatter.clone(),
                     body: request.body.clone(),
                 },
-                true,
+                Some(b'1'),
             )
             .await?;
             let document_hash = document_hash(&marker.path).map_err(|error| {
