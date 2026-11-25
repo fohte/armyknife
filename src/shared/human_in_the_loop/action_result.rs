@@ -1,6 +1,10 @@
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
+
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -8,6 +12,7 @@ use sha2::{Digest, Sha256};
 use super::review_finish::path_with_suffix;
 
 const ACTION_RESULT_SUFFIX: &str = ".watch-web-action-result";
+const ACTION_DOCUMENT_SNAPSHOT_SUFFIX: &str = ".watch-web-action-snapshot";
 const ACTION_RESULT_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -104,12 +109,60 @@ pub(crate) fn action_result_path(document_path: &Path) -> PathBuf {
     path_with_suffix(document_path, ACTION_RESULT_SUFFIX)
 }
 
+fn action_document_snapshot_path(document_path: &Path) -> PathBuf {
+    path_with_suffix(document_path, ACTION_DOCUMENT_SNAPSHOT_SUFFIX)
+}
+
 pub(crate) fn document_hash(path: &Path) -> std::io::Result<String> {
     fs::read(path).map(|content| content_hash(&content))
 }
 
 pub(crate) fn clear_action_result(document_path: &Path) -> std::io::Result<()> {
-    remove_if_present(&action_result_path(document_path))
+    remove_if_present(&action_result_path(document_path))?;
+    remove_if_present(&action_document_snapshot_path(document_path))
+}
+
+pub(crate) fn save_action_document_snapshot(
+    document_path: &Path,
+    content: &str,
+) -> std::io::Result<()> {
+    let snapshot_path = action_document_snapshot_path(document_path);
+    let parent = snapshot_path
+        .parent()
+        .ok_or_else(|| std::io::Error::other("action document snapshot path has no parent"))?;
+    fs::create_dir_all(parent)?;
+    let temporary_path = path_with_suffix(&snapshot_path, ".tmp");
+    let save_result = (|| {
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let mut file = options.open(&temporary_path)?;
+        #[cfg(unix)]
+        file.set_permissions(fs::Permissions::from_mode(0o600))?;
+        file.write_all(content.as_bytes())?;
+        file.sync_all()?;
+        drop(file);
+        fs::rename(&temporary_path, &snapshot_path)
+    })();
+    if save_result.is_err() {
+        remove_if_present(&temporary_path)?;
+    }
+    save_result
+}
+
+pub(crate) fn take_action_document_snapshot(
+    document_path: &Path,
+) -> std::io::Result<Option<String>> {
+    let snapshot_path = action_document_snapshot_path(document_path);
+    match fs::read_to_string(&snapshot_path) {
+        Ok(content) => {
+            fs::remove_file(snapshot_path)?;
+            Ok(Some(content))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
 }
 
 pub(crate) fn save_action_result(

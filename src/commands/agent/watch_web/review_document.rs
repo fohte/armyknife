@@ -2042,6 +2042,7 @@ mod tests {
 
     #[tokio::test]
     async fn web_action_waits_for_the_review_child_and_reports_its_result() {
+        use std::os::unix::fs::PermissionsExt;
         use std::os::unix::process::CommandExt;
         use std::process::Stdio;
         use std::sync::Mutex;
@@ -2108,8 +2109,10 @@ mod tests {
         let mut session = session_with_review(&document_path);
         session.cwd = temp_dir.path().to_path_buf();
         let action_lock_state = Arc::new(Mutex::new(None));
+        let approved_document_state = Arc::new(Mutex::new(None));
         let action_started = Arc::new(AtomicBool::new(false));
         let executor_lock_state = action_lock_state.clone();
+        let executor_approved_document_state = approved_document_state.clone();
         let executor_action_started = action_started.clone();
         let executor_path = document_path.clone();
         let app = router_with_injected_action_executor(
@@ -2127,6 +2130,23 @@ mod tests {
                 *executor_lock_state
                     .lock()
                     .expect("action lock state should be writable") = Some(lock_state);
+                let mut snapshot_file = executor_path.as_os_str().to_os_string();
+                snapshot_file.push(".watch-web-action-snapshot");
+                let snapshot_mode = std::fs::metadata(PathBuf::from(snapshot_file))
+                    .expect("approved document snapshot should exist")
+                    .permissions()
+                    .mode()
+                    & 0o777;
+                let approved_document = (
+                    document_hash(&executor_path).expect("approved document hash should be read"),
+                    current_revision(&executor_path),
+                    snapshot_mode,
+                );
+                *executor_approved_document_state
+                    .lock()
+                    .expect("approved document state should be writable") = Some(approved_document);
+                std::fs::remove_file(&executor_path)
+                    .expect("successful comment action should remove the local draft");
                 Box::pin(async { Ok("Issue comment posted.".to_owned()) })
             }),
         );
@@ -2177,6 +2197,9 @@ mod tests {
             terminate_test_worker(&mut review_parent);
         }
         let review_parent_succeeded = wait_for_test_worker(&mut review_parent).await;
+        let mut snapshot_file = document_path.as_os_str().to_os_string();
+        snapshot_file.push(".watch-web-action-snapshot");
+        let snapshot_removed_after_review = !PathBuf::from(snapshot_file).exists();
         let editor_can_reacquire_lock = LockGuard::acquire(&document_path).is_ok();
         let printed_output = std::fs::read_to_string(&output_file)
             .expect("review process output should be captured");
@@ -2186,7 +2209,12 @@ mod tests {
         } else {
             None
         };
-        let resulting_hash = document_hash(&document_path).expect("result hash should be read");
+        let approved_document_state = approved_document_state
+            .lock()
+            .expect("approved document state should be readable")
+            .take();
+        let (resulting_hash, approved_revision, snapshot_mode) =
+            approved_document_state.expect("executor should observe the approved document");
         let action_lock_state = action_lock_state
             .lock()
             .expect("action lock state should be readable")
@@ -2203,7 +2231,11 @@ mod tests {
                 response_json,
                 action_lock_state,
                 action_result,
-                review_parent_succeeded,
+                (
+                    review_parent_succeeded,
+                    snapshot_mode,
+                    snapshot_removed_after_review,
+                ),
                 editor_can_reacquire_lock,
                 printed_output,
             ),
@@ -2216,7 +2248,7 @@ mod tests {
                 StatusCode::OK,
                 serde_json::json!({
                     "success": true,
-                    "revision": current_revision(&document_path),
+                    "revision": approved_revision,
                 }),
                 Some((true, true)),
                 Some(ReviewDocumentActionResult::new(
@@ -2224,9 +2256,9 @@ mod tests {
                     true,
                     "Issue comment posted.".to_owned(),
                     resulting_hash.clone(),
-                    Some(resulting_hash),
+                    None,
                 )),
-                true,
+                (true, 0o600, true),
                 true,
                 indoc! {"
                     Watch-web issue comment succeeded: Issue comment posted.

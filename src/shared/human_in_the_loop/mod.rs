@@ -23,8 +23,9 @@ mod session_watch;
 mod tmux;
 pub(crate) use action_result::{
     ReviewDocumentAction, ReviewDocumentActionResult, action_result_after_review_completion,
-    clear_action_result, document_hash, save_action_result, successful_action_result,
-    successful_action_results_in_directory,
+    clear_action_result, document_hash, save_action_document_snapshot, save_action_result,
+    successful_action_result, successful_action_results_in_directory,
+    take_action_document_snapshot,
 };
 pub(crate) use pending_review::{
     ReviewDocumentMarker, is_active_pr_draft_review_marker, review_document_marker,
@@ -281,9 +282,9 @@ where
         }
     };
 
-    if let Some(action_result) =
-        action_result_after_review_completion(completion_signal, document_path)?
-    {
+    let action_result = action_result_after_review_completion(completion_signal, document_path)?;
+    let completed_by_watch_web = action_result.is_some();
+    if let Some(action_result) = action_result {
         action_result.print_for_agent();
     }
 
@@ -299,7 +300,14 @@ where
 
     // Emit a diff of what the user edited so background callers can pick it
     // up from stdout without re-reading the file.
-    let post_edit = std::fs::read_to_string(document_path)?;
+    let post_edit = if completed_by_watch_web {
+        match take_action_document_snapshot(document_path)? {
+            Some(snapshot) => snapshot,
+            None => std::fs::read_to_string(document_path)?,
+        }
+    } else {
+        std::fs::read_to_string(document_path)?
+    };
     if let Err(e) = print_edit_diff(&pre_edit, &post_edit)
         && e.kind() != std::io::ErrorKind::BrokenPipe
     {

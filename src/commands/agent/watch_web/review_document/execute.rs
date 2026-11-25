@@ -18,7 +18,8 @@ use super::{
 };
 pub(super) use crate::shared::human_in_the_loop::ReviewDocumentAction;
 use crate::shared::human_in_the_loop::{
-    LockGuard, ReviewDocumentActionResult, clear_action_result, document_hash, save_action_result,
+    LockGuard, ReviewDocumentActionResult, clear_action_result, document_hash,
+    save_action_document_snapshot, save_action_result,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -182,6 +183,15 @@ pub(super) async fn execute_review_document(
             (record, saved_revision, false)
         }
     };
+
+    let approved_document = std::fs::read_to_string(&record.path).map_err(|error| {
+        tracing::warn!(%error, "failed to read approved review document snapshot");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    save_action_document_snapshot(&record.path, &approved_document).map_err(|error| {
+        tracing::warn!(%error, "failed to save approved review document snapshot");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
 
     if retrying {
         crate::shared::human_in_the_loop::ApprovalManager::new(&record.path)
