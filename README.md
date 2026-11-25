@@ -509,6 +509,9 @@ action; `--force` overrides the conflict. Approval (`submit: true`) is required
 only when changes are applied, so `--dry-run` and no-change pushes skip approval.
 `--no-review` skips editor approval when vibe mode is enabled and the target
 repository is allowed.
+After an applied push refreshes the local file, an open reply review for that
+file is asked to finish. A failed finish request prints a warning without
+changing the push result; dry-run and no-change pushes do not request a finish.
 
 ##### `a gh pr-review reply review`
 

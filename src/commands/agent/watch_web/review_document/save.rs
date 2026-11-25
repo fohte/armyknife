@@ -1,8 +1,8 @@
 use axum::http::StatusCode;
 
 use crate::shared::human_in_the_loop::{
-    FINISH_ACK_TIMEOUT, ReviewDocumentOperationLock, finish_ack_fifo_path,
-    finish_request_fifo_path, open_fifo_reader, wait_for_finish_ack,
+    ReviewDocumentOperationLock, finish_ack_fifo_path, finish_request_fifo_path, open_fifo_reader,
+    signal_review_finish_and_wait,
 };
 
 use super::{
@@ -80,27 +80,29 @@ pub(super) async fn save_document_for_session(
         let content = render_review_document(&marker.path, request.frontmatter, &request.body)?;
         let revision = review_document_revision(content.as_bytes());
         overwrite_review_document(&marker.path, content.as_bytes(), &request.revision)?;
-        if finishing {
-            crate::shared::human_in_the_loop::try_signal_fifo(&fifo_path).map_err(|error| {
-                tracing::warn!(%error, "failed to signal review finish request");
-                StatusCode::INTERNAL_SERVER_ERROR
-            })?;
-        }
-        drop(review_lock);
-        if let Some(ack_reader) = ack_reader.as_mut() {
-            let acknowledgement =
-                wait_for_finish_ack(ack_reader, FINISH_ACK_TIMEOUT).map_err(|error| {
-                    tracing::warn!(%error, "review process did not acknowledge finish request");
-                    if error.kind() == std::io::ErrorKind::TimedOut {
-                        StatusCode::GATEWAY_TIMEOUT
-                    } else {
-                        StatusCode::INTERNAL_SERVER_ERROR
-                    }
-                })?;
-            if acknowledgement != b'0' {
-                tracing::warn!("review completion handler rejected the finish request");
-                return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        let acknowledgement = match ack_reader.as_mut() {
+            Some(ack_reader) => Some(
+                signal_review_finish_and_wait(review_lock, &fifo_path, ack_reader).map_err(
+                    |error| {
+                        tracing::warn!(%error, "review process did not acknowledge finish request");
+                        if error.kind() == std::io::ErrorKind::TimedOut {
+                            StatusCode::GATEWAY_TIMEOUT
+                        } else {
+                            StatusCode::INTERNAL_SERVER_ERROR
+                        }
+                    },
+                )?,
+            ),
+            None => {
+                drop(review_lock);
+                None
             }
+        };
+        if let Some(acknowledgement) = acknowledgement
+            && acknowledgement != b'0'
+        {
+            tracing::warn!("review completion handler rejected the finish request");
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
         }
         Ok(revision)
     })

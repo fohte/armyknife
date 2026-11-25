@@ -26,8 +26,8 @@ pub(crate) use pending_review::{
 };
 pub(crate) use review_completion::complete_review;
 pub(crate) use review_finish::{
-    FINISH_ACK_TIMEOUT, ReviewDocumentOperationLock, finish_ack_fifo_path,
-    finish_request_fifo_path, open_fifo_reader, request_review_finish, wait_for_finish_ack,
+    ReviewDocumentOperationLock, finish_ack_fifo_path, finish_request_fifo_path, open_fifo_reader,
+    request_review_finish, signal_review_finish_and_wait,
 };
 use review_finish::{
     create_fifo_at_path, path_with_suffix, remove_fifo_if_present, try_read_fifo_signal,
