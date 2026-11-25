@@ -360,7 +360,7 @@ fn filter_proposals_after_tail_window(
                     resolved: false,
                     ..
                 }
-            ) || proposal.resolved_at.unwrap_or(proposal.created_at) >= cutoff
+            ) || proposal.position_timestamp() >= cutoff
         })
         .cloned()
         .collect()
@@ -418,14 +418,19 @@ fn resolve_queued_prompt_ids_before_window(
 mod tests {
     use chrono::{DateTime, Utc};
 
-    use super::{
-        filter_decisions_after_tail_window, filter_proposals_after_tail_window,
-        filter_todos_after_tail_window, parse_tail_window_or_full,
+    use super::{TailWindowParserState, parse_tail_window_or_full, render_tail_window_parser};
+    use crate::commands::agent::proposal::{ProposalAnswer, ProposalOption};
+    use crate::commands::agent::store::{AgentTodo, TodoResolution};
+    use crate::commands::agent::types::Engine;
+    use crate::commands::agent::watch_web::messages::parser::claude::{
+        IncrementalClaudeParser, ParserAdditions,
     };
-    use crate::commands::agent::proposal::ProposalOption;
-    use crate::commands::agent::store::{AgentDecision, AgentTodo, TodoResolution};
-    use crate::commands::agent::watch_web::messages::ChatItem;
     use crate::commands::agent::watch_web::messages::proposals::ProposalItem;
+    use crate::commands::agent::watch_web::messages::{
+        ChatItem, ConversationResponse, TranscriptInput,
+    };
+    use indoc::indoc;
+    use std::io::Cursor;
 
     fn timestamp(value: &str) -> DateTime<Utc> {
         DateTime::parse_from_rfc3339(value)
@@ -447,76 +452,54 @@ mod tests {
     }
 
     #[test]
-    fn tail_window_keeps_pending_cards_and_recently_resolved_cards() {
-        let decisions = [
-            AgentDecision {
-                session_id: "fixture-session".to_string(),
-                seq: 1,
-                title: "An old unreviewed decision".to_string(),
-                why: "It predates the displayed transcript window.".to_string(),
-                considered: Vec::new(),
-                easy_to_change: "Change it later.".to_string(),
-                created_at: "2026-06-01T11:59:59Z".to_string(),
-                review: None,
-                reviewed_at: None,
-            },
-            AgentDecision {
-                session_id: "fixture-session".to_string(),
-                seq: 2,
-                title: "A recent reviewed decision".to_string(),
-                why: "It falls inside the displayed transcript window.".to_string(),
-                considered: Vec::new(),
-                easy_to_change: "Change it later.".to_string(),
-                created_at: "2026-06-01T12:00:00Z".to_string(),
-                review: Some("ok".to_string()),
-                reviewed_at: Some("2026-06-01T12:00:01Z".to_string()),
-            },
-        ];
-        let todos = [
-            AgentTodo {
-                session_id: "fixture-session".to_string(),
-                seq: 1,
-                title: "An old incomplete todo".to_string(),
-                detail: None,
-                folded: false,
-                added_folded: false,
-                created_at: timestamp("2026-06-01T11:59:59Z"),
-                completed_at: None,
-                resolution: None,
-                comment: None,
-            },
-            AgentTodo {
-                session_id: "fixture-session".to_string(),
-                seq: 2,
-                title: "An old completed todo".to_string(),
-                detail: None,
-                folded: false,
-                added_folded: false,
-                created_at: timestamp("2026-06-01T11:59:58Z"),
-                completed_at: Some(timestamp("2026-06-01T11:59:59Z")),
-                resolution: Some(TodoResolution::Completed),
-                comment: None,
-            },
-            AgentTodo {
-                session_id: "fixture-session".to_string(),
-                seq: 3,
-                title: "A recent completed todo".to_string(),
-                detail: None,
-                folded: false,
-                added_folded: false,
-                created_at: timestamp("2026-06-01T11:59:57Z"),
-                completed_at: Some(timestamp("2026-06-01T12:00:01Z")),
-                resolution: Some(TodoResolution::Completed),
-                comment: None,
-            },
-        ];
+    fn tail_window_renders_pending_cards_and_recently_resolved_cards() {
+        let transcript = indoc! {r#"
+            {"uuid":"fixture-before","parentUuid":null,"timestamp":"2026-06-01T11:59:00Z","type":"assistant","message":{"content":[{"type":"text","text":"Before"}]}}
+            {"uuid":"fixture-after","parentUuid":"fixture-before","timestamp":"2026-06-01T12:01:00Z","type":"assistant","message":{"content":[{"type":"text","text":"After"}]}}
+        "#};
+        let parser = IncrementalClaudeParser::new(Cursor::new(transcript), None)
+            .expect("Claude transcript should parse");
+        let cutoff = timestamp("2026-06-01T12:00:00Z");
         let proposals = [
             ProposalItem {
                 seq: 1,
+                created_at: timestamp("2026-06-01T11:59:56Z"),
+                resolved_at: Some(timestamp("2026-06-01T11:59:59Z")),
+                item: ChatItem::Proposal {
+                    seq: 1,
+                    title: "An old resolved proposal".to_string(),
+                    summary: None,
+                    options: Vec::new(),
+                    answer: None,
+                    resolved: true,
+                    resolution: None,
+                    comment: None,
+                },
+            },
+            ProposalItem {
+                seq: 2,
+                created_at: timestamp("2026-06-01T11:59:56Z"),
+                resolved_at: Some(timestamp("2026-06-01T12:00:01Z")),
+                item: ChatItem::Proposal {
+                    seq: 2,
+                    title: "A recently resolved proposal".to_string(),
+                    summary: None,
+                    options: Vec::new(),
+                    answer: Some(ProposalAnswer {
+                        choice: Some(0),
+                        comment: None,
+                    }),
+                    resolved: true,
+                    resolution: None,
+                    comment: None,
+                },
+            },
+            ProposalItem {
+                seq: 3,
                 created_at: timestamp("2026-06-01T11:59:57Z"),
                 resolved_at: None,
                 item: ChatItem::Proposal {
-                    seq: 1,
+                    seq: 3,
                     title: "A pending proposal".to_string(),
                     summary: None,
                     options: vec![ProposalOption {
@@ -532,49 +515,108 @@ mod tests {
                     comment: None,
                 },
             },
-            ProposalItem {
-                seq: 2,
+        ];
+        let todos = [
+            AgentTodo {
+                session_id: "fixture-session".to_string(),
+                seq: 1,
+                title: "An old incomplete todo".to_string(),
+                detail: None,
+                folded: false,
+                added_folded: false,
                 created_at: timestamp("2026-06-01T11:59:58Z"),
-                resolved_at: Some(timestamp("2026-06-01T11:59:59Z")),
-                item: ChatItem::Proposal {
-                    seq: 2,
-                    title: "An old resolved proposal".to_string(),
-                    summary: None,
-                    options: Vec::new(),
-                    answer: None,
-                    resolved: true,
-                    resolution: None,
-                    comment: None,
-                },
+                completed_at: None,
+                resolution: None,
+                comment: None,
             },
-            ProposalItem {
+            AgentTodo {
+                session_id: "fixture-session".to_string(),
+                seq: 2,
+                title: "An old completed todo".to_string(),
+                detail: None,
+                folded: false,
+                added_folded: false,
+                created_at: timestamp("2026-06-01T11:59:57Z"),
+                completed_at: Some(timestamp("2026-06-01T11:59:59Z")),
+                resolution: Some(TodoResolution::Completed),
+                comment: None,
+            },
+            AgentTodo {
+                session_id: "fixture-session".to_string(),
                 seq: 3,
+                title: "A recently completed todo".to_string(),
+                detail: None,
+                folded: false,
+                added_folded: false,
                 created_at: timestamp("2026-06-01T11:59:56Z"),
-                resolved_at: Some(timestamp("2026-06-01T12:00:01Z")),
-                item: ChatItem::Proposal {
-                    seq: 3,
-                    title: "A recently resolved proposal".to_string(),
-                    summary: None,
-                    options: Vec::new(),
-                    answer: None,
-                    resolved: true,
-                    resolution: None,
-                    comment: None,
-                },
+                completed_at: Some(timestamp("2026-06-01T12:00:02Z")),
+                resolution: Some(TodoResolution::Completed),
+                comment: None,
             },
         ];
-        let cutoff = timestamp("2026-06-01T12:00:00Z");
+        let additions = ParserAdditions {
+            session_id: "fixture-session",
+            parent: None,
+            pending_tool: None,
+            user_marker: None,
+            decisions: &[],
+            queued_prompts: &[],
+            peer_out_messages: &[],
+            proposals: &proposals,
+            todos: &todos,
+            additional_cards: &[],
+        };
+        let input = TranscriptInput {
+            path: None,
+            engine: Engine::Claude,
+            additions,
+        };
+        let state = TailWindowParserState {
+            cutoff,
+            prior_resolved_ids: Vec::new(),
+            message_limit: 2,
+        };
+        let (conversation, resolved_ids) =
+            render_tail_window_parser(&parser, &state, &input).expect("tail window should render");
 
         assert_eq!(
+            (conversation, resolved_ids),
             (
-                filter_decisions_after_tail_window(&decisions, cutoff),
-                filter_proposals_after_tail_window(&proposals, cutoff),
-                filter_todos_after_tail_window(&todos, cutoff),
-            ),
-            (
-                vec![decisions[1].clone()],
-                vec![proposals[0].clone(), proposals[2].clone()],
-                vec![todos[0].clone(), todos[2].clone()],
+                ConversationResponse {
+                    messages: vec![
+                        ChatItem::Assistant {
+                            text: "Before".to_string(),
+                        },
+                        proposals[1].item.clone(),
+                        ChatItem::Todo {
+                            seq: 3,
+                            title: "A recently completed todo".to_string(),
+                            detail: None,
+                            folded: false,
+                            added_folded: false,
+                            completed: true,
+                            resolution: Some(TodoResolution::Completed),
+                            comment: None,
+                        },
+                        ChatItem::Assistant {
+                            text: "After".to_string(),
+                        },
+                        proposals[2].item.clone(),
+                        ChatItem::Todo {
+                            seq: 1,
+                            title: "An old incomplete todo".to_string(),
+                            detail: None,
+                            folded: false,
+                            added_folded: false,
+                            completed: false,
+                            resolution: None,
+                            comment: None,
+                        },
+                    ],
+                    tail_window_start: Some(cutoff),
+                    ..ConversationResponse::default()
+                },
+                Vec::new(),
             ),
         );
     }

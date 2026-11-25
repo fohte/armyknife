@@ -1,6 +1,7 @@
 use anyhow::Context;
 use axum::Json;
 use axum::extract::{Path as RoutePath, State};
+use chrono::Utc;
 use serde::Deserialize;
 
 use super::super::super::{
@@ -114,6 +115,7 @@ pub(super) async fn answer_proposal(
         attachments::append_image_previews_to_comment(request.comment, &saved_attachments);
     let content = attachments::append_paths_to_message(content, &attachment_paths);
     let content = watch_web_message_content(&session, marker.as_deref(), &content);
+    let resolved_at = Utc::now();
     let runtime = state.runtime;
     let send_session = session.clone();
     if let Err(error) = run_blocking(move || runtime.send_message(&send_session, &content)).await {
@@ -130,9 +132,15 @@ pub(super) async fn answer_proposal(
     let configured_sessions_dir = state.sessions_dir;
     let updated = run_blocking(move || match configured_sessions_dir {
         Some(sessions_dir) => {
-            store::write_agent_proposal_answer_from(&sessions_dir, &session_id, seq, &answer)
+            store::write_agent_proposal_answer_at_from(
+                &sessions_dir,
+                &session_id,
+                seq,
+                &answer,
+                resolved_at,
+            )
         }
-        None => store::write_agent_proposal_answer(&session_id, seq, &answer),
+        None => store::write_agent_proposal_answer_at(&session_id, seq, &answer, resolved_at),
     })
     .await
     .map_err(|error| {

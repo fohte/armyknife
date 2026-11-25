@@ -621,21 +621,23 @@ pub(crate) fn agent_proposals_from(
     database::agent_proposals(sessions_dir, session_id)
 }
 
-pub(crate) fn write_agent_proposal_answer(
+pub(crate) fn write_agent_proposal_answer_at(
     session_id: &str,
     seq: i64,
     answer: &str,
+    resolved_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<bool> {
-    write_agent_proposal_answer_from(&sessions_dir()?, session_id, seq, answer)
+    write_agent_proposal_answer_at_from(&sessions_dir()?, session_id, seq, answer, resolved_at)
 }
 
-pub(crate) fn write_agent_proposal_answer_from(
+pub(crate) fn write_agent_proposal_answer_at_from(
     sessions_dir: &Path,
     session_id: &str,
     seq: i64,
     answer: &str,
+    resolved_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<bool> {
-    database::write_agent_proposal_answer(sessions_dir, session_id, seq, answer)
+    database::write_agent_proposal_answer_at(sessions_dir, session_id, seq, answer, resolved_at)
 }
 
 pub(crate) fn resolve_agent_proposal_from(

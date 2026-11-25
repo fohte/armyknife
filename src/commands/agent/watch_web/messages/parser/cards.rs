@@ -179,7 +179,7 @@ pub(in crate::commands::agent::watch_web::messages) fn cards_from_sources(
         let resolved = matches!(&proposal.item, ChatItem::Proposal { resolved: true, .. });
         TimedCard::new(
             CardKind::Proposal,
-            Some(proposal.resolved_at.unwrap_or(proposal.created_at)),
+            Some(proposal.position_timestamp()),
             proposal.seq,
             !resolved,
             proposal.item.clone(),
