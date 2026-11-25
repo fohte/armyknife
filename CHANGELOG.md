@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.927](https://github.com/fohte/armyknife/compare/v0.1.926...v0.1.927) (2026-11-25)
+
+
+### Bug Fixes
+
+* **agent/watch-web:** resolve retry denial cards ([#2278](https://github.com/fohte/armyknife/issues/2278)) ([a5ccde3](https://github.com/fohte/armyknife/commit/a5ccde399a09b81142fbcdadd957cd9164b26d61))
+
 ## [0.1.926](https://github.com/fohte/armyknife/compare/v0.1.925...v0.1.926) (2026-11-25)
 
 
