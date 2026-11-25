@@ -51,7 +51,8 @@ pub(crate) use peer_out_messages::{
 };
 pub(crate) use permission_denied::{PermissionDeniedOperation, PermissionDeniedResolution};
 pub(crate) use permission_denied::{
-    add_permission_denied, permission_denied_operations, resolve_permission_denied,
+    add_permission_denied, permission_denied_operations,
+    resolve_matching_unclassified_permission_denials, resolve_permission_denied,
 };
 pub(crate) use permission_requests::{
     PermissionRequestData, PermissionRequestDecision, PermissionRequestResolution,

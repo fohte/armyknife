@@ -1045,6 +1045,21 @@ fn process_hook_event_impl_with_env_and_unreported_stop(
         )?;
     }
 
+    if event == HookEvent::PostToolUse
+        && let (Some(tool_name), Some(tool_input)) = (
+            input.tool_name.as_deref(),
+            input.tool_input.as_ref().map(|tool_input| &tool_input.raw),
+        )
+    {
+        store::resolve_matching_unclassified_permission_denials_from(
+            sessions_dir,
+            &session.session_id,
+            tool_name,
+            tool_input,
+            store::PermissionDeniedResolution::Approved,
+        )?;
+    }
+
     if session.engine == Engine::Claude && input.agent_id.is_none() {
         let compacting = match event {
             HookEvent::PreCompact => Some(true),
@@ -2615,6 +2630,66 @@ mod tests {
                     false,
                 )],
             ),
+        );
+    }
+
+    #[rstest]
+    #[case::claude_retry(HookEvent::PostToolUse, Engine::Claude, "retry-session", "Bash", serde_json::json!({"command": "printf fixture"}), "Classifier unavailable", true)]
+    #[case::codex_retry(HookEvent::PostToolUse, Engine::Codex, "retry-session", "Bash", serde_json::json!({"command": "printf fixture"}), "Classifier unavailable", true)]
+    #[case::different_session(HookEvent::PostToolUse, Engine::Claude, "other-session", "Bash", serde_json::json!({"command": "printf fixture"}), "Classifier unavailable", false)]
+    #[case::different_tool_input(HookEvent::PostToolUse, Engine::Claude, "retry-session", "Bash", serde_json::json!({"command": "printf other"}), "Classifier unavailable", false)]
+    #[case::different_tool_name(HookEvent::PostToolUse, Engine::Claude, "retry-session", "Read", serde_json::json!({"command": "printf fixture"}), "Classifier unavailable", false)]
+    #[case::no_successful_tool_result(HookEvent::PreToolUse, Engine::Claude, "retry-session", "Bash", serde_json::json!({"command": "printf fixture"}), "Classifier unavailable", false)]
+    #[case::classified_denial(HookEvent::PostToolUse, Engine::Claude, "retry-session", "Bash", serde_json::json!({"command": "printf fixture"}), "[Destructive Operation]", false)]
+    fn matching_successful_retry_resolves_only_unclassified_denials(
+        #[case] event: HookEvent,
+        #[case] engine: Engine,
+        #[case] event_session_id: &str,
+        #[case] tool_name: &str,
+        #[case] tool_input: serde_json::Value,
+        #[case] reason: &str,
+        #[case] resolved: bool,
+    ) {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let sessions_dir = temp_dir.path();
+        let denied_input = serde_json::json!({"command": "printf fixture"});
+        store::add_permission_denied_from(
+            sessions_dir,
+            "retry-session",
+            Some("denied-tool-call"),
+            "Bash",
+            &denied_input,
+            Some(reason),
+        )
+        .expect("denial should be recorded");
+        let mut input: HookInput = serde_json::from_value(serde_json::json!({
+            "session_id": event_session_id,
+            "cwd": "/tmp/test",
+            "tool_name": tool_name,
+            "tool_input": tool_input,
+        }))
+        .expect("hook input should deserialize");
+        input.engine = engine;
+
+        process_hook_event_impl(event, input, sessions_dir, &SideEffects::none())
+            .expect("hook should succeed");
+        let denied = store::permission_denied_operations_from(sessions_dir, "retry-session")
+            .expect("denial should load");
+
+        assert_eq!(
+            denied
+                .into_iter()
+                .map(|operation| (
+                    operation.seq,
+                    operation.resolved_at.is_some(),
+                    operation.resolution
+                ))
+                .collect::<Vec<_>>(),
+            vec![(
+                1,
+                resolved,
+                resolved.then_some(store::PermissionDeniedResolution::Approved),
+            )],
         );
     }
 
