@@ -159,11 +159,18 @@ mod tests {
         ready_file: PathBuf,
     }
 
-    struct WaitingReviewEditor;
+    struct WaitingReviewEditor {
+        started_at: Instant,
+    }
 
     impl ReviewEditorChild for WaitingReviewEditor {
         fn try_wait(&mut self) -> std::io::Result<Option<ExitStatus>> {
-            Ok(None)
+            if self.started_at.elapsed() >= Duration::from_secs(10) {
+                use std::os::unix::process::ExitStatusExt;
+                Ok(Some(ExitStatus::from_raw(1 << 8)))
+            } else {
+                Ok(None)
+            }
         }
 
         fn terminate_and_wait(&mut self) -> std::io::Result<()> {
@@ -186,7 +193,12 @@ mod tests {
             })?;
             let mut finish_reader = open_fifo_reader(finish_fifo_path)?;
             std::fs::write(&self.ready_file, "ready")?;
-            editor::wait_for_editor_or_finish_request(&mut WaitingReviewEditor, &mut finish_reader)
+            editor::wait_for_editor_or_finish_request(
+                &mut WaitingReviewEditor {
+                    started_at: Instant::now(),
+                },
+                &mut finish_reader,
+            )
         }
     }
 
@@ -194,6 +206,8 @@ mod tests {
     #[ignore = "spawned by the watch-web review action integration test"]
     fn watch_web_review_child_worker() {
         use crate::shared::human_in_the_loop::FifoSignalGuard;
+
+        let _deadline = super::super::TestWorkerDeadline::new(Duration::from_secs(30));
 
         let document_path = PathBuf::from(
             std::env::var_os("ARMYKNIFE_REVIEW_TEST_DOCUMENT").expect("document path"),

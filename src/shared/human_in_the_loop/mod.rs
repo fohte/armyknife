@@ -69,6 +69,42 @@ const FIFO_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const REVIEW_SESSION_CHECK_INTERVAL: Duration = Duration::from_secs(2);
 const MAX_CONSECUTIVE_SESSION_CHECK_FAILURES: usize = 3;
 
+#[cfg(test)]
+struct TestWorkerDeadline {
+    cancel: Option<std::sync::mpsc::Sender<()>>,
+    watchdog: Option<std::thread::JoinHandle<()>>,
+}
+
+#[cfg(test)]
+impl TestWorkerDeadline {
+    fn new(timeout: Duration) -> Self {
+        let (cancel, receiver) = std::sync::mpsc::channel();
+        let pid = std::process::id();
+        let watchdog = std::thread::spawn(move || {
+            if receiver.recv_timeout(timeout).is_err() {
+                // SAFETY: the watchdog targets only this test worker process.
+                unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+            }
+        });
+        Self {
+            cancel: Some(cancel),
+            watchdog: Some(watchdog),
+        }
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestWorkerDeadline {
+    fn drop(&mut self) {
+        if let Some(cancel) = self.cancel.take() {
+            let _ = cancel.send(());
+        }
+        if let Some(watchdog) = self.watchdog.take() {
+            let _ = watchdog.join();
+        }
+    }
+}
+
 /// Trait for types that handle the review completion callback.
 ///
 /// Each use case (PR draft, issue comment, PR review reply, or simple file editing)
@@ -661,8 +697,36 @@ mod tests {
     #[ignore = "spawned by the watch-web review action integration test"]
     fn watch_web_review_parent_worker() {
         use std::io::Write;
+        use std::ops::{Deref, DerefMut};
         use std::os::fd::AsRawFd;
         use std::process::Stdio;
+
+        struct ChildGuard(std::process::Child);
+
+        impl Deref for ChildGuard {
+            type Target = std::process::Child;
+
+            fn deref(&self) -> &Self::Target {
+                &self.0
+            }
+        }
+
+        impl DerefMut for ChildGuard {
+            fn deref_mut(&mut self) -> &mut Self::Target {
+                &mut self.0
+            }
+        }
+
+        impl Drop for ChildGuard {
+            fn drop(&mut self) {
+                if self.0.try_wait().ok().flatten().is_none() {
+                    let _ = self.0.kill();
+                }
+                let _ = self.0.wait();
+            }
+        }
+
+        let _deadline = TestWorkerDeadline::new(Duration::from_secs(30));
 
         let document_path = PathBuf::from(
             std::env::var_os("ARMYKNIFE_REVIEW_TEST_DOCUMENT").expect("document path"),
@@ -708,7 +772,7 @@ mod tests {
                     .stdout(Stdio::null())
                     .stderr(Stdio::null());
                 let child = crate::infra::process::spawn(child_command)?;
-                review_child = Some(child);
+                review_child = Some(ChildGuard(child));
                 Ok(ReviewLaunch::without_queue(None))
             },
             |_| Ok(true),
