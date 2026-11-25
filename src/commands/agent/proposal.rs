@@ -158,6 +158,10 @@ fn add_from_input(input: impl Read) -> Result<()> {
         .own_session_id()
         .ok_or(CcError::SelfSessionUnknown)?;
     let sessions_dir = store::sessions_dir()?;
+    ensure!(
+        store::load_session_from(&sessions_dir, &session_id)?.is_some(),
+        "session not found: {session_id}"
+    );
     let seq = record_proposal(&sessions_dir, &session_id, input)?;
     println!("Recorded proposal {seq}");
     Ok(())
@@ -584,6 +588,15 @@ mod tests {
     fn add_records_a_proposal_for_the_claude_code_session_id() {
         let cache_home = tempfile::tempdir().expect("temporary cache home should be created");
         let sessions_dir = cache_home.path().join("armyknife/cc/sessions");
+        let session = serde_json::from_value(serde_json::json!({
+            "session_id": "claude-session",
+            "cwd": "/tmp/claude-session",
+            "status": "running",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+        }))
+        .expect("tracked Claude Code session should deserialize");
+        store::save_session_to(&sessions_dir, &session).expect("session should save");
         let cache_home_path = cache_home
             .path()
             .to_str()
@@ -608,6 +621,37 @@ mod tests {
         assert_eq!(
             actual,
             vec![r#"{"title":"Pick a format","summary":null,"options":[{"label":"Format A","description":null,"pros":[],"cons":[],"recommended":false},{"label":"Format B","description":null,"pros":[],"cons":[],"recommended":false}]}"#.to_string()],
+        );
+    }
+
+    #[test]
+    fn add_rejects_an_untracked_claude_code_session_id() {
+        let cache_home = tempfile::tempdir().expect("temporary cache home should be created");
+        let sessions_dir = cache_home.path().join("armyknife/cc/sessions");
+        let cache_home_path = cache_home
+            .path()
+            .to_str()
+            .expect("cache path should be valid UTF-8");
+        let input =
+            r#"{"title":"Pick a format","options":[{"label":"Format A"},{"label":"Format B"}]}"#;
+
+        let result = temp_env::with_vars(
+            [
+                ("XDG_CACHE_HOME", Some(cache_home_path)),
+                ("ARMYKNIFE_SESSION_ID", None::<&str>),
+                ("CLAUDE_CODE_SESSION_ID", Some("untracked-session")),
+                ("CODEX_SESSION_ID", None::<&str>),
+            ],
+            || add_from_input(std::io::Cursor::new(input)).map_err(|error| error.to_string()),
+        );
+        let proposals = stored_proposal_bodies(&sessions_dir, "untracked-session");
+
+        assert_eq!(
+            (result, proposals),
+            (
+                Err("session not found: untracked-session".to_string()),
+                Vec::new(),
+            ),
         );
     }
 }
