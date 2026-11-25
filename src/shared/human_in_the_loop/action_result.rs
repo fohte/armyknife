@@ -131,12 +131,14 @@ pub(crate) fn save_action_document_snapshot(
         .parent()
         .ok_or_else(|| std::io::Error::other("action document snapshot path has no parent"))?;
     fs::create_dir_all(parent)?;
-    let temporary_path = path_with_suffix(&snapshot_path, ".tmp");
+    let mut temporary_name = snapshot_path.as_os_str().to_os_string();
+    temporary_name.push(format!(".{}.tmp", uuid::Uuid::new_v4()));
+    let temporary_path = PathBuf::from(temporary_name);
     let save_result = (|| {
         let mut options = fs::OpenOptions::new();
-        options.write(true).create(true).truncate(true);
+        options.write(true).create_new(true);
         #[cfg(unix)]
-        options.mode(0o600);
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
         let mut file = options.open(&temporary_path)?;
         #[cfg(unix)]
         file.set_permissions(fs::Permissions::from_mode(0o600))?;
@@ -301,7 +303,8 @@ fn remove_if_present(path: &Path) -> std::io::Result<()> {
 mod tests {
     use super::{
         ReviewDocumentAction, ReviewDocumentActionResult, action_result_after_review_completion,
-        document_hash, save_action_result, successful_action_result, wait_for_action_result_until,
+        document_hash, save_action_document_snapshot, save_action_result, successful_action_result,
+        take_action_document_snapshot, wait_for_action_result_until,
     };
     use rstest::rstest;
     use std::fs;
@@ -320,6 +323,36 @@ mod tests {
             (
                 std::io::ErrorKind::TimedOut,
                 "Timed out waiting for the watch-web action result. The action may still be running in watch-web; do not retry submit or push.".to_owned(),
+            ),
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn snapshot_staging_does_not_truncate_a_symlink_target() {
+        use super::{action_document_snapshot_path, path_with_suffix};
+        use std::os::unix::fs::symlink;
+
+        let directory = TempDir::new().expect("fixture directory should be created");
+        let document_path = directory.path().join("review.md");
+        let protected_path = directory.path().join("protected.txt");
+        fs::write(&protected_path, "protected content").expect("protected file should be written");
+        let staging_path = path_with_suffix(&action_document_snapshot_path(&document_path), ".tmp");
+        symlink(&protected_path, &staging_path).expect("staging symlink should be created");
+
+        save_action_document_snapshot(&document_path, "Approved document.")
+            .expect("approved document snapshot should be saved");
+        let observed = (
+            fs::read_to_string(&protected_path).expect("protected file should remain readable"),
+            take_action_document_snapshot(&document_path)
+                .expect("approved document snapshot should be read"),
+        );
+
+        assert_eq!(
+            observed,
+            (
+                "protected content".to_owned(),
+                Some("Approved document.".to_owned()),
             ),
         );
     }
