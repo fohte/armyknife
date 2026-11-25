@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.925](https://github.com/fohte/armyknife/compare/v0.1.924...v0.1.925) (2026-11-25)
+
+
+### Bug Fixes
+
+* **gh/pr-review:** finish reply reviews after push ([#2273](https://github.com/fohte/armyknife/issues/2273)) ([7880434](https://github.com/fohte/armyknife/commit/7880434c49375b179eb1eeda605ae0d3710ba504))
+
 ## [0.1.924](https://github.com/fohte/armyknife/compare/v0.1.923...v0.1.924) (2026-11-25)
 
 
