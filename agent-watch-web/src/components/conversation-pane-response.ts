@@ -412,6 +412,15 @@ export type ReviewDocumentResponse = {
   revision: string
   frontmatter: JsonValue
   body: string
+  relatedIssueTitles?: Record<string, string>
+}
+
+function isStringRecord(value: unknown): value is Record<string, string> {
+  return (
+    isRecord(value) &&
+    !Array.isArray(value) &&
+    Object.values(value).every((item) => typeof item === 'string')
+  )
 }
 
 export function isReviewDocumentResponse(
@@ -422,7 +431,9 @@ export function isReviewDocumentResponse(
     typeof value['id'] === 'string' &&
     typeof value['revision'] === 'string' &&
     isJsonValue(value['frontmatter']) &&
-    typeof value['body'] === 'string'
+    typeof value['body'] === 'string' &&
+    (value['relatedIssueTitles'] === undefined ||
+      isStringRecord(value['relatedIssueTitles']))
   )
 }
 

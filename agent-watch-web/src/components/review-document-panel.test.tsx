@@ -509,6 +509,10 @@ it('shows issue fields as typed metadata before the Markdown body', () => {
       <ReviewDocumentPanel
         summary={summary}
         summaries={[summary]}
+        relatedIssueTitles={{
+          'example/web-app#390': 'Retry notifications after a delivery failure',
+          'example/web-app#413': 'Retry pending notification deliveries',
+        }}
         frontmatter={{
           title: 'Notifications stop after several deliveries',
           labels: ['bug', 'notifications'],
@@ -560,6 +564,9 @@ The fourth notification is not delivered.`}
         .trim(),
     })),
     parentIssue: parentLink?.textContent,
+    parentIssueTitle: parentRow?.querySelector(
+      '.review-document-issue-reference-title',
+    )?.textContent,
     parentIssueHref: parentLink?.getAttribute('href'),
     parentIssueTarget: parentLink?.getAttribute('target'),
     parentIssueRel: parentLink?.getAttribute('rel'),
@@ -568,6 +575,9 @@ The fourth notification is not delivered.`}
     )?.textContent,
     subIssues: subIssueLinks.map((item) => ({
       reference: item.textContent,
+      title: item.parentElement?.querySelector(
+        '.review-document-issue-reference-title',
+      )?.textContent,
       href: item.getAttribute('href'),
       target: item.getAttribute('target'),
       rel: item.getAttribute('rel'),
@@ -581,6 +591,7 @@ The fourth notification is not delivered.`}
     labels: ['bug', 'notifications'],
     assignees: [{ initial: 'S', name: 'sample-maintainer' }],
     parentIssue: 'example/web-app#390',
+    parentIssueTitle: 'Retry notifications after a delivery failure',
     parentIssueHref: 'https://github.com/example/web-app/issues/390',
     parentIssueTarget: '_blank',
     parentIssueRel: 'noopener noreferrer',
@@ -588,12 +599,14 @@ The fourth notification is not delivered.`}
     subIssues: [
       {
         reference: 'example/web-app#413',
+        title: 'Retry pending notification deliveries',
         href: 'https://github.com/example/web-app/issues/413',
         target: '_blank',
         rel: 'noopener noreferrer',
       },
       {
         reference: 'example/web-app#414',
+        title: undefined,
         href: 'https://github.com/example/web-app/issues/414',
         target: '_blank',
         rel: 'noopener noreferrer',

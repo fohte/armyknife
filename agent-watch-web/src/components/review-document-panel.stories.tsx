@@ -276,6 +276,11 @@ export const IssueBodyShowsTypedMetadata: Story = {
       submit: false,
       readonly: { number: 418, author: 'sample-reporter' },
     },
+    relatedIssueTitles: {
+      'example/web-app#400': '遅延した通知を再送する',
+      'example/web-app#419': '保留中の通知配信を再試行する',
+      'example/web-app#420': '通知配信の試行回数を記録する',
+    },
     body: issueBodyText,
   },
   decorators: [desktopViewport],

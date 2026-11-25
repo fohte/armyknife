@@ -19,6 +19,7 @@ import type { JsonValue } from '#types'
 type ReviewDocumentPanelProps = {
   summary?: ReviewDocumentSummary
   summaries?: readonly ReviewDocumentSummary[]
+  relatedIssueTitles?: Readonly<Record<string, string>> | undefined
   isMobile?: boolean
   canSave?: boolean
   canFinish?: boolean
@@ -296,6 +297,7 @@ function MarkdownEditor({
 export function ReviewDocumentPanel({
   summary,
   summaries = [],
+  relatedIssueTitles,
   isMobile = false,
   canSave = true,
   canFinish = true,
@@ -366,6 +368,7 @@ export function ReviewDocumentPanel({
           <ReviewDocumentPreview
             mode="frontmatter"
             summary={summary}
+            relatedIssueTitles={relatedIssueTitles}
             body={body}
             frontmatter={frontmatter}
             disabled={!canSave || busy}

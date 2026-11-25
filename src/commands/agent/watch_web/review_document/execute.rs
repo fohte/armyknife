@@ -11,6 +11,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::metadata::ReviewDocumentKind;
+use super::related_issue_titles::IssueTitleLookup;
 use super::{
     ReviewDocumentActionRegistry as ActionRegistry, ReviewDocumentEditLock,
     ReviewDocumentEditRequest, ReviewDocumentRoots, ReviewDocumentSummary, ReviewQueueLoader,
@@ -69,12 +70,13 @@ pub(super) struct ReviewDocumentActionResponse {
 }
 
 pub(super) async fn execute_review_document(
-    State((load_session, load_review_queue, edit_lock, roots, actions)): State<(
+    State((load_session, load_review_queue, edit_lock, roots, actions, _)): State<(
         SessionLoader,
         ReviewQueueLoader,
         ReviewDocumentEditLock,
         ReviewDocumentRoots,
         ActionRegistry,
+        IssueTitleLookup,
     )>,
     RoutePath(session_id): RoutePath<String>,
     Json(request): Json<ReviewDocumentActionRequest>,

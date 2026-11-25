@@ -157,17 +157,24 @@
 
 .review-document-issue-reference-link,
 .review-document-issue-reference code {
-  min-width: 0;
-  overflow: hidden;
+  flex: 0 0 auto;
   color: #93c5fd;
   font-family: 'JetBrains Mono', monospace;
   font-size: 11.5px;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .review-document-issue-reference-link {
   text-decoration: underline;
+}
+
+.review-document-issue-reference-title {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: #a1a1aa;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .review-document-issue-reference button {

@@ -16,6 +16,7 @@ import type { JsonValue } from '#types'
 
 type ReviewDocumentPreviewProps = {
   summary?: ReviewDocumentSummary
+  relatedIssueTitles?: Readonly<Record<string, string>> | undefined
   body: string
   frontmatter?: JsonValue
   mode?: 'body' | 'frontmatter'
@@ -51,19 +52,34 @@ function issueReferenceUrl(reference: string) {
   return `https://github.com/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/issues/${issueNumber}`
 }
 
-function IssueReference({ reference }: { reference: string }) {
+function IssueReference({
+  reference,
+  title,
+}: {
+  reference: string
+  title: string | undefined
+}) {
   const href = issueReferenceUrl(reference)
-  return href === null ? (
-    <code>{reference}</code>
-  ) : (
-    <a
-      className="review-document-issue-reference-link"
-      href={href}
-      rel="noopener noreferrer"
-      target="_blank"
-    >
-      {reference}
-    </a>
+  return (
+    <>
+      {href === null ? (
+        <code>{reference}</code>
+      ) : (
+        <a
+          className="review-document-issue-reference-link"
+          href={href}
+          rel="noopener noreferrer"
+          target="_blank"
+        >
+          {reference}
+        </a>
+      )}
+      {title === undefined ? null : (
+        <span className="review-document-issue-reference-title" title={title}>
+          {title}
+        </span>
+      )}
+    </>
   )
 }
 
@@ -132,10 +148,12 @@ function AddIssueValue({
 
 function IssueFrontmatter({
   frontmatter,
+  relatedIssueTitles,
   disabled,
   onChange,
 }: {
   frontmatter: JsonValue
+  relatedIssueTitles: Readonly<Record<string, string>>
   disabled: boolean
   onChange: (frontmatter: JsonValue) => void
 }) {
@@ -258,7 +276,10 @@ function IssueFrontmatter({
         <dd className="review-document-issue-parent">
           {parentIssue.length > 0 ? (
             <div className="review-document-issue-reference">
-              <IssueReference reference={parentIssue} />
+              <IssueReference
+                reference={parentIssue}
+                title={relatedIssueTitles[parentIssue]}
+              />
               <button
                 aria-label="Clear parent issue"
                 disabled={disabled}
@@ -289,7 +310,10 @@ function IssueFrontmatter({
               key={`${subIssue}-${String(index)}`}
               className="review-document-issue-reference"
             >
-              <IssueReference reference={subIssue} />
+              <IssueReference
+                reference={subIssue}
+                title={relatedIssueTitles[subIssue]}
+              />
               <button
                 aria-label={`Remove sub-issue ${subIssue}`}
                 disabled={disabled}
@@ -385,6 +409,7 @@ function ReviewThreadReplyTextarea({
 
 export function ReviewDocumentPreview({
   summary,
+  relatedIssueTitles = {},
   body,
   frontmatter = null,
   mode = 'body',
@@ -397,6 +422,7 @@ export function ReviewDocumentPreview({
     return summary?.kind === 'issue_body' ? (
       <IssueFrontmatter
         frontmatter={frontmatter}
+        relatedIssueTitles={relatedIssueTitles}
         disabled={disabled}
         onChange={onFrontmatterChange}
       />
