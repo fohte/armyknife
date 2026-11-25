@@ -82,7 +82,7 @@ fn pending_work_error(session: &Session, pending_tasks: &[PendingTask]) -> Strin
     for review_id in &session.pending_human_review_ids {
         if let Some(marker) = crate::shared::human_in_the_loop::review_document_marker(review_id) {
             details.push(format!(
-                "  Review document: {}\n    Finish it in the editor, or run `a agent watch-web` and finish it there.",
+                "  Review document: {}\n    Finish it in the editor, or run `a agent watch-web` and finish it there if it is the active review document.",
                 marker.path.display()
             ));
         }
@@ -172,7 +172,7 @@ mod tests {
             "v3",
             "12345",
             "/fixture/review.md",
-            "",
+            "fixture-queue",
             process_id.as_str(),
             process_started_at.as_str(),
         ]
@@ -226,7 +226,7 @@ mod tests {
                   Background task ID: `hook-task`
                   Agent task ID: `subagent-task`
                   Review document: /fixture/review.md
-                    Finish it in the editor, or run `a agent watch-web` and finish it there.
+                    Finish it in the editor, or run `a agent watch-web` and finish it there if it is the active review document.
                 Finish the pending work, then retry this command.
             "}.trim_end(),
         );
