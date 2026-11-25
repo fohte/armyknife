@@ -1157,4 +1157,15 @@ mod tests {
 
         assert_eq!(result, Ok(link));
     }
+
+    #[test]
+    fn resume_resolves_relative_agent_paths_from_the_invoking_directory() {
+        let relative_path = PathBuf::from("relative/bin/claude");
+        let expected_path = std::env::current_dir().unwrap().join(&relative_path);
+
+        let result =
+            absolute_resume_binary_path("claude", relative_path).map_err(|error| error.to_string());
+
+        assert_eq!(result, Ok(expected_path));
+    }
 }
