@@ -1707,25 +1707,37 @@ it('keeps the mobile preview usable when metadata fills the viewport', async () 
   const bodyEditor = container.querySelector<HTMLElement>(
     '.review-document-body-editor',
   )
+  const content = container.querySelector<HTMLElement>(
+    '.review-document-content',
+  )
   const metadata = container.querySelector<HTMLElement>(
     '.review-document-frontmatter',
   )
   const previewColumn = container.querySelector<HTMLElement>(
     '.review-document-preview-column',
   )
-  if (bodyEditor === null || metadata === null || previewColumn === null) {
+  if (
+    bodyEditor === null ||
+    content === null ||
+    metadata === null ||
+    previewColumn === null
+  ) {
     throw new Error('The mobile review editor layout was not rendered.')
   }
 
   const snapshot = () => ({
-    bodyEditorHasRoom: bodyEditor.getBoundingClientRect().height >= 320,
-    previewColumnHasRoom: previewColumn.getBoundingClientRect().height >= 240,
-    metadataCanScroll: metadata.scrollHeight > metadata.clientHeight,
+    contentOverflowY: getComputedStyle(content).overflowY,
+    contentCanScroll: content.scrollHeight > content.clientHeight,
+    metadataOverflowY: getComputedStyle(metadata).overflowY,
+    previewOverflowY: getComputedStyle(previewColumn).overflowY,
+    bodyEditorCanGrow: bodyEditor.scrollHeight <= content.scrollHeight,
   })
   expect(snapshot()).toEqual({
-    bodyEditorHasRoom: true,
-    previewColumnHasRoom: true,
-    metadataCanScroll: true,
+    contentOverflowY: 'auto',
+    contentCanScroll: true,
+    metadataOverflowY: 'visible',
+    previewOverflowY: 'visible',
+    bodyEditorCanGrow: true,
   })
 })
 
