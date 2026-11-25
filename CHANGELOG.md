@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.919](https://github.com/fohte/armyknife/compare/v0.1.918...v0.1.919) (2026-11-25)
+
+
+### Bug Fixes
+
+* **agent:** use Claude Code ID for self lookup ([#2262](https://github.com/fohte/armyknife/issues/2262)) ([3498397](https://github.com/fohte/armyknife/commit/3498397b84e838e26b62645b19294ec6383748dd))
+
 ## [0.1.918](https://github.com/fohte/armyknife/compare/v0.1.917...v0.1.918) (2026-11-25)
 
 
