@@ -17,6 +17,29 @@ export type ConversationScrollAnchor = {
   scrollTop: number
 }
 
+type PreserveConversationScrollPositionOptions = {
+  scrollContainer: HTMLDivElement
+  previous: readonly ConversationChildLayout[]
+  current: readonly ConversationChildLayout[]
+  recentResolutionCards: ReadonlySet<HTMLElement>
+  preferPendingCards: boolean
+  followLatest: boolean
+  wasAtBottom: boolean
+  previousScrollTop: number
+  extraPaddingBottom: number
+  setScrollTop: (scrollContainer: HTMLDivElement, scrollTop: number) => void
+  anchorOffsets: Map<HTMLElement, ConversationAnchorSpacing>
+}
+
+export function isConversationAtBottom(scrollContainer: HTMLDivElement) {
+  return (
+    scrollContainer.scrollHeight -
+      scrollContainer.scrollTop -
+      scrollContainer.clientHeight <=
+    24
+  )
+}
+
 export function readConversationChildLayout(
   scrollContainer: HTMLDivElement,
 ): ConversationChildLayout[] {
@@ -168,23 +191,118 @@ export function preserveConversationChildPosition(
       }
 }
 
+export function preserveConversationScrollPosition({
+  scrollContainer,
+  previous,
+  current,
+  recentResolutionCards,
+  preferPendingCards,
+  followLatest,
+  wasAtBottom,
+  previousScrollTop,
+  extraPaddingBottom: initialExtraPaddingBottom,
+  setScrollTop,
+  anchorOffsets,
+}: PreserveConversationScrollPositionOptions): number {
+  const scrollAnchor = preserveConversationChildPosition(
+    scrollContainer,
+    previous,
+    current,
+    recentResolutionCards,
+    preferPendingCards,
+    followLatest,
+  )
+  const currentMaximum =
+    scrollContainer.scrollHeight - scrollContainer.clientHeight
+  const preservePendingPositionsAtBottom =
+    wasAtBottom && preferPendingCards && scrollAnchor !== null
+  let desiredScrollTop = preservePendingPositionsAtBottom
+    ? scrollAnchor.scrollTop
+    : wasAtBottom
+      ? Math.max(previousScrollTop, currentMaximum)
+      : (scrollAnchor?.scrollTop ?? previousScrollTop)
+  let extraPaddingBottom = initialExtraPaddingBottom
+  const setScrollTopWithPadding = (scrollTop: number) => {
+    setScrollTop(scrollContainer, scrollTop)
+    const shortfall = scrollTop - scrollContainer.scrollTop
+    if (shortfall <= 0.5) return
+    extraPaddingBottom += shortfall
+    scrollContainer.style.setProperty(
+      '--conversation-anchor-extra-padding-bottom',
+      `${String(extraPaddingBottom)}px`,
+    )
+    setScrollTop(scrollContainer, scrollTop)
+  }
+
+  setScrollTopWithPadding(desiredScrollTop)
+  if (scrollAnchor !== null) {
+    const correction =
+      scrollAnchor.element.getBoundingClientRect().top - scrollAnchor.top
+    if (Math.abs(correction) > 0.5) {
+      desiredScrollTop = scrollContainer.scrollTop + correction
+      setScrollTopWithPadding(desiredScrollTop)
+    }
+  }
+  preserveConversationChildren(
+    previous,
+    readConversationChildLayout(scrollContainer),
+    scrollContainer,
+    recentResolutionCards,
+    preferPendingCards,
+    scrollAnchor?.element ?? null,
+    anchorOffsets,
+  )
+
+  if (preservePendingPositionsAtBottom) {
+    const maximumWithoutExtraPadding =
+      scrollContainer.scrollHeight -
+      scrollContainer.clientHeight -
+      extraPaddingBottom
+    const requiredExtraPadding = Math.max(
+      0,
+      desiredScrollTop - maximumWithoutExtraPadding,
+    )
+    if (Math.abs(requiredExtraPadding - extraPaddingBottom) > 0.5) {
+      extraPaddingBottom = requiredExtraPadding
+      if (requiredExtraPadding === 0) {
+        scrollContainer.style.removeProperty(
+          '--conversation-anchor-extra-padding-bottom',
+        )
+      } else {
+        scrollContainer.style.setProperty(
+          '--conversation-anchor-extra-padding-bottom',
+          `${String(requiredExtraPadding)}px`,
+        )
+      }
+      setScrollTop(scrollContainer, desiredScrollTop)
+    }
+  }
+
+  return extraPaddingBottom
+}
+
 export function preserveConversationChildren(
   previous: readonly ConversationChildLayout[],
   current: readonly ConversationChildLayout[],
   scrollContainer: HTMLDivElement,
   recentResolutionCards: ReadonlySet<HTMLElement>,
   preferPendingCards: boolean,
+  anchorElement: HTMLElement | null,
   anchorOffsets: Map<HTMLElement, ConversationAnchorSpacing>,
 ) {
   const bounds = scrollContainer.getBoundingClientRect()
   const previousByElement = new Map(
     previous.map((child) => [child.element, child]),
   )
-  for (const child of current) {
+  const anchorIndex = current.findIndex(
+    ({ element }) => element === anchorElement,
+  )
+  for (const [index, child] of current.entries()) {
     const previousChild = previousByElement.get(child.element)
     if (
       previousChild === undefined ||
-      recentResolutionCards.has(child.element)
+      recentResolutionCards.has(child.element) ||
+      (anchorIndex >= 0 && index < anchorIndex)
     ) {
       continue
     }

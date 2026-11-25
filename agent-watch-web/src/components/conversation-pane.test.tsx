@@ -12543,24 +12543,27 @@ it.each([
     const detail =
       'Review the selected configuration before continuing. '.repeat(10)
     const conversationStart = 5
-    const messages: ChatItem[] = [1, 2, 3].map((index) =>
-      cardType === 'proposal'
-        ? {
-            ...proposal,
-            seq: 60 + index,
-            title: `Choose setting ${String(index)}`,
-            summary: detail,
-          }
-        : {
-            type: 'todo',
-            seq: 60 + index,
-            title: `Review setting ${String(index)}`,
-            detail,
-            completed: false,
-            resolution: null,
-            comment: null,
-          },
-    )
+    const messages: ChatItem[] = [
+      { type: 'assistant', text: 'Earlier context. '.repeat(35) },
+      ...[1, 2, 3].map((index) =>
+        cardType === 'proposal'
+          ? {
+              ...proposal,
+              seq: 60 + index,
+              title: `Choose setting ${String(index)}`,
+              summary: detail,
+            }
+          : {
+              type: 'todo' as const,
+              seq: 60 + index,
+              title: `Review setting ${String(index)}`,
+              detail,
+              completed: false,
+              resolution: null,
+              comment: null,
+            },
+      ),
+    ]
     renderConversationMessages(messages, conversationStart)
 
     const scroll = requireElement(
@@ -12603,7 +12606,7 @@ it.each([
     const atBottomNow = () =>
       scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight <= 24
     const wasAtBottom = atBottomNow()
-    const getLayoutIntegrity = () => {
+    const getOverlappingChildren = () => {
       const children = Array.from(scroll.children).filter(
         (child): child is HTMLElement => child instanceof HTMLElement,
       )
@@ -12627,13 +12630,14 @@ it.each([
           }
         }
       }
-      return {
-        overlappingChildren,
-        translatedChildren: children.flatMap((child, index) =>
-          child.style.translate === '' ? [] : [index],
-        ),
-      }
+      return overlappingChildren
     }
+    const getTranslatedChildren = () =>
+      Array.from(scroll.children).flatMap((child, index) =>
+        child instanceof HTMLElement && child.style.translate !== ''
+          ? [index]
+          : [],
+      )
     const isResolvedMessage = (
       message: ChatItem,
     ): message is Extract<ChatItem, { type: 'proposal' | 'todo' }> =>
@@ -12650,7 +12654,15 @@ it.each([
             completed: true,
             resolution,
           }
-    const remaining = messages.filter((message) => !isResolvedMessage(message))
+    const isCard = (
+      message: ChatItem,
+    ): message is Extract<ChatItem, { type: 'proposal' | 'todo' }> =>
+      message.type === 'proposal' || message.type === 'todo'
+    const remainingCards = messages.filter(
+      (message): message is Extract<ChatItem, { type: 'proposal' | 'todo' }> =>
+        isCard(message) && !isResolvedMessage(message),
+    )
+    const surroundingMessages = messages.filter((message) => !isCard(message))
     const originalRemainingTops = before.map(({ top }) => top)
     const stages: number[][] = []
     const bottomStates: boolean[] = []
@@ -12667,26 +12679,41 @@ it.each([
     )
     renderConversationMessages(optimisticMessages, conversationStart)
     recordRemainingTops()
-    const afterOptimisticUpdate = getLayoutIntegrity()
-    renderConversationMessages([settled, ...remaining], conversationStart)
+    const afterOptimisticUpdate = getOverlappingChildren()
+    renderConversationMessages(
+      [...surroundingMessages, settled, ...remainingCards],
+      conversationStart,
+    )
     recordRemainingTops()
-    const afterServerResponse = getLayoutIntegrity()
+    const afterServerResponse = getOverlappingChildren()
     const notification: ChatItem = {
       type: 'assistant',
       text: 'The selection was recorded.',
     }
-    const updatedMessages = [settled, notification, ...remaining]
+    const updatedMessages = [
+      ...surroundingMessages,
+      settled,
+      notification,
+      ...remainingCards,
+    ]
     renderConversationMessages(updatedMessages, conversationStart)
     recordRemainingTops()
-    const afterNotification = getLayoutIntegrity()
+    const afterNotification = getOverlappingChildren()
     const nextResponse: ChatItem = {
       type: 'assistant',
       text: 'The next step is ready.',
     }
-    const withNextResponse = [settled, notification, nextResponse, ...remaining]
+    const withNextResponse = [
+      ...surroundingMessages,
+      settled,
+      notification,
+      nextResponse,
+      ...remainingCards,
+    ]
     renderConversationMessages(withNextResponse, conversationStart)
     recordRemainingTops()
-    const afterNextResponse = getLayoutIntegrity()
+    const afterNextResponse = getOverlappingChildren()
+    const translatedChildrenAfterNextResponse = getTranslatedChildren()
     const olderContext: ChatItem = {
       type: 'assistant',
       text: 'Earlier context has loaded.',
@@ -12696,9 +12723,10 @@ it.each([
       conversationStart - 1,
     )
     recordRemainingTops()
-    const afterDeltaLoad = getLayoutIntegrity()
+    const afterDeltaLoad = getOverlappingChildren()
     setScrollPosition(Math.max(0, scroll.scrollTop - 20))
-    const afterUserScroll = getLayoutIntegrity()
+    const afterUserScroll = getOverlappingChildren()
+    const translatedChildrenAfterUserScroll = getTranslatedChildren()
 
     const result = () => ({
       remainingCardCount: before.length,
@@ -12715,6 +12743,10 @@ it.each([
         afterDeltaLoad,
         afterUserScroll,
       ],
+      translatedChildren: [
+        translatedChildrenAfterNextResponse,
+        translatedChildrenAfterUserScroll,
+      ],
     })
     const expectedResult = () => ({
       remainingCardCount: 2,
@@ -12723,10 +12755,8 @@ it.each([
       stageTopDeltas: Array.from({ length: 5 }, () =>
         originalRemainingTops.map(() => 0),
       ),
-      layoutIntegrity: Array.from({ length: 6 }, () => ({
-        overlappingChildren: [],
-        translatedChildren: [],
-      })),
+      layoutIntegrity: Array.from({ length: 6 }, () => []),
+      translatedChildren: [[], []],
     })
     expect(result()).toEqual(expectedResult())
   },
