@@ -9,9 +9,11 @@ use super::storage::ThreadStorage;
 use crate::infra::git;
 use crate::shared::config::load_config;
 use crate::shared::human_in_the_loop::{
-    CleanupGuard, Document, DocumentSchema, FifoSignalGuard, Result as HilResult, ReviewHandler,
-    complete_review, start_review,
+    CleanupGuard, Document, DocumentSchema, FifoSignalGuard, HumanInTheLoopError,
+    Result as HilResult, ReviewFinishReason, ReviewHandler, complete_review,
+    start_review_with_completion,
 };
+use crate::shared::yaml_frontmatter;
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct ReviewArgs {
@@ -62,6 +64,26 @@ pub struct ReviewCompleteArgs {
 struct PrReviewReplyHandler {
     pr_number: u64,
     repo_slug: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReplyReviewOutcome {
+    Approved,
+    NotApproved,
+    FinishedByPush,
+}
+
+fn reply_review_outcome(
+    document: &Document<ThreadsFrontmatter>,
+    finish_reason: Option<ReviewFinishReason>,
+) -> ReplyReviewOutcome {
+    if finish_reason == Some(ReviewFinishReason::RepliesPushed) {
+        ReplyReviewOutcome::FinishedByPush
+    } else if document.frontmatter.is_approved() {
+        ReplyReviewOutcome::Approved
+    } else {
+        ReplyReviewOutcome::NotApproved
+    }
 }
 
 impl ReviewHandler<ThreadsFrontmatter> for PrReviewReplyHandler {
@@ -123,6 +145,30 @@ impl ReviewHandler<ThreadsFrontmatter> for PrReviewReplyHandler {
     ) -> HilResult<()> {
         document.persist_approval_state()
     }
+
+    fn on_review_finished(
+        &self,
+        document: &Document<ThreadsFrontmatter>,
+        reason: ReviewFinishReason,
+    ) -> HilResult<()> {
+        if reason == ReviewFinishReason::RepliesPushed {
+            let content = std::fs::read_to_string(&document.path)?;
+            let updated_content = yaml_frontmatter::reset_bool_fields(&content, &["submit"]);
+            if document.frontmatter.submit && updated_content == content {
+                return Err(HumanInTheLoopError::CommandFailed(format!(
+                    "Failed to reset submit in frontmatter at {}",
+                    document.path.display(),
+                )));
+            }
+            if updated_content != content {
+                std::fs::write(&document.path, updated_content)?;
+            }
+            document.remove_approval()?;
+            return Ok(());
+        }
+
+        self.on_review_complete(document)
+    }
 }
 
 pub fn run_review(args: &ReviewArgs) -> anyhow::Result<()> {
@@ -145,27 +191,30 @@ pub fn run_review(args: &ReviewArgs) -> anyhow::Result<()> {
 
     use crate::shared::human_in_the_loop::exit_code;
 
-    let document = exit_code::exit_on_review_failure(start_review::<ThreadsFrontmatter, _>(
-        &threads_path,
-        &window_title,
-        &handler,
-        &config.editor,
-        config.notification.enabled,
-    ))?;
+    let review =
+        exit_code::exit_on_review_failure(start_review_with_completion::<ThreadsFrontmatter, _>(
+            &threads_path,
+            &window_title,
+            &handler,
+            &config.editor,
+            config.notification.enabled,
+        ))?;
 
-    if document.is_none() {
+    let Some(review) = review else {
         std::process::exit(exit_code::ALREADY_OPEN);
-    }
+    };
 
-    let approved = document
-        .as_ref()
-        .is_some_and(|d| d.frontmatter.is_approved());
-    if !approved {
-        eprintln!("Review not approved.");
-        std::process::exit(exit_code::NOT_APPROVED);
+    match reply_review_outcome(&review.document, review.finish_reason) {
+        ReplyReviewOutcome::FinishedByPush => {
+            println!("Reply review finished because push succeeded.");
+            Ok(())
+        }
+        ReplyReviewOutcome::Approved => Ok(()),
+        ReplyReviewOutcome::NotApproved => {
+            eprintln!("Review not approved.");
+            std::process::exit(exit_code::NOT_APPROVED);
+        }
     }
-
-    Ok(())
 }
 
 pub fn run_review_complete(args: &ReviewCompleteArgs) -> anyhow::Result<()> {
@@ -184,18 +233,15 @@ pub fn run_review_complete(args: &ReviewCompleteArgs) -> anyhow::Result<()> {
         repo_slug: args.repo.clone(),
     };
 
-    let completed_by_watch_web = complete_review::<ThreadsFrontmatter, _, _>(
+    complete_review::<ThreadsFrontmatter, _, _>(
         &args.filepath,
         args.window_title.as_deref(),
         &handler,
         &config.editor,
         args.finish_fifo.as_deref(),
         &cleanup_guard,
+        fifo_guard.as_mut(),
     )?;
-
-    if completed_by_watch_web && let Some(fifo_guard) = fifo_guard.as_mut() {
-        fifo_guard.set_signal(b'1');
-    }
 
     Ok(())
 }
@@ -203,6 +249,7 @@ pub fn run_review_complete(args: &ReviewCompleteArgs) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use indoc::indoc;
 
     #[cfg(unix)]
     #[rstest::rstest]
@@ -251,6 +298,106 @@ mod tests {
         assert_eq!(
             (PrReviewReplyHandler::NOTIFICATION_COMMAND_NAME, args_str),
             ("pr-review", expected),
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::approved(true, None, ReplyReviewOutcome::Approved)]
+    #[case::not_approved(false, None, ReplyReviewOutcome::NotApproved)]
+    #[case::external_finish_not_approved(
+        false,
+        Some(ReviewFinishReason::ExternalRequest),
+        ReplyReviewOutcome::NotApproved
+    )]
+    #[case::finished_by_push(
+        false,
+        Some(ReviewFinishReason::RepliesPushed),
+        ReplyReviewOutcome::FinishedByPush
+    )]
+    fn reply_review_outcome_reports_push_completion(
+        #[case] approved: bool,
+        #[case] finish_reason: Option<ReviewFinishReason>,
+        #[case] expected: ReplyReviewOutcome,
+    ) {
+        let content = if approved {
+            indoc! {"
+                ---
+                pr: 123
+                repo: example/repo
+                pulled_at: '2024-01-15T10:00:00Z'
+                submit: true
+                ---
+                Draft reply
+            "}
+        } else {
+            indoc! {"
+                ---
+                pr: 123
+                repo: example/repo
+                pulled_at: '2024-01-15T10:00:00Z'
+                submit: false
+                ---
+                Draft reply
+            "}
+        };
+        let document = Document::<ThreadsFrontmatter>::from_content(
+            std::path::PathBuf::from("threads.md"),
+            content,
+        )
+        .expect("threads document should parse");
+
+        assert_eq!(reply_review_outcome(&document, finish_reason), expected);
+    }
+
+    #[rstest::rstest]
+    fn push_completion_resets_submit_and_removes_approval() {
+        use tempfile::TempDir;
+
+        crate::shared::testing::init_approval_dir();
+        let temp_dir = TempDir::new().expect("temporary review directory");
+        let path = temp_dir.path().join("threads.md");
+        let content = indoc! {"
+            ---
+            pr: 123
+            repo: example/repo
+            pulled_at: '2024-01-15T10:00:00Z'
+            submit: true
+            ---
+            Draft reply
+        "};
+        std::fs::write(&path, content).expect("write approved reply document");
+        let document = Document::<ThreadsFrontmatter>::from_path(path.clone())
+            .expect("load approved reply document");
+        document.save_approval().expect("save approval");
+        let handler = PrReviewReplyHandler {
+            pr_number: 123,
+            repo_slug: "example/repo".to_string(),
+        };
+
+        let outcome = (
+            handler
+                .on_review_finished(&document, ReviewFinishReason::RepliesPushed)
+                .map_err(|error| error.to_string()),
+            std::fs::read_to_string(path).expect("read reset reply document"),
+            document.approval_manager().exists(),
+        );
+
+        assert_eq!(
+            outcome,
+            (
+                Ok(()),
+                indoc! {"
+                    ---
+                    pr: 123
+                    repo: example/repo
+                    pulled_at: '2024-01-15T10:00:00Z'
+                    submit: false
+                    ---
+                    Draft reply
+                "}
+                .to_string(),
+                false,
+            ),
         );
     }
 }

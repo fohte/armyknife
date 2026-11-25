@@ -2218,8 +2218,7 @@ mod tests {
         let app = app.clone();
         let mut action_task = tokio::spawn(async move { app.oneshot(request).await });
         let review_child_finished = wait_for_file(&finished_file, Duration::from_secs(5)).await;
-        let early_response =
-            tokio::time::timeout(Duration::from_millis(100), &mut action_task).await;
+        let early_response = tokio::time::timeout(Duration::from_secs(2), &mut action_task).await;
         let action_completed_before_release = early_response.is_ok();
         let executor_started_before_release =
             action_started.load(std::sync::atomic::Ordering::SeqCst);

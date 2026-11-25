@@ -32,9 +32,10 @@ pub(crate) use pending_review::{
     review_document_path,
 };
 pub(crate) use review_completion::complete_review;
+pub use review_finish::ReviewFinishReason;
 pub(crate) use review_finish::{
-    FINISH_ACK_TIMEOUT, ReviewDocumentOperationLock, finish_ack_fifo_path,
-    finish_request_fifo_path, open_fifo_reader, wait_for_finish_ack,
+    ReviewDocumentOperationLock, finish_ack_fifo_path, finish_request_fifo_path, open_fifo_reader,
+    request_review_finish, signal_review_finish_and_wait,
 };
 use review_finish::{
     create_fifo_at_path, path_with_suffix, remove_fifo_if_present, try_read_fifo_byte,
@@ -134,6 +135,15 @@ pub trait ReviewHandler<S: DocumentSchema> {
         Ok(())
     }
 
+    /// Applies review completion after an external finish request.
+    fn on_review_finished(
+        &self,
+        document: &Document<S>,
+        _reason: ReviewFinishReason,
+    ) -> Result<()> {
+        self.on_review_complete(document)
+    }
+
     /// Applies review completion after a watch-web finish request.
     fn on_watch_web_review_complete(&self, document: &Document<S>) -> Result<()> {
         self.on_review_complete(document)
@@ -162,6 +172,27 @@ pub fn start_review<S, H>(
     editor_config: &EditorConfig,
     notifications_enabled: bool,
 ) -> Result<Option<Document<S>>>
+where
+    S: DocumentSchema,
+    H: ReviewHandler<S>,
+{
+    start_review_with_completion(
+        document_path,
+        window_title,
+        handler,
+        editor_config,
+        notifications_enabled,
+    )
+    .map(|review| review.map(|review| review.document))
+}
+
+pub(crate) fn start_review_with_completion<S, H>(
+    document_path: &Path,
+    window_title: &str,
+    handler: &H,
+    editor_config: &EditorConfig,
+    notifications_enabled: bool,
+) -> Result<Option<ReviewResult<S>>>
 where
     S: DocumentSchema,
     H: ReviewHandler<S>,
@@ -216,6 +247,11 @@ where
     )
 }
 
+pub(crate) struct ReviewResult<S> {
+    pub(crate) document: Document<S>,
+    pub(crate) finish_reason: Option<ReviewFinishReason>,
+}
+
 #[cfg(test)]
 fn start_review_with_launcher<S, L, P>(
     document_path: &Path,
@@ -235,6 +271,7 @@ where
         },
         is_session_alive,
     )
+    .map(|review| review.map(|review| review.document))
 }
 
 struct ReviewLaunch {
@@ -257,7 +294,7 @@ fn start_review_with_marker<S, L, P>(
     pending_review_marker: Option<&str>,
     launch_review: L,
     is_session_alive: P,
-) -> Result<Option<Document<S>>>
+) -> Result<Option<ReviewResult<S>>>
 where
     S: DocumentSchema,
     L: FnOnce(&Path, &Path, &Path, &str) -> Result<ReviewLaunch>,
@@ -353,7 +390,12 @@ where
     // Reuse the in-memory `post_edit` for the document parse to avoid a
     // second read of the same file.
     let document = Document::<S>::from_content(document_path.to_path_buf(), &post_edit)?;
-    Ok(Some(document))
+    let finish_reason = (completion_signal == ReviewFinishReason::RepliesPushed.signal_byte())
+        .then_some(ReviewFinishReason::RepliesPushed);
+    Ok(Some(ReviewResult {
+        document,
+        finish_reason,
+    }))
 }
 
 fn editor_already_open_message(lock_path: &Path) -> String {
@@ -792,7 +834,7 @@ mod tests {
             .wait()
             .expect("review child should exit");
         let result = result
-            .map(|document| document.map(|document| (document.path, document.frontmatter)))
+            .map(|review| review.map(|review| (review.document.path, review.document.frontmatter)))
             .map_err(|error| error.to_string());
 
         assert_eq!(

@@ -197,18 +197,15 @@ pub fn run_complete(args: &ReviewCompleteArgs) -> anyhow::Result<()> {
 
     let config = load_config()?;
 
-    let completed_by_watch_web = complete_review::<Frontmatter, _, _>(
+    complete_review::<Frontmatter, _, _>(
         &args.filepath,
         args.window_title.as_deref(),
         &PrDraftReviewHandler,
         &config.editor,
         args.finish_fifo.as_deref(),
         &cleanup_guard,
+        fifo_guard.as_mut(),
     )?;
-
-    if completed_by_watch_web && let Some(fifo_guard) = fifo_guard.as_mut() {
-        fifo_guard.set_signal(b'1');
-    }
 
     Ok(())
 }

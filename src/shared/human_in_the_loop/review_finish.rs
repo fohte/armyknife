@@ -9,6 +9,28 @@ use super::LockGuard;
 
 pub(crate) const FINISH_ACK_TIMEOUT: Duration = Duration::from_secs(5);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReviewFinishReason {
+    ExternalRequest,
+    RepliesPushed,
+}
+
+impl ReviewFinishReason {
+    pub(crate) fn signal_byte(self) -> u8 {
+        match self {
+            Self::ExternalRequest => b'0',
+            Self::RepliesPushed => b'p',
+        }
+    }
+
+    pub(crate) fn from_signal_byte(signal: u8) -> Self {
+        match signal {
+            b'p' => Self::RepliesPushed,
+            _ => Self::ExternalRequest,
+        }
+    }
+}
+
 pub(crate) fn finish_request_fifo_path(document_path: &Path) -> PathBuf {
     path_with_suffix(document_path, ".finish")
 }
@@ -165,5 +187,171 @@ pub(crate) fn wait_for_finish_ack(reader: &mut File, timeout: Duration) -> io::R
             ));
         }
         std::thread::sleep(super::FIFO_POLL_INTERVAL);
+    }
+}
+
+pub(crate) fn signal_review_finish_and_wait(
+    operation_lock: ReviewDocumentOperationLock,
+    fifo_path: &Path,
+    ack_reader: &mut File,
+    signal: u8,
+) -> io::Result<u8> {
+    super::try_signal_fifo_with_byte(fifo_path, signal)?;
+    drop(operation_lock);
+
+    wait_for_finish_ack(ack_reader, FINISH_ACK_TIMEOUT)
+}
+
+pub(crate) fn request_review_finish(
+    document_path: &Path,
+    reason: ReviewFinishReason,
+) -> super::Result<bool> {
+    let mut document_paths = vec![document_path.to_path_buf()];
+    if let Ok(canonical_path) = fs::canonicalize(document_path)
+        && canonical_path != document_path
+    {
+        document_paths.push(canonical_path);
+    }
+
+    for document_path in document_paths {
+        if request_review_finish_at_path(&document_path, reason)? {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
+fn request_review_finish_at_path(
+    document_path: &Path,
+    reason: ReviewFinishReason,
+) -> super::Result<bool> {
+    let operation_lock = match ReviewDocumentOperationLock::acquire(document_path) {
+        Ok(lock) => lock,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.into()),
+    };
+    if !operation_lock.is_active(document_path) {
+        return Ok(false);
+    }
+
+    let fifo_path = finish_request_fifo_path(document_path);
+    let mut ack_reader = open_fifo_reader(&finish_ack_fifo_path(document_path))?;
+    match signal_review_finish_and_wait(
+        operation_lock,
+        &fifo_path,
+        &mut ack_reader,
+        reason.signal_byte(),
+    )? {
+        b'0' => Ok(true),
+        b'1' => {
+            Err(io::Error::other("review completion handler rejected the finish request").into())
+        }
+        acknowledgement => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("unexpected review finish acknowledgement: {acknowledgement}"),
+        )
+        .into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc;
+    use std::thread;
+
+    use rstest::{fixture, rstest};
+    use tempfile::TempDir;
+
+    struct ActiveReview {
+        _temp_dir: TempDir,
+        document_path: PathBuf,
+        _review_lock: super::super::LockGuard,
+    }
+
+    #[fixture]
+    fn active_review() -> ActiveReview {
+        let temp_dir = TempDir::new().expect("temporary review directory");
+        let document_path = temp_dir.path().join("review.md");
+        fs::write(&document_path, "fixture review").expect("write review document");
+        let review_lock = super::super::LockGuard::acquire(&document_path)
+            .expect("active review lock should be acquired");
+        create_fifo_at_path(&finish_request_fifo_path(&document_path))
+            .expect("finish FIFO should be created");
+        create_fifo_at_path(&finish_ack_fifo_path(&document_path))
+            .expect("acknowledgement FIFO should be created");
+
+        ActiveReview {
+            _temp_dir: temp_dir,
+            document_path,
+            _review_lock: review_lock,
+        }
+    }
+
+    #[test]
+    fn finish_request_is_a_noop_without_an_active_review() {
+        let directory = tempfile::tempdir().expect("temporary review directory");
+        let document_path = directory.path().join("threads.md");
+
+        let result = request_review_finish(&document_path, ReviewFinishReason::RepliesPushed)
+            .map_err(|error| error.to_string());
+
+        assert_eq!(result, Ok(false));
+    }
+
+    #[rstest]
+    #[case::external_request_accepted(ReviewFinishReason::ExternalRequest, b'0', b'0', Ok(true))]
+    #[case::push_request_accepted(ReviewFinishReason::RepliesPushed, b'p', b'0', Ok(true))]
+    #[case::rejected_request(ReviewFinishReason::ExternalRequest, b'0', b'1', Err(()))]
+    fn finish_request_signals_active_review_and_waits_for_acknowledgement(
+        active_review: ActiveReview,
+        #[case] reason: ReviewFinishReason,
+        #[case] expected_signal: u8,
+        #[case] acknowledgement: u8,
+        #[case] expected_result: std::result::Result<bool, ()>,
+    ) {
+        let document_path = active_review.document_path;
+        let finish_fifo_path = finish_request_fifo_path(&document_path);
+        let ack_fifo_path = finish_ack_fifo_path(&document_path);
+        let symlink_path = document_path.with_file_name("review-link.md");
+        std::os::unix::fs::symlink(&document_path, &symlink_path)
+            .expect("document symlink should be created");
+
+        let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
+        let review_actor = thread::spawn(move || -> super::super::Result<u8> {
+            let mut finish_reader = open_fifo_reader(&finish_fifo_path)?;
+            ready_sender
+                .send(())
+                .map_err(|error| io::Error::other(error.to_string()))?;
+            let deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                if let Some(signal) = try_read_fifo_byte(&mut finish_reader)? {
+                    super::super::try_signal_fifo_with_byte(&ack_fifo_path, acknowledgement)?;
+                    return Ok(signal);
+                }
+                if Instant::now() >= deadline {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "finish request was not received",
+                    )
+                    .into());
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+        });
+        ready_receiver
+            .recv_timeout(Duration::from_secs(2))
+            .expect("review actor should be ready");
+
+        let result = (
+            request_review_finish(&symlink_path, reason).map_err(|_| ()),
+            review_actor
+                .join()
+                .expect("review actor thread")
+                .map_err(|_| ()),
+        );
+
+        assert_eq!(result, (expected_result, Ok(expected_signal)));
     }
 }
