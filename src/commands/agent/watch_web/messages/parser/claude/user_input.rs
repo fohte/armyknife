@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::Value;
 
@@ -22,7 +24,11 @@ pub(super) fn is_tool_result_only_user_record(record: &Value) -> bool {
 
 pub(super) fn slash_command_text(text: &str) -> Option<String> {
     let message_id = super::super::super::queued_prompt::id_from_content(text);
-    let text = super::super::super::queued_prompt::strip_id_marker(text);
+    let text = if message_id.is_some() {
+        Cow::Owned(super::super::super::queued_prompt::strip_id_marker(text))
+    } else {
+        Cow::Borrowed(text)
+    };
     let command = text
         .split_once("<command-name>")?
         .1
