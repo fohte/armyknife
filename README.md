@@ -554,8 +554,10 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | `status set <kind> <note>`                                                                            |         | Set the calling session's reason for stopping                                               |
 | `decision add <TITLE> --why <WHY> --considered <ALT> [--considered <ALT>...] --easy-to-change <TEXT>` |         | Record a provisional decision for later review                                              |
 | `proposal add`                                                                                        |         | Record a structured proposal from JSON read from stdin                                      |
+| `proposal edit <seq>`                                                                                 |         | Replace a pending proposal from the calling session using JSON read from stdin              |
 | `proposal withdraw <seq> [--comment <reason>]`                                                        |         | Withdraw a pending proposal from the calling session                                        |
 | `todo add`                                                                                            |         | Record one task the user needs to do from JSON read from stdin                              |
+| `todo edit <seq>`                                                                                     |         | Replace a pending task from the calling session using JSON read from stdin                  |
 | `todo withdraw <seq> [--comment <reason>]`                                                            |         | Withdraw a pending task from the calling session                                            |
 | `title set <TITLE>`                                                                                   |         | Set the calling session's title; an empty title restores the automatic title                |
 | `web-ui add <url> --name <name>`                                                                      |         | Register a named local web interface for the watch-web status panel                         |
@@ -619,12 +621,16 @@ Recorded proposal 1
 
 Run `a agent proposal withdraw <seq> [--comment <reason>]` from the session that recorded a proposal to withdraw it before it is answered. The proposal remains in the watch-web conversation with its withdrawn state and optional comment, and can no longer be answered.
 
+Run `a agent proposal edit <seq>` from the session that recorded a proposal to replace its contents before it is answered. Pipe the same JSON shape used by `a agent proposal add`; the proposal keeps its sequence number and position in the watch-web conversation.
+
 ```console
 $ a agent proposal withdraw 1 --comment "The decision is no longer needed."
 Withdrew proposal 1
 ```
 
 Run `a agent todo add` from a tracked Claude Code or Codex session and pipe a JSON object to stdin. The required field is `title`; `detail` and `folded` are optional. Set `folded` to `true` when the user needs to check the task later; it starts folded and watch-web marks it as added folded. A todo stays in the watch-web conversation after it is completed, rejected, or withdrawn, with its final state and optional comment. Use a proposal when the user should choose from options. The command prints `Recorded todo <seq>` after saving the todo. The user can complete or reject a todo in watch-web; an agent can withdraw a pending todo from its own session with `a agent todo withdraw <seq> [--comment <reason>]`. Withdrawal does not send a message to the session.
+
+Run `a agent todo edit <seq>` from the session that recorded a todo to replace its contents before it is completed, rejected, or withdrawn. Pipe the same JSON shape used by `a agent todo add`; the todo keeps its sequence number and position in the watch-web conversation.
 
 ```console
 $ cat <<'JSON' | a agent todo add

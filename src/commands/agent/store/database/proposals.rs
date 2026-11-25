@@ -71,6 +71,27 @@ pub(crate) fn add_agent_proposal(sessions_dir: &Path, session_id: &str, body: &s
     Ok(seq)
 }
 
+pub(crate) fn edit_agent_proposal(
+    sessions_dir: &Path,
+    session_id: &str,
+    seq: i64,
+    body: &str,
+) -> Result<bool> {
+    validate_session_id(session_id)?;
+    let mut connection = open_connection(sessions_dir)?;
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let changed = transaction.execute(
+        "UPDATE agent_proposal SET body = ?1
+         WHERE session_id = ?2 AND seq = ?3 AND answer IS NULL AND resolved_at IS NULL",
+        params![body, session_id, seq],
+    )?;
+    if changed > 0 {
+        increment_revision(&transaction)?;
+    }
+    transaction.commit()?;
+    Ok(changed > 0)
+}
+
 pub(crate) fn unanswered_agent_proposal_bodies(
     sessions_dir: &Path,
     session_ids: &[String],
