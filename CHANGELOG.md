@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.918](https://github.com/fohte/armyknife/compare/v0.1.917...v0.1.918) (2026-11-25)
+
+
+### Features
+
+* **agent:** support editing pending cards ([#2260](https://github.com/fohte/armyknife/issues/2260)) ([b056022](https://github.com/fohte/armyknife/commit/b0560224c91c0b2fe688e6dbcdf01817dcfc951d))
+
 ## [0.1.917](https://github.com/fohte/armyknife/compare/v0.1.916...v0.1.917) (2026-11-25)
 
 
