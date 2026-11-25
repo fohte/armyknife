@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.933](https://github.com/fohte/armyknife/compare/v0.1.932...v0.1.933) (2026-11-25)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** clear sent text ([#2289](https://github.com/fohte/armyknife/issues/2289)) ([f994a34](https://github.com/fohte/armyknife/commit/f994a34b0f7b196c52276649d6c0ffd542f0a420))
+
 ## [0.1.932](https://github.com/fohte/armyknife/compare/v0.1.931...v0.1.932) (2026-11-25)
 
 
