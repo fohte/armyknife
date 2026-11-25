@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.929](https://github.com/fohte/armyknife/compare/v0.1.928...v0.1.929) (2026-11-25)
+
+
+### Features
+
+* **agent/watch-web:** show related issue titles ([#2279](https://github.com/fohte/armyknife/issues/2279)) ([b56a742](https://github.com/fohte/armyknife/commit/b56a742baa7dfe3d7de37cd9dfbf2915bfcd2086))
+
 ## [0.1.928](https://github.com/fohte/armyknife/compare/v0.1.927...v0.1.928) (2026-11-25)
 
 
