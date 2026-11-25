@@ -17,6 +17,8 @@ type UseConversationScrollObserversOptions = {
     initialHeight: number
   } | null>
   userResizeGestureRef: MutableRef<boolean>
+  programmaticScrollTopRef: MutableRef<number | null>
+  userScrollInputRef: MutableRef<boolean>
   followLatestRef: MutableRef<boolean>
   userLayoutChangeRef: MutableRef<boolean>
   userLayoutChangeTimeoutRef: MutableRef<number | null>
@@ -33,6 +35,8 @@ export function useConversationScrollObservers({
   loadingOlderRef,
   userResizeCandidateRef,
   userResizeGestureRef,
+  programmaticScrollTopRef,
+  userScrollInputRef,
   followLatestRef,
   userLayoutChangeRef,
   userLayoutChangeTimeoutRef,
@@ -141,6 +145,10 @@ export function useConversationScrollObservers({
         userLayoutChangeTimeoutRef.current = null
       }, 1000)
     }
+    const clearProgrammaticScrollTop = () => {
+      programmaticScrollTopRef.current = null
+      userScrollInputRef.current = true
+    }
     const startUserResizeGesture = (event: Event) => {
       if (!(event.target instanceof HTMLTextAreaElement)) return
       if (window.getComputedStyle(event.target).resize === 'none') return
@@ -168,6 +176,17 @@ export function useConversationScrollObservers({
     scrollContainer.addEventListener('change', markUserLayoutChange, true)
     scrollContainer.addEventListener('paste', markUserLayoutChange, true)
     scrollContainer.addEventListener('drop', markUserLayoutChange, true)
+    scrollContainer.addEventListener('wheel', clearProgrammaticScrollTop, true)
+    scrollContainer.addEventListener(
+      'touchmove',
+      clearProgrammaticScrollTop,
+      true,
+    )
+    scrollContainer.addEventListener(
+      'keydown',
+      clearProgrammaticScrollTop,
+      true,
+    )
     scrollContainer.addEventListener(
       'pointerdown',
       startUserResizeGesture,
@@ -184,6 +203,21 @@ export function useConversationScrollObservers({
       scrollContainer.removeEventListener('change', markUserLayoutChange, true)
       scrollContainer.removeEventListener('paste', markUserLayoutChange, true)
       scrollContainer.removeEventListener('drop', markUserLayoutChange, true)
+      scrollContainer.removeEventListener(
+        'wheel',
+        clearProgrammaticScrollTop,
+        true,
+      )
+      scrollContainer.removeEventListener(
+        'touchmove',
+        clearProgrammaticScrollTop,
+        true,
+      )
+      scrollContainer.removeEventListener(
+        'keydown',
+        clearProgrammaticScrollTop,
+        true,
+      )
       scrollContainer.removeEventListener(
         'pointerdown',
         startUserResizeGesture,

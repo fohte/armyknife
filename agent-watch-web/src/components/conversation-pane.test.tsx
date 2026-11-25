@@ -12497,48 +12497,74 @@ it.each([
     atBottom: false,
     resolution: 'completed',
     resolvedSeq: 62,
+    cleanupTrigger: 'response',
   },
   {
     cardType: 'proposal',
     atBottom: true,
     resolution: 'completed',
     resolvedSeq: 62,
+    cleanupTrigger: 'response',
   },
   {
     cardType: 'todo',
     atBottom: false,
     resolution: 'completed',
     resolvedSeq: 62,
+    cleanupTrigger: 'response',
   },
   {
     cardType: 'todo',
     atBottom: true,
     resolution: 'completed',
     resolvedSeq: 62,
+    cleanupTrigger: 'response',
   },
   {
     cardType: 'todo',
     atBottom: false,
     resolution: 'rejected',
     resolvedSeq: 62,
+    cleanupTrigger: 'response',
   },
-  { cardType: 'todo', atBottom: true, resolution: 'rejected', resolvedSeq: 62 },
+  {
+    cardType: 'todo',
+    atBottom: true,
+    resolution: 'rejected',
+    resolvedSeq: 62,
+    cleanupTrigger: 'response',
+  },
   {
     cardType: 'proposal',
     atBottom: true,
     resolution: 'completed',
     resolvedSeq: 63,
+    cleanupTrigger: 'response',
   },
   {
     cardType: 'todo',
     atBottom: true,
     resolution: 'completed',
     resolvedSeq: 63,
+    cleanupTrigger: 'response',
   },
-  { cardType: 'todo', atBottom: true, resolution: 'rejected', resolvedSeq: 63 },
+  {
+    cardType: 'todo',
+    atBottom: true,
+    resolution: 'rejected',
+    resolvedSeq: 63,
+    cleanupTrigger: 'response',
+  },
+  {
+    cardType: 'todo',
+    atBottom: false,
+    resolution: 'completed',
+    resolvedSeq: 62,
+    cleanupTrigger: 'scroll',
+  },
 ] as const)(
-  'keeps the remaining $cardType cards in place when resolving card $resolvedSeq as $resolution atBottom=$atBottom',
-  ({ cardType, atBottom, resolution, resolvedSeq }) => {
+  'keeps the remaining $cardType cards in place when resolving card $resolvedSeq as $resolution atBottom=$atBottom cleanup=$cleanupTrigger',
+  ({ cardType, atBottom, resolution, resolvedSeq, cleanupTrigger }) => {
     container.style.cssText = 'width: 900px; height: 700px'
     const detail =
       'Review the selected configuration before continuing. '.repeat(10)
@@ -12575,12 +12601,16 @@ it.each([
 
     const setScrollPosition = (scrollTop: number) => {
       act(() => {
+        scroll.dispatchEvent(
+          new WheelEvent('wheel', { bubbles: true, deltaY: 1 }),
+        )
         scroll.scrollTop = scrollTop
         scroll.dispatchEvent(new Event('scroll'))
       })
     }
     const bottom = scroll.scrollHeight - scroll.clientHeight
-    setScrollPosition(atBottom ? bottom : Math.min(180, bottom))
+    const scrollPosition = Math.min(180, bottom)
+    setScrollPosition(atBottom ? bottom : scrollPosition)
     const getPendingCards = () =>
       Array.from(
         scroll.querySelectorAll<HTMLElement>(
@@ -12632,12 +12662,16 @@ it.each([
       }
       return overlappingChildren
     }
-    const getTranslatedChildren = () =>
-      Array.from(scroll.children).flatMap((child, index) =>
-        child instanceof HTMLElement && child.style.translate !== ''
-          ? [index]
-          : [],
-      )
+    const getScrollCompensation = () => ({
+      hasChildMarginBlockStart: Array.from(scroll.children).some(
+        (child) =>
+          child instanceof HTMLElement && child.style.marginBlockStart !== '',
+      ),
+      hasExtraPaddingBottom:
+        scroll.style.getPropertyValue(
+          '--conversation-anchor-extra-padding-bottom',
+        ) !== '',
+    })
     const isResolvedMessage = (
       message: ChatItem,
     ): message is Extract<ChatItem, { type: 'proposal' | 'todo' }> =>
@@ -12686,6 +12720,33 @@ it.each([
     )
     recordRemainingTops()
     const afterServerResponse = getOverlappingChildren()
+    const compensationAfterServerResponse = getScrollCompensation()
+    const firstRemainingCard = before[0]?.element
+    const firstRemainingCardTopAfterServerResponse =
+      firstRemainingCard?.getBoundingClientRect().top
+    let responseCleanupPreservedCardPosition: boolean | null = null
+    let compensationAfterUserScroll: ReturnType<
+      typeof getScrollCompensation
+    > | null = null
+    let userScrollPreservedReadingPosition: boolean | null = null
+    const resolutionScrollDistance = atBottom ? 40 : 20
+    if (cleanupTrigger === 'scroll') {
+      const anchorTitle = before[0]?.title
+      const getAnchorTop = () =>
+        getPendingCards()
+          .find(({ title }) => title === anchorTitle)
+          ?.element.getBoundingClientRect().top
+      const anchorTopBeforeUserScroll = getAnchorTop()
+      const previousScrollTop = scroll.scrollTop
+      setScrollPosition(previousScrollTop - resolutionScrollDistance)
+      compensationAfterUserScroll = getScrollCompensation()
+      const anchorTopAfterUserScroll = getAnchorTop()
+      userScrollPreservedReadingPosition =
+        anchorTopBeforeUserScroll !== undefined &&
+        anchorTopAfterUserScroll !== undefined &&
+        Math.round(anchorTopAfterUserScroll - anchorTopBeforeUserScroll) ===
+          resolutionScrollDistance
+    }
     const notification: ChatItem = {
       type: 'assistant',
       text: 'The selection was recorded.',
@@ -12699,6 +12760,19 @@ it.each([
     renderConversationMessages(updatedMessages, conversationStart)
     recordRemainingTops()
     const afterNotification = getOverlappingChildren()
+    const compensationAfterNotification = getScrollCompensation()
+    if (
+      cleanupTrigger === 'response' &&
+      !wasAtBottom &&
+      firstRemainingCard !== undefined &&
+      firstRemainingCardTopAfterServerResponse !== undefined
+    ) {
+      responseCleanupPreservedCardPosition =
+        Math.abs(
+          firstRemainingCard.getBoundingClientRect().top -
+            firstRemainingCardTopAfterServerResponse,
+        ) <= 0.5
+    }
     const nextResponse: ChatItem = {
       type: 'assistant',
       text: 'The next step is ready.',
@@ -12713,7 +12787,7 @@ it.each([
     renderConversationMessages(withNextResponse, conversationStart)
     recordRemainingTops()
     const afterNextResponse = getOverlappingChildren()
-    const translatedChildrenAfterNextResponse = getTranslatedChildren()
+    const compensationAfterNextResponse = getScrollCompensation()
     const olderContext: ChatItem = {
       type: 'assistant',
       text: 'Earlier context has loaded.',
@@ -12726,15 +12800,27 @@ it.each([
     const afterDeltaLoad = getOverlappingChildren()
     setScrollPosition(Math.max(0, scroll.scrollTop - 20))
     const afterUserScroll = getOverlappingChildren()
-    const translatedChildrenAfterUserScroll = getTranslatedChildren()
-
+    const compensationAfterUserScrollFinal = getScrollCompensation()
+    const expectedBottomAfterResolutionScroll =
+      wasAtBottom && cleanupTrigger !== 'scroll'
     const result = () => ({
       remainingCardCount: before.length,
       remainedAtBottom: atBottomNow(),
       bottomStates,
-      stageTopDeltas: stages.map((stage) =>
-        stage.map((top, index) => top - (originalRemainingTops[index] ?? 0)),
+      responseCleanupPreservedCardPosition,
+      userScrollPreservedReadingPosition,
+      stageTopDeltas: stages.map((stage, stageIndex) =>
+        stage.map((top, index) =>
+          stageIndex < 2 ? top - (originalRemainingTops[index] ?? 0) : null,
+        ),
       ),
+      scrollCompensation: {
+        afterServerResponse: compensationAfterServerResponse,
+        afterUserScroll: compensationAfterUserScroll,
+        afterNotification: compensationAfterNotification,
+        afterNextResponse: compensationAfterNextResponse,
+        afterUserScrollFinal: compensationAfterUserScrollFinal,
+      },
       layoutIntegrity: [
         afterOptimisticUpdate,
         afterServerResponse,
@@ -12743,20 +12829,48 @@ it.each([
         afterDeltaLoad,
         afterUserScroll,
       ],
-      translatedChildren: [
-        translatedChildrenAfterNextResponse,
-        translatedChildrenAfterUserScroll,
-      ],
     })
     const expectedResult = () => ({
       remainingCardCount: 2,
-      remainedAtBottom: wasAtBottom,
-      bottomStates: Array.from({ length: 5 }, () => wasAtBottom),
-      stageTopDeltas: Array.from({ length: 5 }, () =>
-        originalRemainingTops.map(() => 0),
+      remainedAtBottom: expectedBottomAfterResolutionScroll,
+      bottomStates: [
+        wasAtBottom,
+        wasAtBottom,
+        ...Array.from({ length: 3 }, () => expectedBottomAfterResolutionScroll),
+      ],
+      responseCleanupPreservedCardPosition:
+        cleanupTrigger === 'response' && !wasAtBottom ? true : null,
+      userScrollPreservedReadingPosition:
+        cleanupTrigger === 'scroll' ? true : null,
+      stageTopDeltas: Array.from({ length: 5 }, (_, stageIndex) =>
+        originalRemainingTops.map(() => (stageIndex < 2 ? 0 : null)),
       ),
+      scrollCompensation: {
+        afterServerResponse: {
+          hasChildMarginBlockStart: resolvedSeq === 62,
+          hasExtraPaddingBottom: resolvedSeq === 63,
+        },
+        afterUserScroll:
+          cleanupTrigger === 'scroll'
+            ? {
+                hasChildMarginBlockStart: false,
+                hasExtraPaddingBottom: false,
+              }
+            : null,
+        afterNotification: {
+          hasChildMarginBlockStart: false,
+          hasExtraPaddingBottom: false,
+        },
+        afterNextResponse: {
+          hasChildMarginBlockStart: false,
+          hasExtraPaddingBottom: false,
+        },
+        afterUserScrollFinal: {
+          hasChildMarginBlockStart: false,
+          hasExtraPaddingBottom: false,
+        },
+      },
       layoutIntegrity: Array.from({ length: 6 }, () => []),
-      translatedChildren: [[], []],
     })
     expect(result()).toEqual(expectedResult())
   },

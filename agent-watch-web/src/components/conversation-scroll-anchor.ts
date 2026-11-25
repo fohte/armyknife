@@ -160,28 +160,41 @@ export function preserveConversationChildPosition(
     }
     return followLatest || isVisible(layout)
   })
-  const candidates =
-    preferPendingCards && pendingAnchors.length > 0
-      ? pendingAnchors
-      : previous.filter(({ element, ...layout }) => {
-          const currentChild = currentByElement.get(element)
-          return (
-            currentChild !== undefined &&
-            !recentResolutionCards.has(element) &&
-            isVisible(layout)
-          )
-        })
-  const anchor = candidates.reduce<{
-    child: ConversationChildLayout
-    offset: number
-  } | null>((maximum, child) => {
-    const currentChild = currentByElement.get(child.element)
-    const offset =
-      currentChild === undefined ? null : currentChild.top - child.top
-    return offset === null || (maximum !== null && offset <= maximum.offset)
-      ? maximum
-      : { child, offset }
-  }, null)
+  const isFollowingPendingCards =
+    followLatest && preferPendingCards && pendingAnchors.length > 0
+  const candidates = isFollowingPendingCards
+    ? pendingAnchors
+    : previous.filter(({ element, ...layout }) => {
+        const currentChild = currentByElement.get(element)
+        return (
+          currentChild !== undefined &&
+          !recentResolutionCards.has(element) &&
+          isVisible(layout)
+        )
+      })
+  const firstCandidate = candidates[0]
+  const firstCandidateCurrent =
+    firstCandidate === undefined
+      ? undefined
+      : currentByElement.get(firstCandidate.element)
+  const anchor = isFollowingPendingCards
+    ? candidates.reduce<{
+        child: ConversationChildLayout
+        offset: number
+      } | null>((maximum, child) => {
+        const currentChild = currentByElement.get(child.element)
+        const offset =
+          currentChild === undefined ? null : currentChild.top - child.top
+        return offset === null || (maximum !== null && offset <= maximum.offset)
+          ? maximum
+          : { child, offset }
+      }, null)
+    : firstCandidate === undefined || firstCandidateCurrent === undefined
+      ? null
+      : {
+          child: firstCandidate,
+          offset: firstCandidateCurrent.top - firstCandidate.top,
+        }
   return anchor === null
     ? null
     : {
@@ -353,6 +366,41 @@ export function clearConversationAnchorOffsets(
 ) {
   for (const element of anchorOffsets.keys()) {
     clearConversationAnchorOffset(element, anchorOffsets)
+  }
+}
+
+export function clearConversationScrollCompensation(
+  scrollContainer: HTMLDivElement,
+  anchorLayout: readonly ConversationChildLayout[],
+  anchorOffsets: Map<HTMLElement, ConversationAnchorSpacing>,
+  recentResolutionCards: ReadonlySet<HTMLElement>,
+  wasAtBottom: boolean,
+  setScrollTop: (scrollContainer: HTMLDivElement, scrollTop: number) => void,
+) {
+  const bounds = scrollContainer.getBoundingClientRect()
+  const visibleChildren = anchorLayout.filter(
+    ({ top, height }) => top < bounds.bottom && top + height > bounds.top,
+  )
+  const anchor =
+    visibleChildren.find(
+      ({ element }) => !recentResolutionCards.has(element),
+    ) ?? visibleChildren[0]
+
+  clearConversationAnchorOffsets(anchorOffsets)
+  scrollContainer.style.removeProperty(
+    '--conversation-anchor-extra-padding-bottom',
+  )
+
+  if (wasAtBottom) {
+    setScrollTop(
+      scrollContainer,
+      scrollContainer.scrollHeight - scrollContainer.clientHeight,
+    )
+  } else if (anchor !== undefined) {
+    const correction = anchor.element.getBoundingClientRect().top - anchor.top
+    if (Math.abs(correction) > 0.5) {
+      setScrollTop(scrollContainer, scrollContainer.scrollTop + correction)
+    }
   }
 }
 

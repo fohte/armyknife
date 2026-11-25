@@ -2,6 +2,7 @@ import { useCallback, useLayoutEffect, useRef } from 'react'
 
 import {
   clearConversationAnchorOffsets,
+  clearConversationScrollCompensation,
   type ConversationAnchorSpacing,
   type ConversationChildLayout,
   hasConversationChildrenInsertedBeforePendingCards,
@@ -47,6 +48,7 @@ export function useConversationScroll({
   } | null>(null)
   const followLatestRef = useRef(true)
   const programmaticScrollTopRef = useRef<number | null>(null)
+  const userScrollInputRef = useRef(false)
   const suppressResizeRef = useRef(false)
   const userResizeGestureRef = useRef(false)
   const userResizeCandidateRef = useRef<{
@@ -75,6 +77,10 @@ export function useConversationScroll({
 
   const setAnchoredScrollTop = useCallback(
     (scrollContainer: HTMLDivElement, scrollTop: number) => {
+      if (scrollContainer.scrollTop === scrollTop) {
+        programmaticScrollTopRef.current = null
+        return
+      }
       programmaticScrollTopRef.current = scrollTop
       scrollContainer.scrollTop = scrollTop
     },
@@ -99,6 +105,7 @@ export function useConversationScroll({
       userLayoutChangeTimeoutRef.current = null
     }
     programmaticScrollTopRef.current = null
+    userScrollInputRef.current = false
     suppressResizeRef.current = false
     userResizeGestureRef.current = false
     userResizeCandidateRef.current = null
@@ -109,6 +116,10 @@ export function useConversationScroll({
     if (scrollContainer === null) return
     const previousMessages = previousMessagesRef.current
     const previousChildLayout = previousChildLayoutRef.current
+    if (userScrollInputRef.current) {
+      userScrollInputRef.current = false
+      followLatestRef.current = isConversationAtBottom(scrollContainer)
+    }
     let currentChildLayout = readConversationChildLayout(scrollContainer)
     const scrollBounds = scrollContainer.getBoundingClientRect()
     const hasVisiblePendingCard = previousChildLayout.some(
@@ -157,10 +168,6 @@ export function useConversationScroll({
         previousChildLayout,
         currentChildLayout,
       )
-    if (conversationLayoutChanged && pendingScrollAnchorRef.current === null) {
-      clearConversationAnchorOffsets(conversationAnchorOffsetsRef.current)
-      currentChildLayout = readConversationChildLayout(scrollContainer)
-    }
     const end = start + messages.length
     const appendedMessages =
       previousMessages !== null &&
@@ -175,6 +182,35 @@ export function useConversationScroll({
         (message, index) => message !== previousMessages.messages[index],
       )
     previousMessagesRef.current = { messages, start, end, epoch }
+
+    const hasScrollCompensation =
+      conversationAnchorOffsetsRef.current.size > 0 ||
+      anchorExtraPaddingBottomRef.current > 0 ||
+      scrollContainer.style.getPropertyValue(
+        '--conversation-anchor-extra-padding-bottom',
+      ) !== ''
+    if (appendedMessages && hasScrollCompensation) {
+      clearConversationScrollCompensation(
+        scrollContainer,
+        previousChildLayout,
+        conversationAnchorOffsetsRef.current,
+        recentResolutionCardsRef.current,
+        followLatestRef.current,
+        setAnchoredScrollTop,
+      )
+      anchorExtraPaddingBottomRef.current = 0
+      previousChildLayoutRef.current =
+        readConversationChildLayout(scrollContainer)
+      previousScrollTopRef.current = scrollContainer.scrollTop
+      followLatestRef.current = isConversationAtBottom(scrollContainer)
+      if (followLatestRef.current && !loadingOlder) onPruneOldMessages()
+      return
+    }
+
+    if (conversationLayoutChanged && pendingScrollAnchorRef.current === null) {
+      clearConversationAnchorOffsets(conversationAnchorOffsetsRef.current)
+      currentChildLayout = readConversationChildLayout(scrollContainer)
+    }
 
     const anchor = pendingScrollAnchorRef.current
     if (anchor !== null) {
@@ -212,9 +248,6 @@ export function useConversationScroll({
           preservationAnchor?.element ?? null,
           conversationAnchorOffsetsRef.current,
         )
-        for (const element of movedChildren) {
-          recentResolutionCardsRef.current.delete(element)
-        }
       }
       previousChildLayoutRef.current =
         readConversationChildLayout(scrollContainer)
@@ -239,9 +272,6 @@ export function useConversationScroll({
         setScrollTop: setAnchoredScrollTop,
         anchorOffsets: conversationAnchorOffsetsRef.current,
       })
-      for (const element of movedChildren) {
-        recentResolutionCardsRef.current.delete(element)
-      }
       previousChildLayoutRef.current =
         readConversationChildLayout(scrollContainer)
       previousScrollTopRef.current = scrollContainer.scrollTop
@@ -310,6 +340,8 @@ export function useConversationScroll({
     loadingOlderRef,
     userResizeCandidateRef,
     userResizeGestureRef,
+    programmaticScrollTopRef,
+    userScrollInputRef,
     followLatestRef,
     userLayoutChangeRef,
     userLayoutChangeTimeoutRef,
@@ -336,7 +368,10 @@ export function useConversationScroll({
   const onScroll = useCallback(() => {
     const scrollContainer = scrollRef.current
     if (scrollContainer === null) return
-    if (programmaticScrollTopRef.current === scrollContainer.scrollTop) {
+    if (
+      programmaticScrollTopRef.current === scrollContainer.scrollTop &&
+      !userScrollInputRef.current
+    ) {
       programmaticScrollTopRef.current = null
       previousChildLayoutRef.current =
         readConversationChildLayout(scrollContainer)
@@ -344,9 +379,22 @@ export function useConversationScroll({
       return
     }
     programmaticScrollTopRef.current = null
-    if (anchorExtraPaddingBottomRef.current > 0) {
-      scrollContainer.style.removeProperty(
+    userScrollInputRef.current = false
+    if (
+      conversationAnchorOffsetsRef.current.size > 0 ||
+      anchorExtraPaddingBottomRef.current > 0 ||
+      scrollContainer.style.getPropertyValue(
         '--conversation-anchor-extra-padding-bottom',
+      ) !== ''
+    ) {
+      const wasAtBottom = isConversationAtBottom(scrollContainer)
+      clearConversationScrollCompensation(
+        scrollContainer,
+        readConversationChildLayout(scrollContainer),
+        conversationAnchorOffsetsRef.current,
+        recentResolutionCardsRef.current,
+        wasAtBottom,
+        setAnchoredScrollTop,
       )
       anchorExtraPaddingBottomRef.current = 0
     }
@@ -365,7 +413,7 @@ export function useConversationScroll({
     followLatestRef.current = isConversationAtBottom(scrollContainer)
     if (followLatestRef.current) onPruneOldMessages()
     if (scrollContainer.scrollTop <= 120) loadOlder()
-  }, [loadOlder, onPruneOldMessages])
+  }, [loadOlder, onPruneOldMessages, setAnchoredScrollTop])
 
   return { loadOlder, onScroll, scrollRef }
 }
