@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.931](https://github.com/fohte/armyknife/compare/v0.1.930...v0.1.931) (2026-11-25)
+
+
+### Bug Fixes
+
+* **agent:** show pending work in close errors ([#2286](https://github.com/fohte/armyknife/issues/2286)) ([38382fb](https://github.com/fohte/armyknife/commit/38382fba53eabcc9310ee0b129b94cc8a0e6b7fb))
+
 ## [0.1.930](https://github.com/fohte/armyknife/compare/v0.1.929...v0.1.930) (2026-11-25)
 
 
