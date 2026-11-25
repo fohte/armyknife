@@ -1723,15 +1723,23 @@ mod tests {
     use chrono::TimeZone;
     use rstest::{fixture, rstest};
 
+    #[derive(Clone, Copy)]
+    enum TestClaudeConfigDir {
+        Default,
+        Custom,
+        Empty,
+    }
+
     #[rstest]
-    #[case::claude_refreshes_existing_directory(Engine::Claude, true, false, (true, true))]
-    #[case::claude_refreshes_custom_config_directory(Engine::Claude, true, true, (true, true))]
-    #[case::codex_leaves_directory_unchanged(Engine::Codex, true, false, (true, false))]
-    #[case::missing_directory_stays_absent(Engine::Claude, false, false, (false, false))]
+    #[case::claude_refreshes_existing_directory(Engine::Claude, true, TestClaudeConfigDir::Default, (true, true))]
+    #[case::claude_refreshes_custom_config_directory(Engine::Claude, true, TestClaudeConfigDir::Custom, (true, true))]
+    #[case::empty_custom_config_directory_falls_back(Engine::Claude, true, TestClaudeConfigDir::Empty, (true, true))]
+    #[case::codex_leaves_directory_unchanged(Engine::Codex, true, TestClaudeConfigDir::Default, (true, false))]
+    #[case::missing_directory_stays_absent(Engine::Claude, false, TestClaudeConfigDir::Default, (false, false))]
     fn hook_refreshes_only_existing_claude_session_env(
         #[case] engine: Engine,
         #[case] create_session_env: bool,
-        #[case] use_custom_config_dir: bool,
+        #[case] config_dir_kind: TestClaudeConfigDir,
         #[case] expected_state: (bool, bool),
     ) {
         use std::fs::{self, File, FileTimes};
@@ -1742,12 +1750,11 @@ mod tests {
         let session_id = "fixture-session";
         let default_config_dir = home_dir.path().join(".claude");
         let custom_config_dir = home_dir.path().join("custom-claude");
-        let config_dir = if use_custom_config_dir {
-            &custom_config_dir
-        } else {
-            &default_config_dir
+        let config_root = match config_dir_kind {
+            TestClaudeConfigDir::Default | TestClaudeConfigDir::Empty => &default_config_dir,
+            TestClaudeConfigDir::Custom => &custom_config_dir,
         };
-        let session_env_dir = config_dir.join("session-env").join(session_id);
+        let session_env_dir = config_root.join("session-env").join(session_id);
         let old_time = SystemTime::now() - Duration::from_secs(60 * 60 * 24);
         if create_session_env {
             fs::create_dir_all(&session_env_dir).expect("session env should be created");
@@ -1766,14 +1773,16 @@ mod tests {
         let custom_config = custom_config_dir
             .to_str()
             .expect("custom config path should be UTF-8");
+        let config_dir_override = match config_dir_kind {
+            TestClaudeConfigDir::Default => None,
+            TestClaudeConfigDir::Custom => Some(custom_config),
+            TestClaudeConfigDir::Empty => Some(""),
+        };
 
         let result = temp_env::with_vars(
             [
                 ("HOME", Some(home)),
-                (
-                    "CLAUDE_CONFIG_DIR",
-                    use_custom_config_dir.then_some(custom_config),
-                ),
+                ("CLAUDE_CONFIG_DIR", config_dir_override),
             ],
             || {
                 process_hook_event_impl(
