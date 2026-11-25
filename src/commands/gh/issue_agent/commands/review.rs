@@ -117,6 +117,17 @@ impl ReviewHandler<SubmitSchema> for IssueReviewHandler {
         }
         Ok(())
     }
+
+    fn on_watch_web_review_complete(&self, document: &Document<SubmitSchema>) -> HilResult<()> {
+        if document.frontmatter.is_approved() {
+            strip_temporary_frontmatter(&document.path)?;
+            document.save_approval()?;
+        } else {
+            strip_temporary_frontmatter(&document.path)?;
+            document.remove_approval()?;
+        }
+        Ok(())
+    }
 }
 
 /// Check if a file has YAML frontmatter (starts with `---\n`).
@@ -259,7 +270,7 @@ pub fn run(args: &ReviewArgs) -> anyhow::Result<()> {
 
 pub fn run_complete(args: &ReviewCompleteArgs) -> anyhow::Result<()> {
     // Create FIFO guard first to ensure signaling even if load_config fails
-    let _fifo_guard = args.done_fifo.as_deref().map(FifoSignalGuard::new);
+    let mut fifo_guard = args.done_fifo.as_deref().map(FifoSignalGuard::new);
     let cleanup_guard = CleanupGuard::from_launcher_args(
         &args.path,
         args.review_lock_id.as_deref(),
@@ -268,7 +279,7 @@ pub fn run_complete(args: &ReviewCompleteArgs) -> anyhow::Result<()> {
 
     let config = load_config()?;
 
-    complete_review::<SubmitSchema, _, _>(
+    let completed_by_watch_web = complete_review::<SubmitSchema, _, _>(
         &args.path,
         args.window_title.as_deref(),
         &IssueReviewHandler,
@@ -276,6 +287,10 @@ pub fn run_complete(args: &ReviewCompleteArgs) -> anyhow::Result<()> {
         args.finish_fifo.as_deref(),
         cleanup_guard,
     )?;
+
+    if completed_by_watch_web && let Some(fifo_guard) = fifo_guard.as_mut() {
+        fifo_guard.set_signal(b'1');
+    }
 
     Ok(())
 }

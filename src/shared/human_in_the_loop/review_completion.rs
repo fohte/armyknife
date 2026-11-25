@@ -53,7 +53,7 @@ pub(crate) fn complete_review<S, H, E>(
     editor_runner: &E,
     finish_fifo_path: Option<&Path>,
     cleanup_guard: CleanupGuard,
-) -> Result<()>
+) -> Result<bool>
 where
     S: DocumentSchema,
     H: ReviewHandler<S>,
@@ -72,11 +72,17 @@ where
 
     if !editor_succeeded && !finish_requested {
         eprintln!("Editor exited with non-zero status");
-        return Ok(());
+        return Ok(false);
     }
 
-    let handler_result = Document::<S>::from_path(document_path.to_path_buf())
-        .and_then(|document| handler.on_review_complete(&document));
+    let handler_result =
+        Document::<S>::from_path(document_path.to_path_buf()).and_then(|document| {
+            if finish_requested {
+                handler.on_watch_web_review_complete(&document)
+            } else {
+                handler.on_review_complete(&document)
+            }
+        });
     if finish_requested {
         let acknowledgement = if handler_result.is_ok() { b'0' } else { b'1' };
         if let Err(error) =
@@ -85,7 +91,7 @@ where
             tracing::warn!(%error, "failed to acknowledge review finish result");
         }
     }
-    handler_result
+    handler_result.map(|()| finish_requested)
 }
 
 fn finalize_finish_request(
@@ -119,7 +125,7 @@ mod tests {
 
     use super::*;
     use crate::shared::human_in_the_loop::editor::{self, ReviewEditorChild};
-    use crate::shared::human_in_the_loop::{LockGuard, create_fifo_at_path, signal_fifo};
+    use crate::shared::human_in_the_loop::{LockGuard, create_fifo_at_path, signal_fifo_with_byte};
 
     #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
     struct FinishTestSchema {
@@ -197,7 +203,7 @@ mod tests {
                 termination_count: self.termination_count.clone(),
             };
             std::fs::write(document_path, &self.saved_document)?;
-            signal_fifo(finish_fifo_path);
+            signal_fifo_with_byte(finish_fifo_path, b'0');
             editor::wait_for_editor_or_finish_request(&mut child, &mut finish_reader)
         }
     }
@@ -275,7 +281,7 @@ mod tests {
                 ack_signal,
             ),
             (
-                Ok(()),
+                Ok(true),
                 1,
                 vec![(document_path, true, saved_document.to_string())],
                 1,

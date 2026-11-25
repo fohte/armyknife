@@ -11,7 +11,7 @@ pub(crate) async fn submit_draft_for_review(
     filepath: std::path::PathBuf,
     session_cwd: &std::path::Path,
     target_repo_id: &str,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<String> {
     submit::run_for_review(
         &submit::SubmitArgs {
             filepath: Some(filepath),

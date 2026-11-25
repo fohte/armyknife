@@ -16,16 +16,10 @@ use super::{
     ReviewDocumentEditRequest, ReviewDocumentRoots, ReviewDocumentSummary, ReviewQueueLoader,
     SessionLoader, active_review_document, save,
 };
-use crate::shared::human_in_the_loop::LockGuard;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub(super) enum ReviewDocumentAction {
-    PostComment,
-    CreatePr,
-    PostReplies,
-    UpdateIssue,
-}
+pub(super) use crate::shared::human_in_the_loop::ReviewDocumentAction;
+use crate::shared::human_in_the_loop::{
+    LockGuard, ReviewDocumentActionResult, clear_action_result, document_hash, save_action_result,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ActionStatus {
@@ -45,10 +39,13 @@ pub(super) struct ActionRecord {
     status: ActionStatus,
     revision: String,
     retry_started_at: Option<DateTime<Utc>>,
+    document_hash: String,
 }
 
 pub(super) type ActionExecutor = Arc<
-    dyn Fn(ActionRecord) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>> + Send + Sync,
+    dyn Fn(ActionRecord) -> Pin<Box<dyn Future<Output = anyhow::Result<String>> + Send>>
+        + Send
+        + Sync,
 >;
 
 #[derive(Deserialize)]
@@ -100,6 +97,7 @@ pub(super) async fn execute_review_document(
             let retrying = record.status == ActionStatus::Failed;
             let frontmatter =
                 approved_frontmatter(record.summary.kind, request.action, request.frontmatter)?;
+            clear_previous_action_result(&record.path)?;
             if same_action_content(
                 &record.frontmatter,
                 &record.body,
@@ -127,6 +125,10 @@ pub(super) async fn execute_review_document(
                     status: ActionStatus::Running,
                     revision: saved_revision.clone(),
                     retry_started_at: None,
+                    document_hash: document_hash(&record.path).map_err(|error| {
+                        tracing::warn!(%error, "failed to hash approved review document");
+                        StatusCode::INTERNAL_SERVER_ERROR
+                    })?,
                     ..record
                 };
                 (updated, saved_revision, retrying)
@@ -147,6 +149,7 @@ pub(super) async fn execute_review_document(
             validate_action(summary.kind, request.action)?;
             let frontmatter =
                 approved_frontmatter(summary.kind, request.action, request.frontmatter)?;
+            clear_previous_action_result(&marker.path)?;
             let saved_revision = save::save_document_for_session(
                 load_session.clone(),
                 load_review_queue.clone(),
@@ -160,6 +163,10 @@ pub(super) async fn execute_review_document(
                 true,
             )
             .await?;
+            let document_hash = document_hash(&marker.path).map_err(|error| {
+                tracing::warn!(%error, "failed to hash approved review document");
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
             let record = ActionRecord {
                 action: request.action,
                 path: marker.path,
@@ -170,6 +177,7 @@ pub(super) async fn execute_review_document(
                 status: ActionStatus::Running,
                 revision: saved_revision.clone(),
                 retry_started_at: None,
+                document_hash,
             };
             (record, saved_revision, false)
         }
@@ -204,6 +212,20 @@ pub(super) async fn execute_review_document(
         executor(action_record).await
     }
     .await;
+    let (succeeded, message) = match &result {
+        Ok(message) => (true, message.clone()),
+        Err(error) => (false, format!("{error:#}")),
+    };
+    let action_result = ReviewDocumentActionResult::new(
+        record.action,
+        succeeded,
+        message.clone(),
+        record.document_hash.clone(),
+        document_hash(&record.path).ok(),
+    );
+    if let Err(error) = save_action_result(&record.path, &action_result) {
+        tracing::error!(%error, "failed to save review document action result");
+    }
     let mut records = actions.lock().await;
     if let Some(current) = records.records.get_mut(&key) {
         current.status = if result.is_ok() {
@@ -213,7 +235,7 @@ pub(super) async fn execute_review_document(
         };
     }
     match result {
-        Ok(()) => Ok(Json(ReviewDocumentActionResponse {
+        Ok(_) => Ok(Json(ReviewDocumentActionResponse {
             success: true,
             revision,
             error: None,
@@ -227,6 +249,13 @@ pub(super) async fn execute_review_document(
             }))
         }
     }
+}
+
+fn clear_previous_action_result(document_path: &Path) -> Result<(), StatusCode> {
+    clear_action_result(document_path).map_err(|error| {
+        tracing::warn!(%error, "failed to clear previous review action result");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })
 }
 
 fn same_action_content(
@@ -308,7 +337,7 @@ fn approved_frontmatter(
     Ok(frontmatter)
 }
 
-pub(super) async fn run_action(record: &ActionRecord) -> anyhow::Result<()> {
+pub(super) async fn run_action(record: &ActionRecord) -> anyhow::Result<String> {
     match record.action {
         ReviewDocumentAction::CreatePr => {
             let target_repo_id = record
@@ -336,7 +365,8 @@ pub(super) async fn run_action(record: &ActionRecord) -> anyhow::Result<()> {
                         .ok_or_else(|| anyhow::anyhow!("Action start time is unavailable"))?,
                 },
             )
-            .await
+            .await?;
+            Ok("Issue comment posted.".to_owned())
         }
         ReviewDocumentAction::UpdateIssue => {
             let (issue_number, repo) = issue_target(record)?;
@@ -347,7 +377,8 @@ pub(super) async fn run_action(record: &ActionRecord) -> anyhow::Result<()> {
                     path: record.path.clone(),
                 },
             )
-            .await
+            .await?;
+            Ok("Issue body updated.".to_owned())
         }
         ReviewDocumentAction::PostReplies => {
             let pr_number = record
@@ -368,7 +399,8 @@ pub(super) async fn run_action(record: &ActionRecord) -> anyhow::Result<()> {
                     .retry_started_at
                     .ok_or_else(|| anyhow::anyhow!("Action start time is unavailable"))?,
             )
-            .await
+            .await?;
+            Ok("Pull request replies posted.".to_owned())
         }
     }
 }

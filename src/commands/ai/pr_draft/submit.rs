@@ -15,7 +15,7 @@ use crate::infra::github::{
     UpdatePrParams,
 };
 use crate::shared::config::load_config;
-use crate::shared::human_in_the_loop::LockGuard;
+use crate::shared::human_in_the_loop::{LockGuard, ReviewDocumentAction, successful_action_result};
 use crate::shared::repo_language::copier_answers_path_for_repo_at;
 
 mod post_submit;
@@ -70,30 +70,50 @@ struct SubmitContext<'a, F> {
 }
 
 pub async fn run(args: &SubmitArgs) -> anyhow::Result<()> {
-    run_with_review_language_context(args, None).await
+    let draft_path = match &args.filepath {
+        Some(path) => path.clone(),
+        None => DraftFile::path_for(&RepoInfo::from_git_only()?),
+    };
+    if let Some(result) = successful_action_result(&draft_path, ReviewDocumentAction::CreatePr)? {
+        result.print_for_agent();
+        return Ok(());
+    }
+    run_with_review_language_context(args, None, None).await
 }
 
 pub(super) async fn run_for_review(
     args: &SubmitArgs,
     session_cwd: &Path,
     expected_repo_id: &str,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<String> {
     let context = ReviewRepositoryLanguageContext {
         expected_repo_id: expected_repo_id.to_owned(),
         copier_answers_path: copier_answers_path_for_repo_at(session_cwd, expected_repo_id),
     };
-    run_with_review_language_context(args, Some(context)).await
+    let pr_url = std::sync::Mutex::new(None);
+    let capture_pr_url = |url: &str| {
+        if let Ok(mut pr_url) = pr_url.lock() {
+            *pr_url = Some(url.to_owned());
+        }
+    };
+    run_with_review_language_context(args, Some(context), Some(&capture_pr_url)).await?;
+    pr_url
+        .into_inner()
+        .map_err(|error| anyhow::anyhow!("Failed to capture submitted pull request URL: {error}"))?
+        .ok_or_else(|| anyhow::anyhow!("Pull request submission completed without a URL"))
 }
 
 async fn run_with_review_language_context(
     args: &SubmitArgs,
     review_language_context: Option<ReviewRepositoryLanguageContext>,
+    capture_created_pr_url: Option<&(dyn Fn(&str) + Send + Sync)>,
 ) -> anyhow::Result<()> {
     let client = GitHubClient::get()?;
     let post_submit_processor = PrSeriesPostSubmitProcessor { github: client };
     let submit_effects = SubmitEffects {
         post_submit_processor: &post_submit_processor,
         record_created_pr_url,
+        capture_created_pr_url,
     };
     run_impl_with_review_language_context(
         args,
@@ -348,6 +368,9 @@ async fn run_impl_with_review_language_context<
     };
 
     (submit_effects.record_created_pr_url)(&pr_url);
+    if let Some(capture_created_pr_url) = submit_effects.capture_created_pr_url {
+        capture_created_pr_url(&pr_url);
+    }
 
     if target_is_current_repo {
         let config_key = format!("branch.{}.pr-url", target.branch);
@@ -414,11 +437,47 @@ mod tests {
     };
     use crate::shared::config::Config;
     use crate::shared::env_var::EnvVars;
+    use crate::shared::human_in_the_loop::{
+        ReviewDocumentAction, ReviewDocumentActionResult, document_hash, save_action_result,
+        successful_action_result,
+    };
     use clap::Parser;
     use indoc::indoc;
     use rstest::{fixture, rstest};
     use std::fs;
     use std::sync::Mutex;
+
+    #[tokio::test]
+    async fn submit_reports_a_watch_web_pr_without_submitting_twice() {
+        let directory = tempfile::TempDir::new().expect("fixture directory should be created");
+        let draft_path = directory.path().join("draft.md");
+        fs::write(&draft_path, "Approved fixture draft.").expect("fixture draft should be written");
+        let result = ReviewDocumentActionResult::new(
+            ReviewDocumentAction::CreatePr,
+            true,
+            "https://example.invalid/pull/42".to_owned(),
+            document_hash(&draft_path).expect("document hash should be computed"),
+            None,
+        );
+        save_action_result(&draft_path, &result).expect("action result should be saved");
+
+        let submitted = run(&SubmitArgs {
+            filepath: Some(draft_path.clone()),
+            base: None,
+            draft: false,
+            no_review: false,
+        })
+        .await;
+
+        assert_eq!(
+            (
+                submitted.map_err(|error| error.to_string()),
+                successful_action_result(&draft_path, ReviewDocumentAction::CreatePr)
+                    .expect("successful action result should remain available"),
+            ),
+            (Ok(()), Some(result)),
+        );
+    }
 
     /// Hook stub that always succeeds. Use when the test does not care about
     /// hook invocation.
@@ -516,6 +575,7 @@ mod tests {
         let submit_effects = SubmitEffects {
             post_submit_processor,
             record_created_pr_url: noop_record_created_pr_url,
+            capture_created_pr_url: None,
         };
         super::run_impl_with_recording(
             args,
@@ -771,6 +831,7 @@ mod tests {
         let submit_effects = SubmitEffects {
             post_submit_processor: &NoopPostSubmitProcessor,
             record_created_pr_url: noop_record_created_pr_url,
+            capture_created_pr_url: None,
         };
 
         let result = super::run_impl_with_review_language_context(
@@ -2134,9 +2195,16 @@ mod tests {
             record_created_pr_url_in(sessions_dir, "sample-session", pr_url)
                 .expect("successful submit should record its pull request URL");
         };
+        let captured_pr_url = Mutex::new(None);
+        let capture_created_pr_url = |pr_url: &str| {
+            *captured_pr_url
+                .lock()
+                .expect("captured pull request URL mutex") = Some(pr_url.to_owned());
+        };
         let submit_effects = SubmitEffects {
             post_submit_processor: &NoopPostSubmitProcessor,
             record_created_pr_url: record_pr_url,
+            capture_created_pr_url: Some(&capture_created_pr_url),
         };
         let result = super::run_impl_with_recording(
             &args,
@@ -2164,18 +2232,23 @@ mod tests {
             .clone();
         let pr_url =
             format!("https://github.com/sample-owner/sample-repository/pull/{pull_request_number}");
+        let captured_pr_url = captured_pr_url
+            .into_inner()
+            .expect("captured pull request URL mutex");
 
         assert_eq!(
             (
                 result.map_err(|error| error.to_string()),
                 created_prs,
                 updated_prs,
+                captured_pr_url,
                 (session.pr_context, session.created_pr_urls),
             ),
             (
                 Ok(()),
                 expected_create_calls,
                 expected_update_calls,
+                Some(pr_url.clone()),
                 (
                     Some(SessionPrContext {
                         owner: "sample-owner".to_string(),

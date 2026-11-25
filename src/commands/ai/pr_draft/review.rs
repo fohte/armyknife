@@ -95,6 +95,15 @@ impl ReviewHandler<Frontmatter> for PrDraftReviewHandler {
 
         Ok(())
     }
+
+    fn on_watch_web_review_complete(&self, document: &Document<Frontmatter>) -> HilResult<()> {
+        if document.frontmatter.is_approved() {
+            document.save_approval()?;
+        } else {
+            document.remove_approval()?;
+        }
+        Ok(())
+    }
 }
 
 pub fn run(args: &ReviewArgs) -> anyhow::Result<()> {
@@ -185,7 +194,7 @@ fn run_impl(args: &ReviewArgs, run_hook: HookRunner<'_>) -> anyhow::Result<()> {
 
 pub fn run_complete(args: &ReviewCompleteArgs) -> anyhow::Result<()> {
     // Create FIFO guard first to ensure signaling even if load_config fails
-    let _fifo_guard = args.done_fifo.as_deref().map(FifoSignalGuard::new);
+    let mut fifo_guard = args.done_fifo.as_deref().map(FifoSignalGuard::new);
     let cleanup_guard = CleanupGuard::from_launcher_args(
         &args.filepath,
         args.review_lock_id.as_deref(),
@@ -194,7 +203,7 @@ pub fn run_complete(args: &ReviewCompleteArgs) -> anyhow::Result<()> {
 
     let config = load_config()?;
 
-    complete_review::<Frontmatter, _, _>(
+    let completed_by_watch_web = complete_review::<Frontmatter, _, _>(
         &args.filepath,
         args.window_title.as_deref(),
         &PrDraftReviewHandler,
@@ -202,6 +211,10 @@ pub fn run_complete(args: &ReviewCompleteArgs) -> anyhow::Result<()> {
         args.finish_fifo.as_deref(),
         cleanup_guard,
     )?;
+
+    if completed_by_watch_web && let Some(fifo_guard) = fifo_guard.as_mut() {
+        fifo_guard.set_signal(b'1');
+    }
 
     Ok(())
 }

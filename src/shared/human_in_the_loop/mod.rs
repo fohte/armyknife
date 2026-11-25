@@ -6,6 +6,7 @@
 //! 3. User edits the document and saves
 //! 4. The result is parsed and processed
 
+mod action_result;
 mod approval;
 mod document;
 mod editor;
@@ -20,6 +21,11 @@ mod review_completion;
 mod review_finish;
 mod session_watch;
 mod tmux;
+pub(crate) use action_result::{
+    ReviewDocumentAction, ReviewDocumentActionResult, clear_action_result, document_hash,
+    save_action_result, successful_action_result, successful_action_results_in_directory,
+    wait_for_action_result,
+};
 pub(crate) use pending_review::{
     ReviewDocumentMarker, is_active_pr_draft_review_marker, review_document_marker,
     review_document_path,
@@ -30,7 +36,8 @@ pub(crate) use review_finish::{
     finish_request_fifo_path, open_fifo_reader, wait_for_finish_ack,
 };
 use review_finish::{
-    create_fifo_at_path, path_with_suffix, remove_fifo_if_present, try_read_fifo_signal,
+    create_fifo_at_path, path_with_suffix, remove_fifo_if_present, try_read_fifo_byte,
+    try_read_fifo_signal,
 };
 
 pub use approval::{ApprovalManager, TEST_APPROVAL_DIR_OVERRIDE};
@@ -89,6 +96,11 @@ pub trait ReviewHandler<S: DocumentSchema> {
     /// Default implementation does nothing, suitable for simple editing workflows.
     fn on_review_complete(&self, _document: &Document<S>) -> Result<()> {
         Ok(())
+    }
+
+    /// Records approval after watch-web has prepared an action for execution.
+    fn on_watch_web_review_complete(&self, document: &Document<S>) -> Result<()> {
+        self.on_review_complete(document)
     }
 }
 
@@ -256,18 +268,22 @@ where
         lock_guard.lock_id(),
     )?;
 
-    {
+    let completion_signal = {
         let _pending_review = pending_review::PendingReviewGuard::for_current_session(
             pending_review_marker,
             document_path,
             review.queue_key.as_deref(),
         );
         if let Some(session) = review.session.as_deref() {
-            wait_for_fifo_signal_or_session_exit(done_fifo_reader, session, is_session_alive)?;
+            wait_for_fifo_signal_or_session_exit(done_fifo_reader, session, is_session_alive)?
         } else {
             // GUI terminal launches have no tmux pane to monitor.
-            wait_for_fifo_signal(done_fifo_reader, &done_fifo_path)?;
+            wait_for_fifo_signal(done_fifo_reader, &done_fifo_path)?
         }
+    };
+
+    if completion_signal == b'1' {
+        wait_for_action_result(document_path)?.print_for_agent();
     }
 
     drop(finish_fifo_reader);
@@ -343,7 +359,7 @@ fn create_fifo_with_suffix(document_path: &Path, suffix: &str) -> Result<PathBuf
 /// blocking mode. The blocking `open` itself will wait until a writer connects,
 /// and the subsequent `read` will return the signal byte.
 #[cfg(unix)]
-fn wait_for_fifo_signal(file: std::fs::File, fifo_path: &Path) -> Result<()> {
+fn wait_for_fifo_signal(file: std::fs::File, fifo_path: &Path) -> Result<u8> {
     use std::io::{self, Read};
     use std::os::unix::io::AsRawFd;
 
@@ -360,7 +376,7 @@ fn wait_for_fifo_signal(file: std::fs::File, fifo_path: &Path) -> Result<()> {
     let mut buf = [0u8; 1];
     loop {
         match file.read(&mut buf) {
-            Ok(n) if n > 0 => break,
+            Ok(n) if n > 0 => return Ok(buf[0]),
             Ok(_) => {
                 // Ok(0) = spurious EOF (macOS: no writer connected yet).
                 // Re-open in blocking mode; the open itself blocks until a writer connects.
@@ -370,10 +386,9 @@ fn wait_for_fifo_signal(file: std::fs::File, fifo_path: &Path) -> Result<()> {
                 file = std::fs::File::open(fifo_path)?;
             }
             Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-            Err(_) => break,
+            Err(error) => return Err(error.into()),
         }
     }
-    Ok(())
 }
 
 /// Wait for the completion signal while periodically checking the editor session.
@@ -382,7 +397,7 @@ fn wait_for_fifo_signal_or_session_exit(
     file: std::fs::File,
     session: &str,
     is_session_alive: impl FnMut(&str) -> Result<bool>,
-) -> Result<()> {
+) -> Result<u8> {
     wait_for_fifo_signal_or_session_exit_with_interval(
         file,
         session,
@@ -396,7 +411,7 @@ fn wait_for_fifo_signal_or_session_exit_with_interval(
     session: &str,
     check_interval: Duration,
     mut is_session_alive: impl FnMut(&str) -> Result<bool>,
-) -> Result<()> {
+) -> Result<u8> {
     use std::time::Instant;
 
     let mut next_session_check = Instant::now();
@@ -407,8 +422,8 @@ fn wait_for_fifo_signal_or_session_exit_with_interval(
                 Ok(true) => consecutive_check_failures = 0,
                 Ok(false) => {
                     consecutive_check_failures = 0;
-                    return Ok(if try_read_fifo_signal(file)? {
-                        FifoPollAction::Signaled
+                    return Ok(if let Some(signal) = try_read_fifo_byte(file)? {
+                        FifoPollAction::Signaled(signal)
                     } else {
                         FifoPollAction::Abort(HumanInTheLoopError::ReviewSessionClosed)
                     });
@@ -435,24 +450,24 @@ fn wait_for_fifo_signal_or_session_exit_with_interval(
 
 enum FifoPollAction {
     Continue,
-    Signaled,
+    Signaled(u8),
     Abort(HumanInTheLoopError),
 }
 
 fn poll_fifo_signal(
     mut file: std::fs::File,
     mut check: impl FnMut(&mut std::fs::File) -> Result<FifoPollAction>,
-) -> Result<()> {
+) -> Result<u8> {
     use std::thread::sleep;
 
     loop {
-        if try_read_fifo_signal(&mut file)? {
-            return Ok(());
+        if let Some(signal) = try_read_fifo_byte(&mut file)? {
+            return Ok(signal);
         }
 
         match check(&mut file)? {
             FifoPollAction::Continue => sleep(FIFO_POLL_INTERVAL),
-            FifoPollAction::Signaled => return Ok(()),
+            FifoPollAction::Signaled(signal) => return Ok(signal),
             FifoPollAction::Abort(error) => return Err(error),
         }
     }
@@ -485,6 +500,7 @@ fn wait_for_fifo_signal_with_timeout(
             Ok(FifoPollAction::Continue)
         }
     })
+    .map(|_| ())
 }
 
 /// RAII guard that removes the FIFO file on drop.
@@ -530,19 +546,25 @@ impl Drop for FifoCleanupGuard {
 /// to ensure signaling even if later initialization (e.g., config loading) fails.
 pub struct FifoSignalGuard {
     fifo_path: PathBuf,
+    signal: u8,
 }
 
 impl FifoSignalGuard {
     pub fn new(fifo_path: &Path) -> Self {
         Self {
             fifo_path: fifo_path.to_path_buf(),
+            signal: b'0',
         }
+    }
+
+    pub fn set_signal(&mut self, signal: u8) {
+        self.signal = signal;
     }
 }
 
 impl Drop for FifoSignalGuard {
     fn drop(&mut self) {
-        signal_fifo(&self.fifo_path);
+        signal_fifo_with_byte(&self.fifo_path, self.signal);
     }
 }
 
@@ -550,8 +572,8 @@ impl Drop for FifoSignalGuard {
 ///
 /// Uses `O_WRONLY | O_NONBLOCK` so the open returns ENXIO immediately
 /// if no reader has the FIFO open, instead of blocking forever.
-pub(crate) fn signal_fifo(fifo_path: &Path) {
-    let _ = try_signal_fifo(fifo_path);
+pub(crate) fn signal_fifo_with_byte(fifo_path: &Path, byte: u8) {
+    let _ = try_signal_fifo_with_byte(fifo_path, byte);
 }
 
 pub(crate) fn try_signal_fifo(fifo_path: &Path) -> std::io::Result<()> {
@@ -666,7 +688,7 @@ mod tests {
         let writer_path = fifo_reader.fifo_path.clone();
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(50));
-            signal_fifo(&writer_path);
+            signal_fifo_with_byte(&writer_path, b'0');
         });
 
         wait_for_fifo_signal_with_timeout(
@@ -681,7 +703,7 @@ mod tests {
     fn wait_for_fifo_signal_or_session_exit_prefers_a_completion_signal(
         fifo_reader: FifoReaderFixture,
     ) {
-        signal_fifo(&fifo_reader.fifo_path);
+        signal_fifo_with_byte(&fifo_reader.fifo_path, b'0');
 
         let result =
             wait_for_fifo_signal_or_session_exit(fifo_reader.reader, "review-session", |_| {
@@ -689,7 +711,7 @@ mod tests {
             })
             .map_err(|error| error.to_string());
 
-        assert_eq!(result, Ok(()));
+        assert_eq!(result, Ok(b'0'));
     }
 
     #[rstest]
@@ -699,12 +721,12 @@ mod tests {
         let writer_path = fifo_reader.fifo_path.clone();
         let result =
             wait_for_fifo_signal_or_session_exit(fifo_reader.reader, "review-session", move |_| {
-                signal_fifo(&writer_path);
+                signal_fifo_with_byte(&writer_path, b'0');
                 Ok(false)
             })
             .map_err(|error| error.to_string());
 
-        assert_eq!(result, Ok(()));
+        assert_eq!(result, Ok(b'0'));
     }
 
     #[rstest]
@@ -714,7 +736,7 @@ mod tests {
         let writer_path = fifo_reader.fifo_path.clone();
         let writer = std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(50));
-            signal_fifo(&writer_path);
+            signal_fifo_with_byte(&writer_path, b'0');
         });
 
         let result =
@@ -724,7 +746,7 @@ mod tests {
             .map_err(|error| error.to_string());
         writer.join().expect("writer thread");
 
-        assert_eq!(result, Ok(()));
+        assert_eq!(result, Ok(b'0'));
     }
 
     #[rstest]
@@ -746,13 +768,13 @@ mod tests {
                     ));
                 }
 
-                signal_fifo(&writer_path);
+                signal_fifo_with_byte(&writer_path, b'0');
                 Ok(true)
             },
         )
         .map_err(|error| error.to_string());
 
-        assert_eq!((result, checks.get()), (Ok(()), 2));
+        assert_eq!((result, checks.get()), (Ok(b'0'), 2));
     }
 
     #[rstest]
@@ -773,7 +795,7 @@ mod tests {
                         "tmux is unavailable".into(),
                     )),
                     5 => {
-                        signal_fifo(&writer_path);
+                        signal_fifo_with_byte(&writer_path, b'0');
                         Ok(true)
                     }
                     _ => Ok(true),
@@ -782,7 +804,7 @@ mod tests {
         )
         .map_err(|error| error.to_string());
 
-        assert_eq!((result, checks.get()), (Ok(()), 5));
+        assert_eq!((result, checks.get()), (Ok(b'0'), 5));
     }
 
     #[rstest]
@@ -861,7 +883,7 @@ mod tests {
             &document_path,
             |path, done_fifo_path, _lock_id| {
                 lock_was_held_during_launch = LockGuard::is_locked(path);
-                signal_fifo(done_fifo_path);
+                signal_fifo_with_byte(done_fifo_path, b'0');
                 Ok(None)
             },
             |_| Ok(true),
@@ -898,7 +920,7 @@ mod tests {
             &document_path,
             |path, done_fifo_path, _lock_id| {
                 lock_was_held_during_launch = LockGuard::is_locked(path);
-                signal_fifo(done_fifo_path);
+                signal_fifo_with_byte(done_fifo_path, b'0');
                 Ok(None)
             },
             |_| Ok(true),
@@ -945,7 +967,7 @@ mod tests {
                 lock_was_held_during_launch = LockGuard::is_locked(path);
                 drop(CleanupGuard::new(path, lock_id, None).expect("register child lock"));
                 newer_review_lock = Some(LockGuard::acquire(path).expect("new review lock"));
-                signal_fifo(done_fifo_path);
+                signal_fifo_with_byte(done_fifo_path, b'0');
                 Ok(None)
             },
             |_| Ok(true),

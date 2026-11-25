@@ -8,7 +8,7 @@ mod field_comparison;
 mod integration_tests;
 mod links;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 
@@ -20,7 +20,10 @@ use crate::commands::gh::issue_agent::body_compare::comment_bodies_equal;
 use crate::commands::gh::issue_agent::models::{Comment, IssueFrontmatter, IssueMetadata};
 use crate::commands::gh::issue_agent::storage::{CommentSnapshot, LocalComment};
 use crate::infra::github::GitHubClient;
-use crate::shared::human_in_the_loop::ApprovalManager;
+use crate::shared::human_in_the_loop::{
+    ApprovalManager, ReviewDocumentAction, successful_action_result,
+    successful_action_results_in_directory,
+};
 
 use changeset::{ChangeSet, CommentChange, DetectOptions, IssueAddress, LocalState, RemoteState};
 use detect::{ConflictCheckInput, check_conflicts};
@@ -296,6 +299,15 @@ async fn run_with_context(
     // Display and apply changes
     let has_changes = changeset.has_changes();
     changeset.display()?;
+
+    let reported_watch_web_action = !args.dry_run
+        && report_completed_watch_web_actions(
+            &ctx.storage.dir().join("issue.md"),
+            &ctx.storage.dir().join("comments"),
+        )?;
+    if reported_watch_web_action && !has_changes {
+        return Ok(());
+    }
 
     // Verify approval before applying (skip for dry-run)
     if !args.dry_run && has_changes {
@@ -647,11 +659,72 @@ fn print_result(dry_run: bool, has_changes: bool) {
     }
 }
 
+fn report_completed_watch_web_actions(
+    issue_path: &Path,
+    comments_dir: &Path,
+) -> anyhow::Result<bool> {
+    let mut completed_results = Vec::new();
+    if let Some(result) = successful_action_result(issue_path, ReviewDocumentAction::UpdateIssue)? {
+        completed_results.push(result);
+    }
+    completed_results.extend(successful_action_results_in_directory(
+        comments_dir,
+        ReviewDocumentAction::PostComment,
+    )?);
+    if completed_results.is_empty() {
+        return Ok(false);
+    }
+    for result in completed_results {
+        result.print_for_agent();
+    }
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::human_in_the_loop::{
+        ReviewDocumentActionResult, document_hash, save_action_result, successful_action_result,
+    };
     use rstest::rstest;
     use tempfile::TempDir;
+
+    #[rstest]
+    #[case::issue_comment(ReviewDocumentAction::PostComment, "comments/new_example.md")]
+    #[case::issue_body(ReviewDocumentAction::UpdateIssue, "issue.md")]
+    fn issue_push_reports_watch_web_actions_without_pushing_twice(
+        #[case] action: ReviewDocumentAction,
+        #[case] relative_path: &str,
+    ) {
+        let directory = TempDir::new().expect("fixture directory should be created");
+        let issue_path = directory.path().join("issue.md");
+        let comments_dir = directory.path().join("comments");
+        let document_path = directory.path().join(relative_path);
+        std::fs::create_dir_all(document_path.parent().expect("document has a parent"))
+            .expect("document directory should be created");
+        std::fs::write(&document_path, "Approved fixture document.")
+            .expect("review document should be written");
+        let result = ReviewDocumentActionResult::new(
+            action,
+            true,
+            "Operation result.".to_owned(),
+            document_hash(&document_path).expect("document hash should be computed"),
+            None,
+        );
+        save_action_result(&document_path, &result).expect("action result should be saved");
+
+        let observed = report_completed_watch_web_actions(&issue_path, &comments_dir)
+            .expect("completed action result should be reported");
+
+        assert_eq!(
+            (
+                observed,
+                successful_action_result(&document_path, action)
+                    .expect("successful action result should remain available"),
+            ),
+            (true, Some(result)),
+        );
+    }
 
     mod advance_comment_snapshot_tests {
         use super::*;

@@ -1661,7 +1661,7 @@ mod tests {
                         release.notified().await;
                         Err(anyhow::anyhow!("Temporary submission failure"))
                     } else {
-                        Ok(())
+                        Ok("Pull request replies posted.".to_owned())
                     }
                 })
             }),
@@ -1703,7 +1703,7 @@ mod tests {
             std::fs::remove_file(&finish_fifo)
                 .expect("review process should close the finish request FIFO");
             drop(operation_lock);
-            crate::shared::human_in_the_loop::signal_fifo(&finish_ack_fifo);
+            crate::shared::human_in_the_loop::signal_fifo_with_byte(&finish_ack_fifo, b'0');
         }
         drop(review_lock);
         tokio::time::timeout(Duration::from_secs(2), action_started.notified())
@@ -1737,6 +1737,11 @@ mod tests {
             .expect("first response body should be read");
         let first_json = serde_json::from_slice::<serde_json::Value>(&first_body)
             .expect("first response should be JSON");
+        let failed_document_hash = crate::shared::human_in_the_loop::document_hash(&document_path)
+            .expect("failed document hash should be computed");
+        let failed_action_result =
+            crate::shared::human_in_the_loop::wait_for_action_result(&document_path)
+                .expect("failed action result should be saved");
         let retry_response = app
             .clone()
             .oneshot(
@@ -1774,6 +1779,7 @@ mod tests {
                 signal_bytes,
                 first_status,
                 first_json,
+                failed_action_result,
                 returned_while_running,
                 second_status,
                 retry_status,
@@ -1790,6 +1796,13 @@ mod tests {
                     "revision": current_revision(&document_path),
                     "error": "Temporary submission failure",
                 }),
+                crate::shared::human_in_the_loop::ReviewDocumentActionResult::new(
+                    crate::shared::human_in_the_loop::ReviewDocumentAction::PostComment,
+                    false,
+                    "Temporary submission failure".to_owned(),
+                    failed_document_hash.clone(),
+                    Some(failed_document_hash),
+                ),
                 true,
                 StatusCode::CONFLICT,
                 StatusCode::OK,
@@ -1803,6 +1816,175 @@ mod tests {
                     "revision": current_revision(&document_path),
                 }),
                 2,
+            ),
+        );
+    }
+
+    #[cfg(unix)]
+    #[rstest]
+    #[case::pr_draft(
+        "pr_draft",
+        "create_pr",
+        "owner/repository/topic.md",
+        serde_json::json!({
+            "title": "Example title",
+            "steps": { "submit": false, "ready-for-translation": false }
+        }),
+        "https://example.invalid/pull/42"
+    )]
+    #[case::issue_comment(
+        "issue_comment",
+        "post_comment",
+        "owner/repository/7319/comments/new_example.md",
+        serde_json::json!({ "submit": false }),
+        "Issue comment posted."
+    )]
+    #[case::pr_replies(
+        "pr_replies",
+        "post_replies",
+        "owner/repository/42/threads.md",
+        serde_json::json!({
+            "pr": 42,
+            "repo": "owner/repository",
+            "pulled_at": "2026-01-01T00:00:00Z",
+            "submit": false
+        }),
+        "Pull request replies posted."
+    )]
+    #[case::issue_body(
+        "issue_body",
+        "update_issue",
+        "owner/repository/7319/issue.md",
+        serde_json::json!({
+            "title": "Example issue",
+            "readonly": { "number": 7319 },
+            "submit": false
+        }),
+        "Issue body updated."
+    )]
+    #[tokio::test]
+    async fn web_action_result_is_saved_for_each_review_document(
+        #[case] kind: &str,
+        #[case] action: &str,
+        #[case] relative_path: &str,
+        #[case] frontmatter: serde_json::Value,
+        #[case] result_message: &str,
+    ) {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        use crate::shared::human_in_the_loop::{
+            ReviewDocumentAction, ReviewDocumentActionResult, document_hash, wait_for_action_result,
+        };
+
+        crate::shared::testing::init_approval_dir();
+        let temp_dir = TempDir::new().expect("fixture directory should be created");
+        let roots = ReviewDocumentRoots {
+            pr_draft: temp_dir.path().join("pr-body-draft"),
+            issue_agent: temp_dir.path().join("gh-issue-agent"),
+            pr_review: temp_dir.path().join("gh-pr-review"),
+        };
+        let root = match kind {
+            "pr_draft" => &roots.pr_draft,
+            "issue_comment" | "issue_body" => &roots.issue_agent,
+            "pr_replies" => &roots.pr_review,
+            _ => unreachable!(),
+        };
+        let document_path = root.join(relative_path);
+        std::fs::create_dir_all(document_path.parent().expect("document has a parent"))
+            .expect("document directory should be created");
+        std::fs::write(&document_path, "Fixture review document.")
+            .expect("review document should be written");
+        create_fixture_fifo(&finish_request_fifo_path(&document_path));
+        create_fixture_fifo(&finish_ack_fifo_path(&document_path));
+        let review_lock = LockGuard::acquire(&document_path)
+            .expect("review lock should be acquired for the fixture document");
+        let mut session = session_with_review(&document_path);
+        session.cwd = temp_dir.path().to_path_buf();
+        let executor_result_message = result_message.to_owned();
+        let app = router_with_injected_action_executor(
+            move |_| Ok(Some(session.clone())),
+            |_| ReviewDocumentQueue::Unmanaged,
+            roots,
+            Arc::new(move |_| {
+                let result_message = executor_result_message.clone();
+                Box::pin(async move { Ok(result_message) })
+            }),
+        );
+        let finish_fifo = finish_request_fifo_path(&document_path);
+        let finish_ack_fifo = finish_ack_fifo_path(&document_path);
+        let mut finish_reader = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(&finish_fifo)
+            .expect("finish request reader should be opened");
+        let request_body = serde_json::json!({
+            "id": "fixture-review",
+            "revision": current_revision(&document_path),
+            "frontmatter": frontmatter,
+            "body": "Approved fixture document.",
+            "action": action,
+        });
+        let request = Request::post("/sessions/fixture-session/review-document/action")
+            .header("content-type", "application/json")
+            .body(Body::from(request_body.to_string()))
+            .expect("action request should be valid");
+        let app = app.clone();
+        let action_task = tokio::spawn(async move { app.oneshot(request).await });
+        let started_at = std::time::Instant::now();
+        let mut signal = [0_u8; 1];
+        let signal_bytes = loop {
+            let bytes = read_fifo_signal_or_pending(&mut finish_reader, &mut signal)
+                .expect("finish FIFO read should succeed");
+            if bytes > 0 || started_at.elapsed() >= Duration::from_secs(2) {
+                break bytes;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
+        if signal_bytes > 0 {
+            let operation_lock = ReviewDocumentOperationLock::acquire(&document_path)
+                .expect("review process should acquire the operation lock");
+            std::fs::remove_file(&finish_fifo).expect("finish FIFO should be removed");
+            drop(operation_lock);
+            crate::shared::human_in_the_loop::signal_fifo_with_byte(&finish_ack_fifo, b'0');
+        }
+        drop(review_lock);
+        let response = action_task
+            .await
+            .expect("action task should not panic")
+            .expect("action request should complete");
+        let response_status = response.status();
+        let response_body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("action response body should be read");
+        let response_json = serde_json::from_slice::<serde_json::Value>(&response_body)
+            .expect("action response should be JSON");
+        let saved_hash = document_hash(&document_path).expect("saved document hash should exist");
+        let saved_result =
+            Some(wait_for_action_result(&document_path).expect("saved result should be readable"));
+        let action = match action {
+            "create_pr" => ReviewDocumentAction::CreatePr,
+            "post_comment" => ReviewDocumentAction::PostComment,
+            "post_replies" => ReviewDocumentAction::PostReplies,
+            "update_issue" => ReviewDocumentAction::UpdateIssue,
+            _ => unreachable!(),
+        };
+
+        assert_eq!(
+            (signal_bytes, response_status, response_json, saved_result),
+            (
+                1,
+                StatusCode::OK,
+                serde_json::json!({
+                    "success": true,
+                    "revision": current_revision(&document_path),
+                }),
+                Some(ReviewDocumentActionResult::new(
+                    action,
+                    true,
+                    result_message.to_owned(),
+                    saved_hash.clone(),
+                    Some(saved_hash),
+                )),
             ),
         );
     }
@@ -1876,7 +2058,7 @@ mod tests {
             std::fs::remove_file(&finish_fifo_path)
                 .expect("review process should close the finish FIFO");
             drop(review_operation_lock);
-            crate::shared::human_in_the_loop::signal_fifo(&finish_ack_path);
+            crate::shared::human_in_the_loop::signal_fifo_with_byte(&finish_ack_path, b'0');
         }
         let response = finish_task
             .await

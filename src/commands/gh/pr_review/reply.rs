@@ -14,7 +14,7 @@ use crate::commands::agent::{ensure_no_review_access, is_vibe_enabled};
 use crate::infra::git;
 use crate::infra::github::GitHubClient;
 use crate::shared::config::load_config;
-use crate::shared::human_in_the_loop::Document;
+use crate::shared::human_in_the_loop::{Document, ReviewDocumentAction, successful_action_result};
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct ReplyPullArgs {
@@ -302,10 +302,26 @@ async fn run_push_after_access(
     retry_started_at: Option<chrono::DateTime<chrono::Utc>>,
 ) -> anyhow::Result<()> {
     let storage = ThreadStorage::new(owner, repo, args.pr_number);
+    run_push_after_access_with_storage(args, owner, repo, retry_started_at, storage).await
+}
 
+async fn run_push_after_access_with_storage(
+    args: &ReplyPushArgs,
+    owner: &str,
+    repo: &str,
+    retry_started_at: Option<chrono::DateTime<chrono::Utc>>,
+    storage: ThreadStorage,
+) -> anyhow::Result<()> {
     // Read and parse local data
     if !storage.exists() {
         return Err(PrReviewError::NoPulledData.into());
+    }
+
+    if let Some(result) =
+        successful_action_result(&storage.threads_path(), ReviewDocumentAction::PostReplies)?
+    {
+        result.print_for_agent();
+        return Ok(());
     }
 
     let content = storage.read_threads()?;
@@ -563,11 +579,56 @@ mod tests {
     use crate::commands::gh::pr_review::changeset::ReplyAction;
     use crate::commands::gh::pr_review::{PrReviewCommands, ReplyCommands};
     use crate::shared::config::Config;
-    use crate::shared::human_in_the_loop::HumanInTheLoopError;
+    use crate::shared::human_in_the_loop::{
+        HumanInTheLoopError, ReviewDocumentAction, ReviewDocumentActionResult, document_hash,
+        save_action_result, successful_action_result,
+    };
     use clap::Parser;
     use indoc::indoc;
     use rstest::rstest;
     use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn push_reports_a_watch_web_reply_without_pushing_twice() {
+        let directory = TempDir::new().expect("fixture directory should be created");
+        let storage = ThreadStorage::with_dir(directory.path().join("owner/repository/42"));
+        storage
+            .write_threads("Approved fixture replies.")
+            .expect("fixture threads should be written");
+        let document_path = storage.threads_path();
+        let result = ReviewDocumentActionResult::new(
+            ReviewDocumentAction::PostReplies,
+            true,
+            "Pull request replies posted.".to_owned(),
+            document_hash(&document_path).expect("document hash should be computed"),
+            None,
+        );
+        save_action_result(&document_path, &result).expect("action result should be saved");
+
+        let pushed = run_push_after_access_with_storage(
+            &ReplyPushArgs {
+                pr_number: 42,
+                repo: None,
+                dry_run: false,
+                force: false,
+                no_review: false,
+            },
+            "owner",
+            "repository",
+            None,
+            storage,
+        )
+        .await;
+
+        assert_eq!(
+            (
+                pushed.map_err(|error| error.to_string()),
+                successful_action_result(&document_path, ReviewDocumentAction::PostReplies)
+                    .expect("successful action result should remain available"),
+            ),
+            (Ok(()), Some(result)),
+        );
+    }
 
     #[rstest]
     #[case::no_changes(false, false, PushPlan::NoChanges)]
