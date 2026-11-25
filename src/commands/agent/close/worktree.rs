@@ -515,7 +515,7 @@ mod tests {
         false,
         false,
         Some(
-            "Agent session `session-1` has pending background or agent tasks; wait for them to finish, then retry this command"
+            "Agent session `session-1` has pending background or agent tasks:\n  Background task ID: `task-1`\nFinish the pending work, then retry this command."
         )
     )]
     #[case::pending_agent_task(
@@ -524,7 +524,7 @@ mod tests {
         true,
         false,
         Some(
-            "Agent session `session-1` has pending background or agent tasks; wait for them to finish, then retry this command"
+            "Agent session `session-1` has pending background or agent tasks:\n  Agent task ID: `agent-task-1`\nFinish the pending work, then retry this command."
         )
     )]
     #[case::recent_activity(

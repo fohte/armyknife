@@ -8,6 +8,7 @@ use super::{bg_storage, store};
 use crate::infra::process;
 use crate::shared::cache;
 use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 /// Covers the interval between task registration and the worker recording its PID.
@@ -22,6 +23,10 @@ struct TaskRecord {
     stdout_path: Option<PathBuf>,
     #[serde(default)]
     description: Option<String>,
+    #[serde(default)]
+    command: Option<Vec<String>>,
+    #[serde(default)]
+    started_at: Option<DateTime<Utc>>,
 }
 
 pub(crate) fn tasks_dir() -> Result<PathBuf> {
@@ -46,10 +51,18 @@ pub(crate) fn register(
     session_id: &str,
     task_id: &str,
     description: &str,
+    command: &[String],
     stdout_path: &Path,
 ) -> Result<()> {
     let tasks_root = tasks_dir()?;
-    register_in(&tasks_root, session_id, task_id, description, stdout_path)?;
+    register_in(
+        &tasks_root,
+        session_id,
+        task_id,
+        description,
+        command,
+        stdout_path,
+    )?;
     if let Err(error) = store::touch_session(session_id) {
         let _ = clear_in(&tasks_root, session_id, task_id);
         return Err(error).context("failed to refresh session after registering background task");
@@ -62,6 +75,7 @@ fn register_in(
     session_id: &str,
     task_id: &str,
     description: &str,
+    command: &[String],
     stdout_path: &Path,
 ) -> Result<()> {
     let marker = marker_path(tasks_root, session_id, task_id)?;
@@ -90,6 +104,8 @@ fn register_in(
                 command_pid: None,
                 stdout_path: Some(stdout_path.to_path_buf()),
                 description: Some(description.to_owned()),
+                command: Some(command.to_vec()),
+                started_at: Some(Utc::now()),
             },
         )?;
         file.write_all(b"\n")?;
@@ -160,6 +176,8 @@ pub(crate) struct PendingScan {
 pub(crate) struct PendingTask {
     pub id: String,
     pub description: String,
+    pub command: Option<Vec<String>>,
+    pub started_at: DateTime<Utc>,
     pub elapsed_seconds: u64,
     pub stdout_path: PathBuf,
 }
@@ -209,28 +227,40 @@ fn pending_tasks_in(tasks_root: &Path, session_id: &str) -> Result<(Vec<PendingT
                         continue;
                     };
                     bg_storage::task_id(task_id)?;
-                    let elapsed_seconds = fs::metadata(&path)
+                    let modified = fs::metadata(&path)
                         .ok()
-                        .and_then(|metadata| metadata.modified().ok())
+                        .and_then(|metadata| metadata.modified().ok());
+                    let elapsed_seconds = modified
                         .and_then(|modified| SystemTime::now().duration_since(modified).ok())
                         .unwrap_or_default()
                         .as_secs();
+                    let started_at = record
+                        .as_ref()
+                        .and_then(|record| record.started_at)
+                        .or_else(|| modified.map(DateTime::<Utc>::from))
+                        .unwrap_or_else(Utc::now);
+                    let description = record
+                        .as_ref()
+                        .and_then(|record| record.description.clone())
+                        .unwrap_or_else(|| "Background command".to_owned());
+                    let command = record.as_ref().and_then(|record| record.command.clone());
+                    let stdout_path = record
+                        .and_then(|record| record.stdout_path)
+                        .unwrap_or_else(|| super::bg::stdout_path(task_id));
                     tasks.push(PendingTask {
                         id: task_id.to_owned(),
-                        description: record
-                            .as_ref()
-                            .and_then(|record| record.description.clone())
-                            .unwrap_or_else(|| "Background command".to_owned()),
+                        description,
+                        command,
+                        started_at,
                         elapsed_seconds,
-                        stdout_path: record
-                            .and_then(|record| record.stdout_path)
-                            .unwrap_or_else(|| super::bg::stdout_path(task_id)),
+                        stdout_path,
                     });
                 }
                 MarkerState::ClearedStale => stale_cleared = true,
                 MarkerState::NotPending => {}
             }
         }
+        tasks.sort_by(|left, right| left.id.cmp(&right.id));
         Ok((tasks, stale_cleared))
     })
 }
@@ -360,6 +390,7 @@ fn with_registry_lock<T>(tasks_root: &Path, operation: impl FnOnce() -> Result<T
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
+    use std::time::SystemTime;
 
     use serde_json::json;
     use tempfile::TempDir;
@@ -378,6 +409,7 @@ mod tests {
             session_id,
             &task_id,
             "Run synthetic task",
+            &["synthetic-command".to_owned(), "--flag".to_owned()],
             &stdout_path,
         )
         .expect("background task should be registered");
@@ -386,6 +418,7 @@ mod tests {
             pending_tasks_in(tasks_root.path(), session_id).expect("pending tasks should be read");
         for task in &mut tasks {
             task.elapsed_seconds = 0;
+            task.started_at = chrono::DateTime::<chrono::Utc>::from(SystemTime::UNIX_EPOCH);
         }
 
         assert_eq!(
@@ -394,6 +427,8 @@ mod tests {
                 vec![PendingTask {
                     id: task_id.clone(),
                     description: "Run synthetic task".to_owned(),
+                    command: Some(vec!["synthetic-command".to_owned(), "--flag".to_owned(),]),
+                    started_at: chrono::DateTime::<chrono::Utc>::from(SystemTime::UNIX_EPOCH),
                     elapsed_seconds: 0,
                     stdout_path,
                 }],
@@ -410,8 +445,9 @@ mod tests {
         let session_directory = tasks_root.path().join(hex::encode(session_id.as_bytes()));
         std::fs::create_dir_all(&session_directory)
             .expect("task registry session directory should be created");
+        let marker_path = session_directory.join(format!("{task_id}.pending"));
         std::fs::write(
-            session_directory.join(format!("{task_id}.pending")),
+            &marker_path,
             serde_json::to_vec(&json!({
                 "parent_pid": std::process::id(),
                 "worker_pid": null,
@@ -420,6 +456,12 @@ mod tests {
             .expect("legacy task marker should serialize"),
         )
         .expect("legacy task marker should be written");
+        let expected_started_at = chrono::DateTime::<chrono::Utc>::from(
+            std::fs::metadata(&marker_path)
+                .expect("legacy task marker metadata should be readable")
+                .modified()
+                .expect("legacy task marker modification time should be readable"),
+        );
 
         let (mut tasks, stale_cleared) =
             pending_tasks_in(tasks_root.path(), session_id).expect("pending tasks should be read");
@@ -433,6 +475,8 @@ mod tests {
                 vec![PendingTask {
                     id: task_id.clone(),
                     description: "Background command".to_owned(),
+                    command: None,
+                    started_at: expected_started_at,
                     elapsed_seconds: 0,
                     stdout_path: super::super::bg::stdout_path(&task_id),
                 }],

@@ -4,7 +4,8 @@ use std::time::Duration;
 use anyhow::{Result, bail};
 use chrono::Utc;
 
-use super::super::types::{Session, SessionStatus, TmuxInfo};
+use super::super::bg_tasks::{self, PendingTask};
+use super::super::types::{BG_RUN_PENDING_TASK_MARKER, Session, SessionStatus, TmuxInfo};
 use super::{CloseRuntime, DraftInspection};
 
 pub(super) fn ensure_session_is_idle(
@@ -17,10 +18,18 @@ pub(super) fn ensure_session_is_idle(
                 "Agent session `{}` is running or waiting for input; complete any requested input and wait for the current turn to finish, then retry this command",
                 session.session_id
             ),
-            _ => bail!(
-                "Agent session `{}` has pending background or agent tasks; wait for them to finish, then retry this command",
-                session.session_id
-            ),
+            _ => {
+                let pending_tasks =
+                    bg_tasks::pending_tasks(&session.session_id).unwrap_or_else(|error| {
+                        tracing::warn!(
+                            event = "agent.close.pending_task_details_failed",
+                            session = %session.session_id,
+                            error = %error,
+                        );
+                        Vec::new()
+                    });
+                bail!("{}", pending_work_error(session, &pending_tasks));
+            }
         }
     }
     if session.has_pending_permission_requests() {
@@ -30,6 +39,57 @@ pub(super) fn ensure_session_is_idle(
         );
     }
     Ok(())
+}
+
+fn pending_work_error(session: &Session, pending_tasks: &[PendingTask]) -> String {
+    let mut details = vec![format!(
+        "Agent session `{}` has pending background or agent tasks:",
+        session.session_id
+    )];
+    let mut reported_background_ids = std::collections::BTreeSet::new();
+
+    for task in pending_tasks {
+        let command = task
+            .command
+            .as_ref()
+            .and_then(|arguments| shlex::try_join(arguments.iter().map(String::as_str)).ok())
+            .unwrap_or_else(|| task.description.clone());
+        details.push(format!(
+            "  Background task `{}`: {command} (started at {})",
+            task.id,
+            task.started_at.format("%Y-%m-%d %H:%M:%S UTC")
+        ));
+        reported_background_ids.insert(task.id.as_str());
+    }
+
+    for task_id in &session.pending_bg_task_ids {
+        if task_id != BG_RUN_PENDING_TASK_MARKER
+            && !reported_background_ids.contains(task_id.as_str())
+        {
+            details.push(format!("  Background task ID: `{task_id}`"));
+        }
+    }
+    if pending_tasks.is_empty()
+        && session
+            .pending_bg_task_ids
+            .contains(BG_RUN_PENDING_TASK_MARKER)
+    {
+        details.push("  Background task details are unavailable.".to_owned());
+    }
+    for task_id in &session.pending_agent_task_ids {
+        details.push(format!("  Agent task ID: `{task_id}`"));
+    }
+    for review_id in &session.pending_human_review_ids {
+        if let Some(marker) = crate::shared::human_in_the_loop::review_document_marker(review_id) {
+            details.push(format!(
+                "  Review document: {}\n    Finish it in the editor, or run `a agent watch-web` and finish it there.",
+                marker.path.display()
+            ));
+        }
+    }
+
+    details.push("Finish the pending work, then retry this command.".to_owned());
+    details.join("\n")
 }
 
 pub(super) fn check_draft_state<R: CloseRuntime>(
@@ -89,4 +149,81 @@ pub(super) fn write_draft_unavailable_warning(
         writer,
         "Warning: could not inspect the unsent draft for session `{session_id}`; using its last update time for the close safety check"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{DateTime, Utc};
+    use serde_json::json;
+
+    use super::pending_work_error;
+    use crate::commands::agent::bg_tasks::PendingTask;
+    use crate::commands::agent::types::Session;
+
+    fn session() -> Session {
+        let review_id = ["review-id", "v2", "12345", "/fixture/review.md", ""].join("\0");
+        serde_json::from_value(json!({
+            "session_id": "fixture-session",
+            "cwd": "/fixture/project",
+            "engine": "claude",
+            "status": "stopped",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "pending_bg_task_ids": ["bg-task", "hook-task"],
+            "pending_agent_task_ids": ["subagent-task"],
+            "pending_human_review_ids": [review_id],
+        }))
+        .expect("fixture session should deserialize")
+    }
+
+    fn started_at() -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339("2026-01-02T03:04:05Z")
+            .expect("fixture timestamp should parse")
+            .with_timezone(&Utc)
+    }
+
+    #[test]
+    fn pending_work_error_lists_background_command_ids_and_review_document() {
+        let task = PendingTask {
+            id: "bg-task".to_owned(),
+            description: "a".to_owned(),
+            command: Some(vec![
+                "a".to_owned(),
+                "gh".to_owned(),
+                "pr-review".to_owned(),
+                "reply".to_owned(),
+                "review".to_owned(),
+                "fixture-review".to_owned(),
+            ]),
+            started_at: started_at(),
+            elapsed_seconds: 0,
+            stdout_path: "/fixture/output".into(),
+        };
+
+        assert_eq!(
+            pending_work_error(&session(), &[task]),
+            "Agent session `fixture-session` has pending background or agent tasks:\n  Background task `bg-task`: a gh pr-review reply review fixture-review (started at 2026-01-02 03:04:05 UTC)\n  Background task ID: `hook-task`\n  Agent task ID: `subagent-task`\n  Review document: /fixture/review.md\n    Finish it in the editor, or run `a agent watch-web` and finish it there.\nFinish the pending work, then retry this command.",
+        );
+    }
+
+    #[test]
+    fn pending_work_error_uses_legacy_description_when_command_is_missing() {
+        let mut session = session();
+        session.pending_bg_task_ids.clear();
+        session.pending_agent_task_ids.clear();
+        session.pending_human_review_ids.clear();
+        let task = PendingTask {
+            id: "legacy-task".to_owned(),
+            description: "a".to_owned(),
+            command: None,
+            started_at: started_at(),
+            elapsed_seconds: 0,
+            stdout_path: "/fixture/output".into(),
+        };
+
+        assert_eq!(
+            pending_work_error(&session, &[task]),
+            "Agent session `fixture-session` has pending background or agent tasks:\n  Background task `legacy-task`: a (started at 2026-01-02 03:04:05 UTC)\nFinish the pending work, then retry this command.",
+        );
+    }
 }

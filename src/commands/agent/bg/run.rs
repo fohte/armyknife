@@ -47,7 +47,12 @@ pub fn run(args: &RunArgs) -> Result<()> {
         .and_then(|command| std::path::Path::new(command).file_name())
         .map(|command| command.to_string_lossy().into_owned())
         .unwrap_or_else(|| "Background command".to_owned());
-    bg_tasks::register(&session_id, &task_id, &description, &stdout_path)?;
+    let command = args
+        .command
+        .iter()
+        .map(|argument| argument.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    bg_tasks::register(&session_id, &task_id, &description, &command, &stdout_path)?;
     guard.mark_task_registered();
     window_status::sync_window_status_for_session(&session_id);
     let worker_args = worker_args(
