@@ -1741,6 +1741,97 @@ it('keeps the mobile preview usable when metadata fills the viewport', async () 
   })
 })
 
+it.each([
+  {
+    view: 'preview' as const,
+    contentOverflowY: 'auto',
+    contentCanScroll: true,
+    metadataOverflowY: 'visible',
+    metadataCanScroll: false,
+  },
+  {
+    view: 'edit' as const,
+    contentOverflowY: 'hidden',
+    contentCanScroll: false,
+    metadataOverflowY: 'auto',
+    metadataCanScroll: true,
+  },
+])(
+  'keeps long issue metadata reachable in mobile $view mode',
+  async ({
+    view,
+    contentOverflowY,
+    contentCanScroll,
+    metadataOverflowY,
+    metadataCanScroll,
+  }) => {
+    await page.viewport(390, 844)
+    container.style.width = '390px'
+    container.style.height = '844px'
+    container.style.display = 'flex'
+    root = createRoot(container)
+    act(() =>
+      root?.render(
+        <div
+          className="session-status-panel"
+          data-size="phone"
+          style={{ width: '390px', height: '844px', display: 'flex' }}
+        >
+          <ReviewDocumentPanel
+            summary={{
+              id: 'fixture-issue-body',
+              kind: 'issue_body',
+              target: {
+                repository: 'example/web-app',
+                issueNumber: 418,
+                title: 'Configure retry limits',
+              },
+              startedAt: Date.now(),
+              isEditor: true,
+              canSave: true,
+              canFinish: true,
+            }}
+            frontmatter={{
+              title: 'Configure retry limits',
+              labels: Array.from(
+                { length: 40 },
+                (_, index) => `sample-label-${String(index + 1)}`,
+              ),
+              submit: false,
+            }}
+            body="## Summary\n\nThe retry limit can be configured."
+            isMobile
+            view={view}
+          />
+        </div>,
+      ),
+    )
+
+    const content = container.querySelector<HTMLElement>(
+      '.review-document-content',
+    )
+    const metadata = container.querySelector<HTMLElement>(
+      '.review-document-issue-frontmatter',
+    )
+    if (content === null || metadata === null) {
+      throw new Error('The mobile issue metadata layout was not rendered.')
+    }
+
+    const snapshot = () => ({
+      contentOverflowY: getComputedStyle(content).overflowY,
+      contentCanScroll: content.scrollHeight > content.clientHeight,
+      metadataOverflowY: getComputedStyle(metadata).overflowY,
+      metadataCanScroll: metadata.scrollHeight > metadata.clientHeight,
+    })
+    expect(snapshot()).toEqual({
+      contentOverflowY,
+      contentCanScroll,
+      metadataOverflowY,
+      metadataCanScroll,
+    })
+  },
+)
+
 it('keeps the approval checkbox available for a new issue draft', async () => {
   const finishSnapshots: JsonValue[] = []
   function NewIssueDraftHarness() {

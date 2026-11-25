@@ -478,24 +478,9 @@ export const MobileCommentCanBePostedImmediately: Story = {
 }
 
 export const RepliesCanBePostedImmediately: Story = {
-  name: 'Review replies can be posted or sent back',
-  args: reviewRepliesActionStoryArgs,
-  decorators: [designComparisonViewport],
-}
-
-export const ReviewReplyPreviewFillsDesktopPanel: Story = {
   name: 'A PR review reply preview fills the desktop panel.',
   args: reviewRepliesActionStoryArgs,
   decorators: [desktopViewport],
-}
-
-export const MobileReviewReplyPreviewFillsPanel: Story = {
-  name: 'The iPhone PR review reply preview fills the panel.',
-  args: {
-    ...reviewRepliesActionStoryArgs,
-    isMobile: true,
-  },
-  decorators: [phoneViewport],
 }
 
 export const ReviewReplyEditFillsDesktopPanel: Story = {
@@ -518,7 +503,7 @@ export const MobileReviewReplyEditFillsPanel: Story = {
 }
 
 export const MobileRepliesCanBePostedImmediately: Story = {
-  name: 'The iPhone review replies can be posted or sent back.',
+  name: 'The iPhone PR review reply preview fills the panel.',
   args: {
     ...reviewRepliesActionStoryArgs,
     isMobile: true,
