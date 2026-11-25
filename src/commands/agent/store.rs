@@ -552,6 +552,22 @@ pub(crate) fn resolve_permission_denied_from(
     database::resolve_permission_denied(sessions_dir, session_id, seq, resolution)
 }
 
+pub(crate) fn resolve_matching_unclassified_permission_denials_from(
+    sessions_dir: &Path,
+    session_id: &str,
+    tool_name: &str,
+    tool_input: &serde_json::Value,
+    resolution: PermissionDeniedResolution,
+) -> Result<usize> {
+    database::resolve_matching_unclassified_permission_denials(
+        sessions_dir,
+        session_id,
+        tool_name,
+        tool_input,
+        resolution,
+    )
+}
+
 pub(crate) fn insert_permission_retry_approval_from(
     sessions_dir: &Path,
     session_id: &str,
