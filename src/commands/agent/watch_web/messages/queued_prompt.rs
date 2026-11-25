@@ -358,6 +358,45 @@ mod tests {
     }
 
     #[test]
+    fn matched_action_id_without_recorded_kind_stays_user_content() {
+        let message_id = "armyknife-action:fixture-message-violet";
+        let content = "<armyknife-todo-completed>A recorded request.</armyknife-todo-completed>";
+        let mut messages = [ChatItem::User {
+            text: add_id_marker(content, message_id),
+            from: None,
+            timestamp: Some("2026-06-01T12:05:00+00:00".to_owned()),
+            rewind_id: None,
+            queued_prompt_id: None,
+        }];
+        let prompts = [WatchWebQueuedPrompt {
+            id: 13,
+            message_id: Some(message_id.to_owned()),
+            content: content.to_owned(),
+            action_event_kind: None,
+            attachments: Vec::new(),
+            resolved: false,
+            sent_at: Utc::now(),
+        }];
+
+        assert_eq!(
+            (
+                resolve_transcript_messages(&mut messages, &prompts),
+                messages,
+            ),
+            (
+                vec![13],
+                [ChatItem::User {
+                    text: content.to_owned(),
+                    from: None,
+                    timestamp: Some("2026-06-01T12:05:00+00:00".to_owned()),
+                    rewind_id: None,
+                    queued_prompt_id: Some(message_id.to_owned()),
+                }],
+            ),
+        );
+    }
+
+    #[test]
     fn transcript_attachments_are_replaced_with_the_saved_attachment_list() {
         let message_id = "fixture-message-lilac";
         let mut messages = [ChatItem::User {

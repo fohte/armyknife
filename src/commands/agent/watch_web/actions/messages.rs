@@ -391,6 +391,17 @@ pub(super) fn send_action_event_message(
                 error = %cleanup_error,
                 "failed to remove unsent watch-web action event"
             );
+            if let Err(resolve_error) = store::mark_watch_web_queued_prompts_resolved_from(
+                sessions_dir,
+                &session.session_id,
+                &[queued_prompt_id],
+            ) {
+                tracing::warn!(
+                    session_id = %session.session_id,
+                    error = %resolve_error,
+                    "failed to resolve unsent watch-web action event"
+                );
+            }
         }
         return Err(error);
     }
