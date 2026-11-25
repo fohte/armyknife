@@ -5,6 +5,7 @@
 
 const SKIP_HOOKS: &str = "ARMYKNIFE_SKIP_HOOKS";
 const SESSION_ID: &str = "ARMYKNIFE_SESSION_ID";
+const CLAUDE_CODE_SESSION_ID: &str = "CLAUDE_CODE_SESSION_ID";
 const CODEX_SESSION_ID: &str = "CODEX_SESSION_ID";
 const CODEX_THREAD_ID: &str = "CODEX_THREAD_ID";
 const SESSION_LABEL: &str = "ARMYKNIFE_SESSION_LABEL";
@@ -42,6 +43,10 @@ pub struct EnvVars {
 
     /// Session ID of the current Claude Code session.
     pub session_id: Option<String>,
+
+    /// Session ID exported by Claude Code when armyknife's SessionStart hook
+    /// did not set `ARMYKNIFE_SESSION_ID` in the shell environment.
+    pub claude_code_session_id: Option<String>,
 
     /// Session ID of the current Codex session. Not an `ARMYKNIFE_*` variable:
     /// Codex exports it to every command it runs.
@@ -93,6 +98,7 @@ impl EnvVars {
         Self {
             skip_hooks: std::env::var(SKIP_HOOKS).is_ok(),
             session_id: non_empty_var(SESSION_ID),
+            claude_code_session_id: non_empty_var(CLAUDE_CODE_SESSION_ID),
             codex_session_id: non_empty_var(CODEX_SESSION_ID),
             codex_thread_id: non_empty_var(CODEX_THREAD_ID),
             session_label: non_empty_var(SESSION_LABEL),
@@ -109,13 +115,28 @@ impl EnvVars {
     }
 
     /// Session ID of the session this process runs in, whichever engine hosts
-    /// it. `ARMYKNIFE_SESSION_ID` is only ever set through Claude Code's
-    /// `CLAUDE_ENV_FILE`, which Codex has no equivalent of, so Codex sessions
-    /// are identified by the variable Codex itself exports.
+    /// it. The armyknife value wins when present, then the hosting CLI's
+    /// ambient variable is used as a fallback.
     pub fn own_session_id(&self) -> Option<String> {
+        self.own_session_id_with_source().map(|(id, _)| id)
+    }
+
+    /// Resolves this process's session ID together with the environment
+    /// variable that supplied it, for callers that need an engine hint.
+    pub(crate) fn own_session_id_with_source(&self) -> Option<(String, SessionIdSource)> {
         self.session_id
-            .clone()
-            .or_else(|| self.codex_session_id.clone())
+            .as_ref()
+            .map(|id| (id.clone(), SessionIdSource::Armyknife))
+            .or_else(|| {
+                self.claude_code_session_id
+                    .as_ref()
+                    .map(|id| (id.clone(), SessionIdSource::ClaudeCode))
+            })
+            .or_else(|| {
+                self.codex_session_id
+                    .as_ref()
+                    .map(|id| (id.clone(), SessionIdSource::Codex))
+            })
     }
 
     /// Returns the env var name for SESSION_ID (used in CLAUDE_ENV_FILE export).
@@ -240,6 +261,13 @@ impl EnvVars {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SessionIdSource {
+    Armyknife,
+    ClaudeCode,
+    Codex,
+}
+
 #[cfg(test)]
 mod tests {
     use rstest::rstest;
@@ -247,19 +275,34 @@ mod tests {
     use super::*;
 
     #[rstest]
-    #[case::armyknife_only(Some("armyknife-id"), None, Some("armyknife-id"))]
-    #[case::codex_only(None, Some("codex-id"), Some("codex-id"))]
-    #[case::armyknife_wins(Some("armyknife-id"), Some("codex-id"), Some("armyknife-id"))]
-    #[case::empty_armyknife_falls_back(Some(""), Some("codex-id"), Some("codex-id"))]
-    #[case::none(None, None, None)]
+    #[case::armyknife_only(Some("armyknife-id"), None, None, Some("armyknife-id"))]
+    #[case::claude_code_only(None, Some("claude-id"), None, Some("claude-id"))]
+    #[case::codex_only(None, None, Some("codex-id"), Some("codex-id"))]
+    #[case::armyknife_wins(
+        Some("armyknife-id"),
+        Some("claude-id"),
+        Some("codex-id"),
+        Some("armyknife-id")
+    )]
+    #[case::claude_code_wins_over_codex(
+        None,
+        Some("claude-id"),
+        Some("codex-id"),
+        Some("claude-id")
+    )]
+    #[case::empty_armyknife_falls_back(Some(""), None, Some("codex-id"), Some("codex-id"))]
+    #[case::empty_claude_code_falls_back(None, Some(""), Some("codex-id"), Some("codex-id"))]
+    #[case::none(None, None, None, None)]
     fn own_session_id_cases(
         #[case] armyknife: Option<&str>,
+        #[case] claude_code: Option<&str>,
         #[case] codex: Option<&str>,
         #[case] expected: Option<&str>,
     ) {
         let result = temp_env::with_vars(
             [
                 ("ARMYKNIFE_SESSION_ID", armyknife),
+                ("CLAUDE_CODE_SESSION_ID", claude_code),
                 ("CODEX_SESSION_ID", codex),
             ],
             || EnvVars::load().own_session_id(),

@@ -39,6 +39,7 @@ pub(super) mod permission_notification;
 mod permission_request;
 mod permission_retry;
 mod prompt_skill;
+mod session_env;
 mod session_lifecycle;
 mod session_metadata;
 mod session_start;
@@ -484,6 +485,8 @@ fn process_hook_event_impl_with_env_and_unreported_stop(
     env: EnvVars,
     mut notify_unreported_stop: impl FnMut(&Session, &HookInput, &Path) -> Result<()>,
 ) -> Result<ProcessResult> {
+    session_env::refresh(input.engine, &input.session_id);
+
     // Claude's SessionEnd confirms termination; Codex's hook does not because
     // the app-server also fires it during daemon shutdown.
     //
@@ -1719,6 +1722,67 @@ mod tests {
     use crate::commands::agent::types::{AgentStatus, TMUX_SESSION_OPTION, WebUiRegistration};
     use chrono::TimeZone;
     use rstest::{fixture, rstest};
+
+    #[rstest]
+    #[case::claude_refreshes_existing_directory(Engine::Claude, true, Some(true))]
+    #[case::codex_leaves_directory_unchanged(Engine::Codex, true, Some(false))]
+    #[case::missing_directory_is_ignored(Engine::Claude, false, None)]
+    fn hook_refreshes_only_existing_claude_session_env(
+        #[case] engine: Engine,
+        #[case] create_session_env: bool,
+        #[case] expected_refresh: Option<bool>,
+    ) {
+        use std::fs::{self, File, FileTimes};
+        use std::time::{Duration, SystemTime};
+
+        let home_dir = tempfile::TempDir::new().expect("home directory should be created");
+        let sessions_dir = tempfile::TempDir::new().expect("sessions directory should be created");
+        let session_id = "fixture-session";
+        let session_env_dir = home_dir
+            .path()
+            .join(".claude")
+            .join("session-env")
+            .join(session_id);
+        let old_time = SystemTime::now() - Duration::from_secs(60 * 60 * 24);
+        if create_session_env {
+            fs::create_dir_all(&session_env_dir).expect("session env should be created");
+            File::open(&session_env_dir)
+                .expect("session env directory should open")
+                .set_times(FileTimes::new().set_modified(old_time))
+                .expect("old timestamp should be set");
+        }
+        let mut session = create_test_session(None);
+        session.session_id = session_id.to_string();
+        store::save_session_to(sessions_dir.path(), &session).expect("session should be saved");
+        let mut input = create_test_input(None);
+        input.session_id = session_id.to_string();
+        input.engine = engine;
+        let home = home_dir.path().to_str().expect("home path should be UTF-8");
+
+        let result = temp_env::with_vars([("HOME", Some(home))], || {
+            process_hook_event_impl(
+                HookEvent::UserPromptSubmit,
+                input,
+                sessions_dir.path(),
+                &SideEffects::none(),
+            )
+        })
+        .expect("hook should succeed");
+        let refresh_state = if create_session_env {
+            let modified = fs::metadata(&session_env_dir)
+                .expect("session env should remain")
+                .modified()
+                .expect("session env timestamp should be available");
+            Some(modified > old_time)
+        } else {
+            None
+        };
+
+        assert_eq!(
+            (result, refresh_state),
+            (ProcessResult::SessionSaved, expected_refresh)
+        );
+    }
 
     fn process_hook_event_without_instruction(
         event: HookEvent,

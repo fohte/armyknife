@@ -553,7 +553,7 @@ mod tests {
             result
                 .map(|session| session.session_id)
                 .map_err(|error| error.to_string()),
-            Err("Neither ARMYKNIFE_SESSION_ID nor CODEX_SESSION_ID is set (not running inside an armyknife-tracked session)".to_string()),
+            Err("Neither ARMYKNIFE_SESSION_ID, CLAUDE_CODE_SESSION_ID, nor CODEX_SESSION_ID is set (not running inside an armyknife-tracked session)".to_string()),
         );
     }
 

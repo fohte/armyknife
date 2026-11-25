@@ -24,7 +24,7 @@ use crate::commands::agent::peer_message::{PEER_MESSAGE_END_TAG, PEER_MESSAGE_ST
 use crate::commands::agent::store;
 use crate::commands::agent::types::{Engine, Session, SessionStatus};
 use crate::infra::notification::{self, Notification};
-use crate::shared::env_var::EnvVars;
+use crate::shared::env_var::{EnvVars, SessionIdSource};
 use crate::shared::log::short_run_id;
 use crate::shared::sanitize::strip_angle_brackets;
 
@@ -230,30 +230,13 @@ fn delivery_output(session_id: &str, delivery: &Delivery) -> String {
 /// misattributing an automated merge notification as a personal message.
 fn resolve_sender() -> Option<(String, Option<Engine>)> {
     let env = EnvVars::load();
-    if let Some(id) = env.session_id {
-        return Some((id, None));
-    }
-    if let Some(id) = non_empty_env_var("CLAUDE_CODE_SESSION_ID") {
-        return Some((id, Some(Engine::Claude)));
-    }
-    // Codex sets both CODEX_SESSION_ID (shared by the root thread and all of
-    // its subagent threads) and CODEX_THREAD_ID (unique per subagent
-    // thread). CODEX_SESSION_ID is the one that matches how armyknife scopes
-    // a session: `HookInput` (types.rs) carries a single `session_id` field
-    // plus a separate optional `agent_id` for subagent-fired events, so a
-    // Claude Code subagent's hook events still report the top-level
-    // session's session_id, not a per-subagent one. The Codex equivalent of
-    // "this session" is the value that's stable across its subagents too.
-    if let Some(id) = env.codex_session_id {
-        return Some((id, Some(Engine::Codex)));
-    }
-    None
-}
-
-/// Treats an empty-but-set env var as unset, matching `EnvVars::load`'s own
-/// `non_empty_var` handling of `ARMYKNIFE_*` variables one branch above.
-fn non_empty_env_var(name: &str) -> Option<String> {
-    std::env::var(name).ok().filter(|v| !v.is_empty())
+    let (id, source) = env.own_session_id_with_source()?;
+    let engine_hint = match source {
+        SessionIdSource::Armyknife => None,
+        SessionIdSource::ClaudeCode => Some(Engine::Claude),
+        SessionIdSource::Codex => Some(Engine::Codex),
+    };
+    Some((id, engine_hint))
 }
 
 fn ensure_not_self_notify(session_id: &str, from: Option<&str>) -> Result<()> {
