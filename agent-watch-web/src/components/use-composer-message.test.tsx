@@ -305,6 +305,10 @@ it('preserves a newer draft when an older send fails after remount', async () =>
   act(() => {
     pendingSend = result().sendMessage()
   })
+  const sendStartedBeforeUnmount = {
+    completionAvailable: finishSend !== undefined,
+    actions: onAction.mock.calls,
+  }
   act(() => {
     root?.unmount()
   })
@@ -321,12 +325,17 @@ it('preserves a newer draft when an older send fails after remount', async () =>
   })
 
   const snapshot = () => ({
+    sendStartedBeforeUnmount,
     visibleDraft: currentDraft().draft,
     storedDraft: window.localStorage.getItem(
       `agent-watch-web:composer-draft:${sessionId}`,
     ),
   })
   expect(snapshot()).toEqual({
+    sendStartedBeforeUnmount: {
+      completionAvailable: true,
+      actions: [['messages', { content: 'Original request' }]],
+    },
     visibleDraft: 'New request',
     storedDraft: 'New request',
   })
