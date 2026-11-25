@@ -1940,6 +1940,74 @@ it.each([
   },
 )
 
+it('keeps overflowing issue preview content horizontally reachable on mobile', () => {
+  const localContainer = document.createElement('div')
+  document.body.append(localContainer)
+  const localRoot = createRoot(localContainer)
+  const overflowingLabel = 'samplelabel'.repeat(24)
+
+  try {
+    act(() => {
+      localRoot.render(
+        <div
+          className="session-status-panel"
+          data-size="phone"
+          style={{ width: '390px', height: '844px', display: 'flex' }}
+        >
+          <ReviewDocumentPanel
+            summary={{
+              id: 'fixture-issue-body',
+              kind: 'issue_body',
+              target: {
+                repository: 'example/web-app',
+                issueNumber: 418,
+                title: 'Configure retry limits',
+              },
+              startedAt: Date.parse('2026-01-15T10:30:00Z'),
+              isEditor: true,
+              canSave: true,
+              canFinish: true,
+            }}
+            frontmatter={{
+              title: 'Configure retry limits',
+              labels: [overflowingLabel],
+              submit: false,
+            }}
+            body="## Summary\n\nDetails."
+            isMobile
+            view="preview"
+          />
+        </div>,
+      )
+    })
+
+    const content = localContainer.querySelector<HTMLElement>(
+      '.review-document-content',
+    )
+    if (content === null) {
+      throw new Error('The mobile issue preview was not rendered.')
+    }
+
+    content.scrollLeft = content.scrollWidth
+    const snapshot = () => ({
+      contentHasOverflowX: content.scrollWidth > content.clientWidth,
+      contentOverflowX: getComputedStyle(content).overflowX,
+      canReachRightEdge:
+        content.scrollLeft === content.scrollWidth - content.clientWidth,
+    })
+    expect(snapshot()).toEqual({
+      contentHasOverflowX: true,
+      contentOverflowX: 'auto',
+      canReachRightEdge: true,
+    })
+  } finally {
+    act(() => {
+      localRoot.unmount()
+    })
+    localContainer.remove()
+  }
+})
+
 it('keeps the approval checkbox available for a new issue draft', async () => {
   const finishSnapshots: JsonValue[] = []
   function NewIssueDraftHarness() {

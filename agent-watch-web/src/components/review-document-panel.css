@@ -234,7 +234,7 @@
 }
 
 .review-document-panel[data-view='preview'] .review-document-content {
-  overflow-y: auto;
+  overflow: auto;
 }
 
 .review-document-panel[data-view='preview'] .review-document-frontmatter {
