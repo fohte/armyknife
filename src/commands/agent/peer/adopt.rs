@@ -6,6 +6,7 @@ use clap::Args;
 
 use super::{CcError, current_session_id, store};
 use crate::commands::agent::types::{Session, SessionStatus};
+use crate::commands::agent::vibe;
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct AdoptArgs {
@@ -63,7 +64,7 @@ fn adopt_in(sessions_dir: &Path, caller_id: &str, target_id: &str, force: bool) 
 
     target.ancestor_session_ids = caller.ancestor_session_ids;
     target.ancestor_session_ids.push(caller_id.to_string());
-    target.launched_with_vibe = false;
+    target.launched_with_vibe = vibe::is_vibe_enabled_for(sessions_dir, caller_id)?;
     lock.save(&target)
 }
 
@@ -399,25 +400,55 @@ mod tests {
         );
     }
 
-    #[test]
-    fn adopt_clears_inherited_vibe_for_the_new_parent() {
-        let store = session_store();
-        let mut caller = session("caller", &[], SessionStatus::Running);
-        caller.vibe_enabled = true;
-        store.save(&caller);
-        store.save(&session("old-parent", &[], SessionStatus::Running));
+    #[rstest]
+    #[case::caller_has_explicit_vibe(&[], true, false, vec!["caller"], true)]
+    #[case::caller_inherits_vibe(
+        &["vibe-root"],
+        false,
+        true,
+        vec!["vibe-root", "caller"],
+        true
+    )]
+    #[case::caller_has_no_vibe(&[], false, false, vec!["caller"], false)]
+    fn adopt_uses_the_new_parents_effective_vibe(
+        session_store: TestSessionStore,
+        #[case] caller_ancestors: &[&str],
+        #[case] caller_vibe_enabled: bool,
+        #[case] caller_launched_with_vibe: bool,
+        #[case] expected_ancestors: Vec<&str>,
+        #[case] expected_vibe_enabled: bool,
+    ) {
+        let mut caller = session("caller", caller_ancestors, SessionStatus::Running);
+        caller.vibe_enabled = caller_vibe_enabled;
+        caller.launched_with_vibe = caller_launched_with_vibe;
+        session_store.save(&caller);
+        let mut vibe_root = session("vibe-root", &[], SessionStatus::Running);
+        vibe_root.vibe_enabled = true;
+        session_store.save(&vibe_root);
+        let mut old_parent = session("old-parent", &[], SessionStatus::Running);
+        old_parent.vibe_enabled = true;
+        session_store.save(&old_parent);
         let mut target = session("target", &["old-parent"], SessionStatus::Running);
         target.launched_with_vibe = true;
-        store.save(&target);
+        session_store.save(&target);
 
-        store
+        session_store
             .adopt("caller", "target", true)
             .expect("force should permit the adoption");
 
-        let adopted = store.load("target");
+        let adopted = session_store.load("target");
         assert_eq!(
-            (adopted.ancestor_session_ids, adopted.launched_with_vibe),
-            (vec!["caller".to_string()], false)
+            (
+                adopted.ancestor_session_ids,
+                adopted.launched_with_vibe,
+                vibe::is_vibe_enabled_for(&session_store.path, "target")
+                    .expect("vibe status should resolve"),
+            ),
+            (
+                expected_ancestors.into_iter().map(str::to_string).collect(),
+                expected_vibe_enabled,
+                expected_vibe_enabled,
+            )
         );
     }
 
