@@ -1357,34 +1357,23 @@ Please close the handle.
 })
 
 it('shows wrapped mobile review replies without an inner textarea scroll', async () => {
-  await page.viewport(390, 844)
-  container.style.width = '390px'
-  container.style.height = '844px'
-  container.style.display = 'flex'
-  root = createRoot(container)
-  act(() =>
-    root?.render(
-      <div
-        className="session-status-panel"
-        data-size="phone"
-        style={{ width: '390px', height: '844px', display: 'flex' }}
-      >
-        <ReviewDocumentPanel
-          summary={{
-            id: 'fixture-review-replies',
-            kind: 'review_replies',
-            target: {
-              repository: 'example/web-app',
-              pullRequestNumber: 2049,
-              threadCount: 1,
-            },
-            startedAt: Date.now(),
-            isEditor: true,
-            canSave: true,
-            canFinish: true,
-          }}
-          frontmatter={{ submit: false }}
-          body={`<!-- thread: THREAD_sample_1 path: src/preflight.ts:42 author: @sample-reviewer -->
+  const localContainer = document.createElement('div')
+  document.body.append(localContainer)
+  const localRoot = createRoot(localContainer)
+  const summary = {
+    id: 'fixture-review-replies',
+    kind: 'review_replies' as const,
+    target: {
+      repository: 'example/web-app',
+      pullRequestNumber: 2049,
+      threadCount: 1,
+    },
+    startedAt: Date.parse('2026-01-15T10:30:00Z'),
+    isEditor: true,
+    canSave: true,
+    canFinish: true,
+  }
+  const initialBody = `<!-- thread: THREAD_sample_1 path: src/preflight.ts:42 author: @sample-reviewer -->
 - [ ] resolve
 <!-- diff -->
 \`\`\`diff
@@ -1399,47 +1388,80 @@ it('shows wrapped mobile review replies without an inner textarea scroll', async
 <!-- comment: @sample-reviewer 2026-01-15T10:30:00Z -->
 Could this accept null?
 <!-- /comment -->
-This is checked before processing.
-Empty values are rejected here, and only valid values continue.
-Boundary cases are covered by the tests.
-This reply records why the check runs before processing.
-It also explains how invalid values are handled.
-The caller can follow the same rule for each input.
+Initial reply.`
+  const editedReply = `This reply grows after it is edited on a phone.
+Every wrapped line remains visible inside the field.
+The reply field grows to fit long lines at the current width.
+Further viewport changes keep the complete text readable.
 No later step needs to repeat this validation.
 The tests cover the boundary values and expected errors.
 The result stays consistent across the related handlers.
-The reply remains readable when it wraps on a phone.`}
-          isMobile
-        />
-      </div>,
-    ),
-  )
+The caller can follow the same rule for each input.
+This reply remains readable when its lines wrap on a phone.`
 
-  const content = container.querySelector<HTMLElement>(
-    '.review-document-content',
-  )
-  const preview = container.querySelector<HTMLElement>(
-    '.review-document-preview-column',
-  )
-  const reply = container.querySelector<HTMLTextAreaElement>(
-    '.review-document-thread-reply textarea',
-  )
-  if (content === null || preview === null || reply === null) {
-    throw new Error('The mobile review reply preview was not rendered.')
+  function Harness() {
+    const [body, setBody] = useState(initialBody)
+    return (
+      <div
+        className="session-status-panel"
+        data-size="phone"
+        style={{ width: '390px', height: '844px', display: 'flex' }}
+      >
+        <ReviewDocumentPanel
+          summary={summary}
+          frontmatter={{ submit: false }}
+          body={body}
+          isMobile
+          onBodyChange={setBody}
+        />
+      </div>
+    )
   }
 
-  const snapshot = () => ({
-    contentCanScroll: content.scrollHeight > content.clientHeight,
-    previewOverflowY: getComputedStyle(preview).overflowY,
-    replyOverflowY: getComputedStyle(reply).overflowY,
-    replyTextFits: reply.scrollHeight <= reply.clientHeight,
-  })
-  expect(snapshot()).toEqual({
-    contentCanScroll: true,
-    previewOverflowY: 'visible',
-    replyOverflowY: 'hidden',
-    replyTextFits: true,
-  })
+  try {
+    act(() => {
+      localRoot.render(<Harness />)
+    })
+
+    const content = localContainer.querySelector<HTMLElement>(
+      '.review-document-content',
+    )
+    const preview = localContainer.querySelector<HTMLElement>(
+      '.review-document-preview-column',
+    )
+    const reply = localContainer.querySelector<HTMLTextAreaElement>(
+      '.review-document-thread-reply textarea',
+    )
+    if (content === null || preview === null || reply === null) {
+      throw new Error('The mobile review reply preview was not rendered.')
+    }
+
+    await act(async () => {
+      await page
+        .getByRole('textbox', { name: 'Your reply to src/preflight.ts' })
+        .fill(editedReply)
+    })
+
+    const snapshot = () => ({
+      contentCanScroll: content.scrollHeight > content.clientHeight,
+      previewOverflowY: getComputedStyle(preview).overflowY,
+      replyOverflowY: getComputedStyle(reply).overflowY,
+      replyTextFits: reply.scrollHeight <= reply.clientHeight,
+      replyValue: reply.value,
+    })
+    expect(snapshot()).toEqual({
+      contentCanScroll: true,
+      previewOverflowY: 'visible',
+      replyOverflowY: 'hidden',
+      replyTextFits: true,
+      replyValue: editedReply,
+    })
+  } finally {
+    act(() => {
+      localRoot.unmount()
+    })
+    localContainer.remove()
+  }
 })
 
 it('shows flat tabs with square editor and queued markers for multiple drafts', () => {
