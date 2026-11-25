@@ -1,3 +1,4 @@
+import { ResultAsync } from 'neverthrow'
 import { useRef, useState } from 'react'
 
 import { useAttachments } from '#components/use-attachments'
@@ -9,8 +10,8 @@ type ComposerMessageOptions = {
   draft: string
   messageEnabled: boolean
   externalSending: boolean
-  clearDraft: () => void
-  restoreDraftIfEmpty: (sentDraft: string) => void
+  clearDraft: () => number
+  restoreDraftIfUnchanged: (sentDraft: string, revision: number) => void
   onAction: (
     action: string,
     payload?: Record<string, unknown>,
@@ -23,7 +24,7 @@ export function useComposerMessage({
   messageEnabled,
   externalSending,
   clearDraft,
-  restoreDraftIfEmpty,
+  restoreDraftIfUnchanged,
   onAction,
 }: ComposerMessageOptions) {
   const attachmentState = useAttachments(sessionId)
@@ -45,7 +46,7 @@ export function useComposerMessage({
       return
     }
     const sentDraft = draft
-    clearDraft()
+    const clearedDraftRevision = clearDraft()
     sendingRef.current = true
     setSendPending(true)
     const finishSending = () => {
@@ -53,26 +54,27 @@ export function useComposerMessage({
       setSendPending(false)
     }
     try {
-      const succeeded = await attachmentState.sendWithAttachments(
-        async (encodedAttachments) => {
+      const succeeded = await ResultAsync.fromPromise(
+        attachmentState.sendWithAttachments(async (encodedAttachments) => {
           const succeeded = await onAction('messages', {
             content: sentDraft,
             ...(encodedAttachments.length === 0
               ? {}
               : { attachments: encodedAttachments }),
           })
-          if (succeeded) {
-            if (encodedAttachments.length > 0) {
-              attachmentState.removeAttachments(attachments.map(({ id }) => id))
-            }
+          if (succeeded && encodedAttachments.length > 0) {
+            attachmentState.removeAttachments(attachments.map(({ id }) => id))
           }
           return succeeded
-        },
+        }),
+        (error: unknown) => error,
+      ).match(
+        (result) => result,
+        () => false,
       )
-      if (!succeeded) restoreDraftIfEmpty(sentDraft)
-    } catch (error) {
-      restoreDraftIfEmpty(sentDraft)
-      throw error
+      if (!succeeded) {
+        restoreDraftIfUnchanged(sentDraft, clearedDraftRevision)
+      }
     } finally {
       finishSending()
     }

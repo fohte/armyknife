@@ -70,9 +70,11 @@ export function useDraft(storageKey: string, initialValue = '') {
   )
   useBeforeUnloadWarning(draft !== '' && !storageAvailable)
   const draftRef = useRef(draft)
+  const draftRevisionRef = useRef(0)
 
   const updateDraft = useCallback(
     (value: string) => {
+      draftRevisionRef.current += 1
       draftRef.current = value
       setDraft(value)
       setStorageAvailable(writeDraft(storageKey, value))
@@ -89,11 +91,14 @@ export function useDraft(storageKey: string, initialValue = '') {
 
   const clearDraft = useCallback(() => {
     updateDraft('')
+    return draftRevisionRef.current
   }, [updateDraft])
 
-  const restoreDraftIfEmpty = useCallback(
-    (value: string) => {
-      if (draftRef.current === '') updateDraft(value)
+  const restoreDraftIfUnchanged = useCallback(
+    (value: string, revision: number) => {
+      if (draftRef.current === '' && draftRevisionRef.current === revision) {
+        updateDraft(value)
+      }
     },
     [updateDraft],
   )
@@ -102,7 +107,7 @@ export function useDraft(storageKey: string, initialValue = '') {
     draft,
     updateDraft,
     clearDraft,
-    restoreDraftIfEmpty,
+    restoreDraftIfUnchanged,
     clearDraftIfUnchanged,
     storageAvailable,
   }

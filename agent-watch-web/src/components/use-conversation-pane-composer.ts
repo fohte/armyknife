@@ -24,7 +24,7 @@ export function useConversationPaneComposer({
     messageEnabled,
     externalSending,
     clearDraft: draftState.clearDraft,
-    restoreDraftIfEmpty: draftState.restoreDraftIfEmpty,
+    restoreDraftIfUnchanged: draftState.restoreDraftIfUnchanged,
     onAction,
   })
 

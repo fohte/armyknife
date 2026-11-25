@@ -7404,6 +7404,44 @@ it('keeps text entered during a failed send', async () => {
   })
 })
 
+it('does not restore a sent draft after the user clears a newer draft', async () => {
+  let completeSend: ((succeeded: boolean) => void) | undefined
+  const onAction = vi.fn(
+    () =>
+      new Promise<boolean>((resolve) => {
+        completeSend = resolve
+      }),
+  )
+  renderView(onAction)
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  setTextareaValue(textarea, 'Original request')
+  act(() => {
+    dispatchKey(textarea, 'Enter')
+  })
+  setTextareaValue(textarea, 'New request')
+  setTextareaValue(textarea, '')
+
+  await act(async () => {
+    completeSend?.(false)
+    await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    draft: textarea.value,
+    storedDraft: window.localStorage.getItem(
+      'agent-watch-web:composer-draft:sample-session',
+    ),
+    actions: onAction.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    draft: '',
+    storedDraft: null,
+    actions: [['messages', { content: 'Original request' }]],
+  })
+})
+
 it('clears an IME composition restored after submitting from the send button', async () => {
   let completeSend: ((succeeded: boolean) => void) | undefined
   const onAction = vi.fn(
@@ -7432,6 +7470,7 @@ it('clears an IME composition restored after submitting from the send button', a
   })
   const draftWhileSending = textarea.value
   act(() => {
+    setTextareaValue(textarea, 'Intermediate composition')
     textarea.dispatchEvent(
       new CompositionEvent('compositionend', {
         bubbles: true,
