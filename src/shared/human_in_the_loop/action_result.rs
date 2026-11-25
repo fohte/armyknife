@@ -206,7 +206,7 @@ pub(crate) fn wait_for_action_result(
         if Instant::now() >= deadline {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::TimedOut,
-                "watch-web did not report the review action result",
+                "Timed out waiting for the watch-web action result. The action may still be running in watch-web; do not retry submit or push.",
             ));
         }
         std::thread::sleep(Duration::from_millis(100));

@@ -201,7 +201,7 @@ pub(super) async fn execute_review_document(
     drop(edit_guard);
 
     let result = async {
-        wait_for_review_lock_release(&record.path).await?;
+        wait_for_review_child_exit(&record.path).await?;
         let mut action_record = record.clone();
         action_record.retry_started_at.get_or_insert_with(Utc::now);
         actions
@@ -267,9 +267,9 @@ fn same_action_content(
     saved_frontmatter == request_frontmatter && saved_body == request_body
 }
 
-async fn wait_for_review_lock_release(path: &Path) -> anyhow::Result<()> {
+async fn wait_for_review_child_exit(path: &Path) -> anyhow::Result<()> {
     tokio::time::timeout(Duration::from_secs(5), async {
-        while LockGuard::is_locked(path) {
+        while LockGuard::is_review_child_running(path) {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
@@ -431,7 +431,6 @@ mod tests {
     use axum::http::StatusCode;
     use rstest::rstest;
     use serde_json::json;
-    use std::time::Duration;
     use tempfile::TempDir;
 
     #[rstest]
@@ -530,25 +529,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn waits_until_the_review_editor_releases_its_lock() {
+    async fn review_launcher_lock_does_not_block_the_review_child_wait() {
         use crate::shared::human_in_the_loop::LockGuard;
 
         let directory = TempDir::new().expect("fixture directory should exist");
         let path = directory.path().join("draft.md");
         std::fs::write(&path, "Fixture draft").expect("fixture draft should be written");
         let lock = LockGuard::acquire(&path).expect("review lock should be acquired");
-        let mut waiting =
-            tokio::spawn(async move { super::wait_for_review_lock_release(&path).await });
-        tokio::task::yield_now().await;
-        let remained_pending = tokio::time::timeout(Duration::from_millis(25), &mut waiting)
+        let result = super::wait_for_review_child_exit(&path)
             .await
-            .is_err();
-        drop(lock);
+            .map_err(|error| error.to_string());
+        let parent_lock_remains = LockGuard::is_locked(&path);
 
-        waiting
-            .await
-            .expect("lock wait should not panic")
-            .expect("review lock should be released");
-        assert!(remained_pending);
+        assert_eq!((result, parent_lock_remains), (Ok(()), true));
+        drop(lock);
     }
 }

@@ -118,6 +118,7 @@ fn finalize_finish_request(
 mod tests {
     use std::io::Read;
     use std::path::{Path, PathBuf};
+    use std::process::ExitStatus;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -129,6 +130,101 @@ mod tests {
     use super::*;
     use crate::shared::human_in_the_loop::editor::{self, ReviewEditorChild};
     use crate::shared::human_in_the_loop::{LockGuard, create_fifo_at_path, signal_fifo_with_byte};
+
+    #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+    struct WatchWebReviewSchema {
+        submit: bool,
+    }
+
+    impl DocumentSchema for WatchWebReviewSchema {
+        fn is_approved(&self) -> bool {
+            self.submit
+        }
+    }
+
+    struct WatchWebReviewHandler;
+
+    impl ReviewHandler<WatchWebReviewSchema> for WatchWebReviewHandler {
+        fn build_complete_args(
+            &self,
+            _document_path: &Path,
+            _tmux_target: Option<&str>,
+            _window_title: &str,
+        ) -> Vec<std::ffi::OsString> {
+            Vec::new()
+        }
+    }
+
+    struct WaitingReviewEditorRunner {
+        ready_file: PathBuf,
+    }
+
+    struct WaitingReviewEditor;
+
+    impl ReviewEditorChild for WaitingReviewEditor {
+        fn try_wait(&mut self) -> std::io::Result<Option<ExitStatus>> {
+            Ok(None)
+        }
+
+        fn terminate_and_wait(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl ReviewEditorRunner for WaitingReviewEditorRunner {
+        fn run(
+            &self,
+            _document_path: &Path,
+            _window_title: Option<&str>,
+            finish_fifo_path: Option<&Path>,
+        ) -> Result<ReviewEditorOutcome> {
+            let finish_fifo_path = finish_fifo_path.ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "finish FIFO should be passed to the editor runner",
+                )
+            })?;
+            let mut finish_reader = open_fifo_reader(finish_fifo_path)?;
+            std::fs::write(&self.ready_file, "ready")?;
+            editor::wait_for_editor_or_finish_request(&mut WaitingReviewEditor, &mut finish_reader)
+        }
+    }
+
+    #[test]
+    #[ignore = "spawned by the watch-web review action integration test"]
+    fn watch_web_review_child_worker() {
+        use crate::shared::human_in_the_loop::FifoSignalGuard;
+
+        let document_path = PathBuf::from(
+            std::env::var_os("ARMYKNIFE_REVIEW_TEST_DOCUMENT").expect("document path"),
+        );
+        let done_fifo_path = PathBuf::from(
+            std::env::var_os("ARMYKNIFE_REVIEW_TEST_DONE_FIFO").expect("done FIFO path"),
+        );
+        let finish_fifo_path = PathBuf::from(
+            std::env::var_os("ARMYKNIFE_REVIEW_TEST_FINISH_FIFO").expect("finish FIFO path"),
+        );
+        let lock_id = std::env::var("ARMYKNIFE_REVIEW_TEST_LOCK_ID").expect("lock ID");
+        let ready_file = PathBuf::from(
+            std::env::var_os("ARMYKNIFE_REVIEW_TEST_READY_FILE").expect("ready file path"),
+        );
+        let mut done_signal = FifoSignalGuard::new(&done_fifo_path);
+        let cleanup_guard = CleanupGuard::new(&document_path, &lock_id, None)
+            .expect("review child should register its lock holder");
+        let editor_runner = WaitingReviewEditorRunner { ready_file };
+        let completed_by_watch_web = complete_review::<WatchWebReviewSchema, _, _>(
+            &document_path,
+            None,
+            &WatchWebReviewHandler,
+            &editor_runner,
+            Some(&finish_fifo_path),
+            cleanup_guard,
+        )
+        .expect("review completion should succeed");
+
+        assert!(completed_by_watch_web);
+        done_signal.set_signal(b'1');
+    }
 
     #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
     struct FinishTestSchema {

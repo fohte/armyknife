@@ -76,6 +76,35 @@ impl LockGuard {
         )
     }
 
+    pub(crate) fn is_review_child_running(document_path: &Path) -> bool {
+        let lock_path = Self::lock_path(document_path);
+        for _ in 0..8 {
+            let file = match open_existing_lock(&lock_path) {
+                Ok(Some(file)) => file,
+                Ok(None) => return false,
+                Err(_) => return true,
+            };
+            let Ok(_file_lock) = AdvisoryLock::try_exclusive(&file) else {
+                return true;
+            };
+            if !same_file_at_path(&file, &lock_path) {
+                continue;
+            }
+
+            let record = match read_record(&file) {
+                Ok(Some(record)) => record,
+                Ok(None) | Err(_) => return true,
+            };
+            if !same_file_at_path(&file, &lock_path) {
+                continue;
+            }
+
+            return record.has_live_review_child(is_process_alive);
+        }
+
+        true
+    }
+
     pub(crate) fn is_locked_with_exclusive_file_lock(document_path: &Path, file: &File) -> bool {
         let lock_path = Self::lock_path(document_path);
         if !same_file_at_path(file, &lock_path) {
@@ -192,12 +221,26 @@ impl LockRecord {
     }
 
     fn has_live_holder(&self, mut is_alive: impl FnMut(u32) -> bool) -> bool {
-        self.pids.iter().any(|pid| {
-            self.process_start_times.get(pid).map_or_else(
-                || is_alive(*pid),
-                |start_time| process_start_time_matches(*pid, start_time),
-            )
-        })
+        self.pids
+            .iter()
+            .copied()
+            .any(|pid| self.holder_is_alive(pid, &mut is_alive))
+    }
+
+    fn has_live_review_child(&self, mut is_alive: impl FnMut(u32) -> bool) -> bool {
+        // The launcher acquires first; CleanupGuard appends review child PIDs.
+        self.pids
+            .iter()
+            .copied()
+            .skip(1)
+            .any(|pid| self.holder_is_alive(pid, &mut is_alive))
+    }
+
+    fn holder_is_alive(&self, pid: u32, is_alive: &mut impl FnMut(u32) -> bool) -> bool {
+        self.process_start_times.get(&pid).map_or_else(
+            || is_alive(pid),
+            |start_time| process_start_time_matches(pid, start_time),
+        )
     }
 }
 

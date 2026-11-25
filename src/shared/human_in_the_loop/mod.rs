@@ -622,6 +622,17 @@ mod tests {
         }
     }
 
+    #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+    struct WatchWebReviewSchema {
+        submit: bool,
+    }
+
+    impl DocumentSchema for WatchWebReviewSchema {
+        fn is_approved(&self) -> bool {
+            self.submit
+        }
+    }
+
     struct ReviewDocumentFixture {
         _temp_dir: TempDir,
         path: PathBuf,
@@ -636,6 +647,83 @@ mod tests {
             _temp_dir: temp_dir,
             path,
         }
+    }
+
+    #[test]
+    #[ignore = "spawned by the watch-web review action integration test"]
+    fn watch_web_review_parent_worker() {
+        use std::io::Write;
+        use std::os::fd::AsRawFd;
+        use std::process::{Command, Stdio};
+
+        let document_path = PathBuf::from(
+            std::env::var_os("ARMYKNIFE_REVIEW_TEST_DOCUMENT").expect("document path"),
+        );
+        let ready_file =
+            std::env::var_os("ARMYKNIFE_REVIEW_TEST_READY_FILE").expect("ready file path");
+        let output_path =
+            std::env::var_os("ARMYKNIFE_REVIEW_TEST_OUTPUT_FILE").expect("output file path");
+        let output_file = std::fs::File::create(output_path).expect("output file should open");
+        // SAFETY: stdout is a valid process file descriptor in this test worker.
+        let saved_stdout = unsafe { libc::dup(libc::STDOUT_FILENO) };
+        assert!(saved_stdout >= 0, "stdout should be duplicated");
+        // SAFETY: `output_file` remains open until stdout is restored.
+        let redirected_stdout = unsafe { libc::dup2(output_file.as_raw_fd(), libc::STDOUT_FILENO) };
+        assert_eq!(redirected_stdout, libc::STDOUT_FILENO);
+
+        let mut review_child = None;
+        let result = start_review_with_marker::<WatchWebReviewSchema, _, _>(
+            &document_path,
+            None,
+            |document_path, done_fifo_path, finish_fifo_path, lock_id| {
+                let child = Command::new(std::env::current_exe()?)
+                    .args([
+                        "--exact",
+                        "shared::human_in_the_loop::review_completion::tests::watch_web_review_child_worker",
+                        "--ignored",
+                        "--nocapture",
+                    ])
+                    .env("ARMYKNIFE_REVIEW_TEST_DOCUMENT", document_path)
+                    .env("ARMYKNIFE_REVIEW_TEST_DONE_FIFO", done_fifo_path)
+                    .env("ARMYKNIFE_REVIEW_TEST_FINISH_FIFO", finish_fifo_path)
+                    .env("ARMYKNIFE_REVIEW_TEST_LOCK_ID", lock_id)
+                    .env("ARMYKNIFE_REVIEW_TEST_READY_FILE", ready_file)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()?;
+                review_child = Some(child);
+                Ok(ReviewLaunch::without_queue(None))
+            },
+            |_| Ok(true),
+        );
+        std::io::stdout()
+            .flush()
+            .expect("review output should flush");
+        // SAFETY: `saved_stdout` is the descriptor duplicated before redirection.
+        let restored_stdout = unsafe { libc::dup2(saved_stdout, libc::STDOUT_FILENO) };
+        // SAFETY: the saved descriptor is no longer needed after restoration.
+        let closed_stdout = unsafe { libc::close(saved_stdout) };
+        assert_eq!((restored_stdout, closed_stdout), (libc::STDOUT_FILENO, 0));
+
+        let child_status = review_child
+            .as_mut()
+            .expect("review child should be launched")
+            .wait()
+            .expect("review child should exit");
+        let result = result
+            .map(|document| document.map(|document| (document.path, document.frontmatter)))
+            .map_err(|error| error.to_string());
+
+        assert_eq!(
+            (result, child_status.success()),
+            (
+                Ok(Some(
+                    (document_path, WatchWebReviewSchema { submit: true },)
+                )),
+                true,
+            ),
+        );
     }
 
     struct FifoReaderFixture {

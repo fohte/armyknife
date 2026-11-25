@@ -591,6 +591,43 @@ mod tests {
         review_document_revision(&content)
     }
 
+    async fn wait_for_file(path: &Path, timeout: Duration) -> bool {
+        let started_at = std::time::Instant::now();
+        while !path.exists() {
+            if started_at.elapsed() >= timeout {
+                return false;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        true
+    }
+
+    fn terminate_test_worker(worker: &mut std::process::Child) {
+        if let Ok(process_group) = i32::try_from(worker.id()) {
+            // SAFETY: the worker owns a dedicated process group for this test.
+            let _ = unsafe { libc::kill(-process_group, libc::SIGKILL) };
+        }
+        let _ = worker.kill();
+        let _ = worker.wait();
+    }
+
+    async fn wait_for_test_worker(worker: &mut std::process::Child) -> bool {
+        let started_at = std::time::Instant::now();
+        loop {
+            if let Some(status) = worker
+                .try_wait()
+                .expect("test worker should be inspectable")
+            {
+                return status.success();
+            }
+            if started_at.elapsed() >= Duration::from_secs(15) {
+                terminate_test_worker(worker);
+                return false;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
     struct ActiveReviewDocument {
         temp_dir: TempDir,
         document_path: PathBuf,
@@ -1999,6 +2036,172 @@ mod tests {
                     saved_hash.clone(),
                     Some(saved_hash),
                 )),
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn web_action_waits_for_the_review_child_and_reports_its_result() {
+        use std::os::unix::process::CommandExt;
+        use std::process::{Command, Stdio};
+        use std::sync::Mutex;
+
+        use crate::shared::human_in_the_loop::{
+            ReviewDocumentAction, ReviewDocumentActionResult,
+            action_result_after_review_completion, document_hash,
+        };
+
+        crate::shared::testing::init_approval_dir();
+        let temp_dir = TempDir::new().expect("fixture directory should be created");
+        let roots = ReviewDocumentRoots {
+            pr_draft: temp_dir.path().join("pr-body-draft"),
+            issue_agent: temp_dir.path().join("gh-issue-agent"),
+            pr_review: temp_dir.path().join("gh-pr-review"),
+        };
+        let document_path = roots
+            .issue_agent
+            .join("owner/repository/7319/comments/comment.md");
+        std::fs::create_dir_all(document_path.parent().expect("document has a parent"))
+            .expect("document directory should be created");
+        let original_document = indoc! {"
+            ---
+            submit: false
+            ---
+            Original comment.
+        "};
+        std::fs::write(&document_path, original_document)
+            .expect("review document should be written");
+        let ready_file = temp_dir.path().join("review-child-ready");
+        let output_file = temp_dir.path().join("agent-output");
+        let mut review_parent = Command::new(std::env::current_exe().expect("test binary path"))
+            .args([
+                "--exact",
+                "shared::human_in_the_loop::tests::watch_web_review_parent_worker",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("ARMYKNIFE_REVIEW_TEST_DOCUMENT", &document_path)
+            .env("ARMYKNIFE_REVIEW_TEST_READY_FILE", &ready_file)
+            .env("ARMYKNIFE_REVIEW_TEST_OUTPUT_FILE", &output_file)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .process_group(0)
+            .spawn()
+            .expect("review parent worker should start");
+        let child_ready = wait_for_file(&ready_file, Duration::from_secs(5)).await;
+        if !child_ready {
+            terminate_test_worker(&mut review_parent);
+        }
+        assert!(
+            child_ready,
+            "review child should wait for the finish signal"
+        );
+
+        let mut session = session_with_review(&document_path);
+        session.cwd = temp_dir.path().to_path_buf();
+        let action_lock_state = Arc::new(Mutex::new(None));
+        let executor_lock_state = action_lock_state.clone();
+        let executor_path = document_path.clone();
+        let app = router_with_injected_action_executor(
+            move |_| Ok(Some(session.clone())),
+            |_| ReviewDocumentQueue::Unmanaged,
+            roots,
+            Arc::new(move |_| {
+                let competing_lock = LockGuard::acquire(&executor_path);
+                let lock_state = (
+                    LockGuard::is_locked(&executor_path),
+                    competing_lock.is_err(),
+                );
+                drop(competing_lock);
+                *executor_lock_state
+                    .lock()
+                    .expect("action lock state should be writable") = Some(lock_state);
+                Box::pin(async { Ok("Issue comment posted.".to_owned()) })
+            }),
+        );
+        let request = Request::post("/sessions/fixture-session/review-document/action")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                    "id": "fixture-review",
+                    "revision": current_revision(&document_path),
+                    "frontmatter": { "submit": false },
+                    "body": "Approved fixture document.",
+                    "action": "post_comment",
+                })
+                .to_string(),
+            ))
+            .expect("action request should be valid");
+        let response = app
+            .oneshot(request)
+            .await
+            .expect("action request should complete");
+        let response_status = response.status();
+        let response_body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("action response body should be readable");
+        let response_json = serde_json::from_slice::<serde_json::Value>(&response_body)
+            .expect("action response should be JSON");
+        let mut action_result_file = document_path.as_os_str().to_os_string();
+        action_result_file.push(".watch-web-action-result");
+        let action_result_saved = PathBuf::from(action_result_file).exists();
+        if !action_result_saved {
+            terminate_test_worker(&mut review_parent);
+        }
+        let review_parent_succeeded = wait_for_test_worker(&mut review_parent).await;
+        let printed_output = std::fs::read_to_string(&output_file)
+            .expect("review process output should be captured");
+        let action_result = if action_result_saved {
+            action_result_after_review_completion(b'1', &document_path)
+                .expect("action result should be readable")
+        } else {
+            None
+        };
+        let resulting_hash = document_hash(&document_path).expect("result hash should be read");
+        let action_lock_state = action_lock_state
+            .lock()
+            .expect("action lock state should be readable")
+            .take();
+
+        assert_eq!(
+            (
+                child_ready,
+                response_status,
+                response_json,
+                action_lock_state,
+                action_result,
+                review_parent_succeeded,
+                printed_output,
+            ),
+            (
+                true,
+                StatusCode::OK,
+                serde_json::json!({
+                    "success": true,
+                    "revision": current_revision(&document_path),
+                }),
+                Some((true, true)),
+                Some(ReviewDocumentActionResult::new(
+                    ReviewDocumentAction::PostComment,
+                    true,
+                    "Issue comment posted.".to_owned(),
+                    resulting_hash.clone(),
+                    Some(resulting_hash),
+                )),
+                true,
+                indoc! {"
+                    Watch-web issue comment succeeded: Issue comment posted.
+                    No further submit or push command is needed.
+                    @@ -1,4 +1,4 @@
+                     ---
+                    -submit: false
+                    +submit: true
+                     ---
+                    -Original comment.
+                    +Approved fixture document.
+                "}
+                .to_owned(),
             ),
         );
     }
