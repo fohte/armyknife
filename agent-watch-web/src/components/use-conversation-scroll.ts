@@ -29,6 +29,20 @@ type UseConversationScrollOptions = {
   olderCursor?: string | undefined
 }
 
+function hasConversationScrollCompensation(
+  scrollContainer: HTMLDivElement,
+  anchorOffsets: ReadonlyMap<HTMLElement, ConversationAnchorSpacing>,
+  extraPaddingBottom: number,
+) {
+  return (
+    anchorOffsets.size > 0 ||
+    extraPaddingBottom > 0 ||
+    scrollContainer.style.getPropertyValue(
+      '--conversation-anchor-extra-padding-bottom',
+    ) !== ''
+  )
+}
+
 export function useConversationScroll({
   messages,
   loadingOlder,
@@ -183,12 +197,11 @@ export function useConversationScroll({
       )
     previousMessagesRef.current = { messages, start, end, epoch }
 
-    const hasScrollCompensation =
-      conversationAnchorOffsetsRef.current.size > 0 ||
-      anchorExtraPaddingBottomRef.current > 0 ||
-      scrollContainer.style.getPropertyValue(
-        '--conversation-anchor-extra-padding-bottom',
-      ) !== ''
+    const hasScrollCompensation = hasConversationScrollCompensation(
+      scrollContainer,
+      conversationAnchorOffsetsRef.current,
+      anchorExtraPaddingBottomRef.current,
+    )
     if (appendedMessages && hasScrollCompensation) {
       clearConversationScrollCompensation(
         scrollContainer,
@@ -381,11 +394,11 @@ export function useConversationScroll({
     programmaticScrollTopRef.current = null
     userScrollInputRef.current = false
     if (
-      conversationAnchorOffsetsRef.current.size > 0 ||
-      anchorExtraPaddingBottomRef.current > 0 ||
-      scrollContainer.style.getPropertyValue(
-        '--conversation-anchor-extra-padding-bottom',
-      ) !== ''
+      hasConversationScrollCompensation(
+        scrollContainer,
+        conversationAnchorOffsetsRef.current,
+        anchorExtraPaddingBottomRef.current,
+      )
     ) {
       const wasAtBottom = isConversationAtBottom(scrollContainer)
       clearConversationScrollCompensation(
