@@ -63,9 +63,7 @@ pub fn run(args: &ResumeArgs) -> Result<()> {
 
     let binary_path = find_command_path(binary_name)
         .ok_or_else(|| anyhow::anyhow!("Could not find '{binary_name}' command in PATH"))?;
-    let binary_path = binary_path
-        .canonicalize()
-        .with_context(|| format!("Could not resolve '{binary_name}' command path in PATH"))?;
+    let binary_path = absolute_resume_binary_path(binary_name, binary_path)?;
     if let Some(session) = &stored_session {
         set_session_working_directory(&session.cwd, |cwd| std::env::set_current_dir(cwd))?;
     }
@@ -120,6 +118,11 @@ fn validate_session_working_directory(cwd: &Path) -> Result<()> {
         );
     }
     Ok(())
+}
+
+fn absolute_resume_binary_path(binary_name: &str, path: PathBuf) -> Result<PathBuf> {
+    std::path::absolute(path)
+        .with_context(|| format!("Could not resolve '{binary_name}' command path in PATH"))
 }
 
 fn set_session_working_directory(
@@ -1136,5 +1139,22 @@ mod tests {
                 false,
             ),
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resume_preserves_the_agent_symlink_path() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("agent-target");
+        let link = directory.path().join("claude");
+        std::fs::write(&target, "fixture executable").unwrap();
+        symlink(&target, &link).unwrap();
+
+        let result =
+            absolute_resume_binary_path("claude", link.clone()).map_err(|error| error.to_string());
+
+        assert_eq!(result, Ok(link));
     }
 }

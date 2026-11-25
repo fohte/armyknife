@@ -193,6 +193,11 @@ pub(super) fn rewind_session(
     if !can_rewind(&session) {
         return Err(SessionNotRewindableError.into());
     }
+    ensure!(
+        session.cwd.is_dir(),
+        "session working directory does not exist: {}",
+        session.cwd.display()
+    );
     if session.engine == Engine::Codex {
         ensure!(
             mode == RewindMode::Conversation,
@@ -606,7 +611,7 @@ mod tests {
                 .into_iter()
                 .map(str::to_string)
                 .collect::<Vec<_>>(),
-                Some(PathBuf::from("/tmp/fixture")),
+                Some(std::env::temp_dir()),
                 vec![(
                     "CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING".to_string(),
                     Some("true".to_string()),
@@ -711,6 +716,48 @@ mod tests {
                     new_session.cwd.display()
                 )),
                 0,
+            ),
+        );
+    }
+
+    #[test]
+    fn rewind_rejects_a_missing_directory_before_stopping_the_session() {
+        let directory = TempDir::new().unwrap();
+        let mut session = test_session();
+        session.engine = Engine::Codex;
+        session.status = SessionStatus::Stopped;
+        session.cwd = directory.path().join("missing");
+        store::save_session_to(directory.path(), &session).unwrap();
+        let fork_transcript_path = directory.path().join("fork.jsonl");
+        let host = FakeHost::with_codex_fork(ForkedCodexThread {
+            thread_id: "fixture-fork".to_string(),
+            transcript_path: fork_transcript_path,
+        });
+
+        let result = rewind_session(
+            directory.path(),
+            &session,
+            "fixture-turn",
+            RewindMode::Conversation,
+            &host,
+        );
+        let stored_session = store::load_session_from(directory.path(), &session.session_id)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            (
+                result.err().map(|error| error.to_string()),
+                host.calls.lock().unwrap().clone(),
+                stored_session.status,
+            ),
+            (
+                Some(format!(
+                    "session working directory does not exist: {}",
+                    session.cwd.display()
+                )),
+                Vec::new(),
+                SessionStatus::Stopped,
             ),
         );
     }
@@ -1055,7 +1102,7 @@ mod tests {
             crit_not_waiting_urls: Default::default(),
             web_uis: Vec::new(),
             pending_human_review_ids: Default::default(),
-            cwd: PathBuf::from("/tmp/fixture"),
+            cwd: std::env::temp_dir(),
             transcript_path: None,
             tty: None,
             tmux_info: Some(crate::commands::agent::types::TmuxInfo {
