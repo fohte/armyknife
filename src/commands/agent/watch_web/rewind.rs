@@ -99,36 +99,56 @@ impl Host for LiveHost {
     }
 
     fn respawn_pane(&self, session: &Session, new_session: &Session) -> Result<()> {
-        let Some(tmux_info) = session.tmux_info.as_ref() else {
-            bail!("session has no tmux pane");
-        };
-        ensure!(
-            new_session.cwd.is_dir(),
-            "session working directory does not exist: {}",
-            new_session.cwd.display()
-        );
-        tmux::set_pane_option_for_socket(
-            tmux_info.socket_path.as_deref(),
-            &tmux_info.pane_id,
-            super::super::types::TMUX_SESSION_OPTION,
-            &new_session.session_id,
-        )?;
-        let pane_session = PaneResumeSession {
-            session_id: new_session.session_id.clone(),
-            ancestor_session_ids: new_session.ancestor_session_ids.clone(),
-            engine: Some(new_session.engine),
-            launched_with_vibe: new_session.launched_with_vibe,
-        };
-        let command = resume_command_for(&pane_session, new_session.engine, false)
-            .context("could not build the session resume command")?;
-        tmux::respawn_pane_for_socket(
-            tmux_info.socket_path.as_deref(),
-            &tmux_info.pane_id,
-            &new_session.cwd,
-            &command,
-        )?;
-        Ok(())
+        respawn_pane_with_tmux(
+            session,
+            new_session,
+            |socket_path, pane_id, option, value| {
+                tmux::set_pane_option_for_socket(socket_path, pane_id, option, value)
+                    .map_err(anyhow::Error::from)
+            },
+            |socket_path, pane_id, cwd, command| {
+                tmux::respawn_pane_for_socket(socket_path, pane_id, cwd, command)
+                    .map_err(anyhow::Error::from)
+            },
+        )
     }
+}
+
+fn respawn_pane_with_tmux(
+    session: &Session,
+    new_session: &Session,
+    set_pane_option: impl FnOnce(Option<&str>, &str, &str, &str) -> Result<()>,
+    respawn_pane: impl FnOnce(Option<&str>, &str, &Path, &str) -> Result<()>,
+) -> Result<()> {
+    let Some(tmux_info) = session.tmux_info.as_ref() else {
+        bail!("session has no tmux pane");
+    };
+    ensure!(
+        new_session.cwd.is_dir(),
+        "session working directory does not exist: {}",
+        new_session.cwd.display()
+    );
+    set_pane_option(
+        tmux_info.socket_path.as_deref(),
+        &tmux_info.pane_id,
+        super::super::types::TMUX_SESSION_OPTION,
+        &new_session.session_id,
+    )?;
+    let pane_session = PaneResumeSession {
+        session_id: new_session.session_id.clone(),
+        ancestor_session_ids: new_session.ancestor_session_ids.clone(),
+        engine: Some(new_session.engine),
+        launched_with_vibe: new_session.launched_with_vibe,
+    };
+    let command = resume_command_for(&pane_session, new_session.engine, false)
+        .context("could not build the session resume command")?;
+    respawn_pane(
+        tmux_info.socket_path.as_deref(),
+        &tmux_info.pane_id,
+        &new_session.cwd,
+        &command,
+    )?;
+    Ok(())
 }
 
 fn claude_file_rewind_command(session: &Session, message_id: &str) -> std::process::Command {
@@ -591,6 +611,106 @@ mod tests {
                     "CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING".to_string(),
                     Some("true".to_string()),
                 )],
+            ),
+        );
+    }
+
+    #[test]
+    fn respawn_passes_the_fork_directory_to_tmux() {
+        let directory = TempDir::new().unwrap();
+        let mut session = test_session();
+        session.cwd = directory.path().to_path_buf();
+        let mut new_session = session.clone();
+        new_session.session_id = "fixture-fork".to_string();
+        new_session.cwd = directory.path().to_path_buf();
+        let pane_session = PaneResumeSession {
+            session_id: new_session.session_id.clone(),
+            ancestor_session_ids: new_session.ancestor_session_ids.clone(),
+            engine: Some(new_session.engine),
+            launched_with_vibe: new_session.launched_with_vibe,
+        };
+        let expected_command =
+            resume_command_for(&pane_session, new_session.engine, false).unwrap();
+        let calls = std::cell::RefCell::new(Vec::new());
+
+        let result = respawn_pane_with_tmux(
+            &session,
+            &new_session,
+            |socket_path, pane_id, option, value| {
+                calls.borrow_mut().push(serde_json::json!({
+                    "setPaneOption": [socket_path, pane_id, option, value],
+                }));
+                Ok(())
+            },
+            |socket_path, pane_id, cwd, command| {
+                calls.borrow_mut().push(serde_json::json!({
+                    "respawnPane": [socket_path, pane_id, cwd.display().to_string(), command],
+                }));
+                Ok(())
+            },
+        );
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                calls.into_inner()
+            ),
+            (
+                Ok(()),
+                vec![
+                    serde_json::json!({
+                        "setPaneOption": [
+                            "/tmp/fixture.sock",
+                            "%7",
+                            crate::commands::agent::types::TMUX_SESSION_OPTION,
+                            "fixture-fork",
+                        ],
+                    }),
+                    serde_json::json!({
+                        "respawnPane": [
+                            "/tmp/fixture.sock",
+                            "%7",
+                            directory.path().display().to_string(),
+                            expected_command,
+                        ],
+                    }),
+                ],
+            ),
+        );
+    }
+
+    #[test]
+    fn missing_fork_directory_leaves_the_tmux_pane_untouched() {
+        let directory = TempDir::new().unwrap();
+        let session = test_session();
+        let mut new_session = session.clone();
+        new_session.cwd = directory.path().join("missing");
+        let tmux_call_count = std::cell::Cell::new(0);
+
+        let result = respawn_pane_with_tmux(
+            &session,
+            &new_session,
+            |_, _, _, _| {
+                tmux_call_count.set(tmux_call_count.get() + 1);
+                Ok(())
+            },
+            |_, _, _, _| {
+                tmux_call_count.set(tmux_call_count.get() + 1);
+                Ok(())
+            },
+        );
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                tmux_call_count.get(),
+            ),
+            (
+                Err(format!(
+                    "session working directory does not exist: {}",
+                    new_session.cwd.display()
+                )),
+                0,
             ),
         );
     }

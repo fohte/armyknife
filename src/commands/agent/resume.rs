@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use clap::Args;
 use thiserror::Error;
@@ -54,15 +54,21 @@ pub fn run(args: &ResumeArgs) -> Result<()> {
     let session_id = resolve_resume_session_id(&sessions_dir, &requested_session_id)?;
     let stored_session = store::load_session_from(&sessions_dir, &session_id)?;
     if let Some(session) = &stored_session {
-        set_session_working_directory(&session.cwd, |cwd| std::env::set_current_dir(cwd))?;
+        validate_session_working_directory(&session.cwd)?;
     }
-    let stored_engine = stored_session.map(|session| session.engine);
+    let stored_engine = stored_session.as_ref().map(|session| session.engine);
     let engine = resolve_resume_engine(args.engine, stored_engine);
 
     let (binary_name, resume_args) = resume_binary_and_args(engine, &session_id);
 
     let binary_path = find_command_path(binary_name)
         .ok_or_else(|| anyhow::anyhow!("Could not find '{binary_name}' command in PATH"))?;
+    let binary_path = binary_path
+        .canonicalize()
+        .with_context(|| format!("Could not resolve '{binary_name}' command path in PATH"))?;
+    if let Some(session) = &stored_session {
+        set_session_working_directory(&session.cwd, |cwd| std::env::set_current_dir(cwd))?;
+    }
 
     let ancestor_session_ids = args
         .ancestor_session_ids
@@ -106,18 +112,27 @@ fn resolve_resume_session_id(sessions_dir: &Path, session_id: &str) -> Result<St
     store::resolve_current_session_id_from(sessions_dir, session_id)
 }
 
-fn set_session_working_directory(
-    cwd: &Path,
-    set_current_dir: impl FnOnce(&Path) -> std::io::Result<()>,
-) -> Result<()> {
+fn validate_session_working_directory(cwd: &Path) -> Result<()> {
     if !cwd.is_dir() {
         bail!(
             "Session working directory does not exist: {}",
             cwd.display()
         );
     }
-    set_current_dir(cwd)
-        .map_err(|error| anyhow::anyhow!("Failed to change to session working directory: {error}"))
+    Ok(())
+}
+
+fn set_session_working_directory(
+    cwd: &Path,
+    set_current_dir: impl FnOnce(&Path) -> std::io::Result<()>,
+) -> Result<()> {
+    validate_session_working_directory(cwd)?;
+    set_current_dir(cwd).with_context(|| {
+        format!(
+            "Failed to change to session working directory {}",
+            cwd.display()
+        )
+    })
 }
 
 fn resume_environment_variables(

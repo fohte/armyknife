@@ -879,6 +879,8 @@ With `--worktree`, the session runs in `config.agent.worktree.layout`, whose pan
 
 A session's engine is recorded on first hook event (see `--engine` on `a agent hook` below) and later read back by `a agent resume` to decide which binary to relaunch. An explicit `a agent resume --engine` value takes precedence when tmux-resurrect restores a snapshot whose store record is missing. `resume` never uses `agent.default_engine`, so changing the default doesn't affect resuming existing sessions.
 
+When a session record exists, `a agent resume` and automatic pane respawns use its recorded working directory. Resume exits with an error if that directory is unavailable.
+
 When `--type` is omitted, `agent.default_engine` supplies the engine if `--engine` and the matching kind profile's `engine` are omitted. Set `agent.default_engine: codex` in config, or prefix a single invocation with `ARMYKNIFE_AGENT__DEFAULT_ENGINE=codex` (see [Environment variable overrides](#environment-variable-overrides)), to change this fallback (with `--worktree` too, so a `codex` fallback replaces the layout's `claude` pane). An explicit `--engine` always wins.
 
 Without `--type`, `agent.codex.model` and `agent.codex.reasoning_effort` are the global defaults for `codex` when a selected kind profile leaves a value unset. Explicit flags and the selected engine's kind settings take precedence. The model is passed on the `codex` command line. The effort follows the launch routes above, so it is sent through `turn/start` or a launch-only `-c` override without modifying `~/.codex/config.toml`. These defaults never apply to `claude` sessions; an explicit `--reasoning-effort` does, as `claude --effort`.
