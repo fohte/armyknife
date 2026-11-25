@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.932](https://github.com/fohte/armyknife/compare/v0.1.931...v0.1.932) (2026-11-25)
+
+
+### Bug Fixes
+
+* **agent/watch-web:** render from saved records ([#2290](https://github.com/fohte/armyknife/issues/2290)) ([a950430](https://github.com/fohte/armyknife/commit/a950430d08fd64540b3ca8cc3037d2b7ae1bc6b4))
+
 ## [0.1.931](https://github.com/fohte/armyknife/compare/v0.1.930...v0.1.931) (2026-11-25)
 
 
