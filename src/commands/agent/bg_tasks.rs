@@ -212,7 +212,8 @@ pub(crate) fn redact_command_arguments(arguments: &[String]) -> Vec<String> {
 }
 
 fn is_sensitive_key(key: &str) -> bool {
-    let characters = key.trim_start_matches('-').chars().collect::<Vec<_>>();
+    let key = key.trim_start_matches('-');
+    let characters = key.chars().collect::<Vec<_>>();
     let mut words = Vec::new();
     let mut current_word = String::new();
 
@@ -245,6 +246,18 @@ fn is_sensitive_key(key: &str) -> bool {
         words.push(current_word);
     }
 
+    let compact_key = characters
+        .iter()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .map(|character| character.to_ascii_lowercase())
+        .collect::<String>();
+    let uppercase_identifier = characters
+        .iter()
+        .any(|character| character.is_ascii_uppercase())
+        && !characters
+            .iter()
+            .any(|character| character.is_ascii_lowercase());
+
     if words.iter().any(|word| {
         matches!(
             word.as_str(),
@@ -261,10 +274,16 @@ fn is_sensitive_key(key: &str) -> bool {
         return true;
     }
 
-    (words.len() == 1
+    let known_key = (words.len() == 1
         && matches!(
             words[0].as_str(),
-            "key" | "apikey" | "accesstoken" | "privatekey" | "clientkey" | "signingkey"
+            "key"
+                | "apikey"
+                | "accesstoken"
+                | "accesskey"
+                | "privatekey"
+                | "clientkey"
+                | "signingkey"
         ))
         || words.windows(2).any(|pair| {
             matches!(
@@ -275,7 +294,28 @@ fn is_sensitive_key(key: &str) -> bool {
                     | ("client", "key")
                     | ("signing", "key")
             )
-        })
+        });
+
+    known_key
+        || (uppercase_identifier
+            && [
+                "token",
+                "password",
+                "passwd",
+                "secret",
+                "credential",
+                "credentials",
+                "authorization",
+                "auth",
+                "apikey",
+                "accesstoken",
+                "accesskey",
+                "privatekey",
+                "clientkey",
+                "signingkey",
+            ]
+            .iter()
+            .any(|sensitive_suffix| compact_key.ends_with(sensitive_suffix)))
 }
 
 fn is_sensitive_header(argument: &str) -> bool {
@@ -620,9 +660,21 @@ mod tests {
         &["API_KEY=fixture-secret"],
         vec!["API_KEY=[REDACTED]"],
     )]
+    #[case::compact_access_key_value(
+        &["ACCESSKEY=fixture-secret"],
+        vec!["ACCESSKEY=[REDACTED]"],
+    )]
     #[case::environment_token_value(
         &["GITHUB_TOKEN=fixture-secret"],
         vec!["GITHUB_TOKEN=[REDACTED]"],
+    )]
+    #[case::concatenated_uppercase_token_value(
+        &["GITHUBTOKEN=fixture-secret"],
+        vec!["GITHUBTOKEN=[REDACTED]"],
+    )]
+    #[case::concatenated_uppercase_secret_value(
+        &["CLIENTSECRET=fixture-secret"],
+        vec!["CLIENTSECRET=[REDACTED]"],
     )]
     #[case::auth_subcommand_is_preserved(
         &["a", "gh", "auth", "status"],
