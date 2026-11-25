@@ -1724,13 +1724,13 @@ mod tests {
     use rstest::{fixture, rstest};
 
     #[rstest]
-    #[case::claude_refreshes_existing_directory(Engine::Claude, true, Some(true))]
-    #[case::codex_leaves_directory_unchanged(Engine::Codex, true, Some(false))]
-    #[case::missing_directory_is_ignored(Engine::Claude, false, None)]
+    #[case::claude_refreshes_existing_directory(Engine::Claude, true, (true, true))]
+    #[case::codex_leaves_directory_unchanged(Engine::Codex, true, (true, false))]
+    #[case::missing_directory_stays_absent(Engine::Claude, false, (false, false))]
     fn hook_refreshes_only_existing_claude_session_env(
         #[case] engine: Engine,
         #[case] create_session_env: bool,
-        #[case] expected_refresh: Option<bool>,
+        #[case] expected_state: (bool, bool),
     ) {
         use std::fs::{self, File, FileTimes};
         use std::time::{Duration, SystemTime};
@@ -1768,19 +1768,21 @@ mod tests {
             )
         })
         .expect("hook should succeed");
-        let refresh_state = if create_session_env {
-            let modified = fs::metadata(&session_env_dir)
-                .expect("session env should remain")
-                .modified()
-                .expect("session env timestamp should be available");
-            Some(modified > old_time)
-        } else {
-            None
+        let refresh_state = match fs::symlink_metadata(&session_env_dir) {
+            Ok(metadata) => (
+                true,
+                metadata
+                    .modified()
+                    .expect("session env timestamp should be available")
+                    > old_time,
+            ),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (false, false),
+            Err(error) => panic!("session env should be inspectable: {error}"),
         };
 
         assert_eq!(
             (result, refresh_state),
-            (ProcessResult::SessionSaved, expected_refresh)
+            (ProcessResult::SessionSaved, expected_state)
         );
     }
 

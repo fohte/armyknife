@@ -32,3 +32,32 @@ fn is_single_path_component(session_id: &str) -> bool {
     let mut components = Path::new(session_id).components();
     matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn parent_traversal_does_not_refresh_a_directory_outside_session_env() {
+        let home_dir = tempfile::TempDir::new().expect("home directory should be created");
+        let outside_dir = home_dir.path().join("outside-session");
+        std::fs::create_dir(&outside_dir).expect("outside directory should be created");
+        let old_time = SystemTime::now() - Duration::from_secs(60 * 60 * 24);
+        File::open(&outside_dir)
+            .expect("outside directory should open")
+            .set_times(FileTimes::new().set_modified(old_time))
+            .expect("old timestamp should be set");
+        let home = home_dir.path().to_str().expect("home path should be UTF-8");
+
+        temp_env::with_vars([("HOME", Some(home))], || {
+            refresh(Engine::Claude, "../../outside-session");
+        });
+        let modified = fs::metadata(&outside_dir)
+            .expect("outside directory should remain")
+            .modified()
+            .expect("outside directory timestamp should be available");
+
+        assert_eq!((modified > old_time, outside_dir.exists()), (false, true));
+    }
+}
