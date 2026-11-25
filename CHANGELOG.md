@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.926](https://github.com/fohte/armyknife/compare/v0.1.925...v0.1.926) (2026-11-25)
+
+
+### Bug Fixes
+
+* **agent/usage:** tolerate invalid field types ([#2277](https://github.com/fohte/armyknife/issues/2277)) ([9cef6bb](https://github.com/fohte/armyknife/commit/9cef6bb0ac043f0710aa3b5fa7cda6354903b5ae))
+
 ## [0.1.925](https://github.com/fohte/armyknife/compare/v0.1.924...v0.1.925) (2026-11-25)
 
 
