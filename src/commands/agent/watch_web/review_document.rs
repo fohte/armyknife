@@ -24,7 +24,9 @@ mod metadata;
 mod related_issue_titles;
 mod save;
 use metadata::{ReviewDocumentRoots, ReviewDocumentSummary, summarize};
-use related_issue_titles::{IssueTitleLookup, github_issue_title_lookup, lookup_issue_titles};
+use related_issue_titles::{
+    IssueTitleLookup, github_issue_title_lookup, lookup_issue_titles_with_timeout,
+};
 
 type SessionLoader = Arc<dyn Fn(&str) -> anyhow::Result<Option<Session>> + Send + Sync>;
 type ReviewQueueLoader = Arc<dyn Fn(&Session) -> ReviewDocumentQueue + Send + Sync>;
@@ -234,7 +236,7 @@ async fn get_review_document(
 
     let mut response = response.ok_or(StatusCode::NOT_FOUND)?;
     response.related_issue_titles =
-        lookup_issue_titles(&response.frontmatter, issue_title_lookup).await;
+        lookup_issue_titles_with_timeout(&response.frontmatter, issue_title_lookup).await;
     Ok(Json(response))
 }
 
@@ -316,7 +318,7 @@ async fn get_review_document_by_id(
 
     let mut response = response;
     response.related_issue_titles =
-        lookup_issue_titles(&response.frontmatter, issue_title_lookup).await;
+        lookup_issue_titles_with_timeout(&response.frontmatter, issue_title_lookup).await;
     Ok(Json(response))
 }
 
@@ -607,11 +609,12 @@ mod tests {
     use crate::shared::human_in_the_loop::LockGuard;
 
     use super::metadata::{ReviewDocumentKind, ReviewDocumentTarget};
+    use super::related_issue_titles::IssueTitleLookup;
     use super::{
         ReviewDocumentOperationLock, ReviewDocumentResponse, ReviewDocumentRoots,
         ReviewDocumentSummary, finish_ack_fifo_path, finish_request_fifo_path,
-        review_document_revision, router_with_injected_action_executor, router_with_loaders,
-        router_with_path_roots, router_with_session_loader,
+        review_document_revision, router_with_dependencies, router_with_injected_action_executor,
+        router_with_loaders, router_with_path_roots, router_with_session_loader,
     };
 
     #[test]
@@ -924,6 +927,86 @@ mod tests {
                     "isEditor": true,
                     "canSave": false,
                     "canFinish": false,
+                }),
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::active("/sessions/fixture-session/review-document")]
+    #[case::by_id("/sessions/fixture-session/review-documents/fixture-review")]
+    #[tokio::test]
+    async fn includes_related_issue_titles_in_document_get_responses(
+        #[case] route: &str,
+        active_review_document: ActiveReviewDocument,
+    ) {
+        let document_path = &active_review_document.document_path;
+        std::fs::write(
+            document_path,
+            indoc! {"
+                ---
+                parentIssue: sample-owner/sample-repo#42
+                subIssues:
+                  - sample-owner/sample-repo#43
+                ---
+                Fixture issue body.
+            "},
+        )
+        .expect("fixture issue document should be writable");
+        let session = active_review_document.session.clone();
+        let issue_title_lookup: IssueTitleLookup = Arc::new(|owner, repository, number| {
+            Box::pin(async move {
+                match (owner.as_str(), repository.as_str(), number) {
+                    ("sample-owner", "sample-repo", 42) => Ok("Sample parent title".to_owned()),
+                    ("sample-owner", "sample-repo", 43) => Ok("Sample sub-issue title".to_owned()),
+                    _ => anyhow::bail!("unexpected issue reference"),
+                }
+            })
+        });
+        let app = router_with_dependencies(
+            move |_| Ok(Some(session.clone())),
+            |_| ReviewDocumentQueue::Unmanaged,
+            ReviewDocumentRoots::default(),
+            issue_title_lookup,
+        );
+        let response = app
+            .oneshot(
+                Request::get(route)
+                    .body(Body::empty())
+                    .expect("request should be valid"),
+            )
+            .await
+            .expect("request should complete");
+        let status = response.status();
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should be readable");
+
+        assert_eq!(
+            (
+                status,
+                serde_json::from_slice::<serde_json::Value>(&body)
+                    .expect("response should be JSON"),
+            ),
+            (
+                StatusCode::OK,
+                serde_json::json!({
+                    "id": "fixture-review",
+                    "revision": current_revision(document_path),
+                    "frontmatter": {
+                        "parentIssue": "sample-owner/sample-repo#42",
+                        "subIssues": ["sample-owner/sample-repo#43"],
+                    },
+                    "body": "Fixture issue body.\n",
+                    "relatedIssueTitles": {
+                        "sample-owner/sample-repo#42": "Sample parent title",
+                        "sample-owner/sample-repo#43": "Sample sub-issue title",
+                    },
+                    "kind": "draft",
+                    "target": { "path": "fixture-document.md" },
+                    "isEditor": true,
+                    "canSave": true,
+                    "canFinish": true,
                 }),
             ),
         );
