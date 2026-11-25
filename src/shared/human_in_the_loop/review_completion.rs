@@ -52,14 +52,13 @@ pub(crate) fn complete_review<S, H, E>(
     handler: &H,
     editor_runner: &E,
     finish_fifo_path: Option<&Path>,
-    cleanup_guard: CleanupGuard,
+    _cleanup_guard: &CleanupGuard,
 ) -> Result<bool>
 where
     S: DocumentSchema,
     H: ReviewHandler<S>,
     E: ReviewEditorRunner,
 {
-    let _cleanup_guard = cleanup_guard;
     let editor_outcome = editor_runner.run(document_path, window_title, finish_fifo_path)?;
     let finish_signal = match finish_fifo_path {
         Some(path) => finalize_finish_request(document_path, path, &editor_outcome)?,
@@ -121,6 +120,7 @@ mod tests {
     use std::process::ExitStatus;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::{Duration, Instant};
 
     use indoc::indoc;
     use rstest::{fixture, rstest};
@@ -208,6 +208,14 @@ mod tests {
         let ready_file = PathBuf::from(
             std::env::var_os("ARMYKNIFE_REVIEW_TEST_READY_FILE").expect("ready file path"),
         );
+        let release_file = PathBuf::from(
+            std::env::var_os("ARMYKNIFE_REVIEW_TEST_RELEASE_FILE").expect("release file path"),
+        );
+        let review_finished_file = PathBuf::from(
+            std::env::var_os("ARMYKNIFE_REVIEW_TEST_FINISHED_FILE")
+                .expect("review finished file path"),
+        );
+
         let mut done_signal = FifoSignalGuard::new(&done_fifo_path);
         let cleanup_guard = CleanupGuard::new(&document_path, &lock_id, None)
             .expect("review child should register its lock holder");
@@ -218,12 +226,21 @@ mod tests {
             &WatchWebReviewHandler,
             &editor_runner,
             Some(&finish_fifo_path),
-            cleanup_guard,
+            &cleanup_guard,
         )
         .expect("review completion should succeed");
 
-        assert!(completed_by_watch_web);
+        std::fs::write(&review_finished_file, "finished")
+            .expect("review completion marker should be written");
         done_signal.set_signal(b'1');
+        drop(done_signal);
+        let started_at = Instant::now();
+        while !release_file.exists() && started_at.elapsed() < Duration::from_secs(15) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let release_received = release_file.exists();
+        drop(cleanup_guard);
+        assert_eq!((completed_by_watch_web, release_received), (true, true));
     }
 
     #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -402,7 +419,7 @@ mod tests {
             &handler,
             &runner,
             Some(&finish_fifo_path),
-            cleanup_guard,
+            &cleanup_guard,
         )
         .map_err(|error| error.to_string());
         let mut ack_signal = [0_u8; 1];
@@ -466,7 +483,7 @@ mod tests {
             &handler,
             &runner,
             None,
-            cleanup_guard,
+            &cleanup_guard,
         )
         .map_err(|error| error.to_string());
         let completed_documents = completed_documents

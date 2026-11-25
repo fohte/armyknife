@@ -278,7 +278,7 @@ pub fn run_complete(args: &ReviewCompleteArgs) -> anyhow::Result<()> {
         &IssueReviewHandler,
         &config.editor,
         args.finish_fifo.as_deref(),
-        cleanup_guard,
+        &cleanup_guard,
     )?;
 
     if completed_by_watch_web && let Some(fifo_guard) = fifo_guard.as_mut() {

@@ -654,13 +654,17 @@ mod tests {
     fn watch_web_review_parent_worker() {
         use std::io::Write;
         use std::os::fd::AsRawFd;
-        use std::process::{Command, Stdio};
+        use std::process::Stdio;
 
         let document_path = PathBuf::from(
             std::env::var_os("ARMYKNIFE_REVIEW_TEST_DOCUMENT").expect("document path"),
         );
         let ready_file =
             std::env::var_os("ARMYKNIFE_REVIEW_TEST_READY_FILE").expect("ready file path");
+        let release_file =
+            std::env::var_os("ARMYKNIFE_REVIEW_TEST_RELEASE_FILE").expect("release file path");
+        let finished_file = std::env::var_os("ARMYKNIFE_REVIEW_TEST_FINISHED_FILE")
+            .expect("review finished file path");
         let output_path =
             std::env::var_os("ARMYKNIFE_REVIEW_TEST_OUTPUT_FILE").expect("output file path");
         let output_file = std::fs::File::create(output_path).expect("output file should open");
@@ -676,7 +680,9 @@ mod tests {
             &document_path,
             None,
             |document_path, done_fifo_path, finish_fifo_path, lock_id| {
-                let child = Command::new(std::env::current_exe()?)
+                let mut child_command =
+                    crate::infra::process::new_command(std::env::current_exe()?);
+                child_command
                     .args([
                         "--exact",
                         "shared::human_in_the_loop::review_completion::tests::watch_web_review_child_worker",
@@ -688,10 +694,12 @@ mod tests {
                     .env("ARMYKNIFE_REVIEW_TEST_FINISH_FIFO", finish_fifo_path)
                     .env("ARMYKNIFE_REVIEW_TEST_LOCK_ID", lock_id)
                     .env("ARMYKNIFE_REVIEW_TEST_READY_FILE", ready_file)
+                    .env("ARMYKNIFE_REVIEW_TEST_RELEASE_FILE", release_file)
+                    .env("ARMYKNIFE_REVIEW_TEST_FINISHED_FILE", finished_file)
                     .stdin(Stdio::null())
                     .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .spawn()?;
+                    .stderr(Stdio::null());
+                let child = crate::infra::process::spawn(child_command)?;
                 review_child = Some(child);
                 Ok(ReviewLaunch::without_queue(None))
             },

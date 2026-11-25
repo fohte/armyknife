@@ -198,7 +198,13 @@ pub(crate) fn successful_action_results_in_directory(
 pub(crate) fn wait_for_action_result(
     document_path: &Path,
 ) -> std::io::Result<ReviewDocumentActionResult> {
-    let deadline = Instant::now() + ACTION_RESULT_TIMEOUT;
+    wait_for_action_result_until(document_path, Instant::now() + ACTION_RESULT_TIMEOUT)
+}
+
+fn wait_for_action_result_until(
+    document_path: &Path,
+    deadline: Instant,
+) -> std::io::Result<ReviewDocumentActionResult> {
     loop {
         if let Some(result) = read_action_result(document_path)? {
             return Ok(result);
@@ -242,11 +248,28 @@ fn remove_if_present(path: &Path) -> std::io::Result<()> {
 mod tests {
     use super::{
         ReviewDocumentAction, ReviewDocumentActionResult, action_result_after_review_completion,
-        document_hash, save_action_result, successful_action_result,
+        document_hash, save_action_result, successful_action_result, wait_for_action_result_until,
     };
     use rstest::rstest;
     use std::fs;
+    use std::time::Instant;
     use tempfile::TempDir;
+
+    #[test]
+    fn missing_action_result_timeout_warns_against_repeating_the_action() {
+        let directory = TempDir::new().expect("fixture directory should be created");
+        let document_path = directory.path().join("review.md");
+        let error = wait_for_action_result_until(&document_path, Instant::now())
+            .expect_err("missing action result should time out");
+
+        assert_eq!(
+            (error.kind(), error.to_string()),
+            (
+                std::io::ErrorKind::TimedOut,
+                "Timed out waiting for the watch-web action result. The action may still be running in watch-web; do not retry submit or push.".to_owned(),
+            ),
+        );
+    }
 
     #[rstest]
     #[case::issue_comment(ReviewDocumentAction::PostComment)]

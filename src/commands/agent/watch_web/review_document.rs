@@ -2043,8 +2043,9 @@ mod tests {
     #[tokio::test]
     async fn web_action_waits_for_the_review_child_and_reports_its_result() {
         use std::os::unix::process::CommandExt;
-        use std::process::{Command, Stdio};
+        use std::process::Stdio;
         use std::sync::Mutex;
+        use std::sync::atomic::AtomicBool;
 
         use crate::shared::human_in_the_loop::{
             ReviewDocumentAction, ReviewDocumentActionResult,
@@ -2072,8 +2073,12 @@ mod tests {
         std::fs::write(&document_path, original_document)
             .expect("review document should be written");
         let ready_file = temp_dir.path().join("review-child-ready");
+        let release_file = temp_dir.path().join("review-child-release");
+        let finished_file = temp_dir.path().join("review-child-finished");
         let output_file = temp_dir.path().join("agent-output");
-        let mut review_parent = Command::new(std::env::current_exe().expect("test binary path"))
+        let mut review_parent_command =
+            crate::infra::process::new_command(std::env::current_exe().expect("test binary path"));
+        review_parent_command
             .args([
                 "--exact",
                 "shared::human_in_the_loop::tests::watch_web_review_parent_worker",
@@ -2082,12 +2087,14 @@ mod tests {
             ])
             .env("ARMYKNIFE_REVIEW_TEST_DOCUMENT", &document_path)
             .env("ARMYKNIFE_REVIEW_TEST_READY_FILE", &ready_file)
+            .env("ARMYKNIFE_REVIEW_TEST_RELEASE_FILE", &release_file)
+            .env("ARMYKNIFE_REVIEW_TEST_FINISHED_FILE", &finished_file)
             .env("ARMYKNIFE_REVIEW_TEST_OUTPUT_FILE", &output_file)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .process_group(0)
-            .spawn()
+            .stderr(Stdio::null());
+        review_parent_command.process_group(0);
+        let mut review_parent = crate::infra::process::spawn(review_parent_command)
             .expect("review parent worker should start");
         let child_ready = wait_for_file(&ready_file, Duration::from_secs(5)).await;
         if !child_ready {
@@ -2101,13 +2108,16 @@ mod tests {
         let mut session = session_with_review(&document_path);
         session.cwd = temp_dir.path().to_path_buf();
         let action_lock_state = Arc::new(Mutex::new(None));
+        let action_started = Arc::new(AtomicBool::new(false));
         let executor_lock_state = action_lock_state.clone();
+        let executor_action_started = action_started.clone();
         let executor_path = document_path.clone();
         let app = router_with_injected_action_executor(
             move |_| Ok(Some(session.clone())),
             |_| ReviewDocumentQueue::Unmanaged,
             roots,
             Arc::new(move |_| {
+                executor_action_started.store(true, std::sync::atomic::Ordering::SeqCst);
                 let competing_lock = LockGuard::acquire(&executor_path);
                 let lock_state = (
                     LockGuard::is_locked(&executor_path),
@@ -2133,10 +2143,27 @@ mod tests {
                 .to_string(),
             ))
             .expect("action request should be valid");
-        let response = app
-            .oneshot(request)
-            .await
-            .expect("action request should complete");
+        let app = app.clone();
+        let mut action_task = tokio::spawn(async move { app.oneshot(request).await });
+        let review_child_finished = wait_for_file(&finished_file, Duration::from_secs(5)).await;
+        let early_response =
+            tokio::time::timeout(Duration::from_millis(100), &mut action_task).await;
+        let action_completed_before_release = early_response.is_ok();
+        let executor_started_before_release =
+            action_started.load(std::sync::atomic::Ordering::SeqCst);
+        let release_written = std::fs::write(&release_file, "release").is_ok();
+        if !release_written {
+            terminate_test_worker(&mut review_parent);
+        }
+        let response = match early_response {
+            Ok(result) => result
+                .expect("action request task should not panic")
+                .expect("action request should complete"),
+            Err(_) => action_task
+                .await
+                .expect("action request task should not panic")
+                .expect("action request should complete"),
+        };
         let response_status = response.status();
         let response_body = to_bytes(response.into_body(), usize::MAX)
             .await
@@ -2150,6 +2177,7 @@ mod tests {
             terminate_test_worker(&mut review_parent);
         }
         let review_parent_succeeded = wait_for_test_worker(&mut review_parent).await;
+        let editor_can_reacquire_lock = LockGuard::acquire(&document_path).is_ok();
         let printed_output = std::fs::read_to_string(&output_file)
             .expect("review process output should be captured");
         let action_result = if action_result_saved {
@@ -2167,14 +2195,23 @@ mod tests {
         assert_eq!(
             (
                 child_ready,
+                review_child_finished,
+                action_completed_before_release,
+                executor_started_before_release,
+                release_written,
                 response_status,
                 response_json,
                 action_lock_state,
                 action_result,
                 review_parent_succeeded,
+                editor_can_reacquire_lock,
                 printed_output,
             ),
             (
+                true,
+                true,
+                false,
+                false,
                 true,
                 StatusCode::OK,
                 serde_json::json!({
@@ -2189,6 +2226,7 @@ mod tests {
                     resulting_hash.clone(),
                     Some(resulting_hash),
                 )),
+                true,
                 true,
                 indoc! {"
                     Watch-web issue comment succeeded: Issue comment posted.
