@@ -202,7 +202,7 @@ pub(crate) fn redact_command_arguments(arguments: &[String]) -> Vec<String> {
             if is_sensitive_header(argument) {
                 return REDACTED_CREDENTIAL.to_owned();
             }
-            if is_sensitive_key(argument) {
+            if argument.starts_with('-') && is_sensitive_key(argument) {
                 redact_next = true;
                 return argument.clone();
             }
@@ -212,29 +212,70 @@ pub(crate) fn redact_command_arguments(arguments: &[String]) -> Vec<String> {
 }
 
 fn is_sensitive_key(key: &str) -> bool {
-    let normalized = key
-        .trim_start_matches('-')
-        .chars()
-        .filter(|character| character.is_ascii_alphanumeric())
-        .collect::<String>()
-        .to_ascii_lowercase();
-    [
-        "token",
-        "password",
-        "passwd",
-        "secret",
-        "credential",
-        "authorization",
-        "auth",
-        "apikey",
-        "accesskey",
-        "privatekey",
-        "clientkey",
-        "signingkey",
-    ]
-    .iter()
-    .any(|sensitive_name| normalized.contains(sensitive_name))
-        || normalized == "key"
+    let characters = key.trim_start_matches('-').chars().collect::<Vec<_>>();
+    let mut words = Vec::new();
+    let mut current_word = String::new();
+
+    for (index, character) in characters.iter().copied().enumerate() {
+        if !character.is_ascii_alphanumeric() {
+            if !current_word.is_empty() {
+                words.push(std::mem::take(&mut current_word));
+            }
+            continue;
+        }
+
+        let previous = index
+            .checked_sub(1)
+            .and_then(|previous_index| characters.get(previous_index))
+            .copied();
+        let next = characters.get(index + 1).copied();
+        let camel_case_boundary = character.is_ascii_uppercase()
+            && previous.is_some_and(|previous| {
+                previous.is_ascii_lowercase()
+                    || previous.is_ascii_digit()
+                    || (previous.is_ascii_uppercase()
+                        && next.is_some_and(|next| next.is_ascii_lowercase()))
+            });
+        if camel_case_boundary && !current_word.is_empty() {
+            words.push(std::mem::take(&mut current_word));
+        }
+        current_word.push(character.to_ascii_lowercase());
+    }
+    if !current_word.is_empty() {
+        words.push(current_word);
+    }
+
+    if words.iter().any(|word| {
+        matches!(
+            word.as_str(),
+            "token"
+                | "password"
+                | "passwd"
+                | "secret"
+                | "credential"
+                | "credentials"
+                | "authorization"
+                | "auth"
+        )
+    }) {
+        return true;
+    }
+
+    (words.len() == 1
+        && matches!(
+            words[0].as_str(),
+            "key" | "apikey" | "accesstoken" | "privatekey" | "clientkey" | "signingkey"
+        ))
+        || words.windows(2).any(|pair| {
+            matches!(
+                (pair[0].as_str(), pair[1].as_str()),
+                ("api", "key")
+                    | ("access", "key")
+                    | ("private", "key")
+                    | ("client", "key")
+                    | ("signing", "key")
+            )
+        })
 }
 
 fn is_sensitive_header(argument: &str) -> bool {
@@ -563,13 +604,37 @@ mod tests {
         &["a", "--token", "fixture-secret", "review"],
         vec!["a", "--token", REDACTED_CREDENTIAL, "review"],
     )]
+    #[case::separate_password_value(
+        &["a", "--password", "fixture-secret"],
+        vec!["a", "--password", REDACTED_CREDENTIAL],
+    )]
+    #[case::camel_case_secret_key(
+        &["a", "--clientSecret=fixture-secret"],
+        vec!["a", "--clientSecret=[REDACTED]"],
+    )]
     #[case::inline_api_key_value(
         &["a", "--api-key=fixture-secret"],
         vec!["a", "--api-key=[REDACTED]"],
     )]
+    #[case::environment_api_key_value(
+        &["API_KEY=fixture-secret"],
+        vec!["API_KEY=[REDACTED]"],
+    )]
     #[case::environment_token_value(
-        &["TOKEN=fixture-secret"],
-        vec!["TOKEN=[REDACTED]"],
+        &["GITHUB_TOKEN=fixture-secret"],
+        vec!["GITHUB_TOKEN=[REDACTED]"],
+    )]
+    #[case::auth_subcommand_is_preserved(
+        &["a", "gh", "auth", "status"],
+        vec!["a", "gh", "auth", "status"],
+    )]
+    #[case::author_flag_is_preserved(
+        &["a", "gh", "pr", "list", "--author", "fixture-author"],
+        vec!["a", "gh", "pr", "list", "--author", "fixture-author"],
+    )]
+    #[case::token_substring_is_not_sensitive(
+        &["TOKENIZED=fixture-value"],
+        vec!["TOKENIZED=fixture-value"],
     )]
     #[case::authorization_header_value(
         &["a", "-H", "Authorization: Bearer fixture-secret"],

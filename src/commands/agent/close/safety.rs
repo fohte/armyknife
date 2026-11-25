@@ -160,15 +160,27 @@ mod tests {
 
     use super::pending_work_error;
     use crate::commands::agent::bg_tasks::PendingTask;
-    use crate::commands::agent::types::Session;
+    use crate::commands::agent::types::{BG_RUN_PENDING_TASK_MARKER, Session};
 
     #[fixture]
     fn session() -> Session {
-        let review_id = ["review-id", "v2", "12345", "/fixture/review.md", ""].join("\0");
+        let process_id = std::process::id().to_string();
+        let process_started_at = crate::infra::process::process_start_time(std::process::id())
+            .expect("test process start time should be available");
+        let review_id = [
+            "review-id",
+            "v3",
+            "12345",
+            "/fixture/review.md",
+            "",
+            process_id.as_str(),
+            process_started_at.as_str(),
+        ]
+        .join("\0");
         serde_json::from_value(json!({
             "session_id": "fixture-session",
             "cwd": "/fixture/project",
-            "engine": "claude",
+            "engine": "codex",
             "status": "stopped",
             "created_at": "2026-01-01T00:00:00Z",
             "updated_at": "2026-01-01T00:00:00Z",
@@ -185,33 +197,58 @@ mod tests {
             .with_timezone(&Utc)
     }
 
-    #[rstest]
-    fn pending_work_error_lists_background_command_ids_and_review_document(session: Session) {
-        let task = PendingTask {
+    #[fixture]
+    fn pending_task() -> PendingTask {
+        PendingTask {
             id: "bg-task".to_owned(),
-            description: "a".to_owned(),
+            description: "fixture-command".to_owned(),
             command: Some(vec![
-                "a".to_owned(),
-                "gh".to_owned(),
-                "pr-review".to_owned(),
-                "reply".to_owned(),
-                "review".to_owned(),
+                "fixture-command".to_owned(),
+                "--target".to_owned(),
                 "fixture-review".to_owned(),
             ]),
             started_at: started_at(),
             elapsed_seconds: 0,
             stdout_path: "/fixture/output".into(),
-        };
+        }
+    }
 
+    #[rstest]
+    fn pending_work_error_lists_background_command_ids_and_review_document(
+        session: Session,
+        pending_task: PendingTask,
+    ) {
         assert_eq!(
-            pending_work_error(&session, &[task]),
+            pending_work_error(&session, &[pending_task]),
             indoc! {"
                 Agent session `fixture-session` has pending background or agent tasks:
-                  Background task `bg-task`: a gh pr-review reply review fixture-review (started at 2026-01-02 03:04:05 UTC)
+                  Background task `bg-task`: fixture-command --target fixture-review (started at 2026-01-02 03:04:05 UTC)
                   Background task ID: `hook-task`
                   Agent task ID: `subagent-task`
                   Review document: /fixture/review.md
                     Finish it in the editor, or run `a agent watch-web` and finish it there.
+                Finish the pending work, then retry this command.
+            "}.trim_end(),
+        );
+    }
+
+    #[rstest]
+    fn pending_work_error_lists_runtime_marker_task_details_without_exposing_marker(
+        mut session: Session,
+        pending_task: PendingTask,
+    ) {
+        session.pending_bg_task_ids.clear();
+        session
+            .pending_bg_task_ids
+            .insert(BG_RUN_PENDING_TASK_MARKER.to_owned());
+        session.pending_agent_task_ids.clear();
+        session.pending_human_review_ids.clear();
+
+        assert_eq!(
+            pending_work_error(&session, &[pending_task]),
+            indoc! {"
+                Agent session `fixture-session` has pending background or agent tasks:
+                  Background task `bg-task`: fixture-command --target fixture-review (started at 2026-01-02 03:04:05 UTC)
                 Finish the pending work, then retry this command.
             "}.trim_end(),
         );
@@ -224,7 +261,7 @@ mod tests {
         session.pending_human_review_ids.clear();
         let task = PendingTask {
             id: "legacy-task".to_owned(),
-            description: "a".to_owned(),
+            description: "fixture-command".to_owned(),
             command: None,
             started_at: started_at(),
             elapsed_seconds: 0,
@@ -235,7 +272,7 @@ mod tests {
             pending_work_error(&session, &[task]),
             indoc! {"
                 Agent session `fixture-session` has pending background or agent tasks:
-                  Background task `legacy-task`: a (started at 2026-01-02 03:04:05 UTC)
+                  Background task `legacy-task`: fixture-command (started at 2026-01-02 03:04:05 UTC)
                 Finish the pending work, then retry this command.
             "}
             .trim_end(),
