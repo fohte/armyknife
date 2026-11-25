@@ -554,8 +554,10 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | `status set <kind> <note>`                                                                            |         | Set the calling session's reason for stopping                                               |
 | `decision add <TITLE> --why <WHY> --considered <ALT> [--considered <ALT>...] --easy-to-change <TEXT>` |         | Record a provisional decision for later review                                              |
 | `proposal add`                                                                                        |         | Record a structured proposal from JSON read from stdin                                      |
+| `proposal edit <seq>`                                                                                 |         | Replace a pending proposal from the calling session using JSON read from stdin              |
 | `proposal withdraw <seq> [--comment <reason>]`                                                        |         | Withdraw a pending proposal from the calling session                                        |
 | `todo add`                                                                                            |         | Record one task the user needs to do from JSON read from stdin                              |
+| `todo edit <seq>`                                                                                     |         | Replace a pending task from the calling session using JSON read from stdin                  |
 | `todo withdraw <seq> [--comment <reason>]`                                                            |         | Withdraw a pending task from the calling session                                            |
 | `title set <TITLE>`                                                                                   |         | Set the calling session's title; an empty title restores the automatic title                |
 | `web-ui add <url> --name <name>`                                                                      |         | Register a named local web interface for the watch-web status panel                         |
@@ -619,12 +621,21 @@ Recorded proposal 1
 
 Run `a agent proposal withdraw <seq> [--comment <reason>]` from the session that recorded a proposal to withdraw it before it is answered. The proposal remains in the watch-web conversation with its withdrawn state and optional comment, and can no longer be answered.
 
+Run `a agent proposal edit <seq>` from the session that recorded a proposal to replace its contents while it is pending. Answered or withdrawn proposals cannot be edited. Pipe the same JSON shape used by `a agent proposal add`; the proposal keeps its sequence number and position in the watch-web conversation.
+
 ```console
 $ a agent proposal withdraw 1 --comment "The decision is no longer needed."
 Withdrew proposal 1
 ```
 
+```console
+$ cat proposal.json | a agent proposal edit 1
+Edited proposal 1
+```
+
 Run `a agent todo add` from a tracked Claude Code or Codex session and pipe a JSON object to stdin. The required field is `title`; `detail` and `folded` are optional. Set `folded` to `true` when the user needs to check the task later; it starts folded and watch-web marks it as added folded. A todo stays in the watch-web conversation after it is completed, rejected, or withdrawn, with its final state and optional comment. Use a proposal when the user should choose from options. The command prints `Recorded todo <seq>` after saving the todo. The user can complete or reject a todo in watch-web; an agent can withdraw a pending todo from its own session with `a agent todo withdraw <seq> [--comment <reason>]`. Withdrawal does not send a message to the session.
+
+Run `a agent todo edit <seq>` from the session that recorded a todo to replace its contents before it is completed, rejected, or withdrawn. Pipe the same JSON shape used by `a agent todo add`; the todo keeps its sequence number and position in the watch-web conversation.
 
 ```console
 $ cat <<'JSON' | a agent todo add
@@ -640,6 +651,11 @@ Recorded todo 1
 ```console
 $ a agent todo withdraw 1 --comment "The plan changed."
 Withdrew todo 1
+```
+
+```console
+$ cat todo.json | a agent todo edit 1
+Edited todo 1
 ```
 
 ### `a agent usage record`
@@ -1249,8 +1265,8 @@ Files sent by an agent are served by `GET /api/sessions/{id}/files/{file_id}` on
 - `POST /api/sessions/{id}/commands/execute` with the same request to revalidate and run the command in the session working directory. The response includes `{"exitCode":0,"succeeded":true,"timedOut":false}`; stdout and stderr are returned to the session, capped to the last 8 KiB each, and execution stops after 30 seconds
 - `POST /api/sessions/{id}/rewind` rewinds a stopped or paused session with a tmux pane, no pending background tasks, and no active sweep. Send `{"messageId":"fixture-user-message-id","mode":"conversation_and_code"}`; `mode` accepts `conversation_and_code`, `conversation`, or `code` for Claude Code and only `conversation` for Codex. Returns `{"sessionId":"fixture-fork-session-id"}`.
 - `POST /api/sessions/{id}/answer` with `{"requestId":"...","answers":{"Which formats?":"Markdown, Plain text","Include examples?":"Yes"}}`, or `{"requestId":"...","skip":true}`
-- `POST /api/sessions/{id}/proposals/{seq}/answer` with `{"choice":0,"comment":"..."}`; `choice` is a zero-based option index or `null` to request another proposal, and `comment` may be `null`
-- `POST /api/sessions/{id}/todos/{seq}/resolve` with `{"resolution":"completed","comment":"..."}` or `{"resolution":"rejected","comment":"..."}`; the comment may be `null`, and a live session receives the selected outcome as a user action before it is saved
+- `POST /api/sessions/{id}/proposals/{seq}/answer` with `{"choice":0,"comment":"...","expectedBody":{"title":"...","summary":null,"options":[...]}}`; `choice` is a zero-based option index or `null` to request another proposal, and `comment` may be `null`. `expectedBody` is optional and, when provided, must match the proposal shown to the user.
+- `POST /api/sessions/{id}/todos/{seq}/resolve` with `{"resolution":"completed","comment":"...","expectedTitle":"...","expectedDetail":null}` or `{"resolution":"rejected","comment":"...","expectedTitle":"...","expectedDetail":null}`; the comment may be `null`, and a live session receives the selected outcome as a user action before it is saved. `expectedTitle` and `expectedDetail` are optional; provided values must match the todo shown to the user.
 - `POST /api/sessions/{id}/permission/approve` with `{"requestId":"..."}`
 - `POST /api/sessions/{id}/permission/reject` with `{"requestId":"..."}`
 - `POST /api/sessions/{id}/permission-denials/{seq}/retry` sends a one-time approval message for a classifier denial; denials without a classifier verdict cannot be retried

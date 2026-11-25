@@ -1917,6 +1917,15 @@ mod tests {
         let unanswered = message_response(&router).await;
         {
             let mut proposal = proposal.lock().unwrap();
+            proposal.body = r#"{"title":"Updated proposal","summary":null,"options":[{"label":"Updated A","description":null,"pros":[],"cons":[],"recommended":false},{"label":"Updated B","description":null,"pros":[],"cons":[],"recommended":false}]}"#.to_string();
+        }
+        let edited = message_response(&router).await;
+        {
+            let mut proposal = proposal.lock().unwrap();
+            proposal.body = r#"{"title":"Sample proposal","summary":null,"options":[{"label":"Option A","description":null,"pros":[],"cons":[],"recommended":false},{"label":"Option B","description":null,"pros":[],"cons":[],"recommended":false}]}"#.to_string();
+        }
+        {
+            let mut proposal = proposal.lock().unwrap();
             proposal.answer = Some(r#"{"choice":0,"comment":"Keep option A."}"#.to_string());
             proposal.resolved_at = Some(created_at);
         }
@@ -1930,12 +1939,17 @@ mod tests {
         let withdrawn = message_response(&router).await;
 
         assert_eq!(
-            (unanswered, resolved, withdrawn),
+            (unanswered, edited, resolved, withdrawn),
             (
                 (
                     StatusCode::OK,
                     Some("application/json".to_string()),
                     json!({"messages":[{"type":"proposal","seq":1,"title":"Sample proposal","summary":null,"options":[{"label":"Option A","description":null,"pros":[],"cons":[],"recommended":false},{"label":"Option B","description":null,"pros":[],"cons":[],"recommended":false}],"answer":null,"resolved":false,"resolution":null,"comment":null}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":true,"activeQuestionIndex":null})
+                ),
+                (
+                    StatusCode::OK,
+                    Some("application/json".to_string()),
+                    json!({"messages":[{"type":"proposal","seq":1,"title":"Updated proposal","summary":null,"options":[{"label":"Updated A","description":null,"pros":[],"cons":[],"recommended":false},{"label":"Updated B","description":null,"pros":[],"cons":[],"recommended":false}],"answer":null,"resolved":false,"resolution":null,"comment":null}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":true,"activeQuestionIndex":null})
                 ),
                 (
                     StatusCode::OK,
@@ -2085,7 +2099,7 @@ mod tests {
             .unwrap()
             .with_timezone(&chrono::Utc);
         let session = stored_session();
-        let todos = vec![
+        let todos = Arc::new(Mutex::new(vec![
             AgentTodo {
                 session_id: "fixture-session".to_string(),
                 seq: 1,
@@ -2110,7 +2124,8 @@ mod tests {
                 resolution: Some(TodoResolution::Completed),
                 comment: Some("Done".to_string()),
             },
-        ];
+        ]));
+        let todo_loader = Arc::clone(&todos);
         let loaders = RouteLoaders::new(
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
@@ -2118,46 +2133,88 @@ mod tests {
             |_, _| Ok(()),
             |_| Ok(Vec::new()),
         )
-        .with_todo_loader(move |_| Ok(todos.clone()));
+        .with_todo_loader(move |_| Ok(todo_loader.lock().unwrap().clone()));
         let router = routes_with_proposals_and_peer_out_messages(
             move |id| Ok((id == "fixture-session").then(|| session.clone())),
             |_| Ok(None),
             loaders,
         );
 
+        let original = message_response(&router).await;
+        {
+            let mut todos = todos.lock().unwrap();
+            todos[0].title = "Review the page".to_string();
+            todos[0].detail = Some("Check the navigation".to_string());
+        }
+        let edited = message_response(&router).await;
+
         assert_eq!(
-            message_response(&router).await,
+            (original, edited),
             (
-                StatusCode::OK,
-                Some("application/json".to_string()),
-                json!({
-                    "messages": [
-                        {
-                            "type": "todo",
-                            "seq": 2,
-                            "title": "Update settings",
-                            "detail": null,
-                            "completed": true,
-                            "resolution": "completed",
-                            "comment": "Done",
-                        },
-                        {
-                            "type": "todo",
-                            "seq": 1,
-                            "title": "Check the page",
-                            "detail": "Use a phone",
-                            "completed": false,
-                            "resolution": null,
-                            "comment": null,
-                        },
-                    ],
-                    "backgroundTasks": [],
-                    "start": 0,
-                    "total": 2,
-                    "decisions": [],
-                    "hasUnansweredProposal": false,
-                    "activeQuestionIndex": null,
-                }),
+                (
+                    StatusCode::OK,
+                    Some("application/json".to_string()),
+                    json!({
+                        "messages": [
+                            {
+                                "type": "todo",
+                                "seq": 2,
+                                "title": "Update settings",
+                                "detail": null,
+                                "completed": true,
+                                "resolution": "completed",
+                                "comment": "Done",
+                            },
+                            {
+                                "type": "todo",
+                                "seq": 1,
+                                "title": "Check the page",
+                                "detail": "Use a phone",
+                                "completed": false,
+                                "resolution": null,
+                                "comment": null,
+                            },
+                        ],
+                        "backgroundTasks": [],
+                        "start": 0,
+                        "total": 2,
+                        "decisions": [],
+                        "hasUnansweredProposal": false,
+                        "activeQuestionIndex": null,
+                    }),
+                ),
+                (
+                    StatusCode::OK,
+                    Some("application/json".to_string()),
+                    json!({
+                        "messages": [
+                            {
+                                "type": "todo",
+                                "seq": 2,
+                                "title": "Update settings",
+                                "detail": null,
+                                "completed": true,
+                                "resolution": "completed",
+                                "comment": "Done",
+                            },
+                            {
+                                "type": "todo",
+                                "seq": 1,
+                                "title": "Review the page",
+                                "detail": "Check the navigation",
+                                "completed": false,
+                                "resolution": null,
+                                "comment": null,
+                            },
+                        ],
+                        "backgroundTasks": [],
+                        "start": 0,
+                        "total": 2,
+                        "decisions": [],
+                        "hasUnansweredProposal": false,
+                        "activeQuestionIndex": null,
+                    }),
+                ),
             ),
         );
     }
