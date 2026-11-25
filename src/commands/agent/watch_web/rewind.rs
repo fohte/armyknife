@@ -102,6 +102,11 @@ impl Host for LiveHost {
         let Some(tmux_info) = session.tmux_info.as_ref() else {
             bail!("session has no tmux pane");
         };
+        ensure!(
+            new_session.cwd.is_dir(),
+            "session working directory does not exist: {}",
+            new_session.cwd.display()
+        );
         tmux::set_pane_option_for_socket(
             tmux_info.socket_path.as_deref(),
             &tmux_info.pane_id,
@@ -119,6 +124,7 @@ impl Host for LiveHost {
         tmux::respawn_pane_for_socket(
             tmux_info.socket_path.as_deref(),
             &tmux_info.pane_id,
+            &new_session.cwd,
             &command,
         )?;
         Ok(())
