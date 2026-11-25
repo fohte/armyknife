@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.922](https://github.com/fohte/armyknife/compare/v0.1.921...v0.1.922) (2026-11-25)
+
+
+### Bug Fixes
+
+* **agent/peer:** inherit vibe on adoption ([#2269](https://github.com/fohte/armyknife/issues/2269)) ([14f45a7](https://github.com/fohte/armyknife/commit/14f45a716fc82b527d6939db126798a13108daeb))
+
 ## [0.1.921](https://github.com/fohte/armyknife/compare/v0.1.920...v0.1.921) (2026-11-25)
 
 
