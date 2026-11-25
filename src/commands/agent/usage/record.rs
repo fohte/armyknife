@@ -488,6 +488,92 @@ mod tests {
     }
 
     #[rstest]
+    fn malformed_updates_preserve_the_last_valid_usage_fields(
+        sessions_dir: TempDir,
+        transcript_dir: TempDir,
+    ) {
+        let transcript = transcript_dir.path().join("sample-transcript.jsonl");
+        fs::write(
+            &transcript,
+            indoc! {r#"
+                {"type":"assistant","message":{"usage":{"input_tokens":160,"output_tokens":40}}}
+            "#},
+        )
+        .expect("fixture transcript should be written");
+        let first_observed_at = Utc.with_ymd_and_hms(2026, 11, 16, 12, 0, 0).unwrap();
+        let first = serde_json::json!({
+            "session_id": "sample-session-copper",
+            "model": {"display_name": "sample-model-copper"},
+            "effort": {"level": "high"},
+            "context_window": {"context_window_size": 1000},
+            "rate_limits": {
+                "five_hour": {"used_percentage": 32, "resets_at": 1794841200},
+                "seven_day": {"used_percentage": 18, "resets_at": 1795435200}
+            },
+            "version": "0.99.0",
+            "transcript_path": transcript,
+        })
+        .to_string();
+        record_status_line_from(sessions_dir.path(), Cursor::new(first), || {
+            first_observed_at
+        })
+        .expect("initial usage should be recorded");
+
+        let updated_at = Utc.with_ymd_and_hms(2026, 11, 16, 12, 1, 0).unwrap();
+        let update = serde_json::json!({
+            "session_id": "sample-session-copper",
+            "model": {"display_name": "sample-model-copper"},
+            "effort": {"level": 3},
+            "rate_limits": {
+                "five_hour": {"used_percentage": 50, "resets_at": "invalid"}
+            }
+        })
+        .to_string();
+        record_status_line_from(sessions_dir.path(), Cursor::new(update), || updated_at)
+            .expect("valid usage fields should be recorded");
+
+        let rate_limits = RateLimits {
+            five_hour: Some(RateLimitWindow {
+                used_percentage: 50.0,
+                resets_at: Some(1794841200),
+                window_seconds: 18_000,
+            }),
+            seven_day: Some(RateLimitWindow {
+                used_percentage: 18.0,
+                resets_at: Some(1795435200),
+                window_seconds: 604_800,
+            }),
+        };
+        assert_eq!(
+            (
+                usage_snapshots_from(sessions_dir.path()).expect("session usage should load"),
+                engine_quotas_from(sessions_dir.path()).expect("engine quota should load"),
+            ),
+            (
+                vec![SessionUsage {
+                    session_id: "sample-session-copper".to_owned(),
+                    engine: Engine::Claude,
+                    model: Some("sample-model-copper".to_owned()),
+                    effort: Some("high".to_owned()),
+                    context: Some(ContextUsage {
+                        used_tokens: 200,
+                        window_tokens: 1000,
+                        used_percentage: 25,
+                    }),
+                    rate_limits: rate_limits.clone(),
+                    version: Some("0.99.0".to_owned()),
+                    observed_at: updated_at,
+                }],
+                vec![crate::commands::agent::usage::model::EngineQuota {
+                    engine: Engine::Claude,
+                    rate_limits,
+                    observed_at: updated_at,
+                }],
+            ),
+        );
+    }
+
+    #[rstest]
     fn best_effort_recording_succeeds_when_status_line_json_is_invalid(sessions_dir: TempDir) {
         record_status_line_best_effort(
             Ok(sessions_dir.path().to_path_buf()),
