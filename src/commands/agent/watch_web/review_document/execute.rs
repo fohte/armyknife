@@ -184,14 +184,35 @@ pub(super) async fn execute_review_document(
         }
     };
 
-    let approved_document = std::fs::read_to_string(&record.path).map_err(|error| {
-        tracing::warn!(%error, "failed to read approved review document snapshot");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-    save_action_document_snapshot(&record.path, &approved_document).map_err(|error| {
+    let snapshot_result = std::fs::read_to_string(&record.path).and_then(|approved_document| {
+        save_action_document_snapshot(&record.path, &approved_document)
+    });
+    if let Err(error) = snapshot_result {
         tracing::warn!(%error, "failed to save approved review document snapshot");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+        let message = "Could not save the approved review document snapshot.";
+        let action_result = ReviewDocumentActionResult::new(
+            record.action,
+            false,
+            message.to_owned(),
+            record.document_hash.clone(),
+            document_hash(&record.path).ok(),
+        );
+        save_action_result(&record.path, &action_result).map_err(|error| {
+            tracing::error!(%error, "failed to save review document action result");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+        record.status = ActionStatus::Failed;
+        actions
+            .lock()
+            .await
+            .records
+            .insert(key.clone(), record.clone());
+        return Ok(Json(ReviewDocumentActionResponse {
+            success: false,
+            revision,
+            error: Some(message.to_owned()),
+        }));
+    }
 
     if retrying {
         crate::shared::human_in_the_loop::ApprovalManager::new(&record.path)
