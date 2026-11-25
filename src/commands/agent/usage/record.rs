@@ -288,7 +288,8 @@ mod tests {
 
     use chrono::{TimeZone, Utc};
     use indoc::indoc;
-    use tempfile::tempdir;
+    use rstest::{fixture, rstest};
+    use tempfile::{TempDir, tempdir};
 
     use super::{
         parse_claude_status_line, record_status_line_best_effort, record_status_line_from,
@@ -299,10 +300,21 @@ mod tests {
         ContextUsage, RateLimitWindow, RateLimits, SessionUsage,
     };
 
-    #[test]
-    fn records_usage_from_status_line_json_and_transcript() {
-        let sessions_dir = tempdir().expect("temporary sessions directory should exist");
-        let transcript_dir = tempdir().expect("temporary transcript directory should exist");
+    #[fixture]
+    fn sessions_dir() -> TempDir {
+        tempdir().expect("temporary sessions directory should exist")
+    }
+
+    #[fixture]
+    fn transcript_dir() -> TempDir {
+        tempdir().expect("temporary transcript directory should exist")
+    }
+
+    #[rstest]
+    fn records_usage_from_status_line_json_and_transcript(
+        sessions_dir: TempDir,
+        transcript_dir: TempDir,
+    ) {
         let transcript = transcript_dir.path().join("fixture-transcript.jsonl");
         fs::write(
             &transcript,
@@ -397,12 +409,13 @@ mod tests {
         );
     }
 
-    #[test]
-    fn records_valid_status_line_fields_when_another_field_has_an_unexpected_type() {
+    #[rstest]
+    fn records_valid_status_line_fields_when_another_field_has_an_unexpected_type(
+        sessions_dir: TempDir,
+        transcript_dir: TempDir,
+    ) {
         use crate::shared::testing::capture_json_events;
 
-        let sessions_dir = tempdir().expect("temporary sessions directory should exist");
-        let transcript_dir = tempdir().expect("temporary transcript directory should exist");
         let transcript = transcript_dir.path().join("sample-transcript.jsonl");
         fs::write(
             &transcript,
@@ -474,10 +487,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn best_effort_recording_succeeds_when_status_line_json_is_invalid() {
-        let sessions_dir = tempdir().expect("temporary sessions directory should exist");
-
+    #[rstest]
+    fn best_effort_recording_succeeds_when_status_line_json_is_invalid(sessions_dir: TempDir) {
         record_status_line_best_effort(
             Ok(sessions_dir.path().to_path_buf()),
             Cursor::new("not json"),
