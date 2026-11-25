@@ -17,6 +17,24 @@ fn add_proposal(context: &ActionContext, session_id: &str) {
     .unwrap();
 }
 
+fn proposal_answer_request(
+    choice: serde_json::Value,
+    comment: serde_json::Value,
+) -> serde_json::Value {
+    json!({
+        "choice": choice,
+        "comment": comment,
+        "expectedBody": {
+            "title": "Pick a format",
+            "summary": null,
+            "options": [
+                {"label":"Format A","description":null,"pros":[],"cons":[],"recommended":false},
+                {"label":"Format B","description":null,"pros":[],"cons":[],"recommended":false},
+            ],
+        },
+    })
+}
+
 #[rstest]
 #[tokio::test]
 async fn chosen_option_is_notified_before_the_answer_is_stored(action_context: ActionContext) {
@@ -27,7 +45,7 @@ async fn chosen_option_is_notified_before_the_answer_is_stored(action_context: A
         .router()
         .oneshot(post(
             "/sessions/sample-session/proposals/1/answer",
-            json!({ "choice": 0, "comment": "Keep the simpler format." }),
+            proposal_answer_request(json!(0), json!("Keep the simpler format.")),
         ))
         .await
         .unwrap();
@@ -65,6 +83,95 @@ async fn chosen_option_is_notified_before_the_answer_is_stored(action_context: A
 
 #[rstest]
 #[tokio::test]
+async fn proposal_answer_without_expected_body_is_accepted(action_context: ActionContext) {
+    action_context.save_session(&session("sample-session"));
+    add_proposal(&action_context, "sample-session");
+
+    let response = action_context
+        .router()
+        .oneshot(post(
+            "/sessions/sample-session/proposals/1/answer",
+            json!({ "choice": 0, "comment": null }),
+        ))
+        .await
+        .unwrap();
+    let proposals = store::agent_proposals_from(
+        &action_context.temp_dir.path().join("sessions"),
+        "sample-session",
+    )
+    .unwrap();
+
+    assert_eq!(
+        (
+            response_snapshot(response, &action_context).await,
+            proposals[0].answer.as_deref(),
+            proposals[0].resolved_at.is_some(),
+        ),
+        (
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": { "ok": true },
+                "calls": [{
+                    "kind": "message",
+                    "sessionId": "sample-session",
+                    "content": "Proposal 1 \"Pick a format\": chose A (Format A).",
+                }],
+            }),
+            Some(r#"{"choice":0,"comment":null}"#),
+            true,
+        ),
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn stale_proposal_answer_is_rejected_after_the_proposal_is_edited(
+    action_context: ActionContext,
+) {
+    action_context.save_session(&session("sample-session"));
+    add_proposal(&action_context, "sample-session");
+    let sessions_dir = action_context.temp_dir.path().join("sessions");
+    let replacement = r#"{"title":"Choose a different format","summary":null,"options":[{"label":"Format B","description":null,"pros":[],"cons":[],"recommended":false},{"label":"Format A","description":null,"pros":[],"cons":[],"recommended":false}]}"#;
+    store::edit_agent_proposal_from(&sessions_dir, "sample-session", 1, replacement).unwrap();
+
+    let response = action_context
+        .router()
+        .oneshot(post(
+            "/sessions/sample-session/proposals/1/answer",
+            proposal_answer_request(json!(0), json!(null)),
+        ))
+        .await
+        .unwrap();
+    let proposals = store::agent_proposals_from(&sessions_dir, "sample-session").unwrap();
+    let calls = action_context.runtime.calls.lock().unwrap().clone();
+
+    assert_eq!(
+        (
+            response_snapshot(response, &action_context).await,
+            proposals
+                .iter()
+                .map(|proposal| (
+                    proposal.body.as_str(),
+                    proposal.answer.as_deref(),
+                    proposal.resolved_at,
+                ))
+                .collect::<Vec<_>>(),
+            calls,
+        ),
+        (
+            json!({
+                "status": StatusCode::CONFLICT.as_u16(),
+                "body": { "error": "proposal changed; reload it before answering" },
+                "calls": [],
+            }),
+            vec![(replacement, None, None)],
+            Vec::new(),
+        ),
+    );
+}
+
+#[rstest]
+#[tokio::test]
 async fn answering_a_proposal_saves_and_forwards_image_attachments(action_context: ActionContext) {
     action_context.save_session(&session("sample-session"));
     add_proposal(&action_context, "sample-session");
@@ -76,6 +183,7 @@ async fn answering_a_proposal_saves_and_forwards_image_attachments(action_contex
             json!({
                 "choice": 0,
                 "comment": "Keep the simpler format.",
+                "expectedBody": proposal_answer_request(json!(0), json!(null))["expectedBody"].clone(),
                 "attachments": [{
                     "name": "screen.gif",
                     "mimeType": "image/gif",
@@ -162,7 +270,7 @@ async fn consecutive_proposals_remain_individually_answerable(action_context: Ac
         .router()
         .oneshot(post(
             "/sessions/sample-session/proposals/1/answer",
-            json!({ "choice": 0, "comment": null }),
+            proposal_answer_request(json!(0), json!(null)),
         ))
         .await
         .unwrap();
@@ -171,7 +279,7 @@ async fn consecutive_proposals_remain_individually_answerable(action_context: Ac
         .router()
         .oneshot(post(
             "/sessions/sample-session/proposals/2/answer",
-            json!({ "choice": 1, "comment": null }),
+            proposal_answer_request(json!(1), json!(null)),
         ))
         .await
         .unwrap();
@@ -237,7 +345,7 @@ async fn concurrent_answers_notify_the_agent_only_once(action_context: ActionCon
         first_router
             .oneshot(post(
                 "/sessions/sample-session/proposals/1/answer",
-                json!({ "choice": 0, "comment": null }),
+                proposal_answer_request(json!(0), json!(null)),
             ))
             .await
             .unwrap()
@@ -249,7 +357,7 @@ async fn concurrent_answers_notify_the_agent_only_once(action_context: ActionCon
         router
             .oneshot(post(
                 "/sessions/sample-session/proposals/1/answer",
-                json!({ "choice": 0, "comment": null }),
+                proposal_answer_request(json!(0), json!(null)),
             ))
             .await
             .unwrap()
@@ -324,7 +432,7 @@ async fn proposal_answers_use_a_marker_only_for_claude(
         .router()
         .oneshot(post(
             "/sessions/sample-session/proposals/1/answer",
-            json!({ "choice": null, "comment": null }),
+            proposal_answer_request(json!(null), json!(null)),
         ))
         .await
         .unwrap();
@@ -411,7 +519,7 @@ async fn unavailable_or_invalid_proposal_answers_are_rejected(
         .router()
         .oneshot(post(
             "/sessions/sample-session/proposals/1/answer",
-            json!({ "choice": choice, "comment": null }),
+            proposal_answer_request(json!(choice), json!(null)),
         ))
         .await
         .unwrap();
@@ -447,6 +555,7 @@ async fn failed_peer_notification_does_not_store_the_answer(action_context: Acti
             json!({
                 "choice": 0,
                 "comment": null,
+                "expectedBody": proposal_answer_request(json!(0), json!(null))["expectedBody"].clone(),
                 "attachments": [{
                     "name": "screen.gif",
                     "mimeType": "image/gif",
@@ -516,7 +625,7 @@ async fn save_failure_after_peer_notification_reports_the_partial_send(
         .router()
         .oneshot(post(
             "/sessions/sample-session/proposals/1/answer",
-            json!({ "choice": 0, "comment": null }),
+            proposal_answer_request(json!(0), json!(null)),
         ))
         .await
         .unwrap();

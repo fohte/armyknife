@@ -37,12 +37,20 @@ and at most one option may be recommended. Optional fields are summary,
 description, pros, cons, and recommended."#
     )]
     Add(AddArgs),
+    /// Replace one of this session's pending proposals from JSON read from stdin
+    Edit(EditArgs),
     /// Withdraw one of this session's pending proposals
     Withdraw(WithdrawArgs),
 }
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct AddArgs {}
+
+#[derive(Args, Clone, PartialEq, Eq)]
+pub struct EditArgs {
+    /// Sequence number printed when the proposal was recorded
+    seq: i64,
+}
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct WithdrawArgs {
@@ -84,8 +92,31 @@ pub(crate) struct ProposalAnswer {
 pub fn run(command: &ProposalCommands) -> Result<()> {
     match command {
         ProposalCommands::Add(_) => add(),
+        ProposalCommands::Edit(args) => edit(args),
         ProposalCommands::Withdraw(args) => withdraw(args),
     }
+}
+
+fn edit(args: &EditArgs) -> Result<()> {
+    let session_id = EnvVars::load()
+        .own_session_id()
+        .ok_or(CcError::SelfSessionUnknown)?;
+    let sessions_dir = store::sessions_dir()?;
+    let stdin = std::io::stdin();
+    edit_proposal(&sessions_dir, &session_id, args.seq, stdin.lock())?;
+    println!("Edited proposal {}", args.seq);
+    Ok(())
+}
+
+fn edit_proposal(sessions_dir: &Path, session_id: &str, seq: i64, input: impl Read) -> Result<()> {
+    let body = read_proposal_body(input)?;
+    let body_json = serde_json::to_string(&body).context("serializing validated proposal")?;
+    let _proposal_lock = store::lock_agent_proposal_resolution_from(sessions_dir, session_id, seq)?;
+    ensure!(
+        store::edit_agent_proposal_from(sessions_dir, session_id, seq, &body_json)?,
+        "proposal is already resolved or does not exist"
+    );
+    Ok(())
 }
 
 fn withdraw(args: &WithdrawArgs) -> Result<()> {
@@ -130,14 +161,19 @@ fn add() -> Result<()> {
 }
 
 fn record_proposal(sessions_dir: &Path, session_id: &str, mut input: impl Read) -> Result<i64> {
+    let body = read_proposal_body(&mut input)?;
+    let body_json = serde_json::to_string(&body).context("serializing validated proposal")?;
+    store::add_agent_proposal_in(sessions_dir, session_id, &body_json)
+}
+
+fn read_proposal_body(mut input: impl Read) -> Result<ProposalBody> {
     let mut raw = String::new();
     input
         .read_to_string(&mut raw)
         .context("reading proposal JSON from stdin")?;
     let body: ProposalBody = serde_json::from_str(&raw).context("parsing proposal JSON")?;
     validate_body(&body)?;
-    let body_json = serde_json::to_string(&body).context("serializing validated proposal")?;
-    store::add_agent_proposal_in(sessions_dir, session_id, &body_json)
+    Ok(body)
 }
 
 fn validate_body(body: &ProposalBody) -> Result<()> {
@@ -175,7 +211,7 @@ mod tests {
     use serde_json::Value;
     use tempfile::TempDir;
 
-    use super::{ProposalCommands, record_proposal, withdraw_proposal};
+    use super::{ProposalCommands, edit_proposal, record_proposal, withdraw_proposal};
     use crate::commands::agent::store::{self, ProposalResolution};
 
     #[derive(Parser)]
@@ -275,6 +311,135 @@ mod tests {
     }
 
     #[rstest]
+    fn replaces_a_pending_proposal_without_changing_its_identity_or_position(
+        sessions_dir: TempDir,
+    ) {
+        let seq = store::add_agent_proposal_in(sessions_dir.path(), "session-a", "original")
+            .expect("proposal should save");
+        let before = store::agent_proposals_from(sessions_dir.path(), "session-a")
+            .expect("proposal should load");
+        let before_revision =
+            store::session_store_revision_from(sessions_dir.path()).expect("revision should load");
+        edit_proposal(
+            sessions_dir.path(),
+            "session-a",
+            seq,
+            std::io::Cursor::new(
+                r#"{"title":"Choose a format","summary":"Updated context","options":[{"label":"Compact","pros":["Small"],"recommended":true},{"label":"Readable","cons":["Longer"]}]}"#,
+            ),
+        )
+        .expect("pending proposal should be editable");
+        let after = store::agent_proposals_from(sessions_dir.path(), "session-a")
+            .expect("updated proposal should load");
+        let after_revision =
+            store::session_store_revision_from(sessions_dir.path()).expect("revision should load");
+
+        assert_eq!(
+            (
+                before[0].seq,
+                before[0].created_at,
+                after
+                    .into_iter()
+                    .map(|proposal| (
+                        proposal.seq,
+                        proposal.body,
+                        proposal.created_at,
+                        proposal.answer,
+                        proposal.resolved_at,
+                        proposal.resolution,
+                        proposal.comment,
+                    ))
+                    .collect::<Vec<_>>(),
+                after_revision,
+            ),
+            (
+                seq,
+                before[0].created_at,
+                vec![(
+                    seq,
+                    r#"{"title":"Choose a format","summary":"Updated context","options":[{"label":"Compact","description":null,"pros":["Small"],"cons":[],"recommended":true},{"label":"Readable","description":null,"pros":[],"cons":["Longer"],"recommended":false}]}"#.to_string(),
+                    before[0].created_at,
+                    None,
+                    None,
+                    None,
+                    None,
+                )],
+                before_revision + 1,
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::missing("missing")]
+    #[case::another_session("another_session")]
+    #[case::answered("answered")]
+    #[case::withdrawn("withdrawn")]
+    fn refuses_to_edit_a_proposal_that_is_not_pending(sessions_dir: TempDir, #[case] target: &str) {
+        let seq = if target == "another_session" {
+            store::add_agent_proposal_in(sessions_dir.path(), "session-b", "original")
+                .expect("other session proposal should save")
+        } else if target == "missing" {
+            1
+        } else {
+            let seq = store::add_agent_proposal_in(sessions_dir.path(), "session-a", "original")
+                .expect("proposal should save");
+            match target {
+                "answered" => {
+                    store::write_agent_proposal_answer_at_from(
+                        sessions_dir.path(),
+                        "session-a",
+                        seq,
+                        "answer",
+                        chrono::Utc::now(),
+                    )
+                    .expect("answer should save");
+                }
+                "withdrawn" => {
+                    store::resolve_agent_proposal_from(sessions_dir.path(), "session-a", seq, None)
+                        .expect("proposal should be withdrawn");
+                }
+                _ => unreachable!(),
+            }
+            seq
+        };
+        let before = store::agent_proposals_from(sessions_dir.path(), "session-a")
+            .expect("proposals should load");
+        let before_revision =
+            store::session_store_revision_from(sessions_dir.path()).expect("revision should load");
+        let error = edit_proposal(
+            sessions_dir.path(),
+            "session-a",
+            seq,
+            std::io::Cursor::new(
+                r#"{"title":"Replacement","options":[{"label":"A"},{"label":"B"}]}"#,
+            ),
+        )
+        .err()
+        .map(|error| error.to_string());
+        let after = store::agent_proposals_from(sessions_dir.path(), "session-a")
+            .expect("proposals should load");
+        let after_revision =
+            store::session_store_revision_from(sessions_dir.path()).expect("revision should load");
+
+        assert_eq!(
+            (
+                error,
+                before.clone(),
+                after,
+                before_revision,
+                after_revision
+            ),
+            (
+                Some("proposal is already resolved or does not exist".to_string()),
+                before.clone(),
+                before,
+                before_revision,
+                before_revision,
+            ),
+        );
+    }
+
+    #[rstest]
     fn rejects_answering_a_withdrawn_proposal(sessions_dir: TempDir) {
         let seq = store::add_agent_proposal_in(sessions_dir.path(), "session-a", "{}")
             .expect("proposal should save");
@@ -304,9 +469,21 @@ mod tests {
         .expect("withdraw arguments should parse");
         let actual = match cli.command {
             ProposalCommands::Withdraw(args) => (args.seq, args.comment),
-            ProposalCommands::Add(_) => (0, None),
+            ProposalCommands::Add(_) | ProposalCommands::Edit(_) => (0, None),
         };
         assert_eq!(actual, (3, Some("No longer needed.".to_string())));
+    }
+
+    #[rstest]
+    fn parses_the_edit_command_sequence() {
+        let cli = ProposalCli::try_parse_from(["proposal", "edit", "3"])
+            .expect("edit arguments should parse");
+        let actual = match cli.command {
+            ProposalCommands::Edit(args) => args.seq,
+            ProposalCommands::Add(_) | ProposalCommands::Withdraw(_) => 0,
+        };
+
+        assert_eq!(actual, 3);
     }
 
     #[rstest]

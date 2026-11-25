@@ -356,6 +356,10 @@ export function startSessionFeed(
               return
             }
 
+            const revisionChanged =
+              body.mode === 'delta' &&
+              currentSessions?.response.revision !==
+                applied.value.response.revision
             currentSessions = applied.value
             const changedSessionIds =
               body.mode === 'full'
@@ -369,6 +373,7 @@ export function startSessionFeed(
                     ...new Set([
                       ...body.updatedSessions.map((session) => session.id),
                       ...body.removedSessionIds,
+                      ...(revisionChanged ? body.sessionOrder : []),
                     ]),
                   ]
             onSessions(currentSessions.response, changedSessionIds)

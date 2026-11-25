@@ -10,6 +10,7 @@ use super::super::super::{
     types::{Engine, SessionStatus},
 };
 use super::super::attachments;
+use super::request_fields::deserialize_present;
 use super::{
     ActionState, ApiError, Success, load_session,
     messages::{remove_attachments, watch_web_message_content},
@@ -21,6 +22,12 @@ use super::{
 pub(super) struct AnswerRequest {
     choice: serde_json::Value,
     comment: Option<String>,
+    #[serde(
+        rename = "expectedBody",
+        default,
+        deserialize_with = "deserialize_present"
+    )]
+    expected_body: Option<ProposalBody>,
     #[serde(default)]
     attachments: Vec<attachments::Request>,
 }
@@ -65,6 +72,15 @@ pub(super) async fn answer_proposal(
     let body: ProposalBody = serde_json::from_str(&proposal.body)
         .context("parsing stored proposal body")
         .map_err(ApiError::internal)?;
+    if request
+        .expected_body
+        .as_ref()
+        .is_some_and(|expected_body| &body != expected_body)
+    {
+        return Err(ApiError::conflict(
+            "proposal changed; reload it before answering",
+        ));
+    }
     let choice = if request.choice.is_null() {
         None
     } else {

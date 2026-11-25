@@ -599,6 +599,15 @@ pub(crate) fn add_agent_proposal_in(
     database::add_agent_proposal(sessions_dir, session_id, body)
 }
 
+pub(crate) fn edit_agent_proposal_from(
+    sessions_dir: &Path,
+    session_id: &str,
+    seq: i64,
+    body: &str,
+) -> Result<bool> {
+    database::edit_agent_proposal(sessions_dir, session_id, seq, body)
+}
+
 pub(crate) fn unanswered_agent_proposal_bodies(
     session_ids: &[String],
 ) -> Result<Vec<(String, String)>> {
@@ -667,6 +676,17 @@ pub(crate) fn add_agent_todo_in(
     folded: bool,
 ) -> Result<i64> {
     database::add_agent_todo(sessions_dir, session_id, title, detail, folded)
+}
+
+pub(crate) fn edit_agent_todo_from(
+    sessions_dir: &Path,
+    session_id: &str,
+    seq: i64,
+    title: &str,
+    detail: Option<&str>,
+    folded: bool,
+) -> Result<bool> {
+    database::edit_agent_todo(sessions_dir, session_id, seq, title, detail, folded)
 }
 
 pub(crate) fn agent_todos_from(sessions_dir: &Path, session_id: &str) -> Result<Vec<AgentTodo>> {
