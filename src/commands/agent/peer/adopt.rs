@@ -401,20 +401,30 @@ mod tests {
     }
 
     #[rstest]
-    #[case::caller_has_explicit_vibe(&[], true, false, vec!["caller"], true)]
+    #[case::caller_has_explicit_vibe(&[], true, false, false, vec!["caller"], true)]
     #[case::caller_inherits_vibe(
         &["vibe-root"],
         false,
         true,
+        true,
         vec!["vibe-root", "caller"],
         true
     )]
-    #[case::caller_has_no_vibe(&[], false, false, vec!["caller"], false)]
+    #[case::caller_has_no_vibe(&[], false, false, false, vec!["caller"], false)]
+    #[case::caller_has_stale_inheritance(
+        &["vibe-root"],
+        false,
+        true,
+        false,
+        vec!["vibe-root", "caller"],
+        false
+    )]
     fn adopt_uses_the_new_parents_effective_vibe(
         session_store: TestSessionStore,
         #[case] caller_ancestors: &[&str],
         #[case] caller_vibe_enabled: bool,
         #[case] caller_launched_with_vibe: bool,
+        #[case] caller_ancestor_vibe_enabled: bool,
         #[case] expected_ancestors: Vec<&str>,
         #[case] expected_vibe_enabled: bool,
     ) {
@@ -423,7 +433,7 @@ mod tests {
         caller.launched_with_vibe = caller_launched_with_vibe;
         session_store.save(&caller);
         let mut vibe_root = session("vibe-root", &[], SessionStatus::Running);
-        vibe_root.vibe_enabled = true;
+        vibe_root.vibe_enabled = caller_ancestor_vibe_enabled;
         session_store.save(&vibe_root);
         let mut old_parent = session("old-parent", &[], SessionStatus::Running);
         old_parent.vibe_enabled = true;
