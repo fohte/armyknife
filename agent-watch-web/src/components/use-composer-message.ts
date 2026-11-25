@@ -10,8 +10,12 @@ type ComposerMessageOptions = {
   draft: string
   messageEnabled: boolean
   externalSending: boolean
-  clearDraft: () => number
-  restoreDraftIfUnchanged: (sentDraft: string, revision: number) => void
+  clearDraftForSend: () => number
+  settleDraftSend: (
+    sentDraft: string,
+    revision: number,
+    succeeded: boolean,
+  ) => void
   onAction: (
     action: string,
     payload?: Record<string, unknown>,
@@ -23,8 +27,8 @@ export function useComposerMessage({
   draft,
   messageEnabled,
   externalSending,
-  clearDraft,
-  restoreDraftIfUnchanged,
+  clearDraftForSend,
+  settleDraftSend,
   onAction,
 }: ComposerMessageOptions) {
   const attachmentState = useAttachments(sessionId)
@@ -46,15 +50,16 @@ export function useComposerMessage({
       return
     }
     const sentDraft = draft
-    const clearedDraftRevision = clearDraft()
+    const clearedDraftRevision = clearDraftForSend()
     sendingRef.current = true
     setSendPending(true)
     const finishSending = () => {
       sendingRef.current = false
       setSendPending(false)
     }
+    let succeeded = false
     try {
-      const succeeded = await ResultAsync.fromPromise(
+      succeeded = await ResultAsync.fromPromise(
         attachmentState.sendWithAttachments(async (encodedAttachments) => {
           const succeeded = await onAction('messages', {
             content: sentDraft,
@@ -72,10 +77,8 @@ export function useComposerMessage({
         (result) => result,
         () => false,
       )
-      if (!succeeded) {
-        restoreDraftIfUnchanged(sentDraft, clearedDraftRevision)
-      }
     } finally {
+      settleDraftSend(sentDraft, clearedDraftRevision, succeeded)
       finishSending()
     }
   }

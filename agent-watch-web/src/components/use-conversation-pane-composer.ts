@@ -23,8 +23,8 @@ export function useConversationPaneComposer({
     draft: draftState.draft,
     messageEnabled,
     externalSending,
-    clearDraft: draftState.clearDraft,
-    restoreDraftIfUnchanged: draftState.restoreDraftIfUnchanged,
+    clearDraftForSend: draftState.clearDraftForSend,
+    settleDraftSend: draftState.settleDraftSend,
     onAction,
   })
 
