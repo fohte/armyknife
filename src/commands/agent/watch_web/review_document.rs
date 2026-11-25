@@ -602,23 +602,61 @@ mod tests {
         true
     }
 
-    fn terminate_test_worker(worker: &mut std::process::Child) {
-        if let Ok(process_group) = i32::try_from(worker.id()) {
-            // SAFETY: the worker owns a dedicated process group for this test.
-            let _ = unsafe { libc::kill(-process_group, libc::SIGKILL) };
-        }
-        let _ = worker.kill();
-        let _ = worker.wait();
+    struct TestWorkerGuard {
+        child: std::process::Child,
+        process_group: libc::pid_t,
+        finished: bool,
     }
 
-    async fn wait_for_test_worker(worker: &mut std::process::Child) -> bool {
+    impl TestWorkerGuard {
+        fn new(child: std::process::Child) -> Self {
+            let process_group = child.id() as libc::pid_t;
+            Self {
+                child,
+                process_group,
+                finished: false,
+            }
+        }
+
+        fn terminate(&mut self) {
+            // SAFETY: the worker owns a dedicated process group for this test.
+            let _ = unsafe { libc::kill(-self.process_group, libc::SIGKILL) };
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+            self.finished = true;
+        }
+
+        fn mark_finished(&mut self) {
+            self.finished = true;
+        }
+    }
+
+    impl Drop for TestWorkerGuard {
+        fn drop(&mut self) {
+            if !self.finished {
+                self.terminate();
+            }
+        }
+    }
+
+    fn terminate_test_worker(worker: &mut TestWorkerGuard) {
+        worker.terminate();
+    }
+
+    async fn wait_for_test_worker(worker: &mut TestWorkerGuard) -> bool {
         let started_at = std::time::Instant::now();
         loop {
             if let Some(status) = worker
+                .child
                 .try_wait()
                 .expect("test worker should be inspectable")
             {
-                return status.success();
+                if status.success() {
+                    worker.mark_finished();
+                    return true;
+                }
+                worker.terminate();
+                return false;
             }
             if started_at.elapsed() >= Duration::from_secs(15) {
                 terminate_test_worker(worker);
@@ -2107,8 +2145,10 @@ mod tests {
             .stdout(Stdio::null())
             .stderr(Stdio::null());
         review_parent_command.process_group(0);
-        let mut review_parent = crate::infra::process::spawn(review_parent_command)
-            .expect("review parent worker should start");
+        let mut review_parent = TestWorkerGuard::new(
+            crate::infra::process::spawn(review_parent_command)
+                .expect("review parent worker should start"),
+        );
         let child_ready = wait_for_file(&ready_file, Duration::from_secs(5)).await;
         if !child_ready {
             terminate_test_worker(&mut review_parent);
