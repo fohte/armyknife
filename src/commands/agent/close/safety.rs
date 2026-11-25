@@ -154,12 +154,15 @@ pub(super) fn write_draft_unavailable_warning(
 #[cfg(test)]
 mod tests {
     use chrono::{DateTime, Utc};
+    use indoc::indoc;
+    use rstest::{fixture, rstest};
     use serde_json::json;
 
     use super::pending_work_error;
     use crate::commands::agent::bg_tasks::PendingTask;
     use crate::commands::agent::types::Session;
 
+    #[fixture]
     fn session() -> Session {
         let review_id = ["review-id", "v2", "12345", "/fixture/review.md", ""].join("\0");
         serde_json::from_value(json!({
@@ -182,8 +185,8 @@ mod tests {
             .with_timezone(&Utc)
     }
 
-    #[test]
-    fn pending_work_error_lists_background_command_ids_and_review_document() {
+    #[rstest]
+    fn pending_work_error_lists_background_command_ids_and_review_document(session: Session) {
         let task = PendingTask {
             id: "bg-task".to_owned(),
             description: "a".to_owned(),
@@ -201,14 +204,21 @@ mod tests {
         };
 
         assert_eq!(
-            pending_work_error(&session(), &[task]),
-            "Agent session `fixture-session` has pending background or agent tasks:\n  Background task `bg-task`: a gh pr-review reply review fixture-review (started at 2026-01-02 03:04:05 UTC)\n  Background task ID: `hook-task`\n  Agent task ID: `subagent-task`\n  Review document: /fixture/review.md\n    Finish it in the editor, or run `a agent watch-web` and finish it there.\nFinish the pending work, then retry this command.",
+            pending_work_error(&session, &[task]),
+            indoc! {"
+                Agent session `fixture-session` has pending background or agent tasks:
+                  Background task `bg-task`: a gh pr-review reply review fixture-review (started at 2026-01-02 03:04:05 UTC)
+                  Background task ID: `hook-task`
+                  Agent task ID: `subagent-task`
+                  Review document: /fixture/review.md
+                    Finish it in the editor, or run `a agent watch-web` and finish it there.
+                Finish the pending work, then retry this command.
+            "}.trim_end(),
         );
     }
 
-    #[test]
-    fn pending_work_error_uses_legacy_description_when_command_is_missing() {
-        let mut session = session();
+    #[rstest]
+    fn pending_work_error_uses_legacy_description_when_command_is_missing(mut session: Session) {
         session.pending_bg_task_ids.clear();
         session.pending_agent_task_ids.clear();
         session.pending_human_review_ids.clear();
@@ -223,7 +233,12 @@ mod tests {
 
         assert_eq!(
             pending_work_error(&session, &[task]),
-            "Agent session `fixture-session` has pending background or agent tasks:\n  Background task `legacy-task`: a (started at 2026-01-02 03:04:05 UTC)\nFinish the pending work, then retry this command.",
+            indoc! {"
+                Agent session `fixture-session` has pending background or agent tasks:
+                  Background task `legacy-task`: a (started at 2026-01-02 03:04:05 UTC)
+                Finish the pending work, then retry this command.
+            "}
+            .trim_end(),
         );
     }
 }

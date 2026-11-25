@@ -52,6 +52,7 @@ pub fn run(args: &RunArgs) -> Result<()> {
         .iter()
         .map(|argument| argument.to_string_lossy().into_owned())
         .collect::<Vec<_>>();
+    let command = bg_tasks::redact_command_arguments(&command);
     bg_tasks::register(&session_id, &task_id, &description, &command, &stdout_path)?;
     guard.mark_task_registered();
     window_status::sync_window_status_for_session(&session_id);

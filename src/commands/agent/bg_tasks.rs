@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 
 /// Covers the interval between task registration and the worker recording its PID.
 const UNREGISTERED_WORKER_GRACE: Duration = Duration::from_secs(5 * 60);
+const REDACTED_CREDENTIAL: &str = "[REDACTED]";
 
 #[derive(Deserialize, Serialize)]
 struct TaskRecord {
@@ -180,6 +181,66 @@ pub(crate) struct PendingTask {
     pub started_at: DateTime<Utc>,
     pub elapsed_seconds: u64,
     pub stdout_path: PathBuf,
+}
+
+pub(crate) fn redact_command_arguments(arguments: &[String]) -> Vec<String> {
+    let mut redact_next = false;
+    arguments
+        .iter()
+        .map(|argument| {
+            if redact_next && !argument.starts_with('-') {
+                redact_next = false;
+                return REDACTED_CREDENTIAL.to_owned();
+            }
+            redact_next = false;
+
+            if let Some((key, _)) = argument.split_once('=')
+                && is_sensitive_key(key)
+            {
+                return format!("{key}={REDACTED_CREDENTIAL}");
+            }
+            if is_sensitive_header(argument) {
+                return REDACTED_CREDENTIAL.to_owned();
+            }
+            if is_sensitive_key(argument) {
+                redact_next = true;
+                return argument.clone();
+            }
+            argument.clone()
+        })
+        .collect()
+}
+
+fn is_sensitive_key(key: &str) -> bool {
+    let normalized = key
+        .trim_start_matches('-')
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .collect::<String>()
+        .to_ascii_lowercase();
+    [
+        "token",
+        "password",
+        "passwd",
+        "secret",
+        "credential",
+        "authorization",
+        "auth",
+        "apikey",
+        "accesskey",
+        "privatekey",
+        "clientkey",
+        "signingkey",
+    ]
+    .iter()
+    .any(|sensitive_name| normalized.contains(sensitive_name))
+        || normalized == "key"
+}
+
+fn is_sensitive_header(argument: &str) -> bool {
+    argument
+        .split_once(':')
+        .is_some_and(|(name, _)| is_sensitive_key(name.trim()))
 }
 
 pub(crate) fn pending_tasks(session_id: &str) -> Result<Vec<PendingTask>> {
@@ -390,12 +451,13 @@ fn with_registry_lock<T>(tasks_root: &Path, operation: impl FnOnce() -> Result<T
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
-    use std::time::SystemTime;
 
+    use chrono::{DateTime, Utc};
+    use rstest::rstest;
     use serde_json::json;
     use tempfile::TempDir;
 
-    use super::{PendingTask, pending_tasks_in, register_in};
+    use super::{PendingTask, REDACTED_CREDENTIAL, marker_path, pending_tasks_in, register_in};
     use crate::shared::hex;
 
     #[test]
@@ -414,11 +476,22 @@ mod tests {
         )
         .expect("background task should be registered");
 
+        let marker = marker_path(tasks_root.path(), session_id, &task_id)
+            .expect("task marker path should be valid");
+        let mut record: super::TaskRecord = serde_json::from_slice(
+            &std::fs::read(&marker).expect("task marker should be readable"),
+        )
+        .expect("task marker should deserialize");
+        let expected_started_at = DateTime::parse_from_rfc3339("2026-01-02T03:04:05Z")
+            .expect("fixture timestamp should parse")
+            .with_timezone(&Utc);
+        record.started_at = Some(expected_started_at);
+        super::write_record(&marker, &record).expect("task marker should update");
+
         let (mut tasks, stale_cleared) =
             pending_tasks_in(tasks_root.path(), session_id).expect("pending tasks should be read");
         for task in &mut tasks {
             task.elapsed_seconds = 0;
-            task.started_at = chrono::DateTime::<chrono::Utc>::from(SystemTime::UNIX_EPOCH);
         }
 
         assert_eq!(
@@ -428,7 +501,7 @@ mod tests {
                     id: task_id.clone(),
                     description: "Run synthetic task".to_owned(),
                     command: Some(vec!["synthetic-command".to_owned(), "--flag".to_owned(),]),
-                    started_at: chrono::DateTime::<chrono::Utc>::from(SystemTime::UNIX_EPOCH),
+                    started_at: expected_started_at,
                     elapsed_seconds: 0,
                     stdout_path,
                 }],
@@ -482,6 +555,35 @@ mod tests {
                 }],
                 false,
             ),
+        );
+    }
+
+    #[rstest]
+    #[case::separate_token_value(
+        &["a", "--token", "fixture-secret", "review"],
+        vec!["a", "--token", REDACTED_CREDENTIAL, "review"],
+    )]
+    #[case::inline_api_key_value(
+        &["a", "--api-key=fixture-secret"],
+        vec!["a", "--api-key=[REDACTED]"],
+    )]
+    #[case::environment_token_value(
+        &["TOKEN=fixture-secret"],
+        vec!["TOKEN=[REDACTED]"],
+    )]
+    #[case::authorization_header_value(
+        &["a", "-H", "Authorization: Bearer fixture-secret"],
+        vec!["a", "-H", REDACTED_CREDENTIAL],
+    )]
+    fn redacts_credential_arguments(#[case] arguments: &[&str], #[case] expected: Vec<&str>) {
+        let arguments = arguments
+            .iter()
+            .map(|argument| (*argument).to_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            super::redact_command_arguments(&arguments),
+            expected.into_iter().map(str::to_owned).collect::<Vec<_>>(),
         );
     }
 }

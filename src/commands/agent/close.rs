@@ -487,6 +487,7 @@ mod tests {
     use std::io;
 
     use chrono::Utc;
+    use indoc::indoc;
     use rstest::rstest;
 
     use super::test_support::{
@@ -572,7 +573,11 @@ mod tests {
             pending_task: true,
             recent_activity: false,
             stop_and_close: false,
-            expected_error: Some("Agent session `session-1` has pending background or agent tasks:\n  Background task ID: `task-1`\nFinish the pending work, then retry this command."),
+            expected_error: Some(indoc! {"
+                Agent session `session-1` has pending background or agent tasks:
+                  Background task ID: `task-1`
+                Finish the pending work, then retry this command.
+            "}.trim_end()),
             expected_ended_sessions: vec![],
         },
     )]
@@ -691,9 +696,17 @@ mod tests {
                 if status == SessionStatus::Running || status == SessionStatus::WaitingInput {
                     "Agent session `session-1` is running or waiting for input; complete any requested input and wait for the current turn to finish, then retry this command"
                 } else if pending_bg {
-                    "Agent session `session-1` has pending background or agent tasks:\n  Background task ID: `task-1`\nFinish the pending work, then retry this command."
+                    indoc! {"
+                        Agent session `session-1` has pending background or agent tasks:
+                          Background task ID: `task-1`
+                        Finish the pending work, then retry this command.
+                    "}.trim_end()
                 } else {
-                    "Agent session `session-1` has pending background or agent tasks:\n  Agent task ID: `agent-task-1`\nFinish the pending work, then retry this command."
+                    indoc! {"
+                        Agent session `session-1` has pending background or agent tasks:
+                          Agent task ID: `agent-task-1`
+                        Finish the pending work, then retry this command.
+                    "}.trim_end()
                 }
                 .to_string(),
                 vec![
@@ -851,8 +864,13 @@ mod tests {
         assert_eq!(
             (result.unwrap_err().to_string(), runtime.calls.into_inner()),
             (
-                "Agent session `session-1` has pending background or agent tasks:\n  Background task ID: `task-1`\nFinish the pending work, then retry this command."
-                    .to_string(),
+                indoc! {"
+                    Agent session `session-1` has pending background or agent tasks:
+                      Background task ID: `task-1`
+                    Finish the pending work, then retry this command.
+                "}
+                .trim_end()
+                .to_string(),
                 vec![
                     pane_exists_call(),
                     pane_session_call(),
