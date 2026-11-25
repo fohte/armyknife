@@ -2,6 +2,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
+import { useComposerDraft } from '#components/use-composer-draft'
 import {
   clearSessionAttachments,
   useComposerMessage,
@@ -18,11 +19,17 @@ vi.mock('#lib/image-attachment', () => ({
 let container: HTMLDivElement
 let root: Root | null = null
 let composerMessage: ReturnType<typeof useComposerMessage> | null = null
+let composerDraft: ReturnType<typeof useComposerDraft> | null = null
 let revokedUrls: string[] = []
 
 function result() {
   if (composerMessage === null) throw new Error('Composer hook is not mounted')
   return composerMessage
+}
+
+function currentDraft() {
+  if (composerDraft === null) throw new Error('Composer draft is not mounted')
+  return composerDraft
 }
 
 function ComposerMessageHarness({
@@ -35,12 +42,14 @@ function ComposerMessageHarness({
     payload?: Record<string, unknown>,
   ) => Promise<boolean>
 }) {
+  composerDraft = useComposerDraft(sessionId)
   composerMessage = useComposerMessage({
     sessionId,
-    draft: '',
+    draft: composerDraft.draft,
     messageEnabled: true,
     externalSending: false,
-    clearDraftIfUnchanged: () => undefined,
+    clearDraftForSend: composerDraft.clearDraftForSend,
+    settleDraftSend: composerDraft.settleDraftSend,
     onAction,
   })
   return null
@@ -53,6 +62,7 @@ function renderSession(
     payload?: Record<string, unknown>,
   ) => Promise<boolean>,
 ) {
+  root ??= createRoot(container)
   act(() => {
     root?.render(
       <ComposerMessageHarness
@@ -88,6 +98,7 @@ beforeEach(() => {
   document.body.append(container)
   root = createRoot(container)
   composerMessage = null
+  composerDraft = null
   optimizeImageAttachmentMock.mockReset()
   optimizeImageAttachmentMock.mockImplementation((file) =>
     Promise.resolve(file),
@@ -108,6 +119,7 @@ afterEach(() => {
   root = null
   composerMessage = null
   container.remove()
+  window.localStorage.clear()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
@@ -273,6 +285,154 @@ it('revokes a preview URL when its attachment is removed', async () => {
   expect(snapshot()).toEqual({
     attachments: [],
     revokedUrls: [attachment.previewUrl],
+  })
+})
+
+it('preserves a newer draft when an older send fails after remount', async () => {
+  const sessionId = crypto.randomUUID()
+  let finishSend: ((succeeded: boolean) => void) | undefined
+  const onAction = vi.fn(
+    () =>
+      new Promise<boolean>((resolve) => {
+        finishSend = resolve
+      }),
+  )
+  renderSession(sessionId, onAction)
+  act(() => {
+    currentDraft().updateDraft('Original request')
+  })
+  let pendingSend: Promise<void> | undefined
+  act(() => {
+    pendingSend = result().sendMessage()
+  })
+  const sendStartedBeforeUnmount = {
+    completionAvailable: finishSend !== undefined,
+    actions: onAction.mock.calls,
+  }
+  act(() => {
+    root?.unmount()
+  })
+  root = null
+  renderSession(sessionId, onAction)
+  act(() => {
+    currentDraft().updateDraft('New request')
+  })
+
+  if (pendingSend === undefined) throw new Error('Expected a pending send')
+  await act(async () => {
+    finishSend?.(false)
+    await pendingSend
+  })
+
+  const snapshot = () => ({
+    sendStartedBeforeUnmount,
+    visibleDraft: currentDraft().draft,
+    storedDraft: window.localStorage.getItem(
+      `agent-watch-web:composer-draft:${sessionId}`,
+    ),
+  })
+  expect(snapshot()).toEqual({
+    sendStartedBeforeUnmount: {
+      completionAvailable: true,
+      actions: [['messages', { content: 'Original request' }]],
+    },
+    visibleDraft: 'New request',
+    storedDraft: 'New request',
+  })
+})
+
+it('keeps the sent draft recoverable after remounting during a pending send', async () => {
+  const sessionId = crypto.randomUUID()
+  let finishSend: ((succeeded: boolean) => void) | undefined
+  const onAction = vi.fn(
+    () =>
+      new Promise<boolean>((resolve) => {
+        finishSend = resolve
+      }),
+  )
+  renderSession(sessionId, onAction)
+  act(() => {
+    currentDraft().updateDraft('Recover this request')
+  })
+  let pendingSend: Promise<void> | undefined
+  act(() => {
+    pendingSend = result().sendMessage()
+  })
+
+  act(() => {
+    root?.unmount()
+  })
+  root = null
+  renderSession(sessionId, onAction)
+
+  const snapshot = () => ({
+    visibleDraft: currentDraft().draft,
+    storedDraft: window.localStorage.getItem(
+      `agent-watch-web:composer-draft:${sessionId}`,
+    ),
+  })
+  expect(snapshot()).toEqual({
+    visibleDraft: '',
+    storedDraft: 'Recover this request',
+  })
+
+  if (pendingSend === undefined) throw new Error('Expected a pending send')
+  await act(async () => {
+    finishSend?.(false)
+    await pendingSend
+  })
+
+  const restoredSnapshot = () => ({
+    visibleDraft: currentDraft().draft,
+    storedDraft: window.localStorage.getItem(
+      `agent-watch-web:composer-draft:${sessionId}`,
+    ),
+  })
+  expect(restoredSnapshot()).toEqual({
+    visibleDraft: 'Recover this request',
+    storedDraft: 'Recover this request',
+  })
+})
+
+it('clears the sent draft from a remounted composer after success', async () => {
+  const sessionId = crypto.randomUUID()
+  let finishSend: ((succeeded: boolean) => void) | undefined
+  const onAction = vi.fn(
+    () =>
+      new Promise<boolean>((resolve) => {
+        finishSend = resolve
+      }),
+  )
+  renderSession(sessionId, onAction)
+  act(() => {
+    currentDraft().updateDraft('Sent request')
+  })
+  let pendingSend: Promise<void> | undefined
+  act(() => {
+    pendingSend = result().sendMessage()
+  })
+
+  act(() => {
+    root?.unmount()
+  })
+  root = null
+  renderSession(sessionId, onAction)
+
+  if (pendingSend === undefined) throw new Error('Expected a pending send')
+  await act(async () => {
+    finishSend?.(true)
+    await pendingSend
+  })
+
+  const snapshot = () => ({
+    visibleDraft: currentDraft().draft,
+    storedDraft: window.localStorage.getItem(
+      `agent-watch-web:composer-draft:${sessionId}`,
+    ),
+  })
+  expect(snapshot()).toEqual({
+    visibleDraft: '',
+    storedDraft: null,
   })
 })
 

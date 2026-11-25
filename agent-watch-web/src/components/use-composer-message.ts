@@ -1,3 +1,4 @@
+import { ResultAsync } from 'neverthrow'
 import { useRef, useState } from 'react'
 
 import { useAttachments } from '#components/use-attachments'
@@ -9,7 +10,12 @@ type ComposerMessageOptions = {
   draft: string
   messageEnabled: boolean
   externalSending: boolean
-  clearDraftIfUnchanged: (sentDraft: string) => void
+  clearDraftForSend: () => number
+  settleDraftSend: (
+    sentDraft: string,
+    revision: number,
+    succeeded: boolean,
+  ) => void
   onAction: (
     action: string,
     payload?: Record<string, unknown>,
@@ -21,7 +27,8 @@ export function useComposerMessage({
   draft,
   messageEnabled,
   externalSending,
-  clearDraftIfUnchanged,
+  clearDraftForSend,
+  settleDraftSend,
   onAction,
 }: ComposerMessageOptions) {
   const attachmentState = useAttachments(sessionId)
@@ -43,29 +50,35 @@ export function useComposerMessage({
       return
     }
     const sentDraft = draft
+    const clearedDraftRevision = clearDraftForSend()
     sendingRef.current = true
     setSendPending(true)
     const finishSending = () => {
       sendingRef.current = false
       setSendPending(false)
     }
+    let succeeded = false
     try {
-      await attachmentState.sendWithAttachments(async (encodedAttachments) => {
-        const succeeded = await onAction('messages', {
-          content: sentDraft,
-          ...(encodedAttachments.length === 0
-            ? {}
-            : { attachments: encodedAttachments }),
-        })
-        if (succeeded) {
-          clearDraftIfUnchanged(sentDraft)
-          if (encodedAttachments.length > 0) {
+      succeeded = await ResultAsync.fromPromise(
+        attachmentState.sendWithAttachments(async (encodedAttachments) => {
+          const succeeded = await onAction('messages', {
+            content: sentDraft,
+            ...(encodedAttachments.length === 0
+              ? {}
+              : { attachments: encodedAttachments }),
+          })
+          if (succeeded && encodedAttachments.length > 0) {
             attachmentState.removeAttachments(attachments.map(({ id }) => id))
           }
-        }
-        return succeeded
-      })
+          return succeeded
+        }),
+        (error: unknown) => error,
+      ).match(
+        (result) => result,
+        () => false,
+      )
     } finally {
+      settleDraftSend(sentDraft, clearedDraftRevision, succeeded)
       finishSending()
     }
   }
