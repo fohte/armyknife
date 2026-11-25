@@ -290,6 +290,41 @@ it('renders the proposal heading, recommended option, and pros and cons', () => 
   })
 })
 
+it('clears a selected option when the proposal is edited', async () => {
+  const cardProps = props({ sessionId: 'session-edit' })
+  renderCard(cardProps)
+  await userEvent.click(
+    requireElement(
+      container.querySelector<HTMLLabelElement>('.chat-proposal-option-label'),
+    ),
+  )
+
+  renderCard({ ...cardProps, options: [...cardProps.options].reverse() })
+
+  const snapshot = () => ({
+    options: Array.from(
+      container.querySelectorAll<HTMLDivElement>('.chat-proposal-option'),
+      (option) => ({
+        label: option.querySelector('.chat-proposal-option-label')?.textContent,
+        checked: option.querySelector<HTMLInputElement>('input')?.checked,
+      }),
+    ),
+    chooseDisabled: requireElement(
+      container.querySelector<HTMLButtonElement>(
+        '.chat-proposal-actions button',
+      ),
+    ).disabled,
+  })
+
+  expect(snapshot()).toEqual({
+    options: [
+      { label: 'Show the choice earlier', checked: false },
+      { label: 'Use the existing flow', checked: false },
+    ],
+    chooseDisabled: true,
+  })
+})
+
 it('renders proposal summaries, descriptions, and withdrawal comments as markdown', () => {
   renderCard(
     props({
@@ -724,7 +759,11 @@ it('restores a proposal comment after reload and clears it after sending', async
       [{ choice: 1, comment: 'Keep the new choice easy to compare.' }],
     ],
     storedDraftBeforeReload: 'Keep the new choice easy to compare.',
-    storedChoiceBeforeReload: '1',
+    storedChoiceBeforeReload: `${JSON.stringify([
+      cardProps.title,
+      cardProps.summary,
+      cardProps.options,
+    ])}:1`,
     storedDraft: null,
     storedChoiceDraft: null,
   })

@@ -60,19 +60,24 @@ export function ProposalCard({
     cardDraftStorageKey('proposal', draftSessionId, seq, 'comment'),
     answer?.comment ?? defaultComment,
   )
+  const choiceDraftPrefix = `${JSON.stringify([title, summary, options])}:`
   const choiceDraft = useDraft(
     cardDraftStorageKey('proposal', draftSessionId, seq, 'choice'),
-    defaultChoice === null ? '' : String(defaultChoice),
+    defaultChoice === null
+      ? ''
+      : `${choiceDraftPrefix}${String(defaultChoice)}`,
   )
   const [submittedAnswer, setSubmittedAnswer] = useState<ProposalAnswer | null>(
     null,
   )
   const latestAnswer = answer ?? submittedAnswer
-  const savedChoice = Number(choiceDraft.draft)
+  const hasCurrentChoice = choiceDraft.draft.startsWith(choiceDraftPrefix)
+  const savedChoice = Number(choiceDraft.draft.slice(choiceDraftPrefix.length))
   const selectedChoice =
     latestAnswer !== null
       ? latestAnswer.choice
-      : choiceDraft.draft !== '' &&
+      : hasCurrentChoice &&
+          choiceDraft.draft !== '' &&
           Number.isInteger(savedChoice) &&
           savedChoice >= 0 &&
           savedChoice < options.length
@@ -80,9 +85,11 @@ export function ProposalCard({
         : null
   const setSelectedChoice = useCallback(
     (choice: number | null) => {
-      choiceDraft.updateDraft(choice === null ? '' : String(choice))
+      choiceDraft.updateDraft(
+        choice === null ? '' : `${choiceDraftPrefix}${String(choice)}`,
+      )
     },
-    [choiceDraft.updateDraft],
+    [choiceDraft.updateDraft, choiceDraftPrefix],
   )
   const { draft: comment, updateDraft, clearDraftIfUnchanged } = commentDraft
   const [isSubmitting, setIsSubmitting] = useState(false)
