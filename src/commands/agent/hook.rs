@@ -1739,6 +1739,19 @@ mod tests {
     use indoc::indoc;
     use rstest::{fixture, rstest};
 
+    #[fixture]
+    fn pending_deferred_stop() -> (tempfile::TempDir, Session, chrono::DateTime<chrono::Utc>) {
+        let sessions_dir = tempfile::TempDir::new().expect("temp dir");
+        let mut session = crate::commands::agent::test_support::deferred_stop_delegate();
+        session.pending_bg_task_ids.insert("bg-1".to_string());
+        let stopped_at = session.updated_at;
+        store::save_session_to(sessions_dir.path(), &session).expect("save");
+        store::record_deferred_stop(sessions_dir.path(), &session, "fixture-parent", stopped_at)
+            .expect("deferred stop should be recorded");
+
+        (sessions_dir, session, stopped_at)
+    }
+
     #[derive(Clone, Copy)]
     enum TestClaudeConfigDir {
         Default,
@@ -4360,18 +4373,15 @@ mod tests {
         );
     }
 
-    #[test]
-    fn notification_idle_prompt_keeps_a_deferred_stop_eligible() {
-        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+    #[rstest]
+    fn notification_idle_prompt_keeps_a_deferred_stop_eligible(
+        pending_deferred_stop: (tempfile::TempDir, Session, chrono::DateTime<chrono::Utc>),
+    ) {
+        let (temp_dir, mut existing, stopped_at) = pending_deferred_stop;
         let sessions_dir = temp_dir.path();
 
-        let mut existing = crate::commands::agent::test_support::deferred_stop_delegate();
         existing.engine = Engine::Claude;
-        existing.pending_bg_task_ids.insert("bg-1".to_string());
-        let stopped_at = existing.updated_at;
         store::save_session_to(sessions_dir, &existing).expect("save");
-        store::record_deferred_stop(sessions_dir, &existing, "fixture-parent", stopped_at)
-            .expect("deferred stop should be recorded");
 
         let mut input = create_test_input_with_session_and_source(
             &existing.session_id,
@@ -4428,16 +4438,12 @@ mod tests {
         );
     }
 
-    #[test]
-    fn codex_peer_prompt_marks_a_turn_running_without_a_prompt_timestamp() {
-        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+    #[rstest]
+    fn codex_peer_prompt_marks_a_turn_running_without_a_prompt_timestamp(
+        pending_deferred_stop: (tempfile::TempDir, Session, chrono::DateTime<chrono::Utc>),
+    ) {
+        let (temp_dir, existing, stopped_at) = pending_deferred_stop;
         let sessions_dir = temp_dir.path();
-        let mut existing = crate::commands::agent::test_support::deferred_stop_delegate();
-        existing.pending_bg_task_ids.insert("bg-1".to_string());
-        let stopped_at = existing.updated_at;
-        store::save_session_to(sessions_dir, &existing).expect("save");
-        store::record_deferred_stop(sessions_dir, &existing, "fixture-parent", stopped_at)
-            .expect("deferred stop should be recorded");
 
         let mut input = create_test_input_with_session_and_source(&existing.session_id, None, None);
         input.engine = Engine::Codex;
