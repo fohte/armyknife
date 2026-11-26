@@ -1,7 +1,8 @@
 //! Claude Code session information reader.
 //!
 //! Reads session metadata from Claude Code's .jsonl transcript files
-//! located at ~/.claude/projects/{encoded-path}/{session-id}.jsonl
+//! located at $CLAUDE_CONFIG_DIR/projects/{encoded-path}/{session-id}.jsonl,
+//! falling back to ~/.claude/projects when the variable is unset or empty.
 
 use lazy_regex::regex_replace_all;
 use serde::Deserialize;
@@ -146,10 +147,7 @@ pub fn encode_project_path(path: &Path) -> String {
 ///
 /// Path format: $CLAUDE_CONFIG_DIR/projects/{encoded-path}/ or ~/.claude/projects/{encoded-path}/.
 fn project_dir(project_path: &Path) -> Option<PathBuf> {
-    let config_dir = std::env::var_os("CLAUDE_CONFIG_DIR")
-        .filter(|path| !path.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| crate::shared::dirs::home_dir().map(|home| home.join(".claude")))?;
+    let config_dir = crate::shared::dirs::claude_config_dir()?;
     let encoded = encode_project_path(project_path);
     Some(config_dir.join("projects").join(encoded))
 }
@@ -193,8 +191,8 @@ pub fn get_session_title(project_path: &Path, session_id: &str) -> Option<String
 /// before this feature existed, or subagent sidechains) -- callers fall
 /// through to the next title source.
 pub fn get_last_title(project_path: &Path, session_id: &str) -> Option<String> {
-    let home = crate::shared::dirs::home_dir()?;
-    get_last_title_in_home(&home, project_path, session_id)
+    let config_dir = crate::shared::dirs::claude_config_dir()?;
+    get_last_title_in_config_dir(&config_dir, project_path, session_id)
 }
 
 /// Internal function for testing: allows overriding the home directory.
@@ -210,10 +208,18 @@ pub fn get_last_title(project_path: &Path, session_id: &str) -> Option<String> {
 /// equivalent in cost to the bounded reverse scan; for larger files, a
 /// title entry older than `MAX_READ_SIZE` from EOF is treated as absent and
 /// callers fall through to the next title source.
+#[cfg(test)]
 fn get_last_title_in_home(home: &Path, project_path: &Path, session_id: &str) -> Option<String> {
+    get_last_title_in_config_dir(&home.join(".claude"), project_path, session_id)
+}
+
+fn get_last_title_in_config_dir(
+    config_dir: &Path,
+    project_path: &Path,
+    session_id: &str,
+) -> Option<String> {
     let encoded = encode_project_path(project_path);
-    let jsonl_path = home
-        .join(".claude")
+    let jsonl_path = config_dir
         .join("projects")
         .join(&encoded)
         .join(format!("{session_id}.jsonl"));
@@ -968,6 +974,33 @@ mod tests {
             get_last_title_in_home(home_dir, Path::new("/nonexistent/path"), "test-session");
 
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn get_last_title_reads_custom_config_transcripts() {
+        let config_dir = TempDir::new().unwrap();
+        let home_dir = TempDir::new().unwrap();
+        let project_path = Path::new("/fixture/custom-project");
+        let session_id = "session-config-title";
+        let project_dir = config_dir
+            .path()
+            .join("projects")
+            .join(encode_project_path(project_path));
+        std::fs::create_dir_all(&project_dir).unwrap();
+        std::fs::write(
+            project_dir.join(format!("{session_id}.jsonl")),
+            r#"{"type":"custom-title","customTitle":"Configured title"}"#,
+        )
+        .unwrap();
+
+        let home = home_dir.path().to_str().unwrap();
+        let config = config_dir.path().to_str().unwrap();
+        let result = temp_env::with_vars(
+            [("HOME", Some(home)), ("CLAUDE_CONFIG_DIR", Some(config))],
+            || get_last_title(project_path, session_id),
+        );
+
+        assert_eq!(result, Some("Configured title".to_owned()));
     }
 
     #[test]

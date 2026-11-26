@@ -6,6 +6,15 @@ pub fn home_dir() -> Option<PathBuf> {
     non_empty_env("HOME").map(PathBuf::from)
 }
 
+/// Returns the Claude config directory from CLAUDE_CONFIG_DIR or ~/.claude.
+/// Empty CLAUDE_CONFIG_DIR values are treated as unset.
+pub fn claude_config_dir() -> Option<PathBuf> {
+    std::env::var_os("CLAUDE_CONFIG_DIR")
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| home_dir().map(|home| home.join(".claude")))
+}
+
 /// Returns the Codex home directory from CODEX_HOME or ~/.codex.
 pub fn codex_home_dir() -> Option<PathBuf> {
     std::env::var_os("CODEX_HOME")
@@ -57,7 +66,6 @@ fn non_empty_env(key: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(not(target_os = "macos"))]
     use rstest::rstest;
 
     #[test]
@@ -72,6 +80,28 @@ mod tests {
         temp_env::with_vars([("HOME", Some(""))], || {
             assert_eq!(home_dir(), None);
         });
+    }
+
+    #[rstest]
+    #[case::custom_config(
+        Some("/fixture/config"),
+        Some("/fixture/home"),
+        Some("/fixture/config")
+    )]
+    #[case::empty_config_falls_back(Some(""), Some("/fixture/home"), Some("/fixture/home/.claude"))]
+    #[case::home_fallback(None, Some("/fixture/home"), Some("/fixture/home/.claude"))]
+    #[case::no_directory(None, None, None)]
+    fn claude_config_dir_uses_config_or_home(
+        #[case] config_dir: Option<&str>,
+        #[case] home: Option<&str>,
+        #[case] expected: Option<&str>,
+    ) {
+        let result = temp_env::with_vars(
+            [("CLAUDE_CONFIG_DIR", config_dir), ("HOME", home)],
+            claude_config_dir,
+        );
+
+        assert_eq!(result, expected.map(PathBuf::from));
     }
 
     #[test]
