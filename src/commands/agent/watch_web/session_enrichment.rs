@@ -3,7 +3,7 @@ use std::future::Future;
 use std::hash::Hash;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use super::EnrichmentUpdates;
 use crate::commands::agent::tq_session_tasks::{
@@ -15,6 +15,7 @@ use crate::infra::github::{PrNumberQuery, PrProgressInfo};
 use crate::infra::tq::{
     TQ_COMMAND_TIMEOUT, TqClient, TqGithubLink, TqProjectSummary, TqTaskSummary,
 };
+use tokio::time::Instant;
 
 mod cache;
 mod task_pull_requests;
@@ -940,7 +941,7 @@ mod tests {
         let _ = cache.task_metadata(std::slice::from_ref(&session)).await;
         wait_for_refresh(&mut receiver).await;
         let refreshed = tokio::time::timeout(
-            Duration::from_millis(20),
+            Duration::from_secs(1),
             cache.task_metadata(std::slice::from_ref(&session)),
         )
         .await
@@ -960,13 +961,16 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn task_github_link_cache_refreshes_only_expired_tasks() {
         let updates = EnrichmentUpdates::new();
         let mut receiver = updates.subscribe();
         let requested = Arc::new(Mutex::new(Vec::new()));
-        let cache_ttl = Duration::from_secs(2);
-        let cache = Arc::new(RefreshingCache::new(updates, FETCH_TIMEOUT, cache_ttl));
+        let cache = Arc::new(RefreshingCache::new(
+            updates,
+            FETCH_TIMEOUT,
+            TASK_GITHUB_LINK_CACHE_TTL,
+        ));
         let task_a = "task-a".to_string();
         let task_b = "task-b".to_string();
         let keys_a = HashSet::from([task_a.clone()]);
@@ -979,7 +983,7 @@ mod tests {
             .expect("initial task-link refresh should notify");
         let reused_within_ttl =
             refresh_task_links(&cache, keys_a.clone(), Arc::clone(&requested)).await;
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        tokio::time::advance(Duration::from_secs(4 * 60)).await;
         let before_task_b_refresh =
             refresh_task_links(&cache, keys_a_b.clone(), Arc::clone(&requested)).await;
         receiver
@@ -988,7 +992,7 @@ mod tests {
             .expect("new task-link refresh should notify");
         let after_task_b_refresh =
             refresh_task_links(&cache, keys_a_b.clone(), Arc::clone(&requested)).await;
-        tokio::time::sleep(Duration::from_millis(1_700)).await;
+        tokio::time::advance(Duration::from_secs(90)).await;
         let before_task_a_refresh =
             refresh_task_links(&cache, keys_a_b.clone(), Arc::clone(&requested)).await;
         receiver
@@ -1037,6 +1041,58 @@ mod tests {
         #[case] expected: Duration,
     ) {
         assert_eq!(task_github_link_fetch_timeout(task_count), expected);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn task_link_fetch_uses_the_per_refresh_timeout_override() {
+        let updates = EnrichmentUpdates::new();
+        let mut receiver = updates.subscribe();
+        let task_id = "task-a".to_string();
+        let task_ids = HashSet::from([task_id.clone()]);
+        let cache = Arc::new(RefreshingCache::new(
+            updates,
+            Duration::from_millis(10),
+            TASK_GITHUB_LINK_CACHE_TTL,
+        ));
+
+        let initial = cache
+            .get_or_refresh(
+                "TQ task GitHub links",
+                task_ids.clone(),
+                Some(Duration::from_millis(100)),
+                move |_, task_ids| {
+                    Box::pin(async move {
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                        Ok(task_ids
+                            .into_iter()
+                            .map(|task_id| (task_id, Vec::new()))
+                            .collect())
+                    })
+                },
+                cache::merge_task_github_links,
+                cache::prune_task_github_links,
+            )
+            .await;
+        tokio::time::advance(Duration::from_millis(50)).await;
+        receiver
+            .changed()
+            .await
+            .expect("task-link refresh should notify");
+        let refreshed = cache
+            .get_or_refresh(
+                "TQ task GitHub links",
+                task_ids,
+                None,
+                |_, _| Box::pin(async { Ok(HashMap::new()) }),
+                cache::merge_task_github_links,
+                cache::prune_task_github_links,
+            )
+            .await;
+
+        assert_eq!(
+            (initial, refreshed),
+            (HashMap::new(), HashMap::from([(task_id, Vec::new())]),),
+        );
     }
 
     #[tokio::test]
