@@ -11,10 +11,16 @@ use crate::infra::process;
 
 const CRIT_CLIENT_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 
-pub(super) fn crit_client_waiting_on_port(port: u16, daemon_pid: u32) -> Result<bool> {
-    let output =
-        process::run_with_timeout(crit_client_lsof_command(port), CRIT_CLIENT_CHECK_TIMEOUT)
-            .context("failed to inspect crit client connections")?;
+pub(super) fn crit_client_waiting_on_port(
+    port: u16,
+    daemon_pid: u32,
+    run_with_timeout: impl FnOnce(
+        std::process::Command,
+        Duration,
+    ) -> std::io::Result<std::process::Output>,
+) -> Result<bool> {
+    let output = run_with_timeout(crit_client_lsof_command(port), CRIT_CLIENT_CHECK_TIMEOUT)
+        .context("failed to inspect crit client connections")?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     crit_client_waiting_from_lsof_result(
@@ -94,7 +100,7 @@ pub(super) fn reconcile_registered_session(
         port,
         status,
         super::status::crit_status,
-        crit_client_waiting_on_port,
+        |port, daemon_pid| crit_client_waiting_on_port(port, daemon_pid, process::run_with_timeout),
     )
 }
 
@@ -206,15 +212,28 @@ mod tests {
 
     #[test]
     fn crit_client_lsof_command_uses_supported_arguments() {
-        let command = crit_client_lsof_command(43127);
-        let args = command
-            .get_args()
-            .map(|argument| argument.to_string_lossy().into_owned())
-            .collect::<Vec<_>>();
+        let args = std::cell::RefCell::new(Vec::new());
+        let result = crit_client_waiting_on_port(43127, 101, |command, _| {
+            *args.borrow_mut() = command
+                .get_args()
+                .map(|argument| argument.to_string_lossy().into_owned())
+                .collect();
+            Err(std::io::Error::other(
+                "test stops after capturing arguments",
+            ))
+        });
 
         assert_eq!(
-            args,
-            vec!["-nP", "-iTCP:43127", "-sTCP:ESTABLISHED", "-Fpc",],
+            (args.into_inner(), result.is_err()),
+            (
+                vec![
+                    "-nP".to_owned(),
+                    "-iTCP:43127".to_owned(),
+                    "-sTCP:ESTABLISHED".to_owned(),
+                    "-Fpc".to_owned(),
+                ],
+                true,
+            ),
         );
     }
 
