@@ -37,7 +37,7 @@ fn delete_session_with_archive_in(
 
     let _todo_resolution_lock = super::lock_agent_todo_resolution(sessions_dir, session_id)?;
     let session_lock = super::lock_session_for_update(sessions_dir, session_id)?;
-    let session = session_lock.load()?;
+    let session = session_lock.load_skipping_undecodable()?;
     let should_archive = match session.as_ref() {
         Some(session) if session.engine == Engine::Codex => !session_lock.has_incomplete_todos()?,
         _ => false,
@@ -645,6 +645,68 @@ mod tests {
         assert_eq!(
             (kept, removed, absent, archive_calls.into_inner(),),
             (false, true, false, vec![(session_id.to_string(), true)],),
+        );
+    }
+
+    #[rstest]
+    fn explicit_delete_removes_undecodable_session_without_archiving(
+        test_session_dir: TestSessionDir,
+    ) {
+        let session_id = "session-with-invalid-data";
+        let session = make_session(session_id, Engine::Codex);
+        super::super::save_session_to(&test_session_dir.sessions_dir, &session)
+            .expect("session save should succeed");
+        super::super::database::open_connection(&test_session_dir.sessions_dir)
+            .expect("database should open")
+            .execute(
+                "UPDATE sessions SET data = ?1 WHERE session_id = ?2",
+                ["{", session_id],
+            )
+            .expect("session data should become undecodable");
+        let archive_calls = RefCell::new(Vec::new());
+
+        let removed = delete_session_with_archive_in(
+            &test_session_dir.sessions_dir,
+            session_id,
+            None,
+            |id| {
+                archive_calls.borrow_mut().push(id.to_string());
+                Ok(())
+            },
+        )
+        .expect("undecodable session should still be deletable");
+        let row_exists = super::super::database::open_connection(&test_session_dir.sessions_dir)
+            .expect("database should open")
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sessions WHERE session_id = ?1)",
+                [session_id],
+                |row| row.get::<_, bool>(0),
+            )
+            .expect("session row should be queried");
+
+        assert_eq!(
+            (removed, archive_calls.into_inner(), row_exists),
+            (true, Vec::<String>::new(), false),
+        );
+    }
+
+    #[rstest]
+    fn explicit_delete_does_not_create_a_missing_sessions_directory(
+        test_session_dir: TestSessionDir,
+    ) {
+        let sessions_dir = test_session_dir.temp_dir.path().join("missing-sessions");
+        let archive_calls = RefCell::new(Vec::new());
+
+        let removed =
+            delete_session_with_archive_in(&sessions_dir, "session-not-found", None, |id| {
+                archive_calls.borrow_mut().push(id.to_string());
+                Ok(())
+            })
+            .expect("deleting from a missing directory should be harmless");
+
+        assert_eq!(
+            (removed, sessions_dir.exists(), archive_calls.into_inner()),
+            (false, false, Vec::<String>::new()),
         );
     }
 

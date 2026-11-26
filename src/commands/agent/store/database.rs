@@ -239,6 +239,10 @@ impl SessionLock {
         read_session_strict(&self.connection, &self.session_id)
     }
 
+    pub(crate) fn load_skipping_undecodable(&self) -> Result<Option<Session>> {
+        read_session_skipping_undecodable(&self.connection, &self.session_id)
+    }
+
     pub(crate) fn has_pending_agent_requests(&self) -> Result<bool> {
         Ok(self.connection.query_row(
             "SELECT EXISTS(
