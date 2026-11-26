@@ -3,11 +3,14 @@ use std::fs::{self, File, Metadata};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
-use tempfile::NamedTempFile;
+use tempfile::{Builder, NamedTempFile, TempPath};
+
+#[cfg(not(test))]
+use crate::shared::command;
 
 use super::super::claude_sessions::session_jsonl_path;
 
@@ -72,20 +75,28 @@ struct TranscriptAnalysis {
     read_paths_by_record: HashMap<String, String>,
 }
 
+#[cfg(not(test))]
 fn slim_transcript(path: &Path) -> Result<SlimResult> {
-    slim_transcript_with(path, || {}, || {}, || {})
+    slim_transcript_with(path, || {}, || {}, || {}, has_writable_open_handle)
 }
 
-fn slim_transcript_with<F, G, H>(
+#[cfg(test)]
+fn slim_transcript(path: &Path) -> Result<SlimResult> {
+    slim_transcript_with(path, || {}, || {}, || {}, |_| Ok(false))
+}
+
+fn slim_transcript_with<F, G, H, P>(
     path: &Path,
     during_rewrite: F,
     before_replace: G,
     after_replace: H,
+    mut has_writable_open_handle: P,
 ) -> Result<SlimResult>
 where
     F: FnOnce(),
     G: FnOnce(),
     H: FnOnce(),
+    P: FnMut(&Path) -> Result<bool>,
 {
     let mut source = File::open(path)
         .with_context(|| format!("open Claude Code transcript {}", path.display()))?;
@@ -127,6 +138,13 @@ where
     )
     .with_context(|| format!("preserve transcript appends for {}", path.display()))?;
 
+    let old_inode_monitor = OldInodeMonitor::new(path)?;
+    has_writable_open_handle(old_inode_monitor.path())
+        .context("check transcript writer monitoring before replacement")?;
+    let mut replacement_writer = fs::OpenOptions::new()
+        .append(true)
+        .open(replacement.path())
+        .with_context(|| format!("open replacement transcript {} for append", path.display()))?;
     fs::set_permissions(replacement.path(), metadata.permissions())
         .with_context(|| format!("preserve transcript permissions for {}", path.display()))?;
     before_replace();
@@ -142,12 +160,20 @@ where
         .as_file()
         .sync_all()
         .with_context(|| format!("sync replacement transcript for {}", path.display()))?;
-    replacement
+    let persisted_file = replacement
         .persist(path)
         .map_err(|error| error.error)
         .with_context(|| format!("replace Claude Code transcript {}", path.display()))?;
+    drop(persisted_file);
     after_replace();
-    reconcile_in_flight_appends(path, &mut source, copied_to).with_context(|| {
+    reconcile_in_flight_appends(
+        old_inode_monitor.path(),
+        &mut source,
+        &mut replacement_writer,
+        copied_to,
+        &mut has_writable_open_handle,
+    )
+    .with_context(|| {
         format!(
             "preserve in-flight transcript appends for {}",
             path.display()
@@ -244,16 +270,43 @@ fn reconcile_appends(
     }
 }
 
-fn reconcile_in_flight_appends(path: &Path, source: &mut File, mut copied_to: u64) -> Result<()> {
-    let mut replacement = fs::OpenOptions::new()
-        .append(true)
-        .open(path)
-        .with_context(|| format!("open replacement transcript {} for append", path.display()))?;
-    let mut observed_len = source
-        .metadata()
-        .context("inspect original transcript after replacement")?
-        .len();
-    let mut stable_since = Instant::now();
+struct OldInodeMonitor {
+    path: TempPath,
+}
+
+impl OldInodeMonitor {
+    fn new(transcript_path: &Path) -> Result<Self> {
+        let parent = transcript_path
+            .parent()
+            .context("Claude Code transcript has no parent directory")?;
+        let path = Builder::new()
+            .prefix(".armyknife-transcript-slim-watch-")
+            .tempfile_in(parent)
+            .with_context(|| format!("create transcript monitor link in {}", parent.display()))?
+            .into_temp_path();
+        fs::remove_file(&path).context("prepare transcript monitor link path")?;
+        fs::hard_link(transcript_path, &path)
+            .with_context(|| format!("create monitor link for {}", transcript_path.display()))?;
+        Ok(Self { path })
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+fn reconcile_in_flight_appends<P>(
+    old_inode_path: &Path,
+    source: &mut File,
+    replacement: &mut File,
+    mut copied_to: u64,
+    has_writable_open_handle: &mut P,
+) -> Result<()>
+where
+    P: FnMut(&Path) -> Result<bool>,
+{
+    const POLL_INTERVAL: Duration = Duration::from_millis(25);
+    let mut inspection_failed = false;
 
     loop {
         let current_len = source
@@ -265,36 +318,166 @@ fn reconcile_in_flight_appends(path: &Path, source: &mut File, mut copied_to: u6
                 .seek(SeekFrom::Start(copied_to))
                 .context("seek to in-flight transcript append")?;
             let mut appended = (&mut *source).take(current_len - copied_to);
-            copied_to += std::io::copy(&mut appended, &mut replacement)
+            copied_to += std::io::copy(&mut appended, replacement)
                 .context("copy in-flight transcript append")?;
             replacement
                 .sync_data()
                 .context("sync in-flight transcript append")?;
-            observed_len = source
-                .metadata()
-                .context("recheck original transcript after in-flight append")?
-                .len();
-            stable_since = Instant::now();
-        } else if current_len != observed_len {
-            observed_len = current_len;
-            stable_since = Instant::now();
-        } else if stable_since.elapsed() >= Duration::from_millis(25) {
-            return Ok(());
         }
-        thread::sleep(Duration::from_millis(5));
+
+        let has_writer = match has_writable_open_handle(old_inode_path) {
+            Ok(has_writer) => {
+                inspection_failed = false;
+                has_writer
+            }
+            Err(error) => {
+                if !inspection_failed {
+                    eprintln!(
+                        "Cannot inspect transcript writers after replacement; retrying: {error:#}"
+                    );
+                    inspection_failed = true;
+                }
+                thread::sleep(POLL_INTERVAL);
+                continue;
+            }
+        };
+
+        if !has_writer {
+            let final_len = source
+                .metadata()
+                .context("verify original transcript after writers close")?
+                .len();
+            if final_len == copied_to {
+                replacement
+                    .sync_all()
+                    .context("sync final replacement transcript")?;
+                return Ok(());
+            }
+        }
+        thread::sleep(POLL_INTERVAL);
     }
+}
+
+#[cfg(all(not(test), target_os = "macos"))]
+fn has_writable_open_handle(path: &Path) -> Result<bool> {
+    let output = command::new("lsof")
+        .args(["-nP", "-F0pfa"])
+        .arg(path)
+        .output()
+        .context("run lsof to inspect transcript writers")?;
+    if !output.status.success() || !output.stderr.is_empty() {
+        bail!("lsof could not inspect transcript writers");
+    }
+    Ok(lsof_output_has_writable_handle(&output.stdout))
+}
+
+#[cfg(all(not(test), target_os = "linux"))]
+fn has_writable_open_handle(path: &Path) -> Result<bool> {
+    use std::os::unix::fs::MetadataExt;
+
+    let target = fs::metadata(path).context("inspect monitored transcript inode")?;
+    let current_uid = fs::metadata("/proc/self")
+        .context("inspect current process owner")?
+        .uid();
+    for process in fs::read_dir("/proc").context("list processes for transcript writer check")? {
+        let process = process.context("read process entry")?;
+        let Some(pid) = process
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        let process_path = process.path();
+        let process_metadata = match fs::metadata(&process_path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(error).with_context(|| format!("inspect process {pid} owner"));
+            }
+        };
+        if process_metadata.uid() != current_uid {
+            continue;
+        }
+        let fd_directory = process_path.join("fd");
+        let file_descriptors = match fs::read_dir(&fd_directory) {
+            Ok(file_descriptors) => file_descriptors,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("inspect file descriptors for process {pid}"));
+            }
+        };
+        for file_descriptor in file_descriptors {
+            let file_descriptor = file_descriptor.context("read process file descriptor")?;
+            let descriptor_path = file_descriptor.path();
+            let descriptor_metadata = match fs::metadata(&descriptor_path) {
+                Ok(metadata) => metadata,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => {
+                    return Err(error).with_context(|| {
+                        format!("inspect process {pid} file descriptor {descriptor_path:?}")
+                    });
+                }
+            };
+            if descriptor_metadata.dev() != target.dev()
+                || descriptor_metadata.ino() != target.ino()
+            {
+                continue;
+            }
+            let Some(descriptor_id) = file_descriptor.file_name().to_str().map(str::to_owned)
+            else {
+                continue;
+            };
+            let descriptor_info =
+                match fs::read_to_string(process_path.join("fdinfo").join(descriptor_id)) {
+                    Ok(descriptor_info) => descriptor_info,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(error) => {
+                        return Err(error)
+                            .with_context(|| format!("read process {pid} descriptor flags"));
+                    }
+                };
+            let flags = descriptor_info
+                .lines()
+                .find_map(|line| line.strip_prefix("flags:"))
+                .context("process file descriptor has no flags field")?;
+            let flags = u32::from_str_radix(flags.trim(), 8)
+                .context("parse process file descriptor flags")?;
+            if flags & (libc::O_ACCMODE as u32) != libc::O_RDONLY as u32 {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+#[cfg(all(not(test), not(any(target_os = "macos", target_os = "linux"))))]
+fn has_writable_open_handle(_path: &Path) -> Result<bool> {
+    bail!("transcript slimming requires macOS or Linux open-file inspection")
+}
+
+fn lsof_output_has_writable_handle(output: &[u8]) -> bool {
+    output
+        .split(|byte| *byte == 0)
+        .any(|field| field.starts_with(b"aw") || field.starts_with(b"au"))
 }
 
 #[cfg(test)]
 mod tests {
     use std::fs;
     use std::io::Write;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::thread;
+    use std::time::Duration;
 
     use indoc::indoc;
+    use rstest::rstest;
     use serde_json::Value;
     use tempfile::tempdir;
 
-    use super::{slim_transcript, slim_transcript_with};
+    use super::{lsof_output_has_writable_handle, slim_transcript, slim_transcript_with};
 
     #[test]
     fn slims_only_discardable_data_before_the_latest_compact_boundary() {
@@ -310,7 +493,8 @@ mod tests {
                 {"type":"attachment","uuid":"fixture-attachment","parentUuid":"fixture-image","attachment":{"type":"invoked_skills","content":["fixture-skill"]}}
                 {"type":"api-request-blob","body":"fixture-payload"}
                 {"type":"user","uuid":"fixture-preserved","message":{"content":"preserved fixture"}}
-                {"type":"system","subtype":"compact_boundary","compactMetadata":{"preservedMessages":{"uuids":["fixture-preserved"]}}}
+                {"type":"user","uuid":"fixture-preserved-image","message":{"content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"fixture-preserved-base64"}}]}}
+                {"type":"system","subtype":"compact_boundary","compactMetadata":{"preservedMessages":{"uuids":["fixture-preserved","fixture-preserved-image"]}}}
                 {"type":"assistant","uuid":"fixture-after","message":{"content":"after boundary"}}
             "#},
         )
@@ -329,7 +513,8 @@ mod tests {
                 {"type":"user","uuid":"fixture-image","parentUuid":"fixture-read","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-tool","content":[{"type":"text","text":"[Image data omitted; source: /sandbox/sample.txt]"}]}]},"toolUseResult":{"task_id":"fixture-task","taskId":"fixture-task-camel","background_task_id":"fixture-background","backgroundTaskId":"fixture-background-camel","shell_id":"fixture-shell","shellId":"fixture-shell-camel","agentId":"fixture-agent","status":"fixture-status","answers":{"fixture-question":"fixture-answer"},"questions":["fixture-question"]}}
                 {"type":"attachment","uuid":"fixture-attachment","parentUuid":"fixture-image","attachment":{"type":"invoked_skills"}}
                 {"type":"user","uuid":"fixture-preserved","message":{"content":"preserved fixture"}}
-                {"type":"system","subtype":"compact_boundary","compactMetadata":{"preservedMessages":{"uuids":["fixture-preserved"]}}}
+                {"type":"user","uuid":"fixture-preserved-image","message":{"content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"fixture-preserved-base64"}}]}}
+                {"type":"system","subtype":"compact_boundary","compactMetadata":{"preservedMessages":{"uuids":["fixture-preserved","fixture-preserved-image"]}}}
                 {"type":"assistant","uuid":"fixture-after","message":{"content":"after boundary"}}
             "#})
         );
@@ -396,45 +581,59 @@ mod tests {
             "#},
         )
         .expect("fixture transcript should be written");
-        let old_writer = std::cell::RefCell::new(Some(
-            fs::OpenOptions::new()
-                .append(true)
-                .open(&transcript)
-                .expect("original transcript should be appendable"),
-        ));
+        let old_writer = fs::OpenOptions::new()
+            .append(true)
+            .open(&transcript)
+            .expect("original transcript should be appendable");
+        let writer_open = Arc::new(AtomicBool::new(true));
+        let callback_writer_open = Arc::clone(&writer_open);
+        let mut late_writer_thread = None;
 
-        slim_transcript_with(&transcript, || {
-            let mut original = fs::OpenOptions::new()
-                .append(true)
-                .open(&transcript)
-                .expect("original transcript should be appendable during rewrite");
-            original
-                .write_all(b"{\"type\":\"user\",\"uuid\":\"fixture-during\",\"message\":{\"content\":\"fixture during\"}}\n")
-                .expect("append during rewrite should succeed");
-        }, || {
-            let mut original = fs::OpenOptions::new()
-                .append(true)
-                .open(&transcript)
-                .expect("original transcript should be appendable before replacement");
-            original
-                .write_all(b"{\"type\":\"user\",\"uuid\":\"fixture-before-replace\",\"message\":{\"content\":\"fixture before replace\"}}\n")
-                .expect("append before replacement should succeed");
-        }, || {
-            let mut replacement = fs::OpenOptions::new()
-                .append(true)
-                .open(&transcript)
-                .expect("replacement transcript should be appendable");
-            replacement
-                .write_all(b"{\"type\":\"user\",\"uuid\":\"fixture-new-path-after-replace\",\"message\":{\"content\":\"fixture new path after replace\"}}\n")
-                .expect("append through the new path should succeed");
-            old_writer
-                .borrow_mut()
-                .take()
-                .expect("pre-replacement file handle should still be open")
-                .write_all(b"{\"type\":\"user\",\"uuid\":\"fixture-old-fd-after-replace\",\"message\":{\"content\":\"fixture old fd after replace\"}}\n")
-                .expect("append through the old file handle should succeed");
-        })
+        slim_transcript_with(
+            &transcript,
+            || {
+                let mut original = fs::OpenOptions::new()
+                    .append(true)
+                    .open(&transcript)
+                    .expect("original transcript should be appendable during rewrite");
+                original
+                    .write_all(b"{\"type\":\"user\",\"uuid\":\"fixture-during\",\"message\":{\"content\":\"fixture during\"}}\n")
+                    .expect("append during rewrite should succeed");
+            },
+            || {
+                let mut original = fs::OpenOptions::new()
+                    .append(true)
+                    .open(&transcript)
+                    .expect("original transcript should be appendable before replacement");
+                original
+                    .write_all(b"{\"type\":\"user\",\"uuid\":\"fixture-before-replace\",\"message\":{\"content\":\"fixture before replace\"}}\n")
+                    .expect("append before replacement should succeed");
+            },
+            || {
+                let mut replacement = fs::OpenOptions::new()
+                    .append(true)
+                    .open(&transcript)
+                    .expect("replacement transcript should be appendable");
+                replacement
+                    .write_all(b"{\"type\":\"user\",\"uuid\":\"fixture-new-path-after-replace\",\"message\":{\"content\":\"fixture new path after replace\"}}\n")
+                    .expect("append through the new path should succeed");
+                late_writer_thread = Some(thread::spawn(move || {
+                    thread::sleep(Duration::from_millis(100));
+                    let mut old_writer = old_writer;
+                    let result = old_writer.write_all(b"{\"type\":\"user\",\"uuid\":\"fixture-old-fd-after-replace\",\"message\":{\"content\":\"fixture old fd after replace\"}}\n");
+                    drop(old_writer);
+                    callback_writer_open.store(false, Ordering::SeqCst);
+                    result
+                }));
+            },
+            |_| Ok(writer_open.load(Ordering::SeqCst)),
+        )
         .expect("transcript should be slimmed");
+        late_writer_thread
+            .expect("late writer thread should be created")
+            .join()
+            .expect("late writer thread should finish")
+            .expect("append through the old file handle should succeed");
 
         assert_eq!(
             fs::read_to_string(&transcript).expect("transcript should be readable"),
@@ -446,6 +645,47 @@ mod tests {
                 {"type":"user","uuid":"fixture-new-path-after-replace","message":{"content":"fixture new path after replace"}}
                 {"type":"user","uuid":"fixture-old-fd-after-replace","message":{"content":"fixture old fd after replace"}}
             "#}
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn preserves_read_only_permissions_after_replacement() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempdir().expect("temporary directory should be created");
+        let transcript = directory.path().join("fixture-transcript.jsonl");
+        fs::write(
+            &transcript,
+            indoc! {r#"
+                {"type":"user","uuid":"fixture-old","message":{"content":"fixture old"}}
+                {"type":"system","subtype":"compact_boundary","compactMetadata":{"preservedMessages":{"uuids":[]}}}
+            "#},
+        )
+        .expect("fixture transcript should be written");
+        fs::set_permissions(&transcript, fs::Permissions::from_mode(0o444))
+            .expect("fixture transcript should become read-only");
+
+        slim_transcript_with(&transcript, || {}, || {}, || {}, |_| Ok(false))
+            .expect("read-only transcript should be slimmed");
+
+        assert_eq!(
+            (
+                fs::read_to_string(&transcript).expect("slimmed transcript should be readable"),
+                fs::metadata(&transcript)
+                    .expect("slimmed transcript metadata should be readable")
+                    .permissions()
+                    .mode()
+                    & 0o777,
+            ),
+            (
+                indoc! {r#"
+                    {"type":"user","uuid":"fixture-old","message":{"content":"fixture old"}}
+                    {"type":"system","subtype":"compact_boundary","compactMetadata":{"preservedMessages":{"uuids":[]}}}
+                "#}
+                .to_owned(),
+                0o444,
+            ),
         );
     }
 
@@ -464,10 +704,25 @@ mod tests {
         );
     }
 
-    #[test]
-    fn validates_session_ids_as_single_path_components() {
-        assert!(super::validate_session_id("fixture-session").is_ok());
-        assert!(super::validate_session_id("../fixture-session").is_err());
+    #[rstest]
+    #[case::single_path_component("fixture-session", true)]
+    #[case::parent_path("../fixture-session", false)]
+    fn validates_session_ids_as_single_path_components(
+        #[case] session_id: &str,
+        #[case] expected_valid: bool,
+    ) {
+        assert_eq!(
+            super::validate_session_id(session_id).is_ok(),
+            expected_valid
+        );
+    }
+
+    #[rstest]
+    #[case::read_only(b"p123\0f4\0ar\0", false)]
+    #[case::write_only(b"p123\0f4\0aw\0", true)]
+    #[case::read_and_write(b"p123\0f4\0au\0", true)]
+    fn detects_writable_open_handles_in_lsof_output(#[case] output: &[u8], #[case] expected: bool) {
+        assert_eq!(lsof_output_has_writable_handle(output), expected);
     }
 
     fn parse_jsonl(source: &str) -> Vec<Value> {

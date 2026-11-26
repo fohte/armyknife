@@ -594,7 +594,7 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 
 ### `a agent transcript slim`
 
-Slim the Claude Code transcript for a session ID. The command resolves the file under `~/.claude/projects/` from the encoded project directory; `--cwd` selects the project directory and defaults to the current directory. It rewrites records before the latest `compact_boundary`, except UUIDs listed in that boundary's `compactMetadata.preservedMessages.uuids`. It removes API request records, trims `toolUseResult`, replaces image data with text, and clears large attachment payloads while retaining their UUID links. Records at and after the boundary remain unchanged. The replacement is atomic, and appends observed during replacement are preserved.
+Slim the Claude Code transcript for a session ID in the selected project directory; `--cwd` selects that directory and defaults to the current directory. It rewrites records before the latest `compact_boundary`, except UUIDs listed in that boundary's `compactMetadata.preservedMessages.uuids`. It removes API request records, trims `toolUseResult` to task metadata, replaces base64 image data with text, and clears payloads from selected nonessential attachment types while retaining their UUID links. Records at and after the boundary remain unchanged. The replacement is atomic, and appends observed during replacement are preserved.
 
 ```sh
 a agent transcript slim <session_id> --cwd /path/to/project
