@@ -8,7 +8,9 @@ import {
   useState,
 } from 'react'
 
+import { BackgroundTaskElapsedStartedAtProvider } from '#components/background-task-elapsed-context'
 import { commandResultMatchesCommands } from '#components/command-result-message'
+import { getConversationTimelineEndIndex } from '#components/conversation-message-timeline'
 import { ConversationPaneView } from '#components/conversation-pane-view'
 import { MarkdownSessionLinksProvider } from '#components/markdown-message'
 import type { PendingPermissionActions } from '#components/permission-card'
@@ -355,15 +357,16 @@ export function ConversationPane({
       operation.sessionId === session.id && operation.type === 'interrupt',
   )
   const { messages, backgroundTasks } = displayedConversation
+  const actionTimelineIndex =
+    loading && messages.length === 0
+      ? undefined
+      : getConversationTimelineEndIndex(
+          messages,
+          displayedConversation.start,
+          session.category,
+          session.isCompacting === true,
+        )
   const editorReviewDocument = useEditorReviewDocument(session)
-  const backgroundTaskElapsedOffset =
-    messagesLoadedAt === null
-      ? 0
-      : Math.max(0, Math.floor((Date.now() - messagesLoadedAt) / 1_000))
-  const displayBackgroundTasks = backgroundTasks.map((task) => ({
-    ...task,
-    elapsedSeconds: task.elapsedSeconds + backgroundTaskElapsedOffset,
-  }))
   const {
     activeTabId,
     isReviewFocusOpen,
@@ -382,6 +385,7 @@ export function ConversationPane({
     pullRequestListTarget,
   } = useConversationStatusPanel({
     session,
+    actionTimelineIndex,
     reviewDocumentSummaries: editorReviewDocument?.summaries ?? null,
     ...(editorReviewDocument?.retrySummaries === undefined
       ? {}
@@ -390,7 +394,7 @@ export function ConversationPane({
         }),
     messages,
     allDecisions: displayedConversation.decisions,
-    backgroundTasks: displayBackgroundTasks,
+    backgroundTasks,
     sessionTree,
     sessionTreeError,
     sessionTreeViewState: initialSessionTreeViewState,
@@ -416,6 +420,7 @@ export function ConversationPane({
   const conversationView = (
     <ConversationPaneView
       session={session}
+      actionTimelineIndex={actionTimelineIndex}
       vibeMode={conversation.vibeMode ?? session.vibeMode}
       sessions={sessions}
       sessionLinkTargets={sessionLinkTargets}
@@ -423,7 +428,7 @@ export function ConversationPane({
       {...(displayedConversation.messageImageSources === undefined
         ? {}
         : { messageImageSources: displayedConversation.messageImageSources })}
-      start={conversation.start}
+      start={displayedConversation.start}
       epoch={conversation.epoch}
       olderCursor={conversation.olderCursor}
       decisions={displayedConversation.decisions}
@@ -431,7 +436,7 @@ export function ConversationPane({
       loadingOlder={loadingOlder}
       onLoadOlder={loadOlder}
       onPruneOldMessages={pruneOldMessages}
-      backgroundTasks={displayBackgroundTasks}
+      backgroundTasks={backgroundTasks}
       skills={conversation.skills ?? []}
       actions={actions}
       actionsReady={actionsReady}
@@ -514,15 +519,17 @@ export function ConversationPane({
         if (!isMobile && !statusPanelOpen) onToggleStatusPanel()
       }}
     >
-      {isReviewFocusOpen && reviewFocusBody !== null ? (
-        <ReviewDocumentFocus
-          sessionTitle={session.title}
-          body={reviewFocusBody}
-          onBack={onCloseReviewFocus}
-        />
-      ) : (
-        conversationLayout
-      )}
+      <BackgroundTaskElapsedStartedAtProvider value={messagesLoadedAt}>
+        {isReviewFocusOpen && reviewFocusBody !== null ? (
+          <ReviewDocumentFocus
+            sessionTitle={session.title}
+            body={reviewFocusBody}
+            onBack={onCloseReviewFocus}
+          />
+        ) : (
+          conversationLayout
+        )}
+      </BackgroundTaskElapsedStartedAtProvider>
     </MarkdownSessionLinksProvider>
   )
 }

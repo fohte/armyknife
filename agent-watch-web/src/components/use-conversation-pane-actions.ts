@@ -27,7 +27,12 @@ export function useConversationPaneActions({
 }: UseConversationPaneActionsOptions) {
   const actionFeedback = useOptionalAsyncActionFeedback()
   const onRewind = useCallback(
-    async (messageId: string, mode: RewindMode, draft: string) => {
+    async (
+      messageId: string,
+      mode: RewindMode,
+      draft: string,
+      timelineIndex?: number,
+    ) => {
       const operation = createSessionOperation(sessionId, 'rewind', {
         messageId,
         mode,
@@ -69,6 +74,7 @@ export function useConversationPaneActions({
           kind: 'rewind',
           sessionId,
           sessionTitle,
+          ...(timelineIndex === undefined ? {} : { timelineIndex }),
           run: runRewind,
         })
         return true

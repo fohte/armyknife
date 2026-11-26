@@ -2,6 +2,7 @@ import '#components/running-tasks-panel.css'
 
 import type { ReactNode } from 'react'
 
+import { useBackgroundTaskElapsedSeconds } from '#components/background-task-elapsed-context'
 import { formatElapsedTime } from '#components/format-elapsed-time'
 import type { BackgroundTask } from '#types'
 
@@ -40,9 +41,7 @@ export function RunningTasksPanelView({
                       {task.description}
                     </span>
                   </div>
-                  <span className="running-task-elapsed">
-                    {formatElapsedTime(task.elapsedSeconds)}
-                  </span>
+                  <SubagentElapsedTime elapsedSeconds={task.elapsedSeconds} />
                 </div>
               </li>
             ))}
@@ -56,5 +55,13 @@ export function RunningTasksPanelView({
         </section>
       ) : null}
     </div>
+  )
+}
+
+function SubagentElapsedTime({ elapsedSeconds }: { elapsedSeconds: number }) {
+  return (
+    <span className="running-task-elapsed">
+      {formatElapsedTime(useBackgroundTaskElapsedSeconds(elapsedSeconds))}
+    </span>
   )
 }

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { userEvent } from 'vitest/browser'
 
 import { getCommandPaletteShortcut } from '#command-palette-shortcut'
+import { SessionElapsedStartedAtProvider } from '#components/session-elapsed-context'
 import { SessionLink } from '#components/session-link'
 import { SessionLinkElapsedSecondsContext } from '#components/session-link-elapsed-seconds'
 import type { SessionLinkTarget } from '#types'
@@ -47,7 +48,40 @@ afterEach(() => {
   if (root !== null) act(() => root?.unmount())
   root = null
   container.remove()
+  vi.useRealTimers()
   vi.unstubAllGlobals()
+})
+
+it('updates the linked session elapsed label from the shared clock', async () => {
+  vi.useFakeTimers()
+  vi.setSystemTime(new Date('2026-11-10T00:00:00.000Z'))
+  const startedAt = Date.now()
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <SessionElapsedStartedAtProvider value={startedAt}>
+        <SessionLink open session={linkedSession}>
+          sample-session
+        </SessionLink>
+      </SessionElapsedStartedAtProvider>,
+    )
+  })
+  const before =
+    document.querySelector('.session-link-card-status')?.textContent ?? null
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1_000)
+  })
+
+  const snapshot = () => ({
+    before,
+    after:
+      document.querySelector('.session-link-card-status')?.textContent ?? null,
+  })
+  expect(snapshot()).toEqual({
+    before: 'Plan · Review the sample configuration. · 2m',
+    after: 'Plan · Review the sample configuration. · 2m 1s',
+  })
 })
 
 it('shows session details on hover', async () => {

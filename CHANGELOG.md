@@ -1,5 +1,47 @@
 # Changelog
 
+## [0.1.950](https://github.com/fohte/armyknife/compare/v0.1.949...v0.1.950) (2026-11-26)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** cut redundant lookups ([#2323](https://github.com/fohte/armyknife/issues/2323)) ([a3a3a9e](https://github.com/fohte/armyknife/commit/a3a3a9e067b3b7e76eac41ba16164c1edadc8d73))
+
+## [0.1.949](https://github.com/fohte/armyknife/compare/v0.1.948...v0.1.949) (2026-11-26)
+
+
+### Performance Improvements
+
+* **watch-web:** pause hidden-tab updates ([#2318](https://github.com/fohte/armyknife/issues/2318)) ([739d324](https://github.com/fohte/armyknife/commit/739d324d5c835931d2720b70fbd951c206106259))
+
+## [0.1.948](https://github.com/fohte/armyknife/compare/v0.1.947...v0.1.948) (2026-11-26)
+
+
+### Bug Fixes
+
+* **watch-web:** keep action rows in place ([#2319](https://github.com/fohte/armyknife/issues/2319)) ([042c2df](https://github.com/fohte/armyknife/commit/042c2dff463ad80da8443dde941024aeaa081ee0))
+
+## [0.1.947](https://github.com/fohte/armyknife/compare/v0.1.946...v0.1.947) (2026-11-26)
+
+
+### Performance Improvements
+
+* **agent/crit:** extend monitor polling interval ([#2321](https://github.com/fohte/armyknife/issues/2321)) ([cf22329](https://github.com/fohte/armyknife/commit/cf223295905884e4950b3a4110b02373359143b5))
+
+## [0.1.946](https://github.com/fohte/armyknife/compare/v0.1.945...v0.1.946) (2026-11-26)
+
+
+### Performance Improvements
+
+* **agent/store:** initialize sessions once ([#2315](https://github.com/fohte/armyknife/issues/2315)) ([2b1a8e2](https://github.com/fohte/armyknife/commit/2b1a8e2ed46b1727c571a007ba9f23e821a0805e))
+
+## [0.1.945](https://github.com/fohte/armyknife/compare/v0.1.944...v0.1.945) (2026-11-26)
+
+
+### Performance Improvements
+
+* **watch-web:** share session revision monitoring ([#2314](https://github.com/fohte/armyknife/issues/2314)) ([9f57150](https://github.com/fohte/armyknife/commit/9f571503c919f7e44f018428c1638ee052bf05da))
+
 ## [0.1.944](https://github.com/fohte/armyknife/compare/v0.1.943...v0.1.944) (2026-11-26)
 
 

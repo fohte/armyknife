@@ -4,8 +4,10 @@ use crate::infra::tq::TqGithubLink;
 use std::collections::{HashMap, HashSet};
 
 use super::{
-    PullRequestKey, SessionEnrichmentCache, SessionPullRequestInfo, SessionTaskMetadata,
+    CacheOperations, PullRequestKey, SessionEnrichmentCache, SessionPullRequestInfo,
+    SessionTaskMetadata,
     cache::{merge_pull_request_results, prune_pull_request_results},
+    pull_request_can_refresh,
 };
 
 impl SessionEnrichmentCache {
@@ -30,10 +32,46 @@ impl SessionEnrichmentCache {
                 None,
                 {
                     let sessions = sessions.to_vec();
-                    move |_, _| fetcher(sessions, number_queries)
+                    move |_, refresh_keys| {
+                        let branch_keys = refresh_keys
+                            .iter()
+                            .filter_map(|key| match key {
+                                PullRequestKey::Branch(key) => Some(key.clone()),
+                                PullRequestKey::Number(_) => None,
+                            })
+                            .collect::<HashSet<_>>();
+                        let number_keys = refresh_keys
+                            .iter()
+                            .filter_map(|key| match key {
+                                PullRequestKey::Branch(_) => None,
+                                PullRequestKey::Number(key) => Some(key.clone()),
+                            })
+                            .collect::<HashSet<_>>();
+                        let sessions = sessions
+                            .into_iter()
+                            .filter(|session| {
+                                session.pr_context.as_ref().is_some_and(|context| {
+                                    branch_keys.contains(&(
+                                        context.owner.clone(),
+                                        context.repo.clone(),
+                                        context.branch.clone(),
+                                    ))
+                                })
+                            })
+                            .collect();
+                        let number_queries = number_queries
+                            .into_iter()
+                            .filter(|query| number_keys.contains(&query.key()))
+                            .collect();
+                        fetcher(sessions, number_queries)
+                    }
                 },
-                merge_pull_request_results,
-                prune_pull_request_results,
+                CacheOperations {
+                    merge: merge_pull_request_results,
+                    prune: prune_pull_request_results,
+                    can_refresh: pull_request_can_refresh,
+                    fetched_keys: |_, refresh_keys| refresh_keys.clone(),
+                },
             )
             .await;
 

@@ -10,11 +10,13 @@ import {
   Workflow,
 } from 'lucide-react'
 
+import { useSessionElapsedStartedAt } from '#components/session-elapsed-context'
 import { VibeIndicator } from '#components/vibe-indicator'
 import { formatSessionDecisionCount } from '#session-decision-count'
 import { sessionKindIcon } from '#session-kind-label'
 import { formatLinkedTaskCount } from '#session-task-count'
 import type { Session, SessionTask } from '#types'
+import { useLiveElapsedOffsetSeconds } from '#use-live-elapsed-offset-seconds'
 
 type SessionRowData = Pick<
   Session,
@@ -52,6 +54,33 @@ function formatElapsedTime(totalSeconds: number) {
   const hours = Math.floor(minutes / 60)
   if (hours < 24) return `${String(hours)}h`
   return `${String(Math.floor(hours / 24))}d`
+}
+
+function SessionAge({ elapsedSeconds }: { elapsedSeconds: number }) {
+  const startedAt = useSessionElapsedStartedAt()
+  if (startedAt === null) {
+    return (
+      <span className="session-age">{formatElapsedTime(elapsedSeconds)}</span>
+    )
+  }
+  return (
+    <LiveSessionAge elapsedSeconds={elapsedSeconds} startedAt={startedAt} />
+  )
+}
+
+function LiveSessionAge({
+  elapsedSeconds,
+  startedAt,
+}: {
+  elapsedSeconds: number
+  startedAt: number
+}) {
+  const elapsedOffsetSeconds = useLiveElapsedOffsetSeconds(startedAt)
+  return (
+    <span className="session-age">
+      {formatElapsedTime(elapsedSeconds + elapsedOffsetSeconds)}
+    </span>
+  )
 }
 
 function rolePresentation(workType: string | null | undefined) {
@@ -166,9 +195,7 @@ export function SessionRow({
           {session.vibeMode === undefined ? null : (
             <VibeIndicator mode={session.vibeMode} />
           )}
-          <span className="session-age">
-            {formatElapsedTime(session.elapsedSeconds)}
-          </span>
+          <SessionAge elapsedSeconds={session.elapsedSeconds} />
         </span>
         {density === 'full' && rowPreview.length > 0 ? (
           <span

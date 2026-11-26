@@ -40,8 +40,7 @@ export function renderConversationAsyncActionItems({
   return feedback?.actions
     .filter(
       (action) =>
-        action.sessionId === sessionId &&
-        !(action.kind === 'merge' && action.timelineIndex !== undefined),
+        action.sessionId === sessionId && action.timelineIndex === undefined,
     )
     .map((action) => renderConversationAsyncActionItem({ action, feedback }))
 }

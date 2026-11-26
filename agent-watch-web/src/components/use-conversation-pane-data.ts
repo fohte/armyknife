@@ -75,8 +75,8 @@ export function useConversationPaneData({
   pendingOperations,
   confirm,
 }: UseConversationPaneDataOptions) {
-  const shiftMergeTimelineIndices =
-    useOptionalAsyncActionFeedback()?.shiftMergeTimelineIndices
+  const shiftActionTimelineIndices =
+    useOptionalAsyncActionFeedback()?.shiftActionTimelineIndices
   const sessionConversationCache = useSessionConversationCache()
   const setCachedConversation = sessionConversationCache?.setCachedConversation
   const [initialCachedConversation] = useState(() =>
@@ -381,9 +381,9 @@ export function useConversationPaneData({
                 start + response.messages.length - latest.start,
               ),
             )
-        // Epoch changes can renumber retained messages, so rebase their merge results.
+        // Epoch changes can renumber retained messages, so rebase their action results.
         if (!epochReset) {
-          shiftMergeTimelineIndices?.({
+          shiftActionTimelineIndices?.({
             sessionId,
             from: latest.start,
             through: latest.start + latest.messages.length,
@@ -424,7 +424,7 @@ export function useConversationPaneData({
     clearErrors,
     markMessagesLoaded,
     sessionId,
-    shiftMergeTimelineIndices,
+    shiftActionTimelineIndices,
     updateConversation,
   ])
 
