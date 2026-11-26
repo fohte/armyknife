@@ -79,12 +79,14 @@ pub(crate) fn take_mature_deferred_stops(
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let mut statement = transaction.prepare(
         "SELECT deferred.session_id, deferred.parent_session_id, deferred.stopped_at,
-                sessions.data,
+                sessions.data, parent_sessions.data,
                 (SELECT MAX(sent_at) FROM watch_web_peer_out_message
                  WHERE from_session_id = deferred.session_id
                    AND to_session_id = deferred.parent_session_id) AS last_message_at
          FROM agent_deferred_unreported_stop AS deferred
-         LEFT JOIN sessions ON sessions.session_id = deferred.session_id",
+         LEFT JOIN sessions ON sessions.session_id = deferred.session_id
+         LEFT JOIN sessions AS parent_sessions
+            ON parent_sessions.session_id = deferred.parent_session_id",
     )?;
     let rows = statement.query_map([], |row| {
         Ok((
@@ -93,17 +95,34 @@ pub(crate) fn take_mature_deferred_stops(
             row.get::<_, String>(2)?,
             row.get::<_, Option<String>>(3)?,
             row.get::<_, Option<String>>(4)?,
+            row.get::<_, Option<String>>(5)?,
         ))
     })?;
     let mut matured = Vec::new();
     for row in rows {
-        let (session_id, parent_session_id, stopped_at, session_data, last_message_at) = row?;
+        let (
+            session_id,
+            parent_session_id,
+            stopped_at,
+            session_data,
+            parent_session_data,
+            last_message_at,
+        ) = row?;
         let stopped_at = DateTime::parse_from_rfc3339(&stopped_at)?.with_timezone(&Utc);
         let last_message_at = last_message_at
             .map(|value| DateTime::parse_from_rfc3339(&value).map(|time| time.with_timezone(&Utc)))
             .transpose()?;
         let last_activity = last_message_at.map_or(stopped_at, |time| time.max(stopped_at));
         if now.signed_duration_since(last_activity) < chrono::Duration::from_std(quiet_for)? {
+            continue;
+        }
+
+        let parent_is_being_signaled = parent_session_data
+            .as_deref()
+            .and_then(|data| super::decode_session(&parent_session_id, data))
+            .is_some_and(|parent| parent.sweep_signaled);
+        if parent_is_being_signaled {
+            // peer notify refuses a signaled parent, so leave the row for a later sweep.
             continue;
         }
 
@@ -279,6 +298,48 @@ mod tests {
                     session_id: "fixture-delegate".to_string(),
                     parent_session_id: "fixture-parent".to_string(),
                     stopped_at: latest_stop,
+                    last_message: None,
+                }],
+            ),
+        );
+    }
+
+    #[rstest::rstest]
+    fn retains_mature_record_while_parent_is_signaled(sessions_dir: TempDir) {
+        let stopped_at = Utc.with_ymd_and_hms(2026, 10, 1, 10, 0, 0).unwrap();
+        let child = delegate_session();
+        let mut parent = deferred_stop_delegate();
+        parent.session_id = "fixture-parent".to_string();
+        parent.ancestor_session_ids.clear();
+        parent.sweep_signaled = true;
+        save_session_to(sessions_dir.path(), &child).unwrap();
+        save_session_to(sessions_dir.path(), &parent).unwrap();
+        record_deferred_stop(sessions_dir.path(), &child, &parent.session_id, stopped_at).unwrap();
+
+        let during_parent_shutdown = take_mature_deferred_stops(
+            sessions_dir.path(),
+            stopped_at + chrono::Duration::minutes(31),
+            Duration::from_secs(30 * 60),
+        )
+        .unwrap();
+        parent.status = SessionStatus::Paused;
+        parent.sweep_signaled = false;
+        save_session_to(sessions_dir.path(), &parent).unwrap();
+        let after_parent_shutdown = take_mature_deferred_stops(
+            sessions_dir.path(),
+            stopped_at + chrono::Duration::minutes(31),
+            Duration::from_secs(30 * 60),
+        )
+        .unwrap();
+
+        assert_eq!(
+            (during_parent_shutdown, after_parent_shutdown),
+            (
+                Vec::new(),
+                vec![DeferredStop {
+                    session_id: "fixture-delegate".to_string(),
+                    parent_session_id: "fixture-parent".to_string(),
+                    stopped_at,
                     last_message: None,
                 }],
             ),
