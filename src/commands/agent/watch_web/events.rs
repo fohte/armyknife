@@ -130,8 +130,13 @@ impl RevisionMonitor {
     }
 
     fn subscribe(&self) -> RevisionSubscription {
+        self.inner.subscribers.send_modify(|count| {
+            if *count == 0 {
+                self.inner.revisions.send_replace(None);
+            }
+            *count = count.saturating_add(1);
+        });
         let revisions = self.inner.revisions.subscribe();
-        self.inner.subscribers.send_modify(|count| *count += 1);
         RevisionSubscription {
             revisions,
             _guard: RevisionSubscriberGuard {
@@ -147,7 +152,6 @@ async fn run_revision_monitor(
     read_revision: RevisionReader,
     create_watcher: WatcherFactory,
 ) {
-    let mut last_revision = None;
     loop {
         while *subscriber_receiver.borrow() == 0 {
             if subscriber_receiver.changed().await.is_err() {
@@ -168,7 +172,7 @@ async fn run_revision_monitor(
         interval.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
         interval.tick().await;
         if *subscriber_receiver.borrow() > 0 {
-            publish_revision(&revision_sender, &read_revision, &mut last_revision).await;
+            publish_revision(&revision_sender, &read_revision).await;
         }
 
         let mut watcher_channel_open = true;
@@ -188,11 +192,7 @@ async fn run_revision_monitor(
                 }
                 _ = interval.tick() => {
                     if *subscriber_receiver.borrow() > 0 {
-                        publish_revision(
-                            &revision_sender,
-                            &read_revision,
-                            &mut last_revision,
-                        ).await;
+                        publish_revision(&revision_sender, &read_revision).await;
                     }
                 }
                 signal = signals.recv(), if watcher_channel_open => {
@@ -202,11 +202,7 @@ async fn run_revision_monitor(
                         time::sleep(WATCHER_DEBOUNCE).await;
                         while signals.try_recv().is_ok() {}
                         if *subscriber_receiver.borrow() > 0 {
-                            publish_revision(
-                                &revision_sender,
-                                &read_revision,
-                                &mut last_revision,
-                            ).await;
+                            publish_revision(&revision_sender, &read_revision).await;
                         }
                     }
                 }
@@ -218,14 +214,12 @@ async fn run_revision_monitor(
 async fn publish_revision(
     revision_sender: &watch::Sender<Option<i64>>,
     read_revision: &RevisionReader,
-    last_revision: &mut Option<i64>,
 ) {
     let read_revision = Arc::clone(read_revision);
     let Ok(Some(revision)) = tokio::task::spawn_blocking(move || read_revision()).await else {
         return;
     };
-    if *last_revision != Some(revision) {
-        *last_revision = Some(revision);
+    if *revision_sender.borrow() != Some(revision) {
         revision_sender.send_replace(Some(revision));
     }
 }
@@ -445,6 +439,7 @@ mod tests {
                 }
             },
         );
+        tokio::time::sleep(Duration::from_millis(10)).await;
         let reads_without_subscribers = read_count.load(Ordering::SeqCst);
         let (first_enrichment_sender, first_enrichment_updates) = watch::channel(());
         let (_second_enrichment_sender, second_enrichment_updates) = watch::channel(());
@@ -490,6 +485,17 @@ mod tests {
         tokio::time::sleep(REVISION_POLL_INTERVAL + Duration::from_millis(50)).await;
         let idle_read_count = read_count.load(Ordering::SeqCst);
 
+        revision.store(9, Ordering::SeqCst);
+        let mut reconnected = Sse::new(test_revision_stream(
+            monitor.subscribe(),
+            watch::channel(()).1,
+        ))
+        .into_response()
+        .into_body()
+        .into_data_stream();
+        let reconnect_event = next_chunk(&mut reconnected).await;
+        let reconnect_read_count = read_count.load(Ordering::SeqCst);
+
         assert_eq!(
             (
                 reads_without_subscribers,
@@ -502,6 +508,8 @@ mod tests {
                 enrichment_update,
                 enrichment_read_count,
                 idle_read_count,
+                reconnect_event,
+                reconnect_read_count,
             ),
             (
                 0,
@@ -514,6 +522,8 @@ mod tests {
                 sessions_event(8),
                 2,
                 2,
+                sessions_event(9),
+                3,
             ),
         );
     }
