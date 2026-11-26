@@ -115,12 +115,27 @@ it('shows an unavailable message for an ineligible assistant image', () => {
 })
 
 it.each([
-  ['a matched unavailable path', { '/tmp/画像 samples/final image.png': null }],
-  ['an unmatched path', {}],
-])('shows the original path for %s', (_name, imageSources) => {
-  const path = '/tmp/画像 samples/final image.png'
-  expect(renderMessage(`![](<${path}>)`, undefined, imageSources)).toBe(
+  [
+    'a matched unavailable path',
+    { '/tmp/画像 samples/final image.png': null },
+    '/tmp/画像 samples/final image.png',
     '<div class="markdown-message"><p><span class="markdown-image-unavailable">表示できません: /tmp/画像 samples/final image.png</span></p></div>',
+  ],
+  [
+    'an unmatched path',
+    {},
+    '/tmp/画像 samples/final image.png',
+    '<div class="markdown-message"><p><span class="markdown-image-unavailable">表示できません: /tmp/画像 samples/final image.png</span></p></div>',
+  ],
+  [
+    'a matched path containing a literal percent sequence',
+    { '/tmp/fixture%20name.png': null },
+    '/tmp/fixture%20name.png',
+    '<div class="markdown-message"><p><span class="markdown-image-unavailable">表示できません: /tmp/fixture%20name.png</span></p></div>',
+  ],
+])('shows the original path for %s', (_name, imageSources, path, expected) => {
+  expect(renderMessage(`![](<${path}>)`, undefined, imageSources)).toBe(
+    expected,
   )
 })
 
