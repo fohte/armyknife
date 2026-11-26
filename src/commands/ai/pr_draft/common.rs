@@ -11,7 +11,7 @@ use crate::infra::git;
 use crate::infra::github::{self, RepoClient};
 use crate::shared::config::load_config;
 use crate::shared::human_in_the_loop::{
-    ApprovalManager, DocumentSchema, HumanInTheLoopError, canonical_document_path,
+    ApprovalManager, DocumentSchema, HumanInTheLoopError, canonical_document_path, document_hash,
 };
 use crate::shared::repo_language::{copier_answers_path_for_current_repo, resolve_repo_language};
 use crate::shared::yaml_frontmatter;
@@ -309,13 +309,28 @@ impl DraftFile {
         Ok(())
     }
 
-    pub fn cleanup(&self) -> Result<()> {
-        if self.path.exists() {
-            fs::remove_file(&self.path)?;
+    pub fn cleanup_if_unchanged(&self, requested_path: &Path, expected_hash: &str) -> Result<bool> {
+        let current_hash = match document_hash(requested_path) {
+            Ok(hash) => hash,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error.into()),
+        };
+        if current_hash != expected_hash {
+            return Ok(false);
+        }
+        match fs::remove_file(requested_path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error.into()),
         }
         self.remove_lock()?;
+        let requested_lock_path = Self::lock_path(requested_path);
+        let canonical_lock_path = Self::lock_path(&self.path);
+        if requested_lock_path != canonical_lock_path && requested_lock_path.exists() {
+            fs::remove_file(requested_lock_path)?;
+        }
         self.remove_approval()?;
-        Ok(())
+        Ok(true)
     }
 
     /// If the on-disk draft has any approval gesture flag (`steps.submit` or
@@ -506,6 +521,29 @@ mod tests {
                 "sample-repository".to_string(),
                 "feature/sample-branch".to_string(),
             )),
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cleanup_leaves_a_symlink_target_intact() {
+        let directory = tempfile::tempdir().expect("temporary directory should be created");
+        let target_path = directory.path().join("target.md");
+        let symlink_path = directory.path().join("draft.md");
+        fs::write(&target_path, "draft").expect("target draft should be written");
+        std::os::unix::fs::symlink(&target_path, &symlink_path)
+            .expect("draft symlink should be created");
+        let canonical_target = canonical_document_path(&symlink_path);
+        let draft = DraftFile::from_path(canonical_target).expect("draft should be read");
+
+        let expected_hash = document_hash(&symlink_path).expect("draft hash should be computed");
+        let cleaned = draft
+            .cleanup_if_unchanged(&symlink_path, &expected_hash)
+            .expect("draft should be cleaned up");
+
+        assert_eq!(
+            (cleaned, symlink_path.exists(), target_path.exists()),
+            (true, false, true)
         );
     }
 

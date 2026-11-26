@@ -1,8 +1,4 @@
 use clap::Args;
-use std::fs::{File, OpenOptions};
-use std::io;
-use std::os::fd::AsRawFd;
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 use super::common::{
@@ -11,6 +7,7 @@ use super::common::{
 };
 use super::hooks::{HookContext, HookRunner, PRE_PR_SUBMIT_HOOK, default_runner, run_pr_hook};
 use super::stack::stack_created_pull_request;
+use super::submit_lock::acquire_submit_lock;
 use crate::commands::agent::{ensure_no_review_access, is_vibe_enabled};
 use crate::commands::ai::pr_series::has_managed_section;
 use crate::infra::git::cmd::run_git;
@@ -82,38 +79,20 @@ struct SubmitContext<'a, F> {
     lock_policy: SubmitLockPolicy,
 }
 
-struct SubmitGuard {
-    _file: File,
-}
-
-impl SubmitGuard {
-    fn acquire(draft_path: &Path) -> io::Result<Self> {
-        let mut lock_path = draft_path.as_os_str().to_os_string();
-        lock_path.push(".submit.lock");
-        let lock_path = PathBuf::from(lock_path);
-        let mut options = OpenOptions::new();
-        options.create(true).read(true).write(true).mode(0o600);
-        #[cfg(unix)]
-        options.custom_flags(libc::O_NOFOLLOW);
-        let file = options.open(lock_path)?;
-
-        loop {
-            // Keep the lock file in place so concurrent submitters always lock the same inode.
-            // SAFETY: `file` stays open for the lifetime of the guard.
-            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } == 0 {
-                return Ok(Self { _file: file });
-            }
-            let error = io::Error::last_os_error();
-            if error.kind() != io::ErrorKind::Interrupted {
-                return Err(error);
-            }
-        }
+fn validate_default_draft_path(
+    canonical_path: &Path,
+    requested_path: &Path,
+    current_repo: &RepoInfo,
+) -> anyhow::Result<()> {
+    let invalid_path =
+        || PrDraftError::CommandFailed(format!("Invalid draft path: {}", requested_path.display()));
+    let Some((owner, repo, branch)) = DraftFile::parse_path(canonical_path) else {
+        return Err(invalid_path().into());
+    };
+    if owner != current_repo.owner || repo != current_repo.repo || branch != current_repo.branch {
+        return Err(invalid_path().into());
     }
-}
-
-async fn acquire_submit_lock(draft_path: &Path) -> anyhow::Result<SubmitGuard> {
-    let draft_path = draft_path.to_owned();
-    Ok(tokio::task::spawn_blocking(move || SubmitGuard::acquire(&draft_path)).await??)
+    Ok(())
 }
 
 pub async fn run(args: &SubmitArgs) -> anyhow::Result<()> {
@@ -212,11 +191,25 @@ async fn run_impl_with_review_language_context<
     vibe_access_check: impl FnOnce(&str, &str) -> anyhow::Result<()>,
 ) -> anyhow::Result<String> {
     // Get draft path and target repo info
-    let requested_draft_path = match &args.filepath {
-        Some(path) => path.clone(),
-        None => DraftFile::path_for(&RepoInfo::from_git_only()?),
+    let default_repo_info = if args.filepath.is_none() {
+        Some(RepoInfo::from_git_only()?)
+    } else {
+        None
+    };
+    let requested_draft_path = match (&args.filepath, &default_repo_info) {
+        (Some(path), _) => path.clone(),
+        (None, Some(repo_info)) => DraftFile::path_for(repo_info),
+        (None, None) => {
+            return Err(PrDraftError::CommandFailed(
+                "Current repository information is required for the default draft path".to_owned(),
+            )
+            .into());
+        }
     };
     let draft_path = canonical_document_path(&requested_draft_path);
+    if let Some(repo_info) = &default_repo_info {
+        validate_default_draft_path(&draft_path, &requested_draft_path, repo_info)?;
+    }
 
     let parsed_draft_path = match &args.filepath {
         Some(path) => Some(DraftFile::parse_path(&draft_path).ok_or_else(|| {
@@ -444,7 +437,7 @@ async fn run_impl_with_review_language_context<
             ReviewDocumentAction::CreatePr,
             true,
             pr_url.clone(),
-            approved_document_hash,
+            approved_document_hash.clone(),
             None,
         ),
     )?;
@@ -475,8 +468,12 @@ async fn run_impl_with_review_language_context<
         );
     }
 
-    // Cleanup
-    draft.cleanup()?;
+    if !draft.cleanup_if_unchanged(&requested_draft_path, &approved_document_hash)? {
+        eprintln!(
+            "Warning: Draft changed or was removed during submission; preserving its current state: {}",
+            requested_draft_path.display()
+        );
+    }
 
     Ok(pr_url)
 }
@@ -598,6 +595,59 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn default_draft_path_rejects_a_file_symlink_outside_the_draft_root() {
+        use std::os::unix::fs::symlink;
+
+        let owner = "sample-owner";
+        let repo = "sample-repository";
+        let branch = "feature/symlinked-draft";
+        let _draft_directory = TestDraftDirectory::new(owner, repo);
+        let current_repo = RepoInfo {
+            owner: owner.to_owned(),
+            repo: repo.to_owned(),
+            branch: branch.to_owned(),
+            is_private: true,
+        };
+        let requested_path = DraftFile::path_for(&current_repo);
+        fs::create_dir_all(
+            requested_path
+                .parent()
+                .expect("draft path should have a parent"),
+        )
+        .expect("draft directory should be created");
+        let external_directory = tempfile::tempdir().expect("external directory should be created");
+        let external_target = external_directory.path().join("body.md");
+        fs::write(&external_target, "Sample external body.")
+            .expect("external draft should be written");
+        symlink(&external_target, &requested_path).expect("draft symlink should be created");
+
+        let validation = validate_default_draft_path(
+            &canonical_document_path(&requested_path),
+            &requested_path,
+            &current_repo,
+        )
+        .map_err(|error| error.to_string());
+        let observed = (
+            validation,
+            fs::read_to_string(&external_target).map_err(|error| error.to_string()),
+            fs::symlink_metadata(&requested_path).is_ok(),
+        );
+
+        assert_eq!(
+            observed,
+            (
+                Err(format!(
+                    "Command failed: Invalid draft path: {}",
+                    requested_path.display()
+                )),
+                Ok("Sample external body.".to_owned()),
+                true,
+            ),
+        );
+    }
+
     #[rstest]
     #[case::creates_pr("concurrent-create-repository", None, vec![(
         "concurrent-owner".to_string(),
@@ -673,6 +723,83 @@ mod tests {
                 update_calls,
             ),
             (Ok(()), Ok(()), expected_create_calls, expected_update_calls,),
+        );
+    }
+
+    #[tokio::test]
+    async fn cleanup_preserves_a_draft_replaced_after_watch_web_success() {
+        let env = setup_test_env("sample-owner", "replacement-repository").await;
+        let branch = "feature/replacement-draft";
+        let draft_path = create_approved_draft(
+            &env.owner,
+            &env.repo,
+            branch,
+            "Ready title",
+            "Original body",
+        );
+        let replacement_content = indoc! {"
+            ---
+            title: 'Replacement title'
+            steps:
+              submit: false
+            ---
+            Replacement body.
+        "};
+        let processor = ReplaceDraftAfterSuccess {
+            draft_path: draft_path.clone(),
+            replacement_content: replacement_content.to_owned(),
+            action_result_was_visible: Mutex::new(false),
+        };
+        let client = SubmitClientStub::default();
+        let args = SubmitArgs {
+            filepath: Some(draft_path.clone()),
+            base: None,
+            draft: false,
+            no_review: false,
+        };
+
+        let result = run_impl(
+            &args,
+            &client,
+            &noop_hook,
+            noop_config,
+            || Some((env.owner.clone(), env.repo.clone())),
+            &processor,
+            no_vibe_access,
+        )
+        .await
+        .map_err(|error| error.to_string());
+        let action_result_was_visible = *processor
+            .action_result_was_visible
+            .lock()
+            .expect("action result observation mutex");
+        let remaining_draft = fs::read_to_string(&draft_path).map_err(|error| error.to_string());
+        let create_calls = client
+            .create_calls
+            .lock()
+            .expect("submit client mutex")
+            .clone();
+
+        assert_eq!(
+            (
+                result,
+                action_result_was_visible,
+                remaining_draft,
+                create_calls,
+            ),
+            (
+                Ok(()),
+                true,
+                Ok(replacement_content.to_owned()),
+                vec![(
+                    env.owner.clone(),
+                    env.repo.clone(),
+                    "Ready title".to_owned(),
+                    branch.to_owned(),
+                    None,
+                    false,
+                )],
+            ),
         );
     }
 
@@ -838,6 +965,44 @@ mod tests {
                 }),
                 None => Ok(SubmitSyncOutcome::Synchronized),
             }
+        }
+    }
+
+    struct ReplaceDraftAfterSuccess {
+        draft_path: PathBuf,
+        replacement_content: String,
+        action_result_was_visible: Mutex<bool>,
+    }
+
+    impl PostSubmitProcessor for ReplaceDraftAfterSuccess {
+        fn metadata_for_branch(&self, _branch: &str) -> Option<TqBranchMetadata> {
+            Some(TqBranchMetadata {
+                task_id: "sample-task-id".to_string(),
+                checklist_item_id: "sample-leaf-id".to_string(),
+            })
+        }
+
+        async fn saved_plan(&self, _metadata: &TqBranchMetadata) -> Option<SavedPrSeriesPlan> {
+            None
+        }
+
+        async fn link_and_sync(
+            &self,
+            _metadata: &TqBranchMetadata,
+            _target: &PrTarget,
+            _pr_url: &str,
+            _saved_plan: Option<SavedPrSeriesPlan>,
+        ) -> std::result::Result<SubmitSyncOutcome, SubmitSyncFailure> {
+            *self
+                .action_result_was_visible
+                .lock()
+                .expect("action result observation mutex") =
+                successful_action_result(&self.draft_path, ReviewDocumentAction::CreatePr)
+                    .expect("successful action result should be readable")
+                    .is_some();
+            fs::write(&self.draft_path, &self.replacement_content)
+                .expect("replacement draft should be written");
+            Ok(SubmitSyncOutcome::NoPlan)
         }
     }
 

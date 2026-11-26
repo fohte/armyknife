@@ -6,9 +6,10 @@ use super::common::{
     DraftFile, PrDraftError, RepoBranchArgs, RepoInfo, generate_frontmatter,
     read_stdin_if_available, repo_allows_japanese,
 };
+use super::submit_lock::acquire_submit_lock;
 use crate::infra::github::{GitHubClient, RepoClient};
 use crate::shared::diff::eprint_diff;
-use crate::shared::human_in_the_loop::clear_action_result;
+use crate::shared::human_in_the_loop::{canonical_document_path, clear_action_result};
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct NewArgs {
@@ -57,10 +58,20 @@ async fn run_impl(args: &NewArgs, gh_client: &impl RepoClient) -> anyhow::Result
     let body = read_stdin_if_available().unwrap_or_default();
     let content = format!("{frontmatter}{body}");
 
-    persist_draft(&draft_path, content, args.force)
+    persist_draft(&draft_path, content, args.force).await
 }
 
-fn persist_draft(draft_path: &Path, content: String, force: bool) -> anyhow::Result<()> {
+async fn persist_draft(draft_path: &Path, content: String, force: bool) -> anyhow::Result<()> {
+    if let Some(parent) = draft_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let lock_path = canonical_document_path(draft_path);
+    let _submit_lock = acquire_submit_lock(&lock_path).await?;
+
+    persist_draft_locked(draft_path, content, force)
+}
+
+fn persist_draft_locked(draft_path: &Path, content: String, force: bool) -> anyhow::Result<()> {
     // Check if the draft file already exists
     let old_content = if draft_path.exists() {
         if !force {
@@ -70,11 +81,6 @@ fn persist_draft(draft_path: &Path, content: String, force: bool) -> anyhow::Res
     } else {
         None
     };
-
-    // Create parent directories
-    if let Some(parent) = draft_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
 
     // Show warning and diff when overwriting
     if let Some(old) = &old_content {
@@ -162,7 +168,7 @@ mod tests {
 
         let body = read_stdin_if_available().unwrap_or_default();
         let content = format!("{frontmatter}{body}");
-        persist_draft(&draft_path, content, args.force)?;
+        persist_draft(&draft_path, content, args.force).await?;
         Ok(())
     }
 
