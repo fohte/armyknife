@@ -2747,21 +2747,6 @@ mod tests {
         )
         .unwrap();
         record_delta!();
-        store::insert_agent_files_from(
-            sessions_dir.path(),
-            session_id,
-            &[store::AgentFile {
-                id: "fixture-file".to_string(),
-                position: 0,
-                name: "fixture.txt".to_string(),
-                caption: None,
-                mime_type: Some("text/plain".to_string()),
-                size: 7,
-                created_at: Utc.timestamp_opt(1_100, 0).unwrap(),
-            }],
-        )
-        .unwrap();
-        record_delta!();
 
         let (unchanged_status, _, _, unchanged_response) = session_delta(&router, &token).await;
         deltas.push((unchanged_status, unchanged_response));
@@ -2788,12 +2773,12 @@ mod tests {
         });
         let unchanged_delta = serde_json::json!({
             "mode": "delta",
-            "revision": initial_revision + 14,
+            "revision": initial_revision + 13,
             "updatedSessions": [],
             "removedSessionIds": [],
             "sessionOrder": session_order,
         });
-        let expected_deltas = (1..=14)
+        let expected_deltas = (1..=13)
             .map(|offset| {
                 let mut delta = changed_delta.clone();
                 delta["revision"] = serde_json::json!(initial_revision + offset);

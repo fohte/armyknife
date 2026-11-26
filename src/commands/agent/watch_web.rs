@@ -5,6 +5,7 @@ mod codex_model_catalog;
 mod directories;
 mod events;
 pub(super) mod file_attachments;
+mod freeze_profiler;
 mod image_attachments;
 mod interrupted;
 mod limits;
@@ -345,6 +346,7 @@ fn app_with_assets_and_queued_prompt_loaders_and_restart_signal(
             loaders.clone(),
         ))
         .merge(usage::router())
+        .merge(freeze_profiler::router())
         .merge(directories::router())
         .merge(model_options::router())
         .merge(events::router(enrichment_updates, restart_signal))

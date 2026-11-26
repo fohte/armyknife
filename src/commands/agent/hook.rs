@@ -1736,7 +1736,21 @@ mod tests {
     use crate::commands::agent::session_pr_context::fixed_context_capture;
     use crate::commands::agent::types::{AgentStatus, TMUX_SESSION_OPTION, WebUiRegistration};
     use chrono::TimeZone;
+    use indoc::indoc;
     use rstest::{fixture, rstest};
+
+    #[fixture]
+    fn pending_deferred_stop() -> (tempfile::TempDir, Session, chrono::DateTime<chrono::Utc>) {
+        let sessions_dir = tempfile::TempDir::new().expect("temp dir");
+        let mut session = crate::commands::agent::test_support::deferred_stop_delegate();
+        session.pending_bg_task_ids.insert("bg-1".to_string());
+        let stopped_at = session.updated_at;
+        store::save_session_to(sessions_dir.path(), &session).expect("save");
+        store::record_deferred_stop(sessions_dir.path(), &session, "fixture-parent", stopped_at)
+            .expect("deferred stop should be recorded");
+
+        (sessions_dir, session, stopped_at)
+    }
 
     #[derive(Clone, Copy)]
     enum TestClaudeConfigDir {
@@ -4362,41 +4376,116 @@ mod tests {
         );
     }
 
-    #[test]
-    fn notification_idle_prompt_does_not_touch_pending_bg_task_ids() {
-        // Claude Code fires `Notification(idle_prompt)` whenever the user
-        // goes idle, independent of whether a bg task launched on an
-        // earlier `Stop` has finished -- `background_tasks` is only ever
-        // attached to `Stop`/`SubagentStop` input, so this event can't
-        // refresh the pending sets and must leave what the last `Stop`
-        // already persisted untouched.
-        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+    #[rstest]
+    fn notification_idle_prompt_keeps_a_deferred_stop_eligible(
+        pending_deferred_stop: (tempfile::TempDir, Session, chrono::DateTime<chrono::Utc>),
+    ) {
+        let (temp_dir, mut existing, stopped_at) = pending_deferred_stop;
         let sessions_dir = temp_dir.path();
 
-        let mut existing = create_test_session(None);
-        existing.session_id = "idle-bg-sess".to_string();
-        existing.pending_bg_task_ids.insert("bg-1".to_string());
+        existing.engine = Engine::Claude;
         store::save_session_to(sessions_dir, &existing).expect("save");
 
-        let input: HookInput = serde_json::from_str(
-            r#"{"session_id":"idle-bg-sess","cwd":"/tmp/test","notification_type":"idle_prompt"}"#,
-        )
-        .expect("valid JSON");
+        let mut input = create_test_input_with_session_and_source(
+            &existing.session_id,
+            Some("idle_prompt"),
+            None,
+        );
+        input.engine = Engine::Claude;
+        let config_dir = tempfile::TempDir::new().expect("Claude config dir");
+        let config_dir = config_dir.path().to_string_lossy().into_owned();
+        temp_env::with_vars(
+            [
+                ("CLAUDE_CONFIG_DIR", Some(config_dir.as_str())),
+                ("TMUX_PANE", None::<&str>),
+            ],
+            || {
+                process_hook_event_impl(
+                    HookEvent::Notification,
+                    input,
+                    sessions_dir,
+                    &SideEffects::none(),
+                )
+                .expect("hook should succeed");
+            },
+        );
 
+        let reloaded = store::load_session_from(sessions_dir, &existing.session_id)
+            .expect("load")
+            .expect("session exists");
+        let mature = store::take_mature_deferred_stops(
+            sessions_dir,
+            reloaded.updated_at + chrono::Duration::minutes(30),
+            std::time::Duration::from_secs(30 * 60),
+        )
+        .expect("deferred stop should be available to sweep");
+
+        assert_eq!(
+            (
+                reloaded.status,
+                reloaded.pending_bg_task_ids,
+                reloaded.updated_at > stopped_at,
+                mature,
+            ),
+            (
+                SessionStatus::Stopped,
+                set_of(&["bg-1"]),
+                true,
+                vec![store::DeferredStop {
+                    session_id: "fixture-delegate".to_string(),
+                    parent_session_id: "fixture-parent".to_string(),
+                    stopped_at,
+                    last_message: None,
+                }],
+            ),
+        );
+    }
+
+    #[rstest]
+    fn codex_peer_prompt_marks_a_turn_running_without_a_prompt_timestamp(
+        pending_deferred_stop: (tempfile::TempDir, Session, chrono::DateTime<chrono::Utc>),
+    ) {
+        let (temp_dir, existing, stopped_at) = pending_deferred_stop;
+        let sessions_dir = temp_dir.path();
+
+        let mut input = create_test_input_with_session_and_source(&existing.session_id, None, None);
+        input.engine = Engine::Codex;
+        input.prompt = Some(
+            indoc! {"
+                <peer-message>
+                - From session_id: fixture-parent
+
+                A fictional instruction.
+                </peer-message>"
+            }
+            .to_string(),
+        );
         process_hook_event_impl(
-            HookEvent::Notification,
+            HookEvent::UserPromptSubmit,
             input,
             sessions_dir,
             &SideEffects::none(),
         )
-        .expect("hook should succeed");
+        .expect("peer prompt hook should succeed");
 
-        let reloaded = store::load_session_from(sessions_dir, "idle-bg-sess")
+        let reloaded = store::load_session_from(sessions_dir, &existing.session_id)
             .expect("load")
             .expect("session exists");
+        let mature = store::take_mature_deferred_stops(
+            sessions_dir,
+            reloaded.updated_at + chrono::Duration::minutes(30),
+            std::time::Duration::from_secs(30 * 60),
+        )
+        .expect("deferred stop should be consumed without notifying");
+
         assert_eq!(
-            (reloaded.status, reloaded.pending_bg_task_ids),
-            (SessionStatus::Stopped, set_of(&["bg-1"])),
+            (
+                reloaded.status,
+                reloaded.last_prompted_at,
+                reloaded.updated_at > stopped_at,
+                mature,
+            ),
+            (SessionStatus::Running, None, true, Vec::new()),
         );
     }
 

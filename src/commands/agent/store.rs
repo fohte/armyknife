@@ -35,6 +35,9 @@ pub(crate) use database::{
     resolve_permission_request, resolve_permission_request_with_answers, serialize_session,
 };
 pub(crate) use database::{AgentTodo, TodoResolution};
+pub(crate) use database::{
+    DeferredStop, clear_deferred_stop, record_deferred_stop, take_mature_deferred_stops,
+};
 pub(crate) use peer_out_messages::insert_watch_web_peer_out_message_from;
 pub(crate) use peer_out_messages::{
     insert_watch_web_peer_out_message, mark_watch_web_peer_out_message_delivered_from,
@@ -725,14 +728,6 @@ pub(crate) fn agent_todos_from(sessions_dir: &Path, session_id: &str) -> Result<
 
 pub(crate) fn agent_todos(session_id: &str) -> Result<Vec<AgentTodo>> {
     agent_todos_from(&sessions_dir()?, session_id)
-}
-
-pub(crate) fn insert_agent_files_from(
-    sessions_dir: &Path,
-    session_id: &str,
-    files: &[AgentFile],
-) -> Result<()> {
-    database::insert_agent_files(sessions_dir, session_id, files)
 }
 
 pub(crate) fn agent_files_from(sessions_dir: &Path, session_id: &str) -> Result<Vec<AgentFile>> {
@@ -2390,9 +2385,26 @@ mod tests {
                 size: b"fixture bytes".len() as i64,
                 created_at: now,
             };
-            insert_agent_files_from(&temp_session_dir.sessions_path, session_id, &[file])
+            Connection::open(temp_session_dir.sessions_path.join("sessions.db"))
+                .expect("session database should open")
+                .execute(
+                    "INSERT INTO agent_file (session_id, id, position, name, caption, mime_type, size, created_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    rusqlite::params![
+                        session_id,
+                        file.id,
+                        file.position,
+                        file.name,
+                        file.caption,
+                        file.mime_type,
+                        file.size,
+                        file.created_at.to_rfc3339(),
+                    ],
+                )
                 .expect("attachment record should be inserted");
 
+            let stored_files = agent_files_from(&temp_session_dir.sessions_path, session_id)
+                .expect("file records should load");
             let removed = archive::cleanup_stale_sessions_in_with_archive_at_and_storage(
                 &temp_session_dir.sessions_path,
                 Some(&storage_root),
@@ -2412,9 +2424,10 @@ mod tests {
                         .expect("session record should resolve")
                         .is_stored(),
                     session_storage.exists(),
+                    stored_files,
                     remaining_files,
                 ),
-                (true, false, false, Vec::new()),
+                (true, false, false, vec![file], Vec::new()),
             );
         }
 

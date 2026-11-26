@@ -1,10 +1,10 @@
 use std::path::Path;
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use rusqlite::{OptionalExtension, TransactionBehavior, params};
+use rusqlite::{OptionalExtension, params};
 
-use super::{bump_session_revision, open_connection, validate_session_id};
+use super::{open_connection, validate_session_id};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AgentFile {
@@ -15,42 +15,6 @@ pub(crate) struct AgentFile {
     pub(crate) mime_type: Option<String>,
     pub(crate) size: i64,
     pub(crate) created_at: DateTime<Utc>,
-}
-
-pub(crate) fn insert_agent_files(
-    sessions_dir: &Path,
-    session_id: &str,
-    files: &[AgentFile],
-) -> Result<()> {
-    validate_session_id(session_id)?;
-    ensure!(!files.is_empty(), "at least one file record is required");
-    let mut connection = open_connection(sessions_dir)?;
-    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let session_exists: bool = transaction.query_row(
-        "SELECT EXISTS(SELECT 1 FROM sessions WHERE session_id = ?1)",
-        [session_id],
-        |row| row.get(0),
-    )?;
-    ensure!(session_exists, "session not found: {session_id}");
-    for file in files {
-        transaction.execute(
-            "INSERT INTO agent_file (session_id, id, position, name, caption, mime_type, size, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![
-                session_id,
-                file.id,
-                file.position,
-                file.name,
-                file.caption,
-                file.mime_type,
-                file.size,
-                file.created_at.to_rfc3339(),
-            ],
-        )?;
-    }
-    bump_session_revision(&transaction, session_id)?;
-    transaction.commit()?;
-    Ok(())
 }
 
 pub(crate) fn agent_files(sessions_dir: &Path, session_id: &str) -> Result<Vec<AgentFile>> {

@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.1.958](https://github.com/fohte/armyknife/compare/v0.1.957...v0.1.958) (2026-11-26)
+
+
+### Features
+
+* **agent:** remove `a agent file send` ([#2343](https://github.com/fohte/armyknife/issues/2343)) ([c36b809](https://github.com/fohte/armyknife/commit/c36b80947d8555fd3d245657df163afba061edb9))
+
+## [0.1.957](https://github.com/fohte/armyknife/compare/v0.1.956...v0.1.957) (2026-11-26)
+
+
+### Features
+
+* **agent/watch-web:** profile long tasks ([#2337](https://github.com/fohte/armyknife/issues/2337)) ([da84d0c](https://github.com/fohte/armyknife/commit/da84d0c4cac2a02fa60d83ffa40fea8f8e6336a4))
+
+## [0.1.956](https://github.com/fohte/armyknife/compare/v0.1.955...v0.1.956) (2026-11-26)
+
+
+### Bug Fixes
+
+* **agent:** alert parents to silent delegates ([#2338](https://github.com/fohte/armyknife/issues/2338)) ([8ff80b8](https://github.com/fohte/armyknife/commit/8ff80b8ba7390de5974fee47188f67ced775b04d))
+
+## [0.1.955](https://github.com/fohte/armyknife/compare/v0.1.954...v0.1.955) (2026-11-26)
+
+
+### Features
+
+* **watch-web:** display reply images ([#2336](https://github.com/fohte/armyknife/issues/2336)) ([fc34158](https://github.com/fohte/armyknife/commit/fc3415877e50cc77b2498be44733d9e8f0087563))
+
+
+### Bug Fixes
+
+* **agent:** ignore stale Codex composer after exit ([#2334](https://github.com/fohte/armyknife/issues/2334)) ([3f0ef25](https://github.com/fohte/armyknife/commit/3f0ef25bb311337b843e9353fccea99b53585426))
+
 ## [0.1.954](https://github.com/fohte/armyknife/compare/v0.1.953...v0.1.954) (2026-11-26)
 
 

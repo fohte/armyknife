@@ -10,6 +10,7 @@ import { getCommandPaletteShortcut } from '#command-palette-shortcut'
 import { AgentUsageProvider } from '#components/agent-usage-context'
 import { SessionConversationCacheProvider } from '#components/session-conversation-cache'
 import { SessionElapsedStartedAtProvider } from '#components/session-elapsed-context'
+import { startFreezeProfiler } from '#freeze-profiler'
 import { useMobileLayout, useSessionMobileNavigation } from '#mobile-layout'
 import { findLaunchedSession } from '#new-session-navigation'
 import { startSessionFeed } from '#session-feed'
@@ -43,6 +44,8 @@ export function App() {
 }
 
 function AppContent() {
+  useEffect(() => startFreezeProfiler(), [])
+
   useEffect(() => {
     const preventFileNavigation = (event: DragEvent) => {
       if (!Array.from(event.dataTransfer?.types ?? []).includes('Files')) {

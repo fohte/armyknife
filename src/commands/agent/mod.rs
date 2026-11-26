@@ -47,6 +47,8 @@ mod signal;
 mod status;
 pub(crate) mod store;
 mod sweep;
+#[cfg(test)]
+mod test_support;
 mod title;
 pub(crate) mod tmux_sync;
 mod todo;
@@ -82,7 +84,6 @@ pub(crate) use close::{SessionLifecyclePersistenceError, close_from_watch_web};
 pub use codex::CodexArgs;
 pub use codex_subagent_stop::{CodexSubagentStopArgs, CodexSubagentStopWorkerArgs};
 pub use crit::CritCommands;
-pub use file::FileCommands;
 pub use focus::FocusArgs;
 pub use generate_title_detached::GenerateTitleDetachedArgs;
 pub use hook::HookArgs;
@@ -165,10 +166,6 @@ pub enum AgentCommands {
 
     /// Focus on a Claude Code session's tmux pane
     Focus(FocusArgs),
-
-    /// Send files to the calling session's watch-web conversation
-    #[command(subcommand)]
-    File(FileCommands),
 
     /// Mark the pane's Claude Code session as read (wire from tmux pane-focus-in)
     #[command(name = "mark-read")]
@@ -278,7 +275,6 @@ impl AgentCommands {
             Self::Watch(args) => watch::run(args)?,
             Self::WatchWeb(args) => watch_web::run(args).await?,
             Self::Focus(args) => focus::run(args)?,
-            Self::File(command) => file::run(command)?,
             Self::MarkRead(args) => mark_read::run(args)?,
             Self::Status(command) => status::run(command)?,
             Self::Decision(command) => decision::run(command)?,

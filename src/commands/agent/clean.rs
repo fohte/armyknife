@@ -345,7 +345,8 @@ fn apply_active_session_protection(
         .and_then(|c| parse_duration(&c.agent.auto_pause.timeout).ok())
         .unwrap_or(Duration::from_secs(30 * 60));
 
-    protect_active_worktrees(to_delete, to_keep, &sessions, timeout, &TmuxDraftProbe);
+    let probe = TmuxDraftProbe::default();
+    protect_active_worktrees(to_delete, to_keep, &sessions, timeout, &probe);
 }
 
 fn apply_worktree_change_protection(
