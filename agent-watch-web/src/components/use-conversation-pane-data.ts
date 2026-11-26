@@ -76,8 +76,13 @@ export function useConversationPaneData({
   const loadingOlderRef = useRef(false)
   const [error, setError] = useState<string | null>(null)
   const currentSessionId = useRef(sessionId)
-  currentSessionId.current = sessionId
+  const sessionGeneration = useRef(0)
+  if (currentSessionId.current !== sessionId) {
+    currentSessionId.current = sessionId
+    sessionGeneration.current += 1
+  }
   const requestGeneration = useRef(0)
+  const appliedRequestGeneration = useRef(0)
   const actionsRequestGeneration = useRef(0)
   const olderRequestGeneration = useRef(0)
   const messagesError = useRef<string | null>(null)
@@ -177,6 +182,7 @@ export function useConversationPaneData({
   }, [confirmPendingOperations, sessionId])
 
   const refresh = useCallback(async () => {
+    const requestSessionGeneration = sessionGeneration.current
     const generation = requestGeneration.current + 1
     requestGeneration.current = generation
     const sessionPath = `/api/sessions/${encodeURIComponent(sessionId)}`
@@ -203,7 +209,14 @@ export function useConversationPaneData({
     )
     void refreshActions()
     const messagesResult = await messagesRequest
-    if (requestGeneration.current !== generation) return
+    if (
+      currentSessionId.current !== sessionId ||
+      sessionGeneration.current !== requestSessionGeneration ||
+      appliedRequestGeneration.current > generation
+    ) {
+      return
+    }
+    appliedRequestGeneration.current = generation
     let refreshedConversation: ConversationResponse | null = null
     if (messagesResult.isOk()) {
       const alreadyLoaded = conversationSessionId.current === sessionId
@@ -386,7 +399,6 @@ export function useConversationPaneData({
   useEffect(() => {
     void refresh()
     return () => {
-      requestGeneration.current += 1
       actionsRequestGeneration.current += 1
     }
   }, [refresh, refreshKey])
