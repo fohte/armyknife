@@ -5,6 +5,7 @@ import type {
   CommandOutputStart,
 } from '#components/command-result-message'
 import { ConversationMessageRow } from '#components/conversation-message-row'
+import { getVisibleConversationMessageEntries } from '#components/conversation-message-timeline'
 import type {
   PendingPermissionActions,
   PendingPermissionActionState,
@@ -192,11 +193,10 @@ export function useConversationMessageElements({
     const activeTool = messages.findLast(
       (message) => message.type === 'tool_in_progress',
     )
-    const conversationMessages = messages.flatMap((message, index) =>
-      message.type !== 'tool_in_progress' ||
-      (sessionCategory !== 'in_progress' && !isCompacting)
-        ? [{ message, index }]
-        : [],
+    const conversationMessages = getVisibleConversationMessageEntries(
+      messages,
+      sessionCategory,
+      isCompacting,
     )
     const decisions =
       allDecisions ??

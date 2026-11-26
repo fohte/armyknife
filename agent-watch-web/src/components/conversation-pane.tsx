@@ -9,6 +9,7 @@ import {
 } from 'react'
 
 import { commandResultMatchesCommands } from '#components/command-result-message'
+import { getConversationTimelineEndIndex } from '#components/conversation-message-timeline'
 import { ConversationPaneView } from '#components/conversation-pane-view'
 import { MarkdownSessionLinksProvider } from '#components/markdown-message'
 import type { PendingPermissionActions } from '#components/permission-card'
@@ -358,7 +359,12 @@ export function ConversationPane({
   const actionTimelineIndex =
     loading && messages.length === 0
       ? undefined
-      : displayedConversation.start + messages.length
+      : getConversationTimelineEndIndex(
+          messages,
+          displayedConversation.start,
+          session.category,
+          session.isCompacting === true,
+        )
   const editorReviewDocument = useEditorReviewDocument(session)
   const backgroundTaskElapsedOffset =
     messagesLoadedAt === null

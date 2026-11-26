@@ -6956,9 +6956,34 @@ it('opens the Review tab from the draft review band in one click', async () => {
 })
 
 it('keeps a review action result at the conversation boundary where it started', async () => {
+  const firstMessage: ChatItem = {
+    type: 'assistant',
+    text: 'The draft is ready for review.',
+  }
+  const existingToolSummary: ChatItem = {
+    type: 'tool_summary',
+    summary: 'Shell ×1',
+    operations: [{ tool: 'exec', target: 'node fixture.js', failed: false }],
+  }
   const initialMessages: ChatItem[] = [
-    { type: 'assistant', text: 'The draft is ready for review.' },
-    { type: 'assistant', text: 'I am checking the current issue.' },
+    firstMessage,
+    existingToolSummary,
+    {
+      type: 'tool_in_progress',
+      tool: 'exec',
+      target: 'node fixture.js',
+    },
+  ]
+  const messagesAfterToolCompletes: ChatItem[] = [
+    firstMessage,
+    {
+      type: 'tool_summary',
+      summary: 'Shell ×2',
+      operations: [
+        { tool: 'exec', target: 'node fixture.js', failed: false },
+        { tool: 'exec', target: 'node fixture.js', failed: false },
+      ],
+    },
   ]
   const laterMessage: ChatItem = {
     type: 'assistant',
@@ -6973,7 +6998,7 @@ it('keeps a review action result at the conversation boundary where it started',
         jsonResponse(
           messagesResponse(
             showLaterMessage
-              ? [...initialMessages, laterMessage]
+              ? [...messagesAfterToolCompletes, laterMessage]
               : initialMessages,
           ),
         ),
@@ -7029,6 +7054,7 @@ it('keeps a review action result at the conversation boundary where it started',
         <ConversationPane
           session={{
             ...session,
+            category: 'in_progress',
             kind: 'Review',
             reviewDocumentId: 'fixture-review-document',
             reviewDocumentCount: 1,
@@ -7125,13 +7151,16 @@ it('keeps a review action result at the conversation boundary where it started',
   const snapshot = () =>
     Array.from(
       container.querySelectorAll(
-        '.conversation-scroll .chat-assistant-message, .conversation-scroll .async-action-item--line',
+        '.conversation-scroll .chat-assistant-message, .conversation-scroll .chat-tool-summary, .conversation-scroll .async-action-item--line',
       ),
-      (element) => normalizeAsyncActionLineTime(element.textContent),
+      (element) =>
+        element.matches('.chat-tool-summary')
+          ? 'tool summary'
+          : normalizeAsyncActionLineTime(element.textContent),
     )
   expect(snapshot()).toEqual([
     'The draft is ready for review.',
-    'I am checking the current issue.',
+    'tool summary',
     'Post comment completed · <time>',
     'The issue check is complete.',
   ])
