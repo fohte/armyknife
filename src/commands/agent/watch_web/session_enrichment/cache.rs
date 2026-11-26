@@ -176,6 +176,7 @@ mod tests {
     use crate::infra::github::{PrCiState, PrInfo, PrProgressInfo, PrState};
     use rstest::{fixture, rstest};
     use std::sync::Arc;
+    use std::time::Instant;
     use tokio::sync::watch;
 
     use super::super::super::EnrichmentUpdates;
@@ -276,6 +277,31 @@ mod tests {
         assert_eq!(
             cached.updated_at,
             HashMap::from([("task-a".to_string(), refreshed_task_a_at)]),
+        );
+    }
+
+    #[test]
+    fn refreshed_github_link_fetch_timestamps_are_cached_by_task() {
+        let fetched_at = Instant::now();
+        let mut cached = SessionTaskMetadata {
+            links: HashMap::from([("session-a".to_string(), vec![linked_task("task-a")])]),
+            ..SessionTaskMetadata::default()
+        };
+        let refreshed = SessionTaskMetadata {
+            links: HashMap::from([("session-a".to_string(), vec![linked_task("task-a")])]),
+            github_links_fetched_at: HashMap::from([("task-a".to_string(), fetched_at)]),
+            ..SessionTaskMetadata::default()
+        };
+
+        merge_session_task_metadata(
+            &mut cached,
+            refreshed,
+            &HashSet::from(["session-a".to_string()]),
+        );
+
+        assert_eq!(
+            cached.github_links_fetched_at,
+            HashMap::from([("task-a".to_string(), fetched_at)]),
         );
     }
 

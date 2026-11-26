@@ -339,7 +339,12 @@ where
                 links.insert(task_id, task_links);
             }
             Err(error) => {
-                tracing::warn!(%error, task_id, "Failed to fetch agent watch tq task GitHub links; keeping cached values");
+                tracing::warn!(
+                    event = "agent.watch_web.task_github_links.fetch_failed",
+                    %error,
+                    task_id,
+                    "Failed to fetch agent watch tq task GitHub links; keeping cached values"
+                );
                 if let Some(cached_links) = previous.get(&task_id) {
                     links.insert(task_id, cached_links.clone());
                 }
@@ -474,6 +479,9 @@ mod tests {
             })
             .await;
 
-        assert_eq!((links, fetched_at.len()), (previous, 1));
+        assert_eq!(
+            (links, fetched_at.keys().cloned().collect::<HashSet<_>>(),),
+            (previous, HashSet::from(["task-example".to_string()]),),
+        );
     }
 }
