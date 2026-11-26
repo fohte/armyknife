@@ -350,7 +350,7 @@ export function ReviewDocumentPanel({
 
   return (
     <article
-      className="review-document-panel"
+      className={`review-document-panel${isIssueDraft ? ' review-document-panel--issue-draft' : ''}`}
       data-view={view}
       data-status={status}
     >

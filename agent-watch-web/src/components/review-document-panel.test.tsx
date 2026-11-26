@@ -2158,6 +2158,78 @@ it('keeps overflowing issue preview content horizontally reachable on mobile', (
   }
 })
 
+it('keeps new issue draft controls reachable in a short desktop panel', async () => {
+  await page.viewport(640, 360)
+  container.style.width = '640px'
+  container.style.height = '360px'
+  container.style.display = 'flex'
+  root = createRoot(container)
+  act(() =>
+    root?.render(
+      <div
+        className="session-status-panel"
+        data-size="desktop"
+        style={{ width: '100%', height: '100%', display: 'flex' }}
+      >
+        <ReviewDocumentPanel
+          summary={{
+            id: 'fixture-short-issue-draft',
+            kind: 'draft',
+            target: { repository: 'sample-owner/sample-repository' },
+            isEditor: true,
+            canSave: true,
+            canFinish: true,
+          }}
+          frontmatter={{
+            title: 'Fixture issue title',
+            labels: ['sample-label'],
+            assignees: ['sample-maintainer'],
+            parentIssue: 'sample-owner/sample-repository#40',
+            subIssues: ['sample-owner/sample-repository#41'],
+            submit: false,
+          }}
+          body="Fixture issue body."
+          view="edit"
+        />
+      </div>,
+    ),
+  )
+
+  const content = container.querySelector<HTMLElement>(
+    '.review-document-content',
+  )
+  const submit = container.querySelector<HTMLInputElement>(
+    '.review-document-fields input[aria-label="submit"]',
+  )
+  const bodyToolbar = container.querySelector<HTMLElement>(
+    '.review-document-body-toolbar',
+  )
+  if (content === null || submit === null || bodyToolbar === null) {
+    throw new Error('The short desktop issue draft layout was not rendered.')
+  }
+
+  content.scrollTop = content.scrollHeight
+  const contentRect = content.getBoundingClientRect()
+  const submitRect = submit.getBoundingClientRect()
+  const bodyToolbarRect = bodyToolbar.getBoundingClientRect()
+  const snapshot = () => ({
+    overflowY: getComputedStyle(content).overflowY,
+    canScroll: content.scrollHeight > content.clientHeight,
+    submitReachable:
+      submitRect.top >= contentRect.top &&
+      submitRect.bottom <= contentRect.bottom,
+    bodyToolbarReachable:
+      bodyToolbarRect.top >= contentRect.top &&
+      bodyToolbarRect.bottom <= contentRect.bottom,
+  })
+  expect(snapshot()).toEqual({
+    overflowY: 'auto',
+    canScroll: true,
+    submitReachable: true,
+    bodyToolbarReachable: true,
+  })
+})
+
 it('keeps the approval checkbox available for a new issue draft', async () => {
   const finishSnapshots: JsonValue[] = []
   function NewIssueDraftHarness() {
