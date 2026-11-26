@@ -356,6 +356,8 @@ export function ConversationPaneView({
     updateDraft,
     sendMessage,
   })
+  const displayedError =
+    attachmentError !== null && attachmentError !== '' ? attachmentError : error
 
   const conversationPane = (
     <section
@@ -498,10 +500,9 @@ export function ConversationPaneView({
           />
         </>
       )}
-      {(error ?? attachmentError) != null &&
-      (error ?? attachmentError) !== '' ? (
+      {displayedError != null && displayedError !== '' ? (
         <p className="conversation-error" role="alert">
-          {error ?? attachmentError}
+          {displayedError}
         </p>
       ) : null}
       <SessionUsageRow isMobile={isMobile} usage={sessionUsage} />

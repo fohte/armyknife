@@ -19,18 +19,17 @@ import { ReviewDocumentFocus } from '#components/review-document-focus'
 import { SessionStatusPanel } from '#components/session-status-panel'
 import { useConversationPaneActions } from '#components/use-conversation-pane-actions'
 import { useConversationPaneData } from '#components/use-conversation-pane-data'
+import { useConversationPaneOperation } from '#components/use-conversation-pane-operation'
 import { useConversationStatusPanel } from '#components/use-conversation-status-panel'
 import { useEditorReviewDocument } from '#components/use-editor-review-document'
 import {
   type SessionTreeCallbacks,
   useSessionTree,
 } from '#components/use-session-tree'
-import { createQueuedPromptId } from '#queued-prompt-id'
 import { useSessionLinkTargets } from '#session-link-targets'
 import { useSessionOperations } from '#session-operation-context'
 import {
   applyConversationOperation,
-  createSessionOperation,
   type SessionOperation,
 } from '#session-operations'
 import type { SessionTreeViewState } from '#session-tree-model'
@@ -254,64 +253,16 @@ export function ConversationPane({
     setError: setPaneError,
     onSelectSession,
   })
-  const onAction = useCallback(
-    (action: string, payload?: Record<string, unknown>) => {
-      const messageCountBefore =
-        action === 'messages'
-          ? Math.max(
-              conversationRef.current.total,
-              nextMessageCountBefore.current ?? 0,
-            )
-          : undefined
-      const operationResult = createSessionOperation(
-        session.id,
-        action,
-        action === 'messages'
-          ? {
-              ...payload,
-              _queuedPromptId: createQueuedPromptId(),
-              _messageCountBefore: messageCountBefore,
-            }
-          : payload,
-      )
-      if (operationResult.isErr()) {
-        setError(operationResult.error.message)
-        return Promise.resolve(false)
-      }
-      const operation = operationResult.value
-      if (operation.type === 'message' && messageCountBefore !== undefined) {
-        nextMessageCountBefore.current = messageCountBefore + 1
-      }
-      const dispatchers = [dispatchConversationOperation]
-      if (onOptimisticSessionOperation !== undefined) {
-        dispatchers.push(onOptimisticSessionOperation)
-      }
-      return run(operation, {
-        optimisticDispatchers: dispatchers,
-        refresh: (_result, confirmedOperation) =>
-          refreshForOperation(confirmedOperation),
-      }).then((result) =>
-        result.match(
-          () => {
-            clearErrors()
-            return true
-          },
-          (requestError) => {
-            setError(requestError.message)
-            return false
-          },
-        ),
-      )
-    },
-    [
-      clearErrors,
-      dispatchConversationOperation,
-      onOptimisticSessionOperation,
-      refreshForOperation,
-      run,
-      session.id,
-    ],
-  )
+  const { error: operationError, onAction } = useConversationPaneOperation({
+    sessionId: session.id,
+    conversationRef,
+    nextMessageCountBefore,
+    dispatchConversationOperation,
+    onOptimisticSessionOperation,
+    refreshForOperation,
+    clearErrors,
+    run,
+  })
 
   const pendingPermissionActions =
     pendingOperations.reduce<PendingPermissionActions>(
@@ -445,7 +396,7 @@ export function ConversationPane({
       openInTerminalStatus={displayOpenInTerminalStatus}
       interruptPending={interruptPending}
       loading={loading}
-      error={error}
+      error={operationError ?? error}
       onClearError={() => {
         clearErrors()
       }}
