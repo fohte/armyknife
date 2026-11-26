@@ -272,8 +272,7 @@ async fn run_impl_with_review_language_context<
         );
     }
 
-    let draft = DraftFile::from_path(draft_path.clone())?;
-    let approved_document_hash = crate::shared::human_in_the_loop::document_hash(&draft_path)?;
+    let (draft, approved_document_hash) = DraftFile::from_path_with_hash(draft_path.clone())?;
 
     if args.no_review {
         vibe_access_check(&target.owner, &target.repo)?;
@@ -596,12 +595,16 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[test]
-    fn default_draft_path_rejects_a_file_symlink_outside_the_draft_root() {
+    #[rstest]
+    #[case::outside_draft_root("outside-owner", "outside-repository", true)]
+    #[case::different_draft_in_root("inside-owner", "inside-repository", false)]
+    fn default_draft_path_rejects_symlinks_to_nonmatching_drafts(
+        #[case] owner: &str,
+        #[case] repo: &str,
+        #[case] target_outside_draft_root: bool,
+    ) {
         use std::os::unix::fs::symlink;
 
-        let owner = "sample-owner";
-        let repo = "sample-repository";
         let branch = "feature/symlinked-draft";
         let _draft_directory = TestDraftDirectory::new(owner, repo);
         let current_repo = RepoInfo {
@@ -617,11 +620,26 @@ mod tests {
                 .expect("draft path should have a parent"),
         )
         .expect("draft directory should be created");
-        let external_directory = tempfile::tempdir().expect("external directory should be created");
-        let external_target = external_directory.path().join("body.md");
-        fs::write(&external_target, "Sample external body.")
-            .expect("external draft should be written");
-        symlink(&external_target, &requested_path).expect("draft symlink should be created");
+        let external_directory = target_outside_draft_root
+            .then(|| tempfile::tempdir().expect("external directory should be created"));
+        let target_path = match &external_directory {
+            Some(directory) => directory.path().join("body.md"),
+            None => DraftFile::path_for(&RepoInfo {
+                owner: owner.to_owned(),
+                repo: repo.to_owned(),
+                branch: "feature/another-draft".to_owned(),
+                is_private: true,
+            }),
+        };
+        fs::create_dir_all(
+            target_path
+                .parent()
+                .expect("symlink target should have a parent"),
+        )
+        .expect("symlink target directory should be created");
+        fs::write(&target_path, "Sample external body.")
+            .expect("symlink target draft should be written");
+        symlink(&target_path, &requested_path).expect("draft symlink should be created");
 
         let validation = validate_default_draft_path(
             &canonical_document_path(&requested_path),
@@ -631,7 +649,7 @@ mod tests {
         .map_err(|error| error.to_string());
         let observed = (
             validation,
-            fs::read_to_string(&external_target).map_err(|error| error.to_string()),
+            fs::read_to_string(&target_path).map_err(|error| error.to_string()),
             fs::symlink_metadata(&requested_path).is_ok(),
         );
 

@@ -12,6 +12,7 @@ use crate::infra::github::{self, RepoClient};
 use crate::shared::config::load_config;
 use crate::shared::human_in_the_loop::{
     ApprovalManager, DocumentSchema, HumanInTheLoopError, canonical_document_path, document_hash,
+    document_hash_for_content,
 };
 use crate::shared::repo_language::{copier_answers_path_for_current_repo, resolve_repo_language};
 use crate::shared::yaml_frontmatter;
@@ -261,18 +262,27 @@ impl DraftFile {
     }
 
     pub fn from_path(path: PathBuf) -> Result<Self> {
+        Self::from_path_with_hash(path).map(|(draft, _)| draft)
+    }
+
+    pub(super) fn from_path_with_hash(path: PathBuf) -> Result<(Self, String)> {
         if !path.exists() {
             return Err(PrDraftError::FileNotFound(path).into());
         }
 
-        let content = fs::read_to_string(&path)?;
+        let content = fs::read(&path)?;
+        let content_hash = document_hash_for_content(&content);
+        let content = String::from_utf8(content)?;
         let (frontmatter, body) = parse_frontmatter(&content)?;
 
-        Ok(Self {
-            path,
-            frontmatter,
-            body,
-        })
+        Ok((
+            Self {
+                path,
+                frontmatter,
+                body,
+            },
+            content_hash,
+        ))
     }
 
     fn approval_manager(&self) -> ApprovalManager {
@@ -544,6 +554,46 @@ mod tests {
         assert_eq!(
             (cleaned, symlink_path.exists(), target_path.exists()),
             (true, false, true)
+        );
+    }
+
+    #[test]
+    fn from_path_with_hash_binds_the_hash_to_the_parsed_content() {
+        let directory = tempfile::tempdir().expect("temporary directory should be created");
+        let path = directory.path().join("draft.md");
+        let original_content = indoc! {"
+            ---
+            title: 'Original title'
+            steps:
+              submit: false
+            ---
+            Original body.
+        "};
+        let replacement_content = indoc! {"
+            ---
+            title: 'Replacement title'
+            steps:
+              submit: false
+            ---
+            Replacement body.
+        "};
+        fs::write(&path, original_content).expect("original draft should be written");
+
+        let (draft, submitted_hash) = DraftFile::from_path_with_hash(path.clone())
+            .expect("draft and hash should be read together");
+        fs::write(&path, replacement_content).expect("replacement draft should be written");
+
+        assert_eq!(
+            (
+                draft.body,
+                submitted_hash,
+                document_hash(&path).expect("replacement draft hash should be computed"),
+            ),
+            (
+                "Original body.\n".to_owned(),
+                document_hash_for_content(original_content.as_bytes()),
+                document_hash_for_content(replacement_content.as_bytes()),
+            ),
         );
     }
 

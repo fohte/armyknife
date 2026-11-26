@@ -23,8 +23,8 @@ mod session_watch;
 mod tmux;
 pub(crate) use action_result::{
     ReviewDocumentAction, ReviewDocumentActionResult, action_result_after_review_completion,
-    clear_action_result, document_hash, save_action_document_snapshot, save_action_result,
-    successful_action_result, successful_action_results_in_directory,
+    clear_action_result, document_hash, document_hash_for_content, save_action_document_snapshot,
+    save_action_result, successful_action_result, successful_action_results_in_directory,
     take_action_document_snapshot,
 };
 pub(crate) use pending_review::{

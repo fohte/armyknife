@@ -114,7 +114,11 @@ fn action_document_snapshot_path(document_path: &Path) -> PathBuf {
 }
 
 pub(crate) fn document_hash(path: &Path) -> std::io::Result<String> {
-    fs::read(path).map(|content| content_hash(&content))
+    fs::read(path).map(|content| document_hash_for_content(&content))
+}
+
+pub(crate) fn document_hash_for_content(content: &[u8]) -> String {
+    content_hash(content)
 }
 
 pub(crate) fn clear_action_result(document_path: &Path) -> std::io::Result<()> {
