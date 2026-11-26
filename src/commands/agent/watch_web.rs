@@ -75,6 +75,11 @@ fn ensure_port_allowed(port: u16, own_session_id: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+fn should_start_web_ui_relay_manager(own_session_id: Option<&str>) -> bool {
+    // Relay registrations are shared, so a development process must not reconcile them.
+    own_session_id.is_none()
+}
+
 fn restart_args_with_port(args: impl IntoIterator<Item = OsString>, port: u16) -> Vec<OsString> {
     let mut args = args.into_iter().peekable();
     let mut restart_args = Vec::new();
@@ -139,6 +144,7 @@ impl EnrichmentUpdates {
 pub async fn run(args: &WatchWebArgs) -> Result<()> {
     let own_session_id = EnvVars::load().own_session_id();
     ensure_port_allowed(args.port, own_session_id.as_deref())?;
+    let should_manage_web_ui_relays = should_start_web_ui_relay_manager(own_session_id.as_deref());
 
     let executable = std::env::current_exe()?;
     let mut executable_identity = restart::ExecutableIdentity::read(&executable)?;
@@ -163,9 +169,15 @@ pub async fn run(args: &WatchWebArgs) -> Result<()> {
         let relay_sessions_dir = sessions_dir.clone();
         let watch_web_server = async move {
             let (relay_shutdown_sender, relay_shutdown_receiver) = watch::channel(false);
-            let relay_task = web_ui_relays::WebUiRelays::new(relay_sessions_dir)
-                .start(relay_shutdown_receiver.clone())
-                .await;
+            let relay_task = if should_manage_web_ui_relays {
+                Some(
+                    web_ui_relays::WebUiRelays::new(relay_sessions_dir)
+                        .start(relay_shutdown_receiver.clone())
+                        .await,
+                )
+            } else {
+                None
+            };
             let cleanup_task = stale_session_cleanup::start(relay_shutdown_receiver);
             let shutdown_signal_sender = relay_shutdown_sender.clone();
             let result = axum::serve(listener, app(restart_receiver))
@@ -181,7 +193,9 @@ pub async fn run(args: &WatchWebArgs) -> Result<()> {
             if let Err(error) = cleanup_task.await {
                 tracing::warn!(%error, "stale session cleanup task failed to stop");
             }
-            if let Err(error) = relay_task.await {
+            if let Some(relay_task) = relay_task
+                && let Err(error) = relay_task.await
+            {
                 tracing::warn!(%error, "web UI relay manager failed to stop");
             }
             result
@@ -375,7 +389,7 @@ mod tests {
     use super::{
         LISTEN_PORT, app, app_with_assets, app_with_assets_and_loader, bind_listener,
         compression_layer, ensure_port_allowed, open_browser_on_startup, restart_args_with_port,
-        watch_web_url,
+        should_start_web_ui_relay_manager, watch_web_url,
     };
     use crate::cli::{Cli, Commands};
     use crate::commands::agent::AgentCommands;
@@ -398,6 +412,16 @@ mod tests {
             ensure_port_allowed(port, own_session_id).is_ok(),
             expected_is_ok
         );
+    }
+
+    #[rstest]
+    #[case::production_process(None, true)]
+    #[case::agent_session(Some("fixture-session"), false)]
+    fn agent_sessions_do_not_start_the_shared_web_ui_relay_manager(
+        #[case] own_session_id: Option<&str>,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(should_start_web_ui_relay_manager(own_session_id), expected);
     }
 
     #[rstest]
