@@ -368,6 +368,7 @@ fn pull_request_can_refresh(
     cached: &HashMap<PullRequestKey, Option<PrProgressInfo>>,
     key: &PullRequestKey,
 ) -> bool {
+    // Completed PRs stay cached so they do not trigger recurring lookups.
     !matches!(
         cached
             .get(key)
