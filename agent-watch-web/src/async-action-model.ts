@@ -27,8 +27,7 @@ export type AsyncAction = {
   kind: 'merge' | 'close' | 'command' | 'rewind' | 'review_document'
   status: AsyncActionStatus
   command?: string
-  reviewDocumentAction?:
-    'Post comment' | 'Create PR' | 'Post replies' | 'Update issue'
+  reviewDocumentAction?: string
   commandOutputIndex?: number
   exitCode?: number
   pullRequestNumber?: number
@@ -38,6 +37,7 @@ export type AsyncAction = {
   timelineIndex?: number
   message?: string
   error?: string
+  retryable?: boolean
   checks?: CloseWorktreeChecks
   createdAt: number
   completedAt?: number
@@ -45,7 +45,11 @@ export type AsyncAction = {
 
 export type AsyncActionOutcome =
   | { status: 'reviewDocumentActionSucceeded' }
-  | { status: 'reviewDocumentActionFailed'; error: string }
+  | {
+      status: 'reviewDocumentActionFailed'
+      error: string
+      retryable?: boolean
+    }
   | {
       status: 'ranCommand' | 'commandTimedOut'
       commandOutputIndex?: number

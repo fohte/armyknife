@@ -7,6 +7,7 @@ export type ReviewDocumentSummary = {
     branch?: string
     issueNumber?: number
     pullRequestNumber?: number
+    pullRequestLookupUnavailable?: boolean
     title?: string
     threadCount?: number
   }
@@ -59,6 +60,9 @@ export function isReviewDocumentSummaryList(
           typeof item['target']['issueNumber'] === 'number') &&
         (item['target']['pullRequestNumber'] === undefined ||
           typeof item['target']['pullRequestNumber'] === 'number') &&
+        (item['target']['pullRequestLookupUnavailable'] === undefined ||
+          typeof item['target']['pullRequestLookupUnavailable'] ===
+            'boolean') &&
         (item['target']['title'] === undefined ||
           typeof item['target']['title'] === 'string') &&
         (item['target']['threadCount'] === undefined ||

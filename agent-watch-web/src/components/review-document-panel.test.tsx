@@ -309,6 +309,96 @@ it('shows Create PR at the final stage after an English translation', async () =
   })
 })
 
+it('shows Update PR with its number and explanation for an existing pull request', async () => {
+  root = createRoot(container)
+  act(() =>
+    root?.render(
+      <ReviewDocumentPanel
+        summary={{
+          id: 'fixture-pr-draft',
+          kind: 'pr_draft',
+          target: {
+            repository: 'sample-owner/sample-repository',
+            branch: 'feature/example',
+            pullRequestNumber: 73,
+          },
+          isEditor: true,
+          canSave: true,
+          canFinish: true,
+        }}
+        frontmatter={{
+          title: 'Make the retry limit configurable',
+          steps: { 'ready-for-translation': false, submit: false },
+        }}
+        body="Make the retry limit configurable."
+        onSubmit={(action) => directActions.push(action)}
+      />,
+    ),
+  )
+
+  await act(async () => {
+    await page.getByRole('button', { name: 'Update PR #73' }).click()
+  })
+
+  const snapshot = () => ({
+    stageLabels: Array.from(
+      container.querySelectorAll('.review-document-pr-stages li'),
+      (stage) => stage.textContent,
+    ),
+    primary: container.querySelector('.review-document-finish')?.textContent,
+    help: container.querySelector('.review-document-direct-help')?.textContent,
+    actions: directActions,
+  })
+  expect(snapshot()).toEqual({
+    stageLabels: ['✓Review—', '✓Translate—', '3Update PR #73—'],
+    primary: 'Update PR #73',
+    help: 'Update PR #73 updates the existing PR on sample-owner/sample-repository right away. Send back returns your edits to the session.',
+    actions: ['create_pr'],
+  })
+})
+
+it('names the existing pull request in the translation-stage explanation', () => {
+  root = createRoot(container)
+  act(() =>
+    root?.render(
+      <ReviewDocumentPanel
+        summary={{
+          id: 'fixture-pr-draft',
+          kind: 'pr_draft',
+          target: {
+            repository: 'sample-owner/sample-repository',
+            branch: 'feature/example',
+            pullRequestNumber: 73,
+          },
+          isEditor: true,
+          canSave: true,
+          canFinish: true,
+        }}
+        frontmatter={{
+          title: '再送上限を設定',
+          steps: { 'ready-for-translation': false, submit: false },
+        }}
+        body="再送上限を変更できるようにします。"
+        onSubmit={(action) => directActions.push(action)}
+      />,
+    ),
+  )
+
+  const snapshot = () => ({
+    stages: Array.from(
+      container.querySelectorAll('.review-document-pr-stages li'),
+      (stage) => stage.textContent,
+    ),
+    primary: container.querySelector('.review-document-finish')?.textContent,
+    help: container.querySelector('.review-document-direct-help')?.textContent,
+  })
+  expect(snapshot()).toEqual({
+    stages: ['1Review—', '2Translate—', '3Update PR #73—'],
+    primary: 'Approve for translation',
+    help: 'The session translates the title and body to English right away. You review the English draft next, then update PR #73.',
+  })
+})
+
 afterEach(() => {
   if (root !== null) act(() => root?.unmount())
   root = null

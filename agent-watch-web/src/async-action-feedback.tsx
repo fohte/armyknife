@@ -129,6 +129,7 @@ export function AsyncActionFeedbackProvider({
             status: runningStatusFor(action.kind),
           }
           delete next.error
+          delete next.retryable
           delete next.message
           delete next.checks
           delete next.completedAt
@@ -148,6 +149,11 @@ export function AsyncActionFeedbackProvider({
           if ('message' in outcome) next.message = outcome.message
           if ('error' in outcome) next.error = outcome.error
           else delete next.error
+          if ('retryable' in outcome) {
+            next.retryable = outcome.retryable
+          } else {
+            delete next.retryable
+          }
           if ('checks' in outcome) {
             next.checks = outcome.checks
           } else {

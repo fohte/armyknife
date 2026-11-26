@@ -229,3 +229,42 @@ it('shows merge failure detail and Retry as the desktop design does', async () =
   }
   expect(combinedSnapshot()).toEqual(expected)
 })
+
+it('hides retry for PR actions that require a new review', () => {
+  root = createRoot(container)
+  const action = {
+    id: 3,
+    kind: 'review_document',
+    sessionId: 'example-review-session',
+    sessionTitle: 'Review the notification route',
+    status: 'reviewDocumentActionFailed',
+    reviewDocumentAction: 'Update PR #48',
+    error:
+      'The pull request target changed after approval. Send the draft back for review before submitting again.',
+    retryable: false,
+    createdAt: 1_799_000_000_006,
+  } satisfies AsyncAction
+
+  act(() => {
+    root?.render(
+      <AsyncActionItem
+        action={action}
+        form="toast"
+        onRetry={() => undefined}
+      />,
+    )
+  })
+
+  const snapshot = () => ({
+    buttons: Array.from(
+      container.querySelectorAll('.async-action-controls button'),
+    ).map((button) => button.textContent),
+    error: container.querySelector('.async-action-error')?.textContent ?? null,
+  })
+  const expected = {
+    buttons: [],
+    error:
+      'The pull request target changed after approval. Send the draft back for review before submitting again.',
+  }
+  expect(snapshot()).toEqual(expected)
+})
