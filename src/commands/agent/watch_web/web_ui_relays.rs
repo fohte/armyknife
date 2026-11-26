@@ -534,6 +534,14 @@ mod tests {
     }
 
     #[fixture]
+    fn session_directory_with_one_web_ui() -> TempDir {
+        let directory = TempDir::new().expect("temporary sessions directory should be created");
+        store::save_session_to(directory.path(), &session_with_one_web_ui())
+            .expect("fixture session should be saved");
+        directory
+    }
+
+    #[fixture]
     fn state_write_failure_directory() -> TempDir {
         let directory = TempDir::new().expect("temporary sessions directory should be created");
         store::save_session_to(directory.path(), &session_with_one_web_ui())
@@ -950,10 +958,12 @@ mod tests {
         Ok(())
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn failed_active_unexpose_waits_for_backoff_on_the_next_sync() -> anyhow::Result<()> {
-        let directory = TempDir::new()?;
-        store::save_session_to(directory.path(), &session_with_one_web_ui())?;
+    async fn failed_active_unexpose_waits_for_backoff_on_the_next_sync(
+        session_directory_with_one_web_ui: TempDir,
+    ) -> anyhow::Result<()> {
+        let directory = session_directory_with_one_web_ui;
         let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
         let mut relays = WebUiRelays::with_hook_runner(
             directory.path().to_path_buf(),
@@ -997,11 +1007,12 @@ mod tests {
         Ok(())
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn failed_expose_waits_for_backoff_while_a_new_relay_is_exposed_immediately()
-    -> anyhow::Result<()> {
-        let directory = TempDir::new()?;
-        store::save_session_to(directory.path(), &session_with_one_web_ui())?;
+    async fn failed_expose_waits_for_backoff_while_a_new_relay_is_exposed_immediately(
+        session_directory_with_one_web_ui: TempDir,
+    ) -> anyhow::Result<()> {
+        let directory = session_directory_with_one_web_ui;
         let calls = Arc::new(Mutex::new(Vec::new()));
         let mut relays = WebUiRelays::with_hook_runner(directory.path().to_path_buf(), {
             let calls = calls.clone();
@@ -1200,10 +1211,12 @@ mod tests {
         Ok(())
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn failed_expose_retries_on_the_same_relay_until_shutdown() -> anyhow::Result<()> {
-        let directory = TempDir::new()?;
-        store::save_session_to(directory.path(), &session_with_one_web_ui())?;
+    async fn failed_expose_retries_on_the_same_relay_until_shutdown(
+        session_directory_with_one_web_ui: TempDir,
+    ) -> anyhow::Result<()> {
+        let directory = session_directory_with_one_web_ui;
         let (shutdown, manager, mut calls) = start_relay_manager(&directory, false, true).await;
         let first_expose = next_hook_call(&mut calls).await?;
         let second_expose = next_hook_call(&mut calls).await?;
@@ -1242,10 +1255,12 @@ mod tests {
         Ok(())
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn unreadable_relay_state_does_not_block_sync_and_is_replaced() -> anyhow::Result<()> {
-        let directory = TempDir::new()?;
-        store::save_session_to(directory.path(), &session_with_one_web_ui())?;
+    async fn unreadable_relay_state_does_not_block_sync_and_is_replaced(
+        session_directory_with_one_web_ui: TempDir,
+    ) -> anyhow::Result<()> {
+        let directory = session_directory_with_one_web_ui;
         fs::write(
             directory.path().join("web_ui_relays.state"),
             b"invalid state",
@@ -1281,11 +1296,12 @@ mod tests {
         Ok(())
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn relay_state_read_error_does_not_block_sync_or_replace_the_state_path()
-    -> anyhow::Result<()> {
-        let directory = TempDir::new()?;
-        store::save_session_to(directory.path(), &session_with_one_web_ui())?;
+    async fn relay_state_read_error_does_not_block_sync_or_replace_the_state_path(
+        session_directory_with_one_web_ui: TempDir,
+    ) -> anyhow::Result<()> {
+        let directory = session_directory_with_one_web_ui;
         fs::create_dir(directory.path().join("web_ui_relays.state"))?;
         let calls = Arc::new(Mutex::new(Vec::new()));
         let mut relays = WebUiRelays::with_hook_runner(
@@ -1318,11 +1334,12 @@ mod tests {
         Ok(())
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn stale_registration_with_active_port_is_removed_without_unexposing()
-    -> anyhow::Result<()> {
-        let directory = TempDir::new()?;
-        store::save_session_to(directory.path(), &session_with_one_web_ui())?;
+    async fn stale_registration_with_active_port_is_removed_without_unexposing(
+        session_directory_with_one_web_ui: TempDir,
+    ) -> anyhow::Result<()> {
+        let directory = session_directory_with_one_web_ui;
         let calls = Arc::new(Mutex::new(Vec::new()));
         let mut relays = WebUiRelays::with_hook_runner(
             directory.path().to_path_buf(),
