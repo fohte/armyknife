@@ -45,6 +45,7 @@ pub(super) fn run(
             }
         };
         let lock_cleanup_succeeded = migration::remove_legacy_lock_files(sessions_dir);
+        // Keep the expiry check in the one-time sweep to avoid querying metadata on every open.
         let legacy_cleanup_succeeded =
             migration::cleanup_expired_legacy_json(connection, sessions_dir)?;
         state.legacy_data_complete =
