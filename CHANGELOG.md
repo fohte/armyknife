@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.944](https://github.com/fohte/armyknife/compare/v0.1.943...v0.1.944) (2026-11-26)
+
+
+### Performance Improvements
+
+* **watch-web:** avoid per-task GitHub lookups ([#2311](https://github.com/fohte/armyknife/issues/2311)) ([9d40551](https://github.com/fohte/armyknife/commit/9d40551c59903c973f8fecbd5f6a56b86c0b49db))
+
 ## [0.1.943](https://github.com/fohte/armyknife/compare/v0.1.942...v0.1.943) (2026-11-26)
 
 
