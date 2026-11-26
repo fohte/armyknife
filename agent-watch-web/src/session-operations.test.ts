@@ -1666,6 +1666,21 @@ it('reconciles an unresolved queued user by its prompt ID', () => {
   ).toBe(true)
 })
 
+it('confirms a cancelled queued user from the server response', () => {
+  const serverConversation: ConversationResponse = {
+    ...conversationWithTrailingItems,
+    confirmedQueuedPromptIds: ['fixture-message-id'],
+  }
+
+  expect(
+    isConversationOperationConfirmed(
+      serverConversation,
+      operationWithReservedMessageId,
+      null,
+    ),
+  ).toBe(true)
+})
+
 it('keeps a same-text message with a different queued ID unconfirmed', () => {
   const operation: SessionOperation = {
     type: 'message',

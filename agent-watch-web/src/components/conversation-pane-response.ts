@@ -360,6 +360,11 @@ export function isConversationResponse(
     value['messages'].every(isChatItem) &&
     (value['messageImageSources'] === undefined ||
       isMessageImageSources(value['messageImageSources'])) &&
+    (value['confirmedQueuedPromptIds'] === undefined ||
+      (Array.isArray(value['confirmedQueuedPromptIds']) &&
+        value['confirmedQueuedPromptIds'].every(
+          (messageId) => typeof messageId === 'string',
+        ))) &&
     Array.isArray(value['backgroundTasks']) &&
     value['backgroundTasks'].every(isBackgroundTask) &&
     (value['vibeMode'] === undefined || isVibeMode(value['vibeMode'])) &&

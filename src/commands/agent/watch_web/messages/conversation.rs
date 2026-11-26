@@ -1,7 +1,8 @@
-use std::path::Path;
+use std::{collections::HashSet, path::Path};
 
 use anyhow::Result;
 
+use crate::commands::agent::store::WatchWebQueuedPrompt;
 use crate::commands::agent::types::{Engine, MAIN_THREAD_AGENT_KEY, Session};
 use crate::commands::agent::user_turn::is_ask_user_question;
 
@@ -226,6 +227,10 @@ fn load_conversation_with_tail_window_from(
         supplement_skill_suggestions(&mut cached.conversation, &session, loaders);
         resolve_peer_session_titles(&mut cached.conversation.messages, &mut load_session)?;
         cached.conversation.update_metadata();
+        cached.conversation.confirmed_queued_prompt_ids = confirmed_queued_prompt_message_ids(
+            &queued_prompts,
+            &cached.resolved_queued_prompt_ids,
+        );
         cached
             .conversation
             .background_tasks
@@ -292,6 +297,8 @@ fn load_conversation_with_tail_window_from(
         )
     }?;
     let (mut conversation, resolved_queued_prompt_ids, used_tail_window) = parsed;
+    conversation.confirmed_queued_prompt_ids =
+        confirmed_queued_prompt_message_ids(&queued_prompts, &resolved_queued_prompt_ids);
     let used_tail_window = used_tail_window || conversation.tail_window_start.is_some();
     cache::refresh_image_availability(&mut conversation);
     resolve_peer_session_titles(&mut conversation.messages, &mut load_session)?;
@@ -354,6 +361,18 @@ fn load_conversation_with_tail_window_from(
         .background_tasks
         .extend(loaders.background_tasks(session_id)?);
     Ok(Some(conversation))
+}
+
+fn confirmed_queued_prompt_message_ids(
+    queued_prompts: &[WatchWebQueuedPrompt],
+    newly_resolved_ids: &[i64],
+) -> Vec<String> {
+    let newly_resolved_ids = newly_resolved_ids.iter().copied().collect::<HashSet<_>>();
+    queued_prompts
+        .iter()
+        .filter(|prompt| prompt.resolved || newly_resolved_ids.contains(&prompt.id))
+        .filter_map(|prompt| prompt.message_id.clone())
+        .collect()
 }
 
 fn supplement_skill_suggestions(
@@ -432,10 +451,72 @@ mod tests {
 
     use serde_json::json;
 
-    use super::load_conversation_with_queued_prompts;
-    use crate::commands::agent::store::PermissionRequestData;
+    use chrono::{DateTime, Utc};
+
+    use super::{confirmed_queued_prompt_message_ids, load_conversation_with_queued_prompts};
+    use crate::commands::agent::store::{PermissionRequestData, WatchWebQueuedPrompt};
     use crate::commands::agent::types::{Engine, MAIN_THREAD_AGENT_KEY, Session};
-    use crate::commands::agent::watch_web::messages::RouteLoaders;
+    use crate::commands::agent::watch_web::messages::{ConversationResponse, RouteLoaders};
+
+    #[test]
+    fn exposes_persisted_and_newly_resolved_queued_prompt_ids() {
+        let sent_at = DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let queued_prompts = [
+            WatchWebQueuedPrompt {
+                id: 1,
+                message_id: Some("fixture-cancelled-message".to_string()),
+                content: "Cancelled prompt".to_string(),
+                action_event_kind: None,
+                attachments: Vec::new(),
+                resolved: true,
+                sent_at,
+            },
+            WatchWebQueuedPrompt {
+                id: 2,
+                message_id: Some("fixture-delivered-message".to_string()),
+                content: "Delivered prompt".to_string(),
+                action_event_kind: None,
+                attachments: Vec::new(),
+                resolved: false,
+                sent_at,
+            },
+            WatchWebQueuedPrompt {
+                id: 3,
+                message_id: Some("fixture-pending-message".to_string()),
+                content: "Still queued".to_string(),
+                action_event_kind: None,
+                attachments: Vec::new(),
+                resolved: false,
+                sent_at,
+            },
+        ];
+
+        assert_eq!(
+            serde_json::to_value(ConversationResponse {
+                confirmed_queued_prompt_ids: confirmed_queued_prompt_message_ids(
+                    &queued_prompts,
+                    &[2],
+                ),
+                ..ConversationResponse::default()
+            })
+            .unwrap(),
+            json!({
+                "messages": [],
+                "confirmedQueuedPromptIds": [
+                    "fixture-cancelled-message",
+                    "fixture-delivered-message",
+                ],
+                "backgroundTasks": [],
+                "start": 0,
+                "total": 0,
+                "decisions": [],
+                "hasUnansweredProposal": false,
+                "activeQuestionIndex": null,
+            }),
+        );
+    }
 
     #[test]
     fn conversation_load_attaches_request_id_to_grouped_thinking_permission() {
