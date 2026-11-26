@@ -2,8 +2,28 @@ use std::collections::{HashMap, HashSet};
 
 use crate::commands::agent::tq_session_tasks::order_tasks_by_priority;
 use crate::infra::github::PrProgressInfo;
+use crate::infra::tq::TqGithubLink;
 
 use super::{PullRequestKey, SessionTaskMetadata};
+
+pub(super) fn merge_task_github_links(
+    cached: &mut HashMap<String, Vec<TqGithubLink>>,
+    refreshed: HashMap<String, Vec<TqGithubLink>>,
+    requested_task_ids: &HashSet<String>,
+) {
+    for (task_id, links) in refreshed {
+        if requested_task_ids.contains(&task_id) {
+            cached.insert(task_id, links);
+        }
+    }
+}
+
+pub(super) fn prune_task_github_links(
+    cached: &mut HashMap<String, Vec<TqGithubLink>>,
+    stale_task_ids: &HashSet<String>,
+) {
+    cached.retain(|task_id, _| !stale_task_ids.contains(task_id));
+}
 
 pub(super) fn merge_pull_request_results(
     cached: &mut HashMap<PullRequestKey, Option<PrProgressInfo>>,
@@ -79,8 +99,6 @@ fn prune_unlinked_task_metadata(
         cached.updated_at.remove(task_id);
         cached.priority_order.remove(task_id);
         cached.task_projects.remove(task_id);
-        cached.github_links.remove(task_id);
-        cached.github_links_fetched_at.remove(task_id);
     }
 }
 
@@ -119,18 +137,6 @@ fn merge_refreshed_task_metadata(
                 .insert(task_id.clone(), project.clone());
         } else {
             cached.task_projects.remove(task_id);
-        }
-        if let Some(links) = refreshed.github_links.get(task_id) {
-            cached.github_links.insert(task_id.clone(), links.clone());
-        } else {
-            cached.github_links.remove(task_id);
-        }
-        if let Some(fetched_at) = refreshed.github_links_fetched_at.get(task_id) {
-            cached
-                .github_links_fetched_at
-                .insert(task_id.clone(), *fetched_at);
-        } else {
-            cached.github_links_fetched_at.remove(task_id);
         }
     }
 
@@ -176,7 +182,6 @@ mod tests {
     use crate::infra::github::{PrCiState, PrInfo, PrProgressInfo, PrState};
     use rstest::{fixture, rstest};
     use std::sync::Arc;
-    use std::time::Instant;
     use tokio::sync::watch;
 
     use super::super::super::EnrichmentUpdates;
@@ -281,28 +286,16 @@ mod tests {
     }
 
     #[test]
-    fn refreshed_github_link_fetch_timestamps_are_cached_by_task() {
-        let fetched_at = Instant::now();
-        let mut cached = SessionTaskMetadata {
-            links: HashMap::from([("session-a".to_string(), vec![linked_task("task-a")])]),
-            ..SessionTaskMetadata::default()
-        };
-        let refreshed = SessionTaskMetadata {
-            links: HashMap::from([("session-a".to_string(), vec![linked_task("task-a")])]),
-            github_links_fetched_at: HashMap::from([("task-a".to_string(), fetched_at)]),
-            ..SessionTaskMetadata::default()
-        };
+    fn refreshed_task_github_links_are_cached_by_task() {
+        let mut cached = HashMap::new();
 
-        merge_session_task_metadata(
+        merge_task_github_links(
             &mut cached,
-            refreshed,
-            &HashSet::from(["session-a".to_string()]),
+            HashMap::from([("task-a".to_string(), Vec::new())]),
+            &HashSet::from(["task-a".to_string()]),
         );
 
-        assert_eq!(
-            cached.github_links_fetched_at,
-            HashMap::from([("task-a".to_string(), fetched_at)]),
-        );
+        assert_eq!(cached, HashMap::from([("task-a".to_string(), Vec::new())]),);
     }
 
     #[rstest]
@@ -376,7 +369,6 @@ mod tests {
                     ]),
                     task_projects: HashMap::new(),
                     github_links: HashMap::new(),
-                    github_links_fetched_at: HashMap::new(),
                 })
             })
         });
@@ -412,7 +404,6 @@ mod tests {
                 ]),
                 task_projects: HashMap::new(),
                 github_links: HashMap::new(),
-                github_links_fetched_at: HashMap::new(),
             },
         );
     }
@@ -553,7 +544,6 @@ mod tests {
                     ("task-session-b".to_string(), "project-b".to_string()),
                 ]),
                 github_links: HashMap::new(),
-                github_links_fetched_at: HashMap::new(),
             }
         );
     }

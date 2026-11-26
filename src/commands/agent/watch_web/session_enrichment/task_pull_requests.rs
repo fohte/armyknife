@@ -1,6 +1,5 @@
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
-use std::time::Instant;
 
 use futures_util::{StreamExt, stream};
 
@@ -10,7 +9,6 @@ use crate::infra::tq::TqGithubLink;
 
 use super::{
     PullRequestKey, SessionEnrichmentCache, SessionPullRequestInfo, SessionTaskMetadata,
-    TASK_GITHUB_LINK_CACHE_TTL,
     cache::{merge_pull_request_results, prune_pull_request_results},
 };
 
@@ -37,7 +35,7 @@ impl SessionEnrichmentCache {
                 query_keys,
                 {
                     let sessions = sessions.to_vec();
-                    move |_| fetcher(sessions, number_queries)
+                    move |_, _| fetcher(sessions, number_queries)
                 },
                 merge_pull_request_results,
                 prune_pull_request_results,
@@ -287,25 +285,14 @@ pub(super) async fn fetch_pull_requests(
 pub(super) async fn fetch_task_github_links<F, Fut>(
     task_ids: &HashSet<String>,
     previous: &HashMap<String, Vec<TqGithubLink>>,
-    previous_fetched_at: &HashMap<String, Instant>,
     fetch: F,
-) -> (HashMap<String, Vec<TqGithubLink>>, HashMap<String, Instant>)
+) -> HashMap<String, Vec<TqGithubLink>>
 where
     F: Fn(String) -> Fut + Sync,
     Fut: Future<Output = Result<Vec<TqGithubLink>, String>> + Send,
 {
-    let now = Instant::now();
-    let expired_task_ids = task_ids
-        .iter()
-        .filter(|task_id| {
-            previous_fetched_at
-                .get(*task_id)
-                .is_none_or(|fetched_at| fetched_at.elapsed() >= TASK_GITHUB_LINK_CACHE_TTL)
-        })
-        .cloned()
-        .collect::<HashSet<_>>();
     let fetch = &fetch;
-    let responses = stream::iter(expired_task_ids.iter().cloned().map(|task_id| async move {
+    let responses = stream::iter(task_ids.iter().cloned().map(|task_id| async move {
         let result = fetch(task_id.clone()).await;
         (task_id, result)
     }))
@@ -313,27 +300,9 @@ where
     .collect::<Vec<_>>()
     .await;
 
-    let mut links = task_ids
-        .iter()
-        .filter(|task_id| !expired_task_ids.contains(*task_id))
-        .filter_map(|task_id| {
-            previous
-                .get(task_id)
-                .map(|links| (task_id.clone(), links.clone()))
-        })
-        .collect::<HashMap<_, _>>();
-    let mut fetched_at = task_ids
-        .iter()
-        .filter(|task_id| !expired_task_ids.contains(*task_id))
-        .filter_map(|task_id| {
-            previous_fetched_at
-                .get(task_id)
-                .map(|fetched_at| (task_id.clone(), *fetched_at))
-        })
-        .collect::<HashMap<_, _>>();
+    let mut links = HashMap::new();
 
     for (task_id, result) in responses {
-        fetched_at.insert(task_id.clone(), now);
         match result {
             Ok(task_links) => {
                 links.insert(task_id, task_links);
@@ -352,7 +321,7 @@ where
         }
     }
 
-    (links, fetched_at)
+    links
 }
 
 #[cfg(test)]
@@ -360,7 +329,7 @@ mod tests {
     use std::collections::{HashMap, HashSet};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     use crate::infra::tq::TqGithubLink;
 
@@ -380,63 +349,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn does_not_fetch_task_github_links_within_cache_ttl() {
-        let task_ids = HashSet::from(["task-fresh".to_string()]);
-        let previous = HashMap::from([("task-fresh".to_string(), vec![github_link("cached")])]);
-        let previous_fetched_at = HashMap::from([("task-fresh".to_string(), Instant::now())]);
-        let requested = Arc::new(Mutex::new(Vec::new()));
-        let fetch_requested = Arc::clone(&requested);
-
-        let (links, fetched_at) =
-            fetch_task_github_links(&task_ids, &previous, &previous_fetched_at, move |task_id| {
-                fetch_requested.lock().unwrap().push(task_id);
-                async { Ok(Vec::new()) }
-            })
-            .await;
-
-        assert_eq!(
-            (links, fetched_at, requested.lock().unwrap().clone()),
-            (previous, previous_fetched_at, Vec::<String>::new()),
-        );
-    }
-
-    #[tokio::test]
-    async fn refreshes_expired_task_links_with_bounded_concurrency() {
+    async fn fetches_task_links_with_bounded_concurrency() {
         let task_ids = (0..12)
             .map(|index| format!("task-{index}"))
             .collect::<HashSet<_>>();
-        let previous_fetched_at = task_ids
-            .iter()
-            .map(|task_id| {
-                (
-                    task_id.clone(),
-                    Instant::now() - Duration::from_secs(6 * 60),
-                )
-            })
-            .collect::<HashMap<_, _>>();
         let active = Arc::new(AtomicUsize::new(0));
         let max_active = Arc::new(AtomicUsize::new(0));
         let requested = Arc::new(Mutex::new(Vec::new()));
 
-        let (links, _) =
-            fetch_task_github_links(&task_ids, &HashMap::new(), &previous_fetched_at, {
+        let links = fetch_task_github_links(&task_ids, &HashMap::new(), {
+            let active = Arc::clone(&active);
+            let max_active = Arc::clone(&max_active);
+            let requested = Arc::clone(&requested);
+            move |task_id| {
+                requested.lock().unwrap().push(task_id);
                 let active = Arc::clone(&active);
                 let max_active = Arc::clone(&max_active);
-                let requested = Arc::clone(&requested);
-                move |task_id| {
-                    requested.lock().unwrap().push(task_id);
-                    let active = Arc::clone(&active);
-                    let max_active = Arc::clone(&max_active);
-                    async move {
-                        let current = active.fetch_add(1, Ordering::SeqCst) + 1;
-                        max_active.fetch_max(current, Ordering::SeqCst);
-                        tokio::task::yield_now().await;
-                        active.fetch_sub(1, Ordering::SeqCst);
-                        Ok(Vec::new())
-                    }
+                async move {
+                    let current = active.fetch_add(1, Ordering::SeqCst) + 1;
+                    max_active.fetch_max(current, Ordering::SeqCst);
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                    active.fetch_sub(1, Ordering::SeqCst);
+                    Ok(Vec::new())
                 }
-            })
-            .await;
+            }
+        })
+        .await;
 
         let expected_links = task_ids
             .iter()
@@ -461,27 +399,14 @@ mod tests {
         let task_ids = HashSet::from(["task-example".to_string()]);
         let previous = HashMap::from([(
             "task-example".to_string(),
-            vec![TqGithubLink {
-                id: "link-example".to_string(),
-                kind: Some("pull_request".to_string()),
-                owner: Some("example-owner".to_string()),
-                repo: Some("example-repository".to_string()),
-                number: Some(29),
-                title: None,
-                url: None,
-                state: None,
-            }],
+            vec![github_link("link-example")],
         )]);
 
-        let (links, fetched_at) =
-            fetch_task_github_links(&task_ids, &previous, &HashMap::new(), |_| async {
-                Err("temporary lookup failure".to_string())
-            })
-            .await;
+        let links = fetch_task_github_links(&task_ids, &previous, |_| async {
+            Err("temporary lookup failure".to_string())
+        })
+        .await;
 
-        assert_eq!(
-            (links, fetched_at.keys().cloned().collect::<HashSet<_>>(),),
-            (previous, HashSet::from(["task-example".to_string()]),),
-        );
+        assert_eq!(links, previous);
     }
 }
