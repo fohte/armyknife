@@ -5,7 +5,7 @@ use super::resolution_lock::lock_resolution_file;
 use super::{increment_revision, open_connection, validate_session_id};
 use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, Utc};
-use rusqlite::{TransactionBehavior, params, params_from_iter};
+use rusqlite::{Connection, TransactionBehavior, params, params_from_iter};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,6 +55,17 @@ impl TodoResolution {
 pub(crate) fn lock_agent_todo_resolution(sessions_dir: &Path, session_id: &str) -> Result<File> {
     validate_session_id(session_id)?;
     lock_resolution_file(sessions_dir, "todo-resolution-locks", session_id)
+}
+
+pub(crate) fn has_incomplete_todos(connection: &Connection, session_id: &str) -> Result<bool> {
+    Ok(connection.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM agent_todo
+            WHERE session_id = ?1 AND completed_at IS NULL
+        )",
+        [session_id],
+        |row| row.get(0),
+    )?)
 }
 
 pub(crate) fn add_agent_todo(

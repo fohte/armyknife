@@ -35,6 +35,7 @@ fn delete_session_with_archive_in(
         return Ok(false);
     }
 
+    // Keep todo state stable so an incomplete todo cannot keep a session after its thread is archived.
     let _todo_resolution_lock = super::lock_agent_todo_resolution(sessions_dir, session_id)?;
     let session_lock = super::lock_session_for_update(sessions_dir, session_id)?;
     let session = session_lock.load_skipping_undecodable()?;
@@ -185,6 +186,7 @@ fn collect_expired_session<A>(
 where
     A: FnMut(&str) -> anyhow::Result<()>,
 {
+    // Keep todo state stable so an incomplete todo cannot keep a session after its thread is archived.
     let _todo_resolution_lock = match super::lock_agent_todo_resolution(dir, session_id) {
         Ok(lock) => lock,
         Err(error) => {

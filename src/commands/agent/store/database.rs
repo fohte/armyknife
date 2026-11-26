@@ -78,8 +78,9 @@ pub(crate) use replacements::{
 pub(crate) use session_closures::{clear_session_closed, closed_session_ids, mark_session_closed};
 pub(crate) use todos::{AgentTodo, TodoResolution};
 pub(crate) use todos::{
-    add_agent_todo, agent_todos, edit_agent_todo, incomplete_agent_todo_titles,
-    lock_agent_todo_resolution, resolve_agent_todo, resolve_agent_todo_at, set_agent_todo_folded,
+    add_agent_todo, agent_todos, edit_agent_todo, has_incomplete_todos,
+    incomplete_agent_todo_titles, lock_agent_todo_resolution, resolve_agent_todo,
+    resolve_agent_todo_at, set_agent_todo_folded,
 };
 pub(crate) use unreported_stop_checks::check_unreported_stop;
 pub(crate) use web_state::WatchWebSessionState;
@@ -626,17 +627,6 @@ fn delete_session_row(connection: &Connection, session_id: &str) -> Result<bool>
         increment_revision(connection)?;
     }
     Ok(changed > 0)
-}
-
-fn has_incomplete_todos(connection: &Connection, session_id: &str) -> Result<bool> {
-    Ok(connection.query_row(
-        "SELECT EXISTS(
-            SELECT 1 FROM agent_todo
-            WHERE session_id = ?1 AND completed_at IS NULL
-        )",
-        [session_id],
-        |row| row.get(0),
-    )?)
 }
 
 pub(crate) fn validate_session_id(session_id: &str) -> Result<()> {
