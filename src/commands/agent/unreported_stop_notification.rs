@@ -4,6 +4,7 @@ use clap::Args;
 use crate::commands::agent::peer::notify;
 #[cfg(not(test))]
 use crate::infra::process;
+use crate::shared::sanitize::strip_angle_brackets;
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct UnreportedStopNotificationArgs {
@@ -32,6 +33,15 @@ pub(super) fn spawn(session_id: &str, recipient_session_id: &str, message: &str)
             message,
         ],
     );
+}
+
+#[cfg(test)]
+pub(super) fn spawn(_session_id: &str, _recipient_session_id: &str, _message: &str) {}
+
+pub(super) fn render(template: &str, session_id: &str, last_message: &str) -> String {
+    template
+        .replace("{session_id}", &strip_angle_brackets(session_id))
+        .replace("{last_message}", &strip_angle_brackets(last_message))
 }
 
 pub fn run(args: &UnreportedStopNotificationArgs) -> Result<()> {

@@ -35,6 +35,9 @@ pub(crate) use database::{
     resolve_permission_request, resolve_permission_request_with_answers, serialize_session,
 };
 pub(crate) use database::{AgentTodo, TodoResolution};
+pub(crate) use database::{
+    DeferredStop, clear_deferred_stop, record_deferred_stop, take_mature_deferred_stops,
+};
 pub(crate) use peer_out_messages::insert_watch_web_peer_out_message_from;
 pub(crate) use peer_out_messages::{
     insert_watch_web_peer_out_message, mark_watch_web_peer_out_message_delivered_from,
