@@ -9,14 +9,15 @@ use indicatif::{ProgressBar, ProgressStyle};
 
 use crate::commands::agent::auto_pause::parse_duration;
 use crate::commands::agent::session_status::list_sessions_with_bg_run_status;
-use crate::commands::agent::types::{Engine, Session};
+#[cfg(test)]
+use crate::commands::agent::types::Engine;
+use crate::commands::agent::types::Session;
 use crate::infra::git::GitRepo;
 use crate::infra::git::MergeStatus;
 use crate::infra::git::fetch_with_prune;
 use crate::infra::git::get_merge_status_for_repo;
 use crate::infra::git::{github_owner_and_repo, merge_status_from_git, merge_status_from_pr};
 use crate::infra::github::{BranchPrQuery, GitHubClient};
-use crate::infra::process::ProcessSnapshot;
 use crate::shared::active_session::{DraftProbe, TmuxDraftProbe, contains_active_session};
 use crate::shared::config::load_config;
 use crate::shared::repos_root::{discover_repos_with_worktrees, resolve_repos_root};
@@ -344,12 +345,7 @@ fn apply_active_session_protection(
         .and_then(|c| parse_duration(&c.agent.auto_pause.timeout).ok())
         .unwrap_or(Duration::from_secs(30 * 60));
 
-    let snapshot = sessions
-        .iter()
-        .any(|session| session.engine == Engine::Codex)
-        .then(ProcessSnapshot::capture)
-        .flatten();
-    let probe = TmuxDraftProbe::new(snapshot.as_ref());
+    let probe = TmuxDraftProbe::default();
     protect_active_worktrees(to_delete, to_keep, &sessions, timeout, &probe);
 }
 

@@ -127,7 +127,7 @@ async fn run_sweep(args: &SweepArgs) -> Result<()> {
         let snapshot = ProcessSnapshot::capture();
         let probe = TmuxSessionProbe {
             snapshot: snapshot.as_ref(),
-            drafts: TmuxDraftProbe::new(snapshot.as_ref()),
+            drafts: TmuxDraftProbe::default(),
             tasks_dir,
         };
         let syncer = LiveTmuxStatusSyncer;
