@@ -20,11 +20,13 @@ const HOOK_TIMEOUT: Duration = Duration::from_secs(30);
 type HookRunner = dyn Fn(&str, &[(&str, &str)]) -> Result<Option<String>> + Send + Sync;
 
 mod registrations;
+mod unexpose_backoff;
 
 use registrations::{
     RelayRegistration, expose_and_record_registration, load_relay_registrations,
     remove_and_save_relay_registration, remove_relay_registration, unexpose_registration,
 };
+use unexpose_backoff::UnexposeBackoff;
 
 #[cfg(test)]
 use registrations::save_relay_registrations;
@@ -58,6 +60,7 @@ struct Relay {
 pub(super) struct WebUiRelays {
     sessions_dir: PathBuf,
     hook_runner: Arc<HookRunner>,
+    unexpose_backoff: UnexposeBackoff,
     active: HashMap<RelayKey, Relay>,
 }
 
@@ -75,6 +78,7 @@ impl WebUiRelays {
         Self {
             sessions_dir,
             hook_runner: Arc::new(hook_runner),
+            unexpose_backoff: UnexposeBackoff::default(),
             active: HashMap::new(),
         }
     }
@@ -134,8 +138,11 @@ impl WebUiRelays {
                 .filter(|registration| !active_registrations.contains(*registration))
                 .cloned()
                 .collect::<Vec<_>>();
+            self.unexpose_backoff
+                .retain_for(&stale_registrations.iter().cloned().collect());
             for registration in stale_registrations {
                 if active_ports.contains(&registration.port) {
+                    self.unexpose_backoff.remove(&registration);
                     // The hook removes by port, so an old record must not target a live relay.
                     if let Err(error) = remove_and_save_relay_registration(
                         &self.sessions_dir,
@@ -151,8 +158,15 @@ impl WebUiRelays {
                     }
                     continue;
                 }
+                if !self
+                    .unexpose_backoff
+                    .should_attempt(&registration, std::time::Instant::now())
+                {
+                    continue;
+                }
                 match unexpose_registration(self.hook_runner.clone(), &registration).await {
                     Ok(()) => {
+                        self.unexpose_backoff.remove(&registration);
                         if let Err(error) = remove_and_save_relay_registration(
                             &self.sessions_dir,
                             registrations,
@@ -166,12 +180,16 @@ impl WebUiRelays {
                             );
                         }
                     }
-                    Err(error) => tracing::warn!(
-                        session = %registration.session_id,
-                        web_ui = %registration.name,
-                        %error,
-                        "failed to unexpose stale web UI relay"
-                    ),
+                    Err(error) => {
+                        self.unexpose_backoff
+                            .record_failure(registration.clone(), std::time::Instant::now());
+                        tracing::warn!(
+                            session = %registration.session_id,
+                            web_ui = %registration.name,
+                            %error,
+                            "failed to unexpose stale web UI relay"
+                        );
+                    }
                 }
             }
         }
@@ -332,16 +350,21 @@ impl WebUiRelays {
         }
     }
 
-    async fn stop_relay(&self, key: &RelayKey, relay: Relay, clear_exposed_url: bool) {
+    async fn stop_relay(&mut self, key: &RelayKey, relay: Relay, clear_exposed_url: bool) {
         let registration = RelayRegistration::from_relay(key, &relay);
         let unexpose_result = unexpose_registration(self.hook_runner.clone(), &registration).await;
         if let Err(error) = &unexpose_result {
+            self.unexpose_backoff
+                .record_failure(registration.clone(), std::time::Instant::now());
             tracing::warn!(
                 session = %key.session_id,
                 web_ui = %key.name,
                 %error,
                 "web-ui-unexpose hook failed"
             );
+        }
+        if unexpose_result.is_ok() {
+            self.unexpose_backoff.remove(&registration);
         }
         relay.server.abort();
         if let Err(error) = relay.server.await
@@ -858,7 +881,7 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn failed_stale_unexpose_is_retried_on_the_next_sync(
+    async fn failed_stale_unexpose_waits_for_backoff_before_retrying(
         #[future] previous_process: PreviousProcess,
     ) -> anyhow::Result<()> {
         let previous_process = previous_process.await;
@@ -896,6 +919,12 @@ mod tests {
             .context("current relay should be active")?;
         let after_failure = load_relay_registrations(directory)?;
         current.sync().await?;
+        let after_immediate_sync = (
+            load_relay_registrations(directory)?,
+            calls.lock().expect("hook call lock should succeed").len(),
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(2_100)).await;
+        current.sync().await?;
         let after_retry = load_relay_registrations(directory)?;
         let hook_names = calls
             .lock()
@@ -906,9 +935,13 @@ mod tests {
         current.stop_all().await;
 
         assert_eq!(
-            (after_failure, after_retry, hook_names),
+            (after_failure, after_immediate_sync, after_retry, hook_names,),
             (
-                vec![previous_registration, current_registration.clone()],
+                vec![previous_registration.clone(), current_registration.clone()],
+                (
+                    vec![previous_registration.clone(), current_registration.clone()],
+                    2
+                ),
                 vec![current_registration],
                 vec![
                     "web-ui-unexpose".to_owned(),
