@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.940](https://github.com/fohte/armyknife/compare/v0.1.939...v0.1.940) (2026-11-26)
+
+
+### Bug Fixes
+
+* **crit/monitor:** avoid unsupported lsof options ([#2306](https://github.com/fohte/armyknife/issues/2306)) ([80fef3a](https://github.com/fohte/armyknife/commit/80fef3a040aa0c9c0939dd6f66acad102f9a7bdd))
+
 ## [0.1.939](https://github.com/fohte/armyknife/compare/v0.1.938...v0.1.939) (2026-11-26)
 
 
