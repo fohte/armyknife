@@ -62,4 +62,8 @@ impl ClaudeBranchTracking {
     pub(super) fn is_compact_boundary_branch(&self, uuid: Option<&str>) -> bool {
         uuid.is_some_and(|uuid| self.compact_boundary_branch_uuids.contains(uuid))
     }
+
+    pub(super) fn is_valid_tool_result_uuid(&self, uuid: &str) -> bool {
+        self.valid_tool_result_uuids.contains(uuid)
+    }
 }

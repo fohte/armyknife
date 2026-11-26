@@ -90,6 +90,7 @@ pub(super) fn parse_session_transcript_incrementally_for_range(
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut restart_reason = Some("cache_miss");
+    let mut discard_tail_window_after_branch_switch = false;
     let can_reuse = if let Some(entry) = cached.as_mut()
         && entry.engine == input.engine
         && parser_matches_engine(&entry.parser, input.engine)
@@ -102,6 +103,8 @@ pub(super) fn parse_session_transcript_incrementally_for_range(
                 Ok(ParserAdvance::Reuse) => true,
                 Ok(ParserAdvance::Restart(reason)) => {
                     restart_reason = Some(reason);
+                    discard_tail_window_after_branch_switch =
+                        entry.tail_window.is_some() && reason == "append_requires_branch_reparse";
                     false
                 }
                 Err(error) => {
@@ -124,6 +127,10 @@ pub(super) fn parse_session_transcript_incrementally_for_range(
         }
         false
     };
+
+    if discard_tail_window_after_branch_switch {
+        *cached = None;
+    }
 
     if can_reuse {
         let rendered = {
@@ -171,6 +178,7 @@ pub(super) fn parse_session_transcript_incrementally_for_range(
             .requested_epoch
             .is_some_and(super::range::epoch_token_is_decodable)
         && restart_reason != Some("epoch_anchor_outside_tail_window")
+        && !discard_tail_window_after_branch_switch
         && !fingerprint.is_compressed()
     {
         let message_limit = cached

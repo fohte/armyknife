@@ -79,26 +79,15 @@ impl ClaudeParserState {
 
         let task_notification = task_notification_text(&record);
         let is_tool_result_only = is_tool_result_only_user_record(&record);
-        let pending_tool_result = is_tool_result_only
-            && self.has_pending_tool_result_for_parent(
-                &record,
-                record_parent_uuid(&record).as_deref(),
-            );
-        let uuid = record.get("uuid").and_then(Value::as_str);
-        let pending_tool_result_on_active_branch = pending_tool_result
-            && match uuid {
-                None => true,
-                Some(uuid) => match self.transcript_nodes.get(uuid).map(|node| node.membership) {
-                    Some(BranchMembership::Active | BranchMembership::ReachesActive) => true,
-                    Some(BranchMembership::Unknown) => {
-                        is_inactive_branch(uuid, &mut self.transcript_nodes)
-                    }
-                    Some(BranchMembership::Disconnected | BranchMembership::Visiting) | None => {
-                        false
-                    }
-                },
-            };
         let parent_uuid = record_parent_uuid(&record);
+        let pending_tool_result = is_tool_result_only
+            && self.has_pending_tool_result_for_parent(&record, parent_uuid.as_deref());
+        let uuid = record.get("uuid").and_then(Value::as_str);
+        let pending_tool_result_on_active_branch = self.pending_tool_result_on_active_branch(
+            uuid,
+            parent_uuid.as_deref(),
+            pending_tool_result,
+        );
         let parent_membership = parent_uuid.as_deref().and_then(|parent_uuid| {
             if self
                 .transcript_nodes
@@ -116,10 +105,11 @@ impl ClaudeParserState {
             parent_uuid.as_deref(),
             parent_membership,
         );
+        let queued_peer_delivery = self.is_queued_peer_delivery(&record, uuid);
         let mut active_record = uuid.is_none();
         if is_tool_result_only {
             active_record = pending_tool_result_on_active_branch;
-        } else if side_branch_continuation {
+        } else if queued_peer_delivery || side_branch_continuation {
             active_record = true;
             if let Some(uuid) = uuid {
                 is_inactive_branch(uuid, &mut self.transcript_nodes);
