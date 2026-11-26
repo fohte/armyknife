@@ -10307,18 +10307,140 @@ it('shows an attachment size warning over a retained message send error', async 
   )
 
   await act(async () => {
+    await userEvent.click(
+      requireElement(
+        container.querySelector<HTMLButtonElement>(
+          '[aria-label="Remove limit-crossing.bin"]',
+        ),
+      ),
+    )
+  })
+  const retainedErrorRestored = await waitForState(
+    () =>
+      container.querySelectorAll('.attachment-preview-item').length === 1 &&
+      container.querySelector('[role="alert"]')?.textContent ===
+        'The message could not be sent.',
+  )
+
+  await act(async () => {
     dispatchKey(textarea, 'Enter')
     for (let index = 0; index < 12; index += 1) await Promise.resolve()
   })
 
   const snapshot = () => ({
     warningDisplayed,
+    retainedErrorRestored,
     alert: container.querySelector('[role="alert"]')?.textContent ?? null,
     sendCount,
   })
   expect(snapshot()).toEqual({
     warningDisplayed: true,
-    alert: limitWarning,
+    retainedErrorRestored: true,
+    alert: 'The message could not be sent.',
+    sendCount: 1,
+  })
+})
+
+it('keeps a retained message error visible after an empty attachment error', async () => {
+  let sendCount = 0
+  let encodingFailureCount = 0
+  const attachmentSession = { ...session, id: crypto.randomUUID() }
+  renderedSessionIds.add(attachmentSession.id)
+  const fetcher = vi.fn<typeof fetch>((input, init) => {
+    const url = requestUrl(input)
+    if (init?.method === 'POST' && url.endsWith('/messages')) {
+      sendCount += 1
+      return Promise.resolve(
+        jsonResponse({ error: 'The message could not be sent.' }, 503),
+      )
+    }
+    if (url.includes('/messages?')) {
+      return Promise.resolve(jsonResponse(messagesResponse([])))
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <SessionConversationCacheProvider>
+        <ConversationPane
+          session={attachmentSession}
+          shouldSkipSessionTreeFetch
+          initialSessionTree={[]}
+          refreshKey={0}
+          sessionTreeRefreshKey={0}
+          onSelectSession={() => undefined}
+        />
+      </SessionConversationCacheProvider>,
+    )
+  })
+  await waitForState(
+    () =>
+      container.querySelector<HTMLTextAreaElement>('textarea')?.disabled ===
+      false,
+  )
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  setTextareaValue(textarea, 'Retain this prompt')
+  await act(async () => {
+    dispatchKey(textarea, 'Enter')
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  await waitForState(
+    () =>
+      container.querySelector('[role="alert"]')?.textContent ===
+      'The message could not be sent.',
+  )
+
+  const brokenFile = new File(['payload'], 'broken.bin', {
+    type: 'application/octet-stream',
+  })
+  vi.spyOn(Blob.prototype, 'arrayBuffer').mockImplementation(() => {
+    encodingFailureCount += 1
+    return Promise.reject(new Error(''))
+  })
+  const pasteEvent = new Event('paste', { bubbles: true, cancelable: true })
+  Object.defineProperty(pasteEvent, 'clipboardData', {
+    value: { files: [brokenFile] },
+  })
+  act(() => {
+    void textarea.dispatchEvent(pasteEvent)
+  })
+  await waitForState(
+    () => container.querySelector('.attachment-preview-item') !== null,
+  )
+  await waitForState(
+    () =>
+      container
+        .querySelector('.conversation-composer')
+        ?.getAttribute('aria-busy') === 'false',
+  )
+
+  await act(async () => {
+    dispatchKey(textarea, 'Enter')
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  const retainedErrorAfterEncodingFailure = await waitForState(
+    () =>
+      encodingFailureCount === 1 &&
+      container.querySelector('[role="alert"]')?.textContent ===
+        'The message could not be sent.',
+  )
+
+  const snapshot = () => ({
+    retainedErrorAfterEncodingFailure,
+    alert: container.querySelector('[role="alert"]')?.textContent ?? null,
+    encodingFailureCount,
+    sendCount,
+  })
+  expect(snapshot()).toEqual({
+    retainedErrorAfterEncodingFailure: true,
+    alert: 'The message could not be sent.',
+    encodingFailureCount: 1,
     sendCount: 1,
   })
 })
