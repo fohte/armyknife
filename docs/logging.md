@@ -167,6 +167,7 @@ Stop hook (parent process):
 | `agent.crit.add.session_record_failed`        | Session review URL could not be recorded                                     |
 | `agent.crit.add.pane_sync_failed`             | The review queue pane options or layout hook could not update                |
 | `agent.crit.add.review_display_failed`        | An unrecorded review could not be displayed                                  |
+| `agent.crit.expiry.shutdown_failed`           | A crit daemon linked only to an expired session could not be stopped         |
 | `agent.crit.registration.status_failed`       | Crit status lookup failed; registration kept the supplied review URL         |
 | `hitl.review_queue.session_not_alive`         | The editor session did not come alive before the queue labels were refreshed |
 | `agent.crit.monitor.start_failed`             | The lifecycle monitor could not be started                                   |

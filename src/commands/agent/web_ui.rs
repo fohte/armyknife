@@ -1,10 +1,12 @@
 use std::path::Path;
 
 use anyhow::{Context, Result, ensure};
+use chrono::Utc;
 use clap::{Args, Subcommand};
 
 use super::store;
 use super::types::{Session, WebUiRegistration};
+use crate::commands::agent::crit;
 use crate::commands::agent::crit::url::add_url;
 
 #[derive(Subcommand, Clone, PartialEq, Eq)]
@@ -148,12 +150,16 @@ fn record_url_in(
         local_web_ui_port(url)?;
     }
 
+    let _crit_port_lock = record_legacy_crit_url
+        .then(|| crit::lock_port_for_registration(sessions_dir, url))
+        .transpose()?;
     let lock = store::lock_session_for_update(sessions_dir, session_id)?;
     let Some(mut session) = lock.load()? else {
         anyhow::bail!("Agent session not found: {session_id}");
     };
     if record_legacy_crit_url {
         add_url(&mut session.crit_urls, url);
+        session.updated_at = Utc::now();
     }
     let registered_url = if record_legacy_crit_url {
         session.crit_urls.last().map(String::as_str).unwrap_or(url)
@@ -359,6 +365,11 @@ mod tests {
         #[case] url: &str,
         #[case] expected_crit_urls: Vec<&str>,
     ) {
+        let original_updated_at = store::load_session_from(sessions_dir.path(), "fixture-session")
+            .expect("session should load")
+            .expect("session should exist")
+            .updated_at;
+
         let session = record_url_in(
             sessions_dir.path(),
             "fixture-session",
@@ -385,14 +396,18 @@ mod tests {
             (
                 session.crit_urls,
                 session.web_uis,
+                session.updated_at > original_updated_at,
                 stored.crit_urls,
                 stored.web_uis,
+                stored.updated_at == session.updated_at,
             ),
             (
                 expected_crit_urls.clone(),
                 expected_web_uis.clone(),
+                record_legacy_crit_url,
                 expected_crit_urls,
                 expected_web_uis,
+                true,
             ),
         );
     }

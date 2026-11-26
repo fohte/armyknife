@@ -112,12 +112,38 @@ pub(super) fn cleanup_stale_sessions_in_with_archive_at_and_storage<F, G, A>(
     is_pane_alive: F,
     cwd_exists: G,
     now: DateTime<Utc>,
-    mut archive_codex_thread: A,
+    archive_codex_thread: A,
 ) -> Result<bool>
 where
     F: Fn(&TmuxInfo) -> Option<bool>,
     G: Fn(&Path) -> bool,
     A: FnMut(&str) -> anyhow::Result<()>,
+{
+    cleanup_stale_sessions_in_with_archive_at_storage_and_crit_cleanup(
+        dir,
+        storage_root,
+        is_pane_alive,
+        cwd_exists,
+        now,
+        archive_codex_thread,
+        crate::commands::agent::crit::stop_expired_session_daemons,
+    )
+}
+
+fn cleanup_stale_sessions_in_with_archive_at_storage_and_crit_cleanup<F, G, A, C>(
+    dir: &Path,
+    storage_root: Option<&Path>,
+    is_pane_alive: F,
+    cwd_exists: G,
+    now: DateTime<Utc>,
+    mut archive_codex_thread: A,
+    mut stop_expired_crit_daemons: C,
+) -> Result<bool>
+where
+    F: Fn(&TmuxInfo) -> Option<bool>,
+    G: Fn(&Path) -> bool,
+    A: FnMut(&str) -> anyhow::Result<()>,
+    C: FnMut(&Session, &Path) -> anyhow::Result<()>,
 {
     if !dir.exists() {
         return Ok(false);
@@ -142,6 +168,7 @@ where
                     now,
                     retention,
                     &mut archive_codex_thread,
+                    &mut stop_expired_crit_daemons,
                 );
             }
             continue;
@@ -175,16 +202,18 @@ fn vibe_inheritance_ancestors(
         .collect()
 }
 
-fn collect_expired_session<A>(
+fn collect_expired_session<A, C>(
     dir: &Path,
     storage_root: Option<&Path>,
     session_id: &str,
     now: DateTime<Utc>,
     retention: TimeDelta,
     archive_codex_thread: &mut A,
+    stop_expired_crit_daemons: &mut C,
 ) -> bool
 where
     A: FnMut(&str) -> anyhow::Result<()>,
+    C: FnMut(&Session, &Path) -> anyhow::Result<()>,
 {
     // Keep todo state stable so an incomplete todo cannot keep a session after its thread is archived.
     let _todo_resolution_lock = match super::lock_agent_todo_resolution(dir, session_id) {
@@ -259,6 +288,9 @@ where
             crate::commands::agent::file::remove_session_storage(storage_root, session_id)
     {
         warn_cleanup_entry_failure(session_id, "delete_attachment_files", &error);
+    }
+    if removed && let Err(error) = stop_expired_crit_daemons(&current, dir) {
+        warn_cleanup_entry_failure(session_id, "stop_expired_crit_daemons", &error);
     }
     removed
 }
@@ -396,6 +428,7 @@ mod tests {
         let now = Utc::now();
         let session_id = "session-with-todo".to_string();
         let mut session = make_session(&session_id, Engine::Codex);
+        session.crit_urls = vec!["http://review.example.test:43120/review".to_string()];
         session.status = SessionStatus::Ended;
         session.updated_at = now - TimeDelta::days(super::super::ENDED_SESSION_RETENTION_DAYS + 1);
         super::super::save_session_to(&test_session_dir.sessions_dir, &session)
@@ -550,17 +583,26 @@ mod tests {
         } = incomplete_todo_session;
         let session_id = session_id.as_str();
         let archive_calls = RefCell::new(Vec::new());
+        let crit_cleanup_calls = RefCell::new(Vec::new());
         let mut archive_codex_thread = |id: &str| {
             archive_calls.borrow_mut().push(id.to_string());
             Ok(())
         };
+        let mut stop_expired_crit_daemons = |session: &Session, _dir: &Path| {
+            crit_cleanup_calls
+                .borrow_mut()
+                .push(session.session_id.clone());
+            Ok(())
+        };
         let mut cleanup = || {
-            cleanup_stale_sessions_in_with_archive_at(
+            cleanup_stale_sessions_in_with_archive_at_storage_and_crit_cleanup(
                 &test_session_dir.sessions_dir,
+                None,
                 |_| None,
                 |_| true,
                 now,
                 &mut archive_codex_thread,
+                &mut stop_expired_crit_daemons,
             )
             .expect("session cleanup should succeed")
         };
@@ -580,10 +622,17 @@ mod tests {
             .is_some();
 
         assert_eq!(
-            (kept_results, removed, archive_calls.into_inner(), is_stored,),
+            (
+                kept_results,
+                removed,
+                archive_calls.into_inner(),
+                crit_cleanup_calls.into_inner(),
+                is_stored,
+            ),
             (
                 vec![false, false],
                 true,
+                vec![session_id.to_string()],
                 vec![session_id.to_string()],
                 false,
             ),
