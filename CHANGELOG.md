@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.936](https://github.com/fohte/armyknife/compare/v0.1.935...v0.1.936) (2026-11-26)
+
+
+### Bug Fixes
+
+* **watch-web:** label existing PR draft updates ([#2298](https://github.com/fohte/armyknife/issues/2298)) ([3cf11fa](https://github.com/fohte/armyknife/commit/3cf11faa732f9db4122794c323228900bb9fc079))
+
 ## [0.1.935](https://github.com/fohte/armyknife/compare/v0.1.934...v0.1.935) (2026-11-26)
 
 
