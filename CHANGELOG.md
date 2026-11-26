@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.943](https://github.com/fohte/armyknife/compare/v0.1.942...v0.1.943) (2026-11-26)
+
+
+### Bug Fixes
+
+* **watch-web:** slow retries on expose failures ([#2312](https://github.com/fohte/armyknife/issues/2312)) ([f15c81a](https://github.com/fohte/armyknife/commit/f15c81a4faca1d726f53613fc21b65c51f7d1ce4))
+
 ## [0.1.942](https://github.com/fohte/armyknife/compare/v0.1.941...v0.1.942) (2026-11-26)
 
 
