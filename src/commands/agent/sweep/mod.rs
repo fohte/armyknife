@@ -127,7 +127,7 @@ async fn run_sweep(args: &SweepArgs) -> Result<()> {
         let snapshot = ProcessSnapshot::capture();
         let probe = TmuxSessionProbe {
             snapshot: snapshot.as_ref(),
-            drafts: TmuxDraftProbe,
+            drafts: TmuxDraftProbe::new(snapshot.as_ref()),
             tasks_dir,
         };
         let syncer = LiveTmuxStatusSyncer;
@@ -279,10 +279,8 @@ where
     }
 }
 
-/// Adds the "which pid hosts this session?" question on top of the shared
-/// `DraftProbe`. Sweep is the only caller that needs to actually kill a
-/// process; agent clean can use a plain `DraftProbe` and skip the snapshot
-/// walk entirely.
+/// Adds sweep-only process signaling and background-run checks to the shared
+/// `DraftProbe`.
 pub(crate) trait SessionProbe: DraftProbe {
     /// Returns the pid of the live process hosting `session` (per
     /// `session.engine`), if one can be located via the session's tmux pane.

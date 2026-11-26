@@ -17,9 +17,8 @@ use chrono::{DateTime, Utc};
 
 use crate::commands::agent::auto_pause::{PauseDecision, decide_pause_with_effective};
 use crate::commands::agent::pane;
-#[cfg(test)]
-use crate::commands::agent::types::Engine;
-use crate::commands::agent::types::{Session, SessionStatus};
+use crate::commands::agent::types::{Engine, Session, SessionStatus};
+use crate::infra::process::ProcessSnapshot;
 
 /// Source of the observation time for a session with an unsent composer draft.
 ///
@@ -41,15 +40,29 @@ impl DraftProbe for NoDraftProbe {
 }
 
 /// Production probe that checks whether the live composer contains a draft.
-pub struct TmuxDraftProbe;
+/// A Codex composer is ignored when its process is known to have left the pane.
+pub struct TmuxDraftProbe<'a> {
+    process_snapshot: Option<&'a ProcessSnapshot>,
+}
 
-impl TmuxDraftProbe {
+impl<'a> TmuxDraftProbe<'a> {
+    pub fn new(process_snapshot: Option<&'a ProcessSnapshot>) -> Self {
+        Self { process_snapshot }
+    }
+
     fn draft_observed_at_with(
         session: &Session,
         now: DateTime<Utc>,
+        codex_process_is_running: impl FnOnce(Option<&str>, &str) -> Option<bool>,
         pane_has_draft: impl FnOnce(Option<&str>, &str) -> Option<bool>,
     ) -> Option<DateTime<Utc>> {
         let tmux_info = session.tmux_info.as_ref()?;
+        if session.engine == Engine::Codex
+            && codex_process_is_running(tmux_info.socket_path.as_deref(), &tmux_info.pane_id)
+                == Some(false)
+        {
+            return None;
+        }
         match pane_has_draft(tmux_info.socket_path.as_deref(), &tmux_info.pane_id) {
             Some(true) => {
                 tracing::debug!(
@@ -72,11 +85,25 @@ impl TmuxDraftProbe {
     }
 }
 
-impl DraftProbe for TmuxDraftProbe {
+impl DraftProbe for TmuxDraftProbe<'_> {
     fn draft_observed_at(&self, session: &Session, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
-        Self::draft_observed_at_with(session, now, |socket_path, pane_id| {
-            pane::input::pane_has_draft_for_socket(socket_path, pane_id, session.engine)
-        })
+        Self::draft_observed_at_with(
+            session,
+            now,
+            |socket_path, pane_id| {
+                let snapshot = self.process_snapshot?;
+                let pane_pid =
+                    crate::infra::tmux::get_pane_pid_for_socket(socket_path, pane_id).ok()??;
+                Some(pane::process::pane_has_live_agent_process(
+                    pane_pid,
+                    session.engine,
+                    Some(snapshot),
+                ))
+            },
+            |socket_path, pane_id| {
+                pane::input::pane_has_draft_for_socket(socket_path, pane_id, session.engine)
+            },
+        )
     }
 }
 
@@ -148,7 +175,7 @@ mod tests {
     use std::path::PathBuf;
 
     use chrono::TimeDelta;
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
 
     use super::*;
     use crate::commands::agent::types::TmuxInfo;
@@ -234,6 +261,21 @@ mod tests {
         }
     }
 
+    #[fixture]
+    fn stopped_codex_session() -> Session {
+        let now = Utc::now();
+        let mut session = make_session("s", SessionStatus::Stopped, now);
+        session.engine = Engine::Codex;
+        session.tmux_info = Some(TmuxInfo {
+            session_name: "main".to_string(),
+            window_name: "editor".to_string(),
+            window_index: 0,
+            pane_id: "%23".to_string(),
+            socket_path: None,
+        });
+        session
+    }
+
     #[test]
     fn tmux_draft_probe_uses_session_socket() {
         let now = Utc::now();
@@ -247,11 +289,15 @@ mod tests {
         });
         let mut probe_input = None;
 
-        let observed_at =
-            TmuxDraftProbe::draft_observed_at_with(&session, now, |socket_path, pane_id| {
+        let observed_at = TmuxDraftProbe::draft_observed_at_with(
+            &session,
+            now,
+            |_, _| None,
+            |socket_path, pane_id| {
                 probe_input = Some((socket_path.map(str::to_string), pane_id.to_string()));
                 Some(true)
-            });
+            },
+        );
 
         assert_eq!(
             (probe_input, observed_at),
@@ -263,6 +309,37 @@ mod tests {
                 Some(now),
             )
         );
+    }
+
+    #[rstest]
+    fn codex_composer_is_ignored_when_pane_process_has_exited(stopped_codex_session: Session) {
+        let mut composer_was_checked = false;
+
+        let observed_at = TmuxDraftProbe::draft_observed_at_with(
+            &stopped_codex_session,
+            stopped_codex_session.updated_at,
+            |_, _| Some(false),
+            |_, _| {
+                composer_was_checked = true;
+                Some(true)
+            },
+        );
+
+        assert_eq!((observed_at, composer_was_checked), (None, false));
+    }
+
+    #[rstest]
+    fn codex_composer_is_counted_while_pane_process_is_running(stopped_codex_session: Session) {
+        let now = stopped_codex_session.updated_at;
+
+        let observed_at = TmuxDraftProbe::draft_observed_at_with(
+            &stopped_codex_session,
+            now,
+            |_, _| Some(true),
+            |_, _| Some(true),
+        );
+
+        assert_eq!(observed_at, Some(now));
     }
 
     #[rstest]
