@@ -172,6 +172,14 @@ export function ConversationPane({
   )
   const [openInTerminalStatus, setOpenInTerminalStatus] =
     useState<OpenInTerminalStatus>(null)
+  const [sessionOperationError, setSessionOperationError] = useState<{
+    sessionId: string
+    message: string
+  } | null>(null)
+  const operationError =
+    sessionOperationError?.sessionId === session.id
+      ? sessionOperationError.message
+      : null
   const openInTerminalTimer = useRef<number | null>(null)
   const clearOpenInTerminalTimer = useCallback(() => {
     if (openInTerminalTimer.current !== null) {
@@ -275,7 +283,10 @@ export function ConversationPane({
           : payload,
       )
       if (operationResult.isErr()) {
-        setError(operationResult.error.message)
+        setSessionOperationError({
+          sessionId: session.id,
+          message: operationResult.error.message,
+        })
         return Promise.resolve(false)
       }
       const operation = operationResult.value
@@ -293,11 +304,17 @@ export function ConversationPane({
       }).then((result) =>
         result.match(
           () => {
+            setSessionOperationError((current) =>
+              current?.sessionId === session.id ? null : current,
+            )
             clearErrors()
             return true
           },
           (requestError) => {
-            setError(requestError.message)
+            setSessionOperationError({
+              sessionId: session.id,
+              message: requestError.message,
+            })
             return false
           },
         ),
@@ -445,7 +462,7 @@ export function ConversationPane({
       openInTerminalStatus={displayOpenInTerminalStatus}
       interruptPending={interruptPending}
       loading={loading}
-      error={error}
+      error={operationError ?? error}
       onClearError={() => {
         clearErrors()
       }}

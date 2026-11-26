@@ -9975,6 +9975,120 @@ it.each([
   expect(actual).toBe(expected)
 })
 
+it('keeps a message send error through refreshes until a send succeeds', async () => {
+  let refreshConversation: () => void = () => undefined
+  let sendCount = 0
+  const fetcher = vi.fn<typeof fetch>((input, init) => {
+    const url = requestUrl(input)
+    if (init?.method === 'POST' && url.endsWith('/messages')) {
+      sendCount += 1
+      return Promise.resolve(
+        sendCount === 1
+          ? jsonResponse({ error: 'The message could not be sent.' }, 503)
+          : jsonResponse({ queuedPromptId: 'fixture-queued-prompt' }),
+      )
+    }
+    if (url.includes('/messages?')) {
+      return Promise.resolve(jsonResponse(messagesResponse([])))
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  function ConversationHarness() {
+    const [refreshKey, setRefreshKey] = useState(0)
+    refreshConversation = () => {
+      setRefreshKey((current) => current + 1)
+    }
+    return (
+      <ConversationPane
+        session={session}
+        shouldSkipSessionTreeFetch
+        initialSessionTree={[]}
+        refreshKey={refreshKey}
+        sessionTreeRefreshKey={0}
+        onSelectSession={() => undefined}
+      />
+    )
+  }
+
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <SessionConversationCacheProvider>
+        <ConversationHarness />
+      </SessionConversationCacheProvider>,
+    )
+  })
+  await waitForState(
+    () =>
+      container.querySelector<HTMLTextAreaElement>('textarea')?.disabled ===
+      false,
+  )
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  setTextareaValue(textarea, 'Retain this prompt')
+  await act(async () => {
+    dispatchKey(textarea, 'Enter')
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  await waitForState(
+    () =>
+      container.querySelector('[role="alert"]')?.textContent ===
+      'The message could not be sent.',
+  )
+  const afterFailedSend = {
+    alert: container.querySelector('[role="alert"]')?.textContent ?? null,
+    draft: textarea.value,
+  }
+
+  await act(async () => {
+    refreshConversation()
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  await waitForState(
+    () =>
+      fetcher.mock.calls.filter(
+        ([input, init]) =>
+          init?.method !== 'POST' && requestUrl(input).includes('/messages?'),
+      ).length === 2,
+  )
+  const afterRefresh = {
+    alert: container.querySelector('[role="alert"]')?.textContent ?? null,
+    draft: textarea.value,
+  }
+
+  await act(async () => {
+    dispatchKey(textarea, 'Enter')
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  await waitForState(
+    () => sendCount === 2 && container.querySelector('[role="alert"]') === null,
+  )
+
+  const snapshot = () => ({
+    afterFailedSend,
+    afterRefresh,
+    afterSuccessfulSend: {
+      alert: container.querySelector('[role="alert"]')?.textContent ?? null,
+      draft: textarea.value,
+    },
+  })
+  expect(snapshot()).toEqual({
+    afterFailedSend: {
+      alert: 'The message could not be sent.',
+      draft: 'Retain this prompt',
+    },
+    afterRefresh: {
+      alert: 'The message could not be sent.',
+      draft: 'Retain this prompt',
+    },
+    afterSuccessfulSend: { alert: null, draft: '' },
+  })
+})
+
 it.each([
   {
     action: 'approve' as const,
