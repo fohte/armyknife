@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.950](https://github.com/fohte/armyknife/compare/v0.1.949...v0.1.950) (2026-11-26)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** cut redundant lookups ([#2323](https://github.com/fohte/armyknife/issues/2323)) ([a3a3a9e](https://github.com/fohte/armyknife/commit/a3a3a9e067b3b7e76eac41ba16164c1edadc8d73))
+
 ## [0.1.949](https://github.com/fohte/armyknife/compare/v0.1.948...v0.1.949) (2026-11-26)
 
 
