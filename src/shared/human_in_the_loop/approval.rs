@@ -129,7 +129,7 @@ impl ApprovalManager {
     }
 }
 
-fn canonical_document_path(document_path: &Path) -> PathBuf {
+pub(crate) fn canonical_document_path(document_path: &Path) -> PathBuf {
     if let Ok(canonical_path) = fs::canonicalize(document_path) {
         return canonical_path;
     }

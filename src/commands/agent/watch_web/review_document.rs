@@ -2290,11 +2290,11 @@ mod tests {
     }
 
     #[rstest]
-    #[case::snapshot_saved(false)]
-    #[case::snapshot_staging_path_too_long(true)]
+    #[case::short_document_filename(false)]
+    #[case::long_document_filename(true)]
     #[tokio::test]
     async fn web_action_waits_for_the_review_child_and_reports_its_result(
-        #[case] snapshot_staging_path_too_long: bool,
+        #[case] long_document_filename: bool,
     ) {
         use std::os::unix::fs::PermissionsExt;
         use std::os::unix::process::CommandExt;
@@ -2314,8 +2314,8 @@ mod tests {
             issue_agent: temp_dir.path().join("gh-issue-agent"),
             pr_review: temp_dir.path().join("gh-pr-review"),
         };
-        let document_name = if snapshot_staging_path_too_long {
-            // The unique snapshot staging suffix exceeds NAME_MAX while the review lock fits.
+        let document_name = if long_document_filename {
+            // The previous suffix-based staging name exceeded NAME_MAX for this path.
             format!("{}.md", "x".repeat(190))
         } else {
             "comment.md".to_owned()
@@ -2486,78 +2486,37 @@ mod tests {
         let actual_snapshot_mode = approved_document_snapshot
             .as_ref()
             .map(|(_, _, snapshot_mode)| *snapshot_mode);
-        let (expected_action_result, expected_lock_state, expected_snapshot_mode) =
-            if snapshot_staging_path_too_long {
-                let approved_hash =
-                    document_hash(&document_path).expect("approved document hash should exist");
-                (
-                    Some(ReviewDocumentActionResult::new(
-                        ReviewDocumentAction::PostComment,
-                        false,
-                        "Could not save the approved review document snapshot.".to_owned(),
-                        approved_hash.clone(),
-                        Some(approved_hash),
-                    )),
-                    None,
-                    None,
-                )
-            } else {
-                let (resulting_hash, _, snapshot_mode) = approved_document_snapshot
-                    .as_ref()
-                    .expect("executor should observe the approved document");
-                (
-                    Some(ReviewDocumentActionResult::new(
-                        ReviewDocumentAction::PostComment,
-                        true,
-                        "Issue comment posted.".to_owned(),
-                        resulting_hash.clone(),
-                        None,
-                    )),
-                    Some((true, true)),
-                    Some(*snapshot_mode),
-                )
-            };
+        let (resulting_hash, _, snapshot_mode) = approved_document_snapshot
+            .as_ref()
+            .expect("executor should observe the approved document");
+        let expected_action_result = Some(ReviewDocumentActionResult::new(
+            ReviewDocumentAction::PostComment,
+            true,
+            "Issue comment posted.".to_owned(),
+            resulting_hash.clone(),
+            None,
+        ));
+        let expected_lock_state = Some((true, true));
+        let expected_snapshot_mode = Some(*snapshot_mode);
         let action_lock_state = action_lock_state
             .lock()
             .expect("action lock state should be readable")
             .take();
-        let expected_response_json = if snapshot_staging_path_too_long {
-            serde_json::json!({
-                "success": false,
-                "revision": expected_revision,
-                "error": "Could not save the approved review document snapshot.",
-            })
-        } else {
-            serde_json::json!({
-                "success": true,
-                "revision": expected_revision,
-            })
-        };
-        let expected_output = if snapshot_staging_path_too_long {
-            indoc! {"
-                Watch-web issue comment failed: Could not save the approved review document snapshot.
-                Retry this action from the watch-web review screen.
-                @@ -1,4 +1,4 @@
-                 ---
-                -submit: false
-                +submit: true
-                 ---
-                -Original comment.
-                +Approved fixture document.
-            "}
-        } else {
-            indoc! {"
-                Watch-web issue comment succeeded: Issue comment posted.
-                No further submit or push command is needed.
-                @@ -1,4 +1,4 @@
-                 ---
-                -submit: false
-                +submit: true
-                 ---
-                -Original comment.
-                +Approved fixture document.
-            "}
-        };
+        let expected_response_json = serde_json::json!({
+            "success": true,
+            "revision": expected_revision,
+        });
+        let expected_output = indoc! {"
+            Watch-web issue comment succeeded: Issue comment posted.
+            No further submit or push command is needed.
+            @@ -1,4 +1,4 @@
+             ---
+            -submit: false
+            +submit: true
+             ---
+            -Original comment.
+            +Approved fixture document.
+        "};
 
         assert_eq!(
             (
@@ -2584,16 +2543,12 @@ mod tests {
             (
                 true,
                 true,
-                snapshot_staging_path_too_long,
+                false,
                 false,
                 true,
                 StatusCode::OK,
                 expected_response_json,
-                (
-                    !snapshot_staging_path_too_long,
-                    expected_lock_state,
-                    expected_action_result,
-                ),
+                (true, expected_lock_state, expected_action_result,),
                 (true, expected_snapshot_mode, true),
                 true,
                 expected_output.to_owned(),

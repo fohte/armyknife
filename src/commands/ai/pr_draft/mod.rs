@@ -4,6 +4,7 @@ mod new;
 mod review;
 mod stack;
 mod submit;
+mod submit_lock;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
