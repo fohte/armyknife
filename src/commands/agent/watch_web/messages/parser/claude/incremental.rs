@@ -388,7 +388,12 @@ fn is_active_branch_continuation(state: &ClaudeParserState, record: &Value) -> b
     }
 
     if is_tool_result_only {
-        return state.has_pending_tool_result_for_parent(record, Some(parent_uuid.as_str()));
+        let latest_record_is_compact_boundary_branch = state
+            .latest_record_uuid
+            .as_ref()
+            .is_some_and(|uuid| state.compact_boundary_branch_uuids.contains(uuid));
+        return !latest_record_is_compact_boundary_branch
+            && state.has_pending_tool_result_for_parent(record, Some(parent_uuid.as_str()));
     }
     let parent_is_latest = state.latest_record_uuid.as_deref() == Some(parent_uuid.as_str());
     if is_task_notification {

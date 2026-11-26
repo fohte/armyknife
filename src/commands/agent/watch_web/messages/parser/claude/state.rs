@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
 use serde_json::{Map, Value};
@@ -27,8 +27,11 @@ pub(super) fn is_attachment_record(record: &Value) -> bool {
 #[derive(Clone)]
 pub(super) struct ClaudeParserState {
     pub(super) transcript_nodes: BTreeMap<String, TranscriptNode>,
+    pub(super) tool_use_assistant_uuids: HashSet<String>,
+    pub(super) valid_tool_result_uuids: HashSet<String>,
     pub(super) latest_uuid: Option<String>,
     pub(super) latest_record_uuid: Option<String>,
+    pub(super) compact_boundary_branch_uuids: HashSet<String>,
     pub(super) tool_result_parent: Option<String>,
     pub(super) events: Vec<TimedClaudeEvent>,
     pub(super) queue_events: Vec<QueueReplayEvent>,
@@ -42,8 +45,11 @@ impl ClaudeParserState {
     pub(super) fn new() -> Self {
         Self {
             transcript_nodes: BTreeMap::new(),
+            tool_use_assistant_uuids: HashSet::new(),
+            valid_tool_result_uuids: HashSet::new(),
             latest_uuid: None,
             latest_record_uuid: None,
+            compact_boundary_branch_uuids: HashSet::new(),
             tool_result_parent: None,
             events: Vec::new(),
             queue_events: Vec::new(),
@@ -89,24 +95,32 @@ impl ClaudeParserState {
                     }
                 },
             };
-        let parent_membership = record_parent_uuid(&record).and_then(|parent_uuid| {
+        let parent_uuid = record_parent_uuid(&record);
+        let parent_membership = parent_uuid.as_deref().and_then(|parent_uuid| {
             if self
                 .transcript_nodes
-                .get(&parent_uuid)
+                .get(parent_uuid)
                 .is_some_and(|node| node.membership == BranchMembership::Unknown)
             {
-                is_inactive_branch(&parent_uuid, &mut self.transcript_nodes);
+                is_inactive_branch(parent_uuid, &mut self.transcript_nodes);
             }
             self.transcript_nodes
-                .get(&parent_uuid)
+                .get(parent_uuid)
                 .map(|node| node.membership)
         });
         let side_branch_continuation = match parent_membership {
-            Some(BranchMembership::ReachesActive) => matches!(
-                record.get("type").and_then(Value::as_str),
-                Some("assistant" | "system" | "attachment")
-            ),
-            Some(BranchMembership::Active) => has_tool_use_block(&record),
+            Some(BranchMembership::ReachesActive) => {
+                record.get("type").and_then(Value::as_str) == Some("assistant")
+                    && parent_uuid
+                        .as_ref()
+                        .is_some_and(|uuid| self.valid_tool_result_uuids.contains(uuid))
+            }
+            Some(BranchMembership::Active) => {
+                has_tool_use_block(&record)
+                    && parent_uuid
+                        .as_ref()
+                        .is_some_and(|uuid| self.tool_use_assistant_uuids.contains(uuid))
+            }
             _ => false,
         };
         let mut active_record = uuid.is_none();
@@ -125,8 +139,12 @@ impl ClaudeParserState {
                 Some(BranchMembership::Unknown) if !bypass_branch_check => {
                     !is_inactive_branch(uuid, &mut self.transcript_nodes)
                 }
-                Some(BranchMembership::Active | BranchMembership::ReachesActive) => true,
-                Some(BranchMembership::Disconnected | BranchMembership::Visiting) => false,
+                Some(BranchMembership::Active) => true,
+                Some(
+                    BranchMembership::ReachesActive
+                    | BranchMembership::Disconnected
+                    | BranchMembership::Visiting,
+                ) => false,
                 Some(BranchMembership::Unknown) => true,
             };
         }
@@ -137,6 +155,26 @@ impl ClaudeParserState {
         }
         if !active_record {
             return;
+        }
+
+        if let Some(uuid) = uuid {
+            if has_tool_use_block(&record) {
+                self.tool_use_assistant_uuids.insert(uuid.to_owned());
+            }
+            if pending_tool_result_on_active_branch {
+                self.valid_tool_result_uuids.insert(uuid.to_owned());
+            }
+        }
+
+        if let Some(uuid) = uuid {
+            let extends_compact_boundary_branch = parent_uuid
+                .as_ref()
+                .is_some_and(|parent| self.compact_boundary_branch_uuids.contains(parent));
+            let is_compact_boundary = record.get("type").and_then(Value::as_str) == Some("system")
+                && record.get("subtype").and_then(Value::as_str) == Some("compact_boundary");
+            if extends_compact_boundary_branch || is_compact_boundary {
+                self.compact_boundary_branch_uuids.insert(uuid.to_owned());
+            }
         }
 
         if is_tool_result_only {

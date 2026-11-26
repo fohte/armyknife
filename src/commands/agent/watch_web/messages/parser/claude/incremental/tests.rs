@@ -342,6 +342,18 @@ const PARALLEL_TOOLS_WITH_SYSTEM_AFTER_RESULT: &str = indoc! {r#"
     {"type":"system","uuid":"system-step","parentUuid":"result-a","timestamp":"2026-01-01T00:00:04Z","subtype":"compact_boundary"}
 "#};
 
+const PARALLEL_TOOL_RESULT_BRANCH_PREFIX: &str = indoc! {r#"
+    {"type":"user","uuid":"fixture-root","parentUuid":null,"timestamp":"2026-01-01T00:00:01Z","message":{"content":"Run two fixture tools."}}
+    {"type":"assistant","uuid":"fixture-first-call","parentUuid":"fixture-root","timestamp":"2026-01-01T00:00:02Z","message":{"content":[{"type":"tool_use","id":"fixture-call-a","name":"Read","input":{"file_path":"/fixture/a"}}]}}
+    {"type":"assistant","uuid":"fixture-second-call","parentUuid":"fixture-first-call","timestamp":"2026-01-01T00:00:03Z","message":{"content":[{"type":"tool_use","id":"fixture-call-b","name":"Read","input":{"file_path":"/fixture/b"}}]}}
+    {"type":"user","uuid":"fixture-result-a","parentUuid":"fixture-first-call","timestamp":"2026-01-01T00:00:04Z","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-call-a","content":"first result"}]}}
+    {"type":"assistant","uuid":"fixture-followup","parentUuid":"fixture-result-a","timestamp":"2026-01-01T00:00:05Z","message":{"content":[{"type":"text","text":"The first tool result is ready."}]}}
+"#};
+
+const PARALLEL_TOOL_RESULT_BRANCH_SUFFIX: &str = indoc! {r#"
+    {"type":"user","uuid":"fixture-result-b","parentUuid":"fixture-second-call","timestamp":"2026-01-01T00:00:06Z","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-call-b","content":"second result"}]}}
+"#};
+
 const INITIAL_PENDING_SIBLING_TRANSCRIPT: &str = indoc! {r#"
     {"type":"user","uuid":"root","parentUuid":null,"message":{"content":"The original request."}}
     {"type":"assistant","uuid":"current","parentUuid":"root","message":{"content":[{"type":"text","text":"The current branch response."}]}}
@@ -513,17 +525,9 @@ const INITIAL_PENDING_SIBLING_TRANSCRIPT: &str = indoc! {r#"
     IncrementalAppend::RestartRequired,
 )]
 #[case::parallel_tool_result_after_a_new_assistant_continues_incrementally(
-    indoc! {r#"
-        {"type":"user","uuid":"root","parentUuid":null,"timestamp":"2026-01-01T00:00:01Z","message":{"content":"Run two fixture tools."}}
-        {"type":"assistant","uuid":"first-call","parentUuid":"root","timestamp":"2026-01-01T00:00:02Z","message":{"content":[{"type":"tool_use","id":"call-a","name":"Read","input":{"file_path":"/fixture/a"}}]}}
-        {"type":"assistant","uuid":"second-call","parentUuid":"first-call","timestamp":"2026-01-01T00:00:03Z","message":{"content":[{"type":"tool_use","id":"call-b","name":"Read","input":{"file_path":"/fixture/b"}}]}}
-        {"type":"user","uuid":"result-a","parentUuid":"first-call","timestamp":"2026-01-01T00:00:04Z","message":{"content":[{"type":"tool_result","tool_use_id":"call-a","content":"first result"}]}}
-        {"type":"assistant","uuid":"followup","parentUuid":"result-a","timestamp":"2026-01-01T00:00:05Z","message":{"content":[{"type":"text","text":"The first tool result is ready."}]}}
-    "#},
-    indoc! {r#"
-        {"type":"user","uuid":"result-b","parentUuid":"second-call","timestamp":"2026-01-01T00:00:06Z","message":{"content":[{"type":"tool_result","tool_use_id":"call-b","content":"second result"}]}}
-    "#},
-    IncrementalAppend::Applied,
+    PARALLEL_TOOL_RESULT_BRANCH_PREFIX,
+    PARALLEL_TOOL_RESULT_BRANCH_SUFFIX,
+    IncrementalAppend::Applied
 )]
 #[case::assistant_after_system_invalidates_tool_result_parent(
     PARALLEL_TOOLS_WITH_SYSTEM_AFTER_RESULT,
@@ -532,12 +536,12 @@ const INITIAL_PENDING_SIBLING_TRANSCRIPT: &str = indoc! {r#"
     "#},
     IncrementalAppend::RestartRequired,
 )]
-#[case::parallel_tool_result_after_system_uses_its_pending_tool_use(
+#[case::parallel_tool_result_after_a_compact_boundary_restarts_for_branch_parity(
     PARALLEL_TOOLS_WITH_SYSTEM_AFTER_RESULT,
     indoc! {r#"
         {"type":"user","uuid":"result-b","parentUuid":"tool-call","timestamp":"2026-01-01T00:00:05Z","message":{"content":[{"type":"tool_result","tool_use_id":"call-b","content":"second result"}]}}
     "#},
-    IncrementalAppend::Applied,
+    IncrementalAppend::RestartRequired,
 )]
 #[case::task_notification_with_non_latest_parent_restarts(
     indoc! {r#"
@@ -581,6 +585,27 @@ fn appended_transcript_matches_a_full_parse(
         incremental_result(prefix.as_bytes(), suffix.as_bytes()),
         (expected_append, parse_all(&transcript, empty_additions()),),
     );
+}
+
+#[test]
+fn parallel_tool_result_matches_a_full_parse_at_every_split_point() {
+    let mut transcript = PARALLEL_TOOL_RESULT_BRANCH_PREFIX.as_bytes().to_vec();
+    transcript.extend_from_slice(PARALLEL_TOOL_RESULT_BRANCH_SUFFIX.as_bytes());
+    let transcript_text = std::str::from_utf8(&transcript).unwrap();
+    let expected = parse_all(&transcript, empty_additions());
+
+    for split in 0..=transcript.len() {
+        if !transcript_text.is_char_boundary(split) {
+            continue;
+        }
+        let (append, actual) = incremental_result(&transcript[..split], &transcript[split..]);
+
+        assert_eq!(
+            (append, actual),
+            (IncrementalAppend::Applied, expected.clone()),
+            "transcript split at byte {split}",
+        );
+    }
 }
 
 #[test]

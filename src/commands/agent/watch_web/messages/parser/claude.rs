@@ -2815,6 +2815,78 @@ mod tests {
         );
     }
 
+    #[rstest]
+    #[case::rewind_discards_an_old_text_branch(
+        indoc! {r#"
+            {"uuid":"fixture-root-id","parentUuid":null,"type":"user","message":{"content":"Keep the root request."}}
+            {"uuid":"fixture-active-assistant-id","parentUuid":"fixture-root-id","type":"assistant","message":{"content":[{"type":"text","text":"Keep the shared response."}]}}
+            {"uuid":"fixture-old-user-id","parentUuid":"fixture-active-assistant-id","type":"user","message":{"content":"Discard this old request."}}
+            {"uuid":"fixture-old-assistant-id","parentUuid":"fixture-old-user-id","type":"assistant","message":{"content":[{"type":"text","text":"Discard this old response."}]}}
+            {"uuid":"fixture-replacement-user-id","parentUuid":"fixture-active-assistant-id","type":"user","message":{"content":"Keep the replacement request."}}
+            {"uuid":"fixture-replacement-assistant-id","parentUuid":"fixture-replacement-user-id","type":"assistant","message":{"content":[{"type":"text","text":"Keep the replacement response."}]}}
+        "#},
+        vec![
+            ChatItem::User {
+                rewind_id: Some("fixture-root-id".to_string()),
+                text: "Keep the root request.".to_string(),
+                timestamp: None,
+                from: None,
+                queued_prompt_id: None,
+            },
+            ChatItem::Assistant {
+                text: "Keep the shared response.".to_string(),
+            },
+            ChatItem::User {
+                rewind_id: Some("fixture-replacement-user-id".to_string()),
+                text: "Keep the replacement request.".to_string(),
+                timestamp: None,
+                from: None,
+                queued_prompt_id: None,
+            },
+            ChatItem::Assistant {
+                text: "Keep the replacement response.".to_string(),
+            },
+        ],
+    )]
+    #[case::rewind_discards_an_old_tool_branch(
+        indoc! {r#"
+            {"uuid":"fixture-root-id","parentUuid":null,"type":"user","message":{"content":"Keep the root request."}}
+            {"uuid":"fixture-active-assistant-id","parentUuid":"fixture-root-id","type":"assistant","message":{"content":[{"type":"text","text":"Keep the shared response."}]}}
+            {"uuid":"fixture-old-tool-id","parentUuid":"fixture-active-assistant-id","type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-old-call-id","name":"Read","input":{"file_path":"/fixture/old-branch.md"}}]}}
+            {"uuid":"fixture-old-result-id","parentUuid":"fixture-old-tool-id","type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-old-call-id","content":"Old branch result."}]}}
+            {"uuid":"fixture-old-followup-id","parentUuid":"fixture-old-result-id","type":"assistant","message":{"content":[{"type":"text","text":"Discard this old follow-up."}]}}
+            {"uuid":"fixture-replacement-user-id","parentUuid":"fixture-active-assistant-id","type":"user","message":{"content":"Keep the replacement request."}}
+        "#},
+        vec![
+            ChatItem::User {
+                rewind_id: Some("fixture-root-id".to_string()),
+                text: "Keep the root request.".to_string(),
+                timestamp: None,
+                from: None,
+                queued_prompt_id: None,
+            },
+            ChatItem::Assistant {
+                text: "Keep the shared response.".to_string(),
+            },
+            ChatItem::User {
+                rewind_id: Some("fixture-replacement-user-id".to_string()),
+                text: "Keep the replacement request.".to_string(),
+                timestamp: None,
+                from: None,
+                queued_prompt_id: None,
+            },
+        ],
+    )]
+    fn full_parse_omits_rewound_assistant_branches(
+        #[case] transcript: &str,
+        #[case] expected: Vec<ChatItem>,
+    ) {
+        assert_eq!(
+            parse(Cursor::new(transcript), None, None, None).unwrap(),
+            expected,
+        );
+    }
+
     #[test]
     fn follows_logical_parent_across_compact_boundaries() {
         let transcript = indoc! {r#"

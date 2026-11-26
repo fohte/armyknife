@@ -179,24 +179,24 @@ pub(super) fn parse_session_transcript_incrementally_for_range(
             .map_or(super::range::INITIAL_EPOCH_MESSAGE_COUNT, |state| {
                 state.message_limit
             });
-        match tail_window::rebuild_tail_window_parser(
-            &input,
-            pending_task_ids,
-            &fingerprint,
-            range,
-            message_limit,
-        )? {
-            tail_window::TailWindowRebuild::Rebuilt(tail) => {
-                let tail_window::TailWindowParse {
-                    conversation,
-                    resolved_queued_prompt_ids,
-                    parser,
-                    state,
-                } = *tail;
-                if let Some(tail) = fingerprint.tail_bytes()? {
+        if let Some(tail_bytes) = fingerprint.tail_bytes()? {
+            match tail_window::rebuild_tail_window_parser(
+                &input,
+                pending_task_ids,
+                &fingerprint,
+                range,
+                message_limit,
+            )? {
+                tail_window::TailWindowRebuild::Rebuilt(tail) => {
+                    let tail_window::TailWindowParse {
+                        conversation,
+                        resolved_queued_prompt_ids,
+                        parser,
+                        state,
+                    } = *tail;
                     *cached = Some(CachedTranscriptParser {
                         fingerprint: fingerprint.clone(),
-                        tail,
+                        tail: tail_bytes,
                         engine: Engine::Claude,
                         tail_window: Some(state),
                         #[cfg(test)]
@@ -205,11 +205,11 @@ pub(super) fn parse_session_transcript_incrementally_for_range(
                     });
                     return Ok((conversation, resolved_queued_prompt_ids));
                 }
+                tail_window::TailWindowRebuild::AnchorMissing => {
+                    restart_reason = Some("epoch_anchor_outside_tail_window");
+                }
+                tail_window::TailWindowRebuild::Unavailable => {}
             }
-            tail_window::TailWindowRebuild::AnchorMissing => {
-                restart_reason = Some("epoch_anchor_outside_tail_window");
-            }
-            tail_window::TailWindowRebuild::Unavailable => {}
         }
     }
 
