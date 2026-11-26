@@ -291,6 +291,7 @@ export const NewIssueDraftShowsRelatedTitles: Story = {
   args: {
     summary: newIssueDraft,
     summaries: [newIssueDraft],
+    view: 'edit',
     frontmatter: {
       title: 'Sample issue title',
       parentIssue: 'sample-owner/sample-repo#42',
@@ -399,7 +400,7 @@ export const WaitingDraftCanBeRead: Story = {
 }
 
 export const NewIssueDraftCanBeApproved: Story = {
-  name: 'A new issue draft keeps its approval field available',
+  name: 'A new issue draft preview shows its title without frontmatter',
   args: {
     summary: newIssueDraft,
     summaries: [newIssueDraft],
@@ -412,6 +413,47 @@ export const NewIssueDraftCanBeApproved: Story = {
     body: 'Describe the issue and expected behavior.',
   },
   decorators: [desktopViewport],
+}
+
+export const MobileNewIssueDraftCanBePreviewed: Story = {
+  name: 'The iPhone new issue draft preview shows its title without frontmatter.',
+  args: {
+    ...NewIssueDraftCanBeApproved.args,
+    isMobile: true,
+  },
+  decorators: [phoneViewport],
+}
+
+export const NewIssueDraftCanBeEdited: Story = {
+  name: 'A new issue draft exposes its metadata controls in Edit mode',
+  args: {
+    summary: newIssueDraft,
+    summaries: [newIssueDraft],
+    view: 'edit',
+    frontmatter: {
+      title: 'Retry jobs after a temporary outage',
+      labels: ['bug'],
+      assignees: ['sample-maintainer'],
+      parentIssue: 'example/web-app#410',
+      subIssues: ['example/web-app#411'],
+      submit: false,
+    },
+    relatedIssueTitles: {
+      'example/web-app#410': 'Handle temporary outages',
+      'example/web-app#411': 'Retry failed jobs',
+    },
+    body: 'Describe the issue and expected behavior.',
+  },
+  decorators: [desktopViewport],
+}
+
+export const MobileNewIssueDraftCanBeEdited: Story = {
+  name: 'The iPhone new issue draft exposes its metadata controls in Edit mode.',
+  args: {
+    ...NewIssueDraftCanBeEdited.args,
+    isMobile: true,
+  },
+  decorators: [phoneViewport],
 }
 
 export const PullRequestDraftShowsItsTitle: Story = {

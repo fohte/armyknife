@@ -375,7 +375,8 @@ export function ReviewDocumentPreview({
   onBodyChange = () => undefined,
 }: ReviewDocumentPreviewProps) {
   if (mode === 'frontmatter') {
-    return summary?.kind === 'issue_body' ? (
+    return summary?.kind === 'issue_body' ||
+      (summary?.kind === 'draft' && summary.target.repository !== undefined) ? (
       <IssueFrontmatter
         frontmatter={frontmatter}
         relatedIssueTitles={relatedIssueTitles}
