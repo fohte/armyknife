@@ -147,7 +147,7 @@ mod tests {
         args: &NewArgs,
         repo_path: &Path,
         gh_client: &impl RepoClient,
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    ) -> anyhow::Result<()> {
         let repo_info = RepoInfo::from_path(repo_path)?;
         let draft_path = DraftFile::path_for(&repo_info);
 
