@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.939](https://github.com/fohte/armyknife/compare/v0.1.938...v0.1.939) (2026-11-26)
+
+
+### Bug Fixes
+
+* **watch-web:** back off failed unexpose hooks ([#2303](https://github.com/fohte/armyknife/issues/2303)) ([9b6ec64](https://github.com/fohte/armyknife/commit/9b6ec64c3501d43747fd485fbea11dec008ebb68))
+
 ## [0.1.938](https://github.com/fohte/armyknife/compare/v0.1.937...v0.1.938) (2026-11-26)
 
 
