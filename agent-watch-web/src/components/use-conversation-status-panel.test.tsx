@@ -963,6 +963,7 @@ it('sends new issue approval through the existing review finish API', async () =
   )
 
   await act(async () => {
+    await page.getByRole('button', { name: 'Edit', exact: true }).click()
     await page.getByRole('checkbox', { name: 'submit' }).click()
     await page.getByRole('button', { name: 'Finish' }).click()
   })

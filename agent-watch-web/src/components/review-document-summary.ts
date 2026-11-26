@@ -16,6 +16,12 @@ export type ReviewDocumentSummary = {
   canFinish: boolean
 }
 
+export function isNewIssueDraft(
+  summary: ReviewDocumentSummary | undefined,
+): boolean {
+  return summary?.kind === 'draft' && summary.target.repository !== undefined
+}
+
 export type EditorReviewDocumentState =
   | { status: 'ready'; summary: ReviewDocumentSummary }
   | { status: 'unavailable' }

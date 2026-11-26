@@ -8,12 +8,14 @@ import { EditorView, keymap } from '@codemirror/view'
 import { Maximize2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 
-import { ReviewDocumentIssueReference } from '#components/review-document-issue-reference'
 import { ReviewDocumentNavigation } from '#components/review-document-navigation'
 import { ReviewDocumentActions } from '#components/review-document-panel/actions'
 import { getReviewDocumentFrontmatterEntries } from '#components/review-document-panel-frontmatter'
 import { ReviewDocumentPreview } from '#components/review-document-preview'
-import type { ReviewDocumentSummary } from '#components/review-document-summary'
+import {
+  isNewIssueDraft,
+  type ReviewDocumentSummary,
+} from '#components/review-document-summary'
 import type { ReviewDocumentAction } from '#session-operation-types'
 import type { JsonValue } from '#types'
 
@@ -47,12 +49,6 @@ type JsonPathPart = string | number
 
 function isJsonObject(value: JsonValue): value is JsonObject {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-function stringList(value: JsonValue | undefined): string[] {
-  return Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === 'string')
-    : []
 }
 
 function updateAtPath(
@@ -337,37 +333,24 @@ export function ReviewDocumentPanel({
     frontmatter,
     summary,
   )
-  const isIssueDraftPreview =
-    summary?.kind === 'draft' &&
-    summary.target.repository !== undefined &&
-    view === 'preview'
-  const issueFields = isJsonObject(frontmatter) ? frontmatter : {}
-  const parentIssue =
-    typeof issueFields['parentIssue'] === 'string'
-      ? issueFields['parentIssue']
-      : ''
-  const subIssues = stringList(issueFields['subIssues'])
-  const hasRelatedIssueFields = parentIssue.length > 0 || subIssues.length > 0
-  const visibleFrontmatterEntries =
-    isIssueDraftPreview && frontmatterEntries !== null
-      ? frontmatterEntries.filter(
-          ([name]) => name !== 'parentIssue' && name !== 'subIssues',
-        )
-      : frontmatterEntries
+  const isIssueDraft = isNewIssueDraft(summary)
+  const visibleFrontmatterEntries = frontmatterEntries
   const isIssueBody = summary?.kind === 'issue_body'
   const isApprovalDocument = isIssueBody || summary?.kind === 'review_replies'
+  const isIssueDocument = isIssueBody || isIssueDraft
+  const showIssueDraftEditor = isIssueDraft && view === 'edit'
   const showFrontmatterEntries =
     visibleFrontmatterEntries === null || visibleFrontmatterEntries.length > 0
-  const showFrontmatter = isApprovalDocument
-    ? view === 'edit' &&
-      visibleFrontmatterEntries !== null &&
-      visibleFrontmatterEntries.length > 0
-    : frontmatter !== null &&
-      (showFrontmatterEntries || (isIssueDraftPreview && hasRelatedIssueFields))
+  const showFrontmatter =
+    isApprovalDocument || isIssueDraft
+      ? view === 'edit' &&
+        visibleFrontmatterEntries !== null &&
+        visibleFrontmatterEntries.length > 0
+      : frontmatter !== null && showFrontmatterEntries
 
   return (
     <article
-      className="review-document-panel"
+      className={`review-document-panel${isIssueDraft ? ' review-document-panel--issue-draft' : ''}`}
       data-view={view}
       data-status={status}
     >
@@ -389,10 +372,10 @@ export function ReviewDocumentPanel({
         onSelectDocument={onSelectDocument}
       />
       <div className="review-document-content">
-        {isIssueBody ? (
+        {isIssueDocument && (!isIssueDraft || showIssueDraftEditor) ? (
           <ReviewDocumentPreview
             mode="frontmatter"
-            summary={summary}
+            {...(summary === undefined ? {} : { summary })}
             relatedIssueTitles={relatedIssueTitles}
             body={body}
             frontmatter={frontmatter}
@@ -406,41 +389,6 @@ export function ReviewDocumentPanel({
             aria-label="Document metadata"
           >
             <h2>Frontmatter</h2>
-            {isIssueDraftPreview && hasRelatedIssueFields ? (
-              <dl className="review-document-issue-fields">
-                {parentIssue.length > 0 ? (
-                  <>
-                    <dt>Parent issue</dt>
-                    <dd className="review-document-issue-parent">
-                      <div className="review-document-issue-reference">
-                        <ReviewDocumentIssueReference
-                          reference={parentIssue}
-                          title={relatedIssueTitles?.[parentIssue]}
-                        />
-                      </div>
-                    </dd>
-                  </>
-                ) : null}
-                {subIssues.length > 0 ? (
-                  <>
-                    <dt>Sub-issues</dt>
-                    <dd className="review-document-issue-sub-items">
-                      {subIssues.map((subIssue, index) => (
-                        <span
-                          key={`${subIssue}-${String(index)}`}
-                          className="review-document-issue-reference"
-                        >
-                          <ReviewDocumentIssueReference
-                            reference={subIssue}
-                            title={relatedIssueTitles?.[subIssue]}
-                          />
-                        </span>
-                      ))}
-                    </dd>
-                  </>
-                ) : null}
-              </dl>
-            ) : null}
             {visibleFrontmatterEntries !== null ? (
               <dl className="review-document-fields">
                 {visibleFrontmatterEntries.map(([name, value]) => (

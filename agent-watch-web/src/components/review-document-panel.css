@@ -24,6 +24,10 @@
   overflow: hidden;
 }
 
+.review-document-panel--issue-draft[data-view='edit'] .review-document-content {
+  overflow-y: auto;
+}
+
 .review-document-frontmatter {
   display: flex;
   min-width: 0;

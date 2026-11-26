@@ -12,7 +12,10 @@ import {
   parseReviewThreads,
   updateReviewThread,
 } from '#components/review-document-preview-data'
-import type { ReviewDocumentSummary } from '#components/review-document-summary'
+import {
+  isNewIssueDraft,
+  type ReviewDocumentSummary,
+} from '#components/review-document-summary'
 import type { JsonValue } from '#types'
 
 type ReviewDocumentPreviewProps = {
@@ -375,7 +378,7 @@ export function ReviewDocumentPreview({
   onBodyChange = () => undefined,
 }: ReviewDocumentPreviewProps) {
   if (mode === 'frontmatter') {
-    return summary?.kind === 'issue_body' ? (
+    return summary?.kind === 'issue_body' || isNewIssueDraft(summary) ? (
       <IssueFrontmatter
         frontmatter={frontmatter}
         relatedIssueTitles={relatedIssueTitles}
