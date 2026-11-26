@@ -298,6 +298,21 @@ mod tests {
         assert_eq!(cached, HashMap::from([("task-a".to_string(), Vec::new())]),);
     }
 
+    #[test]
+    fn prunes_task_github_links_for_stale_tasks() {
+        let mut cached = HashMap::from([
+            ("task-stale".to_string(), Vec::new()),
+            ("task-active".to_string(), Vec::new()),
+        ]);
+
+        prune_task_github_links(&mut cached, &HashSet::from(["task-stale".to_string()]));
+
+        assert_eq!(
+            cached,
+            HashMap::from([("task-active".to_string(), Vec::new())]),
+        );
+    }
+
     #[rstest]
     #[tokio::test]
     async fn alternating_session_sets_keep_each_sessions_task_metadata(

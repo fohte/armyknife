@@ -6,6 +6,7 @@
 mod client;
 mod error;
 
+pub(crate) use client::TQ_COMMAND_TIMEOUT;
 pub use client::{
     SessionTasks, TqChecklist, TqChecklistItem, TqClient, TqGithubLink, TqProjectSummary, TqTask,
     TqTaskDetails, TqTaskStatus, TqTaskSummary,

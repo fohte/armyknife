@@ -12,7 +12,7 @@ use super::{
     cache::{merge_pull_request_results, prune_pull_request_results},
 };
 
-const TASK_GITHUB_LINK_FETCH_CONCURRENCY: usize = 4;
+pub(super) const TASK_GITHUB_LINK_FETCH_CONCURRENCY: usize = 4;
 
 impl SessionEnrichmentCache {
     pub(in crate::commands::agent::watch_web) async fn pull_requests(
@@ -33,6 +33,7 @@ impl SessionEnrichmentCache {
             .get_or_refresh(
                 "GitHub",
                 query_keys,
+                None,
                 {
                     let sessions = sessions.to_vec();
                     move |_, _| fetcher(sessions, number_queries)

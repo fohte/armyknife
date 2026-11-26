@@ -31,7 +31,7 @@ const CLAUDE_CODE_PROVIDER: &str = "claude_code";
 /// Cloudflare-Access-gated backend over the network, so an unresponsive
 /// backend must not leak a blocking-pool thread and child process on every
 /// session-creation-triggered refetch.
-const TQ_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
+pub(crate) const TQ_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// A tq task's open/closed state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
