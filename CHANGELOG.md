@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.953](https://github.com/fohte/armyknife/compare/v0.1.952...v0.1.953) (2026-11-26)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** keep send errors visible ([#2331](https://github.com/fohte/armyknife/issues/2331)) ([5dadbbf](https://github.com/fohte/armyknife/commit/5dadbbf7290046abeafd6f8216a164e8988086e1))
+
 ## [0.1.952](https://github.com/fohte/armyknife/compare/v0.1.951...v0.1.952) (2026-11-26)
 
 
