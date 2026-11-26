@@ -5,10 +5,11 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail, ensure};
+use chrono::{DateTime, Utc};
 
 use super::super::store;
 use super::super::types::Session;
-use super::daemon_registry::live_pid_for_port_and_cwd;
+use super::daemon_registry::live_pid_for_port_and_updated_at;
 use super::url::{local_crit_ip, parse_port};
 
 pub(super) fn stop_expired_session_daemons(session: &Session, sessions_dir: &Path) -> Result<()> {
@@ -16,7 +17,7 @@ pub(super) fn stop_expired_session_daemons(session: &Session, sessions_dir: &Pat
         session,
         sessions_dir,
         store::all_session_rows_from,
-        live_pid_for_port_and_cwd,
+        live_pid_for_port_and_updated_at,
         request_crit_shutdown,
     )
 }
@@ -25,7 +26,7 @@ fn stop_expired_session_daemons_with(
     session: &Session,
     sessions_dir: &Path,
     load_remaining_sessions: impl FnOnce(&Path) -> Result<Vec<Session>>,
-    resolve_pid: impl FnMut(u16, &Path) -> Result<Option<u32>>,
+    resolve_pid: impl FnMut(u16, DateTime<Utc>) -> Result<Option<u32>>,
     request_shutdown: impl FnMut(&str, u32) -> Result<()>,
 ) -> Result<()> {
     let candidate_ports = session
@@ -82,7 +83,7 @@ struct StopFailure {
 fn stop_daemons_for_ports_with(
     session: &Session,
     ports: &BTreeSet<u16>,
-    mut resolve_pid: impl FnMut(u16, &Path) -> Result<Option<u32>>,
+    mut resolve_pid: impl FnMut(u16, DateTime<Utc>) -> Result<Option<u32>>,
     mut request_shutdown: impl FnMut(&str, u32) -> Result<()>,
 ) -> Vec<StopFailure> {
     let mut failures = Vec::new();
@@ -100,7 +101,7 @@ fn stop_daemons_for_ports_with(
             continue;
         }
 
-        match resolve_pid(*port, &session.cwd) {
+        match resolve_pid(*port, session.updated_at) {
             Ok(Some(pid)) => {
                 let mut shutdown_errors = Vec::new();
                 let shutdown_requested = urls.iter().any(|url| match request_shutdown(url, pid) {
@@ -119,7 +120,7 @@ fn stop_daemons_for_ports_with(
             }
             Ok(None) => failures.push(StopFailure {
                 port: *port,
-                error: "no crit daemon registration matches the session cwd and port".to_string(),
+                error: "no live crit daemon registration matches the session update".to_string(),
             }),
             Err(error) => failures.push(StopFailure {
                 port: *port,
@@ -274,8 +275,8 @@ mod tests {
             &expired,
             temp_dir.path(),
             store::all_session_rows_from,
-            |port, cwd| {
-                resolved_ports.borrow_mut().push((port, cwd.to_path_buf()));
+            |port, updated_at| {
+                resolved_ports.borrow_mut().push((port, updated_at));
                 Ok(Some(9121))
             },
             |url, pid| {
@@ -288,14 +289,14 @@ mod tests {
         assert_eq!(
             (resolved_ports.into_inner(), shutdowns.into_inner()),
             (
-                vec![(43121, expired.cwd.clone())],
+                vec![(43121, expired.updated_at)],
                 vec![("http://review.example.test:43121/review".to_string(), 9121)],
             ),
         );
     }
 
     #[test]
-    fn returns_failure_when_no_crit_registration_matches_the_session() {
+    fn returns_failure_when_no_crit_registration_matches_the_session_update() {
         let session = make_session(
             "expired-session",
             &["http://review.example.test:43122/review"],
@@ -318,7 +319,7 @@ mod tests {
             (
                 vec![StopFailure {
                     port: 43122,
-                    error: "no crit daemon registration matches the session cwd and port"
+                    error: "no live crit daemon registration matches the session update"
                         .to_string(),
                 }],
                 vec![],

@@ -24,16 +24,13 @@ pub(super) fn session_for_port(
         })
 }
 
-pub(in crate::commands::agent::crit) fn pid_for_port(
-    status: &serde_json::Value,
-    port: u16,
-) -> Option<u32> {
+pub(super) fn pid_for_port(status: &serde_json::Value, port: u16) -> Option<u32> {
     session_for_port(status, port)
         .and_then(|session| session.get("pid").and_then(serde_json::Value::as_u64))
         .and_then(|pid| u32::try_from(pid).ok())
 }
 
-pub(in crate::commands::agent::crit) fn crit_status() -> Result<serde_json::Value> {
+pub(super) fn crit_status() -> Result<serde_json::Value> {
     let mut command = ExternalTool::Crit.command();
     command.args(["status", "--json"]);
     let output = process::run_with_timeout(command, Duration::from_secs(5))
