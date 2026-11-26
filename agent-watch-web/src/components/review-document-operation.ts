@@ -151,6 +151,9 @@ export function requestReviewDocumentAction(
                 resolve({
                   status: 'reviewDocumentActionFailed',
                   error: error.message,
+                  ...(error.retryable === undefined
+                    ? {}
+                    : { retryable: error.retryable }),
                 })
               },
             )

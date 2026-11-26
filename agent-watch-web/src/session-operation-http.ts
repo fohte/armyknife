@@ -617,6 +617,9 @@ export function submitSessionOperation(operation: SessionOperation) {
         if (typeof value['revision'] === 'string') {
           error.revision = value['revision']
         }
+        if (typeof value['retryable'] === 'boolean') {
+          error.retryable = value['retryable']
+        }
         return err<unknown, SessionOperationError>(error)
       })
     },

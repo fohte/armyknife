@@ -26,7 +26,18 @@ it('uses the existing PR number in the direct action label', () => {
   })
 })
 
-it('sends the displayed PR target with its update action', () => {
+it.each([
+  {
+    name: 'sends the existing PR number',
+    target: { pullRequestNumber: 318 },
+    expectedPullRequestTarget: { kind: 'existing', number: 318 },
+  },
+  {
+    name: 'keeps an unavailable PR lookup unknown',
+    target: { pullRequestLookupUnavailable: true },
+    expectedPullRequestTarget: { kind: 'unknown' },
+  },
+])('$name', ({ target, expectedPullRequestTarget }) => {
   const operations: SessionOperation[] = []
   const run: ReturnType<typeof useSessionOperations>['run'] = (operation) => {
     operations.push(operation)
@@ -46,7 +57,7 @@ it('sends the displayed PR target with its update action', () => {
     {
       id: 'fixture-review',
       kind: 'pr_draft',
-      target: { pullRequestNumber: 318 },
+      target,
       isEditor: true,
       canSave: true,
       canFinish: true,
@@ -67,7 +78,7 @@ it('sends the displayed PR target with its update action', () => {
       frontmatter: { title: 'Fixture title' },
       body: 'Fixture body',
       action: 'create_pr',
-      expectedPullRequestTarget: { kind: 'existing', number: 318 },
+      expectedPullRequestTarget,
     },
   ])
 })

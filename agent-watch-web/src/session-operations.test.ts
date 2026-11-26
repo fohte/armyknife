@@ -1099,6 +1099,50 @@ it('returns a direct review action failure with its updated revision', async () 
   })
 })
 
+it('marks a stale PR target failure as non-retryable', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn<typeof fetch>().mockResolvedValue(
+      Response.json({
+        success: false,
+        error:
+          'The pull request target changed after approval. Send the draft back for review before submitting again.',
+        revision: 'fixture-revision',
+        retryable: false,
+      }),
+    ),
+  )
+
+  const result = await submitSessionOperation({
+    type: 'review_document_action',
+    sessionId: session.id,
+    id: 'fixture-review-document',
+    revision: 'fixture-revision',
+    frontmatter: { submit: true },
+    body: 'Example pull request',
+    action: 'create_pr',
+    expectedPullRequestTarget: { kind: 'existing', number: 318 },
+  })
+  const actual = result.match(
+    (value) => ({ type: 'success' as const, value }),
+    (error) => ({
+      type: 'error' as const,
+      message: error.message,
+      retryable:
+        'retryable' in error && typeof error.retryable === 'boolean'
+          ? error.retryable
+          : null,
+    }),
+  )
+
+  expect(actual).toEqual({
+    type: 'error',
+    message:
+      'The pull request target changed after approval. Send the draft back for review before submitting again.',
+    retryable: false,
+  })
+})
+
 const sessionReducerCases: [
   string,
   SessionOperation,

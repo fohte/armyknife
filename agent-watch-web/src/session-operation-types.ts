@@ -153,6 +153,7 @@ export type CloseWorktreeChecks = {
 export type SessionOperationError = Error & {
   code?: string | null
   checks?: CloseWorktreeChecks
+  retryable?: boolean
   revision?: string
 }
 function operationKey(operation: SessionOperation) {

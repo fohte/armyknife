@@ -13,6 +13,12 @@ pub(crate) enum ExpectedPullRequestTarget {
     Unknown,
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "The pull request target changed after approval. Send the draft back for review before submitting again."
+)]
+pub(crate) struct ExpectedPullRequestTargetMismatch;
+
 use clap::Subcommand;
 
 pub(crate) async fn submit_draft_for_review(

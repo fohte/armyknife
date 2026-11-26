@@ -37,6 +37,7 @@ export type AsyncAction = {
   timelineIndex?: number
   message?: string
   error?: string
+  retryable?: boolean
   checks?: CloseWorktreeChecks
   createdAt: number
   completedAt?: number
@@ -44,7 +45,11 @@ export type AsyncAction = {
 
 export type AsyncActionOutcome =
   | { status: 'reviewDocumentActionSucceeded' }
-  | { status: 'reviewDocumentActionFailed'; error: string }
+  | {
+      status: 'reviewDocumentActionFailed'
+      error: string
+      retryable?: boolean
+    }
   | {
       status: 'ranCommand' | 'commandTimedOut'
       commandOutputIndex?: number

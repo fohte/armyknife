@@ -17,7 +17,7 @@ use super::{
     ReviewDocumentEditRequest, ReviewDocumentRoots, ReviewDocumentSummary, ReviewQueueLoader,
     SessionLoader, active_review_document, save,
 };
-use crate::commands::ai::pr_draft::ExpectedPullRequestTarget;
+use crate::commands::ai::pr_draft::{ExpectedPullRequestTarget, ExpectedPullRequestTargetMismatch};
 pub(super) use crate::shared::human_in_the_loop::ReviewDocumentAction;
 use crate::shared::human_in_the_loop::{
     LockGuard, ReviewDocumentActionResult, clear_action_result, document_hash,
@@ -28,6 +28,7 @@ use crate::shared::human_in_the_loop::{
 enum ActionStatus {
     Running,
     Failed,
+    NeedsReview,
     Succeeded,
 }
 
@@ -71,6 +72,8 @@ pub(super) struct ReviewDocumentActionResponse {
     revision: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    retryable: Option<bool>,
 }
 
 pub(super) async fn execute_review_document(
@@ -95,28 +98,49 @@ pub(super) async fn execute_review_document(
             if record.action != request.action {
                 return Err(StatusCode::CONFLICT);
             }
-            if record.expected_pr_target != request.expected_pull_request_target {
+            let starts_new_review =
+                record.status == ActionStatus::NeedsReview && record.revision != request.revision;
+            if record.status == ActionStatus::NeedsReview && !starts_new_review {
+                return Ok(Json(ReviewDocumentActionResponse {
+                    success: false,
+                    revision: record.revision,
+                    error: Some(
+                        crate::commands::ai::pr_draft::ExpectedPullRequestTargetMismatch
+                            .to_string(),
+                    ),
+                    retryable: Some(false),
+                }));
+            }
+            if !starts_new_review
+                && record.expected_pr_target != request.expected_pull_request_target
+            {
                 return Err(StatusCode::CONFLICT);
             }
-            if !should_run_again(record.status)? {
+            if !starts_new_review && !should_run_again(record.status)? {
                 return Ok(Json(ReviewDocumentActionResponse {
                     success: true,
                     revision: record.revision,
                     error: None,
+                    retryable: None,
                 }));
             }
-            let retrying = record.status == ActionStatus::Failed;
-            let frontmatter =
-                approved_frontmatter(record.summary.kind, request.action, request.frontmatter)?;
-            clear_previous_action_result(&record.path)?;
-            if same_action_content(
-                &record.frontmatter,
-                &record.body,
-                &frontmatter,
-                &request.body,
-            ) {
-                (record.clone(), record.revision.clone(), retrying)
-            } else {
+            if starts_new_review {
+                let session = load_session(&session_id)
+                    .map_err(|error| {
+                        tracing::warn!(%error, "failed to load session for a new review");
+                        StatusCode::INTERNAL_SERVER_ERROR
+                    })?
+                    .ok_or(StatusCode::NOT_FOUND)?;
+                let queue = load_review_queue(&session);
+                let marker = active_review_document(&session, queue.clone())
+                    .filter(|marker| marker.id == request.id)
+                    .ok_or(StatusCode::NOT_FOUND)?;
+                let summary = super::summary_for_marker(&session, &marker, queue, &roots);
+                validate_action(summary.kind, request.action)?;
+                validate_expected_pr_target(request.action, request.expected_pull_request_target)?;
+                let frontmatter =
+                    approved_frontmatter(summary.kind, request.action, request.frontmatter)?;
+                clear_previous_action_result(&marker.path)?;
                 let saved_revision = save::save_document_for_session(
                     load_session.clone(),
                     load_review_queue.clone(),
@@ -130,19 +154,64 @@ pub(super) async fn execute_review_document(
                     Some(b'1'),
                 )
                 .await?;
+                let document_hash = document_hash(&marker.path).map_err(|error| {
+                    tracing::warn!(%error, "failed to hash approved review document");
+                    StatusCode::INTERNAL_SERVER_ERROR
+                })?;
                 let updated = ActionRecord {
+                    action: request.action,
+                    expected_pr_target: request.expected_pull_request_target,
+                    path: marker.path,
+                    session_cwd: session.cwd.clone(),
+                    summary,
                     frontmatter,
                     body: request.body,
                     status: ActionStatus::Running,
                     revision: saved_revision.clone(),
                     retry_started_at: None,
-                    document_hash: document_hash(&record.path).map_err(|error| {
-                        tracing::warn!(%error, "failed to hash approved review document");
-                        StatusCode::INTERNAL_SERVER_ERROR
-                    })?,
-                    ..record
+                    document_hash,
                 };
-                (updated, saved_revision, retrying)
+                (updated, saved_revision, false)
+            } else {
+                let retrying = record.status == ActionStatus::Failed;
+                let frontmatter =
+                    approved_frontmatter(record.summary.kind, request.action, request.frontmatter)?;
+                clear_previous_action_result(&record.path)?;
+                if same_action_content(
+                    &record.frontmatter,
+                    &record.body,
+                    &frontmatter,
+                    &request.body,
+                ) {
+                    (record.clone(), record.revision.clone(), retrying)
+                } else {
+                    let saved_revision = save::save_document_for_session(
+                        load_session.clone(),
+                        load_review_queue.clone(),
+                        session_id.clone(),
+                        ReviewDocumentEditRequest {
+                            id: request.id.clone(),
+                            revision: request.revision,
+                            frontmatter: frontmatter.clone(),
+                            body: request.body.clone(),
+                        },
+                        Some(b'1'),
+                    )
+                    .await?;
+                    let updated = ActionRecord {
+                        frontmatter,
+                        body: request.body,
+                        status: ActionStatus::Running,
+                        revision: saved_revision.clone(),
+                        retry_started_at: None,
+                        document_hash: document_hash(&record.path).map_err(|error| {
+                            tracing::warn!(%error, "failed to hash approved review document");
+                            StatusCode::INTERNAL_SERVER_ERROR
+                        })?,
+                        ..record
+                    };
+                    (updated, saved_revision, retrying)
+                }
             }
         }
         None => {
@@ -223,6 +292,7 @@ pub(super) async fn execute_review_document(
             success: false,
             revision,
             error: Some(message.to_owned()),
+            retryable: None,
         }));
     }
 
@@ -259,6 +329,11 @@ pub(super) async fn execute_review_document(
         Ok(message) => (true, message.clone()),
         Err(error) => (false, format!("{error:#}")),
     };
+    let needs_review = result.as_ref().is_err_and(|error| {
+        error
+            .downcast_ref::<ExpectedPullRequestTargetMismatch>()
+            .is_some()
+    });
     let action_result = ReviewDocumentActionResult::new(
         record.action,
         succeeded,
@@ -271,10 +346,10 @@ pub(super) async fn execute_review_document(
     }
     let mut records = actions.lock().await;
     if let Some(current) = records.records.get_mut(&key) {
-        current.status = if result.is_ok() {
-            ActionStatus::Succeeded
-        } else {
-            ActionStatus::Failed
+        current.status = match (result.is_ok(), needs_review) {
+            (true, _) => ActionStatus::Succeeded,
+            (false, true) => ActionStatus::NeedsReview,
+            (false, false) => ActionStatus::Failed,
         };
     }
     match result {
@@ -282,6 +357,7 @@ pub(super) async fn execute_review_document(
             success: true,
             revision,
             error: None,
+            retryable: None,
         })),
         Err(error) => {
             tracing::warn!(%error, "review document action failed");
@@ -289,6 +365,7 @@ pub(super) async fn execute_review_document(
                 success: false,
                 revision,
                 error: Some(error.to_string()),
+                retryable: needs_review.then_some(false),
             }))
         }
     }
@@ -360,6 +437,7 @@ fn should_run_again(status: ActionStatus) -> Result<bool, StatusCode> {
     match status {
         ActionStatus::Running => Err(StatusCode::CONFLICT),
         ActionStatus::Failed => Ok(true),
+        ActionStatus::NeedsReview => Err(StatusCode::CONFLICT),
         ActionStatus::Succeeded => Ok(false),
     }
 }
@@ -501,8 +579,19 @@ mod tests {
         .expect("action request should deserialize");
 
         assert_eq!(
-            (request.action, request.expected_pull_request_target),
             (
+                request.id,
+                request.revision,
+                request.frontmatter,
+                request.body,
+                request.action,
+                request.expected_pull_request_target,
+            ),
+            (
+                "fixture-review".to_owned(),
+                "fixture-revision".to_owned(),
+                json!({ "steps": { "submit": false } }),
+                "Fixture body".to_owned(),
                 ReviewDocumentAction::CreatePr,
                 Some(ExpectedPullRequestTarget::Existing { number: 318 }),
             ),
@@ -545,6 +634,7 @@ mod tests {
     #[rstest]
     #[case::running(ActionStatus::Running, Err(StatusCode::CONFLICT))]
     #[case::failed(ActionStatus::Failed, Ok(true))]
+    #[case::needs_review(ActionStatus::NeedsReview, Err(StatusCode::CONFLICT))]
     #[case::succeeded(ActionStatus::Succeeded, Ok(false))]
     fn action_retry_runs_only_after_a_failed_attempt(
         #[case] status: ActionStatus,
