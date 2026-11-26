@@ -207,15 +207,7 @@ fn router_with_action_executor(
 }
 
 async fn get_review_document(
-    State((
-        load_session,
-        load_review_queue,
-        _,
-        roots,
-        _,
-        issue_title_lookup,
-        pull_request_number_lookup,
-    )): State<(
+    State((load_session, load_review_queue, _, roots, _, issue_title_lookup, _)): State<(
         SessionLoader,
         ReviewQueueLoader,
         ReviewDocumentEditLock,
@@ -260,14 +252,6 @@ async fn get_review_document(
     let mut response = response.ok_or(StatusCode::NOT_FOUND)?;
     response.related_issue_titles =
         lookup_issue_titles_with_timeout(&response.frontmatter, issue_title_lookup).await;
-    if let Some(summary) =
-        lookup_open_pull_request_numbers(vec![response.summary.clone()], pull_request_number_lookup)
-            .await
-            .into_iter()
-            .next()
-    {
-        response.summary = summary;
-    }
     Ok(Json(response))
 }
 
@@ -315,15 +299,7 @@ async fn get_review_documents(
 }
 
 async fn get_review_document_by_id(
-    State((
-        load_session,
-        load_review_queue,
-        _,
-        roots,
-        _,
-        issue_title_lookup,
-        pull_request_number_lookup,
-    )): State<(
+    State((load_session, load_review_queue, _, roots, _, issue_title_lookup, _)): State<(
         SessionLoader,
         ReviewQueueLoader,
         ReviewDocumentEditLock,
@@ -363,14 +339,6 @@ async fn get_review_document_by_id(
     let mut response = response;
     response.related_issue_titles =
         lookup_issue_titles_with_timeout(&response.frontmatter, issue_title_lookup).await;
-    if let Some(summary) =
-        lookup_open_pull_request_numbers(vec![response.summary.clone()], pull_request_number_lookup)
-            .await
-            .into_iter()
-            .next()
-    {
-        response.summary = summary;
-    }
     Ok(Json(response))
 }
 

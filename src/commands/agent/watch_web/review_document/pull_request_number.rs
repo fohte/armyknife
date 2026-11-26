@@ -6,7 +6,7 @@ use std::time::Duration;
 use futures_util::stream::{self, StreamExt};
 
 use super::metadata::ReviewDocumentSummary;
-use crate::infra::github::{GitHubClient, PrClient};
+use crate::infra::github::{GitHubClient, PrClient, PrState};
 
 pub(super) type PullRequestNumberFuture =
     Pin<Box<dyn Future<Output = anyhow::Result<Option<u64>>> + Send>>;
@@ -20,8 +20,9 @@ pub(super) fn github_open_pull_request_number_lookup() -> PullRequestNumberLooku
         Box::pin(async move {
             let client = tokio::task::spawn_blocking(GitHubClient::get).await??;
             Ok(client
-                .get_open_pr_for_branch(&owner, &repository, &branch)
+                .get_pr_for_branch(&owner, &repository, &branch)
                 .await?
+                .filter(|pull_request| pull_request.state == PrState::Open)
                 .map(|pull_request| pull_request.number))
         })
     })
@@ -31,6 +32,7 @@ pub(super) async fn lookup_open_pull_request_numbers(
     summaries: Vec<ReviewDocumentSummary>,
     lookup: PullRequestNumberLookup,
 ) -> Vec<ReviewDocumentSummary> {
+    let deadline = tokio::time::Instant::now() + LOOKUP_TIMEOUT;
     stream::iter(summaries)
         .map(|mut summary| {
             let lookup = Arc::clone(&lookup);
@@ -52,8 +54,8 @@ pub(super) async fn lookup_open_pull_request_numbers(
                     return summary;
                 }
 
-                let result = tokio::time::timeout(
-                    LOOKUP_TIMEOUT,
+                let result = tokio::time::timeout_at(
+                    deadline,
                     lookup(owner.to_owned(), repository.to_owned(), branch.to_owned()),
                 )
                 .await;
@@ -61,9 +63,13 @@ pub(super) async fn lookup_open_pull_request_numbers(
                     Ok(Ok(Some(number))) => summary.target.pull_request_number = Some(number),
                     Ok(Ok(None)) => {}
                     Ok(Err(error)) => {
-                        tracing::debug!(%error, "failed to look up PR draft target");
+                        summary.target.pull_request_lookup_unavailable = Some(true);
+                        tracing::warn!(%error, "failed to look up PR draft target");
                     }
-                    Err(_) => tracing::debug!("timed out looking up PR draft target"),
+                    Err(_) => {
+                        summary.target.pull_request_lookup_unavailable = Some(true);
+                        tracing::warn!("timed out looking up PR draft target");
+                    }
                 }
                 summary
             }
@@ -138,13 +144,47 @@ mod tests {
         )
         .await;
 
-        assert_eq!(
-            (
-                summaries[0].target.pull_request_number,
-                summaries[1].target.pull_request_number,
-                calls.load(Ordering::Relaxed)
-            ),
-            (Some(42), None, 1),
+        let mut expected_pr_draft = summary(
+            ReviewDocumentKind::PrDraft,
+            Some("sample-owner/sample-repo"),
+            Some("feature/example"),
         );
+        expected_pr_draft.target.pull_request_number = Some(42);
+        assert_eq!(
+            (summaries, calls.load(Ordering::Relaxed)),
+            (
+                vec![
+                    expected_pr_draft,
+                    summary(
+                        ReviewDocumentKind::Draft,
+                        Some("sample-owner/sample-repo"),
+                        Some("feature/example"),
+                    ),
+                ],
+                1,
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn marks_the_pr_number_unavailable_when_lookup_times_out() {
+        let lookup: PullRequestNumberLookup = Arc::new(|_, _, _| Box::pin(std::future::pending()));
+        let summaries = lookup_open_pull_request_numbers(
+            vec![summary(
+                ReviewDocumentKind::PrDraft,
+                Some("sample-owner/sample-repo"),
+                Some("feature/example"),
+            )],
+            lookup,
+        )
+        .await;
+        let mut expected = summary(
+            ReviewDocumentKind::PrDraft,
+            Some("sample-owner/sample-repo"),
+            Some("feature/example"),
+        );
+        expected.target.pull_request_lookup_unavailable = Some(true);
+
+        assert_eq!(summaries, vec![expected]);
     }
 }

@@ -192,7 +192,7 @@ function directActionLabel(
   action: ReviewDocumentAction,
   summary: ReviewDocumentSummary,
 ) {
-  return reviewDocumentActionLabel(action, summary.target.pullRequestNumber)
+  return reviewDocumentActionLabel(action, summary)
 }
 
 export function frontmatterForReviewFinish(

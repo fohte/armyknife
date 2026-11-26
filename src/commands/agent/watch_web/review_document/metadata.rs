@@ -50,6 +50,8 @@ pub(super) struct ReviewDocumentTarget {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) pull_request_number: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) pull_request_lookup_unavailable: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) thread_count: Option<usize>,

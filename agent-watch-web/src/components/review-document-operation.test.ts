@@ -6,11 +6,17 @@ import { frontmatterForReviewFinish } from '#components/review-document-operatio
 it('uses the existing PR number in the direct action label', () => {
   const labels = () => ({
     create: reviewDocumentActionLabel('create_pr'),
-    update: reviewDocumentActionLabel('create_pr', 73),
+    update: reviewDocumentActionLabel('create_pr', {
+      target: { pullRequestNumber: 73 },
+    }),
+    unavailable: reviewDocumentActionLabel('create_pr', {
+      target: { pullRequestLookupUnavailable: true },
+    }),
   })
   expect(labels()).toEqual({
     create: 'Create PR',
     update: 'Update PR #73',
+    unavailable: 'Submit PR',
   })
 })
 

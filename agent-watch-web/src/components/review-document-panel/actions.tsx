@@ -59,10 +59,13 @@ export function ReviewDocumentActions({
   }\n${body}`
   const hasJapanese = /[\u3040-\u30ff\u3400-\u9fff]/u.test(draftText)
   const prStage = hasJapanese ? 1 : 3
-  const prDraftLabel = reviewDocumentActionLabel(
-    'create_pr',
-    summary?.target.pullRequestNumber,
-  )
+  const prDraftLabel = reviewDocumentActionLabel('create_pr', summary)
+  const prDraftNextStep =
+    summary?.target.pullRequestNumber !== undefined
+      ? `update PR #${String(summary.target.pullRequestNumber)}`
+      : summary?.target.pullRequestLookupUnavailable === true
+        ? 'submit the PR'
+        : 'create the PR'
   const primaryAction =
     kind === 'issue_comment'
       ? 'post_comment'
@@ -89,9 +92,11 @@ export function ReviewDocumentActions({
     pendingAction === 'post_comment'
       ? 'Posting comment…'
       : pendingAction === 'create_pr'
-        ? summary?.target.pullRequestNumber === undefined
-          ? 'Creating PR…'
-          : `Updating PR #${String(summary.target.pullRequestNumber)}…`
+        ? summary?.target.pullRequestNumber !== undefined
+          ? `Updating PR #${String(summary.target.pullRequestNumber)}…`
+          : summary?.target.pullRequestLookupUnavailable === true
+            ? 'Submitting PR…'
+            : 'Creating PR…'
         : pendingAction === 'post_replies'
           ? 'Posting replies…'
           : pendingAction === 'update_issue'
@@ -101,11 +106,13 @@ export function ReviewDocumentActions({
     kind === 'issue_comment'
       ? `Post comment posts it to #${String(summary?.target.issueNumber ?? '')} right away. Send back returns your edits to the session.`
       : kind === 'pr_draft' && requiresTranslation && prStage === 1
-        ? `The session translates the title and body to English right away. You review the English draft next, then ${summary?.target.pullRequestNumber === undefined ? 'create the PR' : `update PR #${String(summary.target.pullRequestNumber)}`}.`
+        ? `The session translates the title and body to English right away. You review the English draft next, then ${prDraftNextStep}.`
         : kind === 'pr_draft'
-          ? summary?.target.pullRequestNumber === undefined
-            ? `Create PR creates the PR on ${summary?.target.repository ?? 'the repository'} right away. Send back returns your edits to the session.`
-            : `${prDraftLabel} updates the existing PR on ${summary.target.repository ?? 'the repository'} right away. Send back returns your edits to the session.`
+          ? summary?.target.pullRequestLookupUnavailable === true
+            ? `Submit PR submits the pull request draft on ${summary.target.repository ?? 'the repository'} right away. Send back returns your edits to the session.`
+            : summary?.target.pullRequestNumber === undefined
+              ? `Create PR creates the PR on ${summary?.target.repository ?? 'the repository'} right away. Send back returns your edits to the session.`
+              : `${prDraftLabel} updates the existing PR on ${summary.target.repository ?? 'the repository'} right away. Send back returns your edits to the session.`
           : kind === 'review_replies'
             ? `Post replies posts them on PR #${String(summary?.target.pullRequestNumber ?? '')} right away. Send back returns your edits to the session.`
             : `Update issue updates it right away. Send back returns your edits to the session.`
@@ -157,9 +164,11 @@ export function ReviewDocumentActions({
           {requiresTranslation ? (
             <ol
               aria-label={
-                summary?.target.pullRequestNumber === undefined
-                  ? 'Steps to create the PR'
-                  : `Steps to update PR #${String(summary.target.pullRequestNumber)}`
+                summary?.target.pullRequestNumber !== undefined
+                  ? `Steps to update PR #${String(summary.target.pullRequestNumber)}`
+                  : summary?.target.pullRequestLookupUnavailable === true
+                    ? 'Steps to submit the PR'
+                    : 'Steps to create the PR'
               }
               className="review-document-pr-stages"
             >
