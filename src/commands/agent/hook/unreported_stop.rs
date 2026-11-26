@@ -598,7 +598,20 @@ mod tests {
 
     #[fixture]
     fn sessions_dir() -> TempDir {
-        tempfile::tempdir().unwrap()
+        let sessions_dir = tempfile::tempdir().unwrap();
+        for session_id in [
+            "fixture-delegate",
+            "fixture-parent",
+            "fixture-pending-delegate",
+            "fixture-reported-delegate",
+        ] {
+            store::save_session_to(
+                sessions_dir.path(),
+                &delegate_session(Engine::Claude, session_id, "fixture-parent"),
+            )
+            .unwrap();
+        }
+        sessions_dir
     }
 
     fn config(template: Option<&str>) -> AgentConfig {
