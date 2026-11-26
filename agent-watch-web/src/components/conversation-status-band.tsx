@@ -5,7 +5,9 @@ import { useId, useState } from 'react'
 
 import type { ConversationStatusBandState } from '#components/conversation-status-band-state'
 import { formatElapsedTime } from '#components/format-elapsed-time'
+import { useSessionElapsedStartedAt } from '#components/session-elapsed-context'
 import type { BackgroundTask, ToolOperation } from '#types'
+import { usePageClockTime } from '#use-page-clock-time'
 
 type ConversationStatusBandProps = {
   state: ConversationStatusBandState | null
@@ -31,6 +33,32 @@ const statusLabels: Record<ConversationStatusBandState['kind'], string> = {
   waiting: 'Waiting',
 }
 
+function WorkingTitle({ elapsedSeconds }: { elapsedSeconds: number }) {
+  const startedAt = useSessionElapsedStartedAt()
+  if (startedAt === null) {
+    return <>Working · {formatElapsedTime(elapsedSeconds)}</>
+  }
+  return (
+    <LiveWorkingTitle elapsedSeconds={elapsedSeconds} startedAt={startedAt} />
+  )
+}
+
+function LiveWorkingTitle({
+  elapsedSeconds,
+  startedAt,
+}: {
+  elapsedSeconds: number
+  startedAt: number
+}) {
+  const nowMs = usePageClockTime(1_000, startedAt)
+  const elapsedOffsetSeconds = Math.floor(
+    Math.max(0, nowMs - startedAt) / 1_000,
+  )
+  return (
+    <>Working · {formatElapsedTime(elapsedSeconds + elapsedOffsetSeconds)}</>
+  )
+}
+
 export function ConversationStatusBand({
   state,
   elapsedSeconds,
@@ -52,11 +80,13 @@ export function ConversationStatusBand({
   const isWarning =
     isReview || state.kind === 'question' || state.kind === 'permission'
   const title =
-    state.kind === 'working'
-      ? `Working · ${formatElapsedTime(elapsedSeconds)}`
-      : state.kind === 'background-tasks'
-        ? `Background tasks (${String(backgroundTasks.length)})`
-        : statusLabels[state.kind]
+    state.kind === 'working' ? (
+      <WorkingTitle elapsedSeconds={elapsedSeconds} />
+    ) : state.kind === 'background-tasks' ? (
+      `Background tasks (${String(backgroundTasks.length)})`
+    ) : (
+      statusLabels[state.kind]
+    )
   const backgroundTask = backgroundTasks[0]
   const toolName = (tool: string) =>
     tool.toLowerCase() === 'exec' ? 'Bash' : tool

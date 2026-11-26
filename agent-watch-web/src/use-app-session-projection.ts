@@ -14,7 +14,6 @@ import { useSavedInboxViews } from '#use-saved-inbox-views'
 type UseAppSessionProjectionOptions = {
   optimisticSessions: readonly Session[]
   nowMs: number
-  sessionsReceivedAt: number
   inboxFilterQuery: string
   laterExpanded: boolean
   workTypeNavLabels: Readonly<Record<string, string>>
@@ -25,16 +24,12 @@ type UseAppSessionProjectionOptions = {
 export function useAppSessionProjection({
   optimisticSessions,
   nowMs,
-  sessionsReceivedAt,
   inboxFilterQuery,
   laterExpanded,
   workTypeNavLabels,
   view,
   setError,
 }: UseAppSessionProjectionOptions) {
-  const elapsedOffsetSeconds = Math.floor(
-    Math.max(0, nowMs - sessionsReceivedAt) / 1_000,
-  )
   const sessionsWithElapsedTime = useMemo(
     () =>
       optimisticSessions.map((session) => {
@@ -48,10 +43,10 @@ export function useAppSessionProjection({
           category: deadlinePassed
             ? (session.categoryWhenNotLater ?? 'needs_action')
             : session.category,
-          elapsedSeconds: session.elapsedSeconds + elapsedOffsetSeconds,
+          elapsedSeconds: session.elapsedSeconds,
         }
       }),
-    [elapsedOffsetSeconds, nowMs, optimisticSessions],
+    [nowMs, optimisticSessions],
   )
   const todaySessions = useMemo(
     () => sessionsWithElapsedTime.filter((session) => session.isToday === true),

@@ -403,6 +403,7 @@ afterEach(() => {
   if (root !== null) act(() => root?.unmount())
   root = null
   container.remove()
+  vi.useRealTimers()
   vi.unstubAllGlobals()
 })
 
@@ -577,6 +578,51 @@ it('shows the issue heading without a draft tab row when one draft is open', () 
     title: '#412 Delivery checks fail on the fourth attempt',
     description: 'New comment on this issue',
     status: 'In the editor · 3m',
+  })
+})
+
+it('updates the editor elapsed label from the shared minute clock', async () => {
+  vi.useFakeTimers()
+  vi.setSystemTime(new Date('2026-11-10T00:00:00.000Z'))
+  const intervalSpy = vi.spyOn(window, 'setInterval')
+  const summary = {
+    id: 'fixture-issue-comment',
+    kind: 'issue_comment' as const,
+    target: { repository: 'example/web-app', issueNumber: 412 },
+    startedAt: Date.now() - 59_000,
+    isEditor: true,
+    canSave: true,
+    canFinish: true,
+  }
+  root = createRoot(container)
+  act(() =>
+    root?.render(
+      <ReviewDocumentPanel
+        summary={summary}
+        frontmatter={{}}
+        body="Fixture comment"
+      />,
+    ),
+  )
+  const before =
+    container.querySelector('.review-document-editor-status')?.textContent ??
+    null
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1_000)
+  })
+
+  const snapshot = () => ({
+    before,
+    after:
+      container.querySelector('.review-document-editor-status')?.textContent ??
+      null,
+    intervalCount: intervalSpy.mock.calls.length,
+  })
+  expect(snapshot()).toEqual({
+    before: 'In the editor · now',
+    after: 'In the editor · 1m',
+    intervalCount: 1,
   })
 })
 

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 
 import { type AgentUsage, requestAgentUsage } from '#agent-usage'
+import { isPageVisible } from '#session-visibility'
 
 const USAGE_REFRESH_INTERVAL = 60_000
 
@@ -10,11 +11,14 @@ export function useAgentUsage() {
 
   useEffect(() => {
     let active = true
+    let visible = isPageVisible(document)
     let timeoutId: number | null = null
+    const canRefresh = () => active && visible
 
     const refresh = async () => {
+      if (!canRefresh()) return
       const result = await requestAgentUsage()
-      if (!active) return
+      if (!canRefresh()) return
       result.match(
         (nextUsage) => {
           setUsage(nextUsage)
@@ -29,9 +33,22 @@ export function useAgentUsage() {
       }, USAGE_REFRESH_INTERVAL)
     }
 
-    void refresh()
+    const handleVisibilityChange = () => {
+      const wasVisible = visible
+      visible = isPageVisible(document)
+      if (!visible) {
+        if (timeoutId !== null) window.clearTimeout(timeoutId)
+        timeoutId = null
+      } else if (!wasVisible) {
+        void refresh()
+      }
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    if (visible) void refresh()
     return () => {
       active = false
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
       if (timeoutId !== null) window.clearTimeout(timeoutId)
     }
   }, [])

@@ -9,6 +9,7 @@ import { useCommandPaletteController } from '#command-palette-controller'
 import { getCommandPaletteShortcut } from '#command-palette-shortcut'
 import { AgentUsageProvider } from '#components/agent-usage-context'
 import { SessionConversationCacheProvider } from '#components/session-conversation-cache'
+import { SessionElapsedStartedAtProvider } from '#components/session-elapsed-context'
 import { useMobileLayout, useSessionMobileNavigation } from '#mobile-layout'
 import { findLaunchedSession } from '#new-session-navigation'
 import { startSessionFeed } from '#session-feed'
@@ -136,13 +137,29 @@ function AppContent() {
   } = useAppSessionProjection({
     optimisticSessions,
     nowMs,
-    sessionsReceivedAt,
     inboxFilterQuery,
     laterExpanded,
     workTypeNavLabels,
     view,
     setError,
   })
+  const nextLaterDeadline = optimisticSessions.reduce<number | null>(
+    (nextDeadline, session) => {
+      if (
+        session.category !== 'later' ||
+        session.laterUntil === null ||
+        session.laterUntil === undefined
+      ) {
+        return nextDeadline
+      }
+      const deadline = Date.parse(session.laterUntil)
+      if (!Number.isFinite(deadline) || deadline <= nowMs) {
+        return nextDeadline
+      }
+      return nextDeadline === null ? deadline : Math.min(nextDeadline, deadline)
+    },
+    null,
+  )
   const {
     laterSessionId,
     laterTimes,
@@ -248,13 +265,17 @@ function AppContent() {
   )
 
   useEffect(() => {
-    const interval = window.setInterval(() => {
-      setNowMs(Date.now())
-    }, 1_000)
+    if (nextLaterDeadline === null) return
+    const timeout = window.setTimeout(
+      () => {
+        setNowMs(Date.now())
+      },
+      Math.max(0, nextLaterDeadline - Date.now()),
+    )
     return () => {
-      window.clearInterval(interval)
+      window.clearTimeout(timeout)
     }
-  }, [])
+  }, [nextLaterDeadline])
 
   useEffect(() => {
     const hiddenProgress = orderedSessions.filter(
@@ -392,99 +413,101 @@ function AppContent() {
     setCommandPaletteOpen,
   ])
   return (
-    <AppWorkspace
-      state={{
-        isMobile,
-        view,
-        selectedId,
-        selectedSession,
-        showMobileConversation,
-        newSessionMode,
-        mobileNavOpen,
-        inboxCollapsed,
-        sessions: sessionsWithElapsedTime,
-        todaySessions,
-        sessionRefreshRevisions: sessionRevisions,
-        sessionsReceivedAt,
-        loaded,
-        error,
-        inboxFilterQuery,
-        showAllInProgress,
-        laterExpanded,
-        inProgressExpanded,
-        doneExpanded,
-        statusPanelOpen,
-        pendingLaunchId,
-        projects,
-        focusedProjectName,
-        hideQuietProjects,
-        workTypeNavGroups,
-        needsActionCount,
-        composerFocusRequest,
-        laterSession,
-        laterTimes,
-        laterTimesError,
-        laterMutationPending,
-        commandPaletteOpen,
-        recentSessionIds,
-        workTypeNavLabels,
-        pendingFocusSessionId,
-        closeConfirmationSession,
-      }}
-      updateNoticeVersion={
-        availableVersion === dismissedVersion ? null : availableVersion
-      }
-      actions={{
-        setInboxFilterQuery,
-        setShowAllInProgress,
-        setLaterExpanded,
-        setInProgressExpanded,
-        setDoneExpanded,
-        setMobileNavOpen,
-        setStatusPanelOpen,
-        setPendingLaunchId,
-        setHideQuietProjects,
-        setCommandPaletteOpen,
-        setFocusedProjectName,
-        toggleInbox,
-        toggleStatusPanel,
-        toggleToday,
-        selectInboxSavedView,
-        selectSavedViewFromNavigation,
-        openSessionFromNavigation,
-        openMobilePalette,
-        openNewSession,
-        closeNewSession,
-        switchFromNewSessionToSession,
-        openConversation,
-        openTodaySession,
-        openSessionInInbox,
-        closeDoneSessions: (doneSessions) => {
-          void closeDoneSessions(doneSessions)
-        },
-        closeDoneSession,
-        requestCloseSession,
-        cancelCloseConfirmation,
-        confirmCloseSession,
-        onLater: openLater,
-        closeLater,
-        laterSubmissionInFlight,
-        submitLater,
-        submitBackNow,
-        dispatchSessionOperation,
-        selectSession,
-        orderedSessions,
-        onBack: backToInbox,
-        onComposerFocusRequestHandled: handleComposerFocusRequest,
-        focusSession,
-        runPaletteCommand,
-        navigate,
-        closeMobileNav,
-        dismissUpdateNotice: setDismissedVersion,
-      }}
-      savedViews={savedViews}
-      newSession={newSession}
-      paletteShortcut={getCommandPaletteShortcut(navigator.platform)}
-    />
+    <SessionElapsedStartedAtProvider value={sessionsReceivedAt}>
+      <AppWorkspace
+        state={{
+          isMobile,
+          view,
+          selectedId,
+          selectedSession,
+          showMobileConversation,
+          newSessionMode,
+          mobileNavOpen,
+          inboxCollapsed,
+          sessions: sessionsWithElapsedTime,
+          todaySessions,
+          sessionRefreshRevisions: sessionRevisions,
+          sessionsReceivedAt,
+          loaded,
+          error,
+          inboxFilterQuery,
+          showAllInProgress,
+          laterExpanded,
+          inProgressExpanded,
+          doneExpanded,
+          statusPanelOpen,
+          pendingLaunchId,
+          projects,
+          focusedProjectName,
+          hideQuietProjects,
+          workTypeNavGroups,
+          needsActionCount,
+          composerFocusRequest,
+          laterSession,
+          laterTimes,
+          laterTimesError,
+          laterMutationPending,
+          commandPaletteOpen,
+          recentSessionIds,
+          workTypeNavLabels,
+          pendingFocusSessionId,
+          closeConfirmationSession,
+        }}
+        updateNoticeVersion={
+          availableVersion === dismissedVersion ? null : availableVersion
+        }
+        actions={{
+          setInboxFilterQuery,
+          setShowAllInProgress,
+          setLaterExpanded,
+          setInProgressExpanded,
+          setDoneExpanded,
+          setMobileNavOpen,
+          setStatusPanelOpen,
+          setPendingLaunchId,
+          setHideQuietProjects,
+          setCommandPaletteOpen,
+          setFocusedProjectName,
+          toggleInbox,
+          toggleStatusPanel,
+          toggleToday,
+          selectInboxSavedView,
+          selectSavedViewFromNavigation,
+          openSessionFromNavigation,
+          openMobilePalette,
+          openNewSession,
+          closeNewSession,
+          switchFromNewSessionToSession,
+          openConversation,
+          openTodaySession,
+          openSessionInInbox,
+          closeDoneSessions: (doneSessions) => {
+            void closeDoneSessions(doneSessions)
+          },
+          closeDoneSession,
+          requestCloseSession,
+          cancelCloseConfirmation,
+          confirmCloseSession,
+          onLater: openLater,
+          closeLater,
+          laterSubmissionInFlight,
+          submitLater,
+          submitBackNow,
+          dispatchSessionOperation,
+          selectSession,
+          orderedSessions,
+          onBack: backToInbox,
+          onComposerFocusRequestHandled: handleComposerFocusRequest,
+          focusSession,
+          runPaletteCommand,
+          navigate,
+          closeMobileNav,
+          dismissUpdateNotice: setDismissedVersion,
+        }}
+        savedViews={savedViews}
+        newSession={newSession}
+        paletteShortcut={getCommandPaletteShortcut(navigator.platform)}
+      />
+    </SessionElapsedStartedAtProvider>
   )
 }
