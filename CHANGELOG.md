@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.942](https://github.com/fohte/armyknife/compare/v0.1.941...v0.1.942) (2026-11-26)
+
+
+### Performance Improvements
+
+* **watch-web:** cache task GitHub links ([#2304](https://github.com/fohte/armyknife/issues/2304)) ([da23677](https://github.com/fohte/armyknife/commit/da23677ff73ce77fec2bbcdbd4a48d10fd5cd428))
+
 ## [0.1.941](https://github.com/fohte/armyknife/compare/v0.1.940...v0.1.941) (2026-11-26)
 
 
