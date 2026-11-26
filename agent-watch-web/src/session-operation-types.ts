@@ -12,6 +12,9 @@ const REVIEW_DOCUMENT_ACTIONS = [
 
 export type ReviewDocumentAction = (typeof REVIEW_DOCUMENT_ACTIONS)[number]
 
+export type ExpectedPullRequestTarget =
+  { kind: 'new' } | { kind: 'existing'; number: number } | { kind: 'unknown' }
+
 export function isReviewDocumentAction(
   value: unknown,
 ): value is ReviewDocumentAction {
@@ -134,6 +137,7 @@ export type SessionOperation =
       frontmatter: JsonValue
       body: string
       action: ReviewDocumentAction
+      expectedPullRequestTarget?: ExpectedPullRequestTarget
     }
 
 export type CloseWorktreeChecks = {

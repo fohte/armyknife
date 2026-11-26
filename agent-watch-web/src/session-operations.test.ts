@@ -541,6 +541,29 @@ const requests: {
     response: { success: true, revision: 'next-fixture-revision' },
   },
   {
+    name: 'submit a review document for its displayed PR',
+    operation: {
+      type: 'review_document_action',
+      sessionId: 'test-session',
+      id: 'fixture-review',
+      revision: 'fixture-revision',
+      frontmatter: { steps: { submit: false } },
+      body: 'Fixture PR body',
+      action: 'create_pr',
+      expectedPullRequestTarget: { kind: 'existing', number: 318 },
+    },
+    path: 'review-document/action',
+    body: {
+      id: 'fixture-review',
+      revision: 'fixture-revision',
+      frontmatter: { steps: { submit: false } },
+      body: 'Fixture PR body',
+      action: 'create_pr',
+      expectedPullRequestTarget: { kind: 'existing', number: 318 },
+    },
+    response: { success: true, revision: 'next-fixture-revision' },
+  },
+  {
     name: 'merge pull request',
     operation: {
       type: 'merge',
@@ -843,6 +866,28 @@ const operationFactories: [
       frontmatter: { submit: false },
       body: 'Fixture comment',
       action: 'post_comment',
+    },
+  ],
+  [
+    'submit a review document for its displayed PR',
+    'review-document/action',
+    {
+      id: 'fixture-review',
+      revision: 'fixture-revision',
+      frontmatter: { steps: { submit: false } },
+      body: 'Fixture PR body',
+      action: 'create_pr',
+      expectedPullRequestTarget: { kind: 'existing', number: 318 },
+    },
+    {
+      type: 'review_document_action',
+      sessionId: session.id,
+      id: 'fixture-review',
+      revision: 'fixture-revision',
+      frontmatter: { steps: { submit: false } },
+      body: 'Fixture PR body',
+      action: 'create_pr',
+      expectedPullRequestTarget: { kind: 'existing', number: 318 },
     },
   ],
   [

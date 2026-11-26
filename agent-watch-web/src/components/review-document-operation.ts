@@ -8,7 +8,10 @@ import { type ReviewDocumentResponse } from '#components/conversation-pane-respo
 import { reviewDocumentActionLabel } from '#components/review-document-action-label'
 import type { ReviewDocumentSummary } from '#components/review-document-summary'
 import { useSessionOperations } from '#session-operation-context'
-import type { ReviewDocumentAction } from '#session-operation-types'
+import type {
+  ExpectedPullRequestTarget,
+  ReviewDocumentAction,
+} from '#session-operation-types'
 import { createSessionOperation } from '#session-operations'
 import type { JsonValue } from '#types'
 
@@ -121,7 +124,16 @@ export function requestReviewDocumentAction(
       revision: document.revision,
       frontmatter,
       body: document.body,
-      ...(action === 'save' || action === 'finish' ? {} : { action }),
+      ...(action === 'save' || action === 'finish'
+        ? {}
+        : {
+            action,
+            ...(action === 'create_pr'
+              ? {
+                  expectedPullRequestTarget: expectedPullRequestTarget(summary),
+                }
+              : {}),
+          }),
     },
   )
   const submit = async (): Promise<AsyncActionOutcome> =>
@@ -193,6 +205,18 @@ function directActionLabel(
   summary: ReviewDocumentSummary,
 ) {
   return reviewDocumentActionLabel(action, summary)
+}
+
+function expectedPullRequestTarget(
+  summary: ReviewDocumentSummary,
+): ExpectedPullRequestTarget {
+  if (summary.target.pullRequestLookupUnavailable === true) {
+    return { kind: 'unknown' }
+  }
+  if (summary.target.pullRequestNumber !== undefined) {
+    return { kind: 'existing', number: summary.target.pullRequestNumber }
+  }
+  return { kind: 'new' }
 }
 
 export function frontmatterForReviewFinish(

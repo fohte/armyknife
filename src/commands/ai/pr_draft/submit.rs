@@ -1,6 +1,7 @@
 use clap::Args;
 use std::path::{Path, PathBuf};
 
+use super::ExpectedPullRequestTarget;
 use super::common::{
     DraftFile, PrDraftError, RepoInfo, contains_japanese, repo_allows_japanese,
     repo_allows_japanese_with_copier_answers,
@@ -74,6 +75,7 @@ struct SubmitContext<'a, F> {
     current_repo_identity: F,
     review_language_context: Option<&'a ReviewRepositoryLanguageContext>,
     lock_policy: SubmitLockPolicy,
+    expected_pr_target: Option<ExpectedPullRequestTarget>,
 }
 
 pub async fn run(args: &SubmitArgs) -> anyhow::Result<()> {
@@ -85,7 +87,7 @@ pub async fn run(args: &SubmitArgs) -> anyhow::Result<()> {
         result.print_for_agent();
         return Ok(());
     }
-    run_with_review_language_context(args, None, SubmitLockPolicy::RequireUnlocked)
+    run_with_review_language_context(args, None, SubmitLockPolicy::RequireUnlocked, None)
         .await
         .map(|_| ())
 }
@@ -94,18 +96,26 @@ pub(super) async fn run_for_review(
     args: &SubmitArgs,
     session_cwd: &Path,
     expected_repo_id: &str,
+    expected_pr_target: Option<ExpectedPullRequestTarget>,
 ) -> anyhow::Result<String> {
     let context = ReviewRepositoryLanguageContext {
         expected_repo_id: expected_repo_id.to_owned(),
         copier_answers_path: copier_answers_path_for_repo_at(session_cwd, expected_repo_id),
     };
-    run_with_review_language_context(args, Some(context), SubmitLockPolicy::OwnedByReview).await
+    run_with_review_language_context(
+        args,
+        Some(context),
+        SubmitLockPolicy::OwnedByReview,
+        expected_pr_target,
+    )
+    .await
 }
 
 async fn run_with_review_language_context(
     args: &SubmitArgs,
     review_language_context: Option<ReviewRepositoryLanguageContext>,
     lock_policy: SubmitLockPolicy,
+    expected_pr_target: Option<ExpectedPullRequestTarget>,
 ) -> anyhow::Result<String> {
     let client = GitHubClient::get()?;
     let post_submit_processor = PrSeriesPostSubmitProcessor { github: client };
@@ -122,6 +132,7 @@ async fn run_with_review_language_context(
             current_repo_identity: read_current_repo_identity,
             review_language_context: review_language_context.as_ref(),
             lock_policy,
+            expected_pr_target,
         },
         &submit_effects,
         |owner, repo| ensure_no_review_access(is_vibe_enabled, load_config, owner, repo),
@@ -148,6 +159,7 @@ async fn run_impl_with_recording<P: PostSubmitProcessor, R: Fn(&str)>(
             current_repo_identity,
             review_language_context: None,
             lock_policy: SubmitLockPolicy::RequireUnlocked,
+            expected_pr_target: None,
         },
         submit_effects,
         vibe_access_check,
@@ -296,6 +308,7 @@ async fn run_impl_with_review_language_context<
         Some(pr_info) if pr_info.state == PrState::Open => Some(pr_info.number),
         _ => None,
     };
+    ensure_expected_pr_target_matches(context.expected_pr_target, update_target)?;
     // Fire pre-pr-submit hook before any network call. The hook script can
     // inspect the title/body and abort submission with a non-zero exit, which
     // lets users enforce custom rules (e.g., forbid cross-org issue links).
@@ -400,6 +413,25 @@ async fn run_impl_with_review_language_context<
     Ok(pr_url)
 }
 
+fn ensure_expected_pr_target_matches(
+    expected: Option<ExpectedPullRequestTarget>,
+    actual_open_pr_number: Option<u64>,
+) -> anyhow::Result<()> {
+    let matches = match expected {
+        Some(ExpectedPullRequestTarget::New) => actual_open_pr_number.is_none(),
+        Some(ExpectedPullRequestTarget::Existing { number }) => {
+            actual_open_pr_number == Some(number)
+        }
+        Some(ExpectedPullRequestTarget::Unknown) | None => true,
+    };
+    if !matches {
+        anyhow::bail!(
+            "The pull request target changed after approval. Review the draft before submitting again."
+        );
+    }
+    Ok(())
+}
+
 fn write_pr_url_config(key: &str, url: &str) -> anyhow::Result<()> {
     write_pr_url_config_with(key, url, |path, args| run_git(path, args))
 }
@@ -422,6 +454,7 @@ fn read_current_repo_identity() -> Option<(String, String)> {
 mod tests {
     use anyhow::Result;
 
+    use super::super::ExpectedPullRequestTarget;
     use super::*;
     use crate::commands::agent::types::SessionPrContext;
     use crate::commands::ai::pr_series::PrSeriesPlan;
@@ -839,6 +872,7 @@ mod tests {
                 current_repo_identity: no_current_repo,
                 review_language_context: Some(&context),
                 lock_policy: SubmitLockPolicy::RequireUnlocked,
+                expected_pr_target: None,
             },
             &submit_effects,
             no_vibe_access,
@@ -913,6 +947,7 @@ mod tests {
                 current_repo_identity: no_current_repo,
                 review_language_context: Some(&review_context),
                 lock_policy: SubmitLockPolicy::OwnedByReview,
+                expected_pr_target: None,
             },
             &submit_effects,
             no_vibe_access,
@@ -1935,6 +1970,79 @@ mod tests {
                     "title": "Updated title",
                     "body": updated_body,
                 })],
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::closed_existing_pr(None, ExpectedPullRequestTarget::Existing { number: 318 })]
+    #[case::replacement_pr(Some(642), ExpectedPullRequestTarget::Existing { number: 318 })]
+    #[case::new_pr_now_open(Some(642), ExpectedPullRequestTarget::New)]
+    #[tokio::test]
+    async fn does_not_submit_if_the_target_changed_after_approval(
+        #[case] existing_pr_number: Option<u64>,
+        #[case] expected_pr_target: ExpectedPullRequestTarget,
+    ) {
+        let _draft_directory = TestDraftDirectory::new("sample-owner", "sample-repository");
+        let draft_path = create_approved_draft(
+            "sample-owner",
+            "sample-repository",
+            "feature/update-target",
+            "Update a sample feature",
+            "Updated sample body",
+        );
+        let args = SubmitArgs {
+            filepath: Some(draft_path),
+            base: None,
+            draft: false,
+            no_review: false,
+        };
+        let client = SubmitClientStub {
+            existing_pr_number,
+            ..SubmitClientStub::default()
+        };
+        let submit_effects = SubmitEffects {
+            post_submit_processor: &NoopPostSubmitProcessor,
+            record_created_pr_url: noop_record_created_pr_url,
+        };
+        let result = super::run_impl_with_review_language_context(
+            &args,
+            &client,
+            &noop_hook,
+            noop_config,
+            SubmitContext {
+                current_repo_identity: no_current_repo,
+                review_language_context: None,
+                lock_policy: SubmitLockPolicy::RequireUnlocked,
+                expected_pr_target: Some(expected_pr_target),
+            },
+            &submit_effects,
+            no_vibe_access,
+        )
+        .await;
+        let observed = (
+            result.map_err(|error| error.to_string()),
+            client
+                .create_calls
+                .lock()
+                .expect("submit client mutex")
+                .clone(),
+            client
+                .update_calls
+                .lock()
+                .expect("submit client mutex")
+                .clone(),
+        );
+
+        assert_eq!(
+            observed,
+            (
+                Err(
+                    "The pull request target changed after approval. Review the draft before submitting again."
+                        .to_owned(),
+                ),
+                Vec::new(),
+                Vec::new(),
             ),
         );
     }

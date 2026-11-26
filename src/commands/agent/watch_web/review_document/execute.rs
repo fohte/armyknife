@@ -17,6 +17,7 @@ use super::{
     ReviewDocumentEditRequest, ReviewDocumentRoots, ReviewDocumentSummary, ReviewQueueLoader,
     SessionLoader, active_review_document, save,
 };
+use crate::commands::ai::pr_draft::ExpectedPullRequestTarget;
 pub(super) use crate::shared::human_in_the_loop::ReviewDocumentAction;
 use crate::shared::human_in_the_loop::{
     LockGuard, ReviewDocumentActionResult, clear_action_result, document_hash,
@@ -33,6 +34,7 @@ enum ActionStatus {
 #[derive(Debug, Clone)]
 pub(super) struct ActionRecord {
     action: ReviewDocumentAction,
+    expected_pr_target: Option<ExpectedPullRequestTarget>,
     path: PathBuf,
     session_cwd: PathBuf,
     summary: ReviewDocumentSummary,
@@ -58,6 +60,8 @@ pub(super) struct ReviewDocumentActionRequest {
     frontmatter: serde_json::Value,
     body: String,
     action: ReviewDocumentAction,
+    #[serde(default)]
+    expected_pull_request_target: Option<ExpectedPullRequestTarget>,
 }
 
 #[derive(Serialize)]
@@ -89,6 +93,9 @@ pub(super) async fn execute_review_document(
     let (mut record, revision, retrying) = match existing {
         Some(record) => {
             if record.action != request.action {
+                return Err(StatusCode::CONFLICT);
+            }
+            if record.expected_pr_target != request.expected_pull_request_target {
                 return Err(StatusCode::CONFLICT);
             }
             if !should_run_again(record.status)? {
@@ -151,6 +158,7 @@ pub(super) async fn execute_review_document(
                 .ok_or(StatusCode::NOT_FOUND)?;
             let summary = super::summary_for_marker(&session, &marker, queue, &roots);
             validate_action(summary.kind, request.action)?;
+            validate_expected_pr_target(request.action, request.expected_pull_request_target)?;
             let frontmatter =
                 approved_frontmatter(summary.kind, request.action, request.frontmatter)?;
             clear_previous_action_result(&marker.path)?;
@@ -173,6 +181,7 @@ pub(super) async fn execute_review_document(
             })?;
             let record = ActionRecord {
                 action: request.action,
+                expected_pr_target: request.expected_pull_request_target,
                 path: marker.path,
                 session_cwd: session.cwd.clone(),
                 summary,
@@ -337,6 +346,16 @@ fn validate_action(
     }
 }
 
+fn validate_expected_pr_target(
+    action: ReviewDocumentAction,
+    expected_pr_target: Option<ExpectedPullRequestTarget>,
+) -> Result<(), StatusCode> {
+    if action != ReviewDocumentAction::CreatePr && expected_pr_target.is_some() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    Ok(())
+}
+
 fn should_run_again(status: ActionStatus) -> Result<bool, StatusCode> {
     match status {
         ActionStatus::Running => Err(StatusCode::CONFLICT),
@@ -384,6 +403,7 @@ pub(super) async fn run_action(record: &ActionRecord) -> anyhow::Result<String> 
                 record.path.clone(),
                 &record.session_cwd,
                 target_repo_id,
+                record.expected_pr_target,
             )
             .await
         }
@@ -458,14 +478,36 @@ fn issue_target(record: &ActionRecord) -> anyhow::Result<(u64, String)> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ActionStatus, ReviewDocumentAction, approved_frontmatter, same_action_content,
-        should_run_again, validate_action,
+        ActionStatus, ReviewDocumentAction, ReviewDocumentActionRequest, approved_frontmatter,
+        same_action_content, should_run_again, validate_action,
     };
     use crate::commands::agent::watch_web::review_document::metadata::ReviewDocumentKind;
+    use crate::commands::ai::pr_draft::ExpectedPullRequestTarget;
     use axum::http::StatusCode;
     use rstest::rstest;
     use serde_json::json;
     use tempfile::TempDir;
+
+    #[test]
+    fn deserializes_the_expected_pull_request_target() {
+        let request = serde_json::from_value::<ReviewDocumentActionRequest>(json!({
+            "id": "fixture-review",
+            "revision": "fixture-revision",
+            "frontmatter": { "steps": { "submit": false } },
+            "body": "Fixture body",
+            "action": "create_pr",
+            "expectedPullRequestTarget": { "kind": "existing", "number": 318 },
+        }))
+        .expect("action request should deserialize");
+
+        assert_eq!(
+            (request.action, request.expected_pull_request_target),
+            (
+                ReviewDocumentAction::CreatePr,
+                Some(ExpectedPullRequestTarget::Existing { number: 318 }),
+            ),
+        );
+    }
 
     #[rstest]
     #[case::issue_comment(

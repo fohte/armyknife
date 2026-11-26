@@ -4,6 +4,7 @@ import { errorFromResponse } from '#api-requests'
 import { isJsonValue } from '#json-value'
 import { LATER_PRESET_OPTIONS } from '#session-navigation'
 import type {
+  ExpectedPullRequestTarget,
   SessionOperation,
   SessionOperationError,
 } from '#session-operation-types'
@@ -26,6 +27,25 @@ function isStringArray(value: unknown): value is string[] {
   return (
     Array.isArray(value) && value.every((entry) => typeof entry === 'string')
   )
+}
+
+function isExpectedPullRequestTarget(
+  value: unknown,
+): value is ExpectedPullRequestTarget {
+  if (!isRecord(value)) return false
+  switch (value['kind']) {
+    case 'new':
+    case 'unknown':
+      return true
+    case 'existing':
+      return (
+        typeof value['number'] === 'number' &&
+        Number.isSafeInteger(value['number']) &&
+        value['number'] > 0
+      )
+    default:
+      return false
+  }
 }
 
 function toError(error: unknown): SessionOperationError {
@@ -214,6 +234,11 @@ function requestFor(operation: SessionOperation) {
           frontmatter: operation.frontmatter,
           body: operation.body,
           action: operation.action,
+          ...(operation.expectedPullRequestTarget === undefined
+            ? {}
+            : {
+                expectedPullRequestTarget: operation.expectedPullRequestTarget,
+              }),
         },
       }
   }
@@ -311,12 +336,15 @@ export function createSessionOperation(
       const body = requiredString('body')
       const frontmatter = payload['frontmatter']
       const action = payload['action']
+      const expectedPullRequestTarget = payload['expectedPullRequestTarget']
       if (
         id === null ||
         revision === null ||
         body === null ||
         !isJsonValue(frontmatter) ||
-        !isReviewDocumentAction(action)
+        !isReviewDocumentAction(action) ||
+        (expectedPullRequestTarget !== undefined &&
+          !isExpectedPullRequestTarget(expectedPullRequestTarget))
       ) {
         return errOperation('Invalid review document action')
       }
@@ -328,6 +356,9 @@ export function createSessionOperation(
         frontmatter,
         body,
         action,
+        ...(expectedPullRequestTarget === undefined
+          ? {}
+          : { expectedPullRequestTarget }),
       })
     }
     case 'commands/preview':

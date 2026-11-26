@@ -5,12 +5,21 @@ mod review;
 mod stack;
 mod submit;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub(crate) enum ExpectedPullRequestTarget {
+    New,
+    Existing { number: u64 },
+    Unknown,
+}
+
 use clap::Subcommand;
 
 pub(crate) async fn submit_draft_for_review(
     filepath: std::path::PathBuf,
     session_cwd: &std::path::Path,
     target_repo_id: &str,
+    expected_pr_target: Option<ExpectedPullRequestTarget>,
 ) -> anyhow::Result<String> {
     submit::run_for_review(
         &submit::SubmitArgs {
@@ -21,6 +30,7 @@ pub(crate) async fn submit_draft_for_review(
         },
         session_cwd,
         target_repo_id,
+        expected_pr_target,
     )
     .await
 }

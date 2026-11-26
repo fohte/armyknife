@@ -1,7 +1,13 @@
+import { ok } from 'neverthrow'
 import { expect, it } from 'vitest'
 
 import { reviewDocumentActionLabel } from '#components/review-document-action-label'
-import { frontmatterForReviewFinish } from '#components/review-document-operation'
+import {
+  frontmatterForReviewFinish,
+  requestReviewDocumentAction,
+} from '#components/review-document-operation'
+import type { useSessionOperations } from '#session-operation-context'
+import type { SessionOperation } from '#session-operation-types'
 
 it('uses the existing PR number in the direct action label', () => {
   const labels = () => ({
@@ -18,6 +24,52 @@ it('uses the existing PR number in the direct action label', () => {
     update: 'Update PR #73',
     unavailable: 'Submit PR',
   })
+})
+
+it('sends the displayed PR target with its update action', () => {
+  const operations: SessionOperation[] = []
+  const run: ReturnType<typeof useSessionOperations>['run'] = (operation) => {
+    operations.push(operation)
+    return Promise.resolve(
+      ok({ success: true, revision: 'next-fixture-revision' }),
+    )
+  }
+
+  requestReviewDocumentAction(
+    'fixture-session',
+    {
+      id: 'fixture-review',
+      revision: 'fixture-revision',
+      frontmatter: { title: 'Fixture title' },
+      body: 'Fixture body',
+    },
+    {
+      id: 'fixture-review',
+      kind: 'pr_draft',
+      target: { pullRequestNumber: 318 },
+      isEditor: true,
+      canSave: true,
+      canFinish: true,
+    },
+    'create_pr',
+    () => undefined,
+    run,
+    'Fixture session',
+    null,
+  )
+
+  expect(operations).toEqual([
+    {
+      type: 'review_document_action',
+      sessionId: 'fixture-session',
+      id: 'fixture-review',
+      revision: 'fixture-revision',
+      frontmatter: { title: 'Fixture title' },
+      body: 'Fixture body',
+      action: 'create_pr',
+      expectedPullRequestTarget: { kind: 'existing', number: 318 },
+    },
+  ])
 })
 
 it.each([
