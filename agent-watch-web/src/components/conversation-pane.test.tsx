@@ -10324,6 +10324,107 @@ it('clears a proposal error after an edited answer succeeds', async () => {
   })
 })
 
+it('clears a todo error after a retry with an edited comment succeeds', async () => {
+  const todo: ChatItem = {
+    type: 'todo',
+    seq: 4,
+    title: 'Check a status panel',
+    detail: 'Confirm the panel closes after resolution.',
+    completed: false,
+    resolution: null,
+    comment: null,
+  }
+  let resolutionCount = 0
+  const submittedComments: string[] = []
+  const fetcher = vi.fn<typeof fetch>((input, init) => {
+    const url = requestUrl(input)
+    if (init?.method === 'POST' && url.endsWith('/todos/4/resolve')) {
+      resolutionCount += 1
+      if (typeof init.body === 'string') {
+        const body: unknown = JSON.parse(init.body)
+        if (typeof body === 'object' && body !== null && 'comment' in body) {
+          const comment = body.comment
+          if (typeof comment === 'string') submittedComments.push(comment)
+        }
+      }
+      return Promise.resolve(
+        resolutionCount === 1
+          ? jsonResponse({ error: 'The todo could not be resolved.' }, 503)
+          : jsonResponse({}),
+      )
+    }
+    if (url.includes('/messages?')) {
+      return Promise.resolve(jsonResponse(messagesResponse([todo])))
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <SessionConversationCacheProvider>
+        <ConversationPane
+          session={session}
+          shouldSkipSessionTreeFetch
+          initialSessionTree={[]}
+          refreshKey={0}
+          sessionTreeRefreshKey={0}
+          onSelectSession={() => undefined}
+        />
+      </SessionConversationCacheProvider>,
+    )
+  })
+  await waitForState(
+    () => container.querySelector('.chat-todo-comment') !== null,
+  )
+  const comment = requireElement(
+    container.querySelector<HTMLTextAreaElement>('.chat-todo-comment'),
+  )
+  setTextareaValue(comment, 'First resolution')
+  const markDone = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      '.chat-todo-footer .aw-button--primary',
+    ),
+  )
+  await act(async () => userEvent.click(markDone))
+  await waitForState(
+    () =>
+      container.querySelector('[role="alert"]')?.textContent ===
+      'The todo could not be resolved.',
+  )
+  const afterFailedResolution =
+    container.querySelector('[role="alert"]')?.textContent ?? null
+
+  const updatedComment = requireElement(
+    container.querySelector<HTMLTextAreaElement>('.chat-todo-comment'),
+  )
+  setTextareaValue(updatedComment, 'Revised resolution')
+  const updatedMarkDone = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      '.chat-todo-footer .aw-button--primary',
+    ),
+  )
+  await act(async () => userEvent.click(updatedMarkDone))
+  const editedResolutionCompleted = await waitForState(
+    () =>
+      resolutionCount === 2 &&
+      container.querySelector('[role="alert"]') === null,
+  )
+
+  const snapshot = () => ({
+    afterFailedResolution,
+    editedResolutionCompleted,
+    submittedComments,
+  })
+  expect(snapshot()).toEqual({
+    afterFailedResolution: 'The todo could not be resolved.',
+    editedResolutionCompleted: true,
+    submittedComments: ['First resolution', 'Revised resolution'],
+  })
+})
+
 it.each([
   {
     action: 'approve' as const,
