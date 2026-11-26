@@ -431,6 +431,7 @@ function renderView(
     messageId: string,
     mode: RewindMode,
     draft: string,
+    timelineIndex?: number,
   ) => Promise<boolean>,
 ) {
   renderedSessionIds.add(viewSession.id)

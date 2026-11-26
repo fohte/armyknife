@@ -1,3 +1,4 @@
+import { err, ok, type Result } from 'neverthrow'
 import { act, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -6,9 +7,18 @@ import { userEvent } from 'vitest/browser'
 import {
   type AsyncAction,
   AsyncActionFeedbackProvider,
+  useOptionalAsyncActionFeedback,
 } from '#async-action-feedback'
+import type { ReviewDocumentResponse } from '#components/conversation-pane-response'
 import { ConversationPaneView } from '#components/conversation-pane-view'
 import { ConversationTimeline } from '#components/conversation-timeline'
+import {
+  requestReviewDocumentAction,
+  type ReviewDocumentStates,
+} from '#components/review-document-operation'
+import type { ReviewDocumentSummary } from '#components/review-document-summary'
+import type { useSessionOperations } from '#session-operation-context'
+import type { SessionOperationError } from '#session-operation-types'
 import type { ChatItem, Session, SessionActions } from '#types'
 
 const pullRequest = {
@@ -58,6 +68,8 @@ const initialMessages: ChatItem[] = [
 let container: HTMLDivElement
 let root: Root | null = null
 let resolveMerge: ((response: Response) => void) | undefined
+let resolveReviewOperation:
+  ((result: Result<unknown, SessionOperationError>) => void) | undefined
 
 function requireElement<T extends Element>(element: T | null): T {
   if (element === null) throw new Error('Expected element was not rendered')
@@ -65,12 +77,50 @@ function requireElement<T extends Element>(element: T | null): T {
 }
 
 function TimelineHarness({ initiallyLoading }: { initiallyLoading: boolean }) {
+  const feedback = useOptionalAsyncActionFeedback()
+  const [, setReviewDocumentStates] = useState<ReviewDocumentStates>({})
   const [messages, setMessages] = useState<readonly ChatItem[]>(
     initiallyLoading ? [] : initialMessages,
   )
   const [loading, setLoading] = useState(initiallyLoading)
+  const reviewDocument: ReviewDocumentResponse = {
+    id: 'fixture-review-document',
+    revision: 'fixture-revision',
+    frontmatter: {},
+    body: 'Fixture draft',
+  }
+  const reviewSummary: ReviewDocumentSummary = {
+    id: reviewDocument.id,
+    kind: 'issue_comment',
+    target: { issueNumber: 51 },
+    isEditor: true,
+    canSave: true,
+    canFinish: true,
+  }
+  const run: ReturnType<typeof useSessionOperations>['run'] = () =>
+    new Promise((resolve) => {
+      resolveReviewOperation = resolve
+    })
   return (
     <>
+      <button
+        type="button"
+        onClick={() => {
+          requestReviewDocumentAction(
+            session.id,
+            reviewDocument,
+            reviewSummary,
+            'post_comment',
+            setReviewDocumentStates,
+            run,
+            session.title,
+            feedback,
+            { timelineIndex: 10 + messages.length },
+          )
+        }}
+      >
+        Start review action
+      </button>
       <button
         type="button"
         onClick={() => {
@@ -142,6 +192,7 @@ beforeEach(() => {
   document.body.append(container)
   root = createRoot(container)
   resolveMerge = undefined
+  resolveReviewOperation = undefined
 })
 
 afterEach(() => {
@@ -208,6 +259,77 @@ it('keeps a merge result between the messages present when it started and later 
       'The change is ready for review.',
       'I am starting the merge.',
       'Merged PR #7042 · 12:03',
+      'The merge is ready for another check.',
+    ],
+  ]
+  expect(getSnapshots()).toEqual(expectedSnapshots)
+})
+
+it('keeps review action progress and retry results at the conversation position where it started', async () => {
+  vi.spyOn(Date, 'now').mockReturnValue(new Date(2034, 2, 19, 12, 3).getTime())
+  act(() => {
+    render()
+  })
+  await clickButton(
+    requireElement(
+      [...container.querySelectorAll<HTMLButtonElement>('button')].find(
+        (button) => button.textContent === 'Start review action',
+      ) ?? null,
+    ),
+  )
+  await clickButton(
+    requireElement(
+      [...container.querySelectorAll<HTMLButtonElement>('button')].find(
+        (button) => button.textContent === 'Add a later message',
+      ) ?? null,
+    ),
+  )
+
+  const running = timelineSnapshot()
+  await act(async () => {
+    resolveReviewOperation?.(
+      err(Object.assign(new Error('Temporary failure'), { retryable: true })),
+    )
+    await new Promise((resolve) => window.setTimeout(resolve, 0))
+  })
+  const failure = timelineSnapshot()
+  await clickButton(
+    requireElement(
+      container.querySelector<HTMLButtonElement>(
+        '.conversation-scroll .async-action-line-retry',
+      ),
+    ),
+  )
+  const retrying = timelineSnapshot()
+  await act(async () => {
+    resolveReviewOperation?.(ok({ success: true }))
+    await new Promise((resolve) => window.setTimeout(resolve, 0))
+  })
+
+  const getSnapshots = () => [running, failure, retrying, timelineSnapshot()]
+  const expectedSnapshots = [
+    [
+      'The change is ready for review.',
+      'I am starting the merge.',
+      'Post comment in progress',
+      'The merge is ready for another check.',
+    ],
+    [
+      'The change is ready for review.',
+      'I am starting the merge.',
+      'Post comment failedTemporary failureRetry · 12:03',
+      'The merge is ready for another check.',
+    ],
+    [
+      'The change is ready for review.',
+      'I am starting the merge.',
+      'Post comment in progress',
+      'The merge is ready for another check.',
+    ],
+    [
+      'The change is ready for review.',
+      'I am starting the merge.',
+      'Post comment completed · 12:03',
       'The merge is ready for another check.',
     ],
   ]

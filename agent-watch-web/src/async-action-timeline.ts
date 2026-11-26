@@ -1,21 +1,20 @@
 import type { AsyncAction } from '#async-action-feedback'
 
-export type ShiftMergeTimelineIndicesOptions = {
+export type ShiftActionTimelineIndicesOptions = {
   sessionId: string
   from: number
   through: number
   offset: number
 }
 
-export function shiftMergeTimelineIndices(
+export function shiftActionTimelineIndices(
   actions: AsyncAction[],
-  { sessionId, from, through, offset }: ShiftMergeTimelineIndicesOptions,
+  { sessionId, from, through, offset }: ShiftActionTimelineIndicesOptions,
 ): AsyncAction[] {
   if (offset === 0) return actions
   return actions.map((action) => {
     const timelineIndex = action.timelineIndex
-    return action.kind === 'merge' &&
-      action.sessionId === sessionId &&
+    return action.sessionId === sessionId &&
       timelineIndex !== undefined &&
       timelineIndex >= from &&
       timelineIndex <= through

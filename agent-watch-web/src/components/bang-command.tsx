@@ -126,6 +126,7 @@ export function BangCommandActions({
       sessionId,
       sessionTitle,
       command: commands.join('\n'),
+      ...(outputStartIndex === null ? {} : { timelineIndex: outputStartIndex }),
       run: async () => {
         try {
           const operation = createSessionOperation(

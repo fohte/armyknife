@@ -56,6 +56,7 @@ export type ConversationMessageRowProps = {
     messageId: string,
     mode: RewindMode,
     draft: string,
+    timelineIndex?: number,
   ) => Promise<boolean>
   sessionEngine: Session['engine']
   sessionId?: string

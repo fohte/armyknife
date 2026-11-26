@@ -87,6 +87,7 @@ type ConversationPaneViewProps = {
     messageId: string,
     mode: RewindMode,
     draft: string,
+    timelineIndex?: number,
   ) => Promise<boolean>
   onOpenInTerminal?: () => void
   onSelectSession: (id: string) => void
@@ -272,8 +273,14 @@ export function ConversationPaneView({
     }
   }, [onAction, onOpenInTerminal])
   const rewindMessage = useCallback(
-    (messageId: string, mode: RewindMode, draftText: string) =>
-      onRewind?.(messageId, mode, draftText) ?? Promise.resolve(false),
+    (
+      messageId: string,
+      mode: RewindMode,
+      draftText: string,
+      timelineIndex?: number,
+    ) =>
+      onRewind?.(messageId, mode, draftText, timelineIndex) ??
+      Promise.resolve(false),
     [onRewind],
   )
   const {
@@ -321,8 +328,8 @@ export function ConversationPaneView({
     backgroundTasks,
     editorReviewDocument: editorReviewDocument ?? null,
   })
-  // A merge result falls back to the trailing action list until the initial page establishes its boundary.
-  const mergeTimelineIndex =
+  // Actions started before the initial page establishes its boundary stay in the trailing list.
+  const actionTimelineIndex =
     loading && messages.length === 0 ? undefined : start + messages.length
   const returnToRequestCard = () => {
     scrollToConversationStatusCard(
@@ -367,9 +374,9 @@ export function ConversationPaneView({
       <ConversationPaneHeader
         key={session.id}
         session={session}
-        {...(mergeTimelineIndex === undefined
+        {...(actionTimelineIndex === undefined
           ? {}
-          : { timelineIndex: mergeTimelineIndex })}
+          : { timelineIndex: actionTimelineIndex })}
         mergeBandTarget={mergeBandTarget}
         pullRequestListTarget={pullRequestListTarget}
         activityFailed={

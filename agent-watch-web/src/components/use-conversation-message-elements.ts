@@ -46,6 +46,7 @@ type UseConversationMessageElementsOptions = {
     messageId: string,
     mode: RewindMode,
     draft: string,
+    timelineIndex?: number,
   ) => Promise<boolean>
   pendingActions: PendingPermissionActions
   sessions: readonly SessionLinkTarget[]

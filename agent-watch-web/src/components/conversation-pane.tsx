@@ -355,6 +355,10 @@ export function ConversationPane({
       operation.sessionId === session.id && operation.type === 'interrupt',
   )
   const { messages, backgroundTasks } = displayedConversation
+  const actionTimelineIndex =
+    loading && messages.length === 0
+      ? undefined
+      : displayedConversation.start + messages.length
   const editorReviewDocument = useEditorReviewDocument(session)
   const backgroundTaskElapsedOffset =
     messagesLoadedAt === null
@@ -382,6 +386,7 @@ export function ConversationPane({
     pullRequestListTarget,
   } = useConversationStatusPanel({
     session,
+    actionTimelineIndex,
     reviewDocumentSummaries: editorReviewDocument?.summaries ?? null,
     ...(editorReviewDocument?.retrySummaries === undefined
       ? {}

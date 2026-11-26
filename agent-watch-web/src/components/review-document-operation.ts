@@ -39,7 +39,10 @@ export function requestReviewDocumentAction(
   run: ReturnType<typeof useSessionOperations>['run'],
   sessionTitle: string,
   feedback: ReturnType<typeof useOptionalAsyncActionFeedback>,
-  frontmatter = document.frontmatter,
+  {
+    frontmatter = document.frontmatter,
+    timelineIndex,
+  }: { frontmatter?: JsonValue; timelineIndex?: number | undefined } = {},
 ) {
   const savedRevision = (value: unknown) =>
     typeof value === 'object' &&
@@ -199,6 +202,7 @@ export function requestReviewDocumentAction(
     reviewDocumentAction: directActionLabel(action, summary),
     sessionId,
     sessionTitle,
+    ...(timelineIndex === undefined ? {} : { timelineIndex }),
     run: runAction,
   })
 }

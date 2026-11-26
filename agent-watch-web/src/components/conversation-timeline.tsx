@@ -60,7 +60,6 @@ export function ConversationTimeline({
     .filter(
       (action) =>
         action.sessionId === sessionId &&
-        action.kind === 'merge' &&
         action.timelineIndex !== undefined &&
         action.timelineIndex >= start,
     )
@@ -76,9 +75,11 @@ export function ConversationTimeline({
       action={action}
       form="line"
       key={action.id}
-      {...(action.completedAt === undefined
-        ? {}
-        : { time: formatAsyncActionTime(action.completedAt) })}
+      {...(action.kind === 'command'
+        ? { time: formatAsyncActionTime(action.createdAt) }
+        : action.completedAt === undefined
+          ? {}
+          : { time: formatAsyncActionTime(action.completedAt) })}
       {...(onRetry === undefined
         ? {}
         : {
