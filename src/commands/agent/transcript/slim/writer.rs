@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 #[cfg(all(not(test), not(any(target_os = "linux", target_os = "macos"))))]
 use anyhow::bail;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(test, target_os = "linux"))]
 fn same_uid_processes<F>(
     process_paths: impl IntoIterator<Item = std::path::PathBuf>,
     current_uid: u32,
@@ -20,14 +20,7 @@ where
     for process_path in process_paths {
         let owner_uid = match process_owner_uid(&process_path) {
             Ok(owner_uid) => owner_uid,
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied
-                ) =>
-            {
-                continue;
-            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(error) => return Err(anyhow::Error::from(error)),
         };
         if owner_uid == current_uid {
@@ -49,14 +42,7 @@ where
     for process_path in process_paths {
         match read_fd_paths(&process_path) {
             Ok(paths) => fd_paths.extend(paths),
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied
-                ) =>
-            {
-                continue;
-            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(error) => {
                 return Err(anyhow::Error::from(error)
                     .context(format!("inspect file descriptors for {process_path:?}")));
@@ -168,7 +154,7 @@ mod tests {
 
     use rstest::rstest;
 
-    use super::{lsof_output_has_writable_handle, process_fd_paths};
+    use super::{lsof_output_has_writable_handle, process_fd_paths, same_uid_processes};
 
     #[rstest]
     #[case::read_only(b"p123\0f4\0ar\0", false)]
@@ -179,19 +165,95 @@ mod tests {
     }
 
     #[test]
-    fn continues_scanning_after_an_unrelated_process_fd_directory_permission_error() {
-        let blocked_process = PathBuf::from("fixture-unrelated-ssh");
-        let writer_process = PathBuf::from("fixture-transcript-writer");
-        let expected = vec![writer_process.join("fd/7")];
+    fn reports_permission_denied_when_reading_process_fd_paths() {
+        let process = PathBuf::from("fixture-uninspectable-process");
 
-        let result = process_fd_paths([blocked_process, writer_process], |process_path| {
-            if process_path == std::path::Path::new("fixture-unrelated-ssh") {
+        let result = process_fd_paths([process], |_| {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "fixture fd directory is not readable",
+            ))
+        })
+        .map_err(|error| format!("{error:#}"));
+
+        assert_eq!(
+            result,
+            Err("inspect file descriptors for \"fixture-uninspectable-process\": fixture fd directory is not readable".to_owned()),
+        );
+    }
+
+    #[test]
+    fn skips_process_that_exited_before_fd_paths_were_read() {
+        let exited_process = PathBuf::from("fixture-exited-process");
+        let live_process = PathBuf::from("fixture-live-process");
+        let expected = vec![live_process.join("fd/7")];
+
+        let result = process_fd_paths([exited_process, live_process], |process_path| {
+            if process_path == std::path::Path::new("fixture-exited-process") {
                 Err(std::io::Error::new(
-                    std::io::ErrorKind::PermissionDenied,
-                    "fixture fd directory is not readable",
+                    std::io::ErrorKind::NotFound,
+                    "fixture process exited",
                 ))
             } else {
                 Ok(vec![process_path.join("fd/7")])
+            }
+        })
+        .map_err(|error| error.to_string());
+
+        assert_eq!(result, Ok(expected));
+    }
+
+    #[test]
+    fn reports_permission_denied_when_reading_process_owner() {
+        let process = PathBuf::from("fixture-uninspectable-process");
+
+        let result = same_uid_processes([process], 42, |_| {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "fixture process owner is not readable",
+            ))
+        })
+        .map_err(|error| format!("{error:#}"));
+
+        assert_eq!(
+            result,
+            Err("fixture process owner is not readable".to_owned()),
+        );
+    }
+
+    #[test]
+    fn excludes_foreign_uid_processes_using_injected_owner_lookup() {
+        let local_process = PathBuf::from("fixture-local-process");
+        let foreign_process = PathBuf::from("fixture-foreign-process");
+        let expected = vec![local_process.clone()];
+
+        let result = same_uid_processes([local_process, foreign_process], 42, |process_path| {
+            let owner_uid = match process_path.to_str() {
+                Some("fixture-local-process") => 42,
+                Some("fixture-foreign-process") => 100,
+                _ => 0,
+            };
+            Ok(owner_uid)
+        })
+        .map_err(|error| error.to_string());
+
+        assert_eq!(result, Ok(expected));
+    }
+
+    #[test]
+    fn skips_process_that_exited_before_owner_uid_was_read() {
+        let exited_process = PathBuf::from("fixture-exited-process");
+        let local_process = PathBuf::from("fixture-local-process");
+        let expected = vec![local_process.clone()];
+
+        let result = same_uid_processes([exited_process, local_process], 42, |process_path| {
+            if process_path == std::path::Path::new("fixture-exited-process") {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "fixture process exited",
+                ))
+            } else {
+                Ok(42)
             }
         })
         .map_err(|error| error.to_string());
