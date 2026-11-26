@@ -72,10 +72,11 @@ pub(super) fn import_legacy_json(connection: &mut Connection, sessions_dir: &Pat
     Ok(())
 }
 
-pub(super) fn remove_legacy_lock_files(sessions_dir: &Path) {
+pub(super) fn remove_legacy_lock_files(sessions_dir: &Path) -> bool {
     let Ok(entries) = fs::read_dir(sessions_dir) else {
-        return;
+        return false;
     };
+    let mut completed = true;
     for entry in entries.flatten() {
         let path = entry.path();
         let is_lock_file = path
@@ -100,17 +101,20 @@ pub(super) fn remove_legacy_lock_files(sessions_dir: &Path) {
             Err(error) if error.kind() == ErrorKind::NotFound => continue,
             Err(error) => {
                 warn_legacy_lock_delete_failure(&path, &error);
+                completed = false;
                 continue;
             }
         };
         match lock_file.try_lock() {
-            Ok(()) => remove_legacy_lock_file(&path),
-            Err(std::fs::TryLockError::WouldBlock) => {}
+            Ok(()) => completed &= remove_legacy_lock_file(&path),
+            Err(std::fs::TryLockError::WouldBlock) => completed = false,
             Err(std::fs::TryLockError::Error(error)) => {
                 warn_legacy_lock_delete_failure(&path, &error);
+                completed = false;
             }
         }
     }
+    completed
 }
 
 fn remove_locked_legacy_lock_files(session_paths: &[PathBuf]) {
@@ -119,12 +123,14 @@ fn remove_locked_legacy_lock_files(session_paths: &[PathBuf]) {
     }
 }
 
-fn remove_legacy_lock_file(path: &Path) {
+fn remove_legacy_lock_file(path: &Path) -> bool {
     if let Err(error) = fs::remove_file(path)
         && error.kind() != ErrorKind::NotFound
     {
         warn_legacy_lock_delete_failure(path, &error);
+        return false;
     }
+    true
 }
 
 fn warn_legacy_lock_delete_failure(path: &Path, error: &impl std::fmt::Display) {
@@ -139,7 +145,7 @@ fn warn_legacy_lock_delete_failure(path: &Path, error: &impl std::fmt::Display) 
 pub(super) fn cleanup_expired_legacy_json(
     connection: &Connection,
     sessions_dir: &Path,
-) -> Result<()> {
+) -> Result<bool> {
     let imported_at: Option<String> = connection
         .query_row(
             "SELECT value FROM session_store_meta WHERE key = 'legacy-imported-at'",
@@ -148,17 +154,17 @@ pub(super) fn cleanup_expired_legacy_json(
         )
         .optional()?;
     let Some(imported_at) = imported_at else {
-        return Ok(());
+        return Ok(true);
     };
     let Ok(imported_at) = DateTime::parse_from_rfc3339(&imported_at) else {
         tracing::warn!(
             target: "armyknife::commands::agent::store",
             event = "agent.store.legacy_import_timestamp_invalid",
         );
-        return Ok(());
+        return Ok(true);
     };
     if Utc::now() - imported_at.with_timezone(&Utc) < LEGACY_RETENTION {
-        return Ok(());
+        return Ok(true);
     }
 
     let legacy_dir = sessions_dir.join("legacy-json");
@@ -171,8 +177,9 @@ pub(super) fn cleanup_expired_legacy_json(
             path = %legacy_dir.display(),
             error = %error,
         );
+        return Ok(false);
     }
-    Ok(())
+    Ok(true)
 }
 
 fn legacy_json_paths(sessions_dir: &Path) -> Result<Vec<PathBuf>> {

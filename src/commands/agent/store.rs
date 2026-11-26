@@ -973,7 +973,7 @@ mod tests {
     use crate::commands::agent::types::SessionStatus;
     use chrono::{TimeDelta, TimeZone, Utc};
     use rstest::{fixture, rstest};
-    use rusqlite::OptionalExtension;
+    use rusqlite::{Connection, OptionalExtension};
     use std::fs::OpenOptions;
     use tempfile::TempDir;
 
@@ -1023,6 +1023,24 @@ mod tests {
             temp_dir,
             sessions_path,
         }
+    }
+
+    fn copy_initialized_database_for_legacy_import(
+        temp_session_dir: &TempSessionDir,
+        copy_name: &str,
+    ) -> PathBuf {
+        let source_path = temp_session_dir.sessions_path.join("sessions.db");
+        let connection = Connection::open(&source_path).expect("source database should open");
+        connection
+            .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+            .expect("source database should checkpoint");
+        drop(connection);
+
+        let sessions_dir = temp_session_dir.temp_dir.path().join(copy_name);
+        fs::create_dir_all(&sessions_dir).expect("copy directory should exist");
+        fs::copy(source_path, sessions_dir.join("sessions.db"))
+            .expect("initialized database should copy");
+        sessions_dir
     }
 
     fn create_test_session(id: &str) -> Session {
@@ -1253,32 +1271,35 @@ mod tests {
         stored.updated_at = newer_at;
         stored.label = Some("stored value".to_string());
         save_session_to(&temp_session_dir.sessions_path, &stored).expect("stored row should save");
+        let older_sessions_dir =
+            copy_initialized_database_for_legacy_import(&temp_session_dir, "older-import");
+        let newer_sessions_dir =
+            copy_initialized_database_for_legacy_import(&temp_session_dir, "newer-import");
 
         let mut legacy = stored.clone();
         legacy.updated_at = older_at;
         legacy.label = Some("older JSON value".to_string());
-        let json_path = temp_session_dir.sessions_path.join("updated-target.json");
+        let older_json_path = older_sessions_dir.join("updated-target.json");
         fs::write(
-            &json_path,
+            &older_json_path,
             serde_json::to_vec(&legacy).expect("legacy session should serialize"),
         )
         .expect("legacy session should write");
-        let after_older_import =
-            load_session_from(&temp_session_dir.sessions_path, "updated-target")
-                .expect("older legacy import should succeed")
-                .expect("stored row should remain");
+        let after_older_import = load_session_from(&older_sessions_dir, "updated-target")
+            .expect("older legacy import should succeed")
+            .expect("stored row should remain");
 
         legacy.updated_at = newer_at + TimeDelta::hours(1);
         legacy.label = Some("newer JSON value".to_string());
+        let newer_json_path = newer_sessions_dir.join("updated-target.json");
         fs::write(
-            &json_path,
+            &newer_json_path,
             serde_json::to_vec(&legacy).expect("newer legacy session should serialize"),
         )
         .expect("newer legacy session should write");
-        let after_newer_import =
-            load_session_from(&temp_session_dir.sessions_path, "updated-target")
-                .expect("newer legacy import should succeed")
-                .expect("newer row should load");
+        let after_newer_import = load_session_from(&newer_sessions_dir, "updated-target")
+            .expect("newer legacy import should succeed")
+            .expect("newer row should load");
 
         assert_eq!(
             (
@@ -1311,23 +1332,24 @@ mod tests {
             .expect("timestamp should be valid");
         stored.ancestor_session_ids = vec!["ancestor-session".to_string()];
         save_session_to(&temp_session_dir.sessions_path, &stored).expect("stored row should save");
+        let sessions_dir =
+            copy_initialized_database_for_legacy_import(&temp_session_dir, "recreated-import");
 
         let mut recreated = stored.clone();
         recreated.created_at += TimeDelta::minutes(1);
         recreated.updated_at += TimeDelta::minutes(1);
         recreated.ancestor_session_ids.clear();
-        let json_path = temp_session_dir.sessions_path.join("recreated-target.json");
+        let json_path = sessions_dir.join("recreated-target.json");
         fs::write(
             &json_path,
             serde_json::to_vec(&recreated).expect("recreated session should serialize"),
         )
         .expect("recreated legacy session should write");
 
-        let imported = load_session_from(&temp_session_dir.sessions_path, "recreated-target")
+        let imported = load_session_from(&sessions_dir, "recreated-target")
             .expect("legacy import should succeed")
             .expect("stored row should remain");
-        let backup_path = temp_session_dir
-            .sessions_path
+        let backup_path = sessions_dir
             .join("legacy-json")
             .join("recreated-target.json");
         let actual = (
@@ -1350,28 +1372,30 @@ mod tests {
 
     #[rstest::rstest]
     fn removes_legacy_backup_after_thirty_days(temp_session_dir: TempSessionDir) {
-        let session = create_test_session("retained-legacy");
-        let json_path = temp_session_dir.sessions_path.join("retained-legacy.json");
-        fs::write(
-            &json_path,
-            serde_json::to_vec(&session).expect("legacy session should serialize"),
+        save_session_to(
+            &temp_session_dir.sessions_path,
+            &create_test_session("retained-legacy"),
         )
-        .expect("legacy session should write");
-        load_session_from(&temp_session_dir.sessions_path, "retained-legacy")
-            .expect("legacy import should succeed");
-        let backup_dir = temp_session_dir.sessions_path.join("legacy-json");
-        let connection =
-            rusqlite::Connection::open(temp_session_dir.sessions_path.join("sessions.db"))
+        .expect("session should save");
+        let source_connection =
+            Connection::open(temp_session_dir.sessions_path.join("sessions.db"))
                 .expect("database should open");
-        connection
+        source_connection
             .execute(
-                "UPDATE session_store_meta SET value = ?1 WHERE key = 'legacy-imported-at'",
+                "INSERT INTO session_store_meta (key, value) VALUES ('legacy-imported-at', ?1)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                 [(Utc::now() - TimeDelta::days(31)).to_rfc3339()],
             )
             .expect("legacy import time should update");
-        drop(connection);
+        drop(source_connection);
+        let sessions_dir =
+            copy_initialized_database_for_legacy_import(&temp_session_dir, "expired-backup");
+        let backup_dir = sessions_dir.join("legacy-json");
+        fs::create_dir_all(&backup_dir).expect("legacy backup directory should exist");
+        fs::write(backup_dir.join("retained-legacy.json"), "fixture backup")
+            .expect("legacy backup should write");
 
-        list_all_sessions_from(&temp_session_dir.sessions_path)
+        list_all_sessions_from(&sessions_dir)
             .expect("opening the database should clean expired backups");
 
         assert!(!backup_dir.exists());
@@ -1381,13 +1405,14 @@ mod tests {
     fn late_legacy_import_refreshes_backup_retention(temp_session_dir: TempSessionDir) {
         let initial = create_test_session("existing-row");
         save_session_to(&temp_session_dir.sessions_path, &initial).expect("row should save");
-        let backup_dir = temp_session_dir.sessions_path.join("legacy-json");
+        let sessions_dir =
+            copy_initialized_database_for_legacy_import(&temp_session_dir, "late-import");
+        let backup_dir = sessions_dir.join("legacy-json");
         fs::create_dir_all(&backup_dir).expect("legacy backup directory should exist");
         let earlier_backup = backup_dir.join("earlier-import.json");
         fs::write(&earlier_backup, "retained backup").expect("earlier backup should write");
         let connection =
-            rusqlite::Connection::open(temp_session_dir.sessions_path.join("sessions.db"))
-                .expect("database should open");
+            Connection::open(sessions_dir.join("sessions.db")).expect("database should open");
         connection
             .execute(
                 "INSERT INTO session_store_meta (key, value) VALUES ('legacy-imported-at', ?1)
@@ -1398,13 +1423,13 @@ mod tests {
         drop(connection);
 
         let late_session = create_test_session("late-import");
-        let late_json = temp_session_dir.sessions_path.join("late-import.json");
+        let late_json = sessions_dir.join("late-import.json");
         fs::write(
             &late_json,
             serde_json::to_vec(&late_session).expect("legacy session should serialize"),
         )
         .expect("late legacy session should write");
-        let loaded = load_session_from(&temp_session_dir.sessions_path, "late-import")
+        let loaded = load_session_from(&sessions_dir, "late-import")
             .expect("late legacy import should succeed")
             .expect("late session should load");
 
@@ -1562,7 +1587,10 @@ mod tests {
 
     #[rstest::rstest]
     fn legacy_import_skips_undecodable_database_rows(undecodable_session: UndecodableSession) {
-        let sessions_dir = &undecodable_session.temp_session_dir.sessions_path;
+        let sessions_dir = copy_initialized_database_for_legacy_import(
+            &undecodable_session.temp_session_dir,
+            "undecodable-import",
+        );
         let legacy_json = sessions_dir.join(format!("{UNDECODABLE_SESSION_ID}.json"));
         fs::write(
             &legacy_json,
@@ -1579,7 +1607,7 @@ mod tests {
         )
         .expect("legacy session should write");
 
-        let connection = database::open_connection(sessions_dir)
+        let connection = database::open_connection(&sessions_dir)
             .expect("database should open when legacy data conflicts with an undecodable row");
         let stored_data = connection
             .query_row(
