@@ -29,6 +29,7 @@ pub(super) fn is_attachment_record(record: &Value) -> bool {
 #[derive(Clone)]
 pub(super) struct ClaudeParserState {
     pub(super) transcript_nodes: BTreeMap<String, TranscriptNode>,
+    pub(super) transcript_children: HashMap<String, Vec<String>>,
     branch_tracking: ClaudeBranchTracking,
     pub(super) latest_uuid: Option<String>,
     pub(super) latest_record_uuid: Option<String>,
@@ -45,6 +46,7 @@ impl ClaudeParserState {
     pub(super) fn new() -> Self {
         Self {
             transcript_nodes: BTreeMap::new(),
+            transcript_children: HashMap::new(),
             branch_tracking: ClaudeBranchTracking::default(),
             latest_uuid: None,
             latest_record_uuid: None,

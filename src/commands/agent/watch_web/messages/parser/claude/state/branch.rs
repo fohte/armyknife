@@ -5,6 +5,33 @@ use super::super::user_input::content_blocks;
 use super::ClaudeParserState;
 
 impl ClaudeParserState {
+    pub(in crate::commands::agent::watch_web::messages::parser::claude) fn rebuild_transcript_children(
+        &mut self,
+    ) {
+        self.transcript_children.clear();
+        for (uuid, node) in &self.transcript_nodes {
+            if let Some(parent_uuid) = &node.parent_uuid {
+                self.transcript_children
+                    .entry(parent_uuid.clone())
+                    .or_default()
+                    .push(uuid.clone());
+            }
+        }
+    }
+
+    pub(in crate::commands::agent::watch_web::messages::parser::claude) fn index_transcript_child(
+        &mut self,
+        parent_uuid: Option<&str>,
+        uuid: &str,
+    ) {
+        if let Some(parent_uuid) = parent_uuid {
+            self.transcript_children
+                .entry(parent_uuid.to_owned())
+                .or_default()
+                .push(uuid.to_owned());
+        }
+    }
+
     pub(super) fn pending_tool_result_on_active_branch(
         &mut self,
         uuid: Option<&str>,
@@ -41,11 +68,11 @@ impl ClaudeParserState {
         let Some(uuid) = uuid.filter(|_| is_queued_peer_delivery_record(record)) else {
             return false;
         };
-        let child_uuid = self.transcript_nodes.iter().find_map(|(child_uuid, node)| {
-            (node.parent_uuid.as_deref() == Some(uuid)).then(|| child_uuid.clone())
-        });
-        child_uuid
-            .is_some_and(|child_uuid| is_inactive_branch(&child_uuid, &mut self.transcript_nodes))
+        self.transcript_children.get(uuid).is_some_and(|children| {
+            children
+                .iter()
+                .any(|child_uuid| is_inactive_branch(child_uuid, &mut self.transcript_nodes))
+        })
     }
 
     pub(in crate::commands::agent::watch_web::messages::parser::claude) fn has_pending_tool_result_for_parent(

@@ -56,6 +56,7 @@ impl IncrementalClaudeParser {
         reader.seek(SeekFrom::Start(0))?;
         let mut state = ClaudeParserState::new();
         state.transcript_nodes = transcript_nodes;
+        state.rebuild_transcript_children();
         activate_pending_record(
             &mut state,
             pending_record.as_ref(),
@@ -124,6 +125,7 @@ impl IncrementalClaudeParser {
                 );
             }
         }
+        state.rebuild_transcript_children();
         let pending_record = parse_record(&pending_line);
         activate_pending_record(
             &mut state,
@@ -339,10 +341,11 @@ fn ingest_record(
         state.transcript_nodes.insert(
             uuid.to_owned(),
             TranscriptNode {
-                parent_uuid,
+                parent_uuid: parent_uuid.clone(),
                 membership: BranchMembership::Unknown,
             },
         );
+        state.index_transcript_child(parent_uuid.as_deref(), uuid);
         mark_active_branch(&mut state.transcript_nodes, Some(uuid));
         if matches!(origin, RecordOrigin::Appended) {
             state.latest_record_uuid = Some(uuid.to_owned());
