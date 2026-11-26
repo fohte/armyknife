@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, Metadata};
-use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write, copy};
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -380,6 +380,7 @@ where
 
     loop {
         if Instant::now() >= deadline {
+            stage_final_appends(source, replacement, copied_to)?;
             if let Some(error) = last_inspection_error {
                 bail!("timed out inspecting old transcript writers: {error}");
             }
@@ -408,6 +409,7 @@ where
                 }
                 last_inspection_error = Some(formatted_error.clone());
                 if Instant::now() >= deadline {
+                    stage_final_appends(source, replacement, copied_to)?;
                     bail!("timed out inspecting old transcript writers: {formatted_error}");
                 }
                 thread::sleep(POLL_INTERVAL);
@@ -427,14 +429,38 @@ where
                 return Ok(copied_to);
             }
             if final_len == current_len {
+                stage_final_appends(source, replacement, copied_to)?;
                 bail!("old transcript writer closed with an incomplete trailing line");
             }
         }
         if Instant::now() >= deadline {
+            stage_final_appends(source, replacement, copied_to)?;
             bail!("timed out waiting for old transcript writers to close");
         }
         thread::sleep(POLL_INTERVAL);
     }
+}
+
+fn stage_final_appends(source: &mut File, replacement: &mut File, copied_to: u64) -> Result<()> {
+    let observed_len = source
+        .metadata()
+        .context("inspect original transcript before preserving its final append")?
+        .len();
+    let copied_to = copy_complete_lines(source, observed_len, copied_to, replacement)?;
+    if observed_len > copied_to {
+        source
+            .seek(SeekFrom::Start(copied_to))
+            .context("seek to incomplete final transcript row")?;
+        let mut remaining = (&mut *source).take(observed_len - copied_to);
+        let copied =
+            copy(&mut remaining, replacement).context("stage incomplete final transcript row")?;
+        if copied != observed_len - copied_to {
+            bail!("transcript changed while staging its incomplete final row");
+        }
+    }
+    replacement
+        .sync_data()
+        .context("sync final staged transcript appends")
 }
 
 #[cfg(test)]
@@ -619,6 +645,147 @@ mod tests {
                 {"type":"user","uuid":"fixture-new-path-after-replace","message":{"content":"fixture new path after replace"}}
                 {"type":"user","uuid":"fixture-old-fd-after-replace","message":{"content":"fixture old fd after replace"}}
             "#})
+        );
+    }
+
+    #[test]
+    fn preserves_staged_old_inode_rows_when_reconciliation_times_out() {
+        let directory = tempdir().expect("temporary directory should be created");
+        let transcript = directory.path().join("fixture-transcript.jsonl");
+        fs::write(
+            &transcript,
+            indoc! {r#"
+                {"type":"user","uuid":"fixture-before","message":{"content":"fixture before"}}
+                {"type":"system","subtype":"compact_boundary","compactMetadata":{"preservedMessages":{"uuids":[]}}}
+            "#},
+        )
+        .expect("fixture transcript should be written");
+        let old_writer = fs::OpenOptions::new()
+            .append(true)
+            .open(&transcript)
+            .expect("original transcript should be appendable");
+        let mut old_writer = Some(old_writer);
+        let replacement_completed = Cell::new(false);
+        let monitor_path = RefCell::new(None);
+
+        let result = slim_transcript_with(
+            &transcript,
+            || {},
+            || {},
+            || {
+                old_writer
+                    .take()
+                    .expect("old transcript writer should be available")
+                    .write_all(b"{\"type\":\"user\",\"uuid\":\"fixture-after-replace\",\"message\":{\"content\":\"fixture appended\"}}\n")
+                    .expect("old inode append should succeed");
+                replacement_completed.set(true);
+            },
+            |path| {
+                *monitor_path.borrow_mut() = Some(path.to_path_buf());
+                Ok(replacement_completed.get())
+            },
+            Duration::from_millis(50),
+        );
+        let monitor_path = monitor_path
+            .into_inner()
+            .expect("monitor path should be inspected");
+        let error = normalized_error(
+            result.err().expect("open old writer should time out"),
+            &transcript,
+        );
+
+        assert_eq!(
+            (
+                error,
+                parse_jsonl(
+                    &fs::read_to_string(&transcript).expect("transcript should be readable")
+                ),
+                monitor_path.exists(),
+            ),
+            (
+                "transcript replacement completed, but post-replacement reconciliation failed for <transcript>: timed out waiting for old transcript writers to close".to_owned(),
+                parse_jsonl(indoc! {r#"
+                    {"type":"user","uuid":"fixture-before","message":{"content":"fixture before"}}
+                    {"type":"system","subtype":"compact_boundary","compactMetadata":{"preservedMessages":{"uuids":[]}}}
+                    {"type":"user","uuid":"fixture-after-replace","message":{"content":"fixture appended"}}
+                "#}),
+                false,
+            ),
+        );
+    }
+
+    #[test]
+    fn saves_incomplete_old_inode_rows_when_reconciliation_times_out() {
+        let directory = tempdir().expect("temporary directory should be created");
+        let transcript = directory.path().join("fixture-transcript.jsonl");
+        fs::write(
+            &transcript,
+            indoc! {r#"
+                {"type":"user","uuid":"fixture-before","message":{"content":"fixture before"}}
+                {"type":"system","subtype":"compact_boundary","compactMetadata":{"preservedMessages":{"uuids":[]}}}
+            "#},
+        )
+        .expect("fixture transcript should be written");
+        let old_writer = fs::OpenOptions::new()
+            .append(true)
+            .open(&transcript)
+            .expect("original transcript should be appendable");
+        let mut old_writer = Some(old_writer);
+        let replacement_completed = Cell::new(false);
+
+        let result = slim_transcript_with(
+            &transcript,
+            || {},
+            || {},
+            || {
+                old_writer
+                    .take()
+                    .expect("old transcript writer should be available")
+                    .write_all(b"{\"type\":\"user\",\"uuid\":\"fixture-complete\",\"message\":{\"content\":\"fixture complete\"}}\n{\"type\":\"user\",\"uuid\":\"fixture-partial\"")
+                    .expect("old inode appends should succeed");
+                replacement_completed.set(true);
+            },
+            |_| Ok(replacement_completed.get()),
+            Duration::from_millis(50),
+        );
+        let recovery_files = fs::read_dir(directory.path())
+            .expect("fixture directory should be readable")
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with(".armyknife-transcript-slim-recovery-"))
+            })
+            .collect::<Vec<_>>();
+        let mut error = normalized_error(
+            result.err().expect("open old writer should time out"),
+            &transcript,
+        );
+        for recovery_path in &recovery_files {
+            error = error.replace(&recovery_path.display().to_string(), "<recovery>");
+        }
+        let recovery_contents = recovery_files
+            .iter()
+            .map(|path| fs::read(path).expect("incomplete row recovery file should be readable"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            (
+                error,
+                parse_jsonl(
+                    &fs::read_to_string(&transcript).expect("transcript should be readable")
+                ),
+                recovery_contents,
+            ),
+            (
+                "transcript replacement completed, but post-replacement reconciliation failed for <transcript>: preserve staged rows after reconciliation failure: timed out waiting for old transcript writers to close: incomplete appended transcript row saved to <recovery>".to_owned(),
+                parse_jsonl(indoc! {r#"
+                    {"type":"user","uuid":"fixture-before","message":{"content":"fixture before"}}
+                    {"type":"system","subtype":"compact_boundary","compactMetadata":{"preservedMessages":{"uuids":[]}}}
+                    {"type":"user","uuid":"fixture-complete","message":{"content":"fixture complete"}}
+                "#}),
+                vec![b"{\"type\":\"user\",\"uuid\":\"fixture-partial\"".to_vec()],
+            ),
         );
     }
 
