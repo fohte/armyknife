@@ -11762,6 +11762,7 @@ it('keeps a merge result after the messages present when an older page is prepen
 it('coalesces refresh-key changes while keeping the in-flight response', async () => {
   const messageResponses: Array<(response: Response) => void> = []
   let refreshKey = 0
+  let actionsRequestCount = 0
   const fetcher = vi.fn<typeof fetch>((input) => {
     const url = requestUrl(input)
     if (url.includes('/messages?')) {
@@ -11769,7 +11770,10 @@ it('coalesces refresh-key changes while keeping the in-flight response', async (
         messageResponses.push(resolve)
       })
     }
-    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    if (url.endsWith('/actions')) {
+      actionsRequestCount += 1
+      return Promise.resolve(jsonResponse(actions))
+    }
     return Promise.resolve(jsonResponse({}))
   })
   vi.stubGlobal('fetch', fetcher)
@@ -11799,6 +11803,7 @@ it('coalesces refresh-key changes while keeping the in-flight response', async (
   refreshKey = 2
   act(renderConversation)
   const requestsBeforeResponse = messageResponses.length
+  const actionsRequestsBeforeResponse = actionsRequestCount
   const resolveFirstResponse = messageResponses[0]
   if (resolveFirstResponse === undefined)
     throw new Error('Expected the initial message response')
@@ -11818,6 +11823,8 @@ it('coalesces refresh-key changes while keeping the in-flight response', async (
       .filter((url) => url.includes('/messages?')),
     requestsBeforeResponse,
     requestsAfterResponse: messageResponses.length,
+    actionsRequestsBeforeResponse,
+    actionsRequestCount,
     visibleMessages: visibleMessages(),
     loadingStatus:
       container.querySelector('.conversation-status')?.textContent ?? null,
@@ -11829,6 +11836,8 @@ it('coalesces refresh-key changes while keeping the in-flight response', async (
     ],
     requestsBeforeResponse: 1,
     requestsAfterResponse: 2,
+    actionsRequestsBeforeResponse: 3,
+    actionsRequestCount: 4,
     visibleMessages: ['Initial message.'],
     loadingStatus: null,
   })

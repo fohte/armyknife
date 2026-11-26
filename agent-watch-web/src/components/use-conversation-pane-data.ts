@@ -180,6 +180,7 @@ export function useConversationPaneData({
   }, [confirmPendingOperations, sessionId])
 
   const refresh = useCallback(async () => {
+    void refreshActions()
     if (messagesRequestInFlight.current) {
       refreshQueued.current = true
       return
@@ -209,7 +210,6 @@ export function useConversationPaneData({
       isConversationResponse,
     )
     try {
-      void refreshActions()
       const messagesResult = await messagesRequest
       if (
         requestGeneration.current !== generation ||
