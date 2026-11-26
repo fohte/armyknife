@@ -8,7 +8,7 @@ use anyhow::{Context, Result, bail, ensure};
 
 use super::super::store;
 use super::super::types::Session;
-use super::monitor::crit_listener_pid_for_port;
+use super::daemon_registry::live_pid_for_port_and_cwd;
 use super::url::{local_crit_ip, parse_port};
 
 pub(super) fn stop_expired_session_daemons(session: &Session, sessions_dir: &Path) -> Result<()> {
@@ -16,7 +16,7 @@ pub(super) fn stop_expired_session_daemons(session: &Session, sessions_dir: &Pat
         session,
         sessions_dir,
         store::all_session_rows_from,
-        crit_listener_pid_for_port,
+        live_pid_for_port_and_cwd,
         request_crit_shutdown,
     )
 }
@@ -25,7 +25,7 @@ fn stop_expired_session_daemons_with(
     session: &Session,
     sessions_dir: &Path,
     load_remaining_sessions: impl FnOnce(&Path) -> Result<Vec<Session>>,
-    resolve_pid: impl FnMut(u16) -> Result<Option<u32>>,
+    resolve_pid: impl FnMut(u16, &Path) -> Result<Option<u32>>,
     request_shutdown: impl FnMut(&str, u32) -> Result<()>,
 ) -> Result<()> {
     let candidate_ports = session
@@ -82,7 +82,7 @@ struct StopFailure {
 fn stop_daemons_for_ports_with(
     session: &Session,
     ports: &BTreeSet<u16>,
-    mut resolve_pid: impl FnMut(u16) -> Result<Option<u32>>,
+    mut resolve_pid: impl FnMut(u16, &Path) -> Result<Option<u32>>,
     mut request_shutdown: impl FnMut(&str, u32) -> Result<()>,
 ) -> Vec<StopFailure> {
     let mut failures = Vec::new();
@@ -100,7 +100,7 @@ fn stop_daemons_for_ports_with(
             continue;
         }
 
-        match resolve_pid(*port) {
+        match resolve_pid(*port, &session.cwd) {
             Ok(Some(pid)) => {
                 let mut shutdown_errors = Vec::new();
                 let shutdown_requested = urls.iter().any(|url| match request_shutdown(url, pid) {
@@ -119,7 +119,7 @@ fn stop_daemons_for_ports_with(
             }
             Ok(None) => failures.push(StopFailure {
                 port: *port,
-                error: "no crit daemon is listening on the port".to_string(),
+                error: "no crit daemon registration matches the session cwd and port".to_string(),
             }),
             Err(error) => failures.push(StopFailure {
                 port: *port,
@@ -274,8 +274,8 @@ mod tests {
             &expired,
             temp_dir.path(),
             store::all_session_rows_from,
-            |port| {
-                resolved_ports.borrow_mut().push(port);
+            |port, cwd| {
+                resolved_ports.borrow_mut().push((port, cwd.to_path_buf()));
                 Ok(Some(9121))
             },
             |url, pid| {
@@ -288,14 +288,14 @@ mod tests {
         assert_eq!(
             (resolved_ports.into_inner(), shutdowns.into_inner()),
             (
-                vec![43121],
+                vec![(43121, expired.cwd.clone())],
                 vec![("http://review.example.test:43121/review".to_string(), 9121)],
             ),
         );
     }
 
     #[test]
-    fn returns_failure_when_lsof_finds_no_crit_listener_for_the_port() {
+    fn returns_failure_when_no_crit_registration_matches_the_session() {
         let session = make_session(
             "expired-session",
             &["http://review.example.test:43122/review"],
@@ -306,7 +306,7 @@ mod tests {
         let failures = stop_daemons_for_ports_with(
             &session,
             &ports,
-            |_| Ok(None),
+            |_, _| Ok(None),
             |url, pid| {
                 shutdowns.borrow_mut().push((url.to_string(), pid));
                 Ok(())
@@ -318,7 +318,8 @@ mod tests {
             (
                 vec![StopFailure {
                     port: 43122,
-                    error: "no crit daemon is listening on the port".to_string(),
+                    error: "no crit daemon registration matches the session cwd and port"
+                        .to_string(),
                 }],
                 vec![],
             ),
@@ -340,7 +341,7 @@ mod tests {
         let failures = stop_daemons_for_ports_with(
             &session,
             &ports,
-            |_| Ok(Some(1234)),
+            |_, _| Ok(Some(1234)),
             |url, _| {
                 attempted_urls.borrow_mut().push(url.to_string());
                 if url.starts_with("https:") {

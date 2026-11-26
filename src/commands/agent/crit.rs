@@ -1,5 +1,6 @@
 //! Link crit reviews to agent sessions and open them in tmux floating panes.
 
+pub(in crate::commands::agent) mod daemon_registry;
 mod expiry;
 mod monitor;
 pub(super) mod toggle;
