@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.937](https://github.com/fohte/armyknife/compare/v0.1.936...v0.1.937) (2026-11-26)
+
+
+### Bug Fixes
+
+* **ai/pr-draft:** accept symlink-resolved paths ([#2296](https://github.com/fohte/armyknife/issues/2296)) ([0188cf1](https://github.com/fohte/armyknife/commit/0188cf13f479f7a6985f508dd99058cc78da7044))
+
 ## [0.1.936](https://github.com/fohte/armyknife/compare/v0.1.935...v0.1.936) (2026-11-26)
 
 
