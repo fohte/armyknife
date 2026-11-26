@@ -75,7 +75,7 @@ impl ClaudeParserState {
         self.branch_tracking.is_side_branch_assistant_uuid(uuid)
     }
 
-    pub(super) fn process_record(&mut self, record: Value, now: DateTime<Utc>) -> bool {
+    pub(super) fn process_record(&mut self, record: Value, now: DateTime<Utc>) {
         if let Some(attachment) = record.get("attachment")
             && attachment.get("type").and_then(Value::as_str) == Some("skill_listing")
         {
@@ -150,7 +150,7 @@ impl ClaudeParserState {
             self.queue_events.push(queue_event);
         }
         if !active_record {
-            return false;
+            return;
         }
 
         self.branch_tracking.observe_active_record(
@@ -159,6 +159,7 @@ impl ClaudeParserState {
             parent_uuid.as_deref(),
             pending_tool_result_on_active_branch,
             side_branch_continuation,
+            task_notification.is_some(),
         );
 
         if is_tool_result_only {
@@ -172,7 +173,6 @@ impl ClaudeParserState {
             timestamp: record_timestamp(&record),
             effects,
         });
-        true
     }
 
     fn record_effects(

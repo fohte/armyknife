@@ -9,11 +9,11 @@ use super::branch::has_tool_use_block;
 #[derive(Clone, Default)]
 pub(super) struct ClaudeBranchTracking {
     tool_use_assistant_uuids: HashSet<String>,
+    side_branch_tool_use_assistant_uuids: HashSet<String>,
     valid_tool_result_uuids: HashSet<String>,
     tool_result_lineage_uuids: HashSet<String>,
     side_branch_assistant_uuids: HashSet<String>,
     compact_boundary_branch_uuids: HashSet<String>,
-    blocked_side_branch_tip_uuid: Option<String>,
 }
 
 impl ClaudeBranchTracking {
@@ -30,7 +30,9 @@ impl ClaudeBranchTracking {
             }
             Some(BranchMembership::Active) => {
                 has_tool_use_block(record)
-                    && parent_uuid.is_some_and(|uuid| self.tool_use_assistant_uuids.contains(uuid))
+                    && parent_uuid.is_some_and(|uuid| {
+                        self.side_branch_tool_use_assistant_uuids.contains(uuid)
+                    })
             }
             _ => false,
         }
@@ -43,7 +45,14 @@ impl ClaudeBranchTracking {
         parent_uuid: Option<&str>,
         pending_tool_result_on_active_branch: bool,
         side_branch_continuation: bool,
+        is_task_notification: bool,
     ) {
+        if !super::super::user_input::is_tool_result_only_user_record(record)
+            && (record.get("type").and_then(Value::as_str) == Some("user") || is_task_notification)
+        {
+            self.reset_side_branch_continuations();
+        }
+
         let Some(uuid) = uuid else {
             return;
         };
@@ -55,6 +64,8 @@ impl ClaudeBranchTracking {
 
         if has_tool_use_block(record) {
             self.tool_use_assistant_uuids.insert(uuid.to_owned());
+            self.side_branch_tool_use_assistant_uuids
+                .insert(uuid.to_owned());
         }
         if pending_tool_result_on_active_branch {
             self.valid_tool_result_uuids.insert(uuid.to_owned());
@@ -94,18 +105,17 @@ impl ClaudeBranchTracking {
         self.side_branch_assistant_uuids.contains(uuid)
     }
 
-    pub(super) fn block_side_branch_tip(&mut self, uuid: &str) {
-        self.blocked_side_branch_tip_uuid = Some(uuid.to_owned());
-    }
-
-    pub(super) fn clear_blocked_side_branch_tip(&mut self) {
-        self.blocked_side_branch_tip_uuid = None;
-    }
-
     pub(super) fn is_retained_side_branch_tip_uuid(&self, uuid: &str) -> bool {
-        self.blocked_side_branch_tip_uuid.as_deref() != Some(uuid)
-            && (self.side_branch_assistant_uuids.contains(uuid)
-                || self.tool_result_lineage_uuids.contains(uuid))
+        self.side_branch_assistant_uuids.contains(uuid)
+            || self.tool_result_lineage_uuids.contains(uuid)
+    }
+
+    fn reset_side_branch_continuations(&mut self) {
+        // Tool ownership remains historical for result matching; only branch continuation expires.
+        self.side_branch_tool_use_assistant_uuids.clear();
+        self.valid_tool_result_uuids.clear();
+        self.tool_result_lineage_uuids.clear();
+        self.side_branch_assistant_uuids.clear();
     }
 }
 
@@ -115,18 +125,5 @@ impl ClaudeParserState {
         uuid: &str,
     ) -> bool {
         self.branch_tracking.is_retained_side_branch_tip_uuid(uuid)
-    }
-
-    pub(in crate::commands::agent::watch_web::messages::parser::claude) fn block_side_branch_tip(
-        &mut self,
-        uuid: &str,
-    ) {
-        self.branch_tracking.block_side_branch_tip(uuid);
-    }
-
-    pub(in crate::commands::agent::watch_web::messages::parser::claude) fn clear_blocked_side_branch_tip(
-        &mut self,
-    ) {
-        self.branch_tracking.clear_blocked_side_branch_tip();
     }
 }

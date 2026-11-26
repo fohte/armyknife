@@ -378,21 +378,7 @@ fn ingest_record(
             state.latest_uuid = Some(uuid.to_owned());
         }
     }
-    let is_task_notification_attachment = is_attachment_record(&record)
-        && super::background_tasks::task_notification_text(&record).is_some();
-    let blocks_side_branch_continuation = !is_tool_result_only_user_record(&record)
-        && (record.get("type").and_then(Value::as_str) == Some("user")
-            || is_task_notification_attachment);
-    let has_uuid = record.get("uuid").and_then(Value::as_str).is_some();
-    let advances_tip = has_uuid && !is_attachment_record(&record);
-    let active_record = state.process_record(record, now);
-    if active_record && blocks_side_branch_continuation {
-        if let Some(uuid) = state.latest_uuid.clone() {
-            state.block_side_branch_tip(&uuid);
-        }
-    } else if active_record && matches!(origin, RecordOrigin::Initial) && advances_tip {
-        state.clear_blocked_side_branch_tip();
-    }
+    state.process_record(record, now);
     true
 }
 

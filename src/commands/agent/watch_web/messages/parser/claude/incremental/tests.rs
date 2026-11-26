@@ -341,6 +341,7 @@ fn assert_incremental_matches_full_parse_at_every_split_point(
     transcript: &str,
     expected: &super::ParsedTranscript,
     expected_append: Option<IncrementalAppend>,
+    context: &str,
 ) {
     let transcript_bytes = transcript.as_bytes();
     for split in 0..=transcript_bytes.len() {
@@ -352,16 +353,162 @@ fn assert_incremental_matches_full_parse_at_every_split_point(
             assert_eq!(
                 actual,
                 (expected_append, expected.clone()),
-                "transcript split at byte {split}",
+                "{context}: transcript split at byte {split}",
             );
         } else {
             assert_eq!(
                 actual.1,
                 expected.clone(),
-                "transcript split at byte {split}",
+                "{context}: transcript split at byte {split}",
             );
         }
     }
+}
+
+struct TranscriptFixtureRng(u64);
+
+impl TranscriptFixtureRng {
+    fn next(&mut self) -> u64 {
+        self.0 = self
+            .0
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        self.0
+    }
+
+    fn index(&mut self, length: usize) -> usize {
+        (self.next() as usize) % length
+    }
+}
+
+fn append_fixture_record(transcript: &mut String, record: serde_json::Value) {
+    transcript.push_str(&record.to_string());
+    transcript.push('\n');
+}
+
+fn generated_short_transcript(seed: u64) -> String {
+    let mut rng = TranscriptFixtureRng(seed);
+    let root_uuid = format!("fixture-{seed}-root");
+    let owner_uuid = format!("fixture-{seed}-owner");
+    let initial_tool_id = format!("fixture-{seed}-tool-initial");
+    let mut transcript = String::new();
+    append_fixture_record(
+        &mut transcript,
+        serde_json::json!({
+            "type": "user",
+            "uuid": root_uuid,
+            "parentUuid": null,
+            "message": {"content": "Run the fixture tools."},
+        }),
+    );
+    append_fixture_record(
+        &mut transcript,
+        serde_json::json!({
+            "type": "assistant",
+            "uuid": owner_uuid,
+            "parentUuid": format!("fixture-{seed}-root"),
+            "message": {"content": [{
+                "type": "tool_use",
+                "id": initial_tool_id,
+                "name": "Read",
+                "input": {"file_path": "/fixture/initial.md"},
+            }]},
+        }),
+    );
+
+    let mut known_uuids = vec![
+        format!("fixture-{seed}-root"),
+        format!("fixture-{seed}-owner"),
+    ];
+    let mut pending_tool_uses = vec![(
+        format!("fixture-{seed}-tool-initial"),
+        format!("fixture-{seed}-owner"),
+    )];
+    let mut record_kinds = [0, 1, 2, 3, 4];
+    for index in (1..record_kinds.len()).rev() {
+        record_kinds.swap(index, rng.index(index + 1));
+    }
+
+    for (index, kind) in record_kinds.into_iter().enumerate() {
+        let uuid = format!("fixture-{seed}-record-{index}");
+        let rewinds_to_older_parent = index % 2 == 0 && known_uuids.len() > 1;
+        let parent_count = if rewinds_to_older_parent {
+            known_uuids.len() - 1
+        } else {
+            known_uuids.len()
+        };
+        let parent_uuid = known_uuids[rng.index(parent_count)].clone();
+        match kind {
+            0 => append_fixture_record(
+                &mut transcript,
+                serde_json::json!({
+                    "type": "assistant",
+                    "uuid": uuid,
+                    "parentUuid": parent_uuid,
+                    "message": {"content": [{"type": "text", "text": "A fixture response."}]},
+                }),
+            ),
+            1 => {
+                let tool_id = format!("fixture-{seed}-tool-{index}");
+                append_fixture_record(
+                    &mut transcript,
+                    serde_json::json!({
+                        "type": "assistant",
+                        "uuid": uuid.clone(),
+                        "parentUuid": parent_uuid,
+                        "message": {"content": [{
+                            "type": "tool_use",
+                            "id": tool_id,
+                            "name": "Read",
+                            "input": {"file_path": "/fixture/generated.md"},
+                        }]},
+                    }),
+                );
+                pending_tool_uses.push((format!("fixture-{seed}-tool-{index}"), uuid.clone()));
+            }
+            2 => {
+                let pending_index = rng.index(pending_tool_uses.len());
+                let (tool_id, owner_uuid) = pending_tool_uses.remove(pending_index);
+                append_fixture_record(
+                    &mut transcript,
+                    serde_json::json!({
+                        "type": "user",
+                        "uuid": uuid,
+                        "parentUuid": owner_uuid,
+                        "message": {"content": [{
+                            "type": "tool_result",
+                            "tool_use_id": tool_id,
+                            "content": "Fixture output.",
+                        }]},
+                    }),
+                );
+            }
+            3 => append_fixture_record(
+                &mut transcript,
+                serde_json::json!({
+                    "type": "user",
+                    "uuid": uuid,
+                    "parentUuid": parent_uuid,
+                    "message": {"content": "A later fixture request."},
+                }),
+            ),
+            4 => append_fixture_record(
+                &mut transcript,
+                serde_json::json!({
+                    "type": "user",
+                    "parentUuid": parent_uuid,
+                    "origin": {"kind": "task-notification"},
+                    "message": {"content": "<task-notification><task-id>fixture-task</task-id><status>completed</status></task-notification>"},
+                }),
+            ),
+            _ => unreachable!(),
+        }
+        if kind != 4 {
+            known_uuids.push(uuid);
+        }
+    }
+
+    transcript
 }
 
 const PARALLEL_TOOLS_WITH_SYSTEM_AFTER_RESULT: &str = indoc! {r#"
@@ -651,6 +798,7 @@ fn parallel_tool_result_matches_a_full_parse_at_every_split_point() {
         &transcript,
         &expected,
         Some(IncrementalAppend::Applied),
+        "parallel tool result",
     );
 }
 
@@ -701,6 +849,7 @@ fn parallel_tool_result_after_an_active_followup_matches_a_full_parse_at_every_s
         &transcript,
         &expected,
         Some(IncrementalAppend::Applied),
+        "parallel tool result after a follow-up",
     );
 }
 
@@ -743,6 +892,7 @@ fn compact_boundary_tool_result_matches_a_full_parse_at_every_split_point() {
         &transcript,
         &expected,
         Some(IncrementalAppend::Applied),
+        "compact-boundary tool result",
     );
 }
 
@@ -847,6 +997,7 @@ fn chained_tool_results_match_a_full_parse_at_every_split_point() {
         transcript_text,
         &expected,
         Some(IncrementalAppend::Applied),
+        "chained tool results",
     );
 }
 
@@ -883,11 +1034,61 @@ fn assistant_after_a_prompt_or_task_notification_restarts_an_old_side_branch(
     let transcript = format!("{prefix}{suffix}");
     let expected = parse_all(transcript.as_bytes(), empty_additions());
 
-    assert_incremental_matches_full_parse_at_every_split_point(&transcript, &expected, None);
+    assert_incremental_matches_full_parse_at_every_split_point(
+        &transcript,
+        &expected,
+        None,
+        "prompt or notification boundary",
+    );
     assert_eq!(
         incremental_result(prefix.as_bytes(), suffix.as_bytes()).0,
         IncrementalAppend::RestartRequired,
     );
+}
+
+#[test]
+fn assistant_after_a_task_notification_and_its_followup_restarts_an_old_side_branch() {
+    let prefix = indoc! {r#"
+        {"type":"user","uuid":"fixture-root","parentUuid":null,"message":{"content":"Run two fixture tools."}}
+        {"type":"assistant","uuid":"fixture-main-call","parentUuid":"fixture-root","message":{"content":[{"type":"tool_use","id":"fixture-main-use","name":"Read","input":{"file_path":"/fixture/main.md"}}]}}
+        {"type":"assistant","uuid":"fixture-side-call","parentUuid":"fixture-main-call","message":{"content":[{"type":"tool_use","id":"fixture-side-use","name":"Read","input":{"file_path":"/fixture/side.md"}}]}}
+        {"type":"user","uuid":"fixture-main-result","parentUuid":"fixture-main-call","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-main-use","content":"main output"}]}}
+        {"type":"assistant","uuid":"fixture-main-followup","parentUuid":"fixture-main-result","message":{"content":[{"type":"text","text":"The main branch continued."}]}}
+        {"type":"user","parentUuid":"fixture-main-followup","origin":{"kind":"task-notification"},"message":{"content":"<task-notification><task-id>fixture-task</task-id><status>completed</status><summary>Fixture task completed</summary></task-notification>"}}
+        {"type":"assistant","uuid":"fixture-main-followup-2","parentUuid":"fixture-main-followup","message":{"content":[{"type":"text","text":"The main branch continued again."}]}}
+    "#};
+    let suffix = indoc! {r#"
+        {"type":"assistant","uuid":"fixture-side-followup","parentUuid":"fixture-side-call","message":{"content":[{"type":"text","text":"The side branch continued."}]}}
+    "#};
+    let transcript = format!("{prefix}{suffix}");
+    let expected = parse_all(transcript.as_bytes(), empty_additions());
+
+    assert_incremental_matches_full_parse_at_every_split_point(
+        &transcript,
+        &expected,
+        None,
+        "task notification followed by assistant continuation",
+    );
+    assert_eq!(
+        incremental_result(prefix.as_bytes(), suffix.as_bytes()).0,
+        IncrementalAppend::RestartRequired,
+    );
+}
+
+#[test]
+fn generated_short_transcripts_match_full_parse_at_every_split_point() {
+    for seed in 0..32 {
+        let transcript = generated_short_transcript(seed + 4_107);
+        let expected = parse_all(transcript.as_bytes(), empty_additions());
+        let context = format!("generated transcript seed {seed}");
+
+        assert_incremental_matches_full_parse_at_every_split_point(
+            &transcript,
+            &expected,
+            None,
+            &context,
+        );
+    }
 }
 
 #[test]
@@ -906,7 +1107,12 @@ fn late_parallel_result_restarts_when_it_would_replace_a_user_branch() {
     let transcript = format!("{prefix}{suffix}");
     let expected = parse_all(transcript.as_bytes(), empty_additions());
 
-    assert_incremental_matches_full_parse_at_every_split_point(&transcript, &expected, None);
+    assert_incremental_matches_full_parse_at_every_split_point(
+        &transcript,
+        &expected,
+        None,
+        "late parallel result after a user branch",
+    );
     assert_eq!(
         incremental_result(prefix.as_bytes(), suffix.as_bytes()).0,
         IncrementalAppend::RestartRequired,
