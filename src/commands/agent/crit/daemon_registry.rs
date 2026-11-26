@@ -124,36 +124,51 @@ mod tests {
         tempfile::tempdir().expect("temporary directory should be created")
     }
 
-    fn write_session(dir: &Path, pid: u32, port: u16, cwd: &str) {
-        fs::write(
-            dir.join("daemon.json"),
-            serde_json::json!({ "pid": pid, "port": port, "cwd": cwd }).to_string(),
-        )
-        .expect("crit daemon registration should be written");
+    fn write_session(dir: &Path, name: &str, pid: u32, port: u16, cwd: Option<&str>) {
+        let session = match cwd {
+            Some(cwd) => serde_json::json!({ "pid": pid, "port": port, "cwd": cwd }),
+            None => serde_json::json!({ "pid": pid, "port": port }),
+        };
+        fs::write(dir.join(name), session.to_string())
+            .expect("crit daemon registration should be written");
     }
 
     #[rstest]
     #[case::matching_port_and_cwd(
         43120,
-        "/repo/worktree",
+        Some("/repo/worktree"),
         43120,
         "/repo/worktree",
         true,
         Some(9121)
     )]
-    #[case::different_port(43121, "/repo/worktree", 43120, "/repo/worktree", true, None)]
-    #[case::different_cwd(43120, "/repo/other-worktree", 43120, "/repo/worktree", true, None)]
-    #[case::dead_daemon(43120, "/repo/worktree", 43120, "/repo/worktree", false, None)]
+    #[case::different_port(43121, Some("/repo/worktree"), 43120, "/repo/worktree", true, None)]
+    #[case::different_cwd(
+        43120,
+        Some("/repo/other-worktree"),
+        43120,
+        "/repo/worktree",
+        true,
+        None
+    )]
+    #[case::missing_cwd(43120, None, 43120, "/repo/worktree", true, None)]
+    #[case::dead_daemon(43120, Some("/repo/worktree"), 43120, "/repo/worktree", false, None)]
     fn resolves_only_a_live_daemon_registered_for_the_port_and_cwd(
         sessions_dir: TempDir,
         #[case] registered_port: u16,
-        #[case] registered_cwd: &str,
+        #[case] registered_cwd: Option<&str>,
         #[case] requested_port: u16,
         #[case] requested_cwd: &str,
         #[case] is_alive: bool,
         #[case] expected_pid: Option<u32>,
     ) {
-        write_session(sessions_dir.path(), 9121, registered_port, registered_cwd);
+        write_session(
+            sessions_dir.path(),
+            "daemon.json",
+            9121,
+            registered_port,
+            registered_cwd,
+        );
 
         let actual = live_pid_for_port_and_cwd_from(
             sessions_dir.path(),
@@ -174,7 +189,13 @@ mod tests {
         #[case] write_other_port: bool,
     ) {
         if write_other_port {
-            write_session(sessions_dir.path(), 9121, 43121, "/repo/worktree");
+            write_session(
+                sessions_dir.path(),
+                "daemon.json",
+                9121,
+                43121,
+                Some("/repo/worktree"),
+            );
         }
 
         let actual = live_pid_for_port_and_cwd_from(
@@ -186,5 +207,37 @@ mod tests {
         .expect("an absent registration should be treated as no daemon");
 
         assert_eq!(actual, None);
+    }
+
+    #[test]
+    fn rejects_multiple_live_daemons_registered_for_the_same_port_and_cwd() {
+        let sessions_dir = tempfile::tempdir().expect("temporary directory should be created");
+        write_session(
+            sessions_dir.path(),
+            "first.json",
+            9121,
+            43120,
+            Some("/repo/worktree"),
+        );
+        write_session(
+            sessions_dir.path(),
+            "second.json",
+            9122,
+            43120,
+            Some("/repo/worktree"),
+        );
+
+        let actual = live_pid_for_port_and_cwd_from(
+            sessions_dir.path(),
+            43120,
+            Path::new("/repo/worktree"),
+            |_| true,
+        )
+        .map_err(|error| error.to_string());
+
+        assert_eq!(
+            actual,
+            Err("multiple live crit daemons match port 43120 and cwd /repo/worktree".to_string()),
+        );
     }
 }
