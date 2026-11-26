@@ -130,13 +130,7 @@ fn request_crit_shutdown(url: &str, pid: u32) -> Result<()> {
         .with_context(|| format!("connecting to crit daemon at {address}"))?;
     stream.set_read_timeout(Some(SHUTDOWN_REQUEST_TIMEOUT))?;
     stream.set_write_timeout(Some(SHUTDOWN_REQUEST_TIMEOUT))?;
-    let request = indoc::formatdoc! {"
-        POST /api/shutdown?pid={pid} HTTP/1.1\r
-        Host: {host_header}\r
-        Content-Length: 0\r
-        Connection: close\r
-        \r
-    "};
+    let request = build_shutdown_request(pid, &host_header);
     stream.write_all(request.as_bytes())?;
 
     let mut status_line = String::new();
@@ -157,6 +151,16 @@ fn request_crit_shutdown(url: &str, pid: u32) -> Result<()> {
         "crit daemon returned HTTP {status} for shutdown"
     );
     Ok(())
+}
+
+fn build_shutdown_request(pid: u32, host_header: &str) -> String {
+    indoc::formatdoc! {"
+        POST /api/shutdown?pid={pid} HTTP/1.1\r
+        Host: {host_header}\r
+        Content-Length: 0\r
+        Connection: close\r
+        \r
+    "}
 }
 
 fn shutdown_request_address(url: &str) -> Result<(SocketAddr, String)> {
@@ -305,6 +309,20 @@ mod tests {
                 }],
                 vec![],
             ),
+        );
+    }
+
+    #[test]
+    fn builds_a_pid_guarded_shutdown_request_without_browser_headers() {
+        assert_eq!(
+            build_shutdown_request(1234, "127.0.0.1:43123"),
+            indoc::indoc! {"
+                POST /api/shutdown?pid=1234 HTTP/1.1\r
+                Host: 127.0.0.1:43123\r
+                Content-Length: 0\r
+                Connection: close\r
+                \r
+            "},
         );
     }
 }
