@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result, ensure};
+use chrono::Utc;
 use clap::{Args, Subcommand};
 
 use super::store;
@@ -158,6 +159,7 @@ fn record_url_in(
     };
     if record_legacy_crit_url {
         add_url(&mut session.crit_urls, url);
+        session.updated_at = Utc::now();
     }
     let registered_url = if record_legacy_crit_url {
         session.crit_urls.last().map(String::as_str).unwrap_or(url)
@@ -363,6 +365,11 @@ mod tests {
         #[case] url: &str,
         #[case] expected_crit_urls: Vec<&str>,
     ) {
+        let original_updated_at = store::load_session_from(sessions_dir.path(), "fixture-session")
+            .expect("session should load")
+            .expect("session should exist")
+            .updated_at;
+
         let session = record_url_in(
             sessions_dir.path(),
             "fixture-session",
@@ -389,14 +396,18 @@ mod tests {
             (
                 session.crit_urls,
                 session.web_uis,
+                session.updated_at > original_updated_at,
                 stored.crit_urls,
                 stored.web_uis,
+                stored.updated_at == session.updated_at,
             ),
             (
                 expected_crit_urls.clone(),
                 expected_web_uis.clone(),
+                record_legacy_crit_url,
                 expected_crit_urls,
                 expected_web_uis,
+                true,
             ),
         );
     }
