@@ -31,7 +31,21 @@ fn delete_session_with_archive_in(
     storage_root: Option<&Path>,
     mut archive_codex_thread: impl FnMut(&str) -> anyhow::Result<()>,
 ) -> Result<bool> {
-    if let Some(session) = super::load_session_from(sessions_dir, session_id)? {
+    if !sessions_dir.exists() {
+        return Ok(false);
+    }
+
+    // Keep todo state stable until deletion so the row is neither deleted unarchived nor kept after archiving.
+    let _todo_resolution_lock = super::lock_agent_todo_resolution(sessions_dir, session_id)?;
+    let session_lock = super::lock_session_for_update(sessions_dir, session_id)?;
+    let session = session_lock.load_skipping_undecodable()?;
+    let should_archive = match session.as_ref() {
+        Some(session) if session.engine == Engine::Codex => !session_lock.has_incomplete_todos()?,
+        _ => false,
+    };
+    drop(session_lock);
+
+    if should_archive && let Some(session) = session {
         archive_codex_thread_before_delete_with(
             &session,
             &mut archive_codex_thread,
@@ -172,6 +186,14 @@ fn collect_expired_session<A>(
 where
     A: FnMut(&str) -> anyhow::Result<()>,
 {
+    // Keep todo state stable so an incomplete todo cannot keep a session after its thread is archived.
+    let _todo_resolution_lock = match super::lock_agent_todo_resolution(dir, session_id) {
+        Ok(lock) => lock,
+        Err(error) => {
+            warn_cleanup_entry_failure(session_id, "lock_todo_resolution", &error);
+            return false;
+        }
+    };
     let Some((session_lock, current)) =
         lock_and_load_session_for_cleanup(dir, session_id, "collection")
     else {
@@ -182,6 +204,14 @@ where
     }
 
     let session_lock = if current.engine == Engine::Codex {
+        match session_lock.has_incomplete_todos() {
+            Ok(true) => return false,
+            Ok(false) => {}
+            Err(error) => {
+                warn_cleanup_entry_failure(session_id, "check_incomplete_todos", &error);
+                return false;
+            }
+        }
         let snapshot = match super::serialize_session(&current) {
             Ok(snapshot) => snapshot,
             Err(error) => {
@@ -341,6 +371,13 @@ mod tests {
         sessions_dir: PathBuf,
     }
 
+    struct IncompleteTodoSession {
+        test_session_dir: TestSessionDir,
+        now: chrono::DateTime<Utc>,
+        session_id: String,
+        todo_seq: i64,
+    }
+
     #[fixture]
     fn test_session_dir() -> TestSessionDir {
         let temp_dir = TempDir::new().expect("temp directory creation should succeed");
@@ -349,6 +386,34 @@ mod tests {
         TestSessionDir {
             temp_dir,
             sessions_dir,
+        }
+    }
+
+    #[fixture]
+    fn incomplete_todo_session(test_session_dir: TestSessionDir) -> IncompleteTodoSession {
+        use super::super::database::add_agent_todo;
+
+        let now = Utc::now();
+        let session_id = "session-with-todo".to_string();
+        let mut session = make_session(&session_id, Engine::Codex);
+        session.status = SessionStatus::Ended;
+        session.updated_at = now - TimeDelta::days(super::super::ENDED_SESSION_RETENTION_DAYS + 1);
+        super::super::save_session_to(&test_session_dir.sessions_dir, &session)
+            .expect("session save should succeed");
+        let todo_seq = add_agent_todo(
+            &test_session_dir.sessions_dir,
+            &session_id,
+            "Finish task",
+            None,
+            false,
+        )
+        .expect("todo should be created");
+
+        IncompleteTodoSession {
+            test_session_dir,
+            now,
+            session_id,
+            todo_seq,
         }
     }
 
@@ -468,6 +533,182 @@ mod tests {
         assert_eq!(
             (result.is_ok(), archive_calls.into_inner(), is_stored(),),
             (true, vec![("session-to-delete".to_string(), true)], false,),
+        );
+    }
+
+    #[rstest]
+    fn cleanup_skips_archive_until_incomplete_todos_are_resolved(
+        incomplete_todo_session: IncompleteTodoSession,
+    ) {
+        use super::super::database::{TodoResolution, resolve_agent_todo};
+
+        let IncompleteTodoSession {
+            test_session_dir,
+            now,
+            session_id,
+            todo_seq,
+        } = incomplete_todo_session;
+        let session_id = session_id.as_str();
+        let archive_calls = RefCell::new(Vec::new());
+        let mut archive_codex_thread = |id: &str| {
+            archive_calls.borrow_mut().push(id.to_string());
+            Ok(())
+        };
+        let mut cleanup = || {
+            cleanup_stale_sessions_in_with_archive_at(
+                &test_session_dir.sessions_dir,
+                |_| None,
+                |_| true,
+                now,
+                &mut archive_codex_thread,
+            )
+            .expect("session cleanup should succeed")
+        };
+
+        let kept_results = vec![cleanup(), cleanup()];
+        resolve_agent_todo(
+            &test_session_dir.sessions_dir,
+            session_id,
+            todo_seq,
+            TodoResolution::Completed,
+            Some("Done"),
+        )
+        .expect("todo should be resolved");
+        let removed = cleanup();
+        let is_stored = super::super::load_session_from(&test_session_dir.sessions_dir, session_id)
+            .expect("session lookup should succeed")
+            .is_some();
+
+        assert_eq!(
+            (kept_results, removed, archive_calls.into_inner(), is_stored,),
+            (
+                vec![false, false],
+                true,
+                vec![session_id.to_string()],
+                false,
+            ),
+        );
+    }
+
+    #[rstest]
+    fn explicit_delete_skips_archive_while_incomplete_todos_remain(
+        incomplete_todo_session: IncompleteTodoSession,
+    ) {
+        use super::super::database::{TodoResolution, resolve_agent_todo};
+
+        let IncompleteTodoSession {
+            test_session_dir,
+            session_id,
+            todo_seq,
+            ..
+        } = incomplete_todo_session;
+        let session_id = session_id.as_str();
+        let archive_calls = RefCell::new(Vec::new());
+        let mut archive_codex_thread = |id: &str| {
+            archive_calls.borrow_mut().push((
+                id.to_string(),
+                super::super::load_session_from(&test_session_dir.sessions_dir, id)
+                    .expect("session lookup should succeed")
+                    .is_some(),
+            ));
+            Ok(())
+        };
+
+        let kept = delete_session_with_archive_in(
+            &test_session_dir.sessions_dir,
+            session_id,
+            None,
+            &mut archive_codex_thread,
+        )
+        .expect("delete should keep a session with incomplete todos");
+        resolve_agent_todo(
+            &test_session_dir.sessions_dir,
+            session_id,
+            todo_seq,
+            TodoResolution::Completed,
+            Some("Done"),
+        )
+        .expect("todo should be resolved");
+        let removed = delete_session_with_archive_in(
+            &test_session_dir.sessions_dir,
+            session_id,
+            None,
+            &mut archive_codex_thread,
+        )
+        .expect("delete should succeed after todos are resolved");
+        let absent = delete_session_with_archive_in(
+            &test_session_dir.sessions_dir,
+            session_id,
+            None,
+            &mut archive_codex_thread,
+        )
+        .expect("deleting an absent session should be harmless");
+
+        assert_eq!(
+            (kept, removed, absent, archive_calls.into_inner(),),
+            (false, true, false, vec![(session_id.to_string(), true)],),
+        );
+    }
+
+    #[rstest]
+    fn explicit_delete_removes_undecodable_session_without_archiving(
+        test_session_dir: TestSessionDir,
+    ) {
+        let session_id = "session-with-invalid-data";
+        let session = make_session(session_id, Engine::Codex);
+        super::super::save_session_to(&test_session_dir.sessions_dir, &session)
+            .expect("session save should succeed");
+        super::super::database::open_connection(&test_session_dir.sessions_dir)
+            .expect("database should open")
+            .execute(
+                "UPDATE sessions SET data = ?1 WHERE session_id = ?2",
+                ["{", session_id],
+            )
+            .expect("session data should become undecodable");
+        let archive_calls = RefCell::new(Vec::new());
+
+        let removed = delete_session_with_archive_in(
+            &test_session_dir.sessions_dir,
+            session_id,
+            None,
+            |id| {
+                archive_calls.borrow_mut().push(id.to_string());
+                Ok(())
+            },
+        )
+        .expect("undecodable session should still be deletable");
+        let row_exists = super::super::database::open_connection(&test_session_dir.sessions_dir)
+            .expect("database should open")
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sessions WHERE session_id = ?1)",
+                [session_id],
+                |row| row.get::<_, bool>(0),
+            )
+            .expect("session row should be queried");
+
+        assert_eq!(
+            (removed, archive_calls.into_inner(), row_exists),
+            (true, Vec::<String>::new(), false),
+        );
+    }
+
+    #[rstest]
+    fn explicit_delete_does_not_create_a_missing_sessions_directory(
+        test_session_dir: TestSessionDir,
+    ) {
+        let sessions_dir = test_session_dir.temp_dir.path().join("missing-sessions");
+        let archive_calls = RefCell::new(Vec::new());
+
+        let removed =
+            delete_session_with_archive_in(&sessions_dir, "session-not-found", None, |id| {
+                archive_calls.borrow_mut().push(id.to_string());
+                Ok(())
+            })
+            .expect("deleting from a missing directory should be harmless");
+
+        assert_eq!(
+            (removed, sessions_dir.exists(), archive_calls.into_inner()),
+            (false, false, Vec::<String>::new()),
         );
     }
 

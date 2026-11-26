@@ -78,8 +78,9 @@ pub(crate) use replacements::{
 pub(crate) use session_closures::{clear_session_closed, closed_session_ids, mark_session_closed};
 pub(crate) use todos::{AgentTodo, TodoResolution};
 pub(crate) use todos::{
-    add_agent_todo, agent_todos, edit_agent_todo, incomplete_agent_todo_titles,
-    lock_agent_todo_resolution, resolve_agent_todo, resolve_agent_todo_at, set_agent_todo_folded,
+    add_agent_todo, agent_todos, edit_agent_todo, has_incomplete_todos,
+    incomplete_agent_todo_titles, lock_agent_todo_resolution, resolve_agent_todo,
+    resolve_agent_todo_at, set_agent_todo_folded,
 };
 pub(crate) use unreported_stop_checks::check_unreported_stop;
 pub(crate) use web_state::WatchWebSessionState;
@@ -239,6 +240,10 @@ impl SessionLock {
         read_session_strict(&self.connection, &self.session_id)
     }
 
+    pub(crate) fn load_skipping_undecodable(&self) -> Result<Option<Session>> {
+        read_session_skipping_undecodable(&self.connection, &self.session_id)
+    }
+
     pub(crate) fn has_pending_agent_requests(&self) -> Result<bool> {
         Ok(self.connection.query_row(
             "SELECT EXISTS(
@@ -344,6 +349,10 @@ impl SessionLock {
         self.connection.execute_batch("COMMIT")?;
         self.transaction_active.set(false);
         Ok(removed)
+    }
+
+    pub(crate) fn has_incomplete_todos(&self) -> Result<bool> {
+        has_incomplete_todos(&self.connection, &self.session_id)
     }
 
     fn ensure_transaction(&self) -> Result<()> {
@@ -593,15 +602,7 @@ fn read_revision(connection: &Connection) -> Result<i64> {
 /// Keeps sessions with incomplete todos available to watch-web.
 /// Returns false when a todo keeps the row available or the row was already absent.
 fn delete_session_row(connection: &Connection, session_id: &str) -> Result<bool> {
-    let has_incomplete_todos: bool = connection.query_row(
-        "SELECT EXISTS(
-            SELECT 1 FROM agent_todo
-            WHERE session_id = ?1 AND completed_at IS NULL
-        )",
-        [session_id],
-        |row| row.get(0),
-    )?;
-    if has_incomplete_todos {
+    if has_incomplete_todos(connection, session_id)? {
         return Ok(false);
     }
 
