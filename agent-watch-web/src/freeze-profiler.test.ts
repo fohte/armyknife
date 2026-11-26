@@ -213,22 +213,53 @@ it.each(longTaskScenarios)(
   },
 )
 
-it('caps pending task reports when profiler rotation repeatedly fails', () => {
+it('caps pending reports across callbacks and retains the newest task', async () => {
   const taskStart = performance.now()
   const {
     deliverLongTasks,
     fetchMock,
+    fetchStarted,
     observerOptions,
     profilerCreationError,
   } = installProfilerEnvironment(taskStart + 500, {
-    failEveryReplacement: true,
+    failOnSecondProfiler: true,
   })
   const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
   startFreezeProfiler()
 
   deliverLongTasks(
-    Array.from({ length: 12 }, (_, index) => longTaskEntry(taskStart + index)),
+    Array.from({ length: 10 }, (_, index) =>
+      longTaskEntry(taskStart - 100 + index),
+    ),
   )
+  deliverLongTasks([longTaskEntry(taskStart - 50)])
+  await fetchStarted
+  await new Promise<void>((resolve) => setTimeout(resolve, 0))
+
+  const reportFor = (startTime: number): LongTaskReport => ({
+    startedAtMs: Math.round(performance.timeOrigin + startTime),
+    durationMs: 1_000,
+    functions: [
+      {
+        name: 'slowTask',
+        file: '/assets/app.js',
+        line: 12,
+        percentage: 100,
+      },
+    ],
+  })
+  const expectedFetchCalls = [
+    ...Array.from({ length: 9 }, (_, index) => -99 + index),
+    -50,
+  ].map((offset) => [
+    '/api/long-tasks',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(reportFor(taskStart + offset)),
+      keepalive: true,
+    },
+  ])
 
   const actual = profilerSnapshot(
     observerOptions(),
@@ -237,10 +268,10 @@ it('caps pending task reports when profiler rotation repeatedly fails', () => {
   )
   const expected = profilerSnapshot(
     { type: 'longtask', buffered: true },
-    [],
+    expectedFetchCalls,
     [
-      ['Dropped 2 stale or excess watch-web long-task profiles'],
       ['Failed to rotate watch-web JavaScript profiler', profilerCreationError],
+      ['Dropped 1 stale or excess watch-web long-task profiles'],
     ],
   )
   expect(actual).toEqual(expected)
@@ -300,7 +331,6 @@ function profilerSnapshot<ObserverOptions, FetchCalls, Warnings>(
 
 type ProfilerEnvironmentOptions = {
   failOnSecondProfiler?: boolean
-  failEveryReplacement?: boolean
   failOnFirstStop?: boolean
 }
 
@@ -331,9 +361,8 @@ function installProfilerEnvironment(
     constructor() {
       profilerConstructions += 1
       if (
-        (options.failOnSecondProfiler === true &&
-          profilerConstructions === 2) ||
-        (options.failEveryReplacement === true && profilerConstructions > 1)
+        options.failOnSecondProfiler === true &&
+        profilerConstructions === 2
       ) {
         throw profilerCreationError
       }
