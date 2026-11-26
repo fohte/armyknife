@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::{Result, bail};
 use chrono::{DateTime, Utc};
-use rusqlite::{OptionalExtension, TransactionBehavior, params};
+use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
 
 use super::open_connection;
 
@@ -41,7 +41,7 @@ pub(crate) fn insert_watch_web_peer_out_message(
         ],
     )?;
     let id = transaction.last_insert_rowid();
-    super::bump_session_revision(&transaction, from_session_id)?;
+    bump_peer_sender_revision(&transaction, from_session_id)?;
     transaction.commit()?;
     Ok(id)
 }
@@ -70,8 +70,22 @@ pub(crate) fn mark_watch_web_peer_out_message_delivered(
     if updated_rows == 0 {
         bail!("peer message {id} does not exist");
     }
-    super::bump_session_revision(&transaction, &from_session_id)?;
+    bump_peer_sender_revision(&transaction, &from_session_id)?;
     transaction.commit()?;
+    Ok(())
+}
+
+fn bump_peer_sender_revision(transaction: &Transaction<'_>, session_id: &str) -> Result<()> {
+    let session_exists = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sessions WHERE session_id = ?1)",
+        [session_id],
+        |row| row.get::<_, bool>(0),
+    )?;
+    if session_exists {
+        super::bump_session_revision(transaction, session_id)?;
+    } else {
+        super::increment_revision(transaction)?;
+    }
     Ok(())
 }
 
@@ -286,6 +300,47 @@ mod tests {
                 }],
                 std::collections::HashMap::from([
                     ("fixture-sender".to_string(), 2),
+                    ("fixture-other-sender".to_string(), 0),
+                ]),
+                2,
+            ),
+        );
+    }
+
+    #[rstest]
+    fn records_peer_messages_when_sender_session_is_not_stored(sessions_dir: TempDir) {
+        let failed_at = chrono::Utc.with_ymd_and_hms(2026, 6, 1, 12, 29, 0).unwrap();
+        let sent_at = chrono::Utc.with_ymd_and_hms(2026, 6, 1, 12, 30, 0).unwrap();
+        let id = insert_watch_web_peer_out_message(
+            sessions_dir.path(),
+            "fixture-untracked-sender",
+            "fixture-recipient",
+            "A fictional peer message.",
+            failed_at,
+            true,
+        )
+        .unwrap();
+
+        mark_watch_web_peer_out_message_delivered(sessions_dir.path(), id, sent_at).unwrap();
+
+        assert_eq!(
+            (
+                watch_web_peer_out_messages(sessions_dir.path(), "fixture-untracked-sender")
+                    .unwrap(),
+                session_revisions_by_session(sessions_dir.path()).unwrap(),
+                session_store_revision(sessions_dir.path()).unwrap(),
+            ),
+            (
+                vec![WatchWebPeerOutMessage {
+                    id,
+                    from_session_id: "fixture-untracked-sender".to_string(),
+                    to_session_id: "fixture-recipient".to_string(),
+                    content: "A fictional peer message.".to_string(),
+                    sent_at,
+                    failed: false,
+                }],
+                std::collections::HashMap::from([
+                    ("fixture-sender".to_string(), 0),
                     ("fixture-other-sender".to_string(), 0),
                 ]),
                 2,
