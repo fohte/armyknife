@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.949](https://github.com/fohte/armyknife/compare/v0.1.948...v0.1.949) (2026-11-26)
+
+
+### Performance Improvements
+
+* **watch-web:** pause hidden-tab updates ([#2318](https://github.com/fohte/armyknife/issues/2318)) ([739d324](https://github.com/fohte/armyknife/commit/739d324d5c835931d2720b70fbd951c206106259))
+
 ## [0.1.948](https://github.com/fohte/armyknife/compare/v0.1.947...v0.1.948) (2026-11-26)
 
 
