@@ -46,6 +46,7 @@ fn crit_client_waiting_from_lsof_result(
     daemon_pid: u32,
 ) -> Result<bool> {
     if !status_success {
+        // lsof exits 1 with no output when no socket matches, so no client is waiting.
         if exit_code == Some(1) && stdout.is_empty() && stderr.is_empty() {
             return Ok(false);
         }
