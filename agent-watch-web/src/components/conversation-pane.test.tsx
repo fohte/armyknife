@@ -9994,6 +9994,11 @@ it('keeps a message send error through refreshes until a send succeeds', async (
     if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
     return Promise.resolve(jsonResponse({}))
   })
+  const messageRefreshCount = () =>
+    fetcher.mock.calls.filter(
+      ([input, init]) =>
+        init?.method !== 'POST' && requestUrl(input).includes('/messages?'),
+    ).length
   vi.stubGlobal('fetch', fetcher)
 
   function ConversationHarness() {
@@ -10053,30 +10058,22 @@ it('keeps a message send error through refreshes until a send succeeds', async (
       ),
     )
   })
-  await waitForState(
-    () =>
-      fetcher.mock.calls.filter(
-        ([input, init]) =>
-          init?.method !== 'POST' && requestUrl(input).includes('/messages?'),
-      ).length === 2,
-  )
+  await waitForState(() => messageRefreshCount() === 2)
   const afterUnrelatedAction = {
     alert: container.querySelector('[role="alert"]')?.textContent ?? null,
     draft: textarea.value,
   }
 
+  const refreshCountBeforeExplicitRefresh = messageRefreshCount()
   await act(async () => {
     refreshConversation()
     for (let index = 0; index < 12; index += 1) await Promise.resolve()
   })
-  await waitForState(
-    () =>
-      fetcher.mock.calls.filter(
-        ([input, init]) =>
-          init?.method !== 'POST' && requestUrl(input).includes('/messages?'),
-      ).length === 2,
+  const explicitRefreshCompleted = await waitForState(
+    () => messageRefreshCount() > refreshCountBeforeExplicitRefresh,
   )
   const afterRefresh = {
+    completed: explicitRefreshCompleted,
     alert: container.querySelector('[role="alert"]')?.textContent ?? null,
     draft: textarea.value,
   }
@@ -10108,6 +10105,7 @@ it('keeps a message send error through refreshes until a send succeeds', async (
       draft: 'Retain this prompt',
     },
     afterRefresh: {
+      completed: true,
       alert: 'The message could not be sent.',
       draft: 'Retain this prompt',
     },

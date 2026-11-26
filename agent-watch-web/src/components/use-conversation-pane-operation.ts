@@ -5,6 +5,7 @@ import type { useSessionOperations } from '#session-operation-context'
 import {
   createSessionOperation,
   type SessionOperation,
+  sessionOperationKey,
 } from '#session-operations'
 import type { ConversationResponse } from '#types'
 
@@ -22,7 +23,13 @@ type UseConversationPaneOperationOptions = {
 
 type SessionOperationError = {
   sessionId: string
-  operationType: string
+  identity:
+    | { kind: 'action'; action: string }
+    | {
+        kind: 'operation'
+        key: string
+        type: SessionOperation['type']
+      }
   message: string
 }
 
@@ -65,11 +72,12 @@ export function useConversationPaneOperation({
       if (operationResult.isErr()) {
         setSessionOperationError((current) =>
           current?.sessionId === sessionId &&
-          current.operationType === 'message'
+          current.identity.kind === 'operation' &&
+          current.identity.type === 'message'
             ? current
             : {
                 sessionId,
-                operationType: action,
+                identity: { kind: 'action', action },
                 message: operationResult.error.message,
               },
         )
@@ -91,10 +99,14 @@ export function useConversationPaneOperation({
         result.match(
           () => {
             setSessionOperationError((current) =>
-              current?.sessionId === sessionId &&
-              current.operationType === operation.type
-                ? null
-                : current,
+              current?.sessionId !== sessionId
+                ? current
+                : current.identity.kind === 'operation' &&
+                    ((current.identity.type === 'message' &&
+                      operation.type === 'message') ||
+                      current.identity.key === sessionOperationKey(operation))
+                  ? null
+                  : current,
             )
             clearErrors()
             return true
@@ -102,12 +114,17 @@ export function useConversationPaneOperation({
           (requestError) => {
             setSessionOperationError((current) =>
               current?.sessionId === sessionId &&
-              current.operationType === 'message' &&
+              current.identity.kind === 'operation' &&
+              current.identity.type === 'message' &&
               operation.type !== 'message'
                 ? current
                 : {
                     sessionId,
-                    operationType: operation.type,
+                    identity: {
+                      kind: 'operation',
+                      key: sessionOperationKey(operation),
+                      type: operation.type,
+                    },
                     message: requestError.message,
                   },
             )
