@@ -421,11 +421,12 @@ export function ConversationPane({
   const conversationView = (
     <ConversationPaneView
       session={session}
+      actionTimelineIndex={actionTimelineIndex}
       vibeMode={conversation.vibeMode ?? session.vibeMode}
       sessions={sessions}
       sessionLinkTargets={sessionLinkTargets}
       messages={messages}
-      start={conversation.start}
+      start={displayedConversation.start}
       epoch={conversation.epoch}
       olderCursor={conversation.olderCursor}
       decisions={displayedConversation.decisions}

@@ -51,6 +51,7 @@ import type {
 
 type ConversationPaneViewProps = {
   session: Session
+  actionTimelineIndex?: number | undefined
   vibeMode?: VibeMode | undefined
   sessions?: readonly Session[]
   sessionLinkTargets?: readonly SessionLinkTarget[]
@@ -121,6 +122,7 @@ type ConversationPaneViewProps = {
 
 export function ConversationPaneView({
   session,
+  actionTimelineIndex,
   vibeMode = session.vibeMode,
   sessions = [],
   sessionLinkTargets: providedSessionLinkTargets,
@@ -328,9 +330,6 @@ export function ConversationPaneView({
     backgroundTasks,
     editorReviewDocument: editorReviewDocument ?? null,
   })
-  // Actions started before the initial page establishes its boundary stay in the trailing list.
-  const actionTimelineIndex =
-    loading && messages.length === 0 ? undefined : start + messages.length
   const returnToRequestCard = () => {
     scrollToConversationStatusCard(
       conversationScrollRef.current,

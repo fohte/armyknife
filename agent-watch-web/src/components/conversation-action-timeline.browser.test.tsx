@@ -148,6 +148,7 @@ function TimelineHarness({ initiallyLoading }: { initiallyLoading: boolean }) {
       </button>
       <ConversationPaneView
         session={session}
+        actionTimelineIndex={loading ? undefined : 10 + messages.length}
         messages={messages}
         start={10}
         actions={sessionActions}

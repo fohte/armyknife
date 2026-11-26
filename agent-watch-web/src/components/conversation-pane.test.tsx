@@ -1644,6 +1644,18 @@ stderr:
         : null,
     )
     const messageFetchCountBeforeCommand = messageFetchCount
+    const conversationTimelineOrder = () =>
+      Array.from(
+        container.querySelectorAll(
+          '.conversation-scroll .chat-todo-card, .conversation-scroll .async-action-item--line, .conversation-scroll .chat-user-group[data-command-result="true"]',
+        ),
+        (element) =>
+          element.matches('.chat-todo-card')
+            ? 'todo'
+            : element.matches('.async-action-item--line')
+              ? 'command'
+              : 'output',
+      )
     await act(async () => userEvent.click(runButton))
     const dialog = requireElement(
       (await waitForState(() =>
@@ -1668,6 +1680,7 @@ stderr:
       dialogOpen: document.body.querySelector('[role="dialog"]') !== null,
       toast: document.body.querySelector('.async-action-toast-stack')
         ?.textContent,
+      timelineOrder: conversationTimelineOrder(),
       conversationLine: normalizeAsyncActionLineTime(
         container.querySelector('.async-action-item--line')?.textContent,
       ),
@@ -1688,6 +1701,7 @@ stderr:
       button: runButton.textContent,
       toast: document.body.querySelector('.async-action-toast-stack')
         ?.textContent,
+      timelineOrder: conversationTimelineOrder(),
       conversationLine: normalizeAsyncActionLineTime(
         container.querySelector('.async-action-item--line')?.textContent,
       ),
@@ -1732,6 +1746,7 @@ stderr:
       runningState: {
         dialogOpen: false,
         toast: 'Running commandprintf safe',
+        timelineOrder: ['todo', 'command'],
         conversationLine: 'Running command… · <time>',
       },
       commandCompleted: true,
@@ -1739,6 +1754,7 @@ stderr:
       finalState: {
         button: buttonLabel,
         toast,
+        timelineOrder: ['todo', 'command', 'output'],
         conversationLine,
         conversationLineButtons: 0,
       },
@@ -6939,6 +6955,188 @@ it('opens the Review tab from the draft review band in one click', async () => {
   })
 })
 
+it('keeps a review action result at the conversation boundary where it started', async () => {
+  const initialMessages: ChatItem[] = [
+    { type: 'assistant', text: 'The draft is ready for review.' },
+    { type: 'assistant', text: 'I am checking the current issue.' },
+  ]
+  const laterMessage: ChatItem = {
+    type: 'assistant',
+    text: 'The issue check is complete.',
+  }
+  let showLaterMessage = false
+  let completeReviewAction: ((response: Response) => void) | undefined
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.includes('/messages?')) {
+      return Promise.resolve(
+        jsonResponse(
+          messagesResponse(
+            showLaterMessage
+              ? [...initialMessages, laterMessage]
+              : initialMessages,
+          ),
+        ),
+      )
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    if (url.endsWith('/review-documents')) {
+      return Promise.resolve(
+        jsonResponse([
+          {
+            id: 'fixture-review-document',
+            kind: 'issue_comment',
+            target: { issueNumber: 51 },
+            isEditor: true,
+            canSave: true,
+            canFinish: true,
+          },
+        ]),
+      )
+    }
+    if (url.endsWith('/review-documents/fixture-review-document')) {
+      return Promise.resolve(
+        jsonResponse({
+          id: 'fixture-review-document',
+          revision: 'fixture-revision',
+          frontmatter: {},
+          body: 'Fixture issue comment',
+        }),
+      )
+    }
+    if (url.endsWith('/review-document/action')) {
+      return new Promise((resolve) => {
+        completeReviewAction = resolve
+      })
+    }
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  function StatusPanelHarness() {
+    const [refreshKey, setRefreshKey] = useState(0)
+    return (
+      <>
+        <button
+          type="button"
+          onClick={() => {
+            showLaterMessage = true
+            setRefreshKey((current) => current + 1)
+          }}
+        >
+          Refresh conversation
+        </button>
+        <ConversationPane
+          session={{
+            ...session,
+            kind: 'Review',
+            reviewDocumentId: 'fixture-review-document',
+            reviewDocumentCount: 1,
+            webUis: [],
+          }}
+          refreshKey={refreshKey}
+          sessionTreeRefreshKey={0}
+          onSelectSession={() => undefined}
+          statusPanelOpen
+        />
+      </>
+    )
+  }
+
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <AsyncActionFeedbackProvider>
+        <StatusPanelHarness />
+      </AsyncActionFeedbackProvider>,
+    )
+  })
+  expect(
+    await waitForState(() =>
+      [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')].some(
+        (button) => button.textContent === 'Review1',
+      ),
+    ),
+  ).toBe(true)
+  await act(async () => {
+    await userEvent.click(
+      requireElement(
+        [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find(
+          (button) => button.textContent === 'Review1',
+        ) ?? null,
+      ),
+    )
+  })
+  expect(
+    await waitForState(() =>
+      [...container.querySelectorAll<HTMLButtonElement>('button')].some(
+        (button) => button.textContent === 'Post comment',
+      ),
+    ),
+  ).toBe(true)
+  await act(async () => {
+    await userEvent.click(
+      requireElement(
+        [...container.querySelectorAll<HTMLButtonElement>('button')].find(
+          (button) => button.textContent === 'Post comment',
+        ) ?? null,
+      ),
+    )
+  })
+  expect(
+    await waitForState(
+      () =>
+        container.querySelector('.async-action-item--line')?.textContent ===
+        'Post comment in progress',
+    ),
+  ).toBe(true)
+
+  await act(async () => {
+    await userEvent.click(
+      requireElement(
+        [...container.querySelectorAll<HTMLButtonElement>('button')].find(
+          (button) => button.textContent === 'Refresh conversation',
+        ) ?? null,
+      ),
+    )
+  })
+  expect(
+    await waitForState(() =>
+      [...container.querySelectorAll('.chat-assistant-message')].some(
+        (message) => message.textContent === laterMessage.text,
+      ),
+    ),
+  ).toBe(true)
+  await act(async () => {
+    completeReviewAction?.(
+      jsonResponse({ success: true, revision: 'next-revision' }),
+    )
+    await Promise.resolve()
+  })
+  expect(
+    await waitForState(
+      () =>
+        normalizeAsyncActionLineTime(
+          container.querySelector('.async-action-item--line')?.textContent,
+        ) === 'Post comment completed · <time>',
+    ),
+  ).toBe(true)
+
+  const snapshot = () =>
+    Array.from(
+      container.querySelectorAll(
+        '.conversation-scroll .chat-assistant-message, .conversation-scroll .async-action-item--line',
+      ),
+      (element) => normalizeAsyncActionLineTime(element.textContent),
+    )
+  expect(snapshot()).toEqual([
+    'The draft is ready for review.',
+    'I am checking the current issue.',
+    'Post comment completed · <time>',
+    'The issue check is complete.',
+  ])
+})
+
 it('returns from DraftFocus with the Back to conversation button', async () => {
   const reviewDocuments = [
     {
@@ -7635,15 +7833,27 @@ it('shows rewind request errors without switching sessions or offering Retry', a
   const originalSession = { ...session, engine: 'claude' as const }
   const forkedSession = { ...originalSession, id: 'fixture-fork-session' }
   const selectedSessions = vi.fn()
+  const earlierMessage: ChatItem = {
+    type: 'assistant',
+    text: 'The request context is ready.',
+  }
   const selectedMessage: ChatItem = {
     type: 'user',
     text: 'Revisit this request.',
     rewindId: 'fixture-user-message',
   }
+  const laterMessage: ChatItem = {
+    type: 'assistant',
+    text: 'I will continue with the follow-up.',
+  }
   const fetcher = vi.fn<typeof fetch>((input) => {
     const url = requestUrl(input)
     if (url.endsWith('/messages?limit=100')) {
-      return Promise.resolve(jsonResponse(messagesResponse([selectedMessage])))
+      return Promise.resolve(
+        jsonResponse(
+          messagesResponse([earlierMessage, selectedMessage, laterMessage]),
+        ),
+      )
     }
     if (url.endsWith('/actions')) {
       return Promise.resolve(jsonResponse({ ...actions, rewind: true }))
@@ -7720,6 +7930,17 @@ it('shows rewind request errors without switching sessions or offering Retry', a
       ),
       (button) => button.textContent,
     ),
+    timelineOrder: Array.from(
+      container.querySelectorAll(
+        '.conversation-scroll .chat-assistant-message, .conversation-scroll .chat-user-group, .conversation-scroll .async-action-item--line',
+      ),
+      (element) =>
+        element.matches('.async-action-item--line')
+          ? 'rewind'
+          : element.matches('.chat-user-group')
+            ? 'selected request'
+            : element.textContent,
+    ),
     composer: container.querySelector<HTMLTextAreaElement>('textarea')?.value,
   })
   expect(snapshot()).toEqual({
@@ -7734,6 +7955,12 @@ it('shows rewind request errors without switching sessions or offering Retry', a
       },
     ],
     retryButtons: [],
+    timelineOrder: [
+      'The request context is ready.',
+      'rewind',
+      'selected request',
+      'I will continue with the follow-up.',
+    ],
     composer: '',
   })
 })
