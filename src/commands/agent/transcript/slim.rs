@@ -520,6 +520,38 @@ mod tests {
     }
 
     #[test]
+    fn slims_image_payloads_without_changing_unrelated_text() {
+        let directory = tempdir().expect("temporary directory should be created");
+        let transcript = directory.path().join("fixture-transcript.jsonl");
+        fs::write(
+            &transcript,
+            indoc! {r#"
+                {"type":"assistant","uuid":"fixture-read","message":{"content":[{"type":"tool_use","id":"fixture-read-tool","name":"Read","input":{"file_path":"/fixture/source.png"}}]}}
+                {"type":"user","uuid":"fixture-images","parentUuid":"fixture-read","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-read-tool","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"fixture-result-payload"}}]},{"type":"text","text":"data:image/png;base64,fixturepayload Keep this instruction."},{"type":"image","base64":"fixture-image-payload","text":"Keep this image note."},{"type":"metadata","base64":"fixture-value","text":"Keep this metadata text."}],"file":{"filePath":"/fixture/source.png","base64":"fixture-file-payload","text":"Keep this file note."},"answers":{"image":"data:image/png;base64,fixtureanswerimage"}},"toolUseResult":{"file":{"filePath":"/fixture/source.png","base64":"fixture-result-file-payload"},"answers":{"image":"data:image/png;base64,fixtureanswerimage"}}}
+                {"type":"attachment","uuid":"fixture-queued-command","parentUuid":"fixture-read","attachment":{"type":"queued_command","prompt":"data:image/png;base64,fixturequeued Keep this queued prompt."}}
+                {"type":"system","subtype":"compact_boundary","compactMetadata":{"preservedMessages":{"uuids":[]}}}
+                {"type":"assistant","uuid":"fixture-after-boundary","message":{"content":"after boundary"}}
+            "#},
+        )
+        .expect("fixture transcript should be written");
+
+        slim_transcript(&transcript).expect("transcript should be slimmed");
+
+        assert_eq!(
+            parse_jsonl(
+                &fs::read_to_string(transcript).expect("slimmed transcript should be readable")
+            ),
+            parse_jsonl(indoc! {r#"
+                {"type":"assistant","uuid":"fixture-read","message":{"content":[{"type":"tool_use","id":"fixture-read-tool","name":"Read","input":{"file_path":"/fixture/source.png"}}]}}
+                {"type":"user","uuid":"fixture-images","parentUuid":"fixture-read","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-read-tool","content":[{"type":"text","text":"[Image data omitted; source: /fixture/source.png]"}]},{"type":"text","text":"[Image data omitted] Keep this instruction."},{"type":"image","base64":"[Image data omitted]","text":"Keep this image note."},{"type":"metadata","base64":"fixture-value","text":"Keep this metadata text."}],"file":{"filePath":"/fixture/source.png","base64":"[Image data omitted; source: /fixture/source.png]","text":"Keep this file note."},"answers":{"image":"[Image data omitted]"}},"toolUseResult":{"answers":{"image":"[Image data omitted]"}}}
+                {"type":"attachment","uuid":"fixture-queued-command","parentUuid":"fixture-read","attachment":{"type":"queued_command","prompt":"[Image data omitted] Keep this queued prompt."}}
+                {"type":"system","subtype":"compact_boundary","compactMetadata":{"preservedMessages":{"uuids":[]}}}
+                {"type":"assistant","uuid":"fixture-after-boundary","message":{"content":"after boundary"}}
+            "#})
+        );
+    }
+
+    #[test]
     fn retains_required_attachments_and_post_boundary_usage() {
         let directory = tempdir().expect("temporary directory should be created");
         let transcript = directory.path().join("fixture-transcript.jsonl");

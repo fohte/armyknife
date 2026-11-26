@@ -302,8 +302,11 @@ fn shorten_data_uri_payloads(text: &str, path: Option<&str>) -> Option<String> {
     let mut changed = false;
     while let Some(relative_start) = text[search_from..].find(PREFIX) {
         let start = search_from + relative_start;
-        let Some(separator_offset) = text[start..].find(BASE64_SEPARATOR) else {
-            search_from = start + PREFIX.len();
+        let next_marker = text[start + PREFIX.len()..]
+            .find(PREFIX)
+            .map_or(text.len(), |offset| start + PREFIX.len() + offset);
+        let Some(separator_offset) = text[start..next_marker].find(BASE64_SEPARATOR) else {
+            search_from = next_marker;
             continue;
         };
         let payload_start = start + separator_offset + BASE64_SEPARATOR.len();
@@ -312,7 +315,7 @@ fn shorten_data_uri_payloads(text: &str, path: Option<&str>) -> Option<String> {
             .position(|byte| !is_base64_byte(*byte))
             .map_or(bytes.len(), |offset| payload_start + offset);
         if payload_end == payload_start {
-            search_from = start + PREFIX.len();
+            search_from = next_marker;
             continue;
         }
 
@@ -355,92 +358,4 @@ fn preserved_uuids(record: &Value) -> HashSet<String> {
         .filter_map(Value::as_str)
         .map(str::to_owned)
         .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use std::collections::{HashMap, HashSet};
-
-    use rstest::{fixture, rstest};
-    use serde_json::{Value, json};
-
-    use super::{RecordAction, TranscriptAnalysis, sanitize_images};
-
-    #[fixture]
-    fn analysis() -> TranscriptAnalysis {
-        TranscriptAnalysis {
-            boundary_offset: None,
-            preserved_uuids: HashSet::new(),
-            read_paths_by_tool_use: HashMap::new(),
-        }
-    }
-
-    #[rstest]
-    #[case::data_uri_followed_by_prompt_text(
-        r#"{"type":"user","message":{"content":"data:image/png;base64,fixturepayload Keep this instruction."}}"#,
-        r#"{"type":"user","message":{"content":"[Image data omitted] Keep this instruction."}}"#,
-    )]
-    #[case::unrelated_base64_object_keeps_its_text(
-        r#"{"type":"user","message":{"content":[{"type":"metadata","base64":"fixture-value","text":"Keep this metadata text."}]}}"#,
-        r#"{"type":"user","message":{"content":[{"type":"metadata","base64":"fixture-value","text":"Keep this metadata text."}]}}"#,
-    )]
-    #[case::image_object_keeps_its_text(
-        r#"{"type":"image","base64":"fixturepayload","text":"Keep this image note."}"#,
-        r#"{"type":"image","base64":"[Image data omitted]","text":"Keep this image note."}"#
-    )]
-    #[case::image_file_keeps_existing_text(
-        r#"{"type":"user","file":{"filePath":"/fixture/source.png","base64":"fixture-payload","text":"Keep this file note."}}"#,
-        r#"{"type":"user","file":{"filePath":"/fixture/source.png","base64":"[Image data omitted; source: /fixture/source.png]","text":"Keep this file note."}}"#,
-    )]
-    fn shortens_image_values_without_rewriting_other_text(
-        analysis: TranscriptAnalysis,
-        #[case] input: &str,
-        #[case] expected: &str,
-    ) {
-        let mut record = serde_json::from_str::<Value>(input).expect("fixture record should parse");
-
-        sanitize_images(&mut record, &analysis);
-
-        assert_eq!(
-            record,
-            serde_json::from_str::<Value>(expected).expect("expected record should parse")
-        );
-    }
-
-    #[rstest]
-    fn scopes_tool_result_file_paths_to_the_file_payload(analysis: TranscriptAnalysis) {
-        let mut record = json!({
-            "type": "user",
-            "toolUseResult": {
-                "file": {
-                    "filePath": "/fixture/source.png",
-                    "base64": "fixture-file-payload",
-                },
-                "answers": {
-                    "image": "data:image/png;base64,fixtureanswerimage",
-                },
-            },
-        });
-
-        let action = sanitize_images(&mut record, &analysis);
-
-        assert_eq!(
-            (action, record),
-            (
-                RecordAction::KeepChanged,
-                json!({
-                    "type": "user",
-                    "toolUseResult": {
-                        "file": {
-                            "filePath": "/fixture/source.png",
-                            "base64": "[Image data omitted; source: /fixture/source.png]",
-                        },
-                        "answers": {
-                            "image": "[Image data omitted]",
-                        },
-                    },
-                }),
-            ),
-        );
-    }
 }
