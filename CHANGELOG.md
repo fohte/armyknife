@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.957](https://github.com/fohte/armyknife/compare/v0.1.956...v0.1.957) (2026-11-26)
+
+
+### Features
+
+* **agent/watch-web:** profile long tasks ([#2337](https://github.com/fohte/armyknife/issues/2337)) ([da84d0c](https://github.com/fohte/armyknife/commit/da84d0c4cac2a02fa60d83ffa40fea8f8e6336a4))
+
 ## [0.1.956](https://github.com/fohte/armyknife/compare/v0.1.955...v0.1.956) (2026-11-26)
 
 
