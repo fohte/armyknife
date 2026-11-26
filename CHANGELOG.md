@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.954](https://github.com/fohte/armyknife/compare/v0.1.953...v0.1.954) (2026-11-26)
+
+
+### Bug Fixes
+
+* **agent:** stop crit daemons on session expiry ([#2332](https://github.com/fohte/armyknife/issues/2332)) ([f60d4e2](https://github.com/fohte/armyknife/commit/f60d4e271ae78080d030d42f8d39be41bc3b1c23))
+
 ## [0.1.953](https://github.com/fohte/armyknife/compare/v0.1.952...v0.1.953) (2026-11-26)
 
 
