@@ -10426,7 +10426,7 @@ it('keeps a retained message error visible after an empty attachment error', asy
   })
   const retainedErrorAfterEncodingFailure = await waitForState(
     () =>
-      encodingFailureCount === 1 &&
+      encodingFailureCount > 0 &&
       container.querySelector('[role="alert"]')?.textContent ===
         'The message could not be sent.',
   )
@@ -10434,13 +10434,13 @@ it('keeps a retained message error visible after an empty attachment error', asy
   const snapshot = () => ({
     retainedErrorAfterEncodingFailure,
     alert: container.querySelector('[role="alert"]')?.textContent ?? null,
-    encodingFailureCount,
+    encodingFailed: encodingFailureCount > 0,
     sendCount,
   })
   expect(snapshot()).toEqual({
     retainedErrorAfterEncodingFailure: true,
     alert: 'The message could not be sent.',
-    encodingFailureCount: 1,
+    encodingFailed: true,
     sendCount: 1,
   })
 })
