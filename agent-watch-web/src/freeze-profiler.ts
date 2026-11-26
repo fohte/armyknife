@@ -106,7 +106,6 @@ export function startFreezeProfiler() {
       )
       if (taskSegments.length === 0) {
         console.warn('No retained JavaScript profile for watch-web long task')
-        continue
       }
       void Promise.all(taskSegments.map((segment) => segment.trace)).then(
         (resolvedTraces) => {

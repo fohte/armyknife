@@ -279,6 +279,46 @@ it.each(longTaskScenarios)(
   },
 )
 
+it('sends timing when a buffered task predates the first profile', async () => {
+  const taskStart = performance.now() - 2_000
+  const { deliverLongTasks, fetchMock, observerOptions } =
+    installProfilerEnvironment(performance.now(), {})
+  const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+  const cleanup = startFreezeProfiler()
+
+  deliverLongTasks([longTaskEntry(taskStart)])
+  await new Promise<void>((resolve) => setTimeout(resolve, 0))
+
+  expect(
+    profilerSnapshot(
+      observerOptions(),
+      fetchMock.mock.calls,
+      warning.mock.calls,
+    ),
+  ).toEqual(
+    profilerSnapshot(
+      { type: 'longtask', buffered: true },
+      [
+        [
+          '/api/long-tasks',
+          {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              startedAtMs: Math.round(performance.timeOrigin + taskStart),
+              durationMs: 1_000,
+              functions: [],
+            }),
+            keepalive: true,
+          },
+        ],
+      ],
+      [['No retained JavaScript profile for watch-web long task']],
+    ),
+  )
+  cleanup()
+})
+
 it('caps pending reports across callbacks and retains the newest task', async () => {
   const taskStart = performance.now()
   const {
