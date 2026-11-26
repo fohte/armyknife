@@ -108,6 +108,7 @@ export function useConversationPaneData({
   const requestGeneration = useRef(0)
   const messagesRequestInFlight = useRef(false)
   const refreshQueued = useRef(false)
+  const pendingPromptIdsForNextRefresh = useRef(new Set<string>())
   const refreshRef = useRef<(() => Promise<void>) | null>(null)
   const actionsRequestGeneration = useRef(0)
   const olderRequestGeneration = useRef(0)
@@ -231,10 +232,28 @@ export function useConversationPaneData({
       loadedConversation?.epoch === undefined
         ? ''
         : `&epoch=${encodeURIComponent(loadedConversation.epoch)}${loadedConversation.olderCursor == null ? '' : `&olderCursor=${encodeURIComponent(loadedConversation.olderCursor)}`}`
+    const pendingPromptIds = new Set(
+      pendingOperationsRef.current.flatMap((pending) =>
+        pending.status === 'sent' &&
+        pending.operation.type === 'message' &&
+        pending.operation.sessionId === sessionId &&
+        pending.operation.queuedPromptId !== undefined
+          ? [pending.operation.queuedPromptId]
+          : [],
+      ),
+    )
+    for (const messageId of pendingPromptIdsForNextRefresh.current) {
+      pendingPromptIds.add(messageId)
+    }
+    pendingPromptIdsForNextRefresh.current.clear()
+    const pendingPromptIdsQuery =
+      pendingPromptIds.size === 0
+        ? ''
+        : `&pendingPromptIds=${encodeURIComponent([...pendingPromptIds].join(','))}`
     const messagesRequest = requestJson(
       loadedConversation === null
-        ? `${sessionPath}/messages?limit=${String(INITIAL_MESSAGE_LIMIT)}`
-        : `${sessionPath}/messages?from=${String(loadedConversation.start)}${epochQuery}${stableDigestQuery}`,
+        ? `${sessionPath}/messages?limit=${String(INITIAL_MESSAGE_LIMIT)}${pendingPromptIdsQuery}`
+        : `${sessionPath}/messages?from=${String(loadedConversation.start)}${epochQuery}${stableDigestQuery}${pendingPromptIdsQuery}`,
       isConversationResponse,
     )
     void refreshActions()
@@ -320,6 +339,13 @@ export function useConversationPaneData({
 
   const refreshForOperation = useCallback(
     async (operation: SessionOperation) => {
+      if (
+        operation.type === 'message' &&
+        operation.sessionId === sessionId &&
+        operation.queuedPromptId !== undefined
+      ) {
+        pendingPromptIdsForNextRefresh.current.add(operation.queuedPromptId)
+      }
       await refresh()
       if (
         isConversationOperationConfirmed(
@@ -461,6 +487,7 @@ export function useConversationPaneData({
       if (currentSessionId.current === sessionId) {
         refreshQueued.current = false
       }
+      pendingPromptIdsForNextRefresh.current.clear()
     }
   }, [sessionId])
 

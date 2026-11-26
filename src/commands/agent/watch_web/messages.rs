@@ -3904,6 +3904,86 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn message_route_confirms_only_requested_resolved_prompt_ids() {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_path = directory.path().join("transcript.jsonl");
+        std::fs::write(
+            &transcript_path,
+            br#"{"type":"queue-operation","operation":"popAll","timestamp":"2026-01-01T00:00:01Z"}"#,
+        )
+        .unwrap();
+
+        let mut session = stored_session();
+        session.transcript_path = Some(transcript_path);
+        let mut already_resolved = saved_prompt(8, "An unrelated resolved prompt.");
+        already_resolved.resolved = true;
+        let mut still_pending = saved_prompt(9, "A later queued prompt.");
+        still_pending.sent_at = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:02Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let queued_prompts = Arc::new(Mutex::new(vec![
+            saved_prompt(7, "A cancelled prompt."),
+            already_resolved,
+            still_pending,
+        ]));
+        let queue_loader = Arc::clone(&queued_prompts);
+        let queue_updater = Arc::clone(&queued_prompts);
+        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
+            move |id| Ok((id == "fixture-session").then(|| session.clone())),
+            |_| Ok(None),
+            |_| Ok(Vec::new()),
+            move |_| Ok(queue_loader.lock().unwrap().clone()),
+            |_| Ok(Vec::new()),
+            move |_, ids| {
+                for prompt in queue_updater.lock().unwrap().iter_mut() {
+                    if ids.contains(&prompt.id) {
+                        prompt.resolved = true;
+                    }
+                }
+                Ok(())
+            },
+        );
+        let query = "?pendingPromptIds=fixture-message-7%2Cfixture-message-9";
+
+        let first = message_response_with_query(&router, query).await;
+        let second = message_response_with_query(&router, query).await;
+        let third = message_response_with_query(&router, query).await;
+        let persisted_resolution = queued_prompts
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|prompt| (prompt.id, prompt.resolved))
+            .collect::<Vec<_>>();
+        let expected_response = (
+            StatusCode::OK,
+            Some("application/json".to_string()),
+            json!({
+                "messages": [{
+                    "type": "queued_user",
+                    "content": [{"type": "text", "text": "A later queued prompt."}],
+                    "queuedPromptId": "fixture-message-9",
+                    "timestamp": "2026-01-01T00:00:02+00:00",
+                }],
+                "confirmedQueuedPromptIds": ["fixture-message-7"],
+                "backgroundTasks": [],
+                "start": 0,
+                "total": 1,
+                "decisions": [],
+                "hasUnansweredProposal": false,
+                "activeQuestionIndex": null,
+            }),
+        );
+
+        assert_eq!(
+            (vec![first, second, third], persisted_resolution),
+            (
+                vec![expected_response.clone(); 3],
+                vec![(7, true), (8, true), (9, false)],
+            ),
+        );
+    }
+
+    #[tokio::test]
     async fn claude_message_route_returns_saved_prompts_when_no_transcript_exists() {
         let session = stored_session();
         let queued = saved_prompt(7, "Continue the fixture build.");

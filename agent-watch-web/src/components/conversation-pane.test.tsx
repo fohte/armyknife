@@ -1440,12 +1440,14 @@ it('provides session links to cards through the conversation pane context', asyn
 })
 
 it('posts a message when randomUUID is unavailable', async () => {
+  const messagesRequestPaths: string[] = []
   vi.stubGlobal('crypto', {
     getRandomValues: (bytes: Uint8Array) => bytes.fill(0),
   })
   const fetcher = vi.fn<typeof fetch>((input, init) => {
     const url = requestUrl(input)
     if (url.includes('/messages?')) {
+      messagesRequestPaths.push(url)
       return Promise.resolve(jsonResponse(messagesResponse([])))
     }
     if (url.endsWith('/messages?from=0')) {
@@ -1494,6 +1496,10 @@ it('posts a message when randomUUID is unavailable', async () => {
         requestUrl(input).endsWith('/messages') && init?.method === 'POST',
     ),
   )
+  const confirmationRequestWasSent = await waitForState(() =>
+    messagesRequestPaths.some((url) => url.includes('pendingPromptIds=')),
+  )
+  const getRequestPaths = messagesRequestPaths.slice()
   const postRequest = fetcher.mock.calls
     .filter(
       ([input, init]) =>
@@ -1506,12 +1512,19 @@ it('posts a message when randomUUID is unavailable', async () => {
   const snapshot = () => ({
     composerReady,
     requestWasSent,
+    confirmationRequestWasSent,
+    getRequestPaths,
     postRequest,
     alert: container.querySelector('[role="alert"]')?.textContent ?? null,
   })
   expect(snapshot()).toEqual({
     composerReady: true,
     requestWasSent: true,
+    confirmationRequestWasSent: true,
+    getRequestPaths: [
+      '/api/sessions/sample-session/messages?limit=100',
+      '/api/sessions/sample-session/messages?from=0&pendingPromptIds=00000000-0000-4000-8000-000000000000',
+    ],
     postRequest: [
       {
         url: '/api/sessions/sample-session/messages',
