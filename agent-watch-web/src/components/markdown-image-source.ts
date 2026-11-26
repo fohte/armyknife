@@ -40,13 +40,36 @@ function normalizeMarkdownUri(value: string): string {
   return normalized
 }
 
+function normalizeMarkdownImagePath(value: string): string {
+  let unescaped = ''
+  for (let index = 0; index < value.length;) {
+    const character = value[index] ?? ''
+    const next = value[index + 1] ?? ''
+    const nextCode = next.charCodeAt(0)
+    if (
+      character === '\\' &&
+      ((nextCode >= 0x21 && nextCode <= 0x2f) ||
+        (nextCode >= 0x3a && nextCode <= 0x40) ||
+        (nextCode >= 0x5b && nextCode <= 0x60) ||
+        (nextCode >= 0x7b && nextCode <= 0x7e))
+    ) {
+      unescaped += next
+      index += 2
+      continue
+    }
+    unescaped += character
+    index += 1
+  }
+  return normalizeMarkdownUri(unescaped)
+}
+
 export function getMappedImageSource(
   src: string,
   imageSources: Readonly<Record<string, string | null>> | undefined,
 ): string | null | undefined {
   if (imageSources === undefined) return undefined
   const matches = Object.entries(imageSources).filter(
-    ([path]) => path === src || normalizeMarkdownUri(path) === src,
+    ([path]) => path === src || normalizeMarkdownImagePath(path) === src,
   )
   if (matches.length === 0) return undefined
   if (matches.length > 1) return null

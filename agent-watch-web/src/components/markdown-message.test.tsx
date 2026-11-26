@@ -104,13 +104,13 @@ it.each([
   )
 })
 
-it('shows unavailable when a Markdown escape changes the mapped path', () => {
+it('renders a mapped server image for an escaped Markdown destination', () => {
   expect(
     renderMessage(`![](<${escapedPath}>)`, undefined, {
-      [escapedPath]: null,
+      [escapedPath]: '/api/sessions/fixture-session/answer-images/fixture-key',
     }),
   ).toBe(
-    '<div class="markdown-message"><p><span class="markdown-image-unavailable">表示できません: /tmp/fixture(v1).png</span></p></div>',
+    '<div class="markdown-message"><p><button class="image-lightbox-trigger" type="button" aria-label="Enlarge image"><img class="chat-user-image" src="/api/sessions/fixture-session/answer-images/fixture-key" alt="" loading="lazy" decoding="async"/></button></p></div>',
   )
 })
 

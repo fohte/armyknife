@@ -14,10 +14,18 @@ const MAX_IMAGES_PER_ANSWER: usize = 16;
 const MAX_ANSWER_IMAGE_BYTES: u64 = 50 * 1024 * 1024;
 
 pub(super) fn attach(session_id: &str, conversation: &mut super::ConversationResponse) {
-    conversation.message_image_sources.clear();
-    match storage_root() {
+    attach_with_storage_root_result(session_id, conversation, storage_root());
+}
+
+fn attach_with_storage_root_result(
+    session_id: &str,
+    conversation: &mut super::ConversationResponse,
+    storage_root: Result<PathBuf>,
+) {
+    match storage_root {
         Ok(storage_root) => attach_with_storage_root(session_id, conversation, &storage_root),
         Err(error) => {
+            conversation.message_image_sources.clear();
             tracing::warn!(%error, "failed to locate assistant answer image storage");
             attach_unavailable_images(conversation);
         }
@@ -328,8 +336,8 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        MAX_AGENT_FILE_BYTES, MAX_IMAGES_PER_ANSWER, attach_with_storage_root, image_key,
-        markdown_image_paths,
+        MAX_AGENT_FILE_BYTES, MAX_IMAGES_PER_ANSWER, attach_with_storage_root,
+        attach_with_storage_root_result, image_key, markdown_image_paths,
     };
     use crate::commands::agent::file::{self, remove_session_storage};
     use crate::commands::agent::watch_web::messages::{ChatItem, ConversationResponse};
@@ -489,6 +497,22 @@ mod tests {
         assert_eq!(
             conversation.message_image_sources,
             BTreeMap::from([(0, BTreeMap::from([(path.display().to_string(), None)]),)]),
+        );
+    }
+
+    #[test]
+    fn storage_root_errors_make_assistant_images_unavailable() {
+        let mut conversation = conversation("![](/tmp/fixture.png)".to_owned());
+
+        attach_with_storage_root_result(
+            "fixture-session",
+            &mut conversation,
+            Err(anyhow::anyhow!("state directory unavailable")),
+        );
+
+        assert_eq!(
+            conversation.message_image_sources,
+            BTreeMap::from([(0, BTreeMap::from([("/tmp/fixture.png".to_owned(), None)]),)]),
         );
     }
 
