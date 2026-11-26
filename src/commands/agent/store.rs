@@ -498,6 +498,10 @@ pub(crate) fn list_all_sessions_from(sessions_dir: &Path) -> Result<Vec<Session>
     Ok(sessions)
 }
 
+pub(crate) fn all_session_rows_from(sessions_dir: &Path) -> Result<Vec<Session>> {
+    database::all_sessions(sessions_dir)
+}
+
 pub(crate) fn session_store_revision() -> Result<i64> {
     session_store_revision_from(&sessions_dir()?)
 }
