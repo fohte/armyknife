@@ -11,6 +11,7 @@ use tempfile::{Builder, NamedTempFile, TempPath};
 
 use super::super::claude_sessions::session_jsonl_path;
 
+mod reconcile;
 mod transform;
 mod writer;
 
@@ -197,12 +198,13 @@ where
         .map_err(|error| error.error)
         .with_context(|| format!("replace Claude Code transcript {}", path.display()))?;
     drop(persisted_file);
+    drop(replacement_writer);
     after_replace();
     // A writer may open the old inode after the pre-replacement scan and before rename.
-    reconcile_in_flight_appends(
+    reconcile::reconcile_after_replacement(
+        path,
         old_inode_monitor.path(),
         &mut source,
-        &mut replacement_writer,
         copied_to,
         &mut has_writable_open_handle,
         max_reconcile_wait,
@@ -441,10 +443,6 @@ mod tests {
     use std::fs;
     use std::io::Write;
     use std::path::Path;
-    use std::sync::Arc;
-    use std::sync::Barrier;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::thread;
     use std::time::Duration;
 
     use indoc::indoc;
@@ -547,7 +545,7 @@ mod tests {
     }
 
     #[test]
-    fn preserves_appends_during_rewrite_and_across_replacement() {
+    fn keeps_jsonl_valid_when_old_inode_and_new_path_writes_overlap() {
         let directory = tempdir().expect("temporary directory should be created");
         let transcript = directory.path().join("fixture-transcript.jsonl");
         fs::write(
@@ -562,14 +560,8 @@ mod tests {
             .append(true)
             .open(&transcript)
             .expect("original transcript should be appendable");
-        let writer_open = Arc::new(AtomicBool::new(true));
-        let callback_writer_open = Arc::clone(&writer_open);
-        let replacement_is_live = Arc::new(AtomicBool::new(false));
-        let callback_replacement_is_live = Arc::clone(&replacement_is_live);
-        let split_row_barrier = Arc::new(Barrier::new(2));
-        let writer_split_row_barrier = Arc::clone(&split_row_barrier);
-        let mut inserted_new_path_row = false;
-        let mut late_writer_thread = None;
+        let mut old_writer = Some(old_writer);
+        let pending_new_path_writer = RefCell::new(None);
 
         slim_transcript_with(
             &transcript,
@@ -592,44 +584,31 @@ mod tests {
                     .expect("append before replacement should succeed");
             },
             || {
-                callback_replacement_is_live.store(true, Ordering::SeqCst);
-                late_writer_thread = Some(thread::spawn(move || {
-                    thread::sleep(Duration::from_millis(100));
-                    let mut old_writer = old_writer;
-                    old_writer.write_all(b"{\"type\":\"user\",\"uuid\":\"fixture-old-fd-after-replace\"")?;
-                    writer_split_row_barrier.wait();
-                    writer_split_row_barrier.wait();
-                    let result = old_writer.write_all(b",\"message\":{\"content\":\"fixture old fd after replace\"}}\n");
-                    drop(old_writer);
-                    callback_writer_open.store(false, Ordering::SeqCst);
-                    result
-                }));
+                old_writer
+                    .take()
+                    .expect("old transcript writer should be available")
+                    .write_all(b"{\"type\":\"user\",\"uuid\":\"fixture-old-fd-after-replace\",\"message\":{\"content\":\"fixture old fd after replace\"}}\n")
+                    .expect("old inode append should succeed");
+                let mut writer = fs::OpenOptions::new()
+                    .append(true)
+                    .open(&transcript)
+                    .expect("replacement transcript should be appendable");
+                writer
+                    .write_all(b"{\"type\":\"user\",\"uuid\":\"fixture-new-path-after-replace\"")
+                    .expect("partial new path append should succeed");
+                *pending_new_path_writer.borrow_mut() = Some(writer);
             },
             |_| {
-                let replacement_is_live = replacement_is_live.load(Ordering::SeqCst);
-                if replacement_is_live && !inserted_new_path_row {
-                    split_row_barrier.wait();
-                    let mut replacement = fs::OpenOptions::new()
-                        .append(true)
-                        .open(&transcript)
-                        .expect("replacement transcript should be appendable");
-                    replacement
-                        .write_all(b"{\"type\":\"user\",\"uuid\":\"fixture-new-path-after-replace\",\"message\":{\"content\":\"fixture new path after replace\"}}\n")
-                        .expect("append through the new path should succeed");
-                    inserted_new_path_row = true;
-                    split_row_barrier.wait();
+                if let Some(mut writer) = pending_new_path_writer.borrow_mut().take() {
+                    writer
+                        .write_all(b",\"message\":{\"content\":\"fixture new path after replace\"}}\n")
+                        .expect("new path append should finish");
                 }
-                Ok(replacement_is_live && writer_open.load(Ordering::SeqCst))
+                Ok(false)
             },
             Duration::from_secs(1),
         )
         .expect("transcript should be slimmed");
-        late_writer_thread
-            .expect("late writer thread should be created")
-            .join()
-            .expect("late writer thread should finish")
-            .expect("append through the old file handle should succeed");
-
         assert_eq!(
             parse_jsonl(&fs::read_to_string(&transcript).expect("transcript should be readable")),
             parse_jsonl(indoc! {r#"
