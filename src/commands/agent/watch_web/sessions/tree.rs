@@ -143,7 +143,12 @@ pub(super) async fn session_tree<S: SessionSource>(
     let session_metadata = tokio::task::spawn_blocking(move || {
         (
             interrupted_session_ids(sessions_to_check),
-            resolve_repos_for_sessions(&sessions_to_resolve, &all_sessions_for_repos, resolve_repo),
+            resolve_repos_for_sessions(
+                &sessions_to_resolve,
+                &all_sessions_for_repos,
+                repo_name_cache(),
+                resolve_repo,
+            ),
         )
     });
     let task_metadata = source.fetch_task_metadata(&tree_sessions).await;

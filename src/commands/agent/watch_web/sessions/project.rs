@@ -12,7 +12,7 @@ const REPO_NAME_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
 static REPO_NAME_CACHE: OnceLock<RepoNameCache> = OnceLock::new();
 
 #[derive(Default)]
-struct RepoNameCache {
+pub(super) struct RepoNameCache {
     entries: Mutex<HashMap<PathBuf, CachedRepoName>>,
 }
 
@@ -62,13 +62,14 @@ impl RepoNameCache {
     }
 }
 
-fn repo_name_cache() -> &'static RepoNameCache {
+pub(super) fn repo_name_cache() -> &'static RepoNameCache {
     REPO_NAME_CACHE.get_or_init(RepoNameCache::default)
 }
 
 pub(super) fn resolve_repos_for_sessions(
     sessions: &[Session],
     all_sessions: &[Session],
+    repo_cache: &RepoNameCache,
     mut resolve_repo: impl FnMut(&std::path::Path) -> String,
 ) -> HashMap<String, String> {
     let relevant_ids = sessions
@@ -86,9 +87,7 @@ pub(super) fn resolve_repos_for_sessions(
         .map(|session| {
             let repo = repo_by_cwd
                 .entry(session.cwd.clone())
-                .or_insert_with(|| {
-                    repo_name_cache().resolve(&session.cwd, || resolve_repo(&session.cwd))
-                })
+                .or_insert_with(|| repo_cache.resolve(&session.cwd, || resolve_repo(&session.cwd)))
                 .clone();
             (session.session_id.clone(), repo)
         })
