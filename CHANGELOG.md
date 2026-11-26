@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.951](https://github.com/fohte/armyknife/compare/v0.1.950...v0.1.951) (2026-11-26)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** reserve production port ([#2327](https://github.com/fohte/armyknife/issues/2327)) ([3c7b55e](https://github.com/fohte/armyknife/commit/3c7b55e0d2cd0249f4c4a51b745a5f157253c91b))
+
 ## [0.1.950](https://github.com/fohte/armyknife/compare/v0.1.949...v0.1.950) (2026-11-26)
 
 
