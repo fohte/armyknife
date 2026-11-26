@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.941](https://github.com/fohte/armyknife/compare/v0.1.940...v0.1.941) (2026-11-26)
+
+
+### Bug Fixes
+
+* **agent:** skip Codex archive while todos remain ([#2308](https://github.com/fohte/armyknife/issues/2308)) ([350c9db](https://github.com/fohte/armyknife/commit/350c9db474b07e82c07f2994ddb150ace2c85413))
+
 ## [0.1.940](https://github.com/fohte/armyknife/compare/v0.1.939...v0.1.940) (2026-11-26)
 
 
