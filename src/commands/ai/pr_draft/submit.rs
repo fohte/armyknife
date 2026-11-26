@@ -1,4 +1,8 @@
 use clap::Args;
+use std::fs::{self, File, OpenOptions};
+use std::io;
+use std::os::fd::AsRawFd;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 use super::common::{
@@ -76,12 +80,63 @@ struct SubmitContext<'a, F> {
     lock_policy: SubmitLockPolicy,
 }
 
+struct SubmitGuard {
+    _file: File,
+}
+
+impl SubmitGuard {
+    fn acquire(draft_path: &Path) -> io::Result<Self> {
+        let mut lock_path = draft_path.as_os_str().to_os_string();
+        lock_path.push(".submit.lock");
+        let lock_path = PathBuf::from(lock_path);
+        let mut options = OpenOptions::new();
+        options.create(true).read(true).write(true).mode(0o600);
+        #[cfg(unix)]
+        options.custom_flags(libc::O_NOFOLLOW);
+        let file = options.open(lock_path)?;
+
+        loop {
+            // Keep the lock file in place so concurrent submitters always lock the same inode.
+            // SAFETY: `file` stays open for the lifetime of the guard.
+            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } == 0 {
+                return Ok(Self { _file: file });
+            }
+            let error = io::Error::last_os_error();
+            if error.kind() != io::ErrorKind::Interrupted {
+                return Err(error);
+            }
+        }
+    }
+}
+
+async fn acquire_submit_lock(draft_path: &Path) -> anyhow::Result<SubmitGuard> {
+    let draft_path = draft_path.to_owned();
+    Ok(tokio::task::spawn_blocking(move || SubmitGuard::acquire(&draft_path)).await??)
+}
+
+fn canonicalize_path_or_parent(path: &Path) -> io::Result<PathBuf> {
+    if let Ok(canonicalized) = fs::canonicalize(path) {
+        return Ok(canonicalized);
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::other("draft path has no parent"))?;
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| io::Error::other("draft path has no file name"))?;
+    Ok(fs::canonicalize(parent)?.join(file_name))
+}
+
 pub async fn run(args: &SubmitArgs) -> anyhow::Result<()> {
     let draft_path = match &args.filepath {
         Some(path) => path.clone(),
         None => DraftFile::path_for(&RepoInfo::from_git_only()?),
     };
-    if let Some(result) = successful_action_result(&draft_path, ReviewDocumentAction::CreatePr)? {
+    let action_result_path =
+        canonicalize_path_or_parent(&draft_path).unwrap_or_else(|_| draft_path.clone());
+    if let Some(result) =
+        successful_action_result(&action_result_path, ReviewDocumentAction::CreatePr)?
+    {
         result.print_for_agent();
         return Ok(());
     }
@@ -169,39 +224,49 @@ async fn run_impl_with_review_language_context<
     vibe_access_check: impl FnOnce(&str, &str) -> anyhow::Result<()>,
 ) -> anyhow::Result<String> {
     // Get draft path and target repo info
-    let (draft_path, target) = match &args.filepath {
+    let requested_draft_path = match &args.filepath {
+        Some(path) => path.clone(),
+        None => DraftFile::path_for(&RepoInfo::from_git_only()?),
+    };
+    let draft_path = canonicalize_path_or_parent(&requested_draft_path)?;
+    let _submit_lock = acquire_submit_lock(&draft_path).await?;
+
+    if let Some(result) = successful_action_result(&draft_path, ReviewDocumentAction::CreatePr)? {
+        if context.lock_policy == SubmitLockPolicy::RequireUnlocked {
+            result.print_for_agent();
+        }
+        return Ok(result.message);
+    }
+
+    let target = match &args.filepath {
         Some(path) => {
             // When filepath is provided, parse it to get owner/repo/branch
             let (owner, repo, branch) = DraftFile::parse_path(path).ok_or_else(|| {
                 PrDraftError::CommandFailed(format!("Invalid draft path: {}", path.display()))
             })?;
             let is_private = gh_client.is_repo_private(&owner, &repo).await?;
-            (
-                path.clone(),
-                PrTarget {
-                    owner,
-                    repo,
-                    branch,
-                    is_private,
-                },
-            )
+            PrTarget {
+                owner,
+                repo,
+                branch,
+                is_private,
+            }
         }
         None => {
             // Auto-detect from current git repo
             let repo_info = RepoInfo::from_current_dir_async(gh_client).await?;
-            let target = PrTarget {
+            PrTarget {
                 owner: repo_info.owner.clone(),
                 repo: repo_info.repo.clone(),
                 branch: repo_info.branch.clone(),
                 is_private: repo_info.is_private,
-            };
-            (DraftFile::path_for(&repo_info), target)
+            }
         }
     };
     let is_private = target.is_private;
 
     // Check for a live review holder before submitting.
-    let lock_path = LockGuard::lock_path(&draft_path);
+    let lock_path = LockGuard::lock_path(&requested_draft_path);
     if context.lock_policy == SubmitLockPolicy::RequireUnlocked && LockGuard::is_locked(&draft_path)
     {
         anyhow::bail!(
@@ -211,6 +276,7 @@ async fn run_impl_with_review_language_context<
     }
 
     let draft = DraftFile::from_path(draft_path.clone())?;
+    let approved_document_hash = crate::shared::human_in_the_loop::document_hash(&draft_path)?;
 
     if args.no_review {
         vibe_access_check(&target.owner, &target.repo)?;
@@ -368,6 +434,17 @@ async fn run_impl_with_review_language_context<
         }
     };
 
+    crate::shared::human_in_the_loop::save_action_result(
+        &draft_path,
+        &crate::shared::human_in_the_loop::ReviewDocumentActionResult::new(
+            ReviewDocumentAction::CreatePr,
+            true,
+            pr_url.clone(),
+            approved_document_hash,
+            None,
+        ),
+    )?;
+
     (submit_effects.record_created_pr_url)(&pr_url);
     if target_is_current_repo {
         let config_key = format!("branch.{}.pr-url", target.branch);
@@ -442,7 +519,7 @@ mod tests {
     use indoc::indoc;
     use rstest::{fixture, rstest};
     use std::fs;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
     #[tokio::test]
     async fn submit_reports_a_watch_web_pr_without_submitting_twice() {
@@ -473,6 +550,84 @@ mod tests {
                     .expect("successful action result should remain available"),
             ),
             (Ok(()), Some(result)),
+        );
+    }
+
+    #[rstest]
+    #[case::creates_pr("concurrent-create-repository", None, vec![(
+        "concurrent-owner".to_string(),
+        "concurrent-create-repository".to_string(),
+        "Submit a sample change".to_string(),
+        "feature/concurrent-submit".to_string(),
+        None,
+        false,
+    )], Vec::new())]
+    #[case::updates_pr("concurrent-update-repository", Some(23), Vec::new(), vec![23])]
+    #[tokio::test]
+    async fn concurrent_submissions_submit_a_pr_once(
+        #[case] repo: &str,
+        #[case] existing_pr_number: Option<u64>,
+        #[case] expected_create_calls: Vec<CreatePrCall>,
+        #[case] expected_update_calls: Vec<u64>,
+    ) {
+        let _draft_directory = TestDraftDirectory::new("concurrent-owner", repo);
+        let draft_path = create_approved_draft(
+            "concurrent-owner",
+            repo,
+            "feature/concurrent-submit",
+            "Submit a sample change",
+            "Body content",
+        );
+        let args = SubmitArgs {
+            filepath: Some(draft_path),
+            base: None,
+            draft: false,
+            no_review: false,
+        };
+        let client = Arc::new(SubmitClientStub {
+            existing_pr_number,
+            ..SubmitClientStub::default()
+        });
+
+        let (first, second) = tokio::join!(
+            run_impl(
+                &args,
+                &*client,
+                &noop_hook,
+                noop_config,
+                no_current_repo,
+                &NoopPostSubmitProcessor,
+                no_vibe_access,
+            ),
+            run_impl(
+                &args,
+                &*client,
+                &noop_hook,
+                noop_config,
+                no_current_repo,
+                &NoopPostSubmitProcessor,
+                no_vibe_access,
+            ),
+        );
+        let create_calls = client
+            .create_calls
+            .lock()
+            .expect("submit client mutex")
+            .clone();
+        let update_calls = client
+            .update_calls
+            .lock()
+            .expect("submit client mutex")
+            .clone();
+
+        assert_eq!(
+            (
+                first.map_err(|error| error.to_string()),
+                second.map_err(|error| error.to_string()),
+                create_calls,
+                update_calls,
+            ),
+            (Ok(()), Ok(()), expected_create_calls, expected_update_calls,),
         );
     }
 

@@ -234,7 +234,9 @@ impl DraftFile {
         path: &Path,
         draft_dir: &Path,
     ) -> Option<(String, String, String)> {
-        let relative = path.strip_prefix(draft_dir).ok()?;
+        let path = fs::canonicalize(path).ok()?;
+        let draft_dir = fs::canonicalize(draft_dir).ok()?;
+        let relative = path.strip_prefix(&draft_dir).ok()?;
         let components: Vec<_> = relative.components().collect();
 
         // Need at least 3 components: owner, repo, and at least one branch segment
@@ -442,6 +444,38 @@ mod tests {
     use super::*;
     use indoc::indoc;
     use rstest::rstest;
+
+    #[cfg(unix)]
+    #[test]
+    fn parse_path_under_accepts_a_canonicalized_path() {
+        let directory = tempfile::tempdir().expect("temporary directory should be created");
+        let real_draft_dir = directory.path().join("drafts");
+        let draft_path = real_draft_dir
+            .join("sample-owner")
+            .join("sample-repository")
+            .join("feature")
+            .join("sample-branch.md");
+        fs::create_dir_all(
+            draft_path
+                .parent()
+                .expect("draft path should have a parent"),
+        )
+        .expect("draft directory should be created");
+        fs::write(&draft_path, "draft").expect("draft should be written");
+        let draft_dir_alias = directory.path().join("drafts-alias");
+        std::os::unix::fs::symlink(&real_draft_dir, &draft_dir_alias)
+            .expect("draft directory alias should be created");
+        let canonicalized_path = fs::canonicalize(&draft_path).expect("path should be resolved");
+
+        assert_eq!(
+            DraftFile::parse_path_under(&canonicalized_path, &draft_dir_alias),
+            Some((
+                "sample-owner".to_string(),
+                "sample-repository".to_string(),
+                "feature/sample-branch".to_string(),
+            )),
+        );
+    }
 
     #[rstest]
     #[case::repo_and_branch("owner/repo", "feature/x", "owner", "repo", "feature/x")]
