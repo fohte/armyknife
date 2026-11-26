@@ -1,5 +1,58 @@
+use std::fs::{self, OpenOptions};
+use std::io::Read;
+use std::path::Path;
+
+use anyhow::Result;
+
 pub(crate) const MAX_AGENT_FILE_BYTES: u64 = 10 * 1024 * 1024;
 pub(crate) const FILE_TYPE_PREFIX_BYTES: usize = 64 * 1024;
+
+pub(crate) struct ImageFile {
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) mime_type: &'static str,
+}
+
+pub(crate) fn read_bounded_image(path: &Path, max_bytes: u64) -> Result<Option<ImageFile>> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => metadata,
+        Ok(_) => return Ok(None),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    if metadata.len() > max_bytes {
+        return Ok(None);
+    }
+
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    let mut file = match options.open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) if error.raw_os_error() == Some(libc::ELOOP) => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    let opened_metadata = file.metadata()?;
+    if !opened_metadata.is_file() || opened_metadata.len() != metadata.len() {
+        return Ok(None);
+    }
+
+    let mut bytes = Vec::with_capacity(opened_metadata.len() as usize);
+    file.by_ref()
+        .take(max_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 != opened_metadata.len() || bytes.len() as u64 > max_bytes {
+        return Ok(None);
+    }
+    let Some((mime_type, _)) = image_format_from_bytes(&bytes) else {
+        return Ok(None);
+    };
+    Ok(Some(ImageFile { bytes, mime_type }))
+}
 
 const TEXT_EXTENSIONS: &[&str] = &[
     "txt",

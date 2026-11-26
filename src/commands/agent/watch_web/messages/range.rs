@@ -613,6 +613,52 @@ mod tests {
     }
 
     #[test]
+    fn epoch_range_rebases_image_sources_after_earlier_messages_are_removed() {
+        let messages = (0..120)
+            .map(|index| ChatItem::Assistant {
+                text: format!("Fixture message {index}."),
+            })
+            .collect::<Vec<_>>();
+        let epoch_start = 80;
+        let epoch = MessageEpochCursor::from_messages(&messages[epoch_start..])
+            .and_then(|cursor| cursor.encode())
+            .unwrap();
+        let sources = std::collections::BTreeMap::from([(
+            "/tmp/fixture.png".to_owned(),
+            Some("/api/answer-images/fixture-key".to_owned()),
+        )]);
+        let mut conversation = ConversationResponse {
+            messages,
+            message_image_sources: std::collections::BTreeMap::from([(85, sources.clone())]),
+            ..ConversationResponse::default()
+        };
+        conversation.update_metadata();
+
+        conversation.apply_range(MessageRange {
+            from: Some(0),
+            epoch: Some(epoch),
+            ..MessageRange::default()
+        });
+
+        assert_eq!(
+            (
+                conversation.start,
+                conversation.messages,
+                conversation.message_image_sources,
+            ),
+            (
+                0,
+                (80..120)
+                    .map(|index| ChatItem::Assistant {
+                        text: format!("Fixture message {index}."),
+                    })
+                    .collect::<Vec<_>>(),
+                std::collections::BTreeMap::from([(5, sources)]),
+            ),
+        );
+    }
+
+    #[test]
     fn full_initial_page_without_history_has_no_older_cursor() {
         let messages = (0..50)
             .map(|index| ChatItem::Assistant {

@@ -817,6 +817,110 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn serves_an_answer_image_snapshot_and_rejects_missing_session_or_image() {
+        let storage = TempDir::new().unwrap();
+        let session_id = "fixture-session";
+        let image_id = "a".repeat(64);
+        let session_directory =
+            crate::commands::agent::file::session_directory(storage.path(), session_id).unwrap();
+        std::fs::write(
+            session_directory.join(format!("answer-image-{image_id}")),
+            [137, 80, 78, 71, 13, 10, 26, 10],
+        )
+        .unwrap();
+        let session: Session = serde_json::from_value(serde_json::json!({
+            "session_id": session_id,
+            "cwd": "/fixture/project",
+            "status": "ended",
+            "created_at": "2030-01-01T00:00:00Z",
+            "updated_at": "2030-01-01T00:00:00Z",
+            "transcript_path": "/fixture/transcript.jsonl"
+        }))
+        .unwrap();
+        let expected_session_id = session_id.to_owned();
+        let app = routes_with(
+            move |requested_session| {
+                Ok((requested_session == expected_session_id).then(|| session.clone()))
+            },
+            |_, _| Ok(None),
+            storage.path().to_path_buf(),
+        );
+        let valid_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/sessions/{session_id}/answer-images/{image_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let valid_status = valid_response.status();
+        let valid_headers = valid_response.headers();
+        let valid_content_type = valid_headers
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        let valid_cache_control = valid_headers
+            .get(axum::http::header::CACHE_CONTROL)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        let valid_nosniff = valid_headers
+            .get(axum::http::header::X_CONTENT_TYPE_OPTIONS)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        let valid_body = to_bytes(valid_response.into_body(), MAX_FILE_BYTES as usize)
+            .await
+            .unwrap()
+            .to_vec();
+        let missing_image_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/sessions/{session_id}/answer-images/{}",
+                        "b".repeat(64)
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let missing_session_response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/sessions/missing-session/answer-images/{image_id}"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            (
+                valid_status,
+                valid_content_type,
+                valid_cache_control,
+                valid_nosniff,
+                valid_body,
+                missing_image_response.status(),
+                missing_session_response.status(),
+            ),
+            (
+                StatusCode::OK,
+                Some("image/png".to_owned()),
+                Some("private, max-age=31536000, immutable".to_owned()),
+                Some("nosniff".to_owned()),
+                vec![137, 80, 78, 71, 13, 10, 26, 10],
+                StatusCode::NOT_FOUND,
+                StatusCode::NOT_FOUND,
+            ),
+        );
+    }
+
+    #[tokio::test]
     async fn serves_a_registered_file_and_rejects_an_unregistered_id() {
         let storage = TempDir::new().unwrap();
         let sessions = TempDir::new().unwrap();

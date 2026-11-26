@@ -1,15 +1,12 @@
 use std::collections::{BTreeMap, HashSet};
-use std::fs::{self, OpenOptions};
-use std::io::Read;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 
 use crate::commands::agent::file::{self, storage_root};
-use crate::commands::agent::file_attachment_support::{
-    MAX_AGENT_FILE_BYTES, image_format_from_bytes,
-};
+use crate::commands::agent::file_attachment_support::{MAX_AGENT_FILE_BYTES, read_bounded_image};
 
 const MAX_IMAGES_PER_ANSWER: usize = 16;
 const MAX_ANSWER_IMAGE_BYTES: u64 = 50 * 1024 * 1024;
@@ -91,7 +88,7 @@ fn snapshot_image(
     }
     let directory = file::session_directory(storage_root, session_id)?;
     let stored_path = stored_path(&directory, key);
-    if let Some(image) = read_image(&stored_path)? {
+    if let Some(image) = read_bounded_image(&stored_path, MAX_AGENT_FILE_BYTES)? {
         if image.bytes.len() as u64 > remaining_bytes {
             return Ok(None);
         }
@@ -100,8 +97,13 @@ fn snapshot_image(
     if fs::symlink_metadata(&stored_path).is_ok() {
         return Ok(None);
     }
-    let Some(image) = read_image(source)? else {
-        return Ok(None);
+    let image = match read_bounded_image(source, MAX_AGENT_FILE_BYTES) {
+        Ok(Some(image)) => image,
+        Ok(None) => return Ok(None),
+        Err(error) => {
+            tracing::warn!(%error, "failed to read assistant answer image source");
+            return Ok(None);
+        }
     };
     if image.bytes.len() as u64 > remaining_bytes {
         return Ok(None);
@@ -109,7 +111,8 @@ fn snapshot_image(
     match file::write_new_file(&stored_path, &image.bytes) {
         Ok(()) => Ok(Some((image.bytes.len(), image.mime_type))),
         Err(error) if is_already_exists(&error) => {
-            Ok(read_image(&stored_path)?.map(|saved| (saved.bytes.len(), saved.mime_type)))
+            Ok(read_bounded_image(&stored_path, MAX_AGENT_FILE_BYTES)?
+                .map(|saved| (saved.bytes.len(), saved.mime_type)))
         }
         Err(error) => Err(error).with_context(|| "saving answer image snapshot"),
     }
@@ -130,52 +133,10 @@ pub(in crate::commands::agent::watch_web) fn read_snapshot(
     let Ok(directory) = file::session_directory(storage_root, session_id) else {
         return Ok(None);
     };
-    Ok(read_image(&stored_path(&directory, key))?.map(|image| (image.bytes, image.mime_type)))
-}
-
-struct ImageBytes {
-    bytes: Vec<u8>,
-    mime_type: &'static str,
-}
-
-fn read_image(path: &Path) -> Result<Option<ImageBytes>> {
-    let metadata = match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => metadata,
-        Ok(_) => return Ok(None),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error.into()),
-    };
-    if metadata.len() > MAX_AGENT_FILE_BYTES {
-        return Ok(None);
-    }
-    let mut options = OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW);
-    }
-    let mut file = match options.open(path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) if error.raw_os_error() == Some(libc::ELOOP) => return Ok(None),
-        Err(error) => return Err(error.into()),
-    };
-    let opened_metadata = file.metadata()?;
-    if !opened_metadata.is_file() || opened_metadata.len() != metadata.len() {
-        return Ok(None);
-    }
-    let mut bytes = Vec::with_capacity(opened_metadata.len() as usize);
-    file.by_ref()
-        .take(MAX_AGENT_FILE_BYTES + 1)
-        .read_to_end(&mut bytes)?;
-    if bytes.len() as u64 != opened_metadata.len() || bytes.len() as u64 > MAX_AGENT_FILE_BYTES {
-        return Ok(None);
-    }
-    let Some((mime_type, _)) = image_format_from_bytes(&bytes) else {
-        return Ok(None);
-    };
-    Ok(Some(ImageBytes { bytes, mime_type }))
+    Ok(
+        read_bounded_image(&stored_path(&directory, key), MAX_AGENT_FILE_BYTES)?
+            .map(|image| (image.bytes, image.mime_type)),
+    )
 }
 
 fn is_already_exists(error: &anyhow::Error) -> bool {
@@ -331,6 +292,7 @@ fn find_backtick_run(bytes: &[u8], start: usize, run: usize) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::fs;
     use std::io::Write;
 
@@ -430,6 +392,28 @@ mod tests {
         );
     }
 
+    #[test]
+    fn marks_unreadable_sources_unavailable_without_failing_the_conversation() {
+        let sources = tempfile::tempdir().unwrap();
+        let storage = tempfile::tempdir().unwrap();
+        let parent_file = sources.path().join("not-a-directory");
+        fs::write(&parent_file, b"fixture").unwrap();
+        let source = parent_file.join("fixture.png");
+        let mut conversation = conversation(format!("![](<{}>)", source.display()));
+
+        let error = attach_with_storage_root("fixture-session", &mut conversation, storage.path())
+            .err()
+            .map(|error| error.to_string());
+
+        assert_eq!(
+            (error, conversation.message_image_sources),
+            (
+                None,
+                BTreeMap::from([(0, BTreeMap::from([(source.display().to_string(), None)]),)]),
+            ),
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn rejects_non_images_oversized_files_and_symlinks() {
@@ -468,7 +452,7 @@ mod tests {
     }
 
     #[test]
-    fn enforces_per_answer_image_count_and_total_bytes() {
+    fn enforces_per_answer_image_count() {
         let sources = tempfile::tempdir().unwrap();
         let storage = tempfile::tempdir().unwrap();
         let count_paths = (0..=MAX_IMAGES_PER_ANSWER)
@@ -503,7 +487,12 @@ mod tests {
             ),
             (&expected_count_sources, MAX_IMAGES_PER_ANSWER),
         );
+    }
 
+    #[test]
+    fn enforces_per_answer_total_bytes() {
+        let sources = tempfile::tempdir().unwrap();
+        let storage = tempfile::tempdir().unwrap();
         let byte_paths = (0..5)
             .map(|index| {
                 image_file(
