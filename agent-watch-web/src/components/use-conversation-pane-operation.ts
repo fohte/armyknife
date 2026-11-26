@@ -33,6 +33,35 @@ type SessionOperationError = {
   message: string
 }
 
+function operationErrorIdentity(operation: SessionOperation) {
+  switch (operation.type) {
+    case 'message':
+      return {
+        kind: 'operation' as const,
+        key: 'message',
+        type: operation.type,
+      }
+    case 'answer':
+      return {
+        kind: 'operation' as const,
+        key: JSON.stringify([operation.type, operation.requestId]),
+        type: operation.type,
+      }
+    case 'proposal_answer':
+      return {
+        kind: 'operation' as const,
+        key: JSON.stringify([operation.type, operation.seq]),
+        type: operation.type,
+      }
+    default:
+      return {
+        kind: 'operation' as const,
+        key: sessionOperationKey(operation),
+        type: operation.type,
+      }
+  }
+}
+
 export function useConversationPaneOperation({
   sessionId,
   conversationRef,
@@ -84,6 +113,7 @@ export function useConversationPaneOperation({
         return Promise.resolve(false)
       }
       const operation = operationResult.value
+      const identity = operationErrorIdentity(operation)
       if (operation.type === 'message' && messageCountBefore !== undefined) {
         nextMessageCountBefore.current = messageCountBefore + 1
       }
@@ -104,7 +134,7 @@ export function useConversationPaneOperation({
                 : current.identity.kind === 'operation' &&
                     ((current.identity.type === 'message' &&
                       operation.type === 'message') ||
-                      current.identity.key === sessionOperationKey(operation))
+                      current.identity.key === identity.key)
                   ? null
                   : current,
             )
@@ -120,11 +150,7 @@ export function useConversationPaneOperation({
                 ? current
                 : {
                     sessionId,
-                    identity: {
-                      kind: 'operation',
-                      key: sessionOperationKey(operation),
-                      type: operation.type,
-                    },
+                    identity,
                     message: requestError.message,
                   },
             )
