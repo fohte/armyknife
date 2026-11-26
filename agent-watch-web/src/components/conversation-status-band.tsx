@@ -3,6 +3,7 @@ import '#components/conversation-status-band.css'
 import { Button } from '@fohte/ui/button'
 import { useId, useState } from 'react'
 
+import { useBackgroundTaskElapsedSeconds } from '#components/background-task-elapsed-context'
 import type { ConversationStatusBandState } from '#components/conversation-status-band-state'
 import { formatElapsedTime } from '#components/format-elapsed-time'
 import { useSessionElapsedStartedAt } from '#components/session-elapsed-context'
@@ -85,6 +86,10 @@ export function ConversationStatusBand({
       statusLabels[state.kind]
     )
   const backgroundTask = backgroundTasks[0]
+  const backgroundTaskDetails = backgroundTasks.map((task) => ({
+    key: `task-${task.id}`,
+    content: <BackgroundTaskDetail task={task} />,
+  }))
   const toolName = (tool: string) =>
     tool.toLowerCase() === 'exec' ? 'Bash' : tool
   const activeToolDetail =
@@ -94,13 +99,15 @@ export function ConversationStatusBand({
         ? toolName(activeTool.tool)
         : `${toolName(activeTool.tool)}  ${activeTool.target}`
   const detail =
-    state.kind === 'working' && activeToolDetail !== null
-      ? activeToolDetail
-      : state.kind === 'compacting'
-        ? '古い会話を要約しています'
-        : state.kind === 'background-tasks' && backgroundTask !== undefined
-          ? formatBackgroundTaskDetail(backgroundTask)
-          : state.detail
+    state.kind === 'working' && activeToolDetail !== null ? (
+      activeToolDetail
+    ) : state.kind === 'compacting' ? (
+      '古い会話を要約しています'
+    ) : state.kind === 'background-tasks' && backgroundTask !== undefined ? (
+      <BackgroundTaskDetail task={backgroundTask} />
+    ) : (
+      state.detail
+    )
   const inlineDetail =
     state.kind === 'waiting' && detail == null && backgroundTasks.length > 0
       ? `Background tasks (${String(backgroundTasks.length)})`
@@ -148,12 +155,13 @@ export function ConversationStatusBand({
     )
   }
 
-  const backgroundTaskDetails = backgroundTasks.map(formatBackgroundTaskDetail)
   const expandedDetails =
     state.kind === 'background-tasks' && backgroundTaskDetails.length > 0
       ? backgroundTaskDetails
       : [
-          ...(detail == null || detail === '' ? [] : [detail]),
+          ...(detail == null || detail === ''
+            ? []
+            : [{ key: 'state-detail', content: detail }]),
           ...backgroundTaskDetails,
         ]
   const statusToggle = (
@@ -213,8 +221,8 @@ export function ConversationStatusBand({
           id={detailsId}
           aria-label="Full status details"
         >
-          {expandedDetails.map((item) => (
-            <p key={item}>{item}</p>
+          {expandedDetails.map(({ key, content }) => (
+            <p key={key}>{content}</p>
           ))}
         </div>
       ) : null}
@@ -222,8 +230,21 @@ export function ConversationStatusBand({
   )
 }
 
-function formatBackgroundTaskDetail(task: BackgroundTask) {
-  return `${task.description} · ${formatElapsedTime(task.elapsedSeconds)}`
+function BackgroundTaskDetail({ task }: { task: BackgroundTask }) {
+  return (
+    <>
+      {task.description} ·{' '}
+      <BackgroundTaskElapsedTime elapsedSeconds={task.elapsedSeconds} />
+    </>
+  )
+}
+
+function BackgroundTaskElapsedTime({
+  elapsedSeconds,
+}: {
+  elapsedSeconds: number
+}) {
+  return formatElapsedTime(useBackgroundTaskElapsedSeconds(elapsedSeconds))
 }
 
 function BackgroundTaskDisclosure({
@@ -250,7 +271,9 @@ function BackgroundTaskList({ tasks }: { tasks: readonly BackgroundTask[] }) {
       {tasks.map((task) => (
         <li key={task.id}>
           <span>{task.description}</span>
-          <span>{formatElapsedTime(task.elapsedSeconds)}</span>
+          <span>
+            <BackgroundTaskElapsedTime elapsedSeconds={task.elapsedSeconds} />
+          </span>
         </li>
       ))}
     </ul>

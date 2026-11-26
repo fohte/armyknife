@@ -2,6 +2,7 @@ import '#components/running-tasks-panel.css'
 
 import { useId } from 'react'
 
+import { useBackgroundTaskElapsedSeconds } from '#components/background-task-elapsed-context'
 import { formatElapsedTime } from '#components/format-elapsed-time'
 import { BackgroundTaskOutput } from '#components/running-task-output'
 import type { BackgroundTask } from '#types'
@@ -39,7 +40,7 @@ export function BackgroundTaskRowView({
         </div>
         <div className="running-task-controls">
           <span className="running-task-elapsed">
-            {formatElapsedTime(task.elapsedSeconds)}
+            <BackgroundTaskElapsedTime elapsedSeconds={task.elapsedSeconds} />
           </span>
           <button
             aria-controls={outputId}
@@ -57,4 +58,12 @@ export function BackgroundTaskRowView({
       </div>
     </li>
   )
+}
+
+function BackgroundTaskElapsedTime({
+  elapsedSeconds,
+}: {
+  elapsedSeconds: number
+}) {
+  return formatElapsedTime(useBackgroundTaskElapsedSeconds(elapsedSeconds))
 }
