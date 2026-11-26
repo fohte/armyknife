@@ -559,7 +559,7 @@ mod tests {
     use crate::commands::agent::file_attachment_support::{
         FILE_TYPE_PREFIX_BYTES, FilePreviewType,
     };
-    use crate::commands::agent::store::{self, AgentFile};
+    use crate::commands::agent::store::AgentFile;
     use crate::commands::agent::types::Session;
 
     #[rstest]
@@ -923,16 +923,7 @@ mod tests {
     #[tokio::test]
     async fn serves_a_registered_file_and_rejects_an_unregistered_id() {
         let storage = TempDir::new().unwrap();
-        let sessions = TempDir::new().unwrap();
         let session_id = "fixture-session";
-        store::session_store_revision_from(sessions.path()).unwrap();
-        rusqlite::Connection::open(sessions.path().join("sessions.db"))
-            .unwrap()
-            .execute(
-                "INSERT INTO sessions (session_id, data, rev) VALUES (?1, '{}', 0)",
-                [session_id],
-            )
-            .unwrap();
         let storage_root = storage.path().join("attachments");
         let file = AgentFile {
             id: uuid::Uuid::new_v4().to_string(),
@@ -948,8 +939,6 @@ mod tests {
         )));
         std::fs::create_dir_all(&session_storage).unwrap();
         std::fs::write(session_storage.join(&file.id), b"fixture report").unwrap();
-        store::insert_agent_files_from(sessions.path(), session_id, std::slice::from_ref(&file))
-            .unwrap();
         let registered_file_id = file.id.clone();
         let request_file_id = file.id.clone();
         let app = routes_with(

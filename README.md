@@ -670,15 +670,6 @@ Read a Claude Code status-line JSON object from stdin and save its latest model,
 $ cat status-line.json | a agent usage record
 ```
 
-### `a agent file send`
-
-Run `a agent file send <path>... [--caption <text>]` from a tracked Claude Code or Codex session to show files in that session's watch-web conversation. The command copies each file at send time, so the conversation keeps the sent contents if the source later changes or disappears. PNG, JPEG, GIF, and WebP images appear inline. Markdown files render in the conversation; other recognized UTF-8 text files appear in a code block, with long previews collapsed. MP4/MOV videos and M4A/MP3 audio files have inline players, and PDFs open in the browser's PDF viewer. HTML files remain download-only so scripts cannot run on the watch-web origin; unsupported files also have download links. A send accepts up to 16 files, each at most 10 MiB, with a combined limit of 50 MiB.
-
-```console
-$ a agent file send ./sample-layout.png ./sample-report.pdf --caption "Review these samples"
-Sent 2 file(s) to watch-web
-```
-
 ### `a agent title set`
 
 Run `a agent title set <TITLE>` from a tracked Claude Code or Codex session to set its title. The title is trimmed before it is saved; an empty or whitespace-only value restores the automatic title. The same title can be changed from `a agent watch` or the watch-web conversation header, and the most recent change wins. When the session has a tmux window, the window title is refreshed best-effort.
