@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use serde_json::Value;
 
 use super::super::transcript_branch::BranchMembership;
+use super::ClaudeParserState;
 use super::branch::has_tool_use_block;
 
 #[derive(Clone, Default)]
@@ -42,11 +43,15 @@ impl ClaudeBranchTracking {
         parent_uuid: Option<&str>,
         pending_tool_result_on_active_branch: bool,
         side_branch_continuation: bool,
-        continues_tool_result_lineage: bool,
     ) {
         let Some(uuid) = uuid else {
             return;
         };
+
+        let continues_tool_result_lineage = record.get("type").and_then(Value::as_str)
+            != Some("user")
+            && parent_uuid
+                .is_some_and(|parent_uuid| self.tool_result_lineage_uuids.contains(parent_uuid));
 
         if has_tool_use_block(record) {
             self.tool_use_assistant_uuids.insert(uuid.to_owned());
@@ -89,10 +94,6 @@ impl ClaudeBranchTracking {
         self.side_branch_assistant_uuids.contains(uuid)
     }
 
-    pub(super) fn is_tool_result_lineage_uuid(&self, uuid: &str) -> bool {
-        self.tool_result_lineage_uuids.contains(uuid)
-    }
-
     pub(super) fn block_side_branch_tip(&mut self, uuid: &str) {
         self.blocked_side_branch_tip_uuid = Some(uuid.to_owned());
     }
@@ -105,5 +106,27 @@ impl ClaudeBranchTracking {
         self.blocked_side_branch_tip_uuid.as_deref() != Some(uuid)
             && (self.side_branch_assistant_uuids.contains(uuid)
                 || self.tool_result_lineage_uuids.contains(uuid))
+    }
+}
+
+impl ClaudeParserState {
+    pub(in crate::commands::agent::watch_web::messages::parser::claude) fn is_retained_side_branch_tip_uuid(
+        &self,
+        uuid: &str,
+    ) -> bool {
+        self.branch_tracking.is_retained_side_branch_tip_uuid(uuid)
+    }
+
+    pub(in crate::commands::agent::watch_web::messages::parser::claude) fn block_side_branch_tip(
+        &mut self,
+        uuid: &str,
+    ) {
+        self.branch_tracking.block_side_branch_tip(uuid);
+    }
+
+    pub(in crate::commands::agent::watch_web::messages::parser::claude) fn clear_blocked_side_branch_tip(
+        &mut self,
+    ) {
+        self.branch_tracking.clear_blocked_side_branch_tip();
     }
 }

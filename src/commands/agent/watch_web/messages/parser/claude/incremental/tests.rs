@@ -857,6 +857,12 @@ fn chained_tool_results_match_a_full_parse_at_every_split_point() {
 #[case::task_notification_without_uuid(indoc! {r#"
     {"type":"user","parentUuid":"fixture-main-followup","origin":{"kind":"task-notification"},"message":{"content":"<task-notification><task-id>fixture-task</task-id><status>completed</status><summary>Fixture task completed</summary></task-notification>"}}
 "#})]
+#[case::task_notification_attachment_with_uuid(indoc! {r#"
+    {"type":"attachment","uuid":"fixture-notification-attachment","parentUuid":"fixture-main-followup","attachment":{"type":"queued_command","origin":{"kind":"task-notification"},"prompt":"<task-notification><task-id>fixture-task</task-id><status>completed</status><summary>Fixture task completed</summary></task-notification>"}}
+"#})]
+#[case::task_notification_attachment_without_uuid(indoc! {r#"
+    {"type":"attachment","parentUuid":"fixture-main-followup","attachment":{"type":"queued_command","origin":{"kind":"task-notification"},"prompt":"<task-notification><task-id>fixture-task</task-id><status>completed</status><summary>Fixture task completed</summary></task-notification>"}}
+"#})]
 fn assistant_after_a_prompt_or_task_notification_restarts_an_old_side_branch(
     #[case] boundary_record: &str,
 ) {
