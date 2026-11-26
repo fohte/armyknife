@@ -34,7 +34,7 @@ pub(in crate::commands::agent) fn lock_port_for_registration(
     sessions_dir: &std::path::Path,
     url: &str,
 ) -> Result<std::fs::File> {
-    expiry::lock_port(sessions_dir, parse_port(url)?)
+    store::lock_crit_port_from(sessions_dir, parse_port(url)?)
 }
 
 const CRIT_TITLE: &str = "■ crit - Review requested";

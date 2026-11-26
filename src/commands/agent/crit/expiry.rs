@@ -1,22 +1,23 @@
 use std::collections::BTreeSet;
-use std::fs::{self, File, OpenOptions};
-use std::path::{Path, PathBuf};
+use std::io::{BufRead, BufReader, Write};
+use std::net::{IpAddr, SocketAddr, TcpStream};
+use std::path::Path;
+use std::time::Duration;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 
-use super::super::signal::{LibcSignalSender, SignalSender};
 use super::super::store;
 use super::super::types::Session;
-use super::monitor::{crit_status, pid_for_port};
-use super::url::parse_port;
+use super::monitor::crit_pid_for_port;
+use super::url::{local_crit_ip, parse_port};
 
 pub(super) fn stop_expired_session_daemons(session: &Session, sessions_dir: &Path) -> Result<()> {
     stop_expired_session_daemons_with(
         session,
         sessions_dir,
         store::all_session_rows_from,
-        crit_status,
-        &LibcSignalSender,
+        crit_pid_for_port,
+        request_crit_shutdown,
     )
 }
 
@@ -24,8 +25,8 @@ fn stop_expired_session_daemons_with(
     session: &Session,
     sessions_dir: &Path,
     load_remaining_sessions: impl FnOnce(&Path) -> Result<Vec<Session>>,
-    read_status: impl FnOnce() -> Result<serde_json::Value>,
-    sender: &impl SignalSender,
+    resolve_pid: impl FnMut(u16) -> Result<Option<u32>>,
+    request_shutdown: impl FnMut(&str, u32) -> Result<()>,
 ) -> Result<()> {
     let candidate_ports = session
         .crit_urls
@@ -38,7 +39,7 @@ fn stop_expired_session_daemons_with(
 
     let _port_locks = candidate_ports
         .iter()
-        .map(|port| lock_port(sessions_dir, *port))
+        .map(|port| store::lock_crit_port_from(sessions_dir, *port))
         .collect::<Result<Vec<_>>>()?;
     let remaining_sessions = load_remaining_sessions(sessions_dir)?;
     let ports = unshared_crit_ports(session, &remaining_sessions);
@@ -46,27 +47,15 @@ fn stop_expired_session_daemons_with(
         return Ok(());
     }
 
-    let status = read_status()?;
-    stop_daemons_for_ports(&ports, &status, sender)
-}
-
-pub(super) fn lock_port(sessions_dir: &Path, port: u16) -> Result<File> {
-    // Keep lock inodes stable so concurrent registrations cannot bypass an active lock.
-    let lock_dir = crit_port_lock_dir(sessions_dir);
-    fs::create_dir_all(&lock_dir)?;
-    let lock_path = lock_dir.join(format!("{port}.lock"));
-    let file = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(lock_path)?;
-    file.lock()?;
-    Ok(file)
-}
-
-fn crit_port_lock_dir(sessions_dir: &Path) -> PathBuf {
-    sessions_dir.join("crit-port-locks")
+    for failure in stop_daemons_for_ports_with(session, &ports, resolve_pid, request_shutdown) {
+        tracing::warn!(
+            event = "agent.crit.expiry.shutdown_failed",
+            session_id = %session.session_id,
+            port = failure.port,
+            error = %failure.error,
+        );
+    }
+    Ok(())
 }
 
 fn unshared_crit_ports(session: &Session, remaining_sessions: &[Session]) -> BTreeSet<u16> {
@@ -84,50 +73,120 @@ fn unshared_crit_ports(session: &Session, remaining_sessions: &[Session]) -> BTr
         .collect()
 }
 
-fn stop_daemons_for_ports(
+#[derive(Debug, PartialEq, Eq)]
+struct StopFailure {
+    port: u16,
+    error: String,
+}
+
+fn stop_daemons_for_ports_with(
+    session: &Session,
     ports: &BTreeSet<u16>,
-    status: &serde_json::Value,
-    sender: &impl SignalSender,
-) -> Result<()> {
+    mut resolve_pid: impl FnMut(u16) -> Result<Option<u32>>,
+    mut request_shutdown: impl FnMut(&str, u32) -> Result<()>,
+) -> Vec<StopFailure> {
     let mut failures = Vec::new();
     for port in ports {
-        let Some(pid) = pid_for_port(status, *port) else {
+        let Some(url) = session
+            .crit_urls
+            .iter()
+            .find(|url| parse_port(url).is_ok_and(|url_port| url_port == *port))
+        else {
+            failures.push(StopFailure {
+                port: *port,
+                error: "crit URL for port is missing".to_string(),
+            });
             continue;
         };
-        if let Err(error) = sender.send(pid, libc::SIGTERM) {
-            failures.push(format!("port {port} (pid {pid}): {error}"));
+
+        match resolve_pid(*port) {
+            Ok(Some(pid)) => {
+                if let Err(error) = request_shutdown(url, pid) {
+                    failures.push(StopFailure {
+                        port: *port,
+                        error: error.to_string(),
+                    });
+                }
+            }
+            Ok(None) => failures.push(StopFailure {
+                port: *port,
+                error: "no crit daemon is listening on the port".to_string(),
+            }),
+            Err(error) => failures.push(StopFailure {
+                port: *port,
+                error: error.to_string(),
+            }),
         }
     }
 
-    if !failures.is_empty() {
-        bail!(
-            "failed to stop expired session crit daemons: {}",
-            failures.join("; ")
-        );
+    failures
+}
+
+const SHUTDOWN_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
+
+fn request_crit_shutdown(url: &str, pid: u32) -> Result<()> {
+    let (address, host_header) = shutdown_request_address(url)?;
+    let mut stream = TcpStream::connect_timeout(&address, SHUTDOWN_REQUEST_TIMEOUT)
+        .with_context(|| format!("connecting to crit daemon at {address}"))?;
+    stream.set_read_timeout(Some(SHUTDOWN_REQUEST_TIMEOUT))?;
+    stream.set_write_timeout(Some(SHUTDOWN_REQUEST_TIMEOUT))?;
+    let request = indoc::formatdoc! {"
+        POST /api/shutdown?pid={pid} HTTP/1.1\r
+        Host: {host_header}\r
+        Content-Length: 0\r
+        Connection: close\r
+        \r
+    "};
+    stream.write_all(request.as_bytes())?;
+
+    let mut status_line = String::new();
+    BufReader::new(stream)
+        .read_line(&mut status_line)
+        .context("reading crit shutdown response")?;
+    let status = status_line
+        .split_whitespace()
+        .nth(1)
+        .context("crit shutdown returned an invalid HTTP status line")?
+        .parse::<u16>()
+        .context("crit shutdown returned an invalid HTTP status code")?;
+    if status == 409 {
+        bail!("crit daemon rejected shutdown because its PID changed");
     }
+    ensure!(
+        (200..300).contains(&status),
+        "crit daemon returned HTTP {status} for shutdown"
+    );
     Ok(())
+}
+
+fn shutdown_request_address(url: &str) -> Result<(SocketAddr, String)> {
+    let parsed = reqwest::Url::parse(url).context("invalid crit review URL")?;
+    ensure!(
+        parsed.scheme() == "http",
+        "crit shutdown requires an HTTP URL"
+    );
+    let host = parsed.host_str().context("crit review URL has no host")?;
+    let ip = local_crit_ip(host).context("crit review URL is not a loopback address")?;
+    let port = parse_port(url)?;
+    let host_header = match ip {
+        IpAddr::V4(_) => format!("{host}:{port}"),
+        IpAddr::V6(_) => {
+            let host = host
+                .strip_prefix('[')
+                .and_then(|host| host.strip_suffix(']'))
+                .unwrap_or(host);
+            format!("[{host}]:{port}")
+        }
+    };
+    Ok((SocketAddr::new(ip, port), host_header))
 }
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
     use std::cell::RefCell;
-    use std::io;
 
     use super::*;
     use crate::commands::agent::types::{Engine, SessionStatus};
-
-    #[derive(Default)]
-    struct RecordingSender {
-        calls: RefCell<Vec<(u32, i32)>>,
-    }
-
-    impl SignalSender for RecordingSender {
-        fn send(&self, pid: u32, signal: i32) -> io::Result<()> {
-            self.calls.borrow_mut().push((pid, signal));
-            Ok(())
-        }
-    }
 
     fn make_session(session_id: &str, crit_urls: &[&str]) -> Session {
         Session {
@@ -174,7 +233,7 @@ mod tests {
     }
 
     #[test]
-    fn sends_sigterm_only_to_unshared_crit_daemons() {
+    fn requests_shutdown_only_for_unshared_crit_daemons() {
         let temp_dir = tempfile::TempDir::new().expect("temporary directory should be created");
         let expired = make_session(
             "expired-session",
@@ -191,30 +250,61 @@ mod tests {
         remaining.archived_at = Some(chrono::Utc::now());
         store::save_session_to(temp_dir.path(), &remaining)
             .expect("remaining session should be saved");
-        let status = serde_json::json!({
-            "sessions": [
-                {"port": 43120, "pid": 9120},
-                {"port": 43121, "pid": 9121},
-            ]
-        });
-        let status_reads = Cell::new(0);
-        let sender = RecordingSender::default();
+        let resolved_ports = RefCell::new(Vec::new());
+        let shutdowns = RefCell::new(Vec::new());
 
         stop_expired_session_daemons_with(
             &expired,
             temp_dir.path(),
             store::all_session_rows_from,
-            || {
-                status_reads.set(status_reads.get() + 1);
-                Ok(status.clone())
+            |port| {
+                resolved_ports.borrow_mut().push(port);
+                Ok(Some(9121))
             },
-            &sender,
+            |url, pid| {
+                shutdowns.borrow_mut().push((url.to_string(), pid));
+                Ok(())
+            },
         )
-        .expect("unshared daemon should stop successfully");
+        .expect("unshared daemon should be processed");
 
         assert_eq!(
-            (sender.calls.into_inner(), status_reads.get()),
-            (vec![(9121, libc::SIGTERM)], 1),
+            (resolved_ports.into_inner(), shutdowns.into_inner()),
+            (
+                vec![43121],
+                vec![("http://review.example.test:43121/review".to_string(), 9121)],
+            ),
+        );
+    }
+
+    #[test]
+    fn warns_when_lsof_finds_no_crit_listener_for_the_port() {
+        let session = make_session(
+            "expired-session",
+            &["http://review.example.test:43122/review"],
+        );
+        let ports = BTreeSet::from([43122]);
+        let shutdowns = RefCell::new(Vec::new());
+
+        let failures = stop_daemons_for_ports_with(
+            &session,
+            &ports,
+            |_| Ok(None),
+            |url, pid| {
+                shutdowns.borrow_mut().push((url.to_string(), pid));
+                Ok(())
+            },
+        );
+
+        assert_eq!(
+            (failures, shutdowns.into_inner()),
+            (
+                vec![StopFailure {
+                    port: 43122,
+                    error: "no crit daemon is listening on the port".to_string(),
+                }],
+                vec![],
+            ),
         );
     }
 }

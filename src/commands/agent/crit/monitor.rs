@@ -14,8 +14,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result, bail};
 use clap::Args;
 
-use self::status::crit_pid_for_port;
-pub(super) use self::status::{crit_status, pid_for_port};
+pub(super) use self::status::crit_pid_for_port;
+use self::status::pid_for_port;
 use super::super::store;
 use super::super::types::Session;
 use super::url::parse_port;
