@@ -89,7 +89,11 @@ pub(super) fn run(args: &MonitorArgs) -> Result<()> {
     let mut previous_waiting = None;
     loop {
         while process::is_process_alive(watched_pid) {
-            let waiting = match crit_client_waiting_on_port(args.port, watched_pid) {
+            let waiting = match crit_client_waiting_on_port(
+                args.port,
+                watched_pid,
+                process::run_with_timeout,
+            ) {
                 Ok(waiting) => Some(waiting),
                 Err(error) => {
                     tracing::warn!(

@@ -11,17 +11,15 @@ use crate::infra::process;
 
 const CRIT_CLIENT_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 
-pub(super) fn crit_client_waiting_on_port(port: u16, daemon_pid: u32) -> Result<bool> {
-    let mut command = ExternalTool::Lsof.command();
-    // An empty socket result is expected after a review finishes.
-    command.args([
-        "-nP",
-        &format!("-iTCP:{port}"),
-        "-sTCP:ESTABLISHED",
-        "-Fpc",
-        "-Q",
-    ]);
-    let output = process::run_with_timeout(command, CRIT_CLIENT_CHECK_TIMEOUT)
+pub(super) fn crit_client_waiting_on_port(
+    port: u16,
+    daemon_pid: u32,
+    run_with_timeout: impl FnOnce(
+        std::process::Command,
+        Duration,
+    ) -> std::io::Result<std::process::Output>,
+) -> Result<bool> {
+    let output = run_with_timeout(crit_client_lsof_command(port), CRIT_CLIENT_CHECK_TIMEOUT)
         .context("failed to inspect crit client connections")?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -34,6 +32,12 @@ pub(super) fn crit_client_waiting_on_port(port: u16, daemon_pid: u32) -> Result<
     )
 }
 
+fn crit_client_lsof_command(port: u16) -> std::process::Command {
+    let mut command = ExternalTool::Lsof.command();
+    command.args(["-nP", &format!("-iTCP:{port}"), "-sTCP:ESTABLISHED", "-Fpc"]);
+    command
+}
+
 fn crit_client_waiting_from_lsof_result(
     status_success: bool,
     exit_code: Option<i32>,
@@ -42,6 +46,7 @@ fn crit_client_waiting_from_lsof_result(
     daemon_pid: u32,
 ) -> Result<bool> {
     if !status_success {
+        // lsof exits 1 with no output when no socket matches, so no client is waiting.
         if exit_code == Some(1) && stdout.is_empty() && stderr.is_empty() {
             return Ok(false);
         }
@@ -96,7 +101,7 @@ pub(super) fn reconcile_registered_session(
         port,
         status,
         super::status::crit_status,
-        crit_client_waiting_on_port,
+        |port, daemon_pid| crit_client_waiting_on_port(port, daemon_pid, process::run_with_timeout),
     )
 }
 
@@ -205,6 +210,33 @@ mod tests {
     use super::*;
     use indoc::indoc;
     use rstest::rstest;
+
+    #[test]
+    fn crit_client_lsof_command_uses_supported_arguments() {
+        let args = std::cell::RefCell::new(Vec::new());
+        let result = crit_client_waiting_on_port(43127, 101, |command, _| {
+            *args.borrow_mut() = command
+                .get_args()
+                .map(|argument| argument.to_string_lossy().into_owned())
+                .collect();
+            Err(std::io::Error::other(
+                "test stops after capturing arguments",
+            ))
+        });
+
+        assert_eq!(
+            (args.into_inner(), result.is_err()),
+            (
+                vec![
+                    "-nP".to_owned(),
+                    "-iTCP:43127".to_owned(),
+                    "-sTCP:ESTABLISHED".to_owned(),
+                    "-Fpc".to_owned(),
+                ],
+                true,
+            ),
+        );
+    }
 
     #[rstest]
     #[case::waiting_client(indoc! {"
