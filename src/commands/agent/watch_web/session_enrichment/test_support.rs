@@ -1,6 +1,5 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{TimeZone, Utc};
@@ -11,7 +10,7 @@ use crate::commands::agent::types::{Engine, Session, SessionPrContext, SessionSt
 use super::super::EnrichmentUpdates;
 use super::{
     PullRequestFetcher, PullRequestKey, SessionEnrichmentCache, SessionTaskMetadata,
-    TaskGithubLinkFetcher, TaskMetadataFetcher,
+    TaskMetadataFetcher,
 };
 
 pub(super) fn cache_with_fetchers(
@@ -20,28 +19,11 @@ pub(super) fn cache_with_fetchers(
     task_fetcher: TaskMetadataFetcher,
     pull_request_fetcher: PullRequestFetcher,
 ) -> SessionEnrichmentCache {
-    cache_with_task_github_link_fetcher(
-        updates,
-        fetch_timeout,
-        task_fetcher,
-        pull_request_fetcher,
-        Arc::new(|_, _| Box::pin(async { std::future::pending().await })),
-    )
-}
-
-pub(super) fn cache_with_task_github_link_fetcher(
-    updates: EnrichmentUpdates,
-    fetch_timeout: Duration,
-    task_fetcher: TaskMetadataFetcher,
-    pull_request_fetcher: PullRequestFetcher,
-    task_github_link_fetcher: TaskGithubLinkFetcher,
-) -> SessionEnrichmentCache {
     SessionEnrichmentCache::with_fetchers(
         updates,
         fetch_timeout,
         task_fetcher,
         pull_request_fetcher,
-        task_github_link_fetcher,
     )
 }
 
