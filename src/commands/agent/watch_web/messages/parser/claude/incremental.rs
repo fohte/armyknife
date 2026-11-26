@@ -388,10 +388,8 @@ fn is_active_branch_continuation(state: &ClaudeParserState, record: &Value) -> b
     }
 
     if is_tool_result_only {
-        let latest_record_is_compact_boundary_branch = state
-            .latest_record_uuid
-            .as_ref()
-            .is_some_and(|uuid| state.compact_boundary_branch_uuids.contains(uuid));
+        let latest_record_is_compact_boundary_branch =
+            state.latest_record_is_compact_boundary_branch();
         return !latest_record_is_compact_boundary_branch
             && state.has_pending_tool_result_for_parent(record, Some(parent_uuid.as_str()));
     }

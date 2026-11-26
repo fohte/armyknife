@@ -543,6 +543,14 @@ const INITIAL_PENDING_SIBLING_TRANSCRIPT: &str = indoc! {r#"
     "#},
     IncrementalAppend::RestartRequired,
 )]
+#[case::parallel_tool_result_after_a_compact_boundary_descendant_restarts_for_branch_parity(
+    PARALLEL_TOOLS_WITH_SYSTEM_AFTER_RESULT,
+    indoc! {r#"
+        {"type":"assistant","uuid":"post-boundary-assistant","parentUuid":"system-step","timestamp":"2026-01-01T00:00:05Z","message":{"content":[{"type":"text","text":"The compact-boundary branch continues."}]}}
+        {"type":"user","uuid":"result-b","parentUuid":"tool-call","timestamp":"2026-01-01T00:00:06Z","message":{"content":[{"type":"tool_result","tool_use_id":"call-b","content":"second result"}]}}
+    "#},
+    IncrementalAppend::RestartRequired,
+)]
 #[case::task_notification_with_non_latest_parent_restarts(
     indoc! {r#"
         {"type":"assistant","uuid":"task-call","parentUuid":null,"timestamp":"2026-01-01T00:00:01Z","message":{"content":[{"type":"tool_use","id":"task-call-id","name":"Bash","input":{"command":"run fixture task","run_in_background":true}}]}}
