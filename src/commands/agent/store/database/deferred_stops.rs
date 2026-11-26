@@ -109,7 +109,7 @@ pub(crate) fn take_mature_deferred_stops(
 
         let session = session_data
             .as_deref()
-            .and_then(|data| serde_json::from_str::<Session>(data).ok());
+            .and_then(|data| super::decode_session(&session_id, data));
         let still_stopped_delegate = session.as_ref().is_some_and(|session| {
             let still_stopped = match session.status {
                 SessionStatus::Stopped => session.updated_at <= stopped_at,
@@ -149,7 +149,7 @@ mod tests {
     use crate::commands::agent::store::{
         check_unreported_stop, insert_watch_web_peer_out_message_from, save_session_to,
     };
-    use crate::commands::agent::types::{ChildLaunchPermission, Engine};
+    use crate::commands::agent::test_support::deferred_stop_delegate;
 
     #[fixture]
     fn sessions_dir() -> TempDir {
@@ -157,48 +157,7 @@ mod tests {
     }
 
     fn delegate_session() -> Session {
-        let timestamp = Utc.with_ymd_and_hms(2026, 10, 1, 9, 0, 0).unwrap();
-        Session {
-            launch_id: None,
-            archived_at: None,
-            pr_context: None,
-            created_pr_urls: Vec::new(),
-            session_id: "fixture-delegate".to_string(),
-            crit_urls: Vec::new(),
-            crit_not_waiting_urls: Default::default(),
-            web_uis: Vec::new(),
-            pending_human_review_ids: Default::default(),
-            cwd: "/fixture/worktree".into(),
-            transcript_path: None,
-            tty: None,
-            tmux_info: None,
-            status: SessionStatus::Stopped,
-            created_at: timestamp,
-            updated_at: timestamp,
-            last_prompted_at: None,
-            last_message: None,
-            current_tool: None,
-            current_tool_name: None,
-            label: None,
-            work_type: None,
-            work_type_pinned: false,
-            vibe_enabled: false,
-            launched_with_vibe: false,
-            child_launch: ChildLaunchPermission::Deny,
-            ancestor_session_ids: vec!["fixture-parent".to_string()],
-            pending_bg_task_ids: Default::default(),
-            pending_agent_task_ids: Default::default(),
-            pending_permission_agent_ids: Default::default(),
-            pending_permission_request_ids: Default::default(),
-            read_at: None,
-            sweep_signaled: false,
-            stop_blocked_by_armyknife: false,
-            agent_status: None,
-            agent_status_clear_pending: false,
-            engine: Engine::Codex,
-            model: None,
-            effort: None,
-        }
+        deferred_stop_delegate()
     }
 
     #[rstest::rstest]

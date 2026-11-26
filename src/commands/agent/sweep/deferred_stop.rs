@@ -68,7 +68,8 @@ mod tests {
 
     use super::*;
     use crate::commands::agent::store::{record_deferred_stop, save_session_to};
-    use crate::commands::agent::types::{ChildLaunchPermission, Engine, Session, SessionStatus};
+    use crate::commands::agent::test_support::deferred_stop_delegate;
+    use crate::commands::agent::types::{Session, SessionStatus};
 
     const TEMPLATE: &str = indoc! {"
         <delegation-update>
@@ -83,48 +84,9 @@ mod tests {
     }
 
     fn stopped_delegate() -> Session {
-        let timestamp = Utc.with_ymd_and_hms(2026, 10, 1, 9, 0, 0).unwrap();
-        Session {
-            launch_id: None,
-            archived_at: None,
-            pr_context: None,
-            created_pr_urls: Vec::new(),
-            session_id: "fixture-delegate".to_string(),
-            crit_urls: Vec::new(),
-            crit_not_waiting_urls: Default::default(),
-            web_uis: Vec::new(),
-            pending_human_review_ids: Default::default(),
-            cwd: "/fixture/worktree".into(),
-            transcript_path: None,
-            tty: None,
-            tmux_info: None,
-            status: SessionStatus::Stopped,
-            created_at: timestamp,
-            updated_at: timestamp,
-            last_prompted_at: None,
-            last_message: Some("A fictional progress summary.".to_string()),
-            current_tool: None,
-            current_tool_name: None,
-            label: None,
-            work_type: None,
-            work_type_pinned: false,
-            vibe_enabled: false,
-            launched_with_vibe: false,
-            child_launch: ChildLaunchPermission::Deny,
-            ancestor_session_ids: vec!["fixture-parent".to_string()],
-            pending_bg_task_ids: Default::default(),
-            pending_agent_task_ids: Default::default(),
-            pending_permission_agent_ids: Default::default(),
-            pending_permission_request_ids: Default::default(),
-            read_at: None,
-            sweep_signaled: false,
-            stop_blocked_by_armyknife: false,
-            agent_status: None,
-            agent_status_clear_pending: false,
-            engine: Engine::Codex,
-            model: None,
-            effort: None,
-        }
+        let mut session = deferred_stop_delegate();
+        session.last_message = Some("A fictional progress summary.".to_string());
+        session
     }
 
     fn record(session: &Session, sessions_dir: &TempDir, stopped_at: chrono::DateTime<Utc>) {
@@ -133,14 +95,17 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case::mature(Utc.with_ymd_and_hms(2026, 10, 1, 9, 30, 0).unwrap(), 1)]
-    #[case::too_early(Utc.with_ymd_and_hms(2026, 10, 1, 9, 29, 59).unwrap(), 0)]
+    #[case::mature_stopped(Utc.with_ymd_and_hms(2026, 10, 1, 9, 30, 0).unwrap(), SessionStatus::Stopped, 1)]
+    #[case::too_early(Utc.with_ymd_and_hms(2026, 10, 1, 9, 29, 59).unwrap(), SessionStatus::Stopped, 0)]
+    #[case::mature_paused(Utc.with_ymd_and_hms(2026, 10, 1, 9, 30, 0).unwrap(), SessionStatus::Paused, 1)]
     fn sends_a_single_existing_template_notification(
         #[case] now: chrono::DateTime<Utc>,
+        #[case] status: SessionStatus,
         #[case] expected_count: usize,
         sessions_dir: TempDir,
     ) {
-        let session = stopped_delegate();
+        let mut session = stopped_delegate();
+        session.status = status;
         let stopped_at = Utc.with_ymd_and_hms(2026, 10, 1, 9, 0, 0).unwrap();
         record(&session, &sessions_dir, stopped_at);
         let calls = Arc::new(Mutex::new(Vec::new()));

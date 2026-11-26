@@ -47,6 +47,8 @@ mod signal;
 mod status;
 pub(crate) mod store;
 mod sweep;
+#[cfg(test)]
+mod test_support;
 mod title;
 pub(crate) mod tmux_sync;
 mod todo;
