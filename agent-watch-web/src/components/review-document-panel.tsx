@@ -12,7 +12,10 @@ import { ReviewDocumentNavigation } from '#components/review-document-navigation
 import { ReviewDocumentActions } from '#components/review-document-panel/actions'
 import { getReviewDocumentFrontmatterEntries } from '#components/review-document-panel-frontmatter'
 import { ReviewDocumentPreview } from '#components/review-document-preview'
-import type { ReviewDocumentSummary } from '#components/review-document-summary'
+import {
+  isNewIssueDraft,
+  type ReviewDocumentSummary,
+} from '#components/review-document-summary'
 import type { ReviewDocumentAction } from '#session-operation-types'
 import type { JsonValue } from '#types'
 
@@ -330,8 +333,7 @@ export function ReviewDocumentPanel({
     frontmatter,
     summary,
   )
-  const isIssueDraft =
-    summary?.kind === 'draft' && summary.target.repository !== undefined
+  const isIssueDraft = isNewIssueDraft(summary)
   const visibleFrontmatterEntries = frontmatterEntries
   const isIssueBody = summary?.kind === 'issue_body'
   const isApprovalDocument = isIssueBody || summary?.kind === 'review_replies'
@@ -373,7 +375,7 @@ export function ReviewDocumentPanel({
         {isIssueDocument && (!isIssueDraft || showIssueDraftEditor) ? (
           <ReviewDocumentPreview
             mode="frontmatter"
-            summary={summary}
+            {...(summary === undefined ? {} : { summary })}
             relatedIssueTitles={relatedIssueTitles}
             body={body}
             frontmatter={frontmatter}
