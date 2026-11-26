@@ -1,0 +1,160 @@
+import { Result } from 'neverthrow'
+
+import {
+  aggregateSamples,
+  type LongTaskFunction,
+  type ProfilerTrace,
+} from '#freeze-profiler-aggregation'
+import { postLongTaskReport } from '#freeze-profiler-http'
+
+const SAMPLE_INTERVAL_MS = 10
+const MAX_BUFFER_SIZE = 10_000
+const ROTATION_INTERVAL_MS = 30_000
+const RETAINED_PROFILE_MS = 120_000
+const MIN_LONG_TASK_MS = 1_000
+
+type ProfilerInstance = {
+  stop(): Promise<ProfilerTrace>
+}
+
+type ProfilerConstructor = new (options: {
+  sampleInterval: number
+  maxBufferSize: number
+}) => ProfilerInstance
+
+type ProfileSegment = {
+  start: number
+  end: number
+  trace: Promise<ProfilerTrace | null>
+}
+
+export type LongTaskReport = {
+  startedAtMs: number
+  durationMs: number
+  functions: LongTaskFunction[]
+}
+
+export function startFreezeProfiler() {
+  if (
+    typeof window === 'undefined' ||
+    typeof PerformanceObserver === 'undefined'
+  ) {
+    return () => undefined
+  }
+
+  const Profiler = (window as Window & { Profiler?: ProfilerConstructor })
+    .Profiler
+  if (Profiler === undefined) return () => undefined
+
+  const segments: ProfileSegment[] = []
+  const initialProfiler = Result.fromThrowable(
+    () => createProfiler(Profiler),
+    toError,
+  )()
+  if (initialProfiler.isErr()) return () => undefined
+
+  let activeProfiler = initialProfiler.value
+  let activeStartedAt = performance.now()
+
+  const rotate = () => {
+    const previous = activeProfiler
+    const startedAt = activeStartedAt
+    const endedAt = performance.now()
+    activeStartedAt = endedAt
+
+    const nextProfiler = Result.fromThrowable(
+      () => createProfiler(Profiler),
+      toError,
+    )()
+    if (nextProfiler.isErr()) return
+    activeProfiler = nextProfiler.value
+
+    const trace = previous.stop().then(
+      (result) => result,
+      () => null,
+    )
+    segments.push({ start: startedAt, end: endedAt, trace })
+    while (segments.length > 0) {
+      const oldestSegment = segments[0]
+      if (
+        oldestSegment === undefined ||
+        oldestSegment.end >= endedAt - RETAINED_PROFILE_MS
+      ) {
+        break
+      }
+      segments.shift()
+    }
+  }
+
+  const reportLongTasks = (entries: PerformanceEntry[]) => {
+    const longTasks = entries.filter(
+      (entry) => entry.duration >= MIN_LONG_TASK_MS,
+    )
+    if (longTasks.length === 0) return
+
+    rotate()
+    const availableSegments = [...segments]
+    for (const task of longTasks) {
+      const start = task.startTime
+      const end = start + task.duration
+      const taskSegments = availableSegments.filter(
+        (segment) => segment.start <= end && segment.end >= start,
+      )
+      void Promise.all(taskSegments.map((segment) => segment.trace)).then(
+        (resolvedTraces) => {
+          const report: LongTaskReport = {
+            startedAtMs: Math.round(performance.timeOrigin + start),
+            durationMs: task.duration,
+            functions: aggregateSamples(
+              resolvedTraces.filter(
+                (trace): trace is ProfilerTrace => trace !== null,
+              ),
+              start,
+              end,
+            ),
+          }
+          return postLongTaskReport(report)
+        },
+      )
+    }
+  }
+
+  const observerResult = Result.fromThrowable(() => {
+    const observer = new PerformanceObserver((list) => {
+      reportLongTasks(list.getEntries())
+    })
+    observer.observe({ type: 'longtask', buffered: true })
+    return observer
+  }, toError)()
+  if (observerResult.isErr()) {
+    void activeProfiler.stop().then(
+      () => undefined,
+      () => undefined,
+    )
+    return () => undefined
+  }
+  const observer = observerResult.value
+
+  const rotationTimer = window.setInterval(rotate, ROTATION_INTERVAL_MS)
+  return () => {
+    window.clearInterval(rotationTimer)
+    observer.disconnect()
+    void activeProfiler.stop().then(
+      () => undefined,
+      () => undefined,
+    )
+  }
+}
+
+function createProfiler(Profiler: ProfilerConstructor) {
+  return new Profiler({
+    sampleInterval: SAMPLE_INTERVAL_MS,
+    maxBufferSize: MAX_BUFFER_SIZE,
+  })
+}
+
+function toError(error: unknown) {
+  return error instanceof Error
+    ? error
+    : new Error('JavaScript profiling is unavailable', { cause: error })
+}

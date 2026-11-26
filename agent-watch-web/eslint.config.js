@@ -23,6 +23,7 @@ export default config(
     ignores: [
       'src/session-operation-http.ts',
       'src/new-session-http.ts',
+      'src/freeze-profiler-http.ts',
       'src/api-requests.ts',
       'src/session-feed.ts',
       'src/**/*.test.*',
