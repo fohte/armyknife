@@ -41,13 +41,13 @@ function operationErrorIdentity(operation: SessionOperation) {
         key: 'message',
         type: operation.type,
       }
-    case 'answer':
+    case 'proposal_answer':
       return {
         kind: 'operation' as const,
-        key: JSON.stringify([operation.type, operation.requestId]),
+        key: JSON.stringify([operation.type, operation.seq]),
         type: operation.type,
       }
-    case 'proposal_answer':
+    case 'todo_resolve':
       return {
         kind: 'operation' as const,
         key: JSON.stringify([operation.type, operation.seq]),
