@@ -4,8 +4,10 @@ use crate::infra::tq::TqGithubLink;
 use std::collections::{HashMap, HashSet};
 
 use super::{
-    PullRequestKey, SessionEnrichmentCache, SessionPullRequestInfo, SessionTaskMetadata,
+    CacheOperations, PullRequestKey, SessionEnrichmentCache, SessionPullRequestInfo,
+    SessionTaskMetadata,
     cache::{merge_pull_request_results, prune_pull_request_results},
+    pull_request_can_refresh,
 };
 
 impl SessionEnrichmentCache {
@@ -32,8 +34,11 @@ impl SessionEnrichmentCache {
                     let sessions = sessions.to_vec();
                     move |_, _| fetcher(sessions, number_queries)
                 },
-                merge_pull_request_results,
-                prune_pull_request_results,
+                CacheOperations {
+                    merge: merge_pull_request_results,
+                    prune: prune_pull_request_results,
+                    can_refresh: pull_request_can_refresh,
+                },
             )
             .await;
 

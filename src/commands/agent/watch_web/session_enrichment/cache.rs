@@ -87,6 +87,8 @@ fn merge_refreshed_task_metadata(
     refreshed: &SessionTaskMetadata,
     refreshed_task_ids: &HashSet<String>,
 ) {
+    cached.project_names = refreshed.project_names.clone();
+
     let mut order_by_priority = cached
         .priorities
         .iter()
@@ -170,6 +172,8 @@ mod tests {
     use crate::infra::tq::TqGithubLink;
     use rstest::{fixture, rstest};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
     use tokio::sync::watch;
 
     use super::super::super::EnrichmentUpdates;
@@ -405,6 +409,7 @@ mod tests {
                         ("deferred".to_string(), 2),
                     ]),
                     task_projects: HashMap::new(),
+                    project_names: HashMap::new(),
                     github_links: HashMap::new(),
                 })
             })
@@ -440,6 +445,7 @@ mod tests {
                     ("deferred".to_string(), 2),
                 ]),
                 task_projects: HashMap::new(),
+                project_names: HashMap::new(),
                 github_links: HashMap::new(),
             },
         );
@@ -534,6 +540,72 @@ mod tests {
         );
     }
 
+    #[rstest]
+    #[case::merged(PrState::Merged)]
+    #[case::closed(PrState::Closed)]
+    #[tokio::test(start_paused = true)]
+    async fn terminal_pull_requests_are_not_refreshed(
+        #[case] state: PrState,
+        updates_and_receiver: (EnrichmentUpdates, watch::Receiver<()>),
+    ) {
+        let (updates, mut receiver) = updates_and_receiver;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let fetch_calls = Arc::clone(&calls);
+        let fetch_state = state.clone();
+        let pull_request_fetcher: PullRequestFetcher = Arc::new(move |sessions, _| {
+            let calls = Arc::clone(&fetch_calls);
+            let state = fetch_state.clone();
+            Box::pin(async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok(sessions
+                    .iter()
+                    .filter_map(|session| {
+                        let context = session.pr_context.as_ref()?;
+                        let mut progress =
+                            head_info(17, "Terminal change", "https://example.test/terminal");
+                        progress.pull_request.state = state.clone();
+                        Some((
+                            PullRequestKey::Branch((
+                                context.owner.clone(),
+                                context.repo.clone(),
+                                context.branch.clone(),
+                            )),
+                            Some(progress),
+                        ))
+                    })
+                    .collect())
+            })
+        });
+        let task_fetcher: TaskMetadataFetcher =
+            Arc::new(|_, previous| Box::pin(async move { Ok(previous) }));
+        let cache = cache_with_fetchers(updates, FETCH_TIMEOUT, task_fetcher, pull_request_fetcher);
+        let session = session_with_branch_name("session-a", "branch-a");
+        let task_metadata = SessionTaskMetadata::default();
+
+        let _ = cache
+            .pull_requests(std::slice::from_ref(&session), &task_metadata)
+            .await;
+        wait_for_refresh(&mut receiver).await;
+        tokio::time::advance(super::super::CACHE_TTL + Duration::from_secs(1)).await;
+        let refreshed = cache
+            .pull_requests(std::slice::from_ref(&session), &task_metadata)
+            .await;
+        let mut expected_progress =
+            head_info(17, "Terminal change", "https://example.test/terminal");
+        expected_progress.pull_request.state = state;
+
+        assert_eq!(
+            (refreshed, calls.load(Ordering::SeqCst)),
+            (
+                HashMap::from([(
+                    "session-a".to_string(),
+                    vec![session_pull_request(&session, expected_progress)],
+                )]),
+                1,
+            )
+        );
+    }
+
     #[test]
     fn prunes_stale_session_links_and_unreferenced_task_metadata() {
         let mut cached = metadata(HashSet::from([
@@ -595,6 +667,7 @@ mod tests {
                     ("task-session-a".to_string(), "project-a".to_string()),
                     ("task-session-b".to_string(), "project-b".to_string()),
                 ]),
+                project_names: HashMap::new(),
                 github_links: HashMap::from([
                     ("task-session-a".to_string(), Vec::new()),
                     ("task-session-b".to_string(), Vec::new()),

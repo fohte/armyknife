@@ -993,6 +993,7 @@ mod tests {
                 priorities: self.task_priorities.clone(),
                 priority_order: self.task_priority_order.clone(),
                 task_projects: self.task_projects.clone(),
+                project_names: HashMap::new(),
                 github_links: HashMap::new(),
             }
         }
