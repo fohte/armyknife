@@ -8,7 +8,7 @@ use anyhow::{Context, Result, bail, ensure};
 
 use super::super::store;
 use super::super::types::Session;
-use super::monitor::crit_pid_for_port;
+use super::monitor::crit_listener_pid_for_port;
 use super::url::{local_crit_ip, parse_port};
 
 pub(super) fn stop_expired_session_daemons(session: &Session, sessions_dir: &Path) -> Result<()> {
@@ -16,7 +16,7 @@ pub(super) fn stop_expired_session_daemons(session: &Session, sessions_dir: &Pat
         session,
         sessions_dir,
         store::all_session_rows_from,
-        crit_pid_for_port,
+        crit_listener_pid_for_port,
         request_crit_shutdown,
     )
 }
@@ -50,7 +50,7 @@ fn stop_expired_session_daemons_with(
     for failure in stop_daemons_for_ports_with(session, &ports, resolve_pid, request_shutdown) {
         tracing::warn!(
             event = "agent.crit.expiry.shutdown_failed",
-            session_id = %session.session_id,
+            session = %session.session_id,
             port = failure.port,
             error = %failure.error,
         );
@@ -87,24 +87,33 @@ fn stop_daemons_for_ports_with(
 ) -> Vec<StopFailure> {
     let mut failures = Vec::new();
     for port in ports {
-        let Some(url) = session
+        let urls = session
             .crit_urls
             .iter()
-            .find(|url| parse_port(url).is_ok_and(|url_port| url_port == *port))
-        else {
+            .filter(|url| parse_port(url).is_ok_and(|url_port| url_port == *port))
+            .collect::<Vec<_>>();
+        if urls.is_empty() {
             failures.push(StopFailure {
                 port: *port,
                 error: "crit URL for port is missing".to_string(),
             });
             continue;
-        };
+        }
 
         match resolve_pid(*port) {
             Ok(Some(pid)) => {
-                if let Err(error) = request_shutdown(url, pid) {
+                let mut shutdown_errors = Vec::new();
+                let shutdown_requested = urls.iter().any(|url| match request_shutdown(url, pid) {
+                    Ok(()) => true,
+                    Err(error) => {
+                        shutdown_errors.push(error.to_string());
+                        false
+                    }
+                });
+                if !shutdown_requested {
                     failures.push(StopFailure {
                         port: *port,
-                        error: error.to_string(),
+                        error: shutdown_errors.join("; "),
                     });
                 }
             }
@@ -188,6 +197,10 @@ fn shutdown_request_address(url: &str) -> Result<(SocketAddr, String)> {
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::{Ipv4Addr, TcpListener, TcpStream};
+
+    use rstest::rstest;
 
     use super::*;
     use crate::commands::agent::types::{Engine, SessionStatus};
@@ -282,7 +295,7 @@ mod tests {
     }
 
     #[test]
-    fn warns_when_lsof_finds_no_crit_listener_for_the_port() {
+    fn returns_failure_when_lsof_finds_no_crit_listener_for_the_port() {
         let session = make_session(
             "expired-session",
             &["http://review.example.test:43122/review"],
@@ -313,6 +326,43 @@ mod tests {
     }
 
     #[test]
+    fn tries_later_local_url_when_the_first_same_port_url_is_unusable() {
+        let session = make_session(
+            "expired-session",
+            &[
+                "https://review.example.test:43123/review",
+                "http://localhost:43123/review",
+            ],
+        );
+        let ports = BTreeSet::from([43123]);
+        let attempted_urls = RefCell::new(Vec::new());
+
+        let failures = stop_daemons_for_ports_with(
+            &session,
+            &ports,
+            |_| Ok(Some(1234)),
+            |url, _| {
+                attempted_urls.borrow_mut().push(url.to_string());
+                if url.starts_with("https:") {
+                    bail!("crit shutdown requires an HTTP URL");
+                }
+                Ok(())
+            },
+        );
+
+        assert_eq!(
+            (failures, attempted_urls.into_inner()),
+            (
+                vec![],
+                vec![
+                    "https://review.example.test:43123/review".to_string(),
+                    "http://localhost:43123/review".to_string(),
+                ],
+            ),
+        );
+    }
+
+    #[test]
     fn builds_a_pid_guarded_shutdown_request_without_browser_headers() {
         assert_eq!(
             build_shutdown_request(1234, "127.0.0.1:43123"),
@@ -323,6 +373,61 @@ mod tests {
                 Connection: close\r
                 \r
             "},
+        );
+    }
+
+    #[rstest]
+    #[case::accepted(200, Ok(()))]
+    #[case::pid_mismatch(409, Err("crit daemon rejected shutdown because its PID changed".to_string()))]
+    fn sends_pid_checked_shutdown_and_handles_daemon_responses(
+        #[case] response_status: u16,
+        #[case] expected_result: Result<(), String>,
+    ) {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .expect("test listener should bind to an ephemeral loopback port");
+        let listener_address = listener
+            .local_addr()
+            .expect("listener should have an address");
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("shutdown request should connect");
+            let mut reader = BufReader::new(stream);
+            let mut request = String::new();
+            loop {
+                let mut line = String::new();
+                let read = reader
+                    .read_line(&mut line)
+                    .expect("shutdown request should be readable");
+                if read == 0 {
+                    break;
+                }
+                request.push_str(&line);
+                if line == "\r\n" {
+                    break;
+                }
+            }
+            let response = indoc::formatdoc! {"
+                HTTP/1.1 {response_status} Test\r
+                Content-Length: 0\r
+                Connection: close\r
+                \r
+            "};
+            let _ = reader.get_mut().write_all(response.as_bytes());
+            request
+        });
+        let url = format!("http://127.0.0.1:{}/review", listener_address.port());
+
+        let actual_result = request_crit_shutdown(&url, 1234).map_err(|error| error.to_string());
+        let _ = TcpStream::connect(listener_address);
+        let actual_request = server
+            .join()
+            .expect("shutdown response thread should finish");
+
+        assert_eq!(
+            (actual_result, actual_request),
+            (
+                expected_result,
+                build_shutdown_request(1234, &format!("127.0.0.1:{}", listener_address.port())),
+            ),
         );
     }
 }

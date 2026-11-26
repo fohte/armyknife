@@ -6,7 +6,14 @@ use anyhow::{Context, Result, bail};
 use crate::infra::external_tool::ExternalTool;
 use crate::infra::process;
 
-pub(in crate::commands::agent::crit) fn crit_pid_for_port(port: u16) -> Result<Option<u32>> {
+pub(super) fn crit_pid_for_port(port: u16) -> Result<Option<u32>> {
+    let status = crit_status()?;
+    Ok(pid_for_port(&status, port))
+}
+
+pub(in crate::commands::agent::crit) fn crit_listener_pid_for_port(
+    port: u16,
+) -> Result<Option<u32>> {
     let output = process::run_with_timeout(crit_listener_command(port), Duration::from_secs(5))
         .context("failed to inspect crit daemon listener")?;
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -125,6 +132,23 @@ mod tests {
             crit_listener_pid_from_lsof_result(false, Some(1), "", "")
                 .expect("no matching lsof entry should be treated as an absent listener"),
             None,
+        );
+    }
+
+    #[test]
+    fn returns_pid_when_lsof_finds_a_crit_listener() {
+        assert_eq!(
+            crit_listener_pid_from_lsof_result(
+                true,
+                Some(0),
+                indoc::indoc! {"
+                    p1234
+                    ccrit
+                "},
+                "",
+            )
+            .expect("valid crit listener output should parse"),
+            Some(1234),
         );
     }
 }

@@ -94,7 +94,7 @@ pub(super) use web_state::{
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(super) fn lock_crit_port(sessions_dir: &Path, port: u16) -> Result<fs::File> {
-    resolution_lock::lock_resolution_file(sessions_dir, "crit-port-locks", &port.to_string())
+    resolution_lock::lock_file(sessions_dir, "crit-port-locks", &format!("{port}.lock"))
 }
 
 #[derive(Debug)]
