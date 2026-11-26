@@ -1110,6 +1110,33 @@ mod tests {
     }
 
     #[rstest]
+    fn start_review_returns_the_watch_web_action_result(review_document: ReviewDocumentFixture) {
+        let document_path = review_document.path;
+        let expected_result = ReviewDocumentActionResult::new(
+            ReviewDocumentAction::CreatePr,
+            true,
+            "Pull request created.".to_owned(),
+            document_hash(&document_path).expect("document hash should be read"),
+            None,
+        );
+
+        let result = start_review_with_marker::<ReviewTestSchema, _, _>(
+            &document_path,
+            None,
+            |path, done_fifo_path, _finish_fifo_path, _lock_id| {
+                save_action_result(path, &expected_result)?;
+                signal_fifo_with_byte(done_fifo_path, b'1');
+                Ok(ReviewLaunch::without_queue(None))
+            },
+            |_| Ok(true),
+        )
+        .expect("start review")
+        .map(|review| (review.action_result, review.finish_reason));
+
+        assert_eq!(result, Some((Some(expected_result), None)),);
+    }
+
+    #[rstest]
     fn start_review_replaces_a_stale_lock_and_proceeds(review_document: ReviewDocumentFixture) {
         let document_path = review_document.path;
         let lock_path = LockGuard::lock_path(&document_path);

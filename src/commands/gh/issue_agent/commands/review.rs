@@ -1,7 +1,8 @@
 //! Review command for gh-issue-agent.
 //!
 //! Opens a file in an editor via the HITL framework for approval.
-//! The user must set `submit: true` in the frontmatter to approve.
+//! The user can set `submit: true` in the frontmatter, or complete a matching
+//! issue action in watch-web, to approve the review.
 //!
 //! For files without YAML frontmatter (e.g., comment files using HTML comment
 //! metadata), a temporary `submit: false` frontmatter is prepended before
