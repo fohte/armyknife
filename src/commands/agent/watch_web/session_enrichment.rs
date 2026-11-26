@@ -287,7 +287,7 @@ async fn fetch_task_metadata(
     let tasks = match client.list_tasks(&task_ids).await {
         Ok(tasks) => tasks,
         Err(error) => {
-            tracing::warn!(%error, "Failed to fetch agent watch tq task priorities; keeping cached priorities");
+            tracing::warn!(%error, "Failed to fetch agent watch tq task metadata including GitHub links; keeping cached values");
             return Ok(keep_cached_priority_metadata(links, previous));
         }
     };
