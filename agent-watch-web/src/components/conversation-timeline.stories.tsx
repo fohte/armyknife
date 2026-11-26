@@ -221,10 +221,24 @@ export const DesktopConversationShowsTheFailedReviewActionAtItsStartPosition: St
     args: { actions: [reviewActionFailure] },
   }
 
+export const IPhoneConversationShowsTheFailedReviewActionAtItsStartPosition: Story =
+  {
+    name: 'The iPhone conversation keeps the failed issue update above later messages',
+    args: { isMobile: true, actions: [reviewActionFailure] },
+    decorators: [iPhoneViewportDecorator],
+  }
+
 export const DesktopConversationShowsTheRunningCommandAtItsStartPosition: Story =
   {
     name: 'The running command stays beside its starting messages with its start time',
     args: { actions: [runningCommand] },
+  }
+
+export const IPhoneConversationShowsTheRunningCommandAtItsStartPosition: Story =
+  {
+    name: 'The iPhone conversation keeps the running command above later messages',
+    args: { isMobile: true, actions: [runningCommand] },
+    decorators: [iPhoneViewportDecorator],
   }
 
 export const DesktopConversationShowsMergedResultsAtTheirStartPositions: Story =
