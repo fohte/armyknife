@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::{Context, Result, ensure};
@@ -89,6 +90,20 @@ pub(crate) fn agent_files(sessions_dir: &Path, session_id: &str) -> Result<Vec<A
         })
     })
     .collect()
+}
+
+pub(crate) fn agent_file_counts_by_session(sessions_dir: &Path) -> Result<HashMap<String, i64>> {
+    if !sessions_dir.exists() {
+        return Ok(HashMap::new());
+    }
+    let connection = open_connection(sessions_dir)?;
+    let mut statement =
+        connection.prepare("SELECT session_id, COUNT(*) FROM agent_file GROUP BY session_id")?;
+    let rows = statement.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+    })?;
+    rows.collect::<rusqlite::Result<HashMap<_, _>>>()
+        .context("loading agent file counts")
 }
 
 pub(crate) fn agent_file(

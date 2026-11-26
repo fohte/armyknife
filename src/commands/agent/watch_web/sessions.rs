@@ -220,6 +220,9 @@ struct SessionView {
     review_document_id: Option<String>,
     #[serde(skip_serializing_if = "is_zero")]
     review_document_count: usize,
+    // New attachment rows change `/messages` even when the session row stays the same.
+    #[serde(skip)]
+    agent_file_count: i64,
 }
 
 impl std::ops::Deref for SessionView {
@@ -253,6 +256,7 @@ pub(super) struct SessionSnapshot {
     title_by_id: HashMap<String, String>,
     repo_by_id: HashMap<String, String>,
     decision_counts: HashMap<String, store::AgentDecisionCounts>,
+    agent_file_counts: HashMap<String, i64>,
     agent_response_timestamps: HashMap<String, DateTime<Utc>>,
     unanswered_proposal_titles: HashMap<String, String>,
     unanswered_todo_titles: HashMap<String, String>,
@@ -490,6 +494,7 @@ async fn list_sessions<S: SessionSource>(
         session_vibe_modes(&snapshot, &response_sessions, &snapshot.repo_by_id).await?;
     let now = source.now();
     let agent_response_timestamps = snapshot.agent_response_timestamps;
+    let agent_file_counts = snapshot.agent_file_counts;
     let state_by_id = snapshot
         .web_states
         .into_iter()
@@ -725,6 +730,10 @@ async fn list_sessions<S: SessionSource>(
                 review_document_count: review_document_states
                     .get(&session.session_id)
                     .map_or(0, |state| state.count),
+                agent_file_count: agent_file_counts
+                    .get(&session.session_id)
+                    .copied()
+                    .unwrap_or_default(),
             }
         })
         .collect::<Vec<_>>();
@@ -781,6 +790,7 @@ fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
     let vibe_sessions_dir = sessions_dir.clone();
     let agent_response_timestamps = store::agent_response_timestamps_from(&sessions_dir)?;
     let decision_counts = store::agent_decision_counts_by_session_from(&sessions_dir)?;
+    let agent_file_counts = store::agent_file_counts_by_session_from(&sessions_dir)?;
     let mut unanswered_proposal_titles = HashMap::new();
     let visible_session_ids = all_sessions
         .iter()
@@ -809,6 +819,7 @@ fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
         title_by_id,
         repo_by_id,
         decision_counts,
+        agent_file_counts,
         agent_response_timestamps,
         unanswered_proposal_titles,
         unanswered_todo_titles,
@@ -922,6 +933,7 @@ mod tests {
         task_projects: HashMap<String, String>,
         pull_requests: HashMap<String, Vec<SessionPullRequestInfo>>,
         decision_counts: HashMap<String, store::AgentDecisionCounts>,
+        agent_file_counts: HashMap<String, i64>,
         agent_response_timestamps: HashMap<String, DateTime<Utc>>,
         work_type_nav_labels: HashMap<String, String>,
         agent_statuses: HashMap<String, AgentStatusConfig>,
@@ -944,6 +956,7 @@ mod tests {
                 title_by_id: self.title_by_id.clone(),
                 repo_by_id: self.repo_by_id.clone(),
                 decision_counts: self.decision_counts.clone(),
+                agent_file_counts: self.agent_file_counts.clone(),
                 agent_response_timestamps: self.agent_response_timestamps.clone(),
                 unanswered_proposal_titles: self.unanswered_proposal_titles.clone(),
                 unanswered_todo_titles: self.unanswered_todo_titles.clone(),
@@ -1047,13 +1060,9 @@ mod tests {
                 snapshot
                     .all_sessions
                     .retain(|session| session.session_id != "removed-session");
-                if let Some(session) = snapshot
-                    .sessions
-                    .iter_mut()
-                    .find(|session| session.session_id == "child-session")
-                {
-                    session.last_message = Some("updated session preview".to_string());
-                }
+                snapshot
+                    .agent_file_counts
+                    .insert("child-session".to_string(), 1);
             }
             Ok(snapshot)
         }
@@ -1220,6 +1229,7 @@ mod tests {
                     unreviewed: 2,
                 },
             )]),
+            agent_file_counts: HashMap::new(),
             agent_response_timestamps: HashMap::new(),
             work_type_nav_labels: HashMap::new(),
             agent_statuses: HashMap::new(),
@@ -2487,7 +2497,6 @@ mod tests {
             .find(|session| session["id"] == "child-session")
             .unwrap()
             .clone();
-        updated_child["preview"] = serde_json::json!("updated session preview");
         updated_child["elapsedSeconds"] = serde_json::json!(102);
         let mut fallback_child = updated_child.clone();
         fallback_child["elapsedSeconds"] = serde_json::json!(104);

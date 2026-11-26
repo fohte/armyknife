@@ -76,13 +76,11 @@ export function useConversationPaneData({
   const loadingOlderRef = useRef(false)
   const [error, setError] = useState<string | null>(null)
   const currentSessionId = useRef(sessionId)
-  const sessionGeneration = useRef(0)
-  if (currentSessionId.current !== sessionId) {
-    currentSessionId.current = sessionId
-    sessionGeneration.current += 1
-  }
+  currentSessionId.current = sessionId
   const requestGeneration = useRef(0)
-  const appliedRequestGeneration = useRef(0)
+  const messagesRequestInFlight = useRef(false)
+  const refreshQueued = useRef(false)
+  const refreshRef = useRef<(() => Promise<void>) | null>(null)
   const actionsRequestGeneration = useRef(0)
   const olderRequestGeneration = useRef(0)
   const messagesError = useRef<string | null>(null)
@@ -182,9 +180,12 @@ export function useConversationPaneData({
   }, [confirmPendingOperations, sessionId])
 
   const refresh = useCallback(async () => {
-    const requestSessionGeneration = sessionGeneration.current
-    const generation = requestGeneration.current + 1
-    requestGeneration.current = generation
+    if (messagesRequestInFlight.current) {
+      refreshQueued.current = true
+      return
+    }
+    messagesRequestInFlight.current = true
+    const generation = requestGeneration.current
     const sessionPath = `/api/sessions/${encodeURIComponent(sessionId)}`
     const loadedConversation =
       conversationSessionId.current === sessionId
@@ -207,65 +208,71 @@ export function useConversationPaneData({
         : `${sessionPath}/messages?from=${String(loadedConversation.start)}${epochQuery}${stableDigestQuery}`,
       isConversationResponse,
     )
-    void refreshActions()
-    const messagesResult = await messagesRequest
-    if (
-      currentSessionId.current !== sessionId ||
-      sessionGeneration.current !== requestSessionGeneration ||
-      appliedRequestGeneration.current > generation
-    ) {
-      return
-    }
-    appliedRequestGeneration.current = generation
-    let refreshedConversation: ConversationResponse | null = null
-    if (messagesResult.isOk()) {
-      const alreadyLoaded = conversationSessionId.current === sessionId
-      const previous = alreadyLoaded
-        ? conversationRef.current
-        : EMPTY_CONVERSATION
-      const sameEpoch = previous.epoch === messagesResult.value.epoch
-      const preserveLoadedPrefix =
-        alreadyLoaded &&
-        sameEpoch &&
-        previous.start < messagesResult.value.start
-      const start = preserveLoadedPrefix
-        ? previous.start
-        : messagesResult.value.start
-      const messages = preserveLoadedPrefix
-        ? [
-            ...previous.messages.slice(
-              0,
-              messagesResult.value.start - previous.start,
-            ),
-            ...messagesResult.value.messages,
-          ]
-        : messagesResult.value.messages
-      refreshedConversation = {
-        ...messagesResult.value,
-        start,
-        messages:
-          alreadyLoaded && !sameEpoch
-            ? messagesResult.value.messages
-            : shareUnchangedMessages(
-                previous.messages,
-                messages,
-                previous.start,
-                start,
-              ),
+    try {
+      void refreshActions()
+      const messagesResult = await messagesRequest
+      if (
+        requestGeneration.current !== generation ||
+        currentSessionId.current !== sessionId
+      ) {
+        return
       }
-      conversationSessionId.current = sessionId
-      markMessagesLoaded()
-      updateConversation(refreshedConversation)
+      let refreshedConversation: ConversationResponse | null = null
+      if (messagesResult.isOk()) {
+        const alreadyLoaded = conversationSessionId.current === sessionId
+        const previous = alreadyLoaded
+          ? conversationRef.current
+          : EMPTY_CONVERSATION
+        const sameEpoch = previous.epoch === messagesResult.value.epoch
+        const preserveLoadedPrefix =
+          alreadyLoaded &&
+          sameEpoch &&
+          previous.start < messagesResult.value.start
+        const start = preserveLoadedPrefix
+          ? previous.start
+          : messagesResult.value.start
+        const messages = preserveLoadedPrefix
+          ? [
+              ...previous.messages.slice(
+                0,
+                messagesResult.value.start - previous.start,
+              ),
+              ...messagesResult.value.messages,
+            ]
+          : messagesResult.value.messages
+        refreshedConversation = {
+          ...messagesResult.value,
+          start,
+          messages:
+            alreadyLoaded && !sameEpoch
+              ? messagesResult.value.messages
+              : shareUnchangedMessages(
+                  previous.messages,
+                  messages,
+                  previous.start,
+                  start,
+                ),
+        }
+        conversationSessionId.current = sessionId
+        markMessagesLoaded()
+        updateConversation(refreshedConversation)
+      }
+      messagesError.current = messagesResult.isErr()
+        ? messagesResult.error.message
+        : null
+      setError(messagesError.current ?? actionsError.current)
+      confirmPendingOperations(
+        refreshedConversation ?? conversationRef.current,
+        actionsRef.current,
+      )
+      setLoading(false)
+    } finally {
+      messagesRequestInFlight.current = false
+      if (refreshQueued.current) {
+        refreshQueued.current = false
+        void refreshRef.current?.()
+      }
     }
-    messagesError.current = messagesResult.isErr()
-      ? messagesResult.error.message
-      : null
-    setError(messagesError.current ?? actionsError.current)
-    confirmPendingOperations(
-      refreshedConversation ?? conversationRef.current,
-      actionsRef.current,
-    )
-    setLoading(false)
   }, [
     confirmPendingOperations,
     markMessagesLoaded,
@@ -273,6 +280,7 @@ export function useConversationPaneData({
     sessionId,
     updateConversation,
   ])
+  refreshRef.current = refresh
 
   const refreshForOperation = useCallback(
     async (operation: SessionOperation) => {
@@ -398,10 +406,17 @@ export function useConversationPaneData({
 
   useEffect(() => {
     void refresh()
-    return () => {
-      actionsRequestGeneration.current += 1
-    }
   }, [refresh, refreshKey])
+
+  useEffect(() => {
+    return () => {
+      requestGeneration.current += 1
+      actionsRequestGeneration.current += 1
+      if (currentSessionId.current === sessionId) {
+        refreshQueued.current = false
+      }
+    }
+  }, [sessionId])
 
   useEffect(() => {
     if (conversationSessionId.current !== sessionId) {

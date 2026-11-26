@@ -94,6 +94,7 @@ mod tests {
             todo_later_title: None,
             review_document_id: None,
             review_document_count: 0,
+            agent_file_count: 0,
         }
     }
 

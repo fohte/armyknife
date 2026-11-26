@@ -11759,9 +11759,83 @@ it('keeps a merge result after the messages present when an older page is prepen
   })
 })
 
-it('applies in-flight message refreshes unless a newer response already applied', async () => {
+it('coalesces refresh-key changes while keeping the in-flight response', async () => {
   const messageResponses: Array<(response: Response) => void> = []
   let refreshKey = 0
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.includes('/messages?')) {
+      return new Promise<Response>((resolve) => {
+        messageResponses.push(resolve)
+      })
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  const renderConversation = () => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        shouldSkipSessionTreeFetch
+        initialSessionTree={[]}
+        refreshKey={refreshKey}
+        sessionTreeRefreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  }
+  const visibleMessages = () =>
+    Array.from(
+      container.querySelectorAll('.chat-assistant-message'),
+      (element) => element.textContent,
+    )
+
+  act(renderConversation)
+  await waitForState(() => messageResponses.length === 1)
+  refreshKey = 1
+  act(renderConversation)
+  refreshKey = 2
+  act(renderConversation)
+  const requestsBeforeResponse = messageResponses.length
+  const resolveFirstResponse = messageResponses[0]
+  if (resolveFirstResponse === undefined)
+    throw new Error('Expected the initial message response')
+  await act(async () => {
+    resolveFirstResponse(
+      jsonResponse(
+        messagesResponse([{ type: 'assistant', text: 'Initial message.' }], []),
+      ),
+    )
+    await Promise.resolve()
+  })
+  await waitForState(() => messageResponses.length === 2)
+
+  const snapshot = () => ({
+    requestUrls: fetcher.mock.calls
+      .map(([url]) => requestUrl(url))
+      .filter((url) => url.includes('/messages?')),
+    requestsBeforeResponse,
+    requestsAfterResponse: messageResponses.length,
+    visibleMessages: visibleMessages(),
+    loadingStatus:
+      container.querySelector('.conversation-status')?.textContent ?? null,
+  })
+  expect(snapshot()).toEqual({
+    requestUrls: [
+      '/api/sessions/sample-session/messages?limit=100',
+      '/api/sessions/sample-session/messages?from=0',
+    ],
+    requestsBeforeResponse: 1,
+    requestsAfterResponse: 2,
+    visibleMessages: ['Initial message.'],
+    loadingStatus: null,
+  })
+})
+
+it('discards a message response after switching away and back to its session', async () => {
+  const messageResponses: Array<(response: Response) => void> = []
   let selectedSession = session
   const otherSession = { ...session, id: 'other-session' }
   const fetcher = vi.fn<typeof fetch>((input) => {
@@ -11782,7 +11856,7 @@ it('applies in-flight message refreshes unless a newer response already applied'
         session={selectedSession}
         shouldSkipSessionTreeFetch
         initialSessionTree={[]}
-        refreshKey={refreshKey}
+        refreshKey={0}
         sessionTreeRefreshKey={0}
         onSelectSession={() => undefined}
       />,
@@ -11804,69 +11878,30 @@ it('applies in-flight message refreshes unless a newer response already applied'
 
   act(renderConversation)
   await waitForState(() => messageResponses.length === 1)
-  await resolveMessageResponse(0, 'Initial message.')
-  await waitForState(() => visibleMessages().length === 1)
-
-  refreshKey = 1
-  act(renderConversation)
-  await waitForState(() => messageResponses.length === 2)
-  refreshKey = 2
-  act(renderConversation)
-  await waitForState(() => messageResponses.length === 3)
-  await resolveMessageResponse(1, 'In-flight message.')
-  const whileLatestRequestIsPending = visibleMessages()
-  await resolveMessageResponse(2, 'Latest message.')
-  await waitForState(() => visibleMessages()[0] === 'Latest message.')
-  const afterLatestResponse = visibleMessages()
-
-  refreshKey = 3
-  act(renderConversation)
-  await waitForState(() => messageResponses.length === 4)
-  refreshKey = 4
-  act(renderConversation)
-  await waitForState(() => messageResponses.length === 5)
-  await resolveMessageResponse(4, 'Newest message.')
-  await waitForState(() => visibleMessages()[0] === 'Newest message.')
-  await resolveMessageResponse(3, 'Stale message.')
-  const afterStaleResponse = visibleMessages()
-  refreshKey = 5
-  act(renderConversation)
-  await waitForState(() => messageResponses.length === 6)
   selectedSession = otherSession
   act(renderConversation)
-  await waitForState(() => messageResponses.length === 7)
   selectedSession = session
   act(renderConversation)
-  await waitForState(() => messageResponses.length === 8)
-  await resolveMessageResponse(7, 'Current session message.')
+  await resolveMessageResponse(0, 'Previous visit message.')
+  await waitForState(() => messageResponses.length === 2)
+  const afterPreviousVisitResponse = visibleMessages()
+  await resolveMessageResponse(1, 'Current session message.')
   await waitForState(() => visibleMessages()[0] === 'Current session message.')
-  await resolveMessageResponse(5, 'Previous visit message.')
-  const afterPreviousSessionResponse = visibleMessages()
 
   const snapshot = () => ({
     requestUrls: fetcher.mock.calls
       .map(([url]) => requestUrl(url))
       .filter((url) => url.includes('/messages?')),
-    whileLatestRequestIsPending,
-    afterLatestResponse,
-    afterStaleResponse,
-    afterPreviousSessionResponse,
+    afterPreviousVisitResponse,
+    visibleMessages: visibleMessages(),
   })
   expect(snapshot()).toEqual({
     requestUrls: [
       '/api/sessions/sample-session/messages?limit=100',
-      '/api/sessions/sample-session/messages?from=0',
-      '/api/sessions/sample-session/messages?from=0',
-      '/api/sessions/sample-session/messages?from=0',
-      '/api/sessions/sample-session/messages?from=0',
-      '/api/sessions/sample-session/messages?from=0',
-      '/api/sessions/other-session/messages?limit=100',
-      '/api/sessions/sample-session/messages?from=0',
+      '/api/sessions/sample-session/messages?limit=100',
     ],
-    whileLatestRequestIsPending: ['In-flight message.'],
-    afterLatestResponse: ['Latest message.'],
-    afterStaleResponse: ['Newest message.'],
-    afterPreviousSessionResponse: ['Current session message.'],
+    afterPreviousVisitResponse: [],
+    visibleMessages: ['Current session message.'],
   })
 })
 

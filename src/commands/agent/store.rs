@@ -729,6 +729,12 @@ pub(crate) fn agent_files(session_id: &str) -> Result<Vec<AgentFile>> {
     agent_files_from(&sessions_dir()?, session_id)
 }
 
+pub(crate) fn agent_file_counts_by_session_from(
+    sessions_dir: &Path,
+) -> Result<HashMap<String, i64>> {
+    database::agent_file_counts_by_session(sessions_dir)
+}
+
 pub(crate) fn agent_file_from(
     sessions_dir: &Path,
     session_id: &str,
@@ -2401,6 +2407,45 @@ mod tests {
                     remaining_files,
                 ),
                 (true, false, false, Vec::new()),
+            );
+        }
+
+        #[rstest]
+        fn counts_agent_files_by_session(temp_session_dir: TempSessionDir) {
+            let session_a_id = "fixture-session-a";
+            let session_b_id = "fixture-session-b";
+            for session_id in [session_a_id, session_b_id] {
+                save_session_to(
+                    &temp_session_dir.sessions_path,
+                    &create_test_session(session_id),
+                )
+                .expect("session should save");
+            }
+            for (session_id, file_id) in [
+                (session_a_id, "fixture-file-a1"),
+                (session_a_id, "fixture-file-a2"),
+                (session_b_id, "fixture-file-b1"),
+            ] {
+                insert_agent_files_from(
+                    &temp_session_dir.sessions_path,
+                    session_id,
+                    &[AgentFile {
+                        id: file_id.to_owned(),
+                        position: 0,
+                        name: "fixture.txt".to_owned(),
+                        caption: None,
+                        mime_type: Some("text/plain".to_owned()),
+                        size: 7,
+                        created_at: Utc::now(),
+                    }],
+                )
+                .expect("file record should insert");
+            }
+
+            assert_eq!(
+                agent_file_counts_by_session_from(&temp_session_dir.sessions_path)
+                    .expect("file counts should load"),
+                HashMap::from([(session_a_id.to_owned(), 2), (session_b_id.to_owned(), 1),]),
             );
         }
 
