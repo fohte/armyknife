@@ -9989,7 +9989,7 @@ it('keeps a message send error through refreshes until a send succeeds', async (
       )
     }
     if (url.includes('/messages?')) {
-      return Promise.resolve(jsonResponse(messagesResponse([])))
+      return Promise.resolve(jsonResponse(messagesResponse([permission])))
     }
     if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
     return Promise.resolve(jsonResponse({}))
@@ -10045,6 +10045,27 @@ it('keeps a message send error through refreshes until a send succeeds', async (
   }
 
   await act(async () => {
+    await userEvent.click(
+      requireElement(
+        container.querySelector<HTMLButtonElement>(
+          '.permission-actions button',
+        ),
+      ),
+    )
+  })
+  await waitForState(
+    () =>
+      fetcher.mock.calls.filter(
+        ([input, init]) =>
+          init?.method !== 'POST' && requestUrl(input).includes('/messages?'),
+      ).length === 2,
+  )
+  const afterUnrelatedAction = {
+    alert: container.querySelector('[role="alert"]')?.textContent ?? null,
+    draft: textarea.value,
+  }
+
+  await act(async () => {
     refreshConversation()
     for (let index = 0; index < 12; index += 1) await Promise.resolve()
   })
@@ -10070,6 +10091,7 @@ it('keeps a message send error through refreshes until a send succeeds', async (
 
   const snapshot = () => ({
     afterFailedSend,
+    afterUnrelatedAction,
     afterRefresh,
     afterSuccessfulSend: {
       alert: container.querySelector('[role="alert"]')?.textContent ?? null,
@@ -10078,6 +10100,10 @@ it('keeps a message send error through refreshes until a send succeeds', async (
   })
   expect(snapshot()).toEqual({
     afterFailedSend: {
+      alert: 'The message could not be sent.',
+      draft: 'Retain this prompt',
+    },
+    afterUnrelatedAction: {
       alert: 'The message could not be sent.',
       draft: 'Retain this prompt',
     },
