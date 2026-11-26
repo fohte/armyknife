@@ -56,6 +56,7 @@ type ConversationPaneViewProps = {
   sessions?: readonly Session[]
   sessionLinkTargets?: readonly SessionLinkTarget[]
   messages: readonly ChatItem[]
+  messageImageSources?: Record<string, Record<string, string | null>>
   start?: number
   epoch?: string | undefined
   olderCursor?: string | undefined
@@ -127,6 +128,7 @@ export function ConversationPaneView({
   sessions = [],
   sessionLinkTargets: providedSessionLinkTargets,
   messages,
+  messageImageSources,
   start = 0,
   epoch,
   olderCursor,
@@ -293,6 +295,7 @@ export function ConversationPaneView({
     hasUnansweredProposal,
   } = useConversationMessageElements({
     messages,
+    ...(messageImageSources === undefined ? {} : { messageImageSources }),
     start,
     ...(decisions === undefined ? {} : { decisions }),
     ...(responseHasUnansweredProposal === undefined

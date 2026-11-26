@@ -9,7 +9,7 @@ pub(super) fn contains_markdown_source(messages: &[ChatItem], expected: &str) ->
 fn message_contains_markdown_source(message: &ChatItem, expected: &str) -> bool {
     match message {
         ChatItem::User { text, .. }
-        | ChatItem::Assistant { text }
+        | ChatItem::Assistant { text, .. }
         | ChatItem::Narration { text, .. } => text == expected,
         ChatItem::QueuedUser { content, .. }
         | ChatItem::UserWithContent { content, .. }

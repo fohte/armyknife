@@ -45,3 +45,33 @@ it('omits an empty standalone thinking summary', () => {
 
   expect(container.innerHTML).toEqual('')
 })
+
+it('shows unavailable for an unmapped local image in an assistant reply', () => {
+  act(() => {
+    root?.render(
+      <ConversationMessageRow
+        actions={null}
+        actionsReady={false}
+        isMobile={false}
+        selected={false}
+        decisionPosition={undefined}
+        onSelectDecision={() => undefined}
+        message={{
+          type: 'assistant',
+          text: '![fixture][sample-image]\n\n[sample-image]: </tmp/fixture.png>',
+        }}
+        pendingAction={null}
+        openInTerminalStatus={null}
+        onAction={() => Promise.resolve(false)}
+        onOpenInTerminal={() => undefined}
+        onSelectSession={() => undefined}
+        sessionEngine="codex"
+        sessions={[]}
+      />,
+    )
+  })
+
+  expect(container.innerHTML).toBe(
+    '<article class="chat-assistant-message"><div class="markdown-message"><p><span class="markdown-image-unavailable">表示できません: /tmp/fixture.png</span></p></div></article>',
+  )
+})

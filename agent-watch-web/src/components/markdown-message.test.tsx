@@ -3,8 +3,15 @@ import { expect, it } from 'vitest'
 
 import { MarkdownMessage } from '#components/markdown-message'
 
-function renderMessage(markdown: string, className?: string) {
-  const props = className === undefined ? {} : { className }
+function renderMessage(
+  markdown: string,
+  className?: string,
+  imageSources?: Readonly<Record<string, string | null>>,
+) {
+  const props = {
+    ...(className === undefined ? {} : { className }),
+    ...(imageSources === undefined ? {} : { imageSources }),
+  }
   return renderToStaticMarkup(
     <MarkdownMessage {...props}>{markdown}</MarkdownMessage>,
   )
@@ -53,6 +60,82 @@ it('renders markdown images with the shared conversation image treatment', () =>
     renderMessage('![Sample screenshot](/api/images/fixture-image.png)'),
   ).toBe(
     '<div class="markdown-message"><p><button class="image-lightbox-trigger" type="button" aria-label="Enlarge Sample screenshot"><img class="chat-user-image" src="/api/images/fixture-image.png" alt="Sample screenshot" loading="lazy" decoding="async"/></button></p></div>',
+  )
+})
+
+it('uses the server source for a copied assistant image', () => {
+  expect(
+    renderMessage('![](/tmp/fixture.png)', undefined, {
+      '/tmp/fixture.png':
+        '/api/sessions/fixture-session/answer-images/fixture-key',
+    }),
+  ).toBe(
+    '<div class="markdown-message"><p><button class="image-lightbox-trigger" type="button" aria-label="Enlarge image"><img class="chat-user-image" src="/api/sessions/fixture-session/answer-images/fixture-key" alt="" loading="lazy" decoding="async"/></button></p></div>',
+  )
+})
+
+it('matches copied assistant images with spaces and non-ASCII path characters', () => {
+  const path = '/tmp/画像 samples/final image.png'
+  expect(
+    renderMessage(`![](<${path}>)`, undefined, {
+      [path]: '/api/sessions/fixture-session/answer-images/fixture-key',
+    }),
+  ).toBe(
+    '<div class="markdown-message"><p><button class="image-lightbox-trigger" type="button" aria-label="Enlarge image"><img class="chat-user-image" src="/api/sessions/fixture-session/answer-images/fixture-key" alt="" loading="lazy" decoding="async"/></button></p></div>',
+  )
+})
+
+const escapedPath = String.raw`/tmp/fixture\(v1\).png`
+
+it.each([
+  [
+    'a Markdown escape is not mapped',
+    `![](<${escapedPath}>)`,
+    '/tmp/fixture(v1).png',
+  ],
+  [
+    'a reference image is not mapped',
+    '![fixture][sample-image]\n\n[sample-image]: </tmp/fixture.png>',
+    '/tmp/fixture.png',
+  ],
+])('shows unavailable local images when %s', (_name, markdown, src) => {
+  expect(renderMessage(markdown, undefined, {})).toBe(
+    `<div class="markdown-message"><p><span class="markdown-image-unavailable">表示できません: ${src}</span></p></div>`,
+  )
+})
+
+it('shows an unavailable message for an ineligible assistant image', () => {
+  expect(
+    renderMessage('![](/tmp/fixture.txt)', undefined, {
+      '/tmp/fixture.txt': null,
+    }),
+  ).toBe(
+    '<div class="markdown-message"><p><span class="markdown-image-unavailable">表示できません: /tmp/fixture.txt</span></p></div>',
+  )
+})
+
+it.each([
+  [
+    'a matched unavailable path',
+    { '/tmp/画像 samples/final image.png': null },
+    '/tmp/画像 samples/final image.png',
+    '<div class="markdown-message"><p><span class="markdown-image-unavailable">表示できません: /tmp/画像 samples/final image.png</span></p></div>',
+  ],
+  [
+    'an unmatched path',
+    {},
+    '/tmp/画像 samples/final image.png',
+    '<div class="markdown-message"><p><span class="markdown-image-unavailable">表示できません: /tmp/画像 samples/final image.png</span></p></div>',
+  ],
+  [
+    'a matched path containing a literal percent sequence',
+    { '/tmp/fixture%20name.png': null },
+    '/tmp/fixture%20name.png',
+    '<div class="markdown-message"><p><span class="markdown-image-unavailable">表示できません: /tmp/fixture%20name.png</span></p></div>',
+  ],
+])('shows the original path for %s', (_name, imageSources, path, expected) => {
+  expect(renderMessage(`![](<${path}>)`, undefined, imageSources)).toBe(
+    expected,
   )
 })
 

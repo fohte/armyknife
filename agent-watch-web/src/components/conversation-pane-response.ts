@@ -312,6 +312,21 @@ function isChatItem(value: unknown): value is ChatItem {
   }
 }
 
+function isMessageImageSources(
+  value: unknown,
+): value is Record<string, Record<string, string | null>> {
+  return (
+    isRecord(value) &&
+    Object.values(value).every(
+      (sources) =>
+        isRecord(sources) &&
+        Object.values(sources).every(
+          (source) => source === null || typeof source === 'string',
+        ),
+    )
+  )
+}
+
 function isBackgroundTask(value: unknown): value is BackgroundTask {
   return (
     isRecord(value) &&
@@ -343,6 +358,8 @@ export function isConversationResponse(
     isRecord(value) &&
     Array.isArray(value['messages']) &&
     value['messages'].every(isChatItem) &&
+    (value['messageImageSources'] === undefined ||
+      isMessageImageSources(value['messageImageSources'])) &&
     Array.isArray(value['backgroundTasks']) &&
     value['backgroundTasks'].every(isBackgroundTask) &&
     (value['vibeMode'] === undefined || isVibeMode(value['vibeMode'])) &&
