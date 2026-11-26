@@ -12,6 +12,7 @@ const MAX_BUFFER_SIZE = 10_000
 const ROTATION_INTERVAL_MS = 30_000
 const RETAINED_PROFILE_MS = 120_000
 const MIN_LONG_TASK_MS = 1_000
+const MAX_PENDING_LONG_TASKS = 10
 
 type ProfilerInstance = {
   stop(): Promise<ProfilerTrace>
@@ -56,6 +57,43 @@ export function startFreezeProfiler() {
   let activeProfiler: ProfilerInstance | null = initialProfiler.value
   let activeStartedAt = performance.now()
   const pendingLongTasks: PerformanceEntry[] = []
+
+  const queueLongTasks = (tasks: PerformanceEntry[]) => {
+    const retainedAfter = performance.now() - RETAINED_PROFILE_MS
+    let droppedCount = 0
+    for (let index = pendingLongTasks.length - 1; index >= 0; index--) {
+      const task = pendingLongTasks[index]
+      if (
+        task !== undefined &&
+        task.startTime + task.duration < retainedAfter
+      ) {
+        pendingLongTasks.splice(index, 1)
+        droppedCount += 1
+      }
+    }
+
+    const recentTasks = tasks.filter(
+      (task) => task.startTime + task.duration >= retainedAfter,
+    )
+    droppedCount += tasks.length - recentTasks.length
+    const overflow = Math.max(
+      0,
+      pendingLongTasks.length + recentTasks.length - MAX_PENDING_LONG_TASKS,
+    )
+    if (overflow > 0) {
+      const pendingOverflow = Math.min(overflow, pendingLongTasks.length)
+      pendingLongTasks.splice(0, pendingOverflow)
+      recentTasks.splice(0, overflow - pendingOverflow)
+      droppedCount += overflow
+    }
+
+    if (droppedCount > 0) {
+      console.warn(
+        `Dropped ${String(droppedCount)} stale or excess watch-web long-task profiles`,
+      )
+    }
+    pendingLongTasks.push(...recentTasks)
+  }
 
   const sendPendingReports = () => {
     const tasks = pendingLongTasks.splice(0)
@@ -109,10 +147,7 @@ export function startFreezeProfiler() {
     const endedAt = performance.now()
     activeProfiler = nextProfiler.value
     activeStartedAt = endedAt
-    const trace = previous.stop().then(
-      (result) => result,
-      () => null,
-    )
+    const trace = stopProfiler(previous)
     segments.push({ start: startedAt, end: endedAt, trace })
     while (segments.length > 0) {
       const oldestSegment = segments[0]
@@ -133,7 +168,7 @@ export function startFreezeProfiler() {
     )
     if (longTasks.length === 0) return
 
-    pendingLongTasks.push(...longTasks)
+    queueLongTasks(longTasks)
     rotate()
   }
 
@@ -145,7 +180,7 @@ export function startFreezeProfiler() {
     return observer
   }, toError)()
   if (observerResult.isErr()) {
-    stopProfiler(activeProfiler)
+    void stopProfiler(activeProfiler)
     return () => undefined
   }
   const observer = observerResult.value
@@ -158,10 +193,7 @@ export function startFreezeProfiler() {
     if (previous === null) return
     activeProfiler = null
     const endedAt = performance.now()
-    const trace = previous.stop().then(
-      (result) => result,
-      () => null,
-    )
+    const trace = stopProfiler(previous)
     segments.push({ start: activeStartedAt, end: endedAt, trace })
     sendPendingReports()
   }
@@ -180,10 +212,12 @@ function toError(error: unknown) {
     : new Error('JavaScript profiling is unavailable', { cause: error })
 }
 
-function stopProfiler(profiler: ProfilerInstance | null) {
-  if (profiler === null) return
-  void profiler.stop().then(
-    () => undefined,
-    () => undefined,
+function stopProfiler(profiler: ProfilerInstance) {
+  return profiler.stop().then(
+    (trace) => trace,
+    (error: unknown) => {
+      console.warn('Failed to stop watch-web JavaScript profiler', error)
+      return null
+    },
   )
 }

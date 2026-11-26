@@ -106,74 +106,145 @@ it('sends the long task report to the watch-web endpoint', async () => {
   ])
 })
 
-it.each([
-  ['profiler rotation succeeds', false],
-  ['replacement profiler construction fails', true],
-] as const)(
-  'sends a long task report when %s',
-  async (_, failOnSecondProfiler) => {
+const longTaskScenarios = [
+  {
+    name: 'profiler rotation succeeds',
+    failOnSecondProfiler: false,
+    failOnFirstStop: false,
+    flush: 'event',
+  },
+  {
+    name: 'replacement profiler construction is retried',
+    failOnSecondProfiler: true,
+    failOnFirstStop: false,
+    flush: 'timer',
+  },
+  {
+    name: 'cleanup flushes a pending report after rotation fails',
+    failOnSecondProfiler: true,
+    failOnFirstStop: false,
+    flush: 'cleanup',
+  },
+  {
+    name: 'profiler stop fails',
+    failOnSecondProfiler: false,
+    failOnFirstStop: true,
+    flush: 'event',
+  },
+] as const
+
+it.each(longTaskScenarios)(
+  'sends a long task report when $name',
+  async ({ failOnSecondProfiler, failOnFirstStop, flush }) => {
     const taskStart = performance.now()
     const expectedReport: LongTaskReport = {
       startedAtMs: Math.round(performance.timeOrigin + taskStart),
       durationMs: 1_000,
-      functions: [
-        {
-          name: 'slowTask',
-          file: '/assets/app.js',
-          line: 12,
-          percentage: 100,
-        },
-      ],
+      functions: failOnFirstStop
+        ? []
+        : [
+            {
+              name: 'slowTask',
+              file: '/assets/app.js',
+              line: 12,
+              percentage: 100,
+            },
+          ],
     }
     const {
-      deliverLongTask,
+      deliverLongTasks,
       fetchMock,
       fetchStarted,
       observerOptions,
       profilerCreationError,
+      profilerStopError,
       triggerRotation,
-    } = installProfilerEnvironment(taskStart + 500, failOnSecondProfiler)
+    } = installProfilerEnvironment(taskStart + 500, {
+      failOnFirstStop,
+      failOnSecondProfiler,
+    })
     const profilerWarning = vi
       .spyOn(console, 'warn')
       .mockImplementation(() => undefined)
     const cleanup = startFreezeProfiler()
 
-    expect(observerOptions()).toEqual({ type: 'longtask', buffered: true })
-    deliverLongTask({
-      duration: 1_000,
-      entryType: 'longtask',
-      name: 'self',
-      startTime: taskStart,
-      toJSON: () => ({}),
-    })
-    if (failOnSecondProfiler) triggerRotation()
+    deliverLongTasks([longTaskEntry(taskStart)])
+    if (flush === 'timer') triggerRotation()
+    if (flush === 'cleanup') cleanup()
     await fetchStarted
 
-    expect(fetchMock.mock.calls).toEqual([
-      [
-        '/api/long-tasks',
-        {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(expectedReport),
-          keepalive: true,
-        },
-      ],
-    ])
-    expect(profilerWarning.mock.calls).toEqual(
-      failOnSecondProfiler
-        ? [
-            [
-              'Failed to rotate watch-web JavaScript profiler',
-              profilerCreationError,
-            ],
-          ]
-        : [],
-    )
+    const expectedWarnings: unknown[][] = []
+    if (failOnSecondProfiler) {
+      expectedWarnings.push([
+        'Failed to rotate watch-web JavaScript profiler',
+        profilerCreationError,
+      ])
+    }
+    if (failOnFirstStop) {
+      expectedWarnings.push([
+        'Failed to stop watch-web JavaScript profiler',
+        profilerStopError,
+      ])
+    }
 
-    cleanup()
+    const actual = profilerSnapshot(
+      observerOptions(),
+      fetchMock.mock.calls,
+      profilerWarning.mock.calls,
+    )
+    const expected = profilerSnapshot(
+      { type: 'longtask', buffered: true },
+      [
+        [
+          '/api/long-tasks',
+          {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(expectedReport),
+            keepalive: true,
+          },
+        ],
+      ],
+      expectedWarnings,
+    )
+    expect(actual).toEqual(expected)
+
+    if (flush !== 'cleanup') cleanup()
   },
 )
+
+it('caps pending task reports when profiler rotation repeatedly fails', () => {
+  const taskStart = performance.now()
+  const {
+    deliverLongTasks,
+    fetchMock,
+    observerOptions,
+    profilerCreationError,
+  } = installProfilerEnvironment(taskStart + 500, {
+    failEveryReplacement: true,
+  })
+  const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+  startFreezeProfiler()
+
+  deliverLongTasks(
+    Array.from({ length: 12 }, (_, index) => longTaskEntry(taskStart + index)),
+  )
+
+  const actual = profilerSnapshot(
+    observerOptions(),
+    fetchMock.mock.calls,
+    warning.mock.calls,
+  )
+  const expected = profilerSnapshot(
+    { type: 'longtask', buffered: true },
+    [],
+    [
+      ['Dropped 2 stale or excess watch-web long-task profiles'],
+      ['Failed to rotate watch-web JavaScript profiler', profilerCreationError],
+    ],
+  )
+  expect(actual).toEqual(expected)
+})
 
 it('warns when the long task report cannot be sent', async () => {
   const error = new Error('Network unavailable')
@@ -209,30 +280,70 @@ it('does not create an observer when the browser does not expose Profiler', () =
   expect(observerConstructions).toEqual(0)
 })
 
+function longTaskEntry(startTime: number): PerformanceEntry {
+  return {
+    duration: 1_000,
+    entryType: 'longtask',
+    name: 'self',
+    startTime,
+    toJSON: () => ({}),
+  }
+}
+
+function profilerSnapshot<ObserverOptions, FetchCalls, Warnings>(
+  observerOptions: ObserverOptions,
+  fetchCalls: FetchCalls,
+  warnings: Warnings,
+) {
+  return { observerOptions, fetchCalls, warnings }
+}
+
+type ProfilerEnvironmentOptions = {
+  failOnSecondProfiler?: boolean
+  failEveryReplacement?: boolean
+  failOnFirstStop?: boolean
+}
+
 function installProfilerEnvironment(
   sampleTimestamp: number,
-  failOnSecondProfiler: boolean,
+  options: ProfilerEnvironmentOptions,
 ) {
   let profilerConstructions = 0
+  let profilerStops = 0
   let observerOptions: PerformanceObserverInit | undefined
   let rotateOnTimer = () => {}
   const triggerRotation = () => {
     rotateOnTimer()
   }
   const profilerCreationError = new Error('Profiler unavailable')
-  let notifyLongTask: (entry: PerformanceEntry) => void = () => {}
-  const deliverLongTask = (entry: PerformanceEntry) => {
-    notifyLongTask(entry)
+  const profilerStopError = new Error('Profiler trace unavailable')
+  let notifyLongTasks: (entries: PerformanceEntry[]) => void = () => {}
+  const deliverLongTasks = (entries: PerformanceEntry[]) => {
+    if (
+      observerOptions?.type !== 'longtask' ||
+      observerOptions.buffered !== true
+    ) {
+      throw new Error('The long-task observer was not registered')
+    }
+    notifyLongTasks(entries)
   }
   class TestProfiler {
     constructor() {
       profilerConstructions += 1
-      if (failOnSecondProfiler && profilerConstructions === 2) {
+      if (
+        (options.failOnSecondProfiler === true &&
+          profilerConstructions === 2) ||
+        (options.failEveryReplacement === true && profilerConstructions > 1)
+      ) {
         throw profilerCreationError
       }
     }
 
     stop() {
+      profilerStops += 1
+      if (options.failOnFirstStop === true && profilerStops === 1) {
+        return Promise.reject(profilerStopError)
+      }
       return Promise.resolve({
         resources: ['/assets/app.js'],
         frames: [{ name: 'slowTask', resourceId: 0, line: 12 }],
@@ -244,9 +355,9 @@ function installProfilerEnvironment(
 
   class TestPerformanceObserver implements PerformanceObserver {
     constructor(callback: PerformanceObserverCallback) {
-      notifyLongTask = (entry) => {
+      notifyLongTasks = (entries) => {
         const list: PerformanceObserverEntryList = {
-          getEntries: () => [entry],
+          getEntries: () => entries,
           getEntriesByName: () => [],
           getEntriesByType: () => [],
         }
@@ -285,11 +396,12 @@ function installProfilerEnvironment(
   vi.stubGlobal('fetch', fetchMock)
 
   return {
-    deliverLongTask,
+    deliverLongTasks,
     fetchMock,
     fetchStarted,
     observerOptions: () => observerOptions,
     profilerCreationError,
+    profilerStopError,
     triggerRotation,
   }
 }
