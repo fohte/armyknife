@@ -143,6 +143,47 @@ it('pauses usage refresh while hidden and refreshes when visible again', async (
   expect(requestCounts).toEqual([0, 1, 1, 2])
 })
 
+it('queues one refresh when a request spans a visibility change', async () => {
+  let resolveFirstRequest: (() => void) | undefined
+  const firstRequest = new Promise((resolve) => {
+    resolveFirstRequest = () => {
+      resolve(ok(usageResponse('fixture-model-one')))
+    }
+  })
+  requestAgentUsageMock
+    .mockReturnValueOnce(firstRequest)
+    .mockReturnValue(ok(usageResponse('fixture-model-two')))
+
+  await act(async () => {
+    root?.render(
+      <AgentUsageProvider>
+        <UsageSnapshot />
+      </AgentUsageProvider>,
+    )
+    await Promise.resolve()
+  })
+  const requestCounts = [requestAgentUsageMock.mock.calls.length]
+
+  act(() => {
+    setVisibilityState('hidden')
+    setVisibilityState('visible')
+  })
+  requestCounts.push(requestAgentUsageMock.mock.calls.length)
+
+  await act(async () => {
+    resolveFirstRequest?.()
+    await firstRequest
+  })
+  requestCounts.push(requestAgentUsageMock.mock.calls.length)
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(60_000)
+  })
+  requestCounts.push(requestAgentUsageMock.mock.calls.length)
+
+  expect(requestCounts).toEqual([1, 1, 2, 3])
+})
+
 it('shows stale usage after a failed refresh and clears the status on recovery', async () => {
   requestAgentUsageMock
     .mockReturnValueOnce(ok(usageResponse('fixture-model-one')))

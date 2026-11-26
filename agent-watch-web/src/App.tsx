@@ -20,6 +20,7 @@ import type { Session } from '#types'
 import { useAppSessionOperations } from '#use-app-session-operations'
 import { useAppSessionProjection } from '#use-app-session-projection'
 import { useComposerFocus } from '#use-composer-focus'
+import { useLaterDeadlineClock } from '#use-later-deadline-clock'
 import { useLaterSessionActions } from '#use-later-session-actions'
 import { useNewSession } from '#use-new-session'
 import { useNewSessionNavigation } from '#use-new-session-navigation'
@@ -73,13 +74,13 @@ function AppContent() {
     runSessionOperation,
     recordSessionSnapshot,
   } = useAppSessionOperations(sessions)
+  const { nowMs, setNowMs } = useLaterDeadlineClock(optimisticSessions)
   const [workTypeNavLabels, setWorkTypeNavLabels] = useState<
     Record<string, string>
   >({})
   const { sessionRevisions, recordSessionChanges } =
     useSessionRefreshRevisions()
   const [sessionsReceivedAt, setSessionsReceivedAt] = useState(() => Date.now())
-  const [nowMs, setNowMs] = useState(() => Date.now())
   const {
     selectedId,
     view,
@@ -143,23 +144,6 @@ function AppContent() {
     view,
     setError,
   })
-  const nextLaterDeadline = optimisticSessions.reduce<number | null>(
-    (nextDeadline, session) => {
-      if (
-        session.category !== 'later' ||
-        session.laterUntil === null ||
-        session.laterUntil === undefined
-      ) {
-        return nextDeadline
-      }
-      const deadline = Date.parse(session.laterUntil)
-      if (!Number.isFinite(deadline) || deadline <= nowMs) {
-        return nextDeadline
-      }
-      return nextDeadline === null ? deadline : Math.min(nextDeadline, deadline)
-    },
-    null,
-  )
   const {
     laterSessionId,
     laterTimes,
@@ -263,19 +247,6 @@ function AppContent() {
       ),
     [recordSessionSnapshot],
   )
-
-  useEffect(() => {
-    if (nextLaterDeadline === null) return
-    const timeout = window.setTimeout(
-      () => {
-        setNowMs(Date.now())
-      },
-      Math.max(0, nextLaterDeadline - Date.now()),
-    )
-    return () => {
-      window.clearTimeout(timeout)
-    }
-  }, [nextLaterDeadline])
 
   useEffect(() => {
     const hiddenProgress = orderedSessions.filter(

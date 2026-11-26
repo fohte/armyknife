@@ -13,11 +13,19 @@ export function useAgentUsage() {
     let active = true
     let visible = isPageVisible(document)
     let timeoutId: number | null = null
+    let requestPending = false
+    let refreshOnResume = false
     const canRefresh = () => active && visible
 
     const refresh = async () => {
       if (!canRefresh()) return
+      if (requestPending) {
+        refreshOnResume = true
+        return
+      }
+      requestPending = true
       const result = await requestAgentUsage()
+      requestPending = false
       if (!canRefresh()) return
       result.match(
         (nextUsage) => {
@@ -28,6 +36,11 @@ export function useAgentUsage() {
           setError(true)
         },
       )
+      if (refreshOnResume) {
+        refreshOnResume = false
+        void refresh()
+        return
+      }
       timeoutId = window.setTimeout(() => {
         void refresh()
       }, USAGE_REFRESH_INTERVAL)
@@ -39,8 +52,14 @@ export function useAgentUsage() {
       if (!visible) {
         if (timeoutId !== null) window.clearTimeout(timeoutId)
         timeoutId = null
+        if (requestPending) refreshOnResume = true
       } else if (!wasVisible) {
-        void refresh()
+        if (requestPending) {
+          refreshOnResume = true
+        } else {
+          refreshOnResume = false
+          void refresh()
+        }
       }
     }
 

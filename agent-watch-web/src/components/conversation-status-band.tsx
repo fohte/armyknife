@@ -7,7 +7,7 @@ import type { ConversationStatusBandState } from '#components/conversation-statu
 import { formatElapsedTime } from '#components/format-elapsed-time'
 import { useSessionElapsedStartedAt } from '#components/session-elapsed-context'
 import type { BackgroundTask, ToolOperation } from '#types'
-import { usePageClockTime } from '#use-page-clock-time'
+import { useLiveElapsedOffsetSeconds } from '#use-live-elapsed-offset-seconds'
 
 type ConversationStatusBandProps = {
   state: ConversationStatusBandState | null
@@ -50,10 +50,7 @@ function LiveWorkingTitle({
   elapsedSeconds: number
   startedAt: number
 }) {
-  const nowMs = usePageClockTime(1_000, startedAt)
-  const elapsedOffsetSeconds = Math.floor(
-    Math.max(0, nowMs - startedAt) / 1_000,
-  )
+  const elapsedOffsetSeconds = useLiveElapsedOffsetSeconds(startedAt)
   return (
     <>Working · {formatElapsedTime(elapsedSeconds + elapsedOffsetSeconds)}</>
   )

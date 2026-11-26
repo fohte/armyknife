@@ -130,6 +130,29 @@ it('advances elapsed time without a panel interval', async () => {
   })
 })
 
+it('clears the shared interval when the tree releases its clock subscription', () => {
+  vi.useFakeTimers()
+  const intervalSpy = vi.spyOn(window, 'setInterval')
+  renderTree()
+  const activeTimersBeforeUnmount = vi.getTimerCount()
+
+  act(() => {
+    root?.unmount()
+  })
+  root = null
+
+  const snapshot = () => ({
+    createdIntervals: intervalSpy.mock.calls.length,
+    activeTimersBeforeUnmount,
+    activeTimersAfterUnmount: vi.getTimerCount(),
+  })
+  expect(snapshot()).toEqual({
+    createdIntervals: 1,
+    activeTimersBeforeUnmount: 1,
+    activeTimersAfterUnmount: 0,
+  })
+})
+
 it('shows every tree session with the shared row and keeps ended sessions visible', () => {
   renderTree()
 

@@ -16,7 +16,7 @@ import { formatSessionDecisionCount } from '#session-decision-count'
 import { sessionKindIcon } from '#session-kind-label'
 import { formatLinkedTaskCount } from '#session-task-count'
 import type { Session, SessionTask } from '#types'
-import { usePageClockTime } from '#use-page-clock-time'
+import { useLiveElapsedOffsetSeconds } from '#use-live-elapsed-offset-seconds'
 
 type SessionRowData = Pick<
   Session,
@@ -75,10 +75,7 @@ function LiveSessionAge({
   elapsedSeconds: number
   startedAt: number
 }) {
-  const nowMs = usePageClockTime(1_000, startedAt)
-  const elapsedOffsetSeconds = Math.floor(
-    Math.max(0, nowMs - startedAt) / 1_000,
-  )
+  const elapsedOffsetSeconds = useLiveElapsedOffsetSeconds(startedAt)
   return (
     <span className="session-age">
       {formatElapsedTime(elapsedSeconds + elapsedOffsetSeconds)}

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { userEvent } from 'vitest/browser'
 
 import { ConversationStatusBand } from '#components/conversation-status-band'
+import { SessionElapsedStartedAtProvider } from '#components/session-elapsed-context'
 
 let container: HTMLDivElement
 let root: Root | null = null
@@ -38,8 +39,46 @@ afterEach(() => {
   if (root !== null) act(() => root?.unmount())
   root = null
   container.remove()
+  vi.useRealTimers()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
+})
+
+it('updates the working elapsed label from the shared clock', async () => {
+  vi.useFakeTimers()
+  vi.setSystemTime(new Date('2026-11-10T00:00:00.000Z'))
+  const startedAt = Date.now()
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <SessionElapsedStartedAtProvider value={startedAt}>
+        <ConversationStatusBand
+          state={{ kind: 'working', detail: null }}
+          elapsedSeconds={92}
+          activeTool={undefined}
+          backgroundTasks={[]}
+        />
+      </SessionElapsedStartedAtProvider>,
+    )
+  })
+  const before =
+    container.querySelector('.conversation-status-band-label')?.textContent ??
+    null
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1_000)
+  })
+
+  const snapshot = () => ({
+    before,
+    after:
+      container.querySelector('.conversation-status-band-label')?.textContent ??
+      null,
+  })
+  expect(snapshot()).toEqual({
+    before: 'Working · 1m 32s',
+    after: 'Working · 1m 33s',
+  })
 })
 
 it('expands to every background task when the compact row is pressed', async () => {

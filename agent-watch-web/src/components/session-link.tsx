@@ -11,7 +11,7 @@ import { formatElapsedTime } from '#components/format-elapsed-time'
 import { useSessionElapsedStartedAt } from '#components/session-elapsed-context'
 import { SessionLinkElapsedSecondsContext } from '#components/session-link-elapsed-seconds'
 import type { SessionLinkTarget } from '#types'
-import { usePageClockTime } from '#use-page-clock-time'
+import { useLiveElapsedOffsetSeconds } from '#use-live-elapsed-offset-seconds'
 
 export type SessionLinkProps = {
   children: ReactNode
@@ -154,10 +154,7 @@ function LiveElapsedLabel({
   elapsedSeconds: number
   startedAt: number
 }) {
-  const nowMs = usePageClockTime(1_000, startedAt)
-  const elapsedOffsetSeconds = Math.floor(
-    Math.max(0, nowMs - startedAt) / 1_000,
-  )
+  const elapsedOffsetSeconds = useLiveElapsedOffsetSeconds(startedAt)
   return formatElapsedTime(elapsedSeconds + elapsedOffsetSeconds)
 }
 
