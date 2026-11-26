@@ -42,7 +42,9 @@ use super::store;
 use super::tmux_sync::{LiveTmuxStatusSyncer, TmuxStatusSyncer};
 use super::types::{Engine, Session, SessionStatus};
 use crate::infra::process::ProcessSnapshot;
-use crate::shared::active_session::{DraftProbe, TmuxDraftProbe, effective_updated_at};
+use crate::shared::active_session::{
+    DraftObservation, DraftProbe, TmuxDraftProbe, effective_updated_at_from_observation,
+};
 use crate::shared::config;
 use crate::shared::log::short_run_id;
 
@@ -286,6 +288,18 @@ pub(crate) trait SessionProbe: DraftProbe {
     /// `session.engine`), if one can be located via the session's tmux pane.
     fn resolve_pid(&self, session: &Session) -> Result<Option<u32>>;
 
+    /// A fresh negative result takes precedence over a snapshot that may retain a dead child.
+    fn resolve_pid_for_pause(
+        &self,
+        session: &Session,
+        draft_observation: &DraftObservation,
+    ) -> Result<Option<u32>> {
+        if draft_observation.codex_process_running == Some(false) {
+            return Ok(None);
+        }
+        self.resolve_pid(session)
+    }
+
     /// Returns whether armyknife is tracking a detached background command
     /// for this session.
     fn has_pending_bg_run(&self, _session: &Session) -> bool {
@@ -313,6 +327,10 @@ const MAX_DESCENDANT_NODES: usize = 64;
 impl<A: DraftProbe> DraftProbe for TmuxSessionProbe<'_, A> {
     fn draft_observed_at(&self, session: &Session, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
         self.drafts.draft_observed_at(session, now)
+    }
+
+    fn observe_draft(&self, session: &Session, now: DateTime<Utc>) -> DraftObservation {
+        self.drafts.observe_draft(session, now)
     }
 }
 
@@ -517,10 +535,12 @@ where
         // N.B. We intentionally do NOT mutate session.updated_at here --
         // the effective timestamp is only for the timeout decision, not for
         // persisting to disk.
-        let effective = effective_updated_at(&session, probe, now);
+        let draft_observation = probe.observe_draft(&session, now);
+        let effective = effective_updated_at_from_observation(&session, &draft_observation);
 
         match auto_pause::decide_pause_with_effective(&session, now, timeout, effective) {
-            PauseDecision::Pause => match probe.resolve_pid(&session) {
+            PauseDecision::Pause => match probe.resolve_pid_for_pause(&session, &draft_observation)
+            {
                 Ok(Some(pid)) if probe.has_remote_control(&session, pid) => {
                     tracing::info!(
                         event = "agent.sweep.remote_control_active",
@@ -777,6 +797,7 @@ mod tests {
     struct FakeProbe {
         pids: RefCell<HashMap<String, u32>>,
         drafts: RefCell<HashSet<String>>,
+        codex_process_states: RefCell<HashMap<String, bool>>,
         failed_queries: RefCell<HashSet<String>>,
         remote_control_pids: HashSet<u32>,
     }
@@ -797,6 +818,15 @@ mod tests {
         fn with_drafts(mut self, session_ids: &[&str]) -> Self {
             for session_id in session_ids {
                 self.drafts.get_mut().insert((*session_id).to_string());
+            }
+            self
+        }
+
+        fn with_codex_process_states(mut self, states: &[(&str, bool)]) -> Self {
+            for (session_id, is_running) in states {
+                self.codex_process_states
+                    .get_mut()
+                    .insert((*session_id).to_string(), *is_running);
             }
             self
         }
@@ -826,6 +856,22 @@ mod tests {
                 .borrow()
                 .contains(&session.session_id)
                 .then_some(now)
+        }
+
+        fn observe_draft(&self, session: &Session, now: DateTime<Utc>) -> DraftObservation {
+            let codex_process_running = self
+                .codex_process_states
+                .borrow()
+                .get(&session.session_id)
+                .copied();
+            DraftObservation {
+                observed_at: if codex_process_running == Some(false) {
+                    None
+                } else {
+                    self.draft_observed_at(session, now)
+                },
+                codex_process_running,
+            }
         }
     }
 
@@ -1856,6 +1902,53 @@ mod tests {
             .expect("load")
             .expect("session exists");
         assert_eq!(reloaded.status, SessionStatus::Stopped);
+    }
+
+    #[rstest]
+    fn stale_snapshot_does_not_signal_codex_after_fresh_exit_observation(test_dir: TestDir) {
+        let old = Utc::now() - TimeDelta::hours(1);
+        let session = make_codex_session("codex-exited", old);
+        save_session_to(&test_dir.path, &session).expect("save");
+
+        let sender = RecordingSender::default();
+        let probe = FakeProbe::with_pids(&[("codex-exited", 4242)])
+            .with_drafts(&["codex-exited"])
+            .with_codex_process_states(&[("codex-exited", false)]);
+        let report = sweep_impl(
+            &test_dir.path,
+            Duration::from_secs(1),
+            &sender,
+            &probe,
+            &RecordingTmuxStatusSyncer::default(),
+            false,
+        )
+        .expect("sweep");
+        let reloaded = store::load_session_from(&test_dir.path, "codex-exited")
+            .expect("load")
+            .expect("session exists");
+
+        assert_eq!(
+            (
+                report,
+                sender.ctrl_d_calls.borrow().clone(),
+                sender.calls.borrow().clone(),
+                reloaded.status,
+                reloaded.sweep_signaled,
+            ),
+            (
+                SweepReport {
+                    scanned: 1,
+                    paused: 1,
+                    signaled: 0,
+                    waiting: 0,
+                    active: 0,
+                },
+                Vec::new(),
+                Vec::new(),
+                SessionStatus::Paused,
+                false,
+            )
+        );
     }
 
     #[rstest]
