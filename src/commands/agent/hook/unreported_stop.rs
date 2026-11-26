@@ -561,6 +561,93 @@ mod tests {
     }
 
     #[rstest]
+    fn a_background_report_before_a_repeated_deferred_stop_clears_the_sweep_record(
+        sessions_dir: TempDir,
+    ) {
+        let mut session = delegate_session(Engine::Codex, "fixture-delegate", "fixture-parent");
+        session.updated_at = at(12, 0);
+        session
+            .pending_bg_task_ids
+            .insert("fixture-bg-task".to_string());
+        store::save_session_to(sessions_dir.path(), &session).unwrap();
+        notify_if_unreported(
+            &session,
+            &stop_input(Engine::Codex),
+            sessions_dir.path(),
+            &config(Some(TEMPLATE)),
+            |_, _| panic!("a pending background task must defer this notification"),
+        )
+        .unwrap();
+        insert_watch_web_peer_out_message_from(
+            sessions_dir.path(),
+            &session.session_id,
+            "fixture-parent",
+            "A fictional progress update.",
+            at(12, 5),
+            false,
+        )
+        .unwrap();
+
+        session.updated_at = at(12, 10);
+        notify_if_unreported(
+            &session,
+            &stop_input(Engine::Codex),
+            sessions_dir.path(),
+            &config(Some(TEMPLATE)),
+            |_, _| panic!("a pending background task must not notify immediately"),
+        )
+        .unwrap();
+        let mature = store::take_mature_deferred_stops(
+            sessions_dir.path(),
+            at(12, 40),
+            Duration::from_secs(30 * 60),
+        )
+        .unwrap();
+
+        assert_eq!(mature, Vec::new());
+    }
+
+    #[rstest]
+    fn a_non_deferred_stop_sends_immediately_and_sweep_does_not_repeat_it(sessions_dir: TempDir) {
+        let session = delegate_session(Engine::Claude, "fixture-delegate", "fixture-parent");
+        store::save_session_to(sessions_dir.path(), &session).unwrap();
+        let mut input = stop_input(Engine::Claude);
+        input.last_assistant_message = None;
+        let mut notifications = Vec::new();
+        notify_if_unreported(
+            &session,
+            &input,
+            sessions_dir.path(),
+            &config(Some(TEMPLATE)),
+            |recipient, message| notifications.push((recipient.to_string(), message.to_string())),
+        )
+        .unwrap();
+        let sweep_notifications = store::take_mature_deferred_stops(
+            sessions_dir.path(),
+            session.updated_at + chrono::Duration::minutes(31),
+            Duration::from_secs(30 * 60),
+        )
+        .unwrap();
+
+        assert_eq!(
+            (notifications, sweep_notifications),
+            (
+                vec![(
+                    "fixture-parent".to_string(),
+                    indoc! {"
+                        <delegation-update>
+                        Session: fixture-delegate
+                        Last message: A stale previous message.
+                        </delegation-update>"
+                    }
+                    .to_string(),
+                )],
+                Vec::new(),
+            ),
+        );
+    }
+
+    #[rstest]
     fn does_not_send_without_a_template_and_records_the_check(sessions_dir: TempDir) {
         let session = delegate_session(Engine::Claude, "fixture-delegate", "fixture-parent");
         let calls = Arc::new(Mutex::new(Vec::new()));

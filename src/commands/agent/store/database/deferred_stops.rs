@@ -111,11 +111,10 @@ pub(crate) fn take_mature_deferred_stops(
             .as_deref()
             .and_then(|data| super::decode_session(&session_id, data));
         let still_stopped_delegate = session.as_ref().is_some_and(|session| {
-            let still_stopped = match session.status {
-                SessionStatus::Stopped => session.updated_at <= stopped_at,
-                SessionStatus::Paused => true,
-                _ => false,
-            };
+            let still_stopped = matches!(
+                session.status,
+                SessionStatus::Stopped | SessionStatus::Paused
+            );
             still_stopped
                 && session.child_launch
                     == crate::commands::agent::types::ChildLaunchPermission::Deny

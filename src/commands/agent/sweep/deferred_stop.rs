@@ -179,26 +179,6 @@ mod tests {
     }
 
     #[rstest::rstest]
-    fn drops_a_stale_record_when_a_later_stop_is_already_saved(sessions_dir: TempDir) {
-        let mut session = stopped_delegate();
-        let stopped_at = Utc.with_ymd_and_hms(2026, 10, 1, 9, 0, 0).unwrap();
-        record(&session, &sessions_dir, stopped_at);
-        session.updated_at = stopped_at + chrono::Duration::minutes(1);
-        save_session_to(sessions_dir.path(), &session).unwrap();
-
-        let notified = notify_ready_at(
-            sessions_dir.path(),
-            TEMPLATE,
-            stopped_at + chrono::Duration::minutes(31),
-            false,
-            |_, _| panic!("a later Stop must replace an older deferred record"),
-        )
-        .unwrap();
-
-        assert_eq!(notified, 0);
-    }
-
-    #[rstest::rstest]
     fn dry_run_does_not_consume_deferred_records(sessions_dir: TempDir) {
         let session = stopped_delegate();
         let stopped_at = Utc.with_ymd_and_hms(2026, 10, 1, 9, 0, 0).unwrap();
