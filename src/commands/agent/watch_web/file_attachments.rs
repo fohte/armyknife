@@ -948,8 +948,6 @@ mod tests {
         )));
         std::fs::create_dir_all(&session_storage).unwrap();
         std::fs::write(session_storage.join(&file.id), b"fixture report").unwrap();
-        store::insert_agent_files_from(sessions.path(), session_id, std::slice::from_ref(&file))
-            .unwrap();
         let registered_file_id = file.id.clone();
         let request_file_id = file.id.clone();
         let app = routes_with(

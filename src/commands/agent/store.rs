@@ -721,14 +721,6 @@ pub(crate) fn agent_todos(session_id: &str) -> Result<Vec<AgentTodo>> {
     agent_todos_from(&sessions_dir()?, session_id)
 }
 
-pub(crate) fn insert_agent_files_from(
-    sessions_dir: &Path,
-    session_id: &str,
-    files: &[AgentFile],
-) -> Result<()> {
-    database::insert_agent_files(sessions_dir, session_id, files)
-}
-
 pub(crate) fn agent_files_from(sessions_dir: &Path, session_id: &str) -> Result<Vec<AgentFile>> {
     database::agent_files(sessions_dir, session_id)
 }
@@ -2384,7 +2376,22 @@ mod tests {
                 size: b"fixture bytes".len() as i64,
                 created_at: now,
             };
-            insert_agent_files_from(&temp_session_dir.sessions_path, session_id, &[file])
+            Connection::open(temp_session_dir.sessions_path.join("sessions.db"))
+                .expect("session database should open")
+                .execute(
+                    "INSERT INTO agent_file (session_id, id, position, name, caption, mime_type, size, created_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    rusqlite::params![
+                        session_id,
+                        file.id,
+                        file.position,
+                        file.name,
+                        file.caption,
+                        file.mime_type,
+                        file.size,
+                        file.created_at.to_rfc3339(),
+                    ],
+                )
                 .expect("attachment record should be inserted");
 
             let removed = archive::cleanup_stale_sessions_in_with_archive_at_and_storage(
