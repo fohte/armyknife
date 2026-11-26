@@ -80,6 +80,7 @@ fn prune_unlinked_task_metadata(
         cached.priority_order.remove(task_id);
         cached.task_projects.remove(task_id);
         cached.github_links.remove(task_id);
+        cached.github_links_fetched_at.remove(task_id);
     }
 }
 
@@ -123,6 +124,13 @@ fn merge_refreshed_task_metadata(
             cached.github_links.insert(task_id.clone(), links.clone());
         } else {
             cached.github_links.remove(task_id);
+        }
+        if let Some(fetched_at) = refreshed.github_links_fetched_at.get(task_id) {
+            cached
+                .github_links_fetched_at
+                .insert(task_id.clone(), *fetched_at);
+        } else {
+            cached.github_links_fetched_at.remove(task_id);
         }
     }
 
@@ -342,6 +350,7 @@ mod tests {
                     ]),
                     task_projects: HashMap::new(),
                     github_links: HashMap::new(),
+                    github_links_fetched_at: HashMap::new(),
                 })
             })
         });
@@ -377,6 +386,7 @@ mod tests {
                 ]),
                 task_projects: HashMap::new(),
                 github_links: HashMap::new(),
+                github_links_fetched_at: HashMap::new(),
             },
         );
     }
@@ -517,6 +527,7 @@ mod tests {
                     ("task-session-b".to_string(), "project-b".to_string()),
                 ]),
                 github_links: HashMap::new(),
+                github_links_fetched_at: HashMap::new(),
             }
         );
     }

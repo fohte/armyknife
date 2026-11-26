@@ -990,6 +990,7 @@ mod tests {
                 priority_order: self.task_priority_order.clone(),
                 task_projects: self.task_projects.clone(),
                 github_links: HashMap::new(),
+                github_links_fetched_at: HashMap::new(),
             }
         }
 

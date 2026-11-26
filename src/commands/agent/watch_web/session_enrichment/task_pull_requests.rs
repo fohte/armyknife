@@ -1,5 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
+use std::time::Instant;
+
+use futures_util::{StreamExt, stream};
 
 use crate::commands::agent::types::{Session, SessionPrContext};
 use crate::infra::github::{BranchPrQuery, GitHubClient, PrNumberQuery, PrProgressInfo};
@@ -7,8 +10,11 @@ use crate::infra::tq::TqGithubLink;
 
 use super::{
     PullRequestKey, SessionEnrichmentCache, SessionPullRequestInfo, SessionTaskMetadata,
+    TASK_GITHUB_LINK_CACHE_TTL,
     cache::{merge_pull_request_results, prune_pull_request_results},
 };
+
+const TASK_GITHUB_LINK_FETCH_CONCURRENCY: usize = 4;
 
 impl SessionEnrichmentCache {
     pub(in crate::commands::agent::watch_web) async fn pull_requests(
@@ -281,38 +287,169 @@ pub(super) async fn fetch_pull_requests(
 pub(super) async fn fetch_task_github_links<F, Fut>(
     task_ids: &HashSet<String>,
     previous: &HashMap<String, Vec<TqGithubLink>>,
+    previous_fetched_at: &HashMap<String, Instant>,
     fetch: F,
-) -> HashMap<String, Vec<TqGithubLink>>
+) -> (HashMap<String, Vec<TqGithubLink>>, HashMap<String, Instant>)
 where
     F: Fn(String) -> Fut + Sync,
     Fut: Future<Output = Result<Vec<TqGithubLink>, String>> + Send,
 {
-    let responses = futures_util::future::join_all(task_ids.iter().map(|task_id| {
-        let task_id = task_id.clone();
-        let future = fetch(task_id.clone());
-        async move { (task_id, future.await) }
+    let now = Instant::now();
+    let expired_task_ids = task_ids
+        .iter()
+        .filter(|task_id| {
+            previous_fetched_at
+                .get(*task_id)
+                .is_none_or(|fetched_at| fetched_at.elapsed() >= TASK_GITHUB_LINK_CACHE_TTL)
+        })
+        .cloned()
+        .collect::<HashSet<_>>();
+    let fetch = &fetch;
+    let responses = stream::iter(expired_task_ids.iter().cloned().map(|task_id| async move {
+        let result = fetch(task_id.clone()).await;
+        (task_id, result)
     }))
+    .buffer_unordered(TASK_GITHUB_LINK_FETCH_CONCURRENCY)
+    .collect::<Vec<_>>()
     .await;
 
-    responses
-        .into_iter()
-        .filter_map(|(task_id, result)| match result {
-            Ok(links) => Some((task_id, links)),
+    let mut links = task_ids
+        .iter()
+        .filter(|task_id| !expired_task_ids.contains(*task_id))
+        .filter_map(|task_id| {
+            previous
+                .get(task_id)
+                .map(|links| (task_id.clone(), links.clone()))
+        })
+        .collect::<HashMap<_, _>>();
+    let mut fetched_at = task_ids
+        .iter()
+        .filter(|task_id| !expired_task_ids.contains(*task_id))
+        .filter_map(|task_id| {
+            previous_fetched_at
+                .get(task_id)
+                .map(|fetched_at| (task_id.clone(), *fetched_at))
+        })
+        .collect::<HashMap<_, _>>();
+
+    for (task_id, result) in responses {
+        fetched_at.insert(task_id.clone(), now);
+        match result {
+            Ok(task_links) => {
+                links.insert(task_id, task_links);
+            }
             Err(error) => {
                 tracing::warn!(%error, task_id, "Failed to fetch agent watch tq task GitHub links; keeping cached values");
-                previous.get(&task_id).cloned().map(|links| (task_id, links))
+                if let Some(cached_links) = previous.get(&task_id) {
+                    links.insert(task_id, cached_links.clone());
+                }
             }
-        })
-        .collect()
+        }
+    }
+
+    (links, fetched_at)
 }
 
 #[cfg(test)]
 mod tests {
     use std::collections::{HashMap, HashSet};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
 
     use crate::infra::tq::TqGithubLink;
 
-    use super::fetch_task_github_links;
+    use super::{TASK_GITHUB_LINK_FETCH_CONCURRENCY, fetch_task_github_links};
+
+    fn github_link(id: &str) -> TqGithubLink {
+        TqGithubLink {
+            id: id.to_string(),
+            kind: Some("pull_request".to_string()),
+            owner: Some("example-owner".to_string()),
+            repo: Some("example-repository".to_string()),
+            number: Some(29),
+            title: None,
+            url: None,
+            state: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn does_not_fetch_task_github_links_within_cache_ttl() {
+        let task_ids = HashSet::from(["task-fresh".to_string()]);
+        let previous = HashMap::from([("task-fresh".to_string(), vec![github_link("cached")])]);
+        let previous_fetched_at = HashMap::from([("task-fresh".to_string(), Instant::now())]);
+        let requested = Arc::new(Mutex::new(Vec::new()));
+        let fetch_requested = Arc::clone(&requested);
+
+        let (links, fetched_at) =
+            fetch_task_github_links(&task_ids, &previous, &previous_fetched_at, move |task_id| {
+                fetch_requested.lock().unwrap().push(task_id);
+                async { Ok(Vec::new()) }
+            })
+            .await;
+
+        assert_eq!(
+            (links, fetched_at, requested.lock().unwrap().clone()),
+            (previous, previous_fetched_at, Vec::<String>::new()),
+        );
+    }
+
+    #[tokio::test]
+    async fn refreshes_expired_task_links_with_bounded_concurrency() {
+        let task_ids = (0..12)
+            .map(|index| format!("task-{index}"))
+            .collect::<HashSet<_>>();
+        let previous_fetched_at = task_ids
+            .iter()
+            .map(|task_id| {
+                (
+                    task_id.clone(),
+                    Instant::now() - Duration::from_secs(6 * 60),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        let active = Arc::new(AtomicUsize::new(0));
+        let max_active = Arc::new(AtomicUsize::new(0));
+        let requested = Arc::new(Mutex::new(Vec::new()));
+
+        let (links, _) =
+            fetch_task_github_links(&task_ids, &HashMap::new(), &previous_fetched_at, {
+                let active = Arc::clone(&active);
+                let max_active = Arc::clone(&max_active);
+                let requested = Arc::clone(&requested);
+                move |task_id| {
+                    requested.lock().unwrap().push(task_id);
+                    let active = Arc::clone(&active);
+                    let max_active = Arc::clone(&max_active);
+                    async move {
+                        let current = active.fetch_add(1, Ordering::SeqCst) + 1;
+                        max_active.fetch_max(current, Ordering::SeqCst);
+                        tokio::task::yield_now().await;
+                        active.fetch_sub(1, Ordering::SeqCst);
+                        Ok(Vec::new())
+                    }
+                }
+            })
+            .await;
+
+        let expected_links = task_ids
+            .iter()
+            .map(|task_id| (task_id.clone(), Vec::new()))
+            .collect::<HashMap<String, Vec<TqGithubLink>>>();
+        let mut requested = requested.lock().unwrap().clone();
+        requested.sort();
+        let mut expected_requested = task_ids.iter().cloned().collect::<Vec<_>>();
+        expected_requested.sort();
+        assert_eq!(
+            (links, requested, max_active.load(Ordering::SeqCst)),
+            (
+                expected_links,
+                expected_requested,
+                TASK_GITHUB_LINK_FETCH_CONCURRENCY,
+            ),
+        );
+    }
 
     #[tokio::test]
     async fn keeps_cached_task_github_links_when_a_refresh_fails() {
@@ -331,12 +468,12 @@ mod tests {
             }],
         )]);
 
-        assert_eq!(
-            fetch_task_github_links(&task_ids, &previous, |_| async {
+        let (links, fetched_at) =
+            fetch_task_github_links(&task_ids, &previous, &HashMap::new(), |_| async {
                 Err("temporary lookup failure".to_string())
             })
-            .await,
-            previous,
-        );
+            .await;
+
+        assert_eq!((links, fetched_at.len()), (previous, 1));
     }
 }

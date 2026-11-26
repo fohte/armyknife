@@ -42,6 +42,7 @@ pub(super) fn metadata(session_ids: HashSet<String>) -> SessionTaskMetadata {
         priority_order: HashMap::new(),
         task_projects: HashMap::new(),
         github_links: HashMap::new(),
+        github_links_fetched_at: HashMap::new(),
     }
 }
 

@@ -24,6 +24,7 @@ use cache::{merge_session_task_metadata, prune_session_task_metadata};
 const CACHE_TTL: Duration = Duration::from_secs(30);
 const CACHE_KEY_RETENTION: Duration = Duration::from_secs(10 * 60);
 const FETCH_TIMEOUT: Duration = Duration::from_secs(35);
+const TASK_GITHUB_LINK_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
 type BranchPrKey = (String, String, String);
 type NumberPrKey = (String, String, u64);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -128,6 +129,7 @@ pub(super) struct SessionTaskMetadata {
     pub(super) priority_order: HashMap<String, usize>,
     pub(super) task_projects: HashMap<String, String>,
     pub(super) github_links: HashMap<String, Vec<TqGithubLink>>,
+    pub(super) github_links_fetched_at: HashMap<String, Instant>,
 }
 
 struct RefreshingCache<T, K> {
@@ -259,6 +261,7 @@ async fn fetch_task_metadata(
             priority_order: previous.priority_order,
             task_projects: previous.task_projects,
             github_links: previous.github_links,
+            github_links_fetched_at: previous.github_links_fetched_at,
         });
     }
 
@@ -270,9 +273,10 @@ async fn fetch_task_metadata(
         }
     };
 
-    let github_links = task_pull_requests::fetch_task_github_links(
+    let (github_links, github_links_fetched_at) = task_pull_requests::fetch_task_github_links(
         &task_ids,
         &previous.github_links,
+        &previous.github_links_fetched_at,
         |task_id| async move {
             TqClient
                 .task_github_links(&task_id)
@@ -301,6 +305,7 @@ async fn fetch_task_metadata(
         priority_order,
         task_projects,
         github_links,
+        github_links_fetched_at,
     })
 }
 
@@ -468,6 +473,7 @@ mod tests {
             priority_order: HashMap::from([("higher".to_string(), 0), ("lower".to_string(), 1)]),
             task_projects: HashMap::from([("higher".to_string(), "sample project".to_string())]),
             github_links: HashMap::new(),
+            github_links_fetched_at: HashMap::new(),
         };
         let links = HashMap::from([(
             "session-a".to_string(),
