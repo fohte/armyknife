@@ -473,9 +473,6 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::sync::Notify;
 
-    type TaskGithubLinkMap = HashMap<String, Vec<TqGithubLink>>;
-    type TaskGithubLinkCache = Arc<RefreshingCache<TaskGithubLinkMap, String>>;
-
     fn task_link_fetcher(requested: Arc<Mutex<Vec<HashSet<String>>>>) -> TaskGithubLinkFetcher {
         Arc::new(move |task_ids, _| {
             requested.lock().unwrap().push(task_ids.clone());
@@ -486,24 +483,6 @@ mod tests {
                     .collect())
             })
         })
-    }
-
-    async fn refresh_task_links(
-        cache: &TaskGithubLinkCache,
-        task_ids: HashSet<String>,
-        requested: Arc<Mutex<Vec<HashSet<String>>>>,
-    ) -> TaskGithubLinkMap {
-        let fetcher = task_link_fetcher(requested);
-        cache
-            .get_or_refresh(
-                "TQ task GitHub links",
-                task_ids,
-                None,
-                move |previous, expired_task_ids| fetcher(expired_task_ids, previous),
-                cache::merge_task_github_links,
-                cache::prune_task_github_links,
-            )
-            .await
     }
 
     fn head_info(number: u64) -> PrProgressInfo {
@@ -966,67 +945,99 @@ mod tests {
         let updates = EnrichmentUpdates::new();
         let mut receiver = updates.subscribe();
         let requested = Arc::new(Mutex::new(Vec::new()));
-        let cache = Arc::new(RefreshingCache::new(
+        let task_fetcher: TaskMetadataFetcher =
+            Arc::new(|session_ids, _| Box::pin(async move { Ok(metadata(session_ids)) }));
+        let pull_request_fetcher: PullRequestFetcher =
+            Arc::new(|_, _| Box::pin(async { Ok(HashMap::new()) }));
+        let task_github_link_fetcher = task_link_fetcher(Arc::clone(&requested));
+        let cache = cache_with_task_github_link_fetcher(
             updates,
             FETCH_TIMEOUT,
-            TASK_GITHUB_LINK_CACHE_TTL,
-        ));
-        let task_a = "task-a".to_string();
-        let task_b = "task-b".to_string();
-        let keys_a = HashSet::from([task_a.clone()]);
-        let keys_a_b = HashSet::from([task_a.clone(), task_b.clone()]);
+            task_fetcher,
+            pull_request_fetcher,
+            task_github_link_fetcher,
+        );
+        let session_a = session("session-a", None);
+        let session_b = session("session-b", None);
+        let sessions_b = [session_b.clone()];
+        let sessions_a_b = [session_a, session_b];
+        let expected_b = SessionTaskMetadata {
+            github_links: HashMap::from([("task-session-b".to_string(), Vec::new())]),
+            ..metadata(HashSet::from(["session-b".to_string()]))
+        };
+        let expected_a_b = SessionTaskMetadata {
+            github_links: HashMap::from([
+                ("task-session-a".to_string(), Vec::new()),
+                ("task-session-b".to_string(), Vec::new()),
+            ]),
+            ..metadata(HashSet::from([
+                "session-a".to_string(),
+                "session-b".to_string(),
+            ]))
+        };
 
-        let initial = refresh_task_links(&cache, keys_a.clone(), Arc::clone(&requested)).await;
+        let initial = cache.task_metadata(&sessions_b).await;
         receiver
             .changed()
             .await
-            .expect("initial task-link refresh should notify");
-        let reused_within_ttl =
-            refresh_task_links(&cache, keys_a.clone(), Arc::clone(&requested)).await;
-        tokio::time::advance(Duration::from_secs(4 * 60)).await;
-        let before_task_b_refresh =
-            refresh_task_links(&cache, keys_a_b.clone(), Arc::clone(&requested)).await;
+            .expect("TQ metadata refresh should notify");
+        let task_b_links_refreshing = cache.task_metadata(&sessions_b).await;
         receiver
             .changed()
             .await
-            .expect("new task-link refresh should notify");
-        let after_task_b_refresh =
-            refresh_task_links(&cache, keys_a_b.clone(), Arc::clone(&requested)).await;
-        tokio::time::advance(Duration::from_secs(90)).await;
-        let before_task_a_refresh =
-            refresh_task_links(&cache, keys_a_b.clone(), Arc::clone(&requested)).await;
+            .expect("task B link refresh should notify");
+        let task_b_cached = cache.task_metadata(&sessions_b).await;
+        tokio::time::advance(Duration::from_secs(4 * 60 + 55)).await;
+        let before_session_refresh = cache.task_metadata(&sessions_a_b).await;
         receiver
             .changed()
             .await
-            .expect("expired task-link refresh should notify");
-        let after_task_a_refresh =
-            refresh_task_links(&cache, keys_a_b, Arc::clone(&requested)).await;
-
-        let expected_a = HashMap::from([(task_a.clone(), Vec::new())]);
-        let expected_a_b =
-            HashMap::from([(task_a.clone(), Vec::new()), (task_b.clone(), Vec::new())]);
+            .expect("new session task refresh should notify");
+        let before_task_a_link_refresh = cache.task_metadata(&sessions_a_b).await;
+        receiver
+            .changed()
+            .await
+            .expect("new task A link refresh should notify");
+        let after_task_a_link_refresh = cache.task_metadata(&sessions_a_b).await;
+        tokio::time::advance(Duration::from_secs(10)).await;
+        let before_task_b_link_refresh = cache.task_metadata(&sessions_a_b).await;
+        receiver
+            .changed()
+            .await
+            .expect("expired task B link refresh should notify");
+        let after_task_b_link_refresh = cache.task_metadata(&sessions_a_b).await;
 
         assert_eq!(
             (
                 initial,
-                reused_within_ttl,
-                before_task_b_refresh,
-                after_task_b_refresh,
-                before_task_a_refresh,
-                after_task_a_refresh,
+                task_b_links_refreshing,
+                task_b_cached,
+                before_session_refresh,
+                before_task_a_link_refresh,
+                after_task_a_link_refresh,
+                before_task_b_link_refresh,
+                after_task_b_link_refresh,
                 requested.lock().unwrap().clone(),
             ),
             (
-                HashMap::new(),
-                expected_a.clone(),
-                expected_a.clone(),
+                SessionTaskMetadata::default(),
+                metadata(HashSet::from(["session-b".to_string()])),
+                expected_b.clone(),
+                expected_b.clone(),
+                SessionTaskMetadata {
+                    github_links: expected_b.github_links.clone(),
+                    ..metadata(HashSet::from([
+                        "session-a".to_string(),
+                        "session-b".to_string(),
+                    ]))
+                },
                 expected_a_b.clone(),
                 expected_a_b.clone(),
                 expected_a_b,
                 vec![
-                    HashSet::from([task_a.clone()]),
-                    HashSet::from([task_b]),
-                    HashSet::from([task_a]),
+                    HashSet::from(["task-session-b".to_string()]),
+                    HashSet::from(["task-session-a".to_string()]),
+                    HashSet::from(["task-session-b".to_string()]),
                 ],
             ),
         );
@@ -1047,51 +1058,77 @@ mod tests {
     async fn task_link_fetch_uses_the_per_refresh_timeout_override() {
         let updates = EnrichmentUpdates::new();
         let mut receiver = updates.subscribe();
-        let task_id = "task-a".to_string();
-        let task_ids = HashSet::from([task_id.clone()]);
-        let cache = Arc::new(RefreshingCache::new(
+        let sessions = (0..14)
+            .map(|index| session(&format!("session-{index}"), None))
+            .collect::<Vec<_>>();
+        let session_ids = sessions
+            .iter()
+            .map(|session| session.session_id.clone())
+            .collect::<HashSet<_>>();
+        let task_ids = session_ids
+            .iter()
+            .map(|session_id| format!("task-{session_id}"))
+            .collect::<HashSet<_>>();
+        let expected = SessionTaskMetadata {
+            github_links: task_ids
+                .iter()
+                .map(|task_id| (task_id.clone(), Vec::new()))
+                .collect(),
+            ..metadata(session_ids.clone())
+        };
+        let requested = Arc::new(Mutex::new(Vec::new()));
+        let fetch_requests = Arc::clone(&requested);
+        let task_github_link_fetcher: TaskGithubLinkFetcher = Arc::new(move |task_ids, _| {
+            fetch_requests.lock().unwrap().push(task_ids.clone());
+            Box::pin(async move {
+                tokio::time::sleep(Duration::from_secs(40)).await;
+                Ok(task_ids
+                    .into_iter()
+                    .map(|task_id| (task_id, Vec::new()))
+                    .collect())
+            })
+        });
+        let task_fetcher: TaskMetadataFetcher =
+            Arc::new(|session_ids, _| Box::pin(async move { Ok(metadata(session_ids)) }));
+        let pull_request_fetcher: PullRequestFetcher =
+            Arc::new(|_, _| Box::pin(async { Ok(HashMap::new()) }));
+        let cache = cache_with_task_github_link_fetcher(
             updates,
-            Duration::from_millis(10),
-            TASK_GITHUB_LINK_CACHE_TTL,
-        ));
+            Duration::from_secs(1),
+            task_fetcher,
+            pull_request_fetcher,
+            task_github_link_fetcher,
+        );
 
-        let initial = cache
-            .get_or_refresh(
-                "TQ task GitHub links",
-                task_ids.clone(),
-                Some(Duration::from_millis(100)),
-                move |_, task_ids| {
-                    Box::pin(async move {
-                        tokio::time::sleep(Duration::from_millis(50)).await;
-                        Ok(task_ids
-                            .into_iter()
-                            .map(|task_id| (task_id, Vec::new()))
-                            .collect())
-                    })
-                },
-                cache::merge_task_github_links,
-                cache::prune_task_github_links,
-            )
-            .await;
-        tokio::time::advance(Duration::from_millis(50)).await;
+        let initial = cache.task_metadata(&sessions).await;
+        receiver
+            .changed()
+            .await
+            .expect("TQ metadata refresh should notify");
+        let before_link_refresh =
+            tokio::time::timeout(Duration::from_secs(1), cache.task_metadata(&sessions))
+                .await
+                .ok();
+        tokio::time::advance(Duration::from_secs(40)).await;
         receiver
             .changed()
             .await
             .expect("task-link refresh should notify");
-        let refreshed = cache
-            .get_or_refresh(
-                "TQ task GitHub links",
-                task_ids,
-                None,
-                |_, _| Box::pin(async { Ok(HashMap::new()) }),
-                cache::merge_task_github_links,
-                cache::prune_task_github_links,
-            )
-            .await;
+        let after_link_refresh = cache.task_metadata(&sessions).await;
 
         assert_eq!(
-            (initial, refreshed),
-            (HashMap::new(), HashMap::from([(task_id, Vec::new())]),),
+            (
+                initial,
+                before_link_refresh,
+                after_link_refresh,
+                requested.lock().unwrap().clone(),
+            ),
+            (
+                SessionTaskMetadata::default(),
+                Some(metadata(session_ids)),
+                expected,
+                vec![task_ids],
+            ),
         );
     }
 
