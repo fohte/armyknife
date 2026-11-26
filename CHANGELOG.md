@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.947](https://github.com/fohte/armyknife/compare/v0.1.946...v0.1.947) (2026-11-26)
+
+
+### Performance Improvements
+
+* **agent/crit:** extend monitor polling interval ([#2321](https://github.com/fohte/armyknife/issues/2321)) ([cf22329](https://github.com/fohte/armyknife/commit/cf223295905884e4950b3a4110b02373359143b5))
+
 ## [0.1.946](https://github.com/fohte/armyknife/compare/v0.1.945...v0.1.946) (2026-11-26)
 
 
