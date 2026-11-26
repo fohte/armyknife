@@ -10,8 +10,7 @@ const INITIAL_EPOCH_MESSAGE_COUNT: usize = 100;
 const MAX_EPOCH_TOKEN_BYTES: usize = 4096;
 const EPOCH_CURSOR_VERSION: u8 = 3;
 
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Default)]
 pub(super) struct MessageRange {
     pub(super) limit: Option<usize>,
     pub(super) before: Option<usize>,
