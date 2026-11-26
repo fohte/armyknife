@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.946](https://github.com/fohte/armyknife/compare/v0.1.945...v0.1.946) (2026-11-26)
+
+
+### Performance Improvements
+
+* **agent/store:** initialize sessions once ([#2315](https://github.com/fohte/armyknife/issues/2315)) ([2b1a8e2](https://github.com/fohte/armyknife/commit/2b1a8e2ed46b1727c571a007ba9f23e821a0805e))
+
 ## [0.1.945](https://github.com/fohte/armyknife/compare/v0.1.944...v0.1.945) (2026-11-26)
 
 
