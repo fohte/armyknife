@@ -5,8 +5,13 @@ import {
   useOptionalAsyncActionFeedback,
 } from '#async-action-feedback'
 import { type ReviewDocumentResponse } from '#components/conversation-pane-response'
+import { reviewDocumentActionLabel } from '#components/review-document-action-label'
+import type { ReviewDocumentSummary } from '#components/review-document-summary'
 import { useSessionOperations } from '#session-operation-context'
-import type { ReviewDocumentAction } from '#session-operation-types'
+import type {
+  ExpectedPullRequestTarget,
+  ReviewDocumentAction,
+} from '#session-operation-types'
 import { createSessionOperation } from '#session-operations'
 import type { JsonValue } from '#types'
 
@@ -28,6 +33,7 @@ export type ReviewDocumentStates = Record<string, ReviewDocumentState>
 export function requestReviewDocumentAction(
   sessionId: string,
   document: ReviewDocumentResponse,
+  summary: ReviewDocumentSummary,
   action: 'save' | 'finish' | ReviewDocumentAction,
   setState: Dispatch<SetStateAction<ReviewDocumentStates>>,
   run: ReturnType<typeof useSessionOperations>['run'],
@@ -118,7 +124,16 @@ export function requestReviewDocumentAction(
       revision: document.revision,
       frontmatter,
       body: document.body,
-      ...(action === 'save' || action === 'finish' ? {} : { action }),
+      ...(action === 'save' || action === 'finish'
+        ? {}
+        : {
+            action,
+            ...(action === 'create_pr'
+              ? {
+                  expectedPullRequestTarget: expectedPullRequestTarget(summary),
+                }
+              : {}),
+          }),
     },
   )
   const submit = async (): Promise<AsyncActionOutcome> =>
@@ -136,6 +151,9 @@ export function requestReviewDocumentAction(
                 resolve({
                   status: 'reviewDocumentActionFailed',
                   error: error.message,
+                  ...(error.retryable === undefined
+                    ? {}
+                    : { retryable: error.retryable }),
                 })
               },
             )
@@ -178,24 +196,30 @@ export function requestReviewDocumentAction(
   }
   feedback.start({
     kind: 'review_document',
-    reviewDocumentAction: directActionLabel(action),
+    reviewDocumentAction: directActionLabel(action, summary),
     sessionId,
     sessionTitle,
     run: runAction,
   })
 }
 
-function directActionLabel(action: ReviewDocumentAction) {
-  switch (action) {
-    case 'post_comment':
-      return 'Post comment'
-    case 'create_pr':
-      return 'Create PR'
-    case 'post_replies':
-      return 'Post replies'
-    case 'update_issue':
-      return 'Update issue'
+function directActionLabel(
+  action: ReviewDocumentAction,
+  summary: ReviewDocumentSummary,
+) {
+  return reviewDocumentActionLabel(action, summary)
+}
+
+function expectedPullRequestTarget(
+  summary: ReviewDocumentSummary,
+): ExpectedPullRequestTarget {
+  if (summary.target.pullRequestLookupUnavailable === true) {
+    return { kind: 'unknown' }
   }
+  if (summary.target.pullRequestNumber !== undefined) {
+    return { kind: 'existing', number: summary.target.pullRequestNumber }
+  }
+  return { kind: 'new' }
 }
 
 export function frontmatterForReviewFinish(

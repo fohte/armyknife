@@ -476,6 +476,7 @@ export function useConversationStatusPanel({
                       requestReviewDocumentAction(
                         session.id,
                         document,
+                        selectedSummary,
                         'save',
                         setReviewDocumentStates,
                         run,
@@ -489,6 +490,7 @@ export function useConversationStatusPanel({
                       requestReviewDocumentAction(
                         session.id,
                         document,
+                        selectedSummary,
                         'finish',
                         setReviewDocumentStates,
                         run,
@@ -508,6 +510,7 @@ export function useConversationStatusPanel({
                       requestReviewDocumentAction(
                         session.id,
                         document,
+                        selectedSummary,
                         'finish',
                         setReviewDocumentStates,
                         run,
@@ -522,6 +525,7 @@ export function useConversationStatusPanel({
                       requestReviewDocumentAction(
                         session.id,
                         document,
+                        selectedSummary,
                         action,
                         setReviewDocumentStates,
                         run,

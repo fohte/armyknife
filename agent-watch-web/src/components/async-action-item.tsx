@@ -181,7 +181,7 @@ export function AsyncActionItem({
   const isQueue = text.icon === 'queued'
   const label = form === 'line' ? text.line : text.title
   const hasCloseChecks = action.kind === 'close' && action.checks !== undefined
-  const canRetry = action.kind !== 'rewind'
+  const canRetry = action.kind !== 'rewind' && action.retryable !== false
   const canShowCommandOutput =
     action.kind === 'command' &&
     (action.status === 'commandFailed' || action.status === 'commandTimedOut')

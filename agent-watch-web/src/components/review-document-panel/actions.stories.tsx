@@ -28,6 +28,24 @@ const prDraft: ReviewDocumentSummary = {
   canFinish: true,
 }
 
+const existingPrDraft: ReviewDocumentSummary = {
+  ...prDraft,
+  target: {
+    repository: 'example/service',
+    branch: 'feature/retry-limit',
+    pullRequestNumber: 73,
+  },
+}
+
+const prDraftWithUnavailableLookup: ReviewDocumentSummary = {
+  ...prDraft,
+  target: {
+    repository: 'example/service',
+    branch: 'feature/retry-limit',
+    pullRequestLookupUnavailable: true,
+  },
+}
+
 const viewport = (Story: ComponentType) => (
   <div
     className="session-status-panel"
@@ -81,6 +99,30 @@ export const EnglishRepoDraftCanCreatePr: Story = {
   name: 'The translated pull request draft is ready to create',
   args: {
     summary: prDraft,
+    frontmatter: {
+      title: 'Make the retry limit configurable',
+      steps: { 'ready-for-translation': false, submit: false },
+    },
+    body: 'Make the retry limit configurable for slow destinations.',
+  },
+}
+
+export const EnglishRepoDraftCanUpdatePr: Story = {
+  name: 'The draft updates the existing pull request',
+  args: {
+    summary: existingPrDraft,
+    frontmatter: {
+      title: 'Make the retry limit configurable',
+      steps: { 'ready-for-translation': false, submit: false },
+    },
+    body: 'Make the retry limit configurable for slow destinations.',
+  },
+}
+
+export const EnglishRepoDraftHasUnavailablePrLookup: Story = {
+  name: 'An unavailable PR lookup keeps the action label neutral',
+  args: {
+    summary: prDraftWithUnavailableLookup,
     frontmatter: {
       title: 'Make the retry limit configurable',
       steps: { 'ready-for-translation': false, submit: false },

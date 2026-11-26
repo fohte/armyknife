@@ -232,11 +232,11 @@ Open a file in editor for review (no approval flow). After the editor exits, a u
 
 Manage PR body drafts with human-in-the-loop review.
 
-| Action   | Description                                                                                                                                                                                                       |
-| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `new`    | Create a new PR body draft file                                                                                                                                                                                   |
-| `review` | Open the draft in editor for review (blocks until editor closes, exits 0 if steps changed, 1 if not, 2 if editor already open, 3 if terminal launch fails, 4 if the review editor session ends before completion) |
-| `submit` | Create or update a PR from a draft (approval required unless `--no-review` is used in vibe mode) and cache its URL when the target is the current repo                                                            |
+| Action   | Description                                                                                                                                                                                                                                                   |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `new`    | Create a new PR body draft file                                                                                                                                                                                                                               |
+| `review` | Open the draft in editor for review (blocks until editor closes, exits 0 if steps change or watch-web successfully creates the PR, 1 if neither, 2 if editor already open, 3 if terminal launch fails, 4 if the review editor session ends before completion) |
+| `submit` | Create or update a PR from a draft (approval required unless `--no-review` is used in vibe mode) and cache its URL when the target is the current repo                                                                                                        |
 
 `new` options:
 
@@ -370,14 +370,14 @@ Manage GitHub Issues as local files for AI agents.
 a gh issue-agent <command> <issue-number> [options]
 ```
 
-| Command  | Description                                                                                                                                                                             |
-| -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `view`   | View issue and comments (read-only, no local cache)                                                                                                                                     |
-| `pull`   | Fetch issue and save locally                                                                                                                                                            |
-| `review` | Review a file before pushing (opens editor, exits 0 if approved, 1 if not, 2 if editor already open, 3 if terminal launch fails, 4 if the review editor session ends before completion) |
-| `push`   | Push local changes to GitHub (requires file approval via review)                                                                                                                        |
-| `diff`   | Show colored diff between local changes and remote                                                                                                                                      |
-| `init`   | Create boilerplate files for new issues or comments                                                                                                                                     |
+| Command  | Description                                                                                                                                                                                                                                                |
+| -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `view`   | View issue and comments (read-only, no local cache)                                                                                                                                                                                                        |
+| `pull`   | Fetch issue and save locally                                                                                                                                                                                                                               |
+| `review` | Review a file before pushing (opens editor, exits 0 if approved or watch-web successfully posts a comment or updates the issue, 1 if neither, 2 if editor already open, 3 if terminal launch fails, 4 if the review editor session ends before completion) |
+| `push`   | Push local changes to GitHub (requires file approval via review)                                                                                                                                                                                           |
+| `diff`   | Show colored diff between local changes and remote                                                                                                                                                                                                         |
+| `init`   | Create boilerplate files for new issues or comments                                                                                                                                                                                                        |
 
 Each pulled issue directory contains `issue.md` for editable issue fields and
 body, `.issue.base.md` as a managed issue snapshot, `.comments.base.json` as a
@@ -421,7 +421,7 @@ Create a new issue boilerplate file. Fetches issue templates from the repository
 | `--template <NAME>` | Use a specific issue template by name             |
 | `--no-template`     | Use default boilerplate (skip template selection) |
 
-The boilerplate includes `submit: false` as the review approval marker. `init issue` prints the created `issue.md` path as `Created: <path>`. Edit that file, then run `a gh issue-agent review <path>` and set `submit: true` in the editor. After approval, run `a gh issue-agent push <new-dir>`, where `<new-dir>` is the directory containing `issue.md`. A normal `push` requires this approval; `--dry-run` skips the approval check and does not create an issue.
+The boilerplate includes `submit: false` as the review approval marker. `init issue` prints the created `issue.md` path as `Created: <path>`. Edit that file, then run `a gh issue-agent review <path>` and set `submit: true` in the editor. After editor approval, run `a gh issue-agent push <new-dir>`, where `<new-dir>` is the directory containing `issue.md`. A successful matching action from watch-web also completes the review and performs the push. A normal `push` requires approval; `--dry-run` skips the approval check and does not create an issue.
 
 The frontmatter accepts `parentIssue` and `subIssues`, so `push` can create an issue and link it via the Sub-issues API in one step. `submit` is approval metadata and is not sent to GitHub:
 
@@ -516,7 +516,7 @@ without changing the push result; dry-run does not request a finish.
 
 ##### `a gh pr-review reply review`
 
-Open the local threads.md in an editor for review. Setting `submit: true` in the frontmatter and saving marks the replies as approved. Run `reply push` afterwards to push. While the review waits, it checks GitHub every five minutes and finishes successfully if the PR is merged or closed, or every thread with a local draft reply is resolved. These automatic finishes are reported separately from approval. Exits 0 if approved or finished by a successful push or an automatic finish, 1 if not approved, 2 if editor already open, 3 if terminal launch fails, 4 if the review editor session ends before completion.
+Open the local threads.md in an editor for review. Setting `submit: true` in the frontmatter and saving marks the replies as approved. Run `reply push` afterwards to push. A successful Post replies action from watch-web also completes the review. While the review waits, it checks GitHub every five minutes and finishes successfully if the PR is merged or closed, or every thread with a local draft reply is resolved. These automatic finishes are reported separately from approval. Exits 0 if approved, watch-web posts replies, or the review finishes by a successful push or automatic finish; 1 if not approved; 2 if editor already open; 3 if terminal launch fails; 4 if the review editor session ends before completion.
 
 Requires `reply pull` to have been run first.
 

@@ -139,8 +139,10 @@ function CommandFeedbackHarness({
 
 function ReviewDocumentActionHarness({
   run,
+  label,
 }: {
   run: () => Promise<AsyncActionOutcome>
+  label: string
 }) {
   const feedback = useOptionalAsyncActionFeedback()
   return (
@@ -150,14 +152,14 @@ function ReviewDocumentActionHarness({
         onClick={() => {
           feedback?.start({
             kind: 'review_document',
-            reviewDocumentAction: 'Post comment',
+            reviewDocumentAction: label,
             sessionId: 'example-session',
             sessionTitle: 'Review the example comment',
             run,
           })
         }}
       >
-        Post comment
+        {label}
       </button>
       <output>
         {JSON.stringify(feedback?.actions.map(({ status }) => status))}
@@ -389,7 +391,7 @@ it('reports a review document action through failure, retry, and success', async
   act(() => {
     root?.render(
       <AsyncActionFeedbackProvider>
-        <ReviewDocumentActionHarness run={run} />
+        <ReviewDocumentActionHarness run={run} label="Update PR #73" />
       </AsyncActionFeedbackProvider>,
     )
   })
@@ -408,12 +410,13 @@ it('reports a review document action through failure, retry, and success', async
   await act(async () => {
     completions[0]?.({
       status: 'reviewDocumentActionFailed',
-      error: 'The example comment could not be posted.',
+      error: 'The example pull request could not be updated.',
     })
     await Promise.resolve()
   })
   const failed = {
     status: textContent('output'),
+    toast: textContent('.async-action-toast-stack'),
     error: textContent('.async-action-error'),
     retry: container.querySelector('.async-action-controls button')
       ?.textContent,
@@ -446,16 +449,18 @@ it('reports a review document action through failure, retry, and success', async
   expect(snapshot()).toEqual({
     running: {
       status: '["reviewDocumentActionRunning"]',
-      toast: 'Post comment in progressReview the example comment',
+      toast: 'Update PR #73 in progressReview the example comment',
     },
     failed: {
       status: '["reviewDocumentActionFailed"]',
-      error: 'The example comment could not be posted.',
+      toast:
+        'Update PR #73 failedReview the example commentThe example pull request could not be updated.Retry',
+      error: 'The example pull request could not be updated.',
       retry: 'Retry',
     },
     retrying: {
       status: '["reviewDocumentActionRunning"]',
-      toast: 'Post comment in progressReview the example comment',
+      toast: 'Update PR #73 in progressReview the example comment',
     },
     succeeded: '["reviewDocumentActionSucceeded"]',
     calls: 2,

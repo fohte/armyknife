@@ -18,6 +18,26 @@ it('accepts a review document summary list with an editor document', () => {
   ).toEqual(true)
 })
 
+it('accepts an unavailable pull request lookup on a draft summary', () => {
+  const summary = () =>
+    isReviewDocumentSummaryList([
+      {
+        id: 'fixture-review-document',
+        kind: 'pr_draft',
+        target: {
+          repository: 'sample-owner/sample-repository',
+          branch: 'feature/example',
+          pullRequestLookupUnavailable: true,
+        },
+        isEditor: true,
+        canSave: true,
+        canFinish: true,
+      },
+    ])
+
+  expect(summary()).toEqual(true)
+})
+
 it.each([
   {
     name: 'an unknown document kind',

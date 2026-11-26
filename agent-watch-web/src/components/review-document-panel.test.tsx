@@ -309,6 +309,96 @@ it('shows Create PR at the final stage after an English translation', async () =
   })
 })
 
+it('shows Update PR with its number and explanation for an existing pull request', async () => {
+  root = createRoot(container)
+  act(() =>
+    root?.render(
+      <ReviewDocumentPanel
+        summary={{
+          id: 'fixture-pr-draft',
+          kind: 'pr_draft',
+          target: {
+            repository: 'sample-owner/sample-repository',
+            branch: 'feature/example',
+            pullRequestNumber: 73,
+          },
+          isEditor: true,
+          canSave: true,
+          canFinish: true,
+        }}
+        frontmatter={{
+          title: 'Make the retry limit configurable',
+          steps: { 'ready-for-translation': false, submit: false },
+        }}
+        body="Make the retry limit configurable."
+        onSubmit={(action) => directActions.push(action)}
+      />,
+    ),
+  )
+
+  await act(async () => {
+    await page.getByRole('button', { name: 'Update PR #73' }).click()
+  })
+
+  const snapshot = () => ({
+    stageLabels: Array.from(
+      container.querySelectorAll('.review-document-pr-stages li'),
+      (stage) => stage.textContent,
+    ),
+    primary: container.querySelector('.review-document-finish')?.textContent,
+    help: container.querySelector('.review-document-direct-help')?.textContent,
+    actions: directActions,
+  })
+  expect(snapshot()).toEqual({
+    stageLabels: ['✓Review—', '✓Translate—', '3Update PR #73—'],
+    primary: 'Update PR #73',
+    help: 'Update PR #73 updates the existing PR on sample-owner/sample-repository right away. Send back returns your edits to the session.',
+    actions: ['create_pr'],
+  })
+})
+
+it('names the existing pull request in the translation-stage explanation', () => {
+  root = createRoot(container)
+  act(() =>
+    root?.render(
+      <ReviewDocumentPanel
+        summary={{
+          id: 'fixture-pr-draft',
+          kind: 'pr_draft',
+          target: {
+            repository: 'sample-owner/sample-repository',
+            branch: 'feature/example',
+            pullRequestNumber: 73,
+          },
+          isEditor: true,
+          canSave: true,
+          canFinish: true,
+        }}
+        frontmatter={{
+          title: '再送上限を設定',
+          steps: { 'ready-for-translation': false, submit: false },
+        }}
+        body="再送上限を変更できるようにします。"
+        onSubmit={(action) => directActions.push(action)}
+      />,
+    ),
+  )
+
+  const snapshot = () => ({
+    stages: Array.from(
+      container.querySelectorAll('.review-document-pr-stages li'),
+      (stage) => stage.textContent,
+    ),
+    primary: container.querySelector('.review-document-finish')?.textContent,
+    help: container.querySelector('.review-document-direct-help')?.textContent,
+  })
+  expect(snapshot()).toEqual({
+    stages: ['1Review—', '2Translate—', '3Update PR #73—'],
+    primary: 'Approve for translation',
+    help: 'The session translates the title and body to English right away. You review the English draft next, then update PR #73.',
+  })
+})
+
 afterEach(() => {
   if (root !== null) act(() => root?.unmount())
   root = null
@@ -704,30 +794,33 @@ it('keeps malformed issue references visible as plain text', () => {
 
 it.each([
   {
-    name: 'Preview shows linked titles without relation controls',
+    name: 'Preview keeps the title in the heading without frontmatter',
     view: 'preview' as const,
     expected: {
-      parentIssue: {
-        reference: 'sample-owner/sample-repo#42',
-        title: 'Sample parent title',
-        href: 'https://github.com/sample-owner/sample-repo/issues/42',
-      },
-      subIssues: [
-        {
-          reference: 'sample-owner/sample-repo#43',
-          title: 'Sample sub-issue title',
-          href: 'https://github.com/sample-owner/sample-repo/issues/43',
-        },
-      ],
-      issueControls: [],
+      title: 'Sample issue title',
+      issueFrontmatter: null,
+      frontmatterHeading: undefined,
+      body: 'Sample issue body.',
     },
   },
   {
-    name: 'Edit keeps relation fields editable',
+    name: 'Edit keeps issue metadata and submit editable',
     view: 'edit' as const,
     expected: {
+      title: 'Sample issue title',
+      labels: ['bug'],
+      assignees: ['sample-maintainer'],
       parentIssue: 'sample-owner/sample-repo#42',
       subIssues: ['sample-owner/sample-repo#43'],
+      editableControls: {
+        title: true,
+        labels: true,
+        assignees: true,
+        parentIssue: true,
+        subIssues: true,
+        submit: true,
+      },
+      submit: true,
     },
   },
 ])('renders a new issue draft where $name', ({ view, expected }) => {
@@ -747,6 +840,8 @@ it.each([
     },
     frontmatter: {
       title: 'Sample issue title',
+      labels: ['bug'],
+      assignees: ['sample-maintainer'],
       parentIssue: 'sample-owner/sample-repo#42',
       subIssues: ['sample-owner/sample-repo#43'],
       submit: false,
@@ -758,51 +853,75 @@ it.each([
 
   const snapshot = () => {
     if (view === 'edit') {
+      const fields = container.querySelector('.review-document-issue-fields')
+      const issueField = (name: string) => {
+        const label = [...(fields?.querySelectorAll('dt') ?? [])].find(
+          (item) => item.textContent === name,
+        )
+        return label?.nextElementSibling
+      }
       return {
-        parentIssue: container.querySelector<HTMLInputElement>(
-          'input[aria-label="parentIssue"]',
+        title: container.querySelector<HTMLTextAreaElement>(
+          'textarea[aria-label="Issue title"]',
         )?.value,
+        labels: [
+          ...(fields?.querySelectorAll(
+            '.review-document-issue-chip:not(.review-document-issue-chip--assignee)',
+          ) ?? []),
+        ].map((chip) => chip.textContent.replace('×', '').trim()),
+        assignees: [
+          ...(fields?.querySelectorAll(
+            '.review-document-issue-chip--assignee',
+          ) ?? []),
+        ].map((chip) =>
+          chip.textContent
+            .replace(chip.querySelector('span')?.textContent ?? '', '')
+            .replace('×', '')
+            .trim(),
+        ),
+        parentIssue:
+          issueField('Parent issue')?.querySelector('a')?.textContent,
         subIssues: [
-          ...container.querySelectorAll<HTMLInputElement>(
-            '.review-document-array input',
-          ),
-        ].map((input) => input.value),
+          ...(issueField('Sub-issues')?.querySelectorAll(
+            '.review-document-issue-reference',
+          ) ?? []),
+        ].map((reference) => reference.querySelector('a')?.textContent),
+        editableControls: {
+          title:
+            container.querySelector<HTMLTextAreaElement>(
+              'textarea[aria-label="Issue title"]',
+            )?.disabled === false,
+          labels:
+            fields?.querySelector('input[aria-label="Add label"]') !== null,
+          assignees:
+            fields?.querySelector('button[aria-label="Add assignee"]') !== null,
+          parentIssue:
+            fields?.querySelector('button[aria-label="Set parent issue"]') !==
+            null,
+          subIssues:
+            fields?.querySelector('button[aria-label="Add sub-issue"]') !==
+            null,
+          submit:
+            container.querySelector<HTMLInputElement>(
+              '.review-document-fields input[aria-label="submit"]',
+            )?.disabled === false,
+        },
+        submit:
+          container.querySelector<HTMLInputElement>(
+            '.review-document-fields input[aria-label="submit"]',
+          ) !== null,
       }
     }
 
-    const fields = container.querySelector('.review-document-issue-fields')
-    const fieldRow = (name: string) => {
-      const label = [...(fields?.querySelectorAll('dt') ?? [])].find(
-        (item) => item.textContent === name,
-      )
-      return label?.nextElementSibling
-    }
-    const parentRow = fieldRow('Parent issue')
-    const parentLink = parentRow?.querySelector('a')
-    const subIssueLinks = [
-      ...(fields?.querySelectorAll(
-        '.review-document-issue-sub-items .review-document-issue-reference-link',
-      ) ?? []),
-    ]
-
     return {
-      parentIssue: {
-        reference: parentLink?.textContent,
-        title: parentRow?.querySelector(
-          '.review-document-issue-reference-title',
-        )?.textContent,
-        href: parentLink?.getAttribute('href'),
-      },
-      subIssues: subIssueLinks.map((link) => ({
-        reference: link.textContent,
-        title: link.parentElement?.querySelector(
-          '.review-document-issue-reference-title',
-        )?.textContent,
-        href: link.getAttribute('href'),
-      })),
-      issueControls: [...(fields?.querySelectorAll('button') ?? [])].map(
-        (button) => button.getAttribute('aria-label'),
+      title: container.querySelector('.review-document-title')?.textContent,
+      issueFrontmatter: container.querySelector(
+        '.review-document-issue-frontmatter',
       ),
+      frontmatterHeading: container.querySelector(
+        '.review-document-frontmatter h2',
+      )?.textContent,
+      body: container.querySelector('.review-document-body')?.textContent,
     }
   }
 
@@ -2129,6 +2248,78 @@ it('keeps overflowing issue preview content horizontally reachable on mobile', (
   }
 })
 
+it('keeps new issue draft controls reachable in a short desktop panel', async () => {
+  await page.viewport(640, 360)
+  container.style.width = '640px'
+  container.style.height = '360px'
+  container.style.display = 'flex'
+  root = createRoot(container)
+  act(() =>
+    root?.render(
+      <div
+        className="session-status-panel"
+        data-size="desktop"
+        style={{ width: '100%', height: '100%', display: 'flex' }}
+      >
+        <ReviewDocumentPanel
+          summary={{
+            id: 'fixture-short-issue-draft',
+            kind: 'draft',
+            target: { repository: 'sample-owner/sample-repository' },
+            isEditor: true,
+            canSave: true,
+            canFinish: true,
+          }}
+          frontmatter={{
+            title: 'Fixture issue title',
+            labels: ['sample-label'],
+            assignees: ['sample-maintainer'],
+            parentIssue: 'sample-owner/sample-repository#40',
+            subIssues: ['sample-owner/sample-repository#41'],
+            submit: false,
+          }}
+          body="Fixture issue body."
+          view="edit"
+        />
+      </div>,
+    ),
+  )
+
+  const content = container.querySelector<HTMLElement>(
+    '.review-document-content',
+  )
+  const submit = container.querySelector<HTMLInputElement>(
+    '.review-document-fields input[aria-label="submit"]',
+  )
+  const bodyToolbar = container.querySelector<HTMLElement>(
+    '.review-document-body-toolbar',
+  )
+  if (content === null || submit === null || bodyToolbar === null) {
+    throw new Error('The short desktop issue draft layout was not rendered.')
+  }
+
+  content.scrollTop = content.scrollHeight
+  const contentRect = content.getBoundingClientRect()
+  const submitRect = submit.getBoundingClientRect()
+  const bodyToolbarRect = bodyToolbar.getBoundingClientRect()
+  const snapshot = () => ({
+    overflowY: getComputedStyle(content).overflowY,
+    canScroll: content.scrollHeight > content.clientHeight,
+    submitReachable:
+      submitRect.top >= contentRect.top &&
+      submitRect.bottom <= contentRect.bottom,
+    bodyToolbarReachable:
+      bodyToolbarRect.top >= contentRect.top &&
+      bodyToolbarRect.bottom <= contentRect.bottom,
+  })
+  expect(snapshot()).toEqual({
+    overflowY: 'auto',
+    canScroll: true,
+    submitReachable: true,
+    bodyToolbarReachable: true,
+  })
+})
+
 it('keeps the approval checkbox available for a new issue draft', async () => {
   const finishSnapshots: JsonValue[] = []
   function NewIssueDraftHarness() {
@@ -2148,6 +2339,7 @@ it('keeps the approval checkbox available for a new issue draft', async () => {
         }}
         frontmatter={frontmatter}
         body="Fixture issue body"
+        view="edit"
         onFrontmatterChange={setFrontmatter}
         onFinish={() => finishSnapshots.push(frontmatter)}
       />
