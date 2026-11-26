@@ -48,12 +48,16 @@ pub(super) fn serve_from(
     } else {
         Body::from(file.contents())
     };
-    match Response::builder()
+    let response = Response::builder()
         .status(StatusCode::OK)
         .header(CONTENT_TYPE, content_type)
-        .header(CACHE_CONTROL, cache_control)
-        .body(body)
-    {
+        .header(CACHE_CONTROL, cache_control);
+    let response = if resolved_path == "index.html" {
+        response.header("document-policy", "js-profiling")
+    } else {
+        response
+    };
+    match response.body(body) {
         Ok(response) => response,
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
@@ -88,7 +92,7 @@ fn asset_path(uri: &Uri) -> &str {
 #[cfg(test)]
 mod tests {
     use axum::body::to_bytes;
-    use axum::http::header::CONTENT_TYPE;
+    use axum::http::header::{CONTENT_TYPE, HeaderName};
     use axum::http::{StatusCode, Uri};
     use include_dir::{Dir, include_dir};
 
@@ -117,13 +121,18 @@ mod tests {
             .headers()
             .get(CONTENT_TYPE)
             .map(|value| value.to_str().unwrap().to_owned());
+        let document_policy = response
+            .headers()
+            .get(HeaderName::from_static("document-policy"))
+            .map(|value| value.to_str().unwrap().to_owned());
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
 
         assert_eq!(
-            (status, content_type, body.to_vec()),
+            (status, content_type, document_policy, body.to_vec()),
             (
                 StatusCode::OK,
                 Some("text/html".to_owned()),
+                Some("js-profiling".to_owned()),
                 include_bytes!("test_assets/index.html").to_vec(),
             )
         );
