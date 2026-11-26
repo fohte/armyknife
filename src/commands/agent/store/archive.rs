@@ -35,7 +35,7 @@ fn delete_session_with_archive_in(
         return Ok(false);
     }
 
-    // Keep todo state stable so an incomplete todo cannot keep a session after its thread is archived.
+    // Keep todo state stable until deletion so the row is neither deleted unarchived nor kept after archiving.
     let _todo_resolution_lock = super::lock_agent_todo_resolution(sessions_dir, session_id)?;
     let session_lock = super::lock_session_for_update(sessions_dir, session_id)?;
     let session = session_lock.load_skipping_undecodable()?;
