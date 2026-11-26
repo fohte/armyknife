@@ -27,6 +27,7 @@ import {
   type MarkdownComponentContextValue,
 } from '#components/markdown-component-context'
 import {
+  displayMarkdownImagePath,
   getMappedImageSource,
   isUnmappedLocalImagePath,
 } from '#components/markdown-image-source'
@@ -373,21 +374,23 @@ const MarkdownParagraph: NonNullable<Components['p']> = ({ children }) => (
 const MarkdownImage: NonNullable<Components['img']> = ({ src, alt, title }) => {
   const { imageSources } = useContext(MarkdownComponentContext)
   if (src === undefined || src === '') return null
-  const mappedSource = getMappedImageSource(src, imageSources)
+  const mappedImage = getMappedImageSource(src, imageSources)
   if (
-    mappedSource === null ||
-    (mappedSource === undefined &&
+    mappedImage?.source === null ||
+    (mappedImage === undefined &&
       imageSources !== undefined &&
       isUnmappedLocalImagePath(src))
   ) {
     return (
-      <span className="markdown-image-unavailable">表示できません: {src}</span>
+      <span className="markdown-image-unavailable">
+        表示できません: {mappedImage?.path ?? displayMarkdownImagePath(src)}
+      </span>
     )
   }
 
   return (
     <ImageLightbox
-      src={mappedSource ?? src}
+      src={mappedImage?.source ?? src}
       alt={alt ?? ''}
       {...(title === undefined ? {} : { title })}
       loading="lazy"

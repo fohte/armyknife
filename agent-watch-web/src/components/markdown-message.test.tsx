@@ -104,16 +104,6 @@ it.each([
   )
 })
 
-it('renders a mapped server image for an escaped Markdown destination', () => {
-  expect(
-    renderMessage(`![](<${escapedPath}>)`, undefined, {
-      [escapedPath]: '/api/sessions/fixture-session/answer-images/fixture-key',
-    }),
-  ).toBe(
-    '<div class="markdown-message"><p><button class="image-lightbox-trigger" type="button" aria-label="Enlarge image"><img class="chat-user-image" src="/api/sessions/fixture-session/answer-images/fixture-key" alt="" loading="lazy" decoding="async"/></button></p></div>',
-  )
-})
-
 it('shows an unavailable message for an ineligible assistant image', () => {
   expect(
     renderMessage('![](/tmp/fixture.txt)', undefined, {
@@ -121,6 +111,16 @@ it('shows an unavailable message for an ineligible assistant image', () => {
     }),
   ).toBe(
     '<div class="markdown-message"><p><span class="markdown-image-unavailable">表示できません: /tmp/fixture.txt</span></p></div>',
+  )
+})
+
+it.each([
+  ['a matched unavailable path', { '/tmp/画像 samples/final image.png': null }],
+  ['an unmatched path', {}],
+])('shows the original path for %s', (_name, imageSources) => {
+  const path = '/tmp/画像 samples/final image.png'
+  expect(renderMessage(`![](<${path}>)`, undefined, imageSources)).toBe(
+    '<div class="markdown-message"><p><span class="markdown-image-unavailable">表示できません: /tmp/画像 samples/final image.png</span></p></div>',
   )
 })
 

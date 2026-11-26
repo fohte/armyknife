@@ -49,7 +49,7 @@ fn attach_with_storage_root(
         let mut sources = BTreeMap::new();
         let mut total_size = 0_u64;
         for (path_index, path) in paths.iter().enumerate() {
-            if path_index >= MAX_IMAGES_PER_ANSWER {
+            if path_index >= MAX_IMAGES_PER_ANSWER || has_markdown_destination_escape(path) {
                 sources.insert(path.clone(), None);
                 continue;
             }
@@ -157,6 +157,12 @@ fn snapshot_image(
 
 fn stored_path(directory: &Path, key: &str) -> PathBuf {
     directory.join(format!("answer-image-{key}"))
+}
+
+fn has_markdown_destination_escape(path: &str) -> bool {
+    path.as_bytes()
+        .windows(2)
+        .any(|bytes| bytes[0] == b'\\' && bytes[1].is_ascii_punctuation())
 }
 
 pub(in crate::commands::agent::watch_web) fn read_snapshot(
@@ -445,6 +451,27 @@ mod tests {
                     Some(format!("/api/sessions/fixture-session/answer-images/{key}")),
                 )]),
             )]),
+        );
+    }
+
+    #[test]
+    fn does_not_snapshot_markdown_escaped_destinations() {
+        let sources = tempfile::tempdir().unwrap();
+        let storage = tempfile::tempdir().unwrap();
+        let path = image_file(&sources, r"fixture\(v1\).png", 8);
+        let answer = format!("![](<{}>)", path.display());
+        let mut conversation = conversation(answer.clone());
+
+        attach_with_storage_root("fixture-session", &mut conversation, storage.path());
+
+        let key = image_key("fixture-session", &answer, &path.display().to_string());
+        let snapshot = super::read_snapshot(storage.path(), "fixture-session", &key).unwrap();
+        assert_eq!(
+            (conversation.message_image_sources, snapshot),
+            (
+                BTreeMap::from([(0, BTreeMap::from([(path.display().to_string(), None)]),)]),
+                None,
+            ),
         );
     }
 
