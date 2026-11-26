@@ -632,8 +632,13 @@ pub(crate) fn validate_session_id(session_id: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
     use serde_json::Value;
+
+    #[fixture]
+    fn sessions_dir() -> tempfile::TempDir {
+        tempfile::tempdir().unwrap()
+    }
 
     fn write_legacy_session(sessions_dir: &Path, session_id: &str) {
         fs::write(
@@ -663,10 +668,9 @@ mod tests {
             .unwrap()
     }
 
-    #[test]
-    fn runs_migrations_once_for_each_sessions_directory() {
-        let temp = tempfile::tempdir().unwrap();
-        let sessions_dir = temp.path();
+    #[rstest]
+    fn runs_migrations_once_for_each_sessions_directory(sessions_dir: tempfile::TempDir) {
+        let sessions_dir = sessions_dir.path();
         drop(open_connection(sessions_dir).unwrap());
 
         let connection = Connection::open(sessions_dir.join("sessions.db")).unwrap();
@@ -683,10 +687,9 @@ mod tests {
         assert_eq!(user_version, migrations::current_version() - 1);
     }
 
-    #[test]
-    fn retries_migrations_after_a_failed_attempt() {
-        let temp = tempfile::tempdir().unwrap();
-        let sessions_dir = temp.path();
+    #[rstest]
+    fn retries_migrations_after_a_failed_attempt(sessions_dir: tempfile::TempDir) {
+        let sessions_dir = sessions_dir.path();
         let connection = Connection::open(sessions_dir.join("sessions.db")).unwrap();
         connection
             .execute_batch("CREATE TABLE sessions (session_id TEXT PRIMARY KEY);")
@@ -709,10 +712,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn imports_legacy_json_once_for_each_sessions_directory() {
-        let temp = tempfile::tempdir().unwrap();
-        let sessions_dir = temp.path();
+    #[rstest]
+    fn imports_legacy_json_once_for_each_sessions_directory(sessions_dir: tempfile::TempDir) {
+        let sessions_dir = sessions_dir.path();
         write_legacy_session(sessions_dir, "fixture-first-session");
 
         let connection = open_connection(sessions_dir).unwrap();
@@ -726,10 +728,9 @@ mod tests {
         assert_eq!((first_session_exists, later_session_exists), (true, false));
     }
 
-    #[test]
-    fn retries_legacy_import_after_a_failed_attempt() {
-        let temp = tempfile::tempdir().unwrap();
-        let sessions_dir = temp.path();
+    #[rstest]
+    fn retries_legacy_import_after_a_failed_attempt(sessions_dir: tempfile::TempDir) {
+        let sessions_dir = sessions_dir.path();
         let mut connection = Connection::open(sessions_dir.join("sessions.db")).unwrap();
         migrations::migrate_if_needed(&mut connection).unwrap();
         connection
@@ -765,10 +766,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn retries_expired_legacy_cleanup_after_a_failed_attempt() {
-        let temp = tempfile::tempdir().unwrap();
-        let sessions_dir = temp.path();
+    #[rstest]
+    fn retries_expired_legacy_cleanup_after_a_failed_attempt(sessions_dir: tempfile::TempDir) {
+        let sessions_dir = sessions_dir.path();
         let mut connection = Connection::open(sessions_dir.join("sessions.db")).unwrap();
         migrations::migrate_if_needed(&mut connection).unwrap();
         connection
@@ -790,6 +790,44 @@ mod tests {
         drop(open_connection(sessions_dir).unwrap());
 
         assert_eq!((legacy_file_remains, legacy_dir.exists()), (true, false));
+    }
+
+    #[test]
+    fn initializes_each_sessions_directory_once() {
+        let first_sessions_dir = tempfile::tempdir().unwrap();
+        let second_sessions_dir = tempfile::tempdir().unwrap();
+        write_legacy_session(first_sessions_dir.path(), "fixture-first-directory");
+        write_legacy_session(second_sessions_dir.path(), "fixture-second-directory");
+
+        let first_connection = open_connection(first_sessions_dir.path()).unwrap();
+        let second_connection = open_connection(second_sessions_dir.path()).unwrap();
+        let actual = (
+            stored_session_exists(&first_connection, "fixture-first-directory"),
+            stored_session_exists(&second_connection, "fixture-second-directory"),
+        );
+
+        assert_eq!(actual, (true, true));
+    }
+
+    #[rstest]
+    fn imports_legacy_json_after_a_usage_only_first_open(sessions_dir: tempfile::TempDir) {
+        let sessions_dir = sessions_dir.path();
+        write_legacy_session(sessions_dir, "fixture-usage-first-session");
+
+        drop(open_usage_connection(sessions_dir).unwrap());
+        let connection = open_connection(sessions_dir).unwrap();
+        let legacy_backup_exists = sessions_dir
+            .join("legacy-json")
+            .join("fixture-usage-first-session.json")
+            .exists();
+
+        assert_eq!(
+            (
+                stored_session_exists(&connection, "fixture-usage-first-session"),
+                legacy_backup_exists,
+            ),
+            (true, true),
+        );
     }
 
     #[test]
