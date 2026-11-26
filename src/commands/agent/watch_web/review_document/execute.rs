@@ -70,13 +70,14 @@ pub(super) struct ReviewDocumentActionResponse {
 }
 
 pub(super) async fn execute_review_document(
-    State((load_session, load_review_queue, edit_lock, roots, actions, _)): State<(
+    State((load_session, load_review_queue, edit_lock, roots, actions, _, _)): State<(
         SessionLoader,
         ReviewQueueLoader,
         ReviewDocumentEditLock,
         ReviewDocumentRoots,
         ActionRegistry,
         IssueTitleLookup,
+        super::pull_request_number::PullRequestNumberLookup,
     )>,
     RoutePath(session_id): RoutePath<String>,
     Json(request): Json<ReviewDocumentActionRequest>,

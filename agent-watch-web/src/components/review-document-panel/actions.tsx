@@ -1,5 +1,6 @@
 import '#components/review-document-panel/direct-actions.css'
 
+import { reviewDocumentActionLabel } from '#components/review-document-action-label'
 import type { ReviewDocumentSummary } from '#components/review-document-summary'
 import type { ReviewDocumentAction } from '#session-operation-types'
 import type { JsonValue } from '#types'
@@ -58,6 +59,10 @@ export function ReviewDocumentActions({
   }\n${body}`
   const hasJapanese = /[\u3040-\u30ff\u3400-\u9fff]/u.test(draftText)
   const prStage = hasJapanese ? 1 : 3
+  const prDraftLabel = reviewDocumentActionLabel(
+    'create_pr',
+    summary?.target.pullRequestNumber,
+  )
   const primaryAction =
     kind === 'issue_comment'
       ? 'post_comment'
@@ -74,7 +79,7 @@ export function ReviewDocumentActions({
       : kind === 'pr_draft'
         ? requiresTranslation && prStage === 1
           ? 'Approve for translation'
-          : 'Create PR'
+          : prDraftLabel
         : kind === 'review_replies'
           ? 'Post replies'
           : kind === 'issue_body'
@@ -84,7 +89,9 @@ export function ReviewDocumentActions({
     pendingAction === 'post_comment'
       ? 'Posting comment…'
       : pendingAction === 'create_pr'
-        ? 'Creating PR…'
+        ? summary?.target.pullRequestNumber === undefined
+          ? 'Creating PR…'
+          : `Updating PR #${String(summary.target.pullRequestNumber)}…`
         : pendingAction === 'post_replies'
           ? 'Posting replies…'
           : pendingAction === 'update_issue'
@@ -94,9 +101,11 @@ export function ReviewDocumentActions({
     kind === 'issue_comment'
       ? `Post comment posts it to #${String(summary?.target.issueNumber ?? '')} right away. Send back returns your edits to the session.`
       : kind === 'pr_draft' && requiresTranslation && prStage === 1
-        ? 'The session translates the title and body to English right away. You review the English draft next, then create the PR.'
+        ? `The session translates the title and body to English right away. You review the English draft next, then ${summary?.target.pullRequestNumber === undefined ? 'create the PR' : `update PR #${String(summary.target.pullRequestNumber)}`}.`
         : kind === 'pr_draft'
-          ? `Create PR creates the PR on ${summary?.target.repository ?? 'the repository'} right away. Send back returns your edits to the session.`
+          ? summary?.target.pullRequestNumber === undefined
+            ? `Create PR creates the PR on ${summary?.target.repository ?? 'the repository'} right away. Send back returns your edits to the session.`
+            : `${prDraftLabel} updates the existing PR on ${summary.target.repository ?? 'the repository'} right away. Send back returns your edits to the session.`
           : kind === 'review_replies'
             ? `Post replies posts them on PR #${String(summary?.target.pullRequestNumber ?? '')} right away. Send back returns your edits to the session.`
             : `Update issue updates it right away. Send back returns your edits to the session.`
@@ -147,10 +156,14 @@ export function ReviewDocumentActions({
         <>
           {requiresTranslation ? (
             <ol
-              aria-label="Steps to create the PR"
+              aria-label={
+                summary?.target.pullRequestNumber === undefined
+                  ? 'Steps to create the PR'
+                  : `Steps to update PR #${String(summary.target.pullRequestNumber)}`
+              }
               className="review-document-pr-stages"
             >
-              {['Review', 'Translate', 'Create PR'].map((label, index) => {
+              {['Review', 'Translate', prDraftLabel].map((label, index) => {
                 const current = index === (prStage === 1 ? 0 : 2)
                 const done = index < (prStage === 1 ? 0 : 2)
                 return (

@@ -309,6 +309,54 @@ it('shows Create PR at the final stage after an English translation', async () =
   })
 })
 
+it('shows Update PR with its number and explanation for an existing pull request', async () => {
+  root = createRoot(container)
+  act(() =>
+    root?.render(
+      <ReviewDocumentPanel
+        summary={{
+          id: 'fixture-pr-draft',
+          kind: 'pr_draft',
+          target: {
+            repository: 'sample-owner/sample-repository',
+            branch: 'feature/example',
+            pullRequestNumber: 73,
+          },
+          isEditor: true,
+          canSave: true,
+          canFinish: true,
+        }}
+        frontmatter={{
+          title: 'Make the retry limit configurable',
+          steps: { 'ready-for-translation': false, submit: false },
+        }}
+        body="Make the retry limit configurable."
+        onSubmit={(action) => directActions.push(action)}
+      />,
+    ),
+  )
+
+  await act(async () => {
+    await page.getByRole('button', { name: 'Update PR #73' }).click()
+  })
+
+  const snapshot = () => ({
+    stageLabels: Array.from(
+      container.querySelectorAll('.review-document-pr-stages li'),
+      (stage) => stage.textContent,
+    ),
+    primary: container.querySelector('.review-document-finish')?.textContent,
+    help: container.querySelector('.review-document-direct-help')?.textContent,
+    actions: directActions,
+  })
+  expect(snapshot()).toEqual({
+    stageLabels: ['✓Review—', '✓Translate—', '3Update PR #73—'],
+    primary: 'Update PR #73',
+    help: 'Update PR #73 updates the existing PR on sample-owner/sample-repository right away. Send back returns your edits to the session.',
+    actions: ['create_pr'],
+  })
+})
+
 afterEach(() => {
   if (root !== null) act(() => root?.unmount())
   root = null

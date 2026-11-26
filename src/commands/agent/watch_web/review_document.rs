@@ -21,9 +21,14 @@ use crate::shared::human_in_the_loop::{
 
 mod execute;
 mod metadata;
+mod pull_request_number;
 mod related_issue_titles;
 mod save;
 use metadata::{ReviewDocumentRoots, ReviewDocumentSummary, summarize};
+use pull_request_number::{
+    PullRequestNumberLookup, github_open_pull_request_number_lookup,
+    lookup_open_pull_request_numbers,
+};
 use related_issue_titles::{
     IssueTitleLookup, github_issue_title_lookup, lookup_issue_titles_with_timeout,
 };
@@ -71,6 +76,7 @@ pub(super) fn router() -> Router {
         review_document_queue,
         ReviewDocumentRoots::default(),
         github_issue_title_lookup(),
+        github_open_pull_request_number_lookup(),
     )
 }
 
@@ -91,20 +97,23 @@ fn router_with_loaders(
         load_review_queue,
         ReviewDocumentRoots::default(),
         no_issue_title_lookup(),
+        pull_request_number::no_pull_request_number_lookup(),
     )
 }
 
 #[cfg(test)]
-fn router_with_path_roots(
+fn router_with_path_roots_and_pr_number_lookup(
     load_session: impl Fn(&str) -> anyhow::Result<Option<Session>> + Send + Sync + 'static,
     load_review_queue: impl Fn(&Session) -> ReviewDocumentQueue + Send + Sync + 'static,
     roots: ReviewDocumentRoots,
+    pull_request_number_lookup: PullRequestNumberLookup,
 ) -> Router {
     router_with_dependencies(
         load_session,
         load_review_queue,
         roots,
         no_issue_title_lookup(),
+        pull_request_number_lookup,
     )
 }
 
@@ -118,6 +127,7 @@ fn router_with_dependencies(
     load_review_queue: impl Fn(&Session) -> ReviewDocumentQueue + Send + Sync + 'static,
     roots: ReviewDocumentRoots,
     issue_title_lookup: IssueTitleLookup,
+    pull_request_number_lookup: PullRequestNumberLookup,
 ) -> Router {
     router_with_action_executor(
         load_session,
@@ -125,6 +135,7 @@ fn router_with_dependencies(
         roots,
         Arc::new(|record| Box::pin(async move { execute::run_action(&record).await })),
         issue_title_lookup,
+        pull_request_number_lookup,
     )
 }
 
@@ -141,6 +152,7 @@ fn router_with_injected_action_executor(
         roots,
         executor,
         no_issue_title_lookup(),
+        pull_request_number::no_pull_request_number_lookup(),
     )
 }
 
@@ -150,6 +162,7 @@ fn router_with_action_executor(
     roots: ReviewDocumentRoots,
     executor: execute::ActionExecutor,
     issue_title_lookup: IssueTitleLookup,
+    pull_request_number_lookup: PullRequestNumberLookup,
 ) -> Router {
     Router::new()
         .route("/sessions/{id}/review-document", get(get_review_document))
@@ -189,17 +202,27 @@ fn router_with_action_executor(
                 executor,
             })) as ReviewDocumentActionRegistry,
             issue_title_lookup,
+            pull_request_number_lookup,
         ))
 }
 
 async fn get_review_document(
-    State((load_session, load_review_queue, _, roots, _, issue_title_lookup)): State<(
+    State((
+        load_session,
+        load_review_queue,
+        _,
+        roots,
+        _,
+        issue_title_lookup,
+        pull_request_number_lookup,
+    )): State<(
         SessionLoader,
         ReviewQueueLoader,
         ReviewDocumentEditLock,
         ReviewDocumentRoots,
         ReviewDocumentActionRegistry,
         IssueTitleLookup,
+        PullRequestNumberLookup,
     )>,
     RoutePath(session_id): RoutePath<String>,
 ) -> Result<Json<ReviewDocumentResponse>, StatusCode> {
@@ -237,17 +260,26 @@ async fn get_review_document(
     let mut response = response.ok_or(StatusCode::NOT_FOUND)?;
     response.related_issue_titles =
         lookup_issue_titles_with_timeout(&response.frontmatter, issue_title_lookup).await;
+    if let Some(summary) =
+        lookup_open_pull_request_numbers(vec![response.summary.clone()], pull_request_number_lookup)
+            .await
+            .into_iter()
+            .next()
+    {
+        response.summary = summary;
+    }
     Ok(Json(response))
 }
 
 async fn get_review_documents(
-    State((load_session, load_review_queue, _, roots, _, _)): State<(
+    State((load_session, load_review_queue, _, roots, _, _, pull_request_number_lookup)): State<(
         SessionLoader,
         ReviewQueueLoader,
         ReviewDocumentEditLock,
         ReviewDocumentRoots,
         ReviewDocumentActionRegistry,
         IssueTitleLookup,
+        PullRequestNumberLookup,
     )>,
     RoutePath(session_id): RoutePath<String>,
 ) -> Result<Json<Vec<ReviewDocumentSummary>>, StatusCode> {
@@ -276,17 +308,29 @@ async fn get_review_documents(
         StatusCode::INTERNAL_SERVER_ERROR
     })??;
 
-    documents.map(Json).ok_or(StatusCode::NOT_FOUND)
+    let documents = documents.ok_or(StatusCode::NOT_FOUND)?;
+    Ok(Json(
+        lookup_open_pull_request_numbers(documents, pull_request_number_lookup).await,
+    ))
 }
 
 async fn get_review_document_by_id(
-    State((load_session, load_review_queue, _, roots, _, issue_title_lookup)): State<(
+    State((
+        load_session,
+        load_review_queue,
+        _,
+        roots,
+        _,
+        issue_title_lookup,
+        pull_request_number_lookup,
+    )): State<(
         SessionLoader,
         ReviewQueueLoader,
         ReviewDocumentEditLock,
         ReviewDocumentRoots,
         ReviewDocumentActionRegistry,
         IssueTitleLookup,
+        PullRequestNumberLookup,
     )>,
     RoutePath((session_id, document_id)): RoutePath<(String, String)>,
 ) -> Result<Json<ReviewDocumentResponse>, StatusCode> {
@@ -319,17 +363,26 @@ async fn get_review_document_by_id(
     let mut response = response;
     response.related_issue_titles =
         lookup_issue_titles_with_timeout(&response.frontmatter, issue_title_lookup).await;
+    if let Some(summary) =
+        lookup_open_pull_request_numbers(vec![response.summary.clone()], pull_request_number_lookup)
+            .await
+            .into_iter()
+            .next()
+    {
+        response.summary = summary;
+    }
     Ok(Json(response))
 }
 
 async fn save_review_document(
-    State((load_session, load_review_queue, edit_lock, _, _, _)): State<(
+    State((load_session, load_review_queue, edit_lock, _, _, _, _)): State<(
         SessionLoader,
         ReviewQueueLoader,
         ReviewDocumentEditLock,
         ReviewDocumentRoots,
         ReviewDocumentActionRegistry,
         IssueTitleLookup,
+        PullRequestNumberLookup,
     )>,
     RoutePath(session_id): RoutePath<String>,
     axum::Json(request): axum::Json<ReviewDocumentEditRequest>,
@@ -345,13 +398,14 @@ async fn save_review_document(
 }
 
 async fn finish_review_document(
-    State((load_session, load_review_queue, edit_lock, _, _, _)): State<(
+    State((load_session, load_review_queue, edit_lock, _, _, _, _)): State<(
         SessionLoader,
         ReviewQueueLoader,
         ReviewDocumentEditLock,
         ReviewDocumentRoots,
         ReviewDocumentActionRegistry,
         IssueTitleLookup,
+        PullRequestNumberLookup,
     )>,
     RoutePath(session_id): RoutePath<String>,
     axum::Json(request): axum::Json<ReviewDocumentEditRequest>,
@@ -372,13 +426,14 @@ async fn finish_review_document(
 }
 
 async fn save_review_document_by_id(
-    State((load_session, load_review_queue, edit_lock, _, _, _)): State<(
+    State((load_session, load_review_queue, edit_lock, _, _, _, _)): State<(
         SessionLoader,
         ReviewQueueLoader,
         ReviewDocumentEditLock,
         ReviewDocumentRoots,
         ReviewDocumentActionRegistry,
         IssueTitleLookup,
+        PullRequestNumberLookup,
     )>,
     RoutePath((session_id, document_id)): RoutePath<(String, String)>,
     axum::Json(request): axum::Json<ReviewDocumentEditRequest>,
@@ -396,13 +451,14 @@ async fn save_review_document_by_id(
 }
 
 async fn finish_review_document_by_id(
-    State((load_session, load_review_queue, edit_lock, _, _, _)): State<(
+    State((load_session, load_review_queue, edit_lock, _, _, _, _)): State<(
         SessionLoader,
         ReviewQueueLoader,
         ReviewDocumentEditLock,
         ReviewDocumentRoots,
         ReviewDocumentActionRegistry,
         IssueTitleLookup,
+        PullRequestNumberLookup,
     )>,
     RoutePath((session_id, document_id)): RoutePath<(String, String)>,
     axum::Json(request): axum::Json<ReviewDocumentEditRequest>,
@@ -609,12 +665,14 @@ mod tests {
     use crate::shared::human_in_the_loop::LockGuard;
 
     use super::metadata::{ReviewDocumentKind, ReviewDocumentTarget};
+    use super::pull_request_number::{PullRequestNumberLookup, no_pull_request_number_lookup};
     use super::related_issue_titles::IssueTitleLookup;
     use super::{
         ReviewDocumentOperationLock, ReviewDocumentResponse, ReviewDocumentRoots,
         ReviewDocumentSummary, finish_ack_fifo_path, finish_request_fifo_path,
         review_document_revision, router_with_dependencies, router_with_injected_action_executor,
-        router_with_loaders, router_with_path_roots, router_with_session_loader,
+        router_with_loaders, router_with_path_roots_and_pr_number_lookup,
+        router_with_session_loader,
     };
 
     #[test]
@@ -968,6 +1026,7 @@ mod tests {
             |_| ReviewDocumentQueue::Unmanaged,
             ReviewDocumentRoots::default(),
             issue_title_lookup,
+            no_pull_request_number_lookup(),
         );
         let response = app
             .oneshot(
@@ -1329,10 +1388,23 @@ mod tests {
                 .pending_human_review_ids
                 .insert(review_marker(id, path, started_at, None));
         }
-        let app = router_with_path_roots(
+        let pull_request_number_lookup: PullRequestNumberLookup =
+            Arc::new(|owner, repository, branch| {
+                Box::pin(async move {
+                    if (owner.as_str(), repository.as_str(), branch.as_str())
+                        == ("sample-owner", "sample-repo", "feature/example")
+                    {
+                        Ok(Some(73))
+                    } else {
+                        Ok(None)
+                    }
+                })
+            });
+        let app = router_with_path_roots_and_pr_number_lookup(
             move |_| Ok(Some(session.clone())),
             |_| ReviewDocumentQueue::Unmanaged,
             roots,
+            pull_request_number_lookup,
         );
         let response = app
             .oneshot(
@@ -1362,6 +1434,7 @@ mod tests {
                         "target": {
                             "repository": "sample-owner/sample-repo",
                             "branch": "feature/example",
+                            "pullRequestNumber": 73,
                             "title": "Sample pull request",
                         },
                         "isEditor": false,

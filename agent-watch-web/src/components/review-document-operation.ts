@@ -5,6 +5,8 @@ import {
   useOptionalAsyncActionFeedback,
 } from '#async-action-feedback'
 import { type ReviewDocumentResponse } from '#components/conversation-pane-response'
+import { reviewDocumentActionLabel } from '#components/review-document-action-label'
+import type { ReviewDocumentSummary } from '#components/review-document-summary'
 import { useSessionOperations } from '#session-operation-context'
 import type { ReviewDocumentAction } from '#session-operation-types'
 import { createSessionOperation } from '#session-operations'
@@ -28,6 +30,7 @@ export type ReviewDocumentStates = Record<string, ReviewDocumentState>
 export function requestReviewDocumentAction(
   sessionId: string,
   document: ReviewDocumentResponse,
+  summary: ReviewDocumentSummary,
   action: 'save' | 'finish' | ReviewDocumentAction,
   setState: Dispatch<SetStateAction<ReviewDocumentStates>>,
   run: ReturnType<typeof useSessionOperations>['run'],
@@ -178,24 +181,18 @@ export function requestReviewDocumentAction(
   }
   feedback.start({
     kind: 'review_document',
-    reviewDocumentAction: directActionLabel(action),
+    reviewDocumentAction: directActionLabel(action, summary),
     sessionId,
     sessionTitle,
     run: runAction,
   })
 }
 
-function directActionLabel(action: ReviewDocumentAction) {
-  switch (action) {
-    case 'post_comment':
-      return 'Post comment'
-    case 'create_pr':
-      return 'Create PR'
-    case 'post_replies':
-      return 'Post replies'
-    case 'update_issue':
-      return 'Update issue'
-  }
+function directActionLabel(
+  action: ReviewDocumentAction,
+  summary: ReviewDocumentSummary,
+) {
+  return reviewDocumentActionLabel(action, summary.target.pullRequestNumber)
 }
 
 export function frontmatterForReviewFinish(

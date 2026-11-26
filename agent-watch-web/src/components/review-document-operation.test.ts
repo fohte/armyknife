@@ -1,6 +1,18 @@
 import { expect, it } from 'vitest'
 
+import { reviewDocumentActionLabel } from '#components/review-document-action-label'
 import { frontmatterForReviewFinish } from '#components/review-document-operation'
+
+it('uses the existing PR number in the direct action label', () => {
+  const labels = () => ({
+    create: reviewDocumentActionLabel('create_pr'),
+    update: reviewDocumentActionLabel('create_pr', 73),
+  })
+  expect(labels()).toEqual({
+    create: 'Create PR',
+    update: 'Update PR #73',
+  })
+})
 
 it.each([
   {

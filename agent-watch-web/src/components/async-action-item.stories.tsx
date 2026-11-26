@@ -504,6 +504,28 @@ export const ReviewDocumentPostFailed: Story = {
   },
 }
 
+const reviewDocumentUpdateAction = {
+  ...reviewDocumentAction,
+  reviewDocumentAction: 'Update PR #73',
+}
+
+export const ReviewDocumentPrUpdateIsInProgress: Story = {
+  name: 'Updating an existing pull request shows its number',
+  args: { form: 'toast', action: reviewDocumentUpdateAction },
+}
+
+export const ReviewDocumentPrUpdateFailed: Story = {
+  name: 'A failed pull request update names the existing pull request',
+  args: {
+    form: 'toast',
+    action: {
+      ...reviewDocumentUpdateAction,
+      status: 'reviewDocumentActionFailed',
+      error: 'The existing pull request could not be updated.',
+    },
+  },
+}
+
 type RunCommandSceneState = 'running' | 'succeeded' | 'failed' | 'timedOut'
 
 function RunCommandFeedbackScene({
