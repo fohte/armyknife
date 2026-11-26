@@ -1,17 +1,16 @@
 import { isJsonValue } from '#json-value'
-import { isPullRequest, isSessionTask } from '#session-record-validation'
 import type {
   BackgroundTask,
   ChatItem,
   ConversationResponse,
   JsonValue,
   SessionActions,
-  SessionTreeNode,
   SkillSuggestion,
   ToolGroupItem,
 } from '#types'
 import { isVibeMode } from '#vibe-mode'
 
+export { isSessionTreeResponse } from '#components/conversation-pane-response/session-tree'
 export {
   type EditorReviewDocumentState,
   isReviewDocumentSummaryList,
@@ -360,6 +359,11 @@ export function isConversationResponse(
     value['messages'].every(isChatItem) &&
     (value['messageImageSources'] === undefined ||
       isMessageImageSources(value['messageImageSources'])) &&
+    (value['confirmedQueuedPromptIds'] === undefined ||
+      (Array.isArray(value['confirmedQueuedPromptIds']) &&
+        value['confirmedQueuedPromptIds'].every(
+          (messageId) => typeof messageId === 'string',
+        ))) &&
     Array.isArray(value['backgroundTasks']) &&
     value['backgroundTasks'].every(isBackgroundTask) &&
     (value['vibeMode'] === undefined || isVibeMode(value['vibeMode'])) &&
@@ -451,47 +455,5 @@ export function isReviewDocumentResponse(
     typeof value['body'] === 'string' &&
     (value['relatedIssueTitles'] === undefined ||
       isStringRecord(value['relatedIssueTitles']))
-  )
-}
-
-export function isSessionTreeResponse(
-  value: unknown,
-): value is { revision: number; sessions: SessionTreeNode[] } {
-  return (
-    isRecord(value) &&
-    typeof value['revision'] === 'number' &&
-    Number.isInteger(value['revision']) &&
-    Array.isArray(value['sessions']) &&
-    value['sessions'].every(
-      (session) =>
-        isRecord(session) &&
-        typeof session['id'] === 'string' &&
-        (session['parentId'] === null ||
-          typeof session['parentId'] === 'string') &&
-        (session['engine'] === undefined ||
-          session['engine'] === 'claude' ||
-          session['engine'] === 'codex') &&
-        (session['workType'] === undefined ||
-          session['workType'] === null ||
-          typeof session['workType'] === 'string') &&
-        typeof session['category'] === 'string' &&
-        typeof session['isActive'] === 'boolean' &&
-        (session['kind'] === null || typeof session['kind'] === 'string') &&
-        typeof session['title'] === 'string' &&
-        (session['preview'] === null ||
-          typeof session['preview'] === 'string') &&
-        typeof session['elapsedSeconds'] === 'number' &&
-        Number.isInteger(session['elapsedSeconds']) &&
-        (session['task'] === null || isSessionTask(session['task'])) &&
-        typeof session['repo'] === 'string' &&
-        isVibeMode(session['vibeMode']) &&
-        typeof session['decisionCount'] === 'number' &&
-        Number.isInteger(session['decisionCount']) &&
-        (session['pullRequest'] === null ||
-          isPullRequest(session['pullRequest'])) &&
-        (session['pullRequests'] === undefined ||
-          (Array.isArray(session['pullRequests']) &&
-            session['pullRequests'].every(isPullRequest))),
-    )
   )
 }

@@ -6150,9 +6150,9 @@ it('reloads only the selected conversation when its session changes', async () =
   await act(async () => {
     for (let index = 0; index < 12; index += 1) await Promise.resolve()
   })
-  const requestsAfterUnrelatedChange = fetcher.mock.calls.map(([input]) =>
-    requestPath(input),
-  )
+  const requestsAfterUnrelatedChange = fetcher.mock.calls
+    .map(([input]) => requestPath(input))
+    .toSorted()
 
   publishSessions(
     {
@@ -6171,22 +6171,24 @@ it('reloads only the selected conversation when its session changes', async () =
   const snapshot = () => ({
     transcript: container.querySelector('.chat-assistant-message')?.textContent,
     requestsAfterUnrelatedChange,
-    requestPaths: fetcher.mock.calls.map(([input]) => requestPath(input)),
+    requestPaths: fetcher.mock.calls
+      .map(([input]) => requestPath(input))
+      .toSorted(),
   })
 
   expect(snapshot()).toEqual({
     transcript: 'After feed update',
     requestsAfterUnrelatedChange: [
-      '/api/usage',
-      '/api/sessions/session-a/messages',
       '/api/sessions/session-a/actions',
+      '/api/sessions/session-a/messages',
+      '/api/usage',
     ],
     requestPaths: [
+      '/api/sessions/session-a/actions',
+      '/api/sessions/session-a/actions',
+      '/api/sessions/session-a/messages',
+      '/api/sessions/session-a/messages',
       '/api/usage',
-      '/api/sessions/session-a/messages',
-      '/api/sessions/session-a/actions',
-      '/api/sessions/session-a/messages',
-      '/api/sessions/session-a/actions',
     ],
   })
 })

@@ -2,7 +2,7 @@ use std::fs::File;
 use std::path::Path;
 
 use super::resolution_lock::lock_resolution_file;
-use super::{increment_revision, open_connection, validate_session_id};
+use super::{bump_session_revision, open_connection, validate_session_id};
 use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, TransactionBehavior, params, params_from_iter};
@@ -97,7 +97,7 @@ pub(crate) fn add_agent_todo(
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
         params![session_id, seq, title, detail, now, folded],
     )?;
-    increment_revision(&transaction)?;
+    bump_session_revision(&transaction, session_id)?;
     transaction.commit()?;
     Ok(seq)
 }
@@ -119,7 +119,7 @@ pub(crate) fn edit_agent_todo(
         params![title, detail, folded, session_id, seq],
     )?;
     if changed > 0 {
-        increment_revision(&transaction)?;
+        bump_session_revision(&transaction, session_id)?;
     }
     transaction.commit()?;
     Ok(changed > 0)
@@ -234,7 +234,7 @@ pub(crate) fn set_agent_todo_folded(
         params![folded, session_id, seq],
     )?;
     if changed > 0 {
-        increment_revision(&transaction)?;
+        bump_session_revision(&transaction, session_id)?;
     }
     transaction.commit()?;
     Ok(pending)
@@ -280,7 +280,7 @@ pub(crate) fn resolve_agent_todo_at(
         ],
     )?;
     if changed > 0 {
-        increment_revision(&transaction)?;
+        bump_session_revision(&transaction, session_id)?;
     }
     transaction.commit()?;
     Ok(changed > 0)

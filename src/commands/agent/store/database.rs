@@ -1,5 +1,5 @@
 use std::cell::Cell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 use std::time::Duration;
@@ -456,6 +456,17 @@ pub(crate) fn session_store_revision(sessions_dir: &Path) -> Result<i64> {
     read_revision(&connection)
 }
 
+pub(crate) fn session_revisions_by_session(sessions_dir: &Path) -> Result<HashMap<String, i64>> {
+    if !sessions_dir.exists() {
+        return Ok(HashMap::new());
+    }
+    let connection = open_connection(sessions_dir)?;
+    let mut statement = connection.prepare("SELECT session_id, rev FROM sessions")?;
+    let rows = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+    rows.collect::<rusqlite::Result<HashMap<_, _>>>()
+        .map_err(Into::into)
+}
+
 pub(crate) fn session_changes_since(
     sessions_dir: &Path,
     revision: i64,
@@ -586,6 +597,19 @@ pub(crate) fn increment_revision(connection: &Connection) -> Result<i64> {
         [],
     )?;
     read_revision(connection)
+}
+
+fn bump_session_revision(connection: &Connection, session_id: &str) -> Result<i64> {
+    let revision = increment_revision(connection)?;
+    let updated = connection.execute(
+        "UPDATE sessions SET rev = ?1 WHERE session_id = ?2",
+        params![revision, session_id],
+    )?;
+    ensure!(
+        updated == 1,
+        "session {session_id} disappeared during update"
+    );
+    Ok(revision)
 }
 
 fn read_revision(connection: &Connection) -> Result<i64> {

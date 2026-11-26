@@ -229,14 +229,20 @@ export function isConversationOperationConfirmed(
 ) {
   switch (operation.type) {
     case 'message':
-      return conversation.messages.some((message, index) =>
-        isServerMessageForOperation(
-          message,
-          index,
-          conversation,
-          operation,
-          operation.messageCountBefore,
-        ),
+      return (
+        (operation.queuedPromptId !== undefined &&
+          conversation.confirmedQueuedPromptIds?.includes(
+            operation.queuedPromptId,
+          ) === true) ||
+        conversation.messages.some((message, index) =>
+          isServerMessageForOperation(
+            message,
+            index,
+            conversation,
+            operation,
+            operation.messageCountBefore,
+          ),
+        )
       )
     case 'answer': {
       const question = conversation.messages.find(

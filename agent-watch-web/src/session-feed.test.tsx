@@ -202,13 +202,13 @@ it('requests deltas and restores the ordered full session response', async () =>
           workTypeNavLabels: { 'type-a': 'Updated Type A' },
           sessions: [updatedSessionC, elapsedSessionB],
         },
-        changedSessionIds: ['session-c', 'session-b'],
+        changedSessionIds: ['session-c'],
       },
     ],
   })
 })
 
-it('marks sessions changed when the store revision advances without a session delta', async () => {
+it('does not mark sessions changed when only the store revision advances', async () => {
   const source = new FakeEventSource()
   const firstReceived = deferred<undefined>()
   const secondReceived = deferred<undefined>()
@@ -253,7 +253,7 @@ it('marks sessions changed when the store revision advances without a session de
   await secondReceived.promise
   stop()
 
-  expect(changedSessionIds).toEqual([['session-a'], ['session-a']])
+  expect(changedSessionIds).toEqual([['session-a'], []])
 })
 
 it('preserves a launch ID from a newly started session in the feed', async () => {

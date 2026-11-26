@@ -101,6 +101,34 @@ it('accepts a compact boundary event from the conversation API', () => {
 
 it.each([
   {
+    name: 'string IDs',
+    confirmedQueuedPromptIds: ['fixture-message-id'],
+    expected: true,
+  },
+  {
+    name: 'non-string IDs',
+    confirmedQueuedPromptIds: [42],
+    expected: false,
+  },
+])(
+  'validates $name for confirmed queued prompts',
+  ({ confirmedQueuedPromptIds, expected }) => {
+    expect(
+      isConversationResponse({
+        ...response({
+          type: 'event',
+          kind: 'system',
+          text: 'A system event',
+          failed: false,
+        }),
+        confirmedQueuedPromptIds,
+      }),
+    ).toEqual(expected)
+  },
+)
+
+it.each([
+  {
     name: 'inherited vibe mode',
     vibeMode: { mode: 'inherited', ancestorSessionId: 'fixture-parent' },
     expected: true,

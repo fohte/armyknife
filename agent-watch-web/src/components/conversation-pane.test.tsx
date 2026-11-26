@@ -1440,12 +1440,14 @@ it('provides session links to cards through the conversation pane context', asyn
 })
 
 it('posts a message when randomUUID is unavailable', async () => {
+  const messagesRequestPaths: string[] = []
   vi.stubGlobal('crypto', {
     getRandomValues: (bytes: Uint8Array) => bytes.fill(0),
   })
   const fetcher = vi.fn<typeof fetch>((input, init) => {
     const url = requestUrl(input)
     if (url.includes('/messages?')) {
+      messagesRequestPaths.push(url)
       return Promise.resolve(jsonResponse(messagesResponse([])))
     }
     if (url.endsWith('/messages?from=0')) {
@@ -1494,6 +1496,10 @@ it('posts a message when randomUUID is unavailable', async () => {
         requestUrl(input).endsWith('/messages') && init?.method === 'POST',
     ),
   )
+  const confirmationRequestWasSent = await waitForState(() =>
+    messagesRequestPaths.some((url) => url.includes('pendingPromptIds=')),
+  )
+  const getRequestPaths = messagesRequestPaths.slice()
   const postRequest = fetcher.mock.calls
     .filter(
       ([input, init]) =>
@@ -1506,12 +1512,19 @@ it('posts a message when randomUUID is unavailable', async () => {
   const snapshot = () => ({
     composerReady,
     requestWasSent,
+    confirmationRequestWasSent,
+    getRequestPaths,
     postRequest,
     alert: container.querySelector('[role="alert"]')?.textContent ?? null,
   })
   expect(snapshot()).toEqual({
     composerReady: true,
     requestWasSent: true,
+    confirmationRequestWasSent: true,
+    getRequestPaths: [
+      '/api/sessions/sample-session/messages?limit=100',
+      '/api/sessions/sample-session/messages?from=0&pendingPromptIds=00000000-0000-4000-8000-000000000000',
+    ],
     postRequest: [
       {
         url: '/api/sessions/sample-session/messages',
@@ -4253,15 +4266,10 @@ it('refreshes peer session labels when the linked session title changes', () => 
 })
 
 it('renders file attachments returned by the messages endpoint', async () => {
-  const jsonResponse = (body: unknown) =>
-    new Response(JSON.stringify(body), {
-      headers: { 'Content-Type': 'application/json' },
-    })
-  const fetcher = vi
-    .fn<typeof fetch>()
-    .mockResolvedValueOnce(
-      jsonResponse(
-        messagesResponse([
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const response = requestUrl(input).endsWith('/actions')
+      ? actions
+      : messagesResponse([
           {
             type: 'user_with_content',
             content: [
@@ -4269,10 +4277,9 @@ it('renders file attachments returned by the messages endpoint', async () => {
               { type: 'file', name: 'sample-layout.html' },
             ],
           },
-        ]),
-      ),
-    )
-    .mockResolvedValueOnce(jsonResponse(actions))
+        ])
+    return Promise.resolve(jsonResponse(response))
+  })
   vi.stubGlobal('fetch', fetcher)
   root = createRoot(container)
   act(() => {
@@ -12537,6 +12544,161 @@ it('keeps a merge result after the messages present when an older page is prepen
       'Merged PR #9061 · <time>',
     ],
     otherSessionTimelineIndex: '2',
+  })
+})
+
+it('coalesces refresh-key changes while keeping the in-flight response', async () => {
+  const messageResponses: Array<(response: Response) => void> = []
+  let refreshKey = 0
+  let actionsRequestCount = 0
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.includes('/messages?')) {
+      return new Promise<Response>((resolve) => {
+        messageResponses.push(resolve)
+      })
+    }
+    if (url.endsWith('/actions')) {
+      actionsRequestCount += 1
+      return Promise.resolve(jsonResponse(actions))
+    }
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  const renderConversation = () => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        shouldSkipSessionTreeFetch
+        initialSessionTree={[]}
+        refreshKey={refreshKey}
+        sessionTreeRefreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  }
+  const visibleMessages = () =>
+    Array.from(
+      container.querySelectorAll('.chat-assistant-message'),
+      (element) => element.textContent,
+    )
+
+  act(renderConversation)
+  await waitForState(() => messageResponses.length === 1)
+  refreshKey = 1
+  act(renderConversation)
+  refreshKey = 2
+  act(renderConversation)
+  const requestsBeforeResponse = messageResponses.length
+  const actionsRequestsBeforeResponse = actionsRequestCount
+  const resolveFirstResponse = messageResponses[0]
+  if (resolveFirstResponse === undefined)
+    throw new Error('Expected the initial message response')
+  await act(async () => {
+    resolveFirstResponse(
+      jsonResponse(
+        messagesResponse([{ type: 'assistant', text: 'Initial message.' }], []),
+      ),
+    )
+    await Promise.resolve()
+  })
+  await waitForState(() => messageResponses.length === 2)
+
+  const snapshot = () => ({
+    requestUrls: fetcher.mock.calls
+      .map(([url]) => requestUrl(url))
+      .filter((url) => url.includes('/messages?')),
+    requestsBeforeResponse,
+    requestsAfterResponse: messageResponses.length,
+    actionsRequestsBeforeResponse,
+    actionsRequestCount,
+    visibleMessages: visibleMessages(),
+    loadingStatus:
+      container.querySelector('.conversation-status')?.textContent ?? null,
+  })
+  expect(snapshot()).toEqual({
+    requestUrls: [
+      '/api/sessions/sample-session/messages?limit=100',
+      '/api/sessions/sample-session/messages?from=0',
+    ],
+    requestsBeforeResponse: 1,
+    requestsAfterResponse: 2,
+    actionsRequestsBeforeResponse: 3,
+    actionsRequestCount: 4,
+    visibleMessages: ['Initial message.'],
+    loadingStatus: null,
+  })
+})
+
+it('discards a message response after switching away and back to its session', async () => {
+  const messageResponses: Array<(response: Response) => void> = []
+  let selectedSession = session
+  const otherSession = { ...session, id: 'other-session' }
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.includes('/messages?')) {
+      return new Promise<Response>((resolve) => {
+        messageResponses.push(resolve)
+      })
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  const renderConversation = () => {
+    root?.render(
+      <ConversationPane
+        session={selectedSession}
+        shouldSkipSessionTreeFetch
+        initialSessionTree={[]}
+        refreshKey={0}
+        sessionTreeRefreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  }
+  const resolveMessageResponse = async (index: number, text: string) => {
+    const resolve = messageResponses[index]
+    if (resolve === undefined) throw new Error('Expected a message response')
+    await act(async () => {
+      resolve(jsonResponse(messagesResponse([{ type: 'assistant', text }], [])))
+      await Promise.resolve()
+    })
+  }
+  const visibleMessages = () =>
+    Array.from(
+      container.querySelectorAll('.chat-assistant-message'),
+      (element) => element.textContent,
+    )
+
+  act(renderConversation)
+  await waitForState(() => messageResponses.length === 1)
+  selectedSession = otherSession
+  act(renderConversation)
+  selectedSession = session
+  act(renderConversation)
+  await resolveMessageResponse(0, 'Previous visit message.')
+  await waitForState(() => messageResponses.length === 2)
+  const afterPreviousVisitResponse = visibleMessages()
+  await resolveMessageResponse(1, 'Current session message.')
+  await waitForState(() => visibleMessages()[0] === 'Current session message.')
+
+  const snapshot = () => ({
+    requestUrls: fetcher.mock.calls
+      .map(([url]) => requestUrl(url))
+      .filter((url) => url.includes('/messages?')),
+    afterPreviousVisitResponse,
+    visibleMessages: visibleMessages(),
+  })
+  expect(snapshot()).toEqual({
+    requestUrls: [
+      '/api/sessions/sample-session/messages?limit=100',
+      '/api/sessions/sample-session/messages?limit=100',
+    ],
+    afterPreviousVisitResponse: [],
+    visibleMessages: ['Current session message.'],
   })
 })
 

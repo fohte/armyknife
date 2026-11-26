@@ -239,6 +239,20 @@ mod tests {
 
     #[fixture]
     fn sessions_dir() -> TempDir {
-        tempfile::tempdir().unwrap()
+        let sessions_dir = tempfile::tempdir().unwrap();
+        let session: crate::commands::agent::types::Session =
+            serde_json::from_value(serde_json::json!({
+                "session_id": "fixture-delegate",
+                "cwd": "/fixture/worktree",
+                "transcript_path": null,
+                "tmux_info": null,
+                "status": "stopped",
+                "created_at": "2026-06-01T10:00:00Z",
+                "updated_at": "2026-06-01T10:00:00Z",
+                "last_message": null,
+            }))
+            .unwrap();
+        crate::commands::agent::store::save_session_to(sessions_dir.path(), &session).unwrap();
+        sessions_dir
     }
 }

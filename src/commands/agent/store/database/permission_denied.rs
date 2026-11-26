@@ -6,7 +6,7 @@ use rusqlite::{OptionalExtension, TransactionBehavior, params};
 use serde::Serialize;
 use serde_json::Value;
 
-use super::{increment_revision, open_connection, validate_session_id};
+use super::{bump_session_revision, open_connection, validate_session_id};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PermissionDeniedOperation {
@@ -125,7 +125,7 @@ pub(crate) fn add_permission_denied(
             Utc::now().to_rfc3339()
         ],
     )?;
-    increment_revision(&transaction)?;
+    bump_session_revision(&transaction, session_id)?;
     transaction.commit()?;
     Ok(seq)
 }
@@ -212,7 +212,7 @@ pub(crate) fn resolve_permission_denied(
         ],
     )?;
     if changed > 0 {
-        increment_revision(&transaction)?;
+        bump_session_revision(&transaction, session_id)?;
     }
     transaction.commit()?;
     Ok(changed > 0)
@@ -264,7 +264,7 @@ pub(crate) fn resolve_matching_unclassified_permission_denials(
         )?;
     }
     if changed > 0 {
-        increment_revision(&transaction)?;
+        bump_session_revision(&transaction, session_id)?;
     }
     transaction.commit()?;
     Ok(changed)

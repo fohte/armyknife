@@ -2,7 +2,7 @@ use std::fs::File;
 use std::path::Path;
 
 use super::resolution_lock::lock_resolution_file;
-use super::{increment_revision, open_connection, validate_session_id};
+use super::{bump_session_revision, open_connection, validate_session_id};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use rusqlite::{TransactionBehavior, params, params_from_iter};
@@ -72,7 +72,7 @@ pub(crate) fn add_agent_proposal(sessions_dir: &Path, session_id: &str, body: &s
          VALUES (?1, ?2, ?3, ?4)",
         params![session_id, seq, body, now],
     )?;
-    increment_revision(&transaction)?;
+    bump_session_revision(&transaction, session_id)?;
     transaction.commit()?;
     Ok(seq)
 }
@@ -92,7 +92,7 @@ pub(crate) fn edit_agent_proposal(
         params![body, session_id, seq],
     )?;
     if changed > 0 {
-        increment_revision(&transaction)?;
+        bump_session_revision(&transaction, session_id)?;
     }
     transaction.commit()?;
     Ok(changed > 0)
@@ -192,7 +192,7 @@ pub(crate) fn resolve_agent_proposal(
         ],
     )?;
     if changed > 0 {
-        increment_revision(&transaction)?;
+        bump_session_revision(&transaction, session_id)?;
     }
     transaction.commit()?;
     Ok(changed > 0)
@@ -214,7 +214,7 @@ pub(crate) fn write_agent_proposal_answer_at(
         params![answer, resolved_at.to_rfc3339(), session_id, seq],
     )?;
     if changed > 0 {
-        increment_revision(&transaction)?;
+        bump_session_revision(&transaction, session_id)?;
     }
     transaction.commit()?;
     Ok(changed > 0)

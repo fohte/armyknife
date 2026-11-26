@@ -529,6 +529,12 @@ pub(crate) fn session_store_revision_from(sessions_dir: &Path) -> Result<i64> {
     database::session_store_revision(sessions_dir)
 }
 
+pub(crate) fn session_revisions_by_session_from(
+    sessions_dir: &Path,
+) -> Result<HashMap<String, i64>> {
+    database::session_revisions_by_session(sessions_dir)
+}
+
 pub(crate) fn add_permission_denied_from(
     sessions_dir: &Path,
     session_id: &str,
