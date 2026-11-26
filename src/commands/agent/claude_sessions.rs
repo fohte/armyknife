@@ -144,16 +144,20 @@ pub fn encode_project_path(path: &Path) -> String {
 
 /// Returns the path to Claude Code's project directory.
 ///
-/// Path format: ~/.claude/projects/{encoded-path}/
+/// Path format: $CLAUDE_CONFIG_DIR/projects/{encoded-path}/ or ~/.claude/projects/{encoded-path}/.
 fn project_dir(project_path: &Path) -> Option<PathBuf> {
-    let home = crate::shared::dirs::home_dir()?;
+    let config_dir = std::env::var_os("CLAUDE_CONFIG_DIR")
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| crate::shared::dirs::home_dir().map(|home| home.join(".claude")))?;
     let encoded = encode_project_path(project_path);
-    Some(home.join(".claude").join("projects").join(encoded))
+    Some(config_dir.join("projects").join(encoded))
 }
 
 /// Returns the path to a session's .jsonl file.
 ///
-/// Path format: ~/.claude/projects/{encoded-path}/{session_id}.jsonl
+/// Path format: $CLAUDE_CONFIG_DIR/projects/{encoded-path}/{session_id}.jsonl or
+/// ~/.claude/projects/{encoded-path}/{session_id}.jsonl.
 pub(super) fn session_jsonl_path(project_path: &Path, session_id: &str) -> Option<PathBuf> {
     Some(project_dir(project_path)?.join(format!("{session_id}.jsonl")))
 }
@@ -1139,6 +1143,34 @@ mod tests {
     fn test_encode_project_path(#[case] input: &str, #[case] expected: &str) {
         let path = Path::new(input);
         assert_eq!(encode_project_path(path), expected);
+    }
+
+    #[rstest]
+    #[case::custom_config(
+        Some("/fixture/custom-config"),
+        Some("/fixture/custom-config/projects/-fixture-project/session-example.jsonl")
+    )]
+    #[case::home_fallback(
+        None,
+        Some("/fixture/home/.claude/projects/-fixture-project/session-example.jsonl")
+    )]
+    #[case::empty_config_falls_back(
+        Some(""),
+        Some("/fixture/home/.claude/projects/-fixture-project/session-example.jsonl")
+    )]
+    fn session_jsonl_path_uses_config_dir_or_home(
+        #[case] config_dir: Option<&str>,
+        #[case] expected: Option<&str>,
+    ) {
+        let result = temp_env::with_vars(
+            [
+                ("HOME", Some("/fixture/home")),
+                ("CLAUDE_CONFIG_DIR", config_dir),
+            ],
+            || session_jsonl_path(Path::new("/fixture/project"), "session-example"),
+        );
+
+        assert_eq!(result, expected.map(PathBuf::from));
     }
 
     #[test]
