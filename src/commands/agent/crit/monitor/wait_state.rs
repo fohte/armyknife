@@ -12,17 +12,9 @@ use crate::infra::process;
 const CRIT_CLIENT_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(super) fn crit_client_waiting_on_port(port: u16, daemon_pid: u32) -> Result<bool> {
-    let mut command = ExternalTool::Lsof.command();
-    // An empty socket result is expected after a review finishes.
-    command.args([
-        "-nP",
-        &format!("-iTCP:{port}"),
-        "-sTCP:ESTABLISHED",
-        "-Fpc",
-        "-Q",
-    ]);
-    let output = process::run_with_timeout(command, CRIT_CLIENT_CHECK_TIMEOUT)
-        .context("failed to inspect crit client connections")?;
+    let output =
+        process::run_with_timeout(crit_client_lsof_command(port), CRIT_CLIENT_CHECK_TIMEOUT)
+            .context("failed to inspect crit client connections")?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     crit_client_waiting_from_lsof_result(
@@ -32,6 +24,12 @@ pub(super) fn crit_client_waiting_on_port(port: u16, daemon_pid: u32) -> Result<
         &stderr,
         daemon_pid,
     )
+}
+
+fn crit_client_lsof_command(port: u16) -> std::process::Command {
+    let mut command = ExternalTool::Lsof.command();
+    command.args(["-nP", &format!("-iTCP:{port}"), "-sTCP:ESTABLISHED", "-Fpc"]);
+    command
 }
 
 fn crit_client_waiting_from_lsof_result(
@@ -205,6 +203,20 @@ mod tests {
     use super::*;
     use indoc::indoc;
     use rstest::rstest;
+
+    #[test]
+    fn crit_client_lsof_command_uses_supported_arguments() {
+        let command = crit_client_lsof_command(43127);
+        let args = command
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            args,
+            vec!["-nP", "-iTCP:43127", "-sTCP:ESTABLISHED", "-Fpc",],
+        );
+    }
 
     #[rstest]
     #[case::waiting_client(indoc! {"
