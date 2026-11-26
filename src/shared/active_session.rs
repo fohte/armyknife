@@ -101,15 +101,16 @@ impl DraftProbe for TmuxDraftProbe {
         let tmux_info = session.tmux_info.as_ref()?;
         let socket_path = tmux_info.socket_path.as_deref();
         let pane_id = &tmux_info.pane_id;
+        let composer_has_draft = self
+            .runtime
+            .pane_has_draft(socket_path, pane_id, session.engine);
         if session.engine == Engine::Codex
+            && composer_has_draft == Some(true)
             && self.runtime.codex_process_is_running(socket_path, pane_id) == Some(false)
         {
             return None;
         }
-        match self
-            .runtime
-            .pane_has_draft(socket_path, pane_id, session.engine)
-        {
+        match composer_has_draft {
             Some(true) => {
                 tracing::debug!(
                     event = "agent.composer.draft_protected",
@@ -387,30 +388,60 @@ mod tests {
     }
 
     #[rstest]
-    #[case::process_exited(Some(false), false)]
-    #[case::process_running(Some(true), true)]
-    #[case::process_state_unknown(None, true)]
-    fn codex_composer_protection_tracks_pane_process(
+    #[case::process_exited(
+        Some(false),
+        Some(true),
+        false,
+        vec![(None, "%23".to_string())],
+        vec![(None, "%23".to_string(), Engine::Codex)]
+    )]
+    #[case::process_running(
+        Some(true),
+        Some(true),
+        true,
+        vec![(None, "%23".to_string())],
+        vec![(None, "%23".to_string(), Engine::Codex)]
+    )]
+    #[case::process_state_unknown(
+        None,
+        Some(true),
+        true,
+        vec![(None, "%23".to_string())],
+        vec![(None, "%23".to_string(), Engine::Codex)]
+    )]
+    #[case::composer_has_no_draft(
+        Some(false),
+        Some(false),
+        false,
+        Vec::new(),
+        vec![(None, "%23".to_string(), Engine::Codex)]
+    )]
+    #[case::composer_state_unknown(
+        Some(false),
+        None,
+        false,
+        Vec::new(),
+        vec![(None, "%23".to_string(), Engine::Codex)]
+    )]
+    fn codex_composer_protection_checks_process_only_for_drafts(
         stopped_codex_session: Session,
         #[case] process_is_running: Option<bool>,
+        #[case] composer_has_draft: Option<bool>,
         #[case] expected_protected: bool,
+        #[case] expected_process_checks: Vec<(Option<String>, String)>,
+        #[case] expected_composer_checks: Vec<(Option<String>, String, Engine)>,
     ) {
         let now = stopped_codex_session.updated_at;
-        let (probe, calls) = tmux_draft_probe(process_is_running, Some(true));
+        let (probe, calls) = tmux_draft_probe(process_is_running, composer_has_draft);
         let observed_at = probe.draft_observed_at(&stopped_codex_session, now);
-        let composer_checks = if process_is_running == Some(false) {
-            Vec::new()
-        } else {
-            vec![(None, "%23".to_string(), Engine::Codex)]
-        };
 
         assert_eq!(
             (observed_at, calls.borrow().clone()),
             (
                 expected_protected.then_some(now),
                 TmuxDraftProbeCalls {
-                    process_checks: vec![(None, "%23".to_string())],
-                    composer_checks,
+                    process_checks: expected_process_checks,
+                    composer_checks: expected_composer_checks,
                 },
             )
         );

@@ -1366,9 +1366,9 @@ Options:
 Worktrees with an active agent session (not paused or ended, with pending
 background tasks, or with an unsent composer draft) are kept by default
 regardless of merge status. A composer draft keeps the worktree active until it
-is submitted or cleared; for Codex, the process must still be running in the
-pane. The `STATUS` column shows `active session` for those entries. Pass
-`--force` to override.
+is submitted or cleared; for Codex, the composer is ignored once the Codex
+process has left the pane. The `STATUS` column shows `active session` for those
+entries. Pass `--force` to override.
 
 ### Hooks
 
