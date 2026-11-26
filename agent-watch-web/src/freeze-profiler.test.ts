@@ -61,6 +61,33 @@ it('aggregates samples by the active function within the long task interval', ()
   ])
 })
 
+it('truncates function names and files at the server byte limits', () => {
+  const name = `${'n'.repeat(254)}é名`
+  const file = `${'f'.repeat(2_046)}é名`
+
+  expect(
+    aggregateSamples(
+      [
+        {
+          resources: [file],
+          frames: [{ name, resourceId: 0, line: 12 }],
+          stacks: [{ frameId: 0 }],
+          samples: [{ timestamp: 10, stackId: 0 }],
+        },
+      ],
+      10,
+      10,
+    ),
+  ).toEqual([
+    {
+      name: `${'n'.repeat(254)}é`,
+      file: `${'f'.repeat(2_046)}é`,
+      line: 12,
+      percentage: 100,
+    },
+  ])
+})
+
 it('labels anonymous samples without a source line', () => {
   expect(
     aggregateSamples(

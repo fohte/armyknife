@@ -29,6 +29,9 @@ export type LongTaskFunction = {
 }
 
 const MAX_REPORTED_FUNCTIONS = 10
+const MAX_FUNCTION_NAME_BYTES = 256
+const MAX_FUNCTION_FILE_BYTES = 2_048
+const UTF8_ENCODER = new TextEncoder()
 
 export function aggregateSamples(
   traces: ProfilerTrace[],
@@ -105,9 +108,15 @@ export function aggregateSamples(
     )
     .slice(0, MAX_REPORTED_FUNCTIONS)
     .map(({ name, file, line, percentage }) => ({
-      name,
-      file,
+      name: truncateUtf8(name, MAX_FUNCTION_NAME_BYTES),
+      file: truncateUtf8(file, MAX_FUNCTION_FILE_BYTES),
       line,
       percentage,
     }))
+}
+
+function truncateUtf8(value: string, maxBytes: number) {
+  const buffer = new Uint8Array(maxBytes)
+  const { read } = UTF8_ENCODER.encodeInto(value, buffer)
+  return value.slice(0, read)
 }
