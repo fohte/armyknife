@@ -41,8 +41,11 @@ use self::category::{
 mod sorting;
 use self::sorting::sort_session_views;
 mod project;
+#[cfg(test)]
+use self::project::RepoNameCache;
 use self::project::{
-    resolve_parent_project, resolve_project, resolve_repo, resolve_repos_for_sessions,
+    repo_name_cache, resolve_parent_project, resolve_project, resolve_repo,
+    resolve_repos_for_sessions,
 };
 mod vibe;
 use self::vibe::{VibeAncestorLoader, states_for_sessions};
@@ -772,7 +775,8 @@ fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
         .iter()
         .map(|session| (session.session_id.clone(), title_display_name(session)))
         .collect();
-    let repo_by_id = resolve_repos_for_sessions(&sessions, &all_sessions, resolve_repo);
+    let repo_by_id =
+        resolve_repos_for_sessions(&sessions, &all_sessions, repo_name_cache(), resolve_repo);
     let sessions_dir = store::sessions_dir()?;
     let vibe_sessions_dir = sessions_dir.clone();
     let agent_response_timestamps = store::agent_response_timestamps_from(&sessions_dir)?;
@@ -1784,7 +1788,7 @@ mod tests {
     }
 
     #[test]
-    fn repo_lookup_uses_active_sessions_and_ancestors_once_per_worktree() {
+    fn repo_lookup_deduplicates_worktrees_and_reuses_the_cache_across_snapshots() {
         let mut active = session(SessionStatus::Running);
         active.session_id = "active-session".to_string();
         active.ancestor_session_ids = vec!["parent-session".to_string()];
@@ -1799,14 +1803,31 @@ mod tests {
 
         let all_sessions = vec![active.clone(), parent, unrelated];
         let mut resolved_cwds = Vec::new();
-        let repos = resolve_repos_for_sessions(&[active.clone()], &all_sessions, |cwd| {
-            resolved_cwds.push(cwd.to_path_buf());
-            "example-org/sample-repo".to_string()
-        });
+        let repo_cache = RepoNameCache::default();
+        let repos =
+            resolve_repos_for_sessions(&[active.clone()], &all_sessions, &repo_cache, |cwd| {
+                resolved_cwds.push(cwd.to_path_buf());
+                "example-org/sample-repo".to_string()
+            });
+        let cached_repos =
+            resolve_repos_for_sessions(&[active.clone()], &all_sessions, &repo_cache, |cwd| {
+                resolved_cwds.push(cwd.to_path_buf());
+                "example-org/second-repo".to_string()
+            });
 
         assert_eq!(
-            (repos, resolved_cwds),
+            (repos, cached_repos, resolved_cwds),
             (
+                HashMap::from([
+                    (
+                        "active-session".to_string(),
+                        "example-org/sample-repo".to_string(),
+                    ),
+                    (
+                        "parent-session".to_string(),
+                        "example-org/sample-repo".to_string(),
+                    ),
+                ]),
                 HashMap::from([
                     (
                         "active-session".to_string(),
