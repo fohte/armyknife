@@ -157,8 +157,6 @@ where
     .with_context(|| format!("preserve transcript appends for {}", path.display()))?;
 
     let old_inode_monitor = OldInodeMonitor::new(path)?;
-    has_writable_open_handle(old_inode_monitor.path())
-        .context("check transcript writer monitoring before replacement")?;
     let mut replacement_writer = fs::OpenOptions::new()
         .append(true)
         .open(replacement.path())
@@ -175,6 +173,20 @@ where
         max_reconcile_wait,
     )
     .with_context(|| format!("preserve final transcript appends for {}", path.display()))?;
+    let copied_to = reconcile_in_flight_appends(
+        old_inode_monitor.path(),
+        &mut source,
+        &mut replacement_writer,
+        copied_to,
+        &mut has_writable_open_handle,
+        max_reconcile_wait,
+    )
+    .with_context(|| {
+        format!(
+            "wait for old transcript writers before replacing {}",
+            path.display()
+        )
+    })?;
     replacement
         .as_file()
         .sync_all()
@@ -185,6 +197,7 @@ where
         .with_context(|| format!("replace Claude Code transcript {}", path.display()))?;
     drop(persisted_file);
     after_replace();
+    // A writer may open the old inode after the pre-replacement scan and before rename.
     reconcile_in_flight_appends(
         old_inode_monitor.path(),
         &mut source,
@@ -281,7 +294,7 @@ fn reconcile_appends(
             .metadata()
             .context("recheck open transcript during append reconciliation")?
             .len();
-        if latest_len == current_len {
+        if latest_len == current_len && copied_to == current_len {
             return Ok(copied_to);
         }
         thread::sleep(Duration::from_millis(5));
@@ -350,16 +363,19 @@ fn reconcile_in_flight_appends<P>(
     mut copied_to: u64,
     has_writable_open_handle: &mut P,
     max_wait: Duration,
-) -> Result<()>
+) -> Result<u64>
 where
     P: FnMut(&Path) -> Result<bool>,
 {
     const POLL_INTERVAL: Duration = Duration::from_millis(25);
     let deadline = Instant::now() + max_wait;
-    let mut inspection_failed = false;
+    let mut last_inspection_error = None;
 
     loop {
         if Instant::now() >= deadline {
+            if let Some(error) = last_inspection_error {
+                bail!("timed out inspecting old transcript writers: {error}");
+            }
             bail!("timed out waiting for old transcript writers to close");
         }
         let current_len = source
@@ -375,18 +391,17 @@ where
 
         let has_writer = match has_writable_open_handle(old_inode_path) {
             Ok(has_writer) => {
-                inspection_failed = false;
+                last_inspection_error = None;
                 has_writer
             }
             Err(error) => {
-                if !inspection_failed {
-                    eprintln!(
-                        "Cannot inspect transcript writers after replacement; retrying: {error:#}"
-                    );
-                    inspection_failed = true;
+                let formatted_error = format!("{error:#}");
+                if last_inspection_error.is_none() {
+                    eprintln!("Cannot inspect old transcript writers; retrying: {formatted_error}");
                 }
+                last_inspection_error = Some(formatted_error.clone());
                 if Instant::now() >= deadline {
-                    bail!("timed out inspecting old transcript writers: {error:#}");
+                    bail!("timed out inspecting old transcript writers: {formatted_error}");
                 }
                 thread::sleep(POLL_INTERVAL);
                 continue;
@@ -402,7 +417,10 @@ where
                 replacement
                     .sync_all()
                     .context("sync final replacement transcript")?;
-                return Ok(());
+                return Ok(copied_to);
+            }
+            if final_len == current_len {
+                bail!("old transcript writer closed with an incomplete trailing line");
             }
         }
         if Instant::now() >= deadline {
@@ -522,6 +540,7 @@ mod tests {
     use std::cell::{Cell, RefCell};
     use std::fs;
     use std::io::Write;
+    use std::path::Path;
     use std::sync::Arc;
     use std::sync::Barrier;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -690,7 +709,8 @@ mod tests {
                 }));
             },
             |_| {
-                if replacement_is_live.load(Ordering::SeqCst) && !inserted_new_path_row {
+                let replacement_is_live = replacement_is_live.load(Ordering::SeqCst);
+                if replacement_is_live && !inserted_new_path_row {
                     split_row_barrier.wait();
                     let mut replacement = fs::OpenOptions::new()
                         .append(true)
@@ -702,7 +722,7 @@ mod tests {
                     inserted_new_path_row = true;
                     split_row_barrier.wait();
                 }
-                Ok(writer_open.load(Ordering::SeqCst))
+                Ok(replacement_is_live && writer_open.load(Ordering::SeqCst))
             },
             Duration::from_secs(1),
         )
@@ -760,14 +780,107 @@ mod tests {
         let monitor_path = monitor_path
             .into_inner()
             .expect("monitor path should be inspected");
+        let error = normalized_error(
+            result.err().expect("writer inspection should time out"),
+            &transcript,
+        );
 
         assert_eq!(
             (
-                result.is_err(),
+                error,
                 inspection_count.get() > 1,
                 monitor_path.exists(),
             ),
-            (true, true, false),
+            (
+                "preserve in-flight transcript appends for <transcript>: timed out inspecting old transcript writers: fixture inspection failure".to_owned(),
+                true,
+                false,
+            ),
+        );
+    }
+
+    #[test]
+    fn stops_after_open_writer_timeout_and_cleans_monitor_link() {
+        let directory = tempdir().expect("temporary directory should be created");
+        let transcript = directory.path().join("fixture-transcript.jsonl");
+        fs::write(
+            &transcript,
+            indoc! {r#"
+                {"type":"user","uuid":"fixture-old","message":{"content":"fixture old"}}
+                {"type":"system","subtype":"compact_boundary","compactMetadata":{"preservedMessages":{"uuids":[]}}}
+            "#},
+        )
+        .expect("fixture transcript should be written");
+        let monitor_path = RefCell::new(None);
+        let inspection_count = Cell::new(0);
+
+        let result = slim_transcript_with(
+            &transcript,
+            || {},
+            || {},
+            || {},
+            |path| {
+                *monitor_path.borrow_mut() = Some(path.to_path_buf());
+                inspection_count.set(inspection_count.get() + 1);
+                Ok(inspection_count.get() > 1)
+            },
+            Duration::from_millis(50),
+        );
+        let monitor_path = monitor_path
+            .into_inner()
+            .expect("monitor path should be inspected");
+        let error = normalized_error(
+            result.err().expect("open writer should time out"),
+            &transcript,
+        );
+
+        assert_eq!(
+            (
+                error,
+                inspection_count.get() > 1,
+                monitor_path.exists(),
+            ),
+            (
+                "preserve in-flight transcript appends for <transcript>: timed out waiting for old transcript writers to close".to_owned(),
+                true,
+                false,
+            ),
+        );
+    }
+
+    #[test]
+    fn keeps_an_unterminated_final_boundary_when_replacement_times_out() {
+        let directory = tempdir().expect("temporary directory should be created");
+        let transcript = directory.path().join("fixture-transcript.jsonl");
+        let original = indoc! {r#"
+            {"type":"user","uuid":"fixture-old","message":{"content":"fixture old"}}
+            {"type":"system","subtype":"compact_boundary","compactMetadata":{"preservedMessages":{"uuids":[]}}}
+        "#}
+        .trim_end()
+        .to_owned();
+        fs::write(&transcript, &original).expect("fixture transcript should be written");
+
+        let result = slim_transcript_with(
+            &transcript,
+            || {},
+            || {},
+            || {},
+            |_| Ok(false),
+            Duration::from_millis(50),
+        );
+        let error = normalized_error(
+            result
+                .err()
+                .expect("unterminated boundary should stop replacement"),
+            &transcript,
+        );
+
+        assert_eq!(
+            (error, fs::read_to_string(transcript).expect("transcript should be readable")),
+            (
+                "preserve transcript appends for <transcript>: timed out reconciling transcript appends before replacement".to_owned(),
+                original,
+            ),
         );
     }
 
@@ -890,5 +1003,9 @@ mod tests {
             .lines()
             .map(|line| serde_json::from_str(line).expect("fixture row should be valid JSON"))
             .collect()
+    }
+
+    fn normalized_error(error: anyhow::Error, transcript: &Path) -> String {
+        format!("{error:#}").replace(&transcript.display().to_string(), "<transcript>")
     }
 }
