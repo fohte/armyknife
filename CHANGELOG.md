@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.945](https://github.com/fohte/armyknife/compare/v0.1.944...v0.1.945) (2026-11-26)
+
+
+### Performance Improvements
+
+* **watch-web:** share session revision monitoring ([#2314](https://github.com/fohte/armyknife/issues/2314)) ([9f57150](https://github.com/fohte/armyknife/commit/9f571503c919f7e44f018428c1638ee052bf05da))
+
 ## [0.1.944](https://github.com/fohte/armyknife/compare/v0.1.943...v0.1.944) (2026-11-26)
 
 
