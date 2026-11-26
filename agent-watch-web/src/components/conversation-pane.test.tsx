@@ -5149,6 +5149,64 @@ it('shows running tasks in the desktop status panel and counts them in the heade
   })
 })
 
+it('updates running task elapsed time from the loaded conversation timestamp', async () => {
+  vi.useFakeTimers()
+  vi.setSystemTime(new Date('2026-11-10T00:00:00.000Z'))
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.endsWith('/messages?limit=100')) {
+      return Promise.resolve(
+        jsonResponse(
+          messagesResponse(
+            [],
+            [
+              {
+                id: 'fixture-background-task',
+                description: 'Build the sample bundle',
+                elapsedSeconds: 61,
+                kind: 'background_task',
+              },
+            ],
+          ),
+        ),
+      )
+    }
+    if (url.endsWith('/actions')) {
+      return Promise.resolve(jsonResponse(actions))
+    }
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={{ ...session, category: 'needs_action' }}
+        shouldSkipSessionTreeFetch
+        initialSessionTree={[]}
+        refreshKey={0}
+        sessionTreeRefreshKey={0}
+        onSelectSession={() => undefined}
+        statusPanelOpen
+      />,
+    )
+  })
+  await act(async () => {
+    for (let index = 0; index < 6; index += 1) await Promise.resolve()
+  })
+  const before = container.querySelector('.running-task-elapsed')?.textContent
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1_000)
+  })
+
+  const snapshot = () => ({
+    before,
+    after: container.querySelector('.running-task-elapsed')?.textContent,
+  })
+  expect(snapshot()).toEqual({ before: '1m 1s', after: '1m 2s' })
+})
+
 it('keeps the Decisions tab active when running tasks appear', async () => {
   const jsonResponse = (body: unknown) =>
     new Response(JSON.stringify(body), {

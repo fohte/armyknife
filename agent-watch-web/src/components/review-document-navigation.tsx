@@ -1,8 +1,7 @@
 import '#components/review-document-navigation.css'
 
-import { useEffect, useState } from 'react'
-
 import type { ReviewDocumentSummary } from '#components/review-document-summary'
+import { usePageClockTime } from '#use-page-clock-time'
 
 type ReviewDocumentNavigationProps = {
   summary?: ReviewDocumentSummary
@@ -122,11 +121,20 @@ function formatElapsed(startedAt: number, now: number) {
     : `${String(hours)}h ${String(minutes)}m`
 }
 
-function editorStatus(summary: ReviewDocumentSummary, now: number) {
+function EditorStatus({ summary }: { summary: ReviewDocumentSummary }) {
   const status = summary.isEditor ? 'In the editor' : 'Queued for the editor'
-  return summary.startedAt === undefined
-    ? status
-    : `${status} · ${formatElapsed(summary.startedAt, now)}`
+  return summary.startedAt === undefined ? (
+    status
+  ) : (
+    <>
+      {status} · <EditorElapsed startedAt={summary.startedAt} />
+    </>
+  )
+}
+
+function EditorElapsed({ startedAt }: { startedAt: number }) {
+  const now = usePageClockTime(60_000, startedAt)
+  return formatElapsed(startedAt, now)
 }
 
 export function ReviewDocumentNavigation({
@@ -138,18 +146,8 @@ export function ReviewDocumentNavigation({
   onTitleChange,
   onSelectDocument,
 }: ReviewDocumentNavigationProps) {
-  const [now, setNow] = useState(Date.now)
   const description =
     summary === undefined ? null : documentDescription(summary)
-
-  useEffect(() => {
-    const interval = window.setInterval(() => {
-      setNow(Date.now())
-    }, 60_000)
-    return () => {
-      window.clearInterval(interval)
-    }
-  }, [])
 
   return (
     <>
@@ -205,7 +203,7 @@ export function ReviewDocumentNavigation({
                   aria-hidden="true"
                   className={`review-document-dot${summary.isEditor ? ' review-document-dot--editor' : ''}`}
                 />
-                {editorStatus(summary, now)}
+                <EditorStatus summary={summary} />
               </span>
             </div>
             {summary.kind === 'pr_draft' ? (

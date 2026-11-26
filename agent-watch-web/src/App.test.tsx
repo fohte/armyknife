@@ -36,6 +36,18 @@ let root: Root | null = null
 let mobileViewportMatches = false
 const nativeMatchMedia = window.matchMedia.bind(window)
 const mediaQueries = new Set<MediaQueryList>()
+const visibilityStateDescriptor = Object.getOwnPropertyDescriptor(
+  document,
+  'visibilityState',
+)
+
+function setVisibilityState(visibilityState: DocumentVisibilityState) {
+  Object.defineProperty(document, 'visibilityState', {
+    configurable: true,
+    value: visibilityState,
+  })
+  document.dispatchEvent(new Event('visibilitychange'))
+}
 
 function matchMediaMock(media: string): MediaQueryList {
   const query = nativeMatchMedia(media)
@@ -1237,6 +1249,15 @@ afterEach(() => {
   container.remove()
   window.localStorage.removeItem('agent-watch-web:saved-inbox-views')
   vi.useRealTimers()
+  if (visibilityStateDescriptor === undefined) {
+    Reflect.deleteProperty(document, 'visibilityState')
+  } else {
+    Object.defineProperty(
+      document,
+      'visibilityState',
+      visibilityStateDescriptor,
+    )
+  }
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
@@ -5961,6 +5982,15 @@ it('advances elapsed time for all rows with one shared timer', async () => {
     container.querySelectorAll<HTMLElement>('.session-age'),
     (element) => element.textContent,
   )
+  const tickMutations: MutationRecord[] = []
+  const observer = new MutationObserver((records) => {
+    tickMutations.push(...records)
+  })
+  observer.observe(container, {
+    childList: true,
+    characterData: true,
+    subtree: true,
+  })
 
   await act(async () => {
     await vi.advanceTimersByTimeAsync(1_000)
@@ -5970,6 +6000,16 @@ it('advances elapsed time for all rows with one shared timer', async () => {
     container.querySelectorAll<HTMLElement>('.session-age'),
     (element) => element.textContent,
   )
+  await Promise.resolve()
+  tickMutations.push(...observer.takeRecords())
+  const tickMutationTargets = tickMutations.map((record) => {
+    const target =
+      record.target instanceof Element
+        ? record.target
+        : record.target.parentElement
+    return target?.closest('.session-age')?.className ?? 'other'
+  })
+  observer.disconnect()
 
   publishSessions({
     revision: 2,
@@ -5990,6 +6030,7 @@ it('advances elapsed time for all rows with one shared timer', async () => {
   const snapshot = () => ({
     before,
     afterFirstTick,
+    tickMutationTargets,
     afterUpdate,
     afterSecondTick: Array.from(
       container.querySelectorAll<HTMLElement>('.session-age'),
@@ -6001,8 +6042,46 @@ it('advances elapsed time for all rows with one shared timer', async () => {
   expect(snapshot()).toEqual({
     before: ['8s', '30s'],
     afterFirstTick: ['9s', '31s'],
+    tickMutationTargets: ['session-age', 'session-age'],
     afterUpdate: ['9s', '31s'],
     afterSecondTick: ['10s', '32s'],
+    intervalCount: 1,
+  })
+})
+
+it('pauses elapsed time while hidden and catches up when visible', async () => {
+  vi.useFakeTimers()
+  vi.setSystemTime(new Date('2026-11-10T00:00:00.000Z'))
+  setVisibilityState('hidden')
+  const intervalSpy = vi.spyOn(window, 'setInterval')
+
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-a', 'First session', 'needs_action', 8)],
+  })
+  const before = container.querySelector('.session-age')?.textContent ?? null
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(10_000)
+  })
+  const whileHidden =
+    container.querySelector('.session-age')?.textContent ?? null
+
+  act(() => {
+    setVisibilityState('visible')
+  })
+
+  const snapshot = () => ({
+    before,
+    whileHidden,
+    afterVisible: container.querySelector('.session-age')?.textContent ?? null,
+    intervalCount: intervalSpy.mock.calls.length,
+  })
+  expect(snapshot()).toEqual({
+    before: '8s',
+    whileHidden: '8s',
+    afterVisible: '18s',
     intervalCount: 1,
   })
 })

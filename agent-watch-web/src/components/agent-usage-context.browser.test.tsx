@@ -20,6 +20,18 @@ vi.mock('#api-requests', () => ({
 
 let container: HTMLDivElement
 let root: Root | null
+const visibilityStateDescriptor = Object.getOwnPropertyDescriptor(
+  document,
+  'visibilityState',
+)
+
+function setVisibilityState(visibilityState: DocumentVisibilityState) {
+  Object.defineProperty(document, 'visibilityState', {
+    configurable: true,
+    value: visibilityState,
+  })
+  document.dispatchEvent(new Event('visibilitychange'))
+}
 
 function UsageSnapshot() {
   const { error, usage } = useAgentUsageContext()
@@ -83,8 +95,93 @@ afterEach(() => {
   root = null
   container.remove()
   vi.useRealTimers()
+  if (visibilityStateDescriptor === undefined) {
+    Reflect.deleteProperty(document, 'visibilityState')
+  } else {
+    Object.defineProperty(
+      document,
+      'visibilityState',
+      visibilityStateDescriptor,
+    )
+  }
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
+})
+
+it('pauses usage refresh while hidden and refreshes when visible again', async () => {
+  requestAgentUsageMock.mockReturnValue(ok(usageResponse('fixture-model')))
+  setVisibilityState('hidden')
+
+  await act(async () => {
+    root?.render(
+      <AgentUsageProvider>
+        <UsageSnapshot />
+      </AgentUsageProvider>,
+    )
+    await Promise.resolve()
+  })
+  const requestCounts = [requestAgentUsageMock.mock.calls.length]
+
+  await act(async () => {
+    setVisibilityState('visible')
+    await Promise.resolve()
+  })
+  requestCounts.push(requestAgentUsageMock.mock.calls.length)
+
+  await act(async () => {
+    setVisibilityState('hidden')
+    await vi.advanceTimersByTimeAsync(120_000)
+  })
+  requestCounts.push(requestAgentUsageMock.mock.calls.length)
+
+  await act(async () => {
+    setVisibilityState('visible')
+    await Promise.resolve()
+  })
+  requestCounts.push(requestAgentUsageMock.mock.calls.length)
+
+  expect(requestCounts).toEqual([0, 1, 1, 2])
+})
+
+it('queues one refresh when a request spans a visibility change', async () => {
+  let resolveFirstRequest: (() => void) | undefined
+  const firstRequest = new Promise((resolve) => {
+    resolveFirstRequest = () => {
+      resolve(ok(usageResponse('fixture-model-one')))
+    }
+  })
+  requestAgentUsageMock
+    .mockReturnValueOnce(firstRequest)
+    .mockReturnValue(ok(usageResponse('fixture-model-two')))
+
+  await act(async () => {
+    root?.render(
+      <AgentUsageProvider>
+        <UsageSnapshot />
+      </AgentUsageProvider>,
+    )
+    await Promise.resolve()
+  })
+  const requestCounts = [requestAgentUsageMock.mock.calls.length]
+
+  act(() => {
+    setVisibilityState('hidden')
+    setVisibilityState('visible')
+  })
+  requestCounts.push(requestAgentUsageMock.mock.calls.length)
+
+  await act(async () => {
+    resolveFirstRequest?.()
+    await firstRequest
+  })
+  requestCounts.push(requestAgentUsageMock.mock.calls.length)
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(60_000)
+  })
+  requestCounts.push(requestAgentUsageMock.mock.calls.length)
+
+  expect(requestCounts).toEqual([1, 1, 2, 3])
 })
 
 it('shows stale usage after a failed refresh and clears the status on recovery', async () => {

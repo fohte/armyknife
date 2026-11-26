@@ -3,6 +3,7 @@ import '#components/session-tree-panel.css'
 import type { KeyboardEvent } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
+import { SessionElapsedStartedAtProvider } from '#components/session-elapsed-context'
 import { SessionRow } from '#components/session-row'
 import {
   defaultExpandedSessionIds,
@@ -30,7 +31,6 @@ export function SessionTreePanel({
 }: SessionTreePanelProps) {
   const treeRef = useRef<HTMLDivElement>(null)
   const [treeReceivedAt, setTreeReceivedAt] = useState(() => Date.now())
-  const [nowMs, setNowMs] = useState(() => Date.now())
   const [localViewState, setLocalViewState] = useState<SessionTreeViewState>(
     () => ({
       expandedSessionIds: [
@@ -63,15 +63,6 @@ export function SessionTreePanel({
   useEffect(() => {
     if (viewState.treeHasFocus) treeRef.current?.focus()
   }, [viewState.treeHasFocus])
-
-  useEffect(() => {
-    const interval = window.setInterval(() => {
-      setNowMs(Date.now())
-    }, 1_000)
-    return () => {
-      window.clearInterval(interval)
-    }
-  }, [])
 
   const updateViewState = (
     update: (current: SessionTreeViewState) => SessionTreeViewState,
@@ -154,81 +145,80 @@ export function SessionTreePanel({
   }
 
   return (
-    <div className="session-tree-panel" data-size={size}>
-      <div
-        ref={treeRef}
-        className="session-tree-list"
-        role="tree"
-        tabIndex={0}
-        aria-label={`Session tree for ${sessionById.get(selectedSessionId)?.title ?? 'current session'}`}
-        aria-activedescendant={`session-tree-row-${focusedId}`}
-        onFocus={() => {
-          updateTreeFocus(true)
-        }}
-        onBlur={(event) => {
-          const nextTarget = event.relatedTarget
-          if (
-            nextTarget !== null &&
-            !event.currentTarget.contains(nextTarget)
-          ) {
-            updateTreeFocus(false)
-          }
-        }}
-        onKeyDown={handleKeyDown}
-      >
-        {rows.map((row) => {
-          const { session } = row
-          const elapsedSeconds =
-            session.elapsedSeconds +
-            Math.max(0, Math.floor((nowMs - treeReceivedAt) / 1_000))
-          return (
-            <div
-              key={session.id}
-              id={`session-tree-row-${session.id}`}
-              className={`session-tree-row${session.id === selectedSessionId ? ' is-current' : ''}${session.id === focusedId ? ' is-focused' : ''}${session.isActive ? '' : ' is-ended'}`}
-              role="treeitem"
-              aria-level={row.depth + 1}
-              aria-expanded={row.hasChildren ? row.isExpanded : undefined}
-              aria-selected={session.id === selectedSessionId}
-              style={{
-                paddingLeft: `${String(row.depth * 18 + 12)}px`,
-              }}
-              onClick={() => {
-                updateFocus(session.id)
-                if (session.isActive) onSelectSession(session.id)
-              }}
-            >
-              <div className="session-tree-main-line">
-                {row.hasChildren ? (
-                  <button
-                    type="button"
-                    className="session-tree-caret"
-                    aria-label={`${row.isExpanded ? 'Collapse' : 'Expand'} ${session.title}`}
-                    data-tree-caret=""
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      updateFocus(session.id)
-                      toggleExpanded(session.id)
-                    }}
-                  >
-                    {row.isExpanded ? '▾' : '▸'}
-                  </button>
-                ) : (
-                  <span
-                    className="session-tree-caret-space"
-                    aria-hidden="true"
+    <SessionElapsedStartedAtProvider value={treeReceivedAt}>
+      <div className="session-tree-panel" data-size={size}>
+        <div
+          ref={treeRef}
+          className="session-tree-list"
+          role="tree"
+          tabIndex={0}
+          aria-label={`Session tree for ${sessionById.get(selectedSessionId)?.title ?? 'current session'}`}
+          aria-activedescendant={`session-tree-row-${focusedId}`}
+          onFocus={() => {
+            updateTreeFocus(true)
+          }}
+          onBlur={(event) => {
+            const nextTarget = event.relatedTarget
+            if (
+              nextTarget !== null &&
+              !event.currentTarget.contains(nextTarget)
+            ) {
+              updateTreeFocus(false)
+            }
+          }}
+          onKeyDown={handleKeyDown}
+        >
+          {rows.map((row) => {
+            const { session } = row
+            return (
+              <div
+                key={session.id}
+                id={`session-tree-row-${session.id}`}
+                className={`session-tree-row${session.id === selectedSessionId ? ' is-current' : ''}${session.id === focusedId ? ' is-focused' : ''}${session.isActive ? '' : ' is-ended'}`}
+                role="treeitem"
+                aria-level={row.depth + 1}
+                aria-expanded={row.hasChildren ? row.isExpanded : undefined}
+                aria-selected={session.id === selectedSessionId}
+                style={{
+                  paddingLeft: `${String(row.depth * 18 + 12)}px`,
+                }}
+                onClick={() => {
+                  updateFocus(session.id)
+                  if (session.isActive) onSelectSession(session.id)
+                }}
+              >
+                <div className="session-tree-main-line">
+                  {row.hasChildren ? (
+                    <button
+                      type="button"
+                      className="session-tree-caret"
+                      aria-label={`${row.isExpanded ? 'Collapse' : 'Expand'} ${session.title}`}
+                      data-tree-caret=""
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        updateFocus(session.id)
+                        toggleExpanded(session.id)
+                      }}
+                    >
+                      {row.isExpanded ? '▾' : '▸'}
+                    </button>
+                  ) : (
+                    <span
+                      className="session-tree-caret-space"
+                      aria-hidden="true"
+                    />
+                  )}
+                  <SessionRow
+                    session={session}
+                    density={size === 'phone' ? 'compact-phone' : 'compact'}
                   />
-                )}
-                <SessionRow
-                  session={{ ...session, elapsedSeconds }}
-                  density={size === 'phone' ? 'compact-phone' : 'compact'}
-                />
+                </div>
               </div>
-            </div>
-          )
-        })}
+            )
+          })}
+        </div>
+        <footer className="session-tree-footer">← / → fold.</footer>
       </div>
-      <footer className="session-tree-footer">← / → fold.</footer>
-    </div>
+    </SessionElapsedStartedAtProvider>
   )
 }

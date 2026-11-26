@@ -8,8 +8,10 @@ import {
   getCommandPaletteShortcut,
 } from '#command-palette-shortcut'
 import { formatElapsedTime } from '#components/format-elapsed-time'
+import { useSessionElapsedStartedAt } from '#components/session-elapsed-context'
 import { SessionLinkElapsedSecondsContext } from '#components/session-link-elapsed-seconds'
 import type { SessionLinkTarget } from '#types'
+import { useLiveElapsedOffsetSeconds } from '#use-live-elapsed-offset-seconds'
 
 export type SessionLinkProps = {
   children: ReactNode
@@ -35,12 +37,6 @@ function SessionLinkCard({
       (value) => value !== null && value !== undefined && value.length > 0,
     )
     .join(' · ')
-  const statusDetails = [
-    session.preview,
-    elapsedSeconds === undefined
-      ? undefined
-      : formatElapsedTime(elapsedSeconds),
-  ].filter((value) => value !== null && value !== undefined && value.length > 0)
   const taskPriority = session.task?.priority
   const taskReference =
     session.task === null
@@ -71,16 +67,24 @@ function SessionLinkCard({
           >
             {session.kind}
           </span>
-          {statusDetails.length > 0 ? (
-            <span className="session-link-card-status-details">
-              {' · '}
-              {statusDetails.join(' · ')}
-            </span>
-          ) : null}
+          <SessionLinkStatusDetails
+            preview={session.preview}
+            elapsedSeconds={elapsedSeconds}
+            leadingSeparator
+          />
         </div>
-      ) : statusDetails.length > 0 ? (
+      ) : session.preview !== null &&
+        session.preview !== undefined &&
+        session.preview.length > 0 ? (
         <div className="session-link-card-status">
-          {statusDetails.join(' · ')}
+          <SessionLinkStatusDetails
+            preview={session.preview}
+            elapsedSeconds={elapsedSeconds}
+          />
+        </div>
+      ) : elapsedSeconds !== undefined ? (
+        <div className="session-link-card-status">
+          <SessionLinkStatusDetails elapsedSeconds={elapsedSeconds} />
         </div>
       ) : null}
       {session.task !== null || session.repo.length > 0 ? (
@@ -110,6 +114,48 @@ function SessionLinkCard({
       </span>
     </>
   )
+}
+
+function SessionLinkStatusDetails({
+  preview,
+  elapsedSeconds,
+  leadingSeparator = false,
+}: {
+  preview?: string | null | undefined
+  elapsedSeconds?: number | undefined
+  leadingSeparator?: boolean
+}) {
+  const startedAt = useSessionElapsedStartedAt()
+  const hasPreview =
+    preview !== null && preview !== undefined && preview.length > 0
+  const hasElapsed = elapsedSeconds !== undefined
+  if (!hasPreview && !hasElapsed) return null
+  return (
+    <span className="session-link-card-status-details">
+      {leadingSeparator ? ' · ' : null}
+      {hasPreview ? preview : null}
+      {hasPreview && hasElapsed ? ' · ' : null}
+      {elapsedSeconds === undefined ? null : startedAt === null ? (
+        formatElapsedTime(elapsedSeconds)
+      ) : (
+        <LiveElapsedLabel
+          elapsedSeconds={elapsedSeconds}
+          startedAt={startedAt}
+        />
+      )}
+    </span>
+  )
+}
+
+function LiveElapsedLabel({
+  elapsedSeconds,
+  startedAt,
+}: {
+  elapsedSeconds: number
+  startedAt: number
+}) {
+  const elapsedOffsetSeconds = useLiveElapsedOffsetSeconds(startedAt)
+  return formatElapsedTime(elapsedSeconds + elapsedOffsetSeconds)
 }
 
 export function SessionLink({
