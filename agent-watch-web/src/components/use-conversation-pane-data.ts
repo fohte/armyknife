@@ -180,8 +180,8 @@ export function useConversationPaneData({
   }, [confirmPendingOperations, sessionId])
 
   const refresh = useCallback(async () => {
-    void refreshActions()
     if (messagesRequestInFlight.current) {
+      void refreshActions()
       refreshQueued.current = true
       return
     }
@@ -209,6 +209,7 @@ export function useConversationPaneData({
         : `${sessionPath}/messages?from=${String(loadedConversation.start)}${epochQuery}${stableDigestQuery}`,
       isConversationResponse,
     )
+    void refreshActions()
     try {
       const messagesResult = await messagesRequest
       if (

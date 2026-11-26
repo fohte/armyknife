@@ -4253,15 +4253,10 @@ it('refreshes peer session labels when the linked session title changes', () => 
 })
 
 it('renders file attachments returned by the messages endpoint', async () => {
-  const jsonResponse = (body: unknown) =>
-    new Response(JSON.stringify(body), {
-      headers: { 'Content-Type': 'application/json' },
-    })
-  const fetcher = vi
-    .fn<typeof fetch>()
-    .mockResolvedValueOnce(
-      jsonResponse(
-        messagesResponse([
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const response = requestUrl(input).endsWith('/actions')
+      ? actions
+      : messagesResponse([
           {
             type: 'user_with_content',
             content: [
@@ -4269,10 +4264,9 @@ it('renders file attachments returned by the messages endpoint', async () => {
               { type: 'file', name: 'sample-layout.html' },
             ],
           },
-        ]),
-      ),
-    )
-    .mockResolvedValueOnce(jsonResponse(actions))
+        ])
+    return Promise.resolve(jsonResponse(response))
+  })
   vi.stubGlobal('fetch', fetcher)
   root = createRoot(container)
   act(() => {
