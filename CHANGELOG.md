@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.935](https://github.com/fohte/armyknife/compare/v0.1.934...v0.1.935) (2026-11-26)
+
+
+### Bug Fixes
+
+* **review:** accept successful watch-web actions ([#2295](https://github.com/fohte/armyknife/issues/2295)) ([75f4196](https://github.com/fohte/armyknife/commit/75f41968247db9539a6dbdc4f93c81f5293c25b4))
+
 ## [0.1.934](https://github.com/fohte/armyknife/compare/v0.1.933...v0.1.934) (2026-11-26)
 
 
