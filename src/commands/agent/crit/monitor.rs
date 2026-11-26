@@ -33,7 +33,7 @@ pub(super) fn prepare_registration(port: u16, url: &str) -> (String, Option<serd
     registration::prepare_registration(port, url)
 }
 
-const MONITOR_POLL_INTERVAL: Duration = Duration::from_secs(1);
+const MONITOR_POLL_INTERVAL: Duration = Duration::from_secs(5);
 const STARTING_MARKER_TTL: Duration = Duration::from_secs(15);
 const CLEANUP_RETRIES: usize = 3;
 const CLEANUP_RETRY_DELAY: Duration = Duration::from_millis(500);
