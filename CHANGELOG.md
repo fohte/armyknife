@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.938](https://github.com/fohte/armyknife/compare/v0.1.937...v0.1.938) (2026-11-26)
+
+
+### Performance Improvements
+
+* **watch-web:** reuse session repository names ([#2301](https://github.com/fohte/armyknife/issues/2301)) ([0bd57ab](https://github.com/fohte/armyknife/commit/0bd57abf9ac23f9d2ac2f00f9b94668a3b960c61))
+
 ## [0.1.937](https://github.com/fohte/armyknife/compare/v0.1.936...v0.1.937) (2026-11-26)
 
 
