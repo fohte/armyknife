@@ -134,8 +134,7 @@ export function useConversationScroll({
       const userScrolledUp =
         scrollContainer.scrollTop < previousScrollTopRef.current - 0.5
       userScrollInputRef.current = false
-      followLatestRef.current =
-        !userScrolledUp && isConversationAtBottom(scrollContainer)
+      if (userScrolledUp) followLatestRef.current = false
     }
     const currentChildLayout = readConversationChildLayout(scrollContainer)
     const scrollBounds = scrollContainer.getBoundingClientRect()
