@@ -78,6 +78,7 @@ uuid = { version = "=1.29.3", features = ["v4"] }
 [dev-dependencies]
 rstest = "=0.28.0"
 temp-env = "=0.3.6"
+tokio = { version = "=1.54.1", features = ["test-util"] }
 tower = { version = "=0.5.3", features = ["util"] }
 flate2 = "=1.1.11"
 wiremock = "=0.6.5"

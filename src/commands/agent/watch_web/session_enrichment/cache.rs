@@ -2,8 +2,28 @@ use std::collections::{HashMap, HashSet};
 
 use crate::commands::agent::tq_session_tasks::order_tasks_by_priority;
 use crate::infra::github::PrProgressInfo;
+use crate::infra::tq::TqGithubLink;
 
 use super::{PullRequestKey, SessionTaskMetadata};
+
+pub(super) fn merge_task_github_links(
+    cached: &mut HashMap<String, Vec<TqGithubLink>>,
+    refreshed: HashMap<String, Vec<TqGithubLink>>,
+    requested_task_ids: &HashSet<String>,
+) {
+    for (task_id, links) in refreshed {
+        if requested_task_ids.contains(&task_id) {
+            cached.insert(task_id, links);
+        }
+    }
+}
+
+pub(super) fn prune_task_github_links(
+    cached: &mut HashMap<String, Vec<TqGithubLink>>,
+    stale_task_ids: &HashSet<String>,
+) {
+    cached.retain(|task_id, _| !stale_task_ids.contains(task_id));
+}
 
 pub(super) fn merge_pull_request_results(
     cached: &mut HashMap<PullRequestKey, Option<PrProgressInfo>>,
@@ -79,7 +99,6 @@ fn prune_unlinked_task_metadata(
         cached.updated_at.remove(task_id);
         cached.priority_order.remove(task_id);
         cached.task_projects.remove(task_id);
-        cached.github_links.remove(task_id);
     }
 }
 
@@ -118,11 +137,6 @@ fn merge_refreshed_task_metadata(
                 .insert(task_id.clone(), project.clone());
         } else {
             cached.task_projects.remove(task_id);
-        }
-        if let Some(links) = refreshed.github_links.get(task_id) {
-            cached.github_links.insert(task_id.clone(), links.clone());
-        } else {
-            cached.github_links.remove(task_id);
         }
     }
 
@@ -268,6 +282,34 @@ mod tests {
         assert_eq!(
             cached.updated_at,
             HashMap::from([("task-a".to_string(), refreshed_task_a_at)]),
+        );
+    }
+
+    #[test]
+    fn refreshed_task_github_links_are_cached_by_task() {
+        let mut cached = HashMap::new();
+
+        merge_task_github_links(
+            &mut cached,
+            HashMap::from([("task-a".to_string(), Vec::new())]),
+            &HashSet::from(["task-a".to_string()]),
+        );
+
+        assert_eq!(cached, HashMap::from([("task-a".to_string(), Vec::new())]),);
+    }
+
+    #[test]
+    fn prunes_task_github_links_for_stale_tasks() {
+        let mut cached = HashMap::from([
+            ("task-stale".to_string(), Vec::new()),
+            ("task-active".to_string(), Vec::new()),
+        ]);
+
+        prune_task_github_links(&mut cached, &HashSet::from(["task-stale".to_string()]));
+
+        assert_eq!(
+            cached,
+            HashMap::from([("task-active".to_string(), Vec::new())]),
         );
     }
 

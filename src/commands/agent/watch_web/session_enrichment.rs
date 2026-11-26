@@ -3,7 +3,7 @@ use std::future::Future;
 use std::hash::Hash;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use super::EnrichmentUpdates;
 use crate::commands::agent::tq_session_tasks::{
@@ -12,7 +12,10 @@ use crate::commands::agent::tq_session_tasks::{
 };
 use crate::commands::agent::types::Session;
 use crate::infra::github::{PrNumberQuery, PrProgressInfo};
-use crate::infra::tq::{TqClient, TqGithubLink, TqProjectSummary, TqTaskSummary};
+use crate::infra::tq::{
+    TQ_COMMAND_TIMEOUT, TqClient, TqGithubLink, TqProjectSummary, TqTaskSummary,
+};
+use tokio::time::Instant;
 
 mod cache;
 mod task_pull_requests;
@@ -24,6 +27,7 @@ use cache::{merge_session_task_metadata, prune_session_task_metadata};
 const CACHE_TTL: Duration = Duration::from_secs(30);
 const CACHE_KEY_RETENTION: Duration = Duration::from_secs(10 * 60);
 const FETCH_TIMEOUT: Duration = Duration::from_secs(35);
+const TASK_GITHUB_LINK_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
 type BranchPrKey = (String, String, String);
 type NumberPrKey = (String, String, u64);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -43,6 +47,14 @@ type PullRequestFetcher = Arc<
         + Send
         + Sync,
 >;
+type TaskGithubLinkFetcher = Arc<
+    dyn Fn(
+            HashSet<String>,
+            HashMap<String, Vec<TqGithubLink>>,
+        ) -> FetchFuture<HashMap<String, Vec<TqGithubLink>>>
+        + Send
+        + Sync,
+>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct SessionPullRequestInfo {
@@ -57,8 +69,10 @@ pub(super) struct SessionEnrichmentCache {
     tq: Arc<RefreshingCache<SessionTaskMetadata, String>>,
     pull_requests:
         Arc<RefreshingCache<HashMap<PullRequestKey, Option<PrProgressInfo>>, PullRequestKey>>,
+    task_github_links: Arc<RefreshingCache<HashMap<String, Vec<TqGithubLink>>, String>>,
     task_fetcher: TaskMetadataFetcher,
     pull_request_fetcher: PullRequestFetcher,
+    task_github_link_fetcher: TaskGithubLinkFetcher,
 }
 
 impl SessionEnrichmentCache {
@@ -77,7 +91,30 @@ impl SessionEnrichmentCache {
                 })
             },
         );
-        Self::with_fetchers(updates, FETCH_TIMEOUT, task_fetcher, pull_request_fetcher)
+        let task_github_link_fetcher: TaskGithubLinkFetcher = Arc::new(
+            |task_ids, previous| -> FetchFuture<HashMap<String, Vec<TqGithubLink>>> {
+                Box::pin(async move {
+                    Ok(task_pull_requests::fetch_task_github_links(
+                        &task_ids,
+                        &previous,
+                        |task_id| async move {
+                            TqClient
+                                .task_github_links(&task_id)
+                                .await
+                                .map_err(|error| error.to_string())
+                        },
+                    )
+                    .await)
+                })
+            },
+        );
+        Self::with_fetchers(
+            updates,
+            FETCH_TIMEOUT,
+            task_fetcher,
+            pull_request_fetcher,
+            task_github_link_fetcher,
+        )
     }
 
     fn with_fetchers(
@@ -85,12 +122,27 @@ impl SessionEnrichmentCache {
         fetch_timeout: Duration,
         task_fetcher: TaskMetadataFetcher,
         pull_request_fetcher: PullRequestFetcher,
+        task_github_link_fetcher: TaskGithubLinkFetcher,
     ) -> Self {
         Self {
-            tq: Arc::new(RefreshingCache::new(updates.clone(), fetch_timeout)),
-            pull_requests: Arc::new(RefreshingCache::new(updates, fetch_timeout)),
+            tq: Arc::new(RefreshingCache::new(
+                updates.clone(),
+                fetch_timeout,
+                CACHE_TTL,
+            )),
+            pull_requests: Arc::new(RefreshingCache::new(
+                updates.clone(),
+                fetch_timeout,
+                CACHE_TTL,
+            )),
+            task_github_links: Arc::new(RefreshingCache::new(
+                updates,
+                FETCH_TIMEOUT,
+                TASK_GITHUB_LINK_CACHE_TTL,
+            )),
             task_fetcher,
             pull_request_fetcher,
+            task_github_link_fetcher,
         }
     }
 
@@ -108,16 +160,52 @@ impl SessionEnrichmentCache {
             .collect::<HashSet<_>>();
         let fetch_session_ids = session_ids.clone();
         let fetcher = Arc::clone(&self.task_fetcher);
-        self.tq
+        let mut metadata = self
+            .tq
             .get_or_refresh(
                 "tq",
                 session_ids,
-                move |previous| fetcher(fetch_session_ids, previous),
+                None,
+                move |previous, _| fetcher(fetch_session_ids, previous),
                 merge_session_task_metadata,
                 prune_session_task_metadata,
             )
-            .await
+            .await;
+
+        let task_ids = metadata
+            .links
+            .values()
+            .flatten()
+            .map(|task| task.task_id.clone())
+            .collect::<HashSet<_>>();
+        if !task_ids.is_empty() {
+            let fetch_timeout = task_github_link_fetch_timeout(task_ids.len());
+            let fetcher = Arc::clone(&self.task_github_link_fetcher);
+            metadata.github_links = self
+                .task_github_links
+                .get_or_refresh(
+                    "TQ task GitHub links",
+                    task_ids,
+                    Some(fetch_timeout),
+                    move |previous, expired_task_ids| fetcher(expired_task_ids, previous),
+                    cache::merge_task_github_links,
+                    cache::prune_task_github_links,
+                )
+                .await;
+        } else {
+            metadata.github_links.clear();
+        }
+
+        metadata
     }
+}
+
+fn task_github_link_fetch_timeout(task_count: usize) -> Duration {
+    let fetch_waves = task_count.div_ceil(task_pull_requests::TASK_GITHUB_LINK_FETCH_CONCURRENCY);
+    let fetch_waves = u32::try_from(fetch_waves).unwrap_or(u32::MAX);
+    TQ_COMMAND_TIMEOUT
+        .saturating_mul(fetch_waves)
+        .saturating_add(FETCH_TIMEOUT)
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -134,6 +222,7 @@ struct RefreshingCache<T, K> {
     state: tokio::sync::Mutex<CacheState<T, K>>,
     updates: EnrichmentUpdates,
     fetch_timeout: Duration,
+    cache_ttl: Duration,
 }
 
 struct CacheState<T, K> {
@@ -148,7 +237,7 @@ where
     T: Default,
     K: Eq + Hash,
 {
-    fn new(updates: EnrichmentUpdates, fetch_timeout: Duration) -> Self {
+    fn new(updates: EnrichmentUpdates, fetch_timeout: Duration, cache_ttl: Duration) -> Self {
         Self {
             state: tokio::sync::Mutex::new(CacheState {
                 value: T::default(),
@@ -158,6 +247,7 @@ where
             }),
             updates,
             fetch_timeout,
+            cache_ttl,
         }
     }
 }
@@ -171,12 +261,13 @@ where
         self: &Arc<Self>,
         resource: &'static str,
         keys: HashSet<K>,
+        fetch_timeout: Option<Duration>,
         fetch: F,
         merge: fn(&mut T, T, &HashSet<K>),
         prune: fn(&mut T, &HashSet<K>),
     ) -> T
     where
-        F: FnOnce(T) -> Fut + Send + 'static,
+        F: FnOnce(T, HashSet<K>) -> Fut + Send + 'static,
         Fut: Future<Output = Result<T, String>> + Send + 'static,
     {
         let mut state = self.state.lock().await;
@@ -196,28 +287,37 @@ where
         }
         prune(&mut state.value, &stale_keys);
         let cached = state.value.clone();
-        let expired = keys.iter().any(|key| {
-            state
-                .attempted_at
-                .get(key)
-                .is_none_or(|last_attempt| last_attempt.elapsed() >= CACHE_TTL)
-        });
+        let expired_keys = keys
+            .iter()
+            .filter(|key| {
+                state
+                    .attempted_at
+                    .get(*key)
+                    .is_none_or(|last_attempt| last_attempt.elapsed() >= self.cache_ttl)
+            })
+            .cloned()
+            .collect::<HashSet<_>>();
 
-        if expired && !state.refresh_in_flight {
+        if !expired_keys.is_empty() && !state.refresh_in_flight {
             state.refresh_in_flight = true;
             let cache = Arc::clone(self);
             let previous = cached.clone();
-            let attempted_keys = keys.clone();
-            let fetch_timeout = self.fetch_timeout;
+            let attempted_keys = expired_keys.clone();
+            let fetch_timeout = fetch_timeout.unwrap_or(self.fetch_timeout);
             tokio::spawn(async move {
-                let result = match tokio::time::timeout(fetch_timeout, fetch(previous)).await {
+                let result = match tokio::time::timeout(
+                    fetch_timeout,
+                    fetch(previous, attempted_keys.clone()),
+                )
+                .await
+                {
                     Ok(result) => result,
                     Err(_) => Err(format!("lookup exceeded {fetch_timeout:?}")),
                 };
                 let mut state = cache.state.lock().await;
                 let attempted_at = Instant::now();
-                for key in attempted_keys {
-                    state.attempted_at.insert(key, attempted_at);
+                for key in &attempted_keys {
+                    state.attempted_at.insert(key.clone(), attempted_at);
                 }
                 match result {
                     Ok(value) => {
@@ -270,18 +370,6 @@ async fn fetch_task_metadata(
         }
     };
 
-    let github_links = task_pull_requests::fetch_task_github_links(
-        &task_ids,
-        &previous.github_links,
-        |task_id| async move {
-            TqClient
-                .task_github_links(&task_id)
-                .await
-                .map_err(|error| error.to_string())
-        },
-    )
-    .await;
-
     let updated_at = task_update_timestamps(&tasks);
 
     let (priorities, priority_order) = task_priority_metadata(tasks.clone());
@@ -300,7 +388,7 @@ async fn fetch_task_metadata(
         priorities,
         priority_order,
         task_projects,
-        github_links,
+        github_links: previous.github_links,
     })
 }
 
@@ -373,16 +461,30 @@ async fn detected_tq_client() -> Result<Option<TqClient>, String> {
 #[cfg(test)]
 mod tests {
     use super::test_support::{
-        branch_key, cache_with_fetchers, metadata, session, session_with_branch,
-        session_with_branch_name, wait_for_refresh,
+        branch_key, cache_with_fetchers, cache_with_task_github_link_fetcher, metadata, session,
+        session_with_branch, session_with_branch_name, wait_for_refresh,
+        wait_for_refresh_with_timeout,
     };
     use super::*;
     use crate::commands::agent::tq_session_tasks::task_priority_metadata;
     use crate::infra::github::{PrCiState, PrInfo, PrProgressInfo, PrState};
     use crate::infra::tq::TqGithubLink;
     use rstest::rstest;
+    use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::sync::Notify;
+
+    fn task_link_fetcher(requested: Arc<Mutex<Vec<HashSet<String>>>>) -> TaskGithubLinkFetcher {
+        Arc::new(move |task_ids, _| {
+            requested.lock().unwrap().push(task_ids.clone());
+            Box::pin(async move {
+                Ok(task_ids
+                    .into_iter()
+                    .map(|task_id| (task_id, Vec::new()))
+                    .collect())
+            })
+        })
+    }
 
     fn head_info(number: u64) -> PrProgressInfo {
         PrProgressInfo {
@@ -778,6 +880,234 @@ mod tests {
                     "session-c".to_string(),
                 ])),
                 3,
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn slow_task_github_lookup_does_not_delay_task_metadata() {
+        let updates = EnrichmentUpdates::new();
+        let mut receiver = updates.subscribe();
+        let task_fetcher: TaskMetadataFetcher =
+            Arc::new(|session_ids, _| Box::pin(async move { Ok(metadata(session_ids)) }));
+        let pull_request_fetcher: PullRequestFetcher =
+            Arc::new(|_, _| Box::pin(async { Ok(HashMap::new()) }));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let fetch_calls = Arc::clone(&calls);
+        let fetch_started = Arc::new(Notify::new());
+        let fetch_started_signal = Arc::clone(&fetch_started);
+        let release_fetch = Arc::new(Notify::new());
+        let release_fetch_signal = Arc::clone(&release_fetch);
+        let task_github_link_fetcher: TaskGithubLinkFetcher = Arc::new(move |_, previous| {
+            let calls = Arc::clone(&fetch_calls);
+            let fetch_started = Arc::clone(&fetch_started_signal);
+            let release_fetch = Arc::clone(&release_fetch_signal);
+            Box::pin(async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                fetch_started.notify_one();
+                release_fetch.notified().await;
+                Ok(previous)
+            })
+        });
+        let cache = cache_with_task_github_link_fetcher(
+            updates,
+            Duration::from_secs(5),
+            task_fetcher,
+            pull_request_fetcher,
+            task_github_link_fetcher,
+        );
+        let session = session("session-a", None);
+
+        let _ = cache.task_metadata(std::slice::from_ref(&session)).await;
+        wait_for_refresh(&mut receiver).await;
+        let refreshed = tokio::time::timeout(
+            Duration::from_secs(1),
+            cache.task_metadata(std::slice::from_ref(&session)),
+        )
+        .await
+        .ok();
+        fetch_started.notified().await;
+        release_fetch.notify_one();
+        wait_for_refresh(&mut receiver).await;
+        let after_link_refresh = cache.task_metadata(std::slice::from_ref(&session)).await;
+
+        assert_eq!(
+            (refreshed, after_link_refresh, calls.load(Ordering::SeqCst)),
+            (
+                Some(metadata(HashSet::from(["session-a".to_string()]))),
+                metadata(HashSet::from(["session-a".to_string()])),
+                1,
+            ),
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn task_github_link_cache_refreshes_only_expired_tasks() {
+        let updates = EnrichmentUpdates::new();
+        let mut receiver = updates.subscribe();
+        let requested = Arc::new(Mutex::new(Vec::new()));
+        let task_fetcher: TaskMetadataFetcher =
+            Arc::new(|session_ids, _| Box::pin(async move { Ok(metadata(session_ids)) }));
+        let pull_request_fetcher: PullRequestFetcher =
+            Arc::new(|_, _| Box::pin(async { Ok(HashMap::new()) }));
+        let task_github_link_fetcher = task_link_fetcher(Arc::clone(&requested));
+        let cache = cache_with_task_github_link_fetcher(
+            updates,
+            FETCH_TIMEOUT,
+            task_fetcher,
+            pull_request_fetcher,
+            task_github_link_fetcher,
+        );
+        let session_a = session("session-a", None);
+        let session_b = session("session-b", None);
+        let sessions_b = [session_b.clone()];
+        let sessions_a_b = [session_a, session_b];
+        let expected_b = SessionTaskMetadata {
+            github_links: HashMap::from([("task-session-b".to_string(), Vec::new())]),
+            ..metadata(HashSet::from(["session-b".to_string()]))
+        };
+        let expected_a_b = SessionTaskMetadata {
+            github_links: HashMap::from([
+                ("task-session-a".to_string(), Vec::new()),
+                ("task-session-b".to_string(), Vec::new()),
+            ]),
+            ..metadata(HashSet::from([
+                "session-a".to_string(),
+                "session-b".to_string(),
+            ]))
+        };
+
+        let initial = cache.task_metadata(&sessions_b).await;
+        wait_for_refresh_with_timeout(&mut receiver, Duration::from_secs(2 * 60)).await;
+        let task_b_links_refreshing = cache.task_metadata(&sessions_b).await;
+        wait_for_refresh_with_timeout(&mut receiver, Duration::from_secs(2 * 60)).await;
+        let task_b_cached = cache.task_metadata(&sessions_b).await;
+        tokio::time::advance(Duration::from_secs(4 * 60 + 55)).await;
+        let before_session_refresh = cache.task_metadata(&sessions_a_b).await;
+        wait_for_refresh_with_timeout(&mut receiver, Duration::from_secs(2 * 60)).await;
+        let before_task_a_link_refresh = cache.task_metadata(&sessions_a_b).await;
+        wait_for_refresh_with_timeout(&mut receiver, Duration::from_secs(2 * 60)).await;
+        let after_task_a_link_refresh = cache.task_metadata(&sessions_a_b).await;
+        tokio::time::advance(Duration::from_secs(10)).await;
+        let before_task_b_link_refresh = cache.task_metadata(&sessions_a_b).await;
+        wait_for_refresh_with_timeout(&mut receiver, Duration::from_secs(2 * 60)).await;
+        let after_task_b_link_refresh = cache.task_metadata(&sessions_a_b).await;
+
+        assert_eq!(
+            (
+                initial,
+                task_b_links_refreshing,
+                task_b_cached,
+                before_session_refresh,
+                before_task_a_link_refresh,
+                after_task_a_link_refresh,
+                before_task_b_link_refresh,
+                after_task_b_link_refresh,
+                requested.lock().unwrap().clone(),
+            ),
+            (
+                SessionTaskMetadata::default(),
+                metadata(HashSet::from(["session-b".to_string()])),
+                expected_b.clone(),
+                expected_b.clone(),
+                SessionTaskMetadata {
+                    github_links: expected_b.github_links.clone(),
+                    ..metadata(HashSet::from([
+                        "session-a".to_string(),
+                        "session-b".to_string(),
+                    ]))
+                },
+                expected_a_b.clone(),
+                expected_a_b.clone(),
+                expected_a_b,
+                vec![
+                    HashSet::from(["task-session-b".to_string()]),
+                    HashSet::from(["task-session-a".to_string()]),
+                    HashSet::from(["task-session-b".to_string()]),
+                ],
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::single_wave(4, Duration::from_secs(45))]
+    #[case::several_waves(14, Duration::from_secs(75))]
+    #[case::measured_task_count(50, Duration::from_secs(165))]
+    fn task_github_link_fetch_timeout_covers_queued_waves(
+        #[case] task_count: usize,
+        #[case] expected: Duration,
+    ) {
+        assert_eq!(task_github_link_fetch_timeout(task_count), expected);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn task_link_fetch_uses_the_per_refresh_timeout_override() {
+        let updates = EnrichmentUpdates::new();
+        let mut receiver = updates.subscribe();
+        let sessions = (0..14)
+            .map(|index| session(&format!("session-{index}"), None))
+            .collect::<Vec<_>>();
+        let session_ids = sessions
+            .iter()
+            .map(|session| session.session_id.clone())
+            .collect::<HashSet<_>>();
+        let task_ids = session_ids
+            .iter()
+            .map(|session_id| format!("task-{session_id}"))
+            .collect::<HashSet<_>>();
+        let expected = SessionTaskMetadata {
+            github_links: task_ids
+                .iter()
+                .map(|task_id| (task_id.clone(), Vec::new()))
+                .collect(),
+            ..metadata(session_ids.clone())
+        };
+        let requested = Arc::new(Mutex::new(Vec::new()));
+        let fetch_requests = Arc::clone(&requested);
+        let task_github_link_fetcher: TaskGithubLinkFetcher = Arc::new(move |task_ids, _| {
+            fetch_requests.lock().unwrap().push(task_ids.clone());
+            Box::pin(async move {
+                tokio::time::sleep(Duration::from_secs(40)).await;
+                Ok(task_ids
+                    .into_iter()
+                    .map(|task_id| (task_id, Vec::new()))
+                    .collect())
+            })
+        });
+        let task_fetcher: TaskMetadataFetcher =
+            Arc::new(|session_ids, _| Box::pin(async move { Ok(metadata(session_ids)) }));
+        let pull_request_fetcher: PullRequestFetcher =
+            Arc::new(|_, _| Box::pin(async { Ok(HashMap::new()) }));
+        let cache = cache_with_task_github_link_fetcher(
+            updates,
+            Duration::from_secs(5),
+            task_fetcher,
+            pull_request_fetcher,
+            task_github_link_fetcher,
+        );
+
+        let initial = cache.task_metadata(&sessions).await;
+        wait_for_refresh_with_timeout(&mut receiver, Duration::from_secs(2 * 60)).await;
+        let before_link_refresh =
+            tokio::time::timeout(Duration::from_secs(1), cache.task_metadata(&sessions))
+                .await
+                .ok();
+        tokio::time::advance(Duration::from_secs(40)).await;
+        wait_for_refresh_with_timeout(&mut receiver, Duration::from_secs(2 * 60)).await;
+        let after_link_refresh = cache.task_metadata(&sessions).await;
+
+        assert_eq!(
+            (
+                initial,
+                before_link_refresh,
+                after_link_refresh,
+                requested.lock().unwrap().clone(),
+            ),
+            (
+                SessionTaskMetadata::default(),
+                Some(metadata(session_ids)),
+                expected,
+                vec![task_ids],
             ),
         );
     }
