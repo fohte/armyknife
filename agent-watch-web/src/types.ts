@@ -322,6 +322,7 @@ export type SkillSuggestion = {
 
 export type ConversationResponse = {
   messages: ChatItem[]
+  messageImageSources?: Record<string, Record<string, string | null>>
   backgroundTasks: BackgroundTask[]
   vibeMode?: VibeMode
   skills?: SkillSuggestion[]

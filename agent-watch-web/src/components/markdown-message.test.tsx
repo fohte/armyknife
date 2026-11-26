@@ -3,8 +3,15 @@ import { expect, it } from 'vitest'
 
 import { MarkdownMessage } from '#components/markdown-message'
 
-function renderMessage(markdown: string, className?: string) {
-  const props = className === undefined ? {} : { className }
+function renderMessage(
+  markdown: string,
+  className?: string,
+  imageSources?: Readonly<Record<string, string | null>>,
+) {
+  const props = {
+    ...(className === undefined ? {} : { className }),
+    ...(imageSources === undefined ? {} : { imageSources }),
+  }
   return renderToStaticMarkup(
     <MarkdownMessage {...props}>{markdown}</MarkdownMessage>,
   )
@@ -53,6 +60,27 @@ it('renders markdown images with the shared conversation image treatment', () =>
     renderMessage('![Sample screenshot](/api/images/fixture-image.png)'),
   ).toBe(
     '<div class="markdown-message"><p><button class="image-lightbox-trigger" type="button" aria-label="Enlarge Sample screenshot"><img class="chat-user-image" src="/api/images/fixture-image.png" alt="Sample screenshot" loading="lazy" decoding="async"/></button></p></div>',
+  )
+})
+
+it('uses the server source for a copied assistant image', () => {
+  expect(
+    renderMessage('![](/tmp/fixture.png)', undefined, {
+      '/tmp/fixture.png':
+        '/api/sessions/fixture-session/answer-images/fixture-key',
+    }),
+  ).toBe(
+    '<div class="markdown-message"><p><button class="image-lightbox-trigger" type="button" aria-label="Enlarge image"><img class="chat-user-image" src="/api/sessions/fixture-session/answer-images/fixture-key" alt="" loading="lazy" decoding="async"/></button></p></div>',
+  )
+})
+
+it('shows an unavailable message for an ineligible assistant image', () => {
+  expect(
+    renderMessage('![](/tmp/fixture.txt)', undefined, {
+      '/tmp/fixture.txt': null,
+    }),
+  ).toBe(
+    '<div class="markdown-message"><p><span class="markdown-image-unavailable">表示できません: /tmp/fixture.txt</span></p></div>',
   )
 })
 

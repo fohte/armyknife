@@ -40,6 +40,7 @@ export type ConversationMessageRowProps = {
   decisionPosition: string | undefined
   onSelectDecision: (seq: number) => void
   message: ChatItem
+  imageSources?: Readonly<Record<string, string | null>>
   pendingAction: PendingPermissionActionState
   openInTerminalStatus: OpenInTerminalStatus
   onAction: (
@@ -71,6 +72,7 @@ export function renderConversationMessage({
   decisionPosition,
   onSelectDecision,
   message,
+  imageSources,
   conversationIndex,
   pendingAction,
   openInTerminalStatus,
@@ -151,6 +153,7 @@ export function renderConversationMessage({
     return (
       <article className={className}>
         <MarkdownMessage
+          {...(imageSources === undefined ? {} : { imageSources })}
           {...(sessionId === undefined ? {} : { sessionId })}
           {...(onCommandExecuted === undefined ? {} : { onCommandExecuted })}
           {...(onCommandStarted === undefined ? {} : { onCommandStarted })}

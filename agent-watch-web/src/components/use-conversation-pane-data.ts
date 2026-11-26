@@ -32,6 +32,34 @@ const INITIAL_MESSAGE_LIMIT = 100
 const MAX_LOADED_MESSAGES = 300
 const RETAINED_MESSAGE_COUNT = 200
 
+function mergeMessageImageSources(
+  ...maps: readonly (
+    Record<string, Record<string, string | null>> | undefined
+  )[]
+): Record<string, Record<string, string | null>> | undefined {
+  const merged: Record<string, Record<string, string | null>> = {}
+  for (const map of maps) {
+    if (map === undefined) continue
+    for (const [index, sources] of Object.entries(map)) {
+      merged[index] = sources
+    }
+  }
+  return Object.keys(merged).length === 0 ? undefined : merged
+}
+
+function shiftMessageImageSources(
+  sources: Record<string, Record<string, string | null>> | undefined,
+  offset: number,
+): Record<string, Record<string, string | null>> | undefined {
+  if (sources === undefined || offset === 0) return sources
+  return Object.fromEntries(
+    Object.entries(sources).map(([index, source]) => [
+      String(Number(index) + offset),
+      source,
+    ]),
+  )
+}
+
 type UseConversationPaneDataOptions = {
   sessionId: string
   refreshKey: number
@@ -227,8 +255,15 @@ export function useConversationPaneData({
             ...messagesResult.value.messages,
           ]
         : messagesResult.value.messages
+      const messageImageSources = preserveLoadedPrefix
+        ? mergeMessageImageSources(
+            previous.messageImageSources,
+            messagesResult.value.messageImageSources,
+          )
+        : messagesResult.value.messageImageSources
       refreshedConversation = {
         ...messagesResult.value,
+        ...(messageImageSources === undefined ? {} : { messageImageSources }),
         start,
         messages:
           alreadyLoaded && !sameEpoch
@@ -337,6 +372,15 @@ export function useConversationPaneData({
           : [...response.messages, ...latest.messages]
         const epochChanged = response.epoch !== latest.epoch
         const start = epochChanged ? 0 : response.start
+        const messageImageSources = epochReset
+          ? response.messageImageSources
+          : mergeMessageImageSources(
+              response.messageImageSources,
+              shiftMessageImageSources(
+                latest.messageImageSources,
+                start + response.messages.length - latest.start,
+              ),
+            )
         // Epoch changes can renumber retained messages, so rebase their merge results.
         if (!epochReset) {
           shiftMergeTimelineIndices?.({
@@ -349,6 +393,7 @@ export function useConversationPaneData({
         markMessagesLoaded()
         updateConversation({
           ...response,
+          ...(messageImageSources === undefined ? {} : { messageImageSources }),
           start,
           total: response.total,
           stableStart: undefined,

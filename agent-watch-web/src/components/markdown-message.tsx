@@ -216,6 +216,7 @@ function remarkTrimNonAsciiAutolinks() {
 type MarkdownMessageProps = {
   children: string
   className?: string
+  imageSources?: Readonly<Record<string, string | null>>
   inline?: boolean
   mobile?: boolean
   sessionId?: string
@@ -380,10 +381,19 @@ const MarkdownParagraph: NonNullable<Components['p']> = ({ children }) => (
   <span>{children}</span>
 )
 
-const MarkdownImage: NonNullable<Components['img']> = ({ src, alt, title }) =>
-  src === undefined || src === '' ? null : (
+const MarkdownImage: NonNullable<Components['img']> = ({ src, alt, title }) => {
+  const { imageSources } = useContext(MarkdownComponentContext)
+  if (src === undefined || src === '') return null
+  const mappedSource = imageSources?.[src]
+  if (mappedSource === null) {
+    return (
+      <span className="markdown-image-unavailable">表示できません: {src}</span>
+    )
+  }
+
+  return (
     <ImageLightbox
-      src={src}
+      src={mappedSource ?? src}
       alt={alt ?? ''}
       {...(title === undefined ? {} : { title })}
       loading="lazy"
@@ -391,6 +401,7 @@ const MarkdownImage: NonNullable<Components['img']> = ({ src, alt, title }) =>
       imageClassName="chat-user-image"
     />
   )
+}
 
 const markdownComponents: Components = {
   a: MarkdownAnchor,
@@ -408,6 +419,7 @@ const inlineMarkdownComponents: Components = {
 export const MarkdownMessage = memo(function MarkdownMessage({
   children,
   className,
+  imageSources,
   inline = false,
   mobile = false,
   sessionId,
@@ -434,6 +446,7 @@ export const MarkdownMessage = memo(function MarkdownMessage({
   const componentContext: MarkdownComponentContextValue = {
     sessionsById,
     webUis: sessionLinks.webUis ?? [],
+    ...(imageSources === undefined ? {} : { imageSources }),
     mobile,
     ...(sessionLinks.onSelectSession === undefined
       ? {}

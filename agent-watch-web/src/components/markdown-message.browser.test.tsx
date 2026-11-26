@@ -591,6 +591,36 @@ it('opens a Markdown image in the modal lightbox', async () => {
   })
 })
 
+it('renders a copied assistant image from its stored URL', () => {
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <MarkdownMessage
+        imageSources={{
+          '/tmp/fixture.png':
+            '/api/sessions/fixture-session/answer-images/fixture-key',
+        }}
+      >
+        {'![](/tmp/fixture.png)'}
+      </MarkdownMessage>,
+    )
+  })
+
+  const getActual = () => ({
+    imageSource:
+      container
+        .querySelector<HTMLImageElement>('.chat-user-image')
+        ?.getAttribute('src') ?? null,
+    unavailableMessage:
+      container.querySelector('.markdown-image-unavailable')?.textContent ??
+      null,
+  })
+  expect(getActual()).toEqual({
+    imageSource: '/api/sessions/fixture-session/answer-images/fixture-key',
+    unavailableMessage: null,
+  })
+})
+
 it('keeps the link next to an expandable linked Markdown image', async () => {
   root = createRoot(container)
   act(() => {

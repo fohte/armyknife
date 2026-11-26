@@ -76,10 +76,54 @@ fn routes_with(
             get(get_stored_file),
         )
         .route(
+            "/sessions/{session_id}/answer-images/{image_id}",
+            get(get_answer_image),
+        )
+        .route(
             "/sessions/{session_id}/transcript-files/{tool_use_id}/{index}",
             get(get_transcript_file),
         )
         .with_state(state)
+}
+
+async fn get_answer_image(
+    State(state): State<RoutesState>,
+    AxumPath((session_id, image_id)): AxumPath<(String, String)>,
+) -> Response {
+    if image_id.len() != 64 || !image_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let load_session = Arc::clone(&state.load_session);
+    let storage_root = state.storage_root;
+    let result = tokio::task::spawn_blocking(move || -> Result<_> {
+        if load_session(&session_id)?.is_none() {
+            return Ok(None);
+        }
+        super::messages::answer_images::read_snapshot(&storage_root, &session_id, &image_id)
+    })
+    .await;
+    match result {
+        Ok(Ok(Some((bytes, mime_type)))) => {
+            let mut response = Body::from(bytes).into_response();
+            let headers = response.headers_mut();
+            headers.insert(CONTENT_TYPE, HeaderValue::from_static(mime_type));
+            headers.insert(
+                CACHE_CONTROL,
+                HeaderValue::from_static("private, max-age=31536000, immutable"),
+            );
+            headers.insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+            response
+        }
+        Ok(Ok(None)) => StatusCode::NOT_FOUND.into_response(),
+        Ok(Err(error)) => {
+            tracing::warn!(%error, "failed to read answer image snapshot");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+        Err(error) => {
+            tracing::warn!(%error, "answer image task failed");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
 }
 
 pub(super) fn stored_chat_files(

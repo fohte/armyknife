@@ -276,6 +276,8 @@ impl ConversationResponse {
     }
 
     fn set_initial_epoch_page(&mut self, page: Vec<ChatItem>, has_older: bool) {
+        let page_start = self.messages.len().saturating_sub(page.len());
+        self.rebase_image_sources(page_start, self.messages.len());
         let cursor = MessageEpochCursor::from_messages(&page).and_then(|cursor| cursor.encode());
         self.messages = page;
         self.start = 0;
@@ -290,6 +292,7 @@ impl ConversationResponse {
     }
 
     fn apply_epoch_range(&mut self, epoch_start: usize, range: MessageRange) {
+        self.rebase_image_sources(epoch_start, self.messages.len());
         let decisions = std::mem::take(&mut self.decisions);
         let has_unanswered_proposal = self.has_unanswered_proposal;
         self.messages.drain(..epoch_start);
@@ -313,6 +316,7 @@ impl ConversationResponse {
         }
 
         let epoch_messages = self.messages[page_start..].to_vec();
+        self.rebase_image_sources(page_start, epoch_start);
         let new_cursor =
             MessageEpochCursor::from_messages(&page).and_then(|cursor| cursor.encode());
         self.start = 0;
@@ -331,6 +335,7 @@ impl ConversationResponse {
 
     fn apply_empty_older_epoch_page_from_start(&mut self, epoch_start: usize, epoch: &str) {
         let epoch_messages = self.messages[epoch_start..].to_vec();
+        self.message_image_sources.clear();
         let decisions = std::mem::take(&mut self.decisions);
         let has_unanswered_proposal = self.has_unanswered_proposal;
         self.messages.clear();
@@ -345,6 +350,15 @@ impl ConversationResponse {
         self.has_unanswered_proposal = has_unanswered_proposal;
         self.epoch = Some(epoch.to_owned());
         self.older_cursor = None;
+    }
+
+    fn rebase_image_sources(&mut self, start: usize, end: usize) {
+        self.message_image_sources = std::mem::take(&mut self.message_image_sources)
+            .into_iter()
+            .filter_map(|(index, sources)| {
+                (start <= index && index < end).then_some((index - start, sources))
+            })
+            .collect();
     }
 
     fn apply_latest_epoch_reset(&mut self) {
@@ -405,6 +419,8 @@ impl ConversationResponse {
             .then(|| message_digest(&self.messages[stable_start..stable_end]))
             .flatten();
 
+        self.message_image_sources
+            .retain(|index, _| start <= *index && *index < end);
         self.messages = self.messages[start..end].to_vec();
         self.start = start;
         self.stable_start = stable_digest.as_ref().map(|_| stable_start);
@@ -545,6 +561,55 @@ mod tests {
         };
 
         assert_eq!(range.older_page_limit(), Some(100));
+    }
+
+    #[test]
+    fn numeric_range_keeps_image_sources_at_their_absolute_message_indices() {
+        let sources = |key: &str| {
+            std::collections::BTreeMap::from([(
+                "/tmp/fixture.png".to_owned(),
+                Some(format!("/api/answer-images/{key}")),
+            )])
+        };
+        let mut conversation = ConversationResponse {
+            messages: (0..4)
+                .map(|index| ChatItem::Assistant {
+                    text: format!("Fixture message {index}."),
+                })
+                .collect(),
+            message_image_sources: std::collections::BTreeMap::from([
+                (1, sources("first")),
+                (3, sources("last")),
+            ]),
+            ..ConversationResponse::default()
+        };
+        conversation.update_metadata();
+
+        conversation.apply_range(MessageRange {
+            before: Some(4),
+            limit: Some(2),
+            ..MessageRange::default()
+        });
+
+        assert_eq!(
+            (
+                conversation.start,
+                conversation.messages,
+                conversation.message_image_sources,
+            ),
+            (
+                2,
+                vec![
+                    ChatItem::Assistant {
+                        text: "Fixture message 2.".to_owned(),
+                    },
+                    ChatItem::Assistant {
+                        text: "Fixture message 3.".to_owned(),
+                    },
+                ],
+                std::collections::BTreeMap::from([(3, sources("last"))]),
+            ),
+        );
     }
 
     #[test]

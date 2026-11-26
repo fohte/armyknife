@@ -420,6 +420,9 @@ export function ConversationPane({
       sessions={sessions}
       sessionLinkTargets={sessionLinkTargets}
       messages={messages}
+      {...(displayedConversation.messageImageSources === undefined
+        ? {}
+        : { messageImageSources: displayedConversation.messageImageSources })}
       start={conversation.start}
       epoch={conversation.epoch}
       olderCursor={conversation.olderCursor}
