@@ -337,6 +337,23 @@ fn incremental_result(
     )
 }
 
+fn assert_incremental_matches_full_parse_at_every_split_point(
+    transcript: &str,
+    expected: &super::ParsedTranscript,
+) {
+    let transcript_bytes = transcript.as_bytes();
+    for split in 0..=transcript_bytes.len() {
+        if !transcript.is_char_boundary(split) {
+            continue;
+        }
+        assert_eq!(
+            incremental_result(&transcript_bytes[..split], &transcript_bytes[split..]),
+            (IncrementalAppend::Applied, expected.clone()),
+            "transcript split at byte {split}",
+        );
+    }
+}
+
 const PARALLEL_TOOLS_WITH_SYSTEM_AFTER_RESULT: &str = indoc! {r#"
     {"type":"user","uuid":"root","parentUuid":null,"timestamp":"2026-01-01T00:00:01Z","message":{"content":"Run two fixture tools."}}
     {"type":"assistant","uuid":"tool-call","parentUuid":"root","timestamp":"2026-01-01T00:00:02Z","message":{"content":[{"type":"tool_use","id":"call-a","name":"Read","input":{"file_path":"/fixture/a"}},{"type":"tool_use","id":"call-b","name":"Read","input":{"file_path":"/fixture/b"}}]}}
@@ -614,30 +631,21 @@ fn appended_transcript_matches_a_full_parse(
 
 #[test]
 fn parallel_tool_result_matches_a_full_parse_at_every_split_point() {
-    let mut transcript = PARALLEL_TOOL_RESULT_BRANCH_PREFIX.as_bytes().to_vec();
-    transcript.extend_from_slice(PARALLEL_TOOL_RESULT_BRANCH_SUFFIX.as_bytes());
-    let transcript_text = std::str::from_utf8(&transcript).unwrap();
-    let expected = parse_all(&transcript, empty_additions());
+    let transcript = format!(
+        "{}{}",
+        PARALLEL_TOOL_RESULT_BRANCH_PREFIX, PARALLEL_TOOL_RESULT_BRANCH_SUFFIX
+    );
+    let expected = parse_all(transcript.as_bytes(), empty_additions());
 
-    for split in 0..=transcript.len() {
-        if !transcript_text.is_char_boundary(split) {
-            continue;
-        }
-        let (append, actual) = incremental_result(&transcript[..split], &transcript[split..]);
-
-        assert_eq!(
-            (append, actual),
-            (IncrementalAppend::Applied, expected.clone()),
-            "transcript split at byte {split}",
-        );
-    }
+    assert_incremental_matches_full_parse_at_every_split_point(&transcript, &expected);
 }
 
 #[test]
 fn parallel_tool_result_after_an_active_followup_matches_a_full_parse_at_every_split_point() {
-    let mut transcript = PARALLEL_TOOL_RESULT_BRANCH_PREFIX.as_bytes().to_vec();
-    transcript.extend_from_slice(PARALLEL_TOOL_RESULT_WITH_FOLLOWUP_SUFFIX.as_bytes());
-    let transcript_text = std::str::from_utf8(&transcript).unwrap();
+    let transcript = format!(
+        "{}{}",
+        PARALLEL_TOOL_RESULT_BRANCH_PREFIX, PARALLEL_TOOL_RESULT_WITH_FOLLOWUP_SUFFIX
+    );
     let expected = (
         vec![
             ChatItem::User {
@@ -675,23 +683,15 @@ fn parallel_tool_result_after_an_active_followup_matches_a_full_parse_at_every_s
         Vec::new(),
     );
 
-    for split in 0..=transcript.len() {
-        if !transcript_text.is_char_boundary(split) {
-            continue;
-        }
-        assert_eq!(
-            incremental_result(&transcript[..split], &transcript[split..]),
-            (IncrementalAppend::Applied, expected.clone()),
-            "transcript split at byte {split}",
-        );
-    }
+    assert_incremental_matches_full_parse_at_every_split_point(&transcript, &expected);
 }
 
 #[test]
 fn compact_boundary_tool_result_matches_a_full_parse_at_every_split_point() {
-    let mut transcript = COMPACT_BRANCH_PENDING_TOOL_PREFIX.as_bytes().to_vec();
-    transcript.extend_from_slice(COMPACT_BRANCH_PENDING_TOOL_SUFFIX.as_bytes());
-    let transcript_text = std::str::from_utf8(&transcript).unwrap();
+    let transcript = format!(
+        "{}{}",
+        COMPACT_BRANCH_PENDING_TOOL_PREFIX, COMPACT_BRANCH_PENDING_TOOL_SUFFIX
+    );
     let expected = (
         vec![
             ChatItem::User {
@@ -721,16 +721,7 @@ fn compact_boundary_tool_result_matches_a_full_parse_at_every_split_point() {
         Vec::new(),
     );
 
-    for split in 0..=transcript.len() {
-        if !transcript_text.is_char_boundary(split) {
-            continue;
-        }
-        assert_eq!(
-            incremental_result(&transcript[..split], &transcript[split..]),
-            (IncrementalAppend::Applied, expected.clone()),
-            "transcript split at byte {split}",
-        );
-    }
+    assert_incremental_matches_full_parse_at_every_split_point(&transcript, &expected);
 }
 
 #[test]
@@ -780,7 +771,6 @@ fn chained_tool_results_match_a_full_parse_at_every_split_point() {
         {"type":"user","uuid":"fixture-result-b","parentUuid":"fixture-result-a","timestamp":"2026-01-01T00:00:04Z","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-call-b","content":"second result"},{"type":"tool_result","tool_use_id":"fixture-question-b","content":"Your questions have been answered: \"Choose a fixture option\"=\"Second option\""}]}}
     "#};
     let transcript_text = transcript.trim_end_matches('\n');
-    let transcript_bytes = transcript_text.as_bytes();
     let expected = (
         vec![
             ChatItem::User {
@@ -831,16 +821,31 @@ fn chained_tool_results_match_a_full_parse_at_every_split_point() {
         Vec::new(),
     );
 
-    for split in 0..=transcript_bytes.len() {
-        if !transcript_text.is_char_boundary(split) {
-            continue;
-        }
-        assert_eq!(
-            incremental_result(&transcript_bytes[..split], &transcript_bytes[split..]),
-            (IncrementalAppend::Applied, expected.clone()),
-            "transcript split at byte {split}",
-        );
-    }
+    assert_incremental_matches_full_parse_at_every_split_point(transcript_text, &expected);
+}
+
+#[test]
+fn assistant_continues_from_a_side_branch_assistant_after_another_branch_updates_the_tip() {
+    let prefix = indoc! {r#"
+        {"type":"user","uuid":"fixture-root","parentUuid":null,"message":{"content":"Run two fixture tools."}}
+        {"type":"assistant","uuid":"fixture-main-call","parentUuid":"fixture-root","message":{"content":[{"type":"tool_use","id":"fixture-main-use","name":"Read","input":{"file_path":"/fixture/main.md"}}]}}
+        {"type":"assistant","uuid":"fixture-side-call","parentUuid":"fixture-main-call","message":{"content":[{"type":"tool_use","id":"fixture-side-use","name":"Read","input":{"file_path":"/fixture/side.md"}}]}}
+        {"type":"user","uuid":"fixture-main-result","parentUuid":"fixture-main-call","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-main-use","content":"main output"}]}}
+        {"type":"assistant","uuid":"fixture-main-followup","parentUuid":"fixture-main-result","message":{"content":[{"type":"text","text":"The main branch continued."}]}}
+    "#};
+    let suffix = indoc! {r#"
+        {"type":"assistant","uuid":"fixture-side-followup","parentUuid":"fixture-side-call","message":{"content":[{"type":"text","text":"The side branch continued."}]}}
+    "#};
+    let mut transcript = prefix.as_bytes().to_vec();
+    transcript.extend_from_slice(suffix.as_bytes());
+
+    assert_eq!(
+        incremental_result(prefix.as_bytes(), suffix.as_bytes()),
+        (
+            IncrementalAppend::Applied,
+            parse_all(&transcript, empty_additions())
+        ),
+    );
 }
 
 #[test]

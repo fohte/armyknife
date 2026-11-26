@@ -29,7 +29,6 @@ impl IncrementalClaudeParser {
     ) -> io::Result<Self> {
         let mut graph_lines = JsonlLineBuffer::default();
         let mut transcript_nodes = std::collections::BTreeMap::new();
-        let mut seen_uuids = std::collections::HashSet::new();
         let mut forward_parent_uuids = std::collections::HashSet::new();
         let mut latest_complete_uuid = None;
         let mut graph_latest_uuid = None;
@@ -37,7 +36,7 @@ impl IncrementalClaudeParser {
             if let Some(record) = parse_record(line) {
                 let parent_uuid = record_parent_uuid(&record);
                 if let Some(parent_uuid) = parent_uuid.as_deref()
-                    && !seen_uuids.contains(parent_uuid)
+                    && !transcript_nodes.contains_key(parent_uuid)
                 {
                     forward_parent_uuids.insert(parent_uuid.to_owned());
                 }
@@ -50,7 +49,6 @@ impl IncrementalClaudeParser {
                 }
                 if let Some(uuid) = record.get("uuid").and_then(Value::as_str) {
                     graph_latest_uuid = Some(uuid.to_owned());
-                    seen_uuids.insert(uuid.to_owned());
                     transcript_nodes.insert(
                         uuid.to_owned(),
                         TranscriptNode {
