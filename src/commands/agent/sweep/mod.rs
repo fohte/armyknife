@@ -48,6 +48,7 @@ use crate::shared::log::short_run_id;
 
 mod codex_turn_status;
 mod crit_cleanup;
+mod deferred_stop;
 mod merged_close;
 mod service;
 mod undelivered_redelivery;
@@ -156,6 +157,16 @@ async fn run_sweep(args: &SweepArgs) -> Result<()> {
         |warning| eprintln!("{warning}"),
     )
     .await;
+    let deferred_stop_notifications = recover_sweep_pass(
+        deferred_stop::notify_ready(
+            &sessions_dir,
+            config.agent.unreported_stop_notification.as_deref(),
+            args.dry_run,
+        ),
+        "agent.sweep.deferred_unreported_stop_failed",
+        "deferred unreported-stop notification failed",
+        &mut |warning| eprintln!("{warning}"),
+    );
     tracing::info!(
         event = "agent.sweep.summary",
         scanned = report.scanned,
@@ -168,6 +179,7 @@ async fn run_sweep(args: &SweepArgs) -> Result<()> {
         merged_closed,
         crit_links_cleared,
         redelivery_started,
+        deferred_stop_notifications,
         timeout = %timeout_str,
         dry_run = args.dry_run,
     );
@@ -183,10 +195,11 @@ async fn run_sweep(args: &SweepArgs) -> Result<()> {
         || codex_updates.total() > 0
         || merged_closed > 0
         || crit_links_cleared > 0
+        || deferred_stop_notifications > 0
         || args.dry_run
     {
         eprintln!(
-            "[armyknife] agent sweep: scanned={} paused={} codex_failed={} codex_interrupted={} merged_closed={} crit_links_cleared={} redelivery_started={} signaled={} waiting={} active={} (timeout={})",
+            "[armyknife] agent sweep: scanned={} paused={} codex_failed={} codex_interrupted={} merged_closed={} crit_links_cleared={} redelivery_started={} deferred_stop_notifications={} signaled={} waiting={} active={} (timeout={})",
             report.scanned,
             report.paused,
             codex_updates.failed,
@@ -194,6 +207,7 @@ async fn run_sweep(args: &SweepArgs) -> Result<()> {
             merged_closed,
             crit_links_cleared,
             redelivery_started,
+            deferred_stop_notifications,
             report.signaled,
             report.waiting,
             report.active,
