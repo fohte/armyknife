@@ -1120,6 +1120,60 @@ fn late_parallel_result_restarts_when_it_would_replace_a_user_branch() {
 }
 
 #[test]
+fn old_tool_use_owner_does_not_keep_a_sibling_assistant_active_after_a_prompt() {
+    let transcript = indoc! {r#"
+        {"type":"user","uuid":"fixture-root","parentUuid":null,"message":{"content":"Run the original request."}}
+        {"type":"assistant","uuid":"fixture-tool-owner","parentUuid":"fixture-root","message":{"content":[{"type":"tool_use","id":"fixture-original-use","name":"Read","input":{"file_path":"/fixture/original.md"}}]}}
+        {"type":"user","uuid":"fixture-replacement","parentUuid":"fixture-tool-owner","message":{"content":"Use the replacement request."}}
+        {"type":"assistant","uuid":"fixture-replacement-response","parentUuid":"fixture-replacement","message":{"content":[{"type":"text","text":"The replacement response."}]}}
+        {"type":"assistant","uuid":"fixture-stale-tool","parentUuid":"fixture-tool-owner","message":{"content":[{"type":"tool_use","id":"fixture-stale-use","name":"Write","input":{"file_path":"/fixture/stale.md","content":"stale"}}]}}
+        {"type":"assistant","uuid":"fixture-replacement-followup","parentUuid":"fixture-replacement-response","message":{"content":[{"type":"text","text":"The replacement branch continued."}]}}
+    "#};
+    let expected: super::ParsedTranscript = (
+        vec![
+            ChatItem::User {
+                rewind_id: Some("fixture-root".to_owned()),
+                text: "Run the original request.".to_owned(),
+                timestamp: None,
+                from: None,
+                queued_prompt_id: None,
+            },
+            ChatItem::User {
+                rewind_id: Some("fixture-replacement".to_owned()),
+                text: "Use the replacement request.".to_owned(),
+                timestamp: None,
+                from: None,
+                queued_prompt_id: None,
+            },
+            ChatItem::Assistant {
+                text: "The replacement response.".to_owned(),
+            },
+            ChatItem::Assistant {
+                text: "The replacement branch continued.".to_owned(),
+            },
+            ChatItem::ToolInProgress {
+                tool: "Read".to_owned(),
+                target: Some("/fixture/original.md".to_owned()),
+            },
+        ],
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    );
+
+    assert_eq!(
+        parse_all(transcript.as_bytes(), empty_additions()),
+        expected
+    );
+    assert_incremental_matches_full_parse_at_every_split_point(
+        transcript,
+        &expected,
+        None,
+        "stale tool-use owner after a user prompt",
+    );
+}
+
+#[test]
 fn assistant_continues_from_a_side_branch_assistant_after_another_branch_updates_the_tip() {
     let prefix = indoc! {r#"
         {"type":"user","uuid":"fixture-root","parentUuid":null,"message":{"content":"Run two fixture tools."}}
