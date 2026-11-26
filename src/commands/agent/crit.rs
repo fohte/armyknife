@@ -30,6 +30,13 @@ pub(super) fn stop_expired_session_daemons(
     expiry::stop_expired_session_daemons(session, sessions_dir)
 }
 
+pub(in crate::commands::agent) fn lock_port_for_registration(
+    sessions_dir: &std::path::Path,
+    url: &str,
+) -> Result<std::fs::File> {
+    expiry::lock_port(sessions_dir, parse_port(url)?)
+}
+
 const CRIT_TITLE: &str = "■ crit - Review requested";
 
 pub(super) fn crit_port_from_url(url: &str) -> Result<u16> {

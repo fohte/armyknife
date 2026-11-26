@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::fs::{self, File, OpenOptions};
+use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
 
@@ -10,14 +11,62 @@ use super::monitor::{crit_status, pid_for_port};
 use super::url::parse_port;
 
 pub(super) fn stop_expired_session_daemons(session: &Session, sessions_dir: &Path) -> Result<()> {
-    let remaining_sessions = store::all_session_rows_from(sessions_dir)?;
+    stop_expired_session_daemons_with(
+        session,
+        sessions_dir,
+        store::all_session_rows_from,
+        crit_status,
+        &LibcSignalSender,
+    )
+}
+
+fn stop_expired_session_daemons_with(
+    session: &Session,
+    sessions_dir: &Path,
+    load_remaining_sessions: impl FnOnce(&Path) -> Result<Vec<Session>>,
+    read_status: impl FnOnce() -> Result<serde_json::Value>,
+    sender: &impl SignalSender,
+) -> Result<()> {
+    let candidate_ports = session
+        .crit_urls
+        .iter()
+        .filter_map(|url| parse_port(url).ok())
+        .collect::<BTreeSet<_>>();
+    if candidate_ports.is_empty() {
+        return Ok(());
+    }
+
+    let _port_locks = candidate_ports
+        .iter()
+        .map(|port| lock_port(sessions_dir, *port))
+        .collect::<Result<Vec<_>>>()?;
+    let remaining_sessions = load_remaining_sessions(sessions_dir)?;
     let ports = unshared_crit_ports(session, &remaining_sessions);
     if ports.is_empty() {
         return Ok(());
     }
 
-    let status = crit_status()?;
-    stop_daemons_for_ports(&ports, &status, &LibcSignalSender)
+    let status = read_status()?;
+    stop_daemons_for_ports(&ports, &status, sender)
+}
+
+pub(super) fn lock_port(sessions_dir: &Path, port: u16) -> Result<File> {
+    // Keep lock inodes stable so concurrent registrations cannot bypass an active lock.
+    let lock_dir = crit_port_lock_dir(sessions_dir);
+    fs::create_dir_all(&lock_dir)?;
+    let lock_path = lock_dir.join(format!("{port}.lock"));
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(lock_path)?;
+    file.lock()?;
+    Ok(file)
+}
+
+fn crit_port_lock_dir(sessions_dir: &Path) -> PathBuf {
+    sessions_dir.join("crit-port-locks")
 }
 
 fn unshared_crit_ports(session: &Session, remaining_sessions: &[Session]) -> BTreeSet<u16> {
@@ -61,10 +110,9 @@ fn stop_daemons_for_ports(
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::cell::RefCell;
     use std::io;
-
-    use rstest::rstest;
 
     use super::*;
     use crate::commands::agent::types::{Engine, SessionStatus};
@@ -125,8 +173,9 @@ mod tests {
         }
     }
 
-    #[rstest]
+    #[test]
     fn sends_sigterm_only_to_unshared_crit_daemons() {
+        let temp_dir = tempfile::TempDir::new().expect("temporary directory should be created");
         let expired = make_session(
             "expired-session",
             &[
@@ -135,25 +184,37 @@ mod tests {
                 "http://review.example.test:43120/another-path",
             ],
         );
-        let remaining = [make_session(
+        let mut remaining = make_session(
             "remaining-session",
             &["http://review.example.test:43120/review"],
-        )];
-        let ports = unshared_crit_ports(&expired, &remaining);
+        );
+        remaining.archived_at = Some(chrono::Utc::now());
+        store::save_session_to(temp_dir.path(), &remaining)
+            .expect("remaining session should be saved");
         let status = serde_json::json!({
             "sessions": [
                 {"port": 43120, "pid": 9120},
                 {"port": 43121, "pid": 9121},
             ]
         });
+        let status_reads = Cell::new(0);
         let sender = RecordingSender::default();
 
-        stop_daemons_for_ports(&ports, &status, &sender)
-            .expect("unshared daemon should stop successfully");
+        stop_expired_session_daemons_with(
+            &expired,
+            temp_dir.path(),
+            store::all_session_rows_from,
+            || {
+                status_reads.set(status_reads.get() + 1);
+                Ok(status.clone())
+            },
+            &sender,
+        )
+        .expect("unshared daemon should stop successfully");
 
         assert_eq!(
-            (ports, sender.calls.into_inner()),
-            (BTreeSet::from([43121]), vec![(9121, libc::SIGTERM)],),
+            (sender.calls.into_inner(), status_reads.get()),
+            (vec![(9121, libc::SIGTERM)], 1),
         );
     }
 }

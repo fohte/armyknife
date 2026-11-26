@@ -5,6 +5,7 @@ use clap::{Args, Subcommand};
 
 use super::store;
 use super::types::{Session, WebUiRegistration};
+use crate::commands::agent::crit;
 use crate::commands::agent::crit::url::add_url;
 
 #[derive(Subcommand, Clone, PartialEq, Eq)]
@@ -148,6 +149,9 @@ fn record_url_in(
         local_web_ui_port(url)?;
     }
 
+    let _crit_port_lock = record_legacy_crit_url
+        .then(|| crit::lock_port_for_registration(sessions_dir, url))
+        .transpose()?;
     let lock = store::lock_session_for_update(sessions_dir, session_id)?;
     let Some(mut session) = lock.load()? else {
         anyhow::bail!("Agent session not found: {session_id}");
