@@ -1,5 +1,10 @@
 use serde_json::Value;
 
+mod slim;
+
+pub(super) use slim::run;
+pub use slim::{SlimArgs, TranscriptCommands};
+
 pub(super) fn claude_assistant_model(record: &Value) -> Option<&str> {
     if record.get("type").and_then(Value::as_str) != Some("assistant") {
         return None;

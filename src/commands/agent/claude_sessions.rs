@@ -154,7 +154,7 @@ fn project_dir(project_path: &Path) -> Option<PathBuf> {
 /// Returns the path to a session's .jsonl file.
 ///
 /// Path format: ~/.claude/projects/{encoded-path}/{session_id}.jsonl
-fn session_jsonl_path(project_path: &Path, session_id: &str) -> Option<PathBuf> {
+pub(super) fn session_jsonl_path(project_path: &Path, session_id: &str) -> Option<PathBuf> {
     Some(project_dir(project_path)?.join(format!("{session_id}.jsonl")))
 }
 

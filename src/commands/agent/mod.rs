@@ -100,6 +100,7 @@ pub use status::StatusCommands;
 pub use sweep::SweepArgs;
 pub use title::TitleCommands;
 pub use todo::TodoCommands;
+pub use transcript::{SlimArgs, TranscriptCommands};
 pub use unreported_stop_notification::UnreportedStopNotificationArgs;
 pub use usage::{RecordArgs, UsageCommands};
 pub use vibe::{VibeCommands, is_vibe_enabled};
@@ -189,6 +190,10 @@ pub enum AgentCommands {
     /// Record user tasks for watch-web
     #[command(subcommand)]
     Todo(TodoCommands),
+
+    /// Reduce the size of a Claude Code transcript
+    #[command(subcommand)]
+    Transcript(TranscriptCommands),
 
     /// Record Claude Code status-line usage for watch-web
     #[command(subcommand)]
@@ -284,6 +289,7 @@ impl AgentCommands {
             Self::Decision(command) => decision::run(command)?,
             Self::Proposal(command) => proposal::run(command)?,
             Self::Todo(command) => todo::run(command)?,
+            Self::Transcript(command) => transcript::run(command)?,
             Self::Usage(command) => usage::run(command)?,
             Self::Title(command) => title::run(command)?,
             Self::Profile(command) => profile::run(command)?,

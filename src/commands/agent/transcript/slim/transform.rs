@@ -1,0 +1,319 @@
+use std::collections::{HashMap, HashSet};
+use std::fs::File;
+use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
+
+use anyhow::{Context, Result};
+use serde_json::{Value, json};
+use tempfile::NamedTempFile;
+
+use super::TranscriptAnalysis;
+
+pub(super) fn analyze_transcript(
+    source: &mut File,
+    snapshot_len: u64,
+) -> Result<TranscriptAnalysis> {
+    source
+        .seek(SeekFrom::Start(0))
+        .context("rewind transcript for analysis")?;
+    let mut reader = BufReader::new(source);
+    let mut analysis = TranscriptAnalysis {
+        boundary_offset: None,
+        preserved_uuids: HashSet::new(),
+        read_paths_by_tool_use: HashMap::new(),
+        read_paths_by_record: HashMap::new(),
+    };
+    let mut line = Vec::new();
+    let mut offset = 0_u64;
+    while offset < snapshot_len {
+        line.clear();
+        let read = reader
+            .read_until(b'\n', &mut line)
+            .context("read transcript during analysis")?;
+        if read == 0 {
+            break;
+        }
+        let line_offset = offset;
+        offset += read as u64;
+        if let Ok(record) = serde_json::from_slice::<Value>(&line) {
+            collect_read_paths(&record, &mut analysis);
+            if is_compact_boundary(&record) {
+                analysis.boundary_offset = Some(line_offset);
+                analysis.preserved_uuids = preserved_uuids(&record);
+            }
+        }
+    }
+    Ok(analysis)
+}
+
+fn collect_read_paths(record: &Value, analysis: &mut TranscriptAnalysis) {
+    if record.get("type").and_then(Value::as_str) != Some("assistant") {
+        return;
+    }
+    let Some(record_uuid) = record.get("uuid").and_then(Value::as_str) else {
+        return;
+    };
+    if let Some(content) = record.pointer("/message/content").and_then(Value::as_array) {
+        for block in content {
+            if block.get("type").and_then(Value::as_str) != Some("tool_use")
+                || block.get("name").and_then(Value::as_str) != Some("Read")
+            {
+                continue;
+            }
+            let Some(path) = block.pointer("/input/file_path").and_then(Value::as_str) else {
+                continue;
+            };
+            if let Some(id) = block.get("id").and_then(Value::as_str) {
+                analysis
+                    .read_paths_by_tool_use
+                    .insert(id.to_owned(), path.to_owned());
+            }
+            analysis
+                .read_paths_by_record
+                .insert(record_uuid.to_owned(), path.to_owned());
+        }
+    }
+}
+
+pub(super) fn write_slimmed_prefix(
+    source: &mut File,
+    snapshot_len: u64,
+    boundary_offset: u64,
+    analysis: &TranscriptAnalysis,
+    output: &mut NamedTempFile,
+) -> Result<()> {
+    source
+        .seek(SeekFrom::Start(0))
+        .context("rewind transcript before slimming")?;
+    let mut reader = BufReader::new(source);
+    let mut line = Vec::new();
+    let mut offset = 0_u64;
+    while offset < snapshot_len {
+        line.clear();
+        let read = reader
+            .read_until(b'\n', &mut line)
+            .context("read transcript while slimming")?;
+        if read == 0 {
+            break;
+        }
+        let line_offset = offset;
+        offset += read as u64;
+        if line_offset >= boundary_offset {
+            output
+                .write_all(&line)
+                .context("write untouched transcript line")?;
+            continue;
+        }
+        let Ok(mut record) = serde_json::from_slice::<Value>(&line) else {
+            output
+                .write_all(&line)
+                .context("write invalid transcript line")?;
+            continue;
+        };
+        if record
+            .get("uuid")
+            .and_then(Value::as_str)
+            .is_some_and(|uuid| analysis.preserved_uuids.contains(uuid))
+        {
+            output
+                .write_all(&line)
+                .context("write preserved transcript line")?;
+            continue;
+        }
+        match slim_record(&mut record, analysis) {
+            RecordAction::Drop => {}
+            RecordAction::KeepUnchanged => {
+                output.write_all(&line).context("write transcript line")?;
+            }
+            RecordAction::KeepChanged => {
+                serde_json::to_writer(&mut *output, &record)
+                    .context("serialize slimmed transcript line")?;
+                output
+                    .write_all(b"\n")
+                    .context("terminate transcript line")?;
+            }
+        }
+    }
+    Ok(())
+}
+
+#[derive(PartialEq, Eq)]
+enum RecordAction {
+    Drop,
+    KeepUnchanged,
+    KeepChanged,
+}
+
+fn slim_record(record: &mut Value, analysis: &TranscriptAnalysis) -> RecordAction {
+    let Some(entry_type) = record.get("type").and_then(Value::as_str) else {
+        return RecordAction::KeepUnchanged;
+    };
+    if entry_type.starts_with("api-request") || entry_type.starts_with("api_request") {
+        return RecordAction::Drop;
+    }
+
+    if is_discardable_attachment(record) {
+        if let Some(object) = record.as_object_mut()
+            && let Some(attachment) = object.get_mut("attachment").and_then(Value::as_object_mut)
+        {
+            let attachment_type = attachment.get("type").cloned().unwrap_or(Value::Null);
+            attachment.clear();
+            attachment.insert("type".to_owned(), attachment_type);
+            return RecordAction::KeepChanged;
+        }
+        return RecordAction::KeepUnchanged;
+    }
+
+    let mut changed = false;
+    if let Some(tool_result) = record.get_mut("toolUseResult")
+        && let Some(result) = tool_result.as_object_mut()
+    {
+        let allowed = [
+            "task_id",
+            "taskId",
+            "background_task_id",
+            "backgroundTaskId",
+            "shell_id",
+            "shellId",
+            "agentId",
+            "status",
+            "answers",
+            "questions",
+        ];
+        let before = result.len();
+        result.retain(|key, _| allowed.contains(&key.as_str()));
+        changed = before != result.len();
+    }
+    let image_changed = sanitize_images(record, analysis, None) == RecordAction::KeepChanged;
+    if changed || image_changed {
+        RecordAction::KeepChanged
+    } else {
+        RecordAction::KeepUnchanged
+    }
+}
+
+fn is_discardable_attachment(record: &Value) -> bool {
+    if record.get("type").and_then(Value::as_str) != Some("attachment") {
+        return false;
+    }
+    let attachment_type = record
+        .pointer("/attachment/type")
+        .or_else(|| record.get("subtype"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    matches!(
+        attachment_type,
+        "invoked_skills" | "prompt_snapshot" | "instructions" | "hook_success"
+    ) || attachment_type.starts_with("deferred_tools_")
+}
+
+fn sanitize_images(
+    record: &mut Value,
+    analysis: &TranscriptAnalysis,
+    inherited_path: Option<&str>,
+) -> RecordAction {
+    let mut changed = false;
+    let path_for_record = record
+        .pointer("/toolUseResult/file/filePath")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .or_else(|| {
+            record
+                .get("tool_use_id")
+                .and_then(Value::as_str)
+                .and_then(|id| analysis.read_paths_by_tool_use.get(id).cloned())
+        })
+        .or_else(|| {
+            record
+                .get("parentUuid")
+                .and_then(Value::as_str)
+                .and_then(|id| analysis.read_paths_by_record.get(id).cloned())
+        })
+        .or_else(|| inherited_path.map(str::to_owned));
+    sanitize_value(record, analysis, path_for_record.as_deref(), &mut changed);
+    if changed {
+        RecordAction::KeepChanged
+    } else {
+        RecordAction::KeepUnchanged
+    }
+}
+
+fn sanitize_value(
+    value: &mut Value,
+    analysis: &TranscriptAnalysis,
+    path: Option<&str>,
+    changed: &mut bool,
+) {
+    if let Some(object) = value.as_object_mut() {
+        if object.get("type").and_then(Value::as_str) == Some("image")
+            && object
+                .get("source")
+                .and_then(|source| source.get("type"))
+                .and_then(Value::as_str)
+                == Some("base64")
+        {
+            *value = json!({
+                "type": "text",
+                "text": image_placeholder(path),
+            });
+            *changed = true;
+            return;
+        }
+
+        let local_path = object
+            .get("tool_use_id")
+            .and_then(Value::as_str)
+            .and_then(|id| analysis.read_paths_by_tool_use.get(id).cloned())
+            .or_else(|| {
+                object
+                    .get("file")
+                    .and_then(|file| file.get("filePath"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            })
+            .or_else(|| path.map(str::to_owned));
+        if object.get("base64").and_then(Value::as_str).is_some() {
+            object.remove("base64");
+            object.insert(
+                "text".to_owned(),
+                json!(image_placeholder(local_path.as_deref())),
+            );
+            *changed = true;
+        }
+        for child in object.values_mut() {
+            sanitize_value(child, analysis, local_path.as_deref(), changed);
+        }
+    } else if let Some(array) = value.as_array_mut() {
+        for child in array {
+            sanitize_value(child, analysis, path, changed);
+        }
+    } else if let Some(text) = value.as_str()
+        && text.starts_with("data:image/")
+        && text.contains(";base64,")
+    {
+        *value = Value::String(image_placeholder(path));
+        *changed = true;
+    }
+}
+
+fn image_placeholder(path: Option<&str>) -> String {
+    match path {
+        Some(path) => format!("[Image data omitted; source: {path}]"),
+        None => "[Image data omitted]".to_owned(),
+    }
+}
+
+fn is_compact_boundary(record: &Value) -> bool {
+    record.get("type").and_then(Value::as_str) == Some("system")
+        && record.get("subtype").and_then(Value::as_str) == Some("compact_boundary")
+}
+
+fn preserved_uuids(record: &Value) -> HashSet<String> {
+    record
+        .pointer("/compactMetadata/preservedMessages/uuids")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_owned)
+        .collect()
+}

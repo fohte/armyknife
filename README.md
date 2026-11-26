@@ -563,6 +563,7 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | `todo add`                                                                                            |         | Record one task the user needs to do from JSON read from stdin                              |
 | `todo edit <seq>`                                                                                     |         | Replace a pending task from the calling session using JSON read from stdin                  |
 | `todo withdraw <seq> [--comment <reason>]`                                                            |         | Withdraw a pending task from the calling session                                            |
+| `transcript slim <session_id> [--cwd <path>]`                                                         |         | Reduce a Claude Code transcript before its latest compact boundary                          |
 | `title set <TITLE>`                                                                                   |         | Set the calling session's title; an empty title restores the automatic title                |
 | `web-ui add <url> --name <name>`                                                                      |         | Register a named local web interface for the watch-web status panel                         |
 | `web-ui remove <name>`                                                                                |         | Remove a named web interface from the calling session                                       |
@@ -590,6 +591,14 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | `auto-compact schedule --session <id>`                                                                |         | Detached worker spawned by the Stop hook (not for direct use)                               |
 | `window-status <window_id>`                                                                           |         | Print status symbols for the sessions in a tmux window                                      |
 | `pane-has-paused <pane_id>`                                                                           |         | Print `1` when the pane holds a Paused Claude Code session, else empty                      |
+
+### `a agent transcript slim`
+
+Slim the Claude Code transcript for a session ID. The command resolves the file under `~/.claude/projects/` from the encoded project directory; `--cwd` selects the project directory and defaults to the current directory. It rewrites records before the latest `compact_boundary`, except UUIDs listed in that boundary's `compactMetadata.preservedMessages.uuids`. It removes API request records, trims `toolUseResult`, replaces image data with text, and clears large attachment payloads while retaining their UUID links. Records at and after the boundary remain unchanged. The replacement is atomic, and appends observed during replacement are preserved.
+
+```sh
+a agent transcript slim <session_id> --cwd /path/to/project
+```
 
 #### AI commit attribution
 
