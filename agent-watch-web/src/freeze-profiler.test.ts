@@ -125,10 +125,20 @@ it.each([
         },
       ],
     }
-    const { deliverLongTask, fetchMock, fetchStarted } =
-      installProfilerEnvironment(taskStart + 500, failOnSecondProfiler)
+    const {
+      deliverLongTask,
+      fetchMock,
+      fetchStarted,
+      observerOptions,
+      profilerCreationError,
+      triggerRotation,
+    } = installProfilerEnvironment(taskStart + 500, failOnSecondProfiler)
+    const profilerWarning = vi
+      .spyOn(console, 'warn')
+      .mockImplementation(() => undefined)
     const cleanup = startFreezeProfiler()
 
+    expect(observerOptions()).toEqual({ type: 'longtask', buffered: true })
     deliverLongTask({
       duration: 1_000,
       entryType: 'longtask',
@@ -136,6 +146,7 @@ it.each([
       startTime: taskStart,
       toJSON: () => ({}),
     })
+    if (failOnSecondProfiler) triggerRotation()
     await fetchStarted
 
     expect(fetchMock.mock.calls).toEqual([
@@ -149,6 +160,16 @@ it.each([
         },
       ],
     ])
+    expect(profilerWarning.mock.calls).toEqual(
+      failOnSecondProfiler
+        ? [
+            [
+              'Failed to rotate watch-web JavaScript profiler',
+              profilerCreationError,
+            ],
+          ]
+        : [],
+    )
 
     cleanup()
   },
@@ -193,6 +214,12 @@ function installProfilerEnvironment(
   failOnSecondProfiler: boolean,
 ) {
   let profilerConstructions = 0
+  let observerOptions: PerformanceObserverInit | undefined
+  let rotateOnTimer = () => {}
+  const triggerRotation = () => {
+    rotateOnTimer()
+  }
+  const profilerCreationError = new Error('Profiler unavailable')
   let notifyLongTask: (entry: PerformanceEntry) => void = () => {}
   const deliverLongTask = (entry: PerformanceEntry) => {
     notifyLongTask(entry)
@@ -201,7 +228,7 @@ function installProfilerEnvironment(
     constructor() {
       profilerConstructions += 1
       if (failOnSecondProfiler && profilerConstructions === 2) {
-        throw new Error('Profiler unavailable')
+        throw profilerCreationError
       }
     }
 
@@ -227,7 +254,9 @@ function installProfilerEnvironment(
       }
     }
 
-    observe() {}
+    observe(options?: PerformanceObserverInit) {
+      observerOptions = options
+    }
     disconnect() {}
     takeRecords(): PerformanceEntry[] {
       return []
@@ -242,14 +271,25 @@ function installProfilerEnvironment(
     resolveFetchStarted()
     return Promise.resolve(new Response(null, { status: 204 }))
   })
+  const setInterval = vi.fn((callback: () => void) => {
+    rotateOnTimer = callback
+    return 1
+  })
 
   vi.stubGlobal('window', {
     Profiler: TestProfiler,
-    setInterval: vi.fn(() => 1),
+    setInterval,
     clearInterval: vi.fn(),
   })
   vi.stubGlobal('PerformanceObserver', TestPerformanceObserver)
   vi.stubGlobal('fetch', fetchMock)
 
-  return { deliverLongTask, fetchMock, fetchStarted }
+  return {
+    deliverLongTask,
+    fetchMock,
+    fetchStarted,
+    observerOptions: () => observerOptions,
+    profilerCreationError,
+    triggerRotation,
+  }
 }

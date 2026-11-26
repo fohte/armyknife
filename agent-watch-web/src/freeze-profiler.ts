@@ -55,51 +55,21 @@ export function startFreezeProfiler() {
 
   let activeProfiler: ProfilerInstance | null = initialProfiler.value
   let activeStartedAt = performance.now()
+  const pendingLongTasks: PerformanceEntry[] = []
 
-  const rotate = () => {
-    const previous = activeProfiler
-    const startedAt = activeStartedAt
-    const endedAt = performance.now()
-    const nextProfiler = Result.fromThrowable(
-      () => createProfiler(Profiler),
-      toError,
-    )()
-    activeProfiler = nextProfiler.isOk() ? nextProfiler.value : null
-    activeStartedAt = endedAt
-
-    if (previous !== null) {
-      const trace = previous.stop().then(
-        (result) => result,
-        () => null,
-      )
-      segments.push({ start: startedAt, end: endedAt, trace })
-    }
-    while (segments.length > 0) {
-      const oldestSegment = segments[0]
-      if (
-        oldestSegment === undefined ||
-        oldestSegment.end >= endedAt - RETAINED_PROFILE_MS
-      ) {
-        break
-      }
-      segments.shift()
-    }
-  }
-
-  const reportLongTasks = (entries: PerformanceEntry[]) => {
-    const longTasks = entries.filter(
-      (entry) => entry.duration >= MIN_LONG_TASK_MS,
-    )
-    if (longTasks.length === 0) return
-
-    rotate()
+  const sendPendingReports = () => {
+    const tasks = pendingLongTasks.splice(0)
     const availableSegments = [...segments]
-    for (const task of longTasks) {
+    for (const task of tasks) {
       const start = task.startTime
       const end = start + task.duration
       const taskSegments = availableSegments.filter(
         (segment) => segment.start <= end && segment.end >= start,
       )
+      if (taskSegments.length === 0) {
+        console.warn('No retained JavaScript profile for watch-web long task')
+        continue
+      }
       void Promise.all(taskSegments.map((segment) => segment.trace)).then(
         (resolvedTraces) => {
           const report: LongTaskReport = {
@@ -119,6 +89,54 @@ export function startFreezeProfiler() {
     }
   }
 
+  const rotate = () => {
+    const previous = activeProfiler
+    if (previous === null) return
+
+    const startedAt = activeStartedAt
+    const nextProfiler = Result.fromThrowable(
+      () => createProfiler(Profiler),
+      toError,
+    )()
+    if (nextProfiler.isErr()) {
+      console.warn(
+        'Failed to rotate watch-web JavaScript profiler',
+        nextProfiler.error,
+      )
+      return
+    }
+
+    const endedAt = performance.now()
+    activeProfiler = nextProfiler.value
+    activeStartedAt = endedAt
+    const trace = previous.stop().then(
+      (result) => result,
+      () => null,
+    )
+    segments.push({ start: startedAt, end: endedAt, trace })
+    while (segments.length > 0) {
+      const oldestSegment = segments[0]
+      if (
+        oldestSegment === undefined ||
+        oldestSegment.end >= endedAt - RETAINED_PROFILE_MS
+      ) {
+        break
+      }
+      segments.shift()
+    }
+    sendPendingReports()
+  }
+
+  const reportLongTasks = (entries: PerformanceEntry[]) => {
+    const longTasks = entries.filter(
+      (entry) => entry.duration >= MIN_LONG_TASK_MS,
+    )
+    if (longTasks.length === 0) return
+
+    pendingLongTasks.push(...longTasks)
+    rotate()
+  }
+
   const observerResult = Result.fromThrowable(() => {
     const observer = new PerformanceObserver((list) => {
       reportLongTasks(list.getEntries())
@@ -136,7 +154,16 @@ export function startFreezeProfiler() {
   return () => {
     window.clearInterval(rotationTimer)
     observer.disconnect()
-    stopProfiler(activeProfiler)
+    const previous = activeProfiler
+    if (previous === null) return
+    activeProfiler = null
+    const endedAt = performance.now()
+    const trace = previous.stop().then(
+      (result) => result,
+      () => null,
+    )
+    segments.push({ start: activeStartedAt, end: endedAt, trace })
+    sendPendingReports()
   }
 }
 
