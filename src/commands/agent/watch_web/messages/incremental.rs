@@ -59,6 +59,7 @@ pub(super) fn parse_session_transcript_incrementally(
         session_id,
         input,
         fingerprint,
+        &[],
         cache,
         TranscriptRangeContext::default(),
     )
@@ -68,18 +69,27 @@ pub(super) fn parse_session_transcript_incrementally_for_range(
     session_id: &str,
     input: TranscriptInput<'_>,
     fingerprint: Option<TranscriptFingerprint>,
+    pending_task_ids: &[String],
     cache: &MessageCache,
     range: TranscriptRangeContext<'_>,
 ) -> Result<(ConversationResponse, Vec<i64>)> {
     let Some(fingerprint) = fingerprint else {
         clear_parser(cache, session_id);
-        return parse_session_transcript(input);
+        let parse_started = Instant::now();
+        let parser = create_parser(&input, None)?;
+        tracing::info!(
+            session_id,
+            reason = "transcript_fingerprint_unavailable",
+            elapsed_ms = parse_started.elapsed().as_millis(),
+            "incremental transcript parser restarted with a full parse"
+        );
+        return render_parser(&parser, &input);
     };
     let parser_slot = cache.transcript_parser_slot(session_id);
     let mut cached = parser_slot
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let mut restart_reason = None;
+    let mut restart_reason = Some("cache_miss");
     let can_reuse = if let Some(entry) = cached.as_mut()
         && entry.engine == input.engine
         && parser_matches_engine(&entry.parser, input.engine)
@@ -101,6 +111,17 @@ pub(super) fn parse_session_transcript_incrementally_for_range(
             }
         }
     } else {
+        if cached
+            .as_ref()
+            .is_some_and(|entry| entry.engine != input.engine)
+        {
+            restart_reason = Some("parser_engine_changed");
+        } else if cached
+            .as_ref()
+            .is_some_and(|entry| !parser_matches_engine(&entry.parser, input.engine))
+        {
+            restart_reason = Some("parser_engine_mismatch");
+        }
         false
     };
 
@@ -145,18 +166,61 @@ pub(super) fn parse_session_transcript_incrementally_for_range(
         }
     }
 
+    if !range.require_full_history
+        && range.requested_epoch.is_some()
+        && restart_reason != Some("epoch_anchor_outside_tail_window")
+        && !fingerprint.is_compressed()
+    {
+        let message_limit = cached
+            .as_ref()
+            .and_then(|entry| entry.tail_window.as_ref())
+            .map_or(super::range::INITIAL_EPOCH_MESSAGE_COUNT, |state| {
+                state.message_limit
+            });
+        match tail_window::rebuild_tail_window_parser(
+            &input,
+            pending_task_ids,
+            &fingerprint,
+            range,
+            message_limit,
+        )? {
+            tail_window::TailWindowRebuild::Rebuilt(tail) => {
+                let tail_window::TailWindowParse {
+                    conversation,
+                    resolved_queued_prompt_ids,
+                    parser,
+                    state,
+                } = *tail;
+                if let Some(tail) = fingerprint.tail_bytes()? {
+                    *cached = Some(CachedTranscriptParser {
+                        fingerprint: fingerprint.clone(),
+                        tail,
+                        engine: Engine::Claude,
+                        tail_window: Some(state),
+                        #[cfg(test)]
+                        last_change: TranscriptChange::Rewritten,
+                        parser: IncrementalTranscriptParser::Claude(Box::new(parser)),
+                    });
+                    return Ok((conversation, resolved_queued_prompt_ids));
+                }
+            }
+            tail_window::TailWindowRebuild::AnchorMissing => {
+                restart_reason = Some("epoch_anchor_outside_tail_window");
+            }
+            tail_window::TailWindowRebuild::Unavailable => {}
+        }
+    }
+
     *cached = None;
     let captured_length = (!fingerprint.is_compressed()).then(|| fingerprint.len());
     let parse_started = Instant::now();
     let parser = create_parser(&input, captured_length)?;
-    if let Some(reason) = restart_reason {
-        tracing::info!(
-            session_id,
-            reason,
-            elapsed_ms = parse_started.elapsed().as_millis(),
-            "incremental transcript parser restarted with a full parse"
-        );
-    }
+    tracing::info!(
+        session_id,
+        reason = restart_reason.unwrap_or("incremental_parser_unavailable"),
+        elapsed_ms = parse_started.elapsed().as_millis(),
+        "incremental transcript parser restarted with a full parse"
+    );
     let tail = if fingerprint.is_compressed() {
         Vec::new()
     } else {
@@ -398,6 +462,7 @@ mod tests {
         MessageCache, transcript_fingerprint,
     };
     use crate::commands::agent::watch_web::messages::parser::claude::ParserAdditions;
+    use crate::commands::agent::watch_web::messages::range::MessageRange;
     use crate::commands::agent::watch_web::messages::{
         ChatItem, ConversationResponse, TranscriptInput, UserContentPart,
     };
@@ -569,5 +634,84 @@ mod tests {
         .unwrap();
 
         assert_eq!(result, (ConversationResponse::default(), Vec::new()));
+    }
+
+    #[test]
+    fn cold_epoch_refresh_rebuilds_a_tail_window_parser() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("fixture.jsonl");
+        let mut records = Vec::new();
+        let mut parent_uuid = None;
+        for index in 0..180 {
+            let user_uuid = format!("fixture-user-{index}");
+            let assistant_uuid = format!("fixture-assistant-{index}");
+            let parent = parent_uuid
+                .as_deref()
+                .map_or("null".to_owned(), |parent| format!("\"{parent}\""));
+            records.push(format!(
+                r#"{{"type":"user","uuid":"{user_uuid}","parentUuid":{parent},"timestamp":"2026-01-01T00:{:02}:{:02}Z","message":{{"content":"Fixture request {index}."}}}}"#,
+                index / 60,
+                index % 60,
+            ));
+            records.push(format!(
+                r#"{{"type":"assistant","uuid":"{assistant_uuid}","parentUuid":"{user_uuid}","timestamp":"2026-01-01T00:{:02}:{:02}Z","message":{{"content":[{{"type":"text","text":"Fixture response {index}."}}]}}}}"#,
+                index / 60,
+                index % 60,
+            ));
+            parent_uuid = Some(assistant_uuid);
+        }
+        std::fs::write(&path, records.join("\n")).unwrap();
+        let input = || TranscriptInput {
+            path: Some(&path),
+            engine: Engine::Claude,
+            additions: ParserAdditions {
+                session_id: "fixture-session",
+                parent: None,
+                pending_tool: None,
+                user_marker: None,
+                decisions: &[],
+                queued_prompts: &[],
+                peer_out_messages: &[],
+                proposals: &[],
+                todos: &[],
+                additional_cards: &[],
+            },
+        };
+        let mut full = parse_session_transcript(input()).unwrap().0;
+        full.initial_epoch = true;
+        full.apply_range(
+            serde_json::from_value::<MessageRange>(serde_json::json!({
+                "limit": 100,
+            }))
+            .unwrap(),
+        );
+        let epoch = full.epoch.clone().unwrap();
+        let fingerprint = transcript_fingerprint(Engine::Claude, Some(&path))
+            .unwrap()
+            .unwrap();
+        let cache = MessageCache::default();
+
+        let (rebuilt, _, _) = super::tail_window::parse_initial_or_full_for_range(
+            "fixture-session",
+            input(),
+            None,
+            &[],
+            Some(fingerprint),
+            &cache,
+            super::TranscriptRangeContext {
+                requested_epoch: Some(&epoch),
+                ..super::TranscriptRangeContext::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            (
+                rebuilt.tail_window_start.is_some(),
+                super::cached_tail_window_message_limit("fixture-session", &cache),
+                rebuilt.epoch_anchor_is_present(&epoch),
+            ),
+            (true, Some(100), true),
+        );
     }
 }

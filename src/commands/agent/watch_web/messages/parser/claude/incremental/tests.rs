@@ -503,17 +503,18 @@ const INITIAL_PENDING_SIBLING_TRANSCRIPT: &str = indoc! {r#"
     r#"{"type":"assistant","uuid":"replacement","parentUuid":"root","timestamp":"2026-01-01T00:00:03Z","message":{"content":[{"type":"text","text":"The replacement response."}]}}"#,
     IncrementalAppend::RestartRequired,
 )]
-#[case::parallel_tool_result_after_a_new_assistant_requires_restart(
+#[case::parallel_tool_result_after_a_new_assistant_continues_incrementally(
     indoc! {r#"
         {"type":"user","uuid":"root","parentUuid":null,"timestamp":"2026-01-01T00:00:01Z","message":{"content":"Run two fixture tools."}}
-        {"type":"assistant","uuid":"parallel-calls","parentUuid":"root","timestamp":"2026-01-01T00:00:02Z","message":{"content":[{"type":"tool_use","id":"call-a","name":"Read","input":{"file_path":"/fixture/a"}},{"type":"tool_use","id":"call-b","name":"Read","input":{"file_path":"/fixture/b"}}]}}
-        {"type":"user","uuid":"result-a","parentUuid":"parallel-calls","timestamp":"2026-01-01T00:00:03Z","message":{"content":[{"type":"tool_result","tool_use_id":"call-a","content":"first result"}]}}
-        {"type":"assistant","uuid":"followup","parentUuid":"result-a","timestamp":"2026-01-01T00:00:04Z","message":{"content":[{"type":"text","text":"The first tool result is ready."}]}}
+        {"type":"assistant","uuid":"first-call","parentUuid":"root","timestamp":"2026-01-01T00:00:02Z","message":{"content":[{"type":"tool_use","id":"call-a","name":"Read","input":{"file_path":"/fixture/a"}}]}}
+        {"type":"assistant","uuid":"second-call","parentUuid":"first-call","timestamp":"2026-01-01T00:00:03Z","message":{"content":[{"type":"tool_use","id":"call-b","name":"Read","input":{"file_path":"/fixture/b"}}]}}
+        {"type":"user","uuid":"result-a","parentUuid":"first-call","timestamp":"2026-01-01T00:00:04Z","message":{"content":[{"type":"tool_result","tool_use_id":"call-a","content":"first result"}]}}
+        {"type":"assistant","uuid":"followup","parentUuid":"result-a","timestamp":"2026-01-01T00:00:05Z","message":{"content":[{"type":"text","text":"The first tool result is ready."}]}}
     "#},
     indoc! {r#"
-        {"type":"user","uuid":"result-b","parentUuid":"parallel-calls","timestamp":"2026-01-01T00:00:05Z","message":{"content":[{"type":"tool_result","tool_use_id":"call-b","content":"second result"}]}}
+        {"type":"user","uuid":"result-b","parentUuid":"second-call","timestamp":"2026-01-01T00:00:06Z","message":{"content":[{"type":"tool_result","tool_use_id":"call-b","content":"second result"}]}}
     "#},
-    IncrementalAppend::RestartRequired,
+    IncrementalAppend::Applied,
 )]
 #[case::assistant_after_system_invalidates_tool_result_parent(
     PARALLEL_TOOLS_WITH_SYSTEM_AFTER_RESULT,
@@ -522,12 +523,12 @@ const INITIAL_PENDING_SIBLING_TRANSCRIPT: &str = indoc! {r#"
     "#},
     IncrementalAppend::RestartRequired,
 )]
-#[case::parallel_tool_result_after_system_invalidates_tool_result_parent(
+#[case::parallel_tool_result_after_system_uses_its_pending_tool_use(
     PARALLEL_TOOLS_WITH_SYSTEM_AFTER_RESULT,
     indoc! {r#"
         {"type":"user","uuid":"result-b","parentUuid":"tool-call","timestamp":"2026-01-01T00:00:05Z","message":{"content":[{"type":"tool_result","tool_use_id":"call-b","content":"second result"}]}}
     "#},
-    IncrementalAppend::RestartRequired,
+    IncrementalAppend::Applied,
 )]
 #[case::task_notification_with_non_latest_parent_restarts(
     indoc! {r#"

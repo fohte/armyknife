@@ -350,18 +350,21 @@ mod tests {
         let tool_uses = [
             ToolUse {
                 id: "first-call".to_string(),
+                assistant_uuid: None,
                 name: "Bash".to_string(),
                 input: Some(json!({"command": "run fixture"})),
                 started_at: None,
             },
             ToolUse {
                 id: "different-call".to_string(),
+                assistant_uuid: None,
                 name: "Read".to_string(),
                 input: Some(json!({"file_path": "fixture.txt"})),
                 started_at: None,
             },
             ToolUse {
                 id: "latest-call".to_string(),
+                assistant_uuid: None,
                 name: "Bash".to_string(),
                 input: Some(json!({"command": "run fixture"})),
                 started_at: None,

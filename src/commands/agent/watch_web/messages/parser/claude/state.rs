@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 
 use chrono::{DateTime, Utc};
 use serde_json::{Map, Value};
@@ -6,6 +6,7 @@ use serde_json::{Map, Value};
 use crate::commands::agent::peer_message::task_notification_envelope;
 use crate::commands::agent::store::PermissionRequestData;
 
+use self::branch::{has_tool_use_block, tool_result_blocks};
 use super::super::super::SkillSuggestion;
 use super::super::queue::QueueReplayEvent;
 use super::super::record_timestamp;
@@ -16,6 +17,8 @@ use super::questions::{
 };
 use super::transcript_branch::{BranchMembership, TranscriptNode, is_inactive_branch};
 use super::user_input::{content_blocks, is_tool_result_only_user_record, user_content, user_text};
+
+mod branch;
 
 pub(super) fn is_attachment_record(record: &Value) -> bool {
     record.get("type").and_then(Value::as_str) == Some("attachment")
@@ -30,7 +33,7 @@ pub(super) struct ClaudeParserState {
     pub(super) events: Vec<TimedClaudeEvent>,
     pub(super) queue_events: Vec<QueueReplayEvent>,
     pub(super) tool_uses: Vec<ToolUse>,
-    pub(super) question_uses: HashSet<String>,
+    pub(super) question_uses: HashMap<String, Option<String>>,
     pub(super) background_tasks: BackgroundTaskTracker,
     pub(super) skills: Vec<SkillSuggestion>,
 }
@@ -45,7 +48,7 @@ impl ClaudeParserState {
             events: Vec::new(),
             queue_events: Vec::new(),
             tool_uses: Vec::new(),
-            question_uses: HashSet::new(),
+            question_uses: HashMap::new(),
             background_tasks: BackgroundTaskTracker::default(),
             skills: Vec::new(),
         }
@@ -67,17 +70,62 @@ impl ClaudeParserState {
 
         let task_notification = task_notification_text(&record);
         let is_tool_result_only = is_tool_result_only_user_record(&record);
+        let pending_tool_result = is_tool_result_only
+            && record_parent_uuid(&record).is_some_and(|parent_uuid| {
+                self.has_pending_tool_result_for_parent(&record, &parent_uuid)
+            });
         let uuid = record.get("uuid").and_then(Value::as_str);
+        let pending_tool_result_on_active_branch = pending_tool_result
+            && uuid.is_some_and(|uuid| {
+                match self.transcript_nodes.get(uuid).map(|node| node.membership) {
+                    Some(BranchMembership::Active | BranchMembership::ReachesActive) => true,
+                    Some(BranchMembership::Unknown) => {
+                        is_inactive_branch(uuid, &mut self.transcript_nodes)
+                    }
+                    Some(BranchMembership::Disconnected | BranchMembership::Visiting) | None => {
+                        false
+                    }
+                }
+            });
+        let parent_membership = record_parent_uuid(&record).and_then(|parent_uuid| {
+            if self
+                .transcript_nodes
+                .get(&parent_uuid)
+                .is_some_and(|node| node.membership == BranchMembership::Unknown)
+            {
+                is_inactive_branch(&parent_uuid, &mut self.transcript_nodes);
+            }
+            self.transcript_nodes
+                .get(&parent_uuid)
+                .map(|node| node.membership)
+        });
+        let side_branch_continuation = match parent_membership {
+            Some(BranchMembership::ReachesActive) => matches!(
+                record.get("type").and_then(Value::as_str),
+                Some("assistant" | "system" | "attachment")
+            ),
+            Some(BranchMembership::Active) => has_tool_use_block(&record),
+            _ => false,
+        };
         let mut active_record = uuid.is_none();
-        if let Some(uuid) = uuid {
+        if is_tool_result_only {
+            active_record = pending_tool_result_on_active_branch;
+        } else if side_branch_continuation {
+            active_record = true;
+            if let Some(uuid) = uuid {
+                is_inactive_branch(uuid, &mut self.transcript_nodes);
+            }
+        } else if let Some(uuid) = uuid {
             let membership = self.transcript_nodes.get(uuid).map(|node| node.membership);
-            let bypass_branch_check = is_tool_result_only || task_notification.is_some();
+            let bypass_branch_check = task_notification.is_some();
             active_record = match membership {
                 None => bypass_branch_check,
                 Some(BranchMembership::Unknown) if !bypass_branch_check => {
                     !is_inactive_branch(uuid, &mut self.transcript_nodes)
                 }
-                Some(_) => true,
+                Some(BranchMembership::Active | BranchMembership::ReachesActive) => true,
+                Some(BranchMembership::Disconnected | BranchMembership::Visiting) => false,
+                Some(BranchMembership::Unknown) => true,
             };
         }
 
@@ -154,7 +202,7 @@ impl ClaudeParserState {
                         let Some(id) = block.get("tool_use_id").and_then(Value::as_str) else {
                             continue;
                         };
-                        if self.question_uses.remove(id) {
+                        if self.question_uses.remove(id).is_some() {
                             let answers = match tool_use_result {
                                 Some(result) => tool_use_result_answers(result),
                                 None => block
@@ -276,7 +324,13 @@ impl ClaudeParserState {
                                         block.get("id").and_then(Value::as_str).map(str::to_owned);
                                     append_questions(&mut questions, input);
                                     if let Some(id) = &id {
-                                        self.question_uses.insert(id.clone());
+                                        self.question_uses.insert(
+                                            id.clone(),
+                                            record
+                                                .get("uuid")
+                                                .and_then(Value::as_str)
+                                                .map(str::to_owned),
+                                        );
                                     }
                                     effects.extend(questions.into_iter().map(|item| {
                                         ClaudeEffect::Question {
@@ -288,6 +342,10 @@ impl ClaudeParserState {
                                     self.background_tasks.stop(input, name);
                                     self.tool_uses.push(ToolUse {
                                         id: id.to_owned(),
+                                        assistant_uuid: record
+                                            .get("uuid")
+                                            .and_then(Value::as_str)
+                                            .map(str::to_owned),
                                         name: name.to_owned(),
                                         input: input.cloned(),
                                         started_at: timestamp,
@@ -320,6 +378,7 @@ pub(super) fn record_parent_uuid(record: &Value) -> Option<String> {
 #[derive(Clone)]
 pub(super) struct ToolUse {
     pub(super) id: String,
+    pub(super) assistant_uuid: Option<String>,
     pub(super) name: String,
     pub(super) input: Option<Value>,
     pub(super) started_at: Option<DateTime<Utc>>,
@@ -385,15 +444,6 @@ fn classifier_record(record: &Value) -> Value {
         }
     }
     Value::Object(projected)
-}
-
-fn tool_result_blocks(message: &Value) -> impl Iterator<Item = &Value> {
-    message
-        .get("content")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter(|block| block.get("type").and_then(Value::as_str) == Some("tool_result"))
 }
 
 pub(super) fn tool_result_text(content: &Value) -> Option<String> {
