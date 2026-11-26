@@ -12,15 +12,17 @@ use crate::commands::agent::tq_session_tasks::{
 };
 use crate::commands::agent::types::Session;
 use crate::infra::github::{PrNumberQuery, PrProgressInfo, PrState};
-use crate::infra::tq::{TqClient, TqGithubLink, TqProjectSummary, TqTaskSummary};
+use crate::infra::tq::{TqClient, TqGithubLink, TqTaskSummary};
 use tokio::time::Instant;
 
 mod cache;
+mod task_projects;
 mod task_pull_requests;
 #[cfg(test)]
 mod test_support;
 
 use cache::{merge_session_task_metadata, prune_session_task_metadata};
+use task_projects::fetch_task_projects;
 
 const CACHE_TTL: Duration = Duration::from_secs(30);
 const CACHE_KEY_RETENTION: Duration = Duration::from_secs(10 * 60);
@@ -127,6 +129,7 @@ impl SessionEnrichmentCache {
                     merge: merge_session_task_metadata,
                     prune: prune_session_task_metadata,
                     can_refresh: |_, _| true,
+                    fetched_keys: |requested, _| requested.clone(),
                 },
             )
             .await
@@ -155,6 +158,7 @@ struct CacheOperations<T, K> {
     merge: fn(&mut T, T, &HashSet<K>),
     prune: fn(&mut T, &HashSet<K>),
     can_refresh: fn(&T, &K) -> bool,
+    fetched_keys: fn(&HashSet<K>, &HashSet<K>) -> HashSet<K>,
 }
 
 struct CacheState<T, K> {
@@ -234,7 +238,7 @@ where
             state.refresh_in_flight = true;
             let cache = Arc::clone(self);
             let previous = cached.clone();
-            let fetched_keys = keys.clone();
+            let fetched_keys = (operations.fetched_keys)(&keys, &expired_keys);
             let expired_keys = expired_keys.clone();
             let fetch_timeout = fetch_timeout.unwrap_or(self.fetch_timeout);
             tokio::spawn(async move {
@@ -360,50 +364,6 @@ fn keep_cached_priority_metadata(
     SessionTaskMetadata { links, ..previous }
 }
 
-async fn fetch_task_projects<F, Fut>(
-    tasks: Vec<TqTaskSummary>,
-    previous_projects: HashMap<String, String>,
-    previous_task_projects: HashMap<String, String>,
-    fetch_projects: F,
-) -> (HashMap<String, String>, HashMap<String, String>)
-where
-    F: FnOnce() -> Fut + Send,
-    Fut: Future<Output = Result<Vec<TqProjectSummary>, String>> + Send,
-{
-    let project_ids = tasks
-        .iter()
-        .filter_map(|task| task.project_id.as_ref())
-        .collect::<HashSet<_>>();
-    if project_ids.is_empty() {
-        return (HashMap::new(), previous_projects);
-    }
-
-    if project_ids
-        .iter()
-        .all(|project_id| previous_projects.contains_key(*project_id))
-    {
-        return (
-            task_project_names(tasks, previous_projects.clone()),
-            previous_projects,
-        );
-    }
-
-    match fetch_projects().await {
-        Ok(projects) => {
-            let project_names = projects
-                .into_iter()
-                .map(|project| (project.id, project.title))
-                .collect::<HashMap<_, _>>();
-            let task_projects = task_project_names(tasks, project_names.clone());
-            (task_projects, project_names)
-        }
-        Err(error) => {
-            tracing::warn!(%error, "Failed to fetch agent watch tq projects; keeping cached values");
-            (previous_task_projects, previous_projects)
-        }
-    }
-}
-
 fn pull_request_can_refresh(
     cached: &HashMap<PullRequestKey, Option<PrProgressInfo>>,
     key: &PullRequestKey,
@@ -415,19 +375,6 @@ fn pull_request_can_refresh(
             .map(|pr| &pr.pull_request.state),
         Some(PrState::Merged | PrState::Closed)
     )
-}
-
-fn task_project_names(
-    tasks: Vec<TqTaskSummary>,
-    project_names: HashMap<String, String>,
-) -> HashMap<String, String> {
-    tasks
-        .into_iter()
-        .filter_map(|task| {
-            let project_name = project_names.get(task.project_id.as_deref()?)?;
-            Some((task.id, project_name.clone()))
-        })
-        .collect()
 }
 
 async fn detected_tq_client() -> Result<Option<TqClient>, String> {
@@ -558,19 +505,6 @@ mod tests {
     }
 
     #[test]
-    fn maps_tq_task_projects_to_project_titles() {
-        let mut task = task("task-a", None);
-        task.project_id = Some("project-a".to_string());
-        let tasks = vec![task];
-        let projects = HashMap::from([("project-a".to_string(), "Example project".to_string())]);
-
-        assert_eq!(
-            task_project_names(tasks, projects),
-            HashMap::from([("task-a".to_string(), "Example project".to_string())]),
-        );
-    }
-
-    #[test]
     fn maps_tq_task_timestamps_by_task_id() {
         let updated_at = chrono::DateTime::parse_from_rfc3339("2026-10-02T03:04:05Z")
             .expect("valid timestamp")
@@ -581,79 +515,6 @@ mod tests {
         assert_eq!(
             task_update_timestamps(&[updated_task, task("task-b", None)]),
             HashMap::from([("task-a".to_string(), updated_at)]),
-        );
-    }
-
-    #[rstest]
-    #[case::project_list_succeeds(
-        Ok(vec![TqProjectSummary {
-            id: "project-a".to_string(),
-            title: "Sample project".to_string(),
-        }]),
-        HashMap::new(),
-        HashMap::new(),
-        (
-            HashMap::from([("task-a".to_string(), "Sample project".to_string())]),
-            HashMap::from([("project-a".to_string(), "Sample project".to_string())]),
-        ),
-    )]
-    #[case::project_list_failure_keeps_cached_values(
-        Err("temporary failure".to_string()),
-        HashMap::from([("project-a".to_string(), "Cached project".to_string())]),
-        HashMap::from([("task-a".to_string(), "Cached project".to_string())]),
-        (
-            HashMap::from([("task-a".to_string(), "Cached project".to_string())]),
-            HashMap::from([("project-a".to_string(), "Cached project".to_string())]),
-        ),
-    )]
-    #[tokio::test]
-    async fn fetches_project_names_or_keeps_cached_values_on_error(
-        #[case] project_result: std::result::Result<Vec<TqProjectSummary>, String>,
-        #[case] previous_projects: HashMap<String, String>,
-        #[case] previous_task_projects: HashMap<String, String>,
-        #[case] expected: (HashMap<String, String>, HashMap<String, String>),
-    ) {
-        let mut linked_task = task("task-a", None);
-        linked_task.project_id = Some("project-a".to_string());
-
-        let actual = fetch_task_projects(
-            vec![linked_task],
-            previous_projects,
-            previous_task_projects,
-            move || async move { project_result },
-        )
-        .await;
-
-        assert_eq!(actual, expected);
-    }
-
-    #[tokio::test]
-    async fn skips_project_list_when_cached_projects_cover_task_project_ids() {
-        let mut linked_task = task("task-a", None);
-        linked_task.project_id = Some("project-a".to_string());
-        let calls = Arc::new(AtomicUsize::new(0));
-        let fetch_calls = Arc::clone(&calls);
-
-        let actual = fetch_task_projects(
-            vec![linked_task],
-            HashMap::from([("project-a".to_string(), "Sample project".to_string())]),
-            HashMap::new(),
-            move || async move {
-                fetch_calls.fetch_add(1, Ordering::SeqCst);
-                Ok(Vec::new())
-            },
-        )
-        .await;
-
-        assert_eq!(
-            (actual, calls.load(Ordering::SeqCst)),
-            (
-                (
-                    HashMap::from([("task-a".to_string(), "Sample project".to_string())]),
-                    HashMap::from([("project-a".to_string(), "Sample project".to_string())]),
-                ),
-                0,
-            )
         );
     }
 

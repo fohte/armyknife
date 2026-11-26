@@ -551,19 +551,35 @@ mod tests {
         let (updates, mut receiver) = updates_and_receiver;
         let calls = Arc::new(AtomicUsize::new(0));
         let fetch_calls = Arc::clone(&calls);
+        let scopes = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded_scopes = Arc::clone(&scopes);
         let fetch_state = state.clone();
         let pull_request_fetcher: PullRequestFetcher = Arc::new(move |sessions, _| {
             let calls = Arc::clone(&fetch_calls);
+            let recorded_scopes = Arc::clone(&recorded_scopes);
             let state = fetch_state.clone();
             Box::pin(async move {
-                calls.fetch_add(1, Ordering::SeqCst);
+                let call = calls.fetch_add(1, Ordering::SeqCst);
+                recorded_scopes.lock().unwrap().push(
+                    sessions
+                        .iter()
+                        .filter_map(|session| session.pr_context.as_ref())
+                        .map(|context| context.branch.clone())
+                        .collect::<HashSet<_>>(),
+                );
                 Ok(sessions
                     .iter()
                     .filter_map(|session| {
                         let context = session.pr_context.as_ref()?;
                         let mut progress =
                             head_info(17, "Terminal change", "https://example.test/terminal");
-                        progress.pull_request.state = state.clone();
+                        progress.pull_request.state = if context.branch == "branch-a" {
+                            state.clone()
+                        } else if call == 0 {
+                            PrState::Open
+                        } else {
+                            PrState::Merged
+                        };
                         Some((
                             PullRequestKey::Branch((
                                 context.owner.clone(),
@@ -579,29 +595,51 @@ mod tests {
         let task_fetcher: TaskMetadataFetcher =
             Arc::new(|_, previous| Box::pin(async move { Ok(previous) }));
         let cache = cache_with_fetchers(updates, FETCH_TIMEOUT, task_fetcher, pull_request_fetcher);
-        let session = session_with_branch_name("session-a", "branch-a");
+        let session_a = session_with_branch_name("session-a", "branch-a");
+        let session_b = session_with_branch_name("session-b", "branch-b");
         let task_metadata = SessionTaskMetadata::default();
 
         let _ = cache
-            .pull_requests(std::slice::from_ref(&session), &task_metadata)
+            .pull_requests(&[session_a.clone(), session_b.clone()], &task_metadata)
             .await;
         wait_for_refresh(&mut receiver).await;
         tokio::time::advance(super::super::CACHE_TTL + Duration::from_secs(1)).await;
-        let refreshed = cache
-            .pull_requests(std::slice::from_ref(&session), &task_metadata)
+        let _ = cache
+            .pull_requests(&[session_a.clone(), session_b.clone()], &task_metadata)
             .await;
-        let mut expected_progress =
+        wait_for_refresh(&mut receiver).await;
+        let refreshed = cache
+            .pull_requests(&[session_a.clone(), session_b.clone()], &task_metadata)
+            .await;
+        let mut expected_a_progress =
             head_info(17, "Terminal change", "https://example.test/terminal");
-        expected_progress.pull_request.state = state;
+        expected_a_progress.pull_request.state = state;
+        let mut expected_b_progress =
+            head_info(17, "Terminal change", "https://example.test/terminal");
+        expected_b_progress.pull_request.state = PrState::Merged;
 
         assert_eq!(
-            (refreshed, calls.load(Ordering::SeqCst)),
             (
-                HashMap::from([(
-                    "session-a".to_string(),
-                    vec![session_pull_request(&session, expected_progress)],
-                )]),
-                1,
+                refreshed,
+                calls.load(Ordering::SeqCst),
+                scopes.lock().unwrap().clone(),
+            ),
+            (
+                HashMap::from([
+                    (
+                        "session-a".to_string(),
+                        vec![session_pull_request(&session_a, expected_a_progress)],
+                    ),
+                    (
+                        "session-b".to_string(),
+                        vec![session_pull_request(&session_b, expected_b_progress)],
+                    ),
+                ]),
+                2,
+                vec![
+                    HashSet::from(["branch-a".to_string(), "branch-b".to_string()]),
+                    HashSet::from(["branch-b".to_string()]),
+                ],
             )
         );
     }
