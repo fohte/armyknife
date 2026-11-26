@@ -127,30 +127,7 @@ pub(crate) fn save_action_document_snapshot(
     content: &str,
 ) -> std::io::Result<()> {
     let snapshot_path = action_document_snapshot_path(document_path);
-    let parent = snapshot_path
-        .parent()
-        .ok_or_else(|| std::io::Error::other("action document snapshot path has no parent"))?;
-    fs::create_dir_all(parent)?;
-    let mut temporary_name = snapshot_path.as_os_str().to_os_string();
-    temporary_name.push(format!(".{}.tmp", uuid::Uuid::new_v4()));
-    let temporary_path = PathBuf::from(temporary_name);
-    let save_result = (|| {
-        let mut options = fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
-        let mut file = options.open(&temporary_path)?;
-        #[cfg(unix)]
-        file.set_permissions(fs::Permissions::from_mode(0o600))?;
-        file.write_all(content.as_bytes())?;
-        file.sync_all()?;
-        drop(file);
-        fs::rename(&temporary_path, &snapshot_path)
-    })();
-    if save_result.is_err() {
-        remove_if_present(&temporary_path)?;
-    }
-    save_result
+    write_atomically(&snapshot_path, content.as_bytes())
 }
 
 pub(crate) fn take_action_document_snapshot(
@@ -172,16 +149,8 @@ pub(crate) fn save_action_result(
     result: &ReviewDocumentActionResult,
 ) -> std::io::Result<()> {
     let result_path = action_result_path(document_path);
-    let parent = result_path
-        .parent()
-        .ok_or_else(|| std::io::Error::other("action result path has no parent"))?;
-    fs::create_dir_all(parent)?;
-    let temporary_path = path_with_suffix(&result_path, ".tmp");
-    fs::write(
-        &temporary_path,
-        serde_json::to_vec(result).map_err(std::io::Error::other)?,
-    )?;
-    fs::rename(temporary_path, result_path)
+    let serialized = serde_json::to_vec(result).map_err(std::io::Error::other)?;
+    write_atomically(&result_path, &serialized)
 }
 
 pub(crate) fn read_action_result(
@@ -299,6 +268,31 @@ fn remove_if_present(path: &Path) -> std::io::Result<()> {
     }
 }
 
+fn write_atomically(path: &Path, content: &[u8]) -> std::io::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| std::io::Error::other("action result path has no parent"))?;
+    fs::create_dir_all(parent)?;
+    let temporary_path = parent.join(format!(".armyknife-action-{}.tmp", uuid::Uuid::new_v4()));
+    let save_result = (|| {
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+        let mut file = options.open(&temporary_path)?;
+        #[cfg(unix)]
+        file.set_permissions(fs::Permissions::from_mode(0o600))?;
+        file.write_all(content)?;
+        file.sync_all()?;
+        drop(file);
+        fs::rename(&temporary_path, path)
+    })();
+    if save_result.is_err() {
+        remove_if_present(&temporary_path)?;
+    }
+    save_result
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -329,16 +323,16 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn snapshot_staging_does_not_truncate_a_symlink_target() {
-        use super::{action_document_snapshot_path, path_with_suffix};
+    fn snapshot_replaces_a_symlink_without_truncating_its_target() {
+        use super::action_document_snapshot_path;
         use std::os::unix::fs::symlink;
 
         let directory = TempDir::new().expect("fixture directory should be created");
         let document_path = directory.path().join("review.md");
         let protected_path = directory.path().join("protected.txt");
         fs::write(&protected_path, "protected content").expect("protected file should be written");
-        let staging_path = path_with_suffix(&action_document_snapshot_path(&document_path), ".tmp");
-        symlink(&protected_path, &staging_path).expect("staging symlink should be created");
+        let snapshot_path = action_document_snapshot_path(&document_path);
+        symlink(&protected_path, &snapshot_path).expect("snapshot symlink should be created");
 
         save_action_document_snapshot(&document_path, "Approved document.")
             .expect("approved document snapshot should be saved");
@@ -385,6 +379,44 @@ mod tests {
         );
 
         assert_eq!(observed, (Some(result.clone()), Some(result)));
+    }
+
+    #[test]
+    fn action_sidecars_support_long_draft_filenames() {
+        let directory = TempDir::new().expect("fixture directory should be created");
+        let document_path = directory.path().join(format!("{}.md", "b".repeat(225)));
+        fs::write(&document_path, "Approved document.")
+            .expect("fixture document should be written");
+        let result = ReviewDocumentActionResult::new(
+            ReviewDocumentAction::CreatePr,
+            true,
+            "Pull request created.".to_owned(),
+            document_hash(&document_path).expect("document hash should be computed"),
+            None,
+        );
+
+        let result_write = save_action_result(&document_path, &result)
+            .map_err(|error| (error.kind(), error.to_string()));
+        let snapshot_write = save_action_document_snapshot(&document_path, "Approved document.")
+            .map_err(|error| (error.kind(), error.to_string()));
+        let observed = (
+            result_write,
+            snapshot_write,
+            successful_action_result(&document_path, ReviewDocumentAction::CreatePr)
+                .expect("action result should be read"),
+            take_action_document_snapshot(&document_path)
+                .expect("document snapshot should be read"),
+        );
+
+        assert_eq!(
+            observed,
+            (
+                Ok(()),
+                Ok(()),
+                Some(result),
+                Some("Approved document.".to_owned()),
+            ),
+        );
     }
 
     #[rstest]
