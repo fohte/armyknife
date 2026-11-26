@@ -9098,6 +9098,9 @@ it('follows new messages at the bottom without moving a reader who scrolled up',
   scrollToPosition(scroll, 200)
   const initialBottom = scroll.scrollTop
 
+  act(() => {
+    scroll.dispatchEvent(new Event('wheel'))
+  })
   setHeight(500)
   renderView(onAction, session, undefined, [
     firstMessage,
