@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.948](https://github.com/fohte/armyknife/compare/v0.1.947...v0.1.948) (2026-11-26)
+
+
+### Bug Fixes
+
+* **watch-web:** keep action rows in place ([#2319](https://github.com/fohte/armyknife/issues/2319)) ([042c2df](https://github.com/fohte/armyknife/commit/042c2dff463ad80da8443dde941024aeaa081ee0))
+
 ## [0.1.947](https://github.com/fohte/armyknife/compare/v0.1.946...v0.1.947) (2026-11-26)
 
 
