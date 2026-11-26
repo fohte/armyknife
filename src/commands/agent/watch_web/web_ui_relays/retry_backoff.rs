@@ -7,7 +7,7 @@ const FIRST_RETRY_DELAY: Duration = Duration::from_secs(2);
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(10 * 60);
 
 #[derive(Default)]
-pub(super) struct UnexposeBackoff {
+pub(super) struct RetryBackoff {
     failures: HashMap<RelayRegistration, Failure>,
 }
 
@@ -16,7 +16,7 @@ struct Failure {
     next_delay: Duration,
 }
 
-impl UnexposeBackoff {
+impl RetryBackoff {
     pub(super) fn should_attempt(&self, registration: &RelayRegistration, now: Instant) -> bool {
         self.failures
             .get(registration)
@@ -48,7 +48,7 @@ mod tests {
 
     use rstest::{fixture, rstest};
 
-    use super::UnexposeBackoff;
+    use super::RetryBackoff;
     use crate::commands::agent::watch_web::web_ui_relays::registrations::RelayRegistration;
 
     #[fixture]
@@ -65,7 +65,7 @@ mod tests {
     #[rstest]
     fn retries_wait_two_seconds_and_double_after_each_failure(registration: RelayRegistration) {
         let start = Instant::now();
-        let mut backoff = UnexposeBackoff::default();
+        let mut backoff = RetryBackoff::default();
 
         backoff.record_failure(registration.clone(), start);
         let first_retry = start + Duration::from_secs(2);
@@ -93,7 +93,7 @@ mod tests {
     #[rstest]
     fn retry_delay_does_not_exceed_ten_minutes(registration: RelayRegistration) {
         let mut now = Instant::now();
-        let mut backoff = UnexposeBackoff::default();
+        let mut backoff = RetryBackoff::default();
         let mut eligibility = Vec::new();
 
         for delay in [2, 4, 8, 16, 32, 64, 128, 256, 512, 600, 600, 600] {
