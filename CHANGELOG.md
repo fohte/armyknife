@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.934](https://github.com/fohte/armyknife/compare/v0.1.933...v0.1.934) (2026-11-26)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** hide issue preview metadata ([#2293](https://github.com/fohte/armyknife/issues/2293)) ([9255fdc](https://github.com/fohte/armyknife/commit/9255fdc33a4b6105a4d04ddc82189ed06c6b6c94))
+
 ## [0.1.933](https://github.com/fohte/armyknife/compare/v0.1.932...v0.1.933) (2026-11-25)
 
 
