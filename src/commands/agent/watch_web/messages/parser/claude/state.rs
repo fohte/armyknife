@@ -71,13 +71,15 @@ impl ClaudeParserState {
         let task_notification = task_notification_text(&record);
         let is_tool_result_only = is_tool_result_only_user_record(&record);
         let pending_tool_result = is_tool_result_only
-            && record_parent_uuid(&record).is_some_and(|parent_uuid| {
-                self.has_pending_tool_result_for_parent(&record, &parent_uuid)
-            });
+            && self.has_pending_tool_result_for_parent(
+                &record,
+                record_parent_uuid(&record).as_deref(),
+            );
         let uuid = record.get("uuid").and_then(Value::as_str);
         let pending_tool_result_on_active_branch = pending_tool_result
-            && uuid.is_some_and(|uuid| {
-                match self.transcript_nodes.get(uuid).map(|node| node.membership) {
+            && match uuid {
+                None => true,
+                Some(uuid) => match self.transcript_nodes.get(uuid).map(|node| node.membership) {
                     Some(BranchMembership::Active | BranchMembership::ReachesActive) => true,
                     Some(BranchMembership::Unknown) => {
                         is_inactive_branch(uuid, &mut self.transcript_nodes)
@@ -85,8 +87,8 @@ impl ClaudeParserState {
                     Some(BranchMembership::Disconnected | BranchMembership::Visiting) | None => {
                         false
                     }
-                }
-            });
+                },
+            };
         let parent_membership = record_parent_uuid(&record).and_then(|parent_uuid| {
             if self
                 .transcript_nodes

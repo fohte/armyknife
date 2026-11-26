@@ -167,7 +167,9 @@ pub(super) fn parse_session_transcript_incrementally_for_range(
     }
 
     if !range.require_full_history
-        && range.requested_epoch.is_some()
+        && range
+            .requested_epoch
+            .is_some_and(super::range::epoch_token_is_decodable)
         && restart_reason != Some("epoch_anchor_outside_tail_window")
         && !fingerprint.is_compressed()
     {
@@ -636,8 +638,8 @@ mod tests {
         assert_eq!(result, (ConversationResponse::default(), Vec::new()));
     }
 
-    #[test]
-    fn cold_epoch_refresh_rebuilds_a_tail_window_parser() {
+    #[rstest::fixture]
+    fn epoch_transcript() -> tempfile::TempDir {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("fixture.jsonl");
         let mut records = Vec::new();
@@ -661,8 +663,12 @@ mod tests {
             parent_uuid = Some(assistant_uuid);
         }
         std::fs::write(&path, records.join("\n")).unwrap();
-        let input = || TranscriptInput {
-            path: Some(&path),
+        directory
+    }
+
+    fn epoch_input(path: &std::path::Path) -> TranscriptInput<'_> {
+        TranscriptInput {
+            path: Some(path),
             engine: Engine::Claude,
             additions: ParserAdditions {
                 session_id: "fixture-session",
@@ -676,42 +682,120 @@ mod tests {
                 todos: &[],
                 additional_cards: &[],
             },
-        };
-        let mut full = parse_session_transcript(input()).unwrap().0;
-        full.initial_epoch = true;
-        full.apply_range(
-            serde_json::from_value::<MessageRange>(serde_json::json!({
-                "limit": 100,
-            }))
-            .unwrap(),
-        );
-        let epoch = full.epoch.clone().unwrap();
-        let fingerprint = transcript_fingerprint(Engine::Claude, Some(&path))
+        }
+    }
+
+    fn epoch_range(epoch: &str) -> MessageRange {
+        serde_json::from_value(serde_json::json!({
+            "from": 0,
+            "epoch": epoch,
+        }))
+        .unwrap()
+    }
+
+    fn expected_epoch_response(
+        path: &std::path::Path,
+        epoch: &str,
+    ) -> (ConversationResponse, Vec<i64>) {
+        let (mut conversation, resolved_ids) = parse_session_transcript(epoch_input(path)).unwrap();
+        conversation.apply_range(epoch_range(epoch));
+        (conversation, resolved_ids)
+    }
+
+    fn parse_epoch_refresh(
+        path: &std::path::Path,
+        epoch: &str,
+        cache: &MessageCache,
+    ) -> (ConversationResponse, Vec<i64>) {
+        let fingerprint = transcript_fingerprint(Engine::Claude, Some(path))
             .unwrap()
             .unwrap();
-        let cache = MessageCache::default();
+        let (mut conversation, resolved_ids, _) =
+            super::tail_window::parse_initial_or_full_for_range(
+                "fixture-session",
+                epoch_input(path),
+                None,
+                &[],
+                Some(fingerprint),
+                cache,
+                super::TranscriptRangeContext {
+                    requested_epoch: Some(epoch),
+                    ..super::TranscriptRangeContext::default()
+                },
+            )
+            .unwrap();
+        conversation.apply_range(epoch_range(epoch));
+        (conversation, resolved_ids)
+    }
 
-        let (rebuilt, _, _) = super::tail_window::parse_initial_or_full_for_range(
-            "fixture-session",
-            input(),
-            None,
-            &[],
-            Some(fingerprint),
-            &cache,
-            super::TranscriptRangeContext {
-                requested_epoch: Some(&epoch),
-                ..super::TranscriptRangeContext::default()
-            },
-        )
-        .unwrap();
+    #[rstest::rstest]
+    fn cold_epoch_refresh_rebuilds_a_tail_window_parser(epoch_transcript: tempfile::TempDir) {
+        let path = epoch_transcript.path().join("fixture.jsonl");
+        let mut full = parse_session_transcript(epoch_input(&path)).unwrap().0;
+        full.initial_epoch = true;
+        full.apply_range(serde_json::from_value(serde_json::json!({"limit": 100})).unwrap());
+        let epoch = full.epoch.clone().unwrap();
+        let cache = MessageCache::default();
+        let actual = parse_epoch_refresh(&path, &epoch, &cache);
+        let expected = expected_epoch_response(&path, &epoch);
 
         assert_eq!(
             (
-                rebuilt.tail_window_start.is_some(),
+                serde_json::to_value(&actual.0).unwrap(),
+                actual.1,
                 super::cached_tail_window_message_limit("fixture-session", &cache),
-                rebuilt.epoch_anchor_is_present(&epoch),
             ),
-            (true, Some(100), true),
+            (
+                serde_json::to_value(expected.0).unwrap(),
+                expected.1,
+                Some(100),
+            ),
+        );
+    }
+
+    #[rstest::rstest]
+    fn cold_epoch_refresh_falls_back_when_anchor_is_outside_the_tail(
+        epoch_transcript: tempfile::TempDir,
+    ) {
+        let path = epoch_transcript.path().join("fixture.jsonl");
+        let (full, _) = parse_session_transcript(epoch_input(&path)).unwrap();
+        let mut initial_page = ConversationResponse {
+            messages: full.messages[..100].to_vec(),
+            initial_epoch: true,
+            ..ConversationResponse::default()
+        };
+        initial_page.update_metadata();
+        initial_page
+            .apply_range(serde_json::from_value(serde_json::json!({"limit": 100})).unwrap());
+        let epoch = initial_page.epoch.clone().unwrap();
+        let cache = MessageCache::default();
+        let actual = parse_epoch_refresh(&path, &epoch, &cache);
+        let expected = expected_epoch_response(&path, &epoch);
+
+        assert_eq!(
+            (
+                serde_json::to_value(&actual.0).unwrap(),
+                actual.1,
+                super::cached_tail_window_message_limit("fixture-session", &cache),
+            ),
+            (serde_json::to_value(expected.0).unwrap(), expected.1, None,),
+        );
+    }
+
+    #[rstest::rstest]
+    fn undecodable_epoch_refresh_skips_tail_window_rebuild(epoch_transcript: tempfile::TempDir) {
+        let path = epoch_transcript.path().join("fixture.jsonl");
+        let cache = MessageCache::default();
+        let actual = parse_epoch_refresh(&path, "x", &cache);
+        let expected = expected_epoch_response(&path, "x");
+
+        assert_eq!(
+            (
+                serde_json::to_value(&actual.0).unwrap(),
+                actual.1,
+                super::cached_tail_window_message_limit("fixture-session", &cache),
+            ),
+            (serde_json::to_value(expected.0).unwrap(), expected.1, None,),
         );
     }
 }

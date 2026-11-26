@@ -358,6 +358,15 @@ const INITIAL_PENDING_SIBLING_TRANSCRIPT: &str = indoc! {r#"
     "#},
     IncrementalAppend::Applied,
 )]
+#[case::uuidless_tool_result_resolves_a_pending_tool_use(
+    indoc! {r#"
+        {"type":"assistant","message":{"content":[{"type":"tool_use","id":"call-a","name":"Read","input":{"file_path":"/fixture/a"}}]}}
+    "#},
+    indoc! {r#"
+        {"type":"user","sourceToolAssistantUUID":"fixture-assistant","toolUseResult":{},"message":{"content":[{"type":"tool_result","tool_use_id":"call-a","content":"fixture output"}]}}
+    "#},
+    IncrementalAppend::Applied,
+)]
 #[case::tool_result_after_an_appended_hook_attachment(
     indoc! {r#"
         {"type":"assistant","uuid":"tool-call","parentUuid":null,"timestamp":"2026-01-01T00:00:01Z","message":{"content":[{"type":"tool_use","id":"call-a","name":"Bash","input":{"command":"echo fixture"}}]}}
@@ -548,6 +557,16 @@ const INITIAL_PENDING_SIBLING_TRANSCRIPT: &str = indoc! {r#"
     "#},
     indoc! {r#"
         {"type":"user","uuid":"orphan-result","parentUuid":"missing-parent","timestamp":"2026-01-01T00:00:03Z","message":{"content":[{"type":"tool_result","tool_use_id":"call-a","content":"orphan output"}]}}
+    "#},
+    IncrementalAppend::RestartRequired,
+)]
+#[case::tool_result_with_unknown_tool_id_requires_restart(
+    indoc! {r#"
+        {"type":"user","uuid":"root","parentUuid":null,"timestamp":"2026-01-01T00:00:01Z","message":{"content":"Run a fixture tool."}}
+        {"type":"assistant","uuid":"tool-call","parentUuid":"root","timestamp":"2026-01-01T00:00:02Z","message":{"content":[{"type":"tool_use","id":"call-a","name":"Read","input":{"file_path":"/fixture/a"}}]}}
+    "#},
+    indoc! {r#"
+        {"type":"user","uuid":"unknown-result","parentUuid":"tool-call","timestamp":"2026-01-01T00:00:03Z","message":{"content":[{"type":"tool_result","tool_use_id":"unknown-call","content":"orphan output"}]}}
     "#},
     IncrementalAppend::RestartRequired,
 )]

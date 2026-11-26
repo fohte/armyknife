@@ -333,7 +333,7 @@ fn ingest_record(
         let parent_uuid = record_parent_uuid(&record);
         let parallel_tool_result = matches!(origin, RecordOrigin::Appended)
             && parent_uuid.as_deref().is_some_and(|parent_uuid| {
-                state.has_pending_tool_result_for_parent(&record, parent_uuid)
+                state.has_pending_tool_result_for_parent(&record, Some(parent_uuid))
                     && parent_uuid != state.latest_uuid.as_deref().unwrap_or_default()
             });
         state.transcript_nodes.insert(
@@ -388,7 +388,7 @@ fn is_active_branch_continuation(state: &ClaudeParserState, record: &Value) -> b
     }
 
     if is_tool_result_only {
-        return state.has_pending_tool_result_for_parent(record, parent_uuid.as_str());
+        return state.has_pending_tool_result_for_parent(record, Some(parent_uuid.as_str()));
     }
     let parent_is_latest = state.latest_record_uuid.as_deref() == Some(parent_uuid.as_str());
     if is_task_notification {
