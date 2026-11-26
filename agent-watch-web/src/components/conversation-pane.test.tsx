@@ -10117,6 +10117,212 @@ it('keeps a message send error through refreshes until a send succeeds', async (
   })
 })
 
+it('shows permission errors alongside a retained message send error', async () => {
+  let sendCount = 0
+  let permissionRequestCount = 0
+  const fetcher = vi.fn<typeof fetch>((input, init) => {
+    const url = requestUrl(input)
+    if (init?.method === 'POST' && url.endsWith('/messages')) {
+      sendCount += 1
+      return Promise.resolve(
+        sendCount === 1
+          ? jsonResponse({ error: 'The message could not be sent.' }, 503)
+          : jsonResponse({ queuedPromptId: 'fixture-queued-prompt' }),
+      )
+    }
+    if (init?.method === 'POST' && url.endsWith('/permission/approve')) {
+      permissionRequestCount += 1
+      return Promise.resolve(
+        permissionRequestCount === 1
+          ? jsonResponse(
+              { error: 'The permission could not be approved.' },
+              503,
+            )
+          : jsonResponse({}),
+      )
+    }
+    if (url.includes('/messages?')) {
+      return Promise.resolve(jsonResponse(messagesResponse([permission])))
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <SessionConversationCacheProvider>
+        <ConversationPane
+          session={session}
+          shouldSkipSessionTreeFetch
+          initialSessionTree={[]}
+          refreshKey={0}
+          sessionTreeRefreshKey={0}
+          onSelectSession={() => undefined}
+        />
+      </SessionConversationCacheProvider>,
+    )
+  })
+  await waitForState(
+    () =>
+      container.querySelector<HTMLTextAreaElement>('textarea')?.disabled ===
+      false,
+  )
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  setTextareaValue(textarea, 'Retain this prompt')
+  await act(async () => {
+    dispatchKey(textarea, 'Enter')
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  await waitForState(
+    () =>
+      container.querySelector('[role="alert"]')?.textContent ===
+      'The message could not be sent.',
+  )
+
+  const approveButton = () =>
+    requireElement(
+      container.querySelector<HTMLButtonElement>(
+        '.chat-permission-card .permission-actions button',
+      ),
+    )
+  await act(async () => userEvent.click(approveButton()))
+  await waitForState(
+    () =>
+      permissionRequestCount === 1 &&
+      container.querySelector('[role="alert"]')?.textContent ===
+        'The permission could not be approved.',
+  )
+  const afterFailedApproval =
+    container.querySelector('[role="alert"]')?.textContent ?? null
+
+  await act(async () => userEvent.click(approveButton()))
+  await waitForState(
+    () =>
+      permissionRequestCount === 2 &&
+      container.querySelector('[role="alert"]')?.textContent ===
+        'The message could not be sent.',
+  )
+  const afterSuccessfulApproval =
+    container.querySelector('[role="alert"]')?.textContent ?? null
+
+  await act(async () => {
+    dispatchKey(textarea, 'Enter')
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  const successfulSendCompleted = await waitForState(
+    () => sendCount === 2 && container.querySelector('[role="alert"]') === null,
+  )
+
+  const snapshot = () => ({
+    afterFailedApproval,
+    afterSuccessfulApproval,
+    successfulSendCompleted,
+  })
+  expect(snapshot()).toEqual({
+    afterFailedApproval: 'The permission could not be approved.',
+    afterSuccessfulApproval: 'The message could not be sent.',
+    successfulSendCompleted: true,
+  })
+})
+
+it('shows an attachment size warning over a retained message send error', async () => {
+  let sendCount = 0
+  const attachmentSession = { ...session, id: crypto.randomUUID() }
+  renderedSessionIds.add(attachmentSession.id)
+  const fetcher = vi.fn<typeof fetch>((input, init) => {
+    const url = requestUrl(input)
+    if (init?.method === 'POST' && url.endsWith('/messages')) {
+      sendCount += 1
+      return Promise.resolve(
+        jsonResponse({ error: 'The message could not be sent.' }, 503),
+      )
+    }
+    if (url.includes('/messages?')) {
+      return Promise.resolve(jsonResponse(messagesResponse([])))
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <SessionConversationCacheProvider>
+        <ConversationPane
+          session={attachmentSession}
+          shouldSkipSessionTreeFetch
+          initialSessionTree={[]}
+          refreshKey={0}
+          sessionTreeRefreshKey={0}
+          onSelectSession={() => undefined}
+        />
+      </SessionConversationCacheProvider>,
+    )
+  })
+  await waitForState(
+    () =>
+      container.querySelector<HTMLTextAreaElement>('textarea')?.disabled ===
+      false,
+  )
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  setTextareaValue(textarea, 'Retain this prompt')
+  await act(async () => {
+    dispatchKey(textarea, 'Enter')
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  await waitForState(
+    () =>
+      container.querySelector('[role="alert"]')?.textContent ===
+      'The message could not be sent.',
+  )
+
+  const firstFile = new File(['first'], 'first.bin', {
+    type: 'application/octet-stream',
+  })
+  const limitCrossingFile = new File(['second'], 'limit-crossing.bin', {
+    type: 'application/octet-stream',
+  })
+  Object.defineProperty(firstFile, 'size', { value: 30 * 1024 * 1024 })
+  Object.defineProperty(limitCrossingFile, 'size', { value: 21 * 1024 * 1024 })
+  const pasteEvent = new Event('paste', { bubbles: true, cancelable: true })
+  Object.defineProperty(pasteEvent, 'clipboardData', {
+    value: { files: [firstFile, limitCrossingFile] },
+  })
+  act(() => {
+    void textarea.dispatchEvent(pasteEvent)
+  })
+  const limitWarning =
+    'limit-crossing.bin would exceed the 50 MiB attachment limit'
+  const warningDisplayed = await waitForState(
+    () =>
+      container.querySelectorAll('.attachment-preview-item').length === 2 &&
+      container.querySelector('[role="alert"]')?.textContent === limitWarning,
+  )
+
+  await act(async () => {
+    dispatchKey(textarea, 'Enter')
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    warningDisplayed,
+    alert: container.querySelector('[role="alert"]')?.textContent ?? null,
+    sendCount,
+  })
+  expect(snapshot()).toEqual({
+    warningDisplayed: true,
+    alert: limitWarning,
+    sendCount: 1,
+  })
+})
+
 it('keeps a permission error until the same request succeeds', async () => {
   let permissionRequestCount = 0
   const fetcher = vi.fn<typeof fetch>((input, init) => {

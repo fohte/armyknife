@@ -498,10 +498,10 @@ export function ConversationPaneView({
           />
         </>
       )}
-      {(error ?? attachmentError) != null &&
-      (error ?? attachmentError) !== '' ? (
+      {(attachmentError ?? error) != null &&
+      (attachmentError ?? error) !== '' ? (
         <p className="conversation-error" role="alert">
-          {error ?? attachmentError}
+          {attachmentError ?? error}
         </p>
       ) : null}
       <SessionUsageRow isMobile={isMobile} usage={sessionUsage} />

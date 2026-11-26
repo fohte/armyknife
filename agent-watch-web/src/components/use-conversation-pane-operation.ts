@@ -24,13 +24,60 @@ type UseConversationPaneOperationOptions = {
 type SessionOperationError = {
   sessionId: string
   identity:
-    | { kind: 'action'; action: string }
-    | {
-        kind: 'operation'
-        key: string
-        type: SessionOperation['type']
-      }
+    { kind: 'action'; action: string } | { kind: 'operation'; key: string }
   message: string
+}
+
+function sameErrorIdentity(
+  left: SessionOperationError['identity'],
+  right: SessionOperationError['identity'],
+) {
+  if (left.kind === 'action' && right.kind === 'action') {
+    return left.action === right.action
+  }
+  if (left.kind === 'operation' && right.kind === 'operation') {
+    return left.key === right.key
+  }
+  return false
+}
+
+function setOperationError(
+  errors: SessionOperationError[],
+  nextError: SessionOperationError,
+) {
+  return [
+    ...errors.filter(
+      (current) =>
+        current.sessionId !== nextError.sessionId ||
+        !sameErrorIdentity(current.identity, nextError.identity),
+    ),
+    nextError,
+  ]
+}
+
+function clearOperationError(
+  errors: SessionOperationError[],
+  sessionId: string,
+  action: string,
+  identity: SessionOperationError['identity'],
+) {
+  return errors.filter((current) => {
+    if (current.sessionId !== sessionId) return true
+    return current.identity.kind === 'action'
+      ? current.identity.action !== action
+      : !sameErrorIdentity(current.identity, identity)
+  })
+}
+
+function latestOperationError(
+  errors: SessionOperationError[],
+  sessionId: string,
+) {
+  for (let index = errors.length - 1; index >= 0; index -= 1) {
+    const current = errors[index]
+    if (current?.sessionId === sessionId) return current.message
+  }
+  return null
 }
 
 function operationErrorIdentity(operation: SessionOperation) {
@@ -39,25 +86,21 @@ function operationErrorIdentity(operation: SessionOperation) {
       return {
         kind: 'operation' as const,
         key: 'message',
-        type: operation.type,
       }
     case 'proposal_answer':
       return {
         kind: 'operation' as const,
         key: JSON.stringify([operation.type, operation.seq]),
-        type: operation.type,
       }
     case 'todo_resolve':
       return {
         kind: 'operation' as const,
         key: JSON.stringify([operation.type, operation.seq]),
-        type: operation.type,
       }
     default:
       return {
         kind: 'operation' as const,
         key: sessionOperationKey(operation),
-        type: operation.type,
       }
   }
 }
@@ -72,12 +115,10 @@ export function useConversationPaneOperation({
   clearErrors,
   run,
 }: UseConversationPaneOperationOptions) {
-  const [sessionOperationError, setSessionOperationError] =
-    useState<SessionOperationError | null>(null)
-  const error =
-    sessionOperationError?.sessionId === sessionId
-      ? sessionOperationError.message
-      : null
+  const [sessionOperationErrors, setSessionOperationErrors] = useState<
+    SessionOperationError[]
+  >([])
+  const error = latestOperationError(sessionOperationErrors, sessionId)
   const onAction = useCallback(
     (action: string, payload?: Record<string, unknown>) => {
       const messageCountBefore =
@@ -99,16 +140,12 @@ export function useConversationPaneOperation({
           : payload,
       )
       if (operationResult.isErr()) {
-        setSessionOperationError((current) =>
-          current?.sessionId === sessionId &&
-          current.identity.kind === 'operation' &&
-          current.identity.type === 'message'
-            ? current
-            : {
-                sessionId,
-                identity: { kind: 'action', action },
-                message: operationResult.error.message,
-              },
+        setSessionOperationErrors((current) =>
+          setOperationError(current, {
+            sessionId,
+            identity: { kind: 'action', action },
+            message: operationResult.error.message,
+          }),
         )
         return Promise.resolve(false)
       }
@@ -128,31 +165,19 @@ export function useConversationPaneOperation({
       }).then((result) =>
         result.match(
           () => {
-            setSessionOperationError((current) =>
-              current?.sessionId !== sessionId
-                ? current
-                : current.identity.kind === 'operation' &&
-                    ((current.identity.type === 'message' &&
-                      operation.type === 'message') ||
-                      current.identity.key === identity.key)
-                  ? null
-                  : current,
+            setSessionOperationErrors((current) =>
+              clearOperationError(current, sessionId, action, identity),
             )
             clearErrors()
             return true
           },
           (requestError) => {
-            setSessionOperationError((current) =>
-              current?.sessionId === sessionId &&
-              current.identity.kind === 'operation' &&
-              current.identity.type === 'message' &&
-              operation.type !== 'message'
-                ? current
-                : {
-                    sessionId,
-                    identity,
-                    message: requestError.message,
-                  },
+            setSessionOperationErrors((current) =>
+              setOperationError(current, {
+                sessionId,
+                identity,
+                message: requestError.message,
+              }),
             )
             return false
           },
