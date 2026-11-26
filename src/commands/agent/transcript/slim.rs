@@ -1,9 +1,9 @@
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, Metadata};
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
@@ -15,6 +15,8 @@ use crate::shared::command;
 use super::super::claude_sessions::session_jsonl_path;
 
 mod transform;
+
+const MAX_TRANSCRIPT_RECONCILE_WAIT: Duration = Duration::from_secs(5);
 
 #[derive(Subcommand, Clone, PartialEq, Eq)]
 pub enum TranscriptCommands {
@@ -72,25 +74,40 @@ struct TranscriptAnalysis {
     boundary_offset: Option<u64>,
     preserved_uuids: HashSet<String>,
     read_paths_by_tool_use: HashMap<String, String>,
-    read_paths_by_record: HashMap<String, String>,
 }
 
 #[cfg(not(test))]
 fn slim_transcript(path: &Path) -> Result<SlimResult> {
-    slim_transcript_with(path, || {}, || {}, || {}, has_writable_open_handle)
+    slim_transcript_with(
+        path,
+        || {},
+        || {},
+        || {},
+        has_writable_open_handle,
+        MAX_TRANSCRIPT_RECONCILE_WAIT,
+    )
 }
 
 #[cfg(test)]
 fn slim_transcript(path: &Path) -> Result<SlimResult> {
-    slim_transcript_with(path, || {}, || {}, || {}, |_| Ok(false))
+    slim_transcript_with(
+        path,
+        || {},
+        || {},
+        || {},
+        |_| Ok(false),
+        MAX_TRANSCRIPT_RECONCILE_WAIT,
+    )
 }
 
+// The compact hook must serialize same-session invocations to prevent competing replacements.
 fn slim_transcript_with<F, G, H, P>(
     path: &Path,
     during_rewrite: F,
     before_replace: G,
     after_replace: H,
     mut has_writable_open_handle: P,
+    max_reconcile_wait: Duration,
 ) -> Result<SlimResult>
 where
     F: FnOnce(),
@@ -118,7 +135,7 @@ where
         .context("Claude Code transcript has no parent directory")?;
     let mut replacement = NamedTempFile::new_in(parent)
         .with_context(|| format!("create replacement transcript in {}", parent.display()))?;
-    transform::write_slimmed_prefix(
+    let copied_to = transform::write_slimmed_prefix(
         &mut source,
         original_bytes,
         boundary_offset,
@@ -133,8 +150,9 @@ where
         path,
         &mut source,
         source_identity,
-        original_bytes,
+        copied_to,
         &mut replacement,
+        max_reconcile_wait,
     )
     .with_context(|| format!("preserve transcript appends for {}", path.display()))?;
 
@@ -154,6 +172,7 @@ where
         source_identity,
         copied_to,
         &mut replacement,
+        max_reconcile_wait,
     )
     .with_context(|| format!("preserve final transcript appends for {}", path.display()))?;
     replacement
@@ -172,6 +191,7 @@ where
         &mut replacement_writer,
         copied_to,
         &mut has_writable_open_handle,
+        max_reconcile_wait,
     )
     .with_context(|| {
         format!(
@@ -236,11 +256,16 @@ fn reconcile_appends(
     identity: FileIdentity,
     mut copied_to: u64,
     output: &mut NamedTempFile,
+    max_wait: Duration,
 ) -> Result<u64> {
     if !identity.matches_path(path)? {
         bail!("transcript was replaced while it was being slimmed");
     }
+    let deadline = Instant::now() + max_wait;
     loop {
+        if Instant::now() >= deadline {
+            bail!("timed out reconciling transcript appends before replacement");
+        }
         let current_len = source
             .metadata()
             .context("inspect open transcript during append reconciliation")?
@@ -248,15 +273,7 @@ fn reconcile_appends(
         if current_len < copied_to {
             bail!("transcript shrank while it was being slimmed");
         }
-        if current_len > copied_to {
-            source
-                .seek(SeekFrom::Start(copied_to))
-                .context("seek to appended transcript data")?;
-            let mut appended = (&mut *source).take(current_len - copied_to);
-            let copied =
-                std::io::copy(&mut appended, output).context("copy appended transcript data")?;
-            copied_to += copied;
-        }
+        copied_to = copy_complete_lines(source, current_len, copied_to, output.as_file_mut())?;
         if !identity.matches_path(path)? {
             bail!("transcript was replaced while it was being slimmed");
         }
@@ -264,9 +281,40 @@ fn reconcile_appends(
             .metadata()
             .context("recheck open transcript during append reconciliation")?
             .len();
-        if latest_len == copied_to {
+        if latest_len == current_len {
             return Ok(copied_to);
         }
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn copy_complete_lines(
+    source: &mut File,
+    observed_len: u64,
+    mut copied_to: u64,
+    output: &mut File,
+) -> Result<u64> {
+    if observed_len <= copied_to {
+        return Ok(copied_to);
+    }
+    source
+        .seek(SeekFrom::Start(copied_to))
+        .context("seek to appended transcript data")?;
+    let available = observed_len - copied_to;
+    let mut reader = BufReader::new((&mut *source).take(available));
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        let read = reader
+            .read_until(b'\n', &mut line)
+            .context("read appended transcript line")?;
+        if read == 0 || line.last() != Some(&b'\n') {
+            return Ok(copied_to);
+        }
+        output
+            .write_all(&line)
+            .context("copy complete appended transcript line")?;
+        copied_to += read as u64;
     }
 }
 
@@ -301,25 +349,25 @@ fn reconcile_in_flight_appends<P>(
     replacement: &mut File,
     mut copied_to: u64,
     has_writable_open_handle: &mut P,
+    max_wait: Duration,
 ) -> Result<()>
 where
     P: FnMut(&Path) -> Result<bool>,
 {
     const POLL_INTERVAL: Duration = Duration::from_millis(25);
+    let deadline = Instant::now() + max_wait;
     let mut inspection_failed = false;
 
     loop {
+        if Instant::now() >= deadline {
+            bail!("timed out waiting for old transcript writers to close");
+        }
         let current_len = source
             .metadata()
             .context("inspect original transcript for in-flight appends")?
             .len();
         if current_len > copied_to {
-            source
-                .seek(SeekFrom::Start(copied_to))
-                .context("seek to in-flight transcript append")?;
-            let mut appended = (&mut *source).take(current_len - copied_to);
-            copied_to += std::io::copy(&mut appended, replacement)
-                .context("copy in-flight transcript append")?;
+            copied_to = copy_complete_lines(source, current_len, copied_to, replacement)?;
             replacement
                 .sync_data()
                 .context("sync in-flight transcript append")?;
@@ -336,6 +384,9 @@ where
                         "Cannot inspect transcript writers after replacement; retrying: {error:#}"
                     );
                     inspection_failed = true;
+                }
+                if Instant::now() >= deadline {
+                    bail!("timed out inspecting old transcript writers: {error:#}");
                 }
                 thread::sleep(POLL_INTERVAL);
                 continue;
@@ -354,6 +405,9 @@ where
                 return Ok(());
             }
         }
+        if Instant::now() >= deadline {
+            bail!("timed out waiting for old transcript writers to close");
+        }
         thread::sleep(POLL_INTERVAL);
     }
 }
@@ -365,7 +419,7 @@ fn has_writable_open_handle(path: &Path) -> Result<bool> {
         .arg(path)
         .output()
         .context("run lsof to inspect transcript writers")?;
-    if !output.status.success() || !output.stderr.is_empty() {
+    if !output.status.success() {
         bail!("lsof could not inspect transcript writers");
     }
     Ok(lsof_output_has_writable_handle(&output.stdout))
@@ -465,9 +519,11 @@ fn lsof_output_has_writable_handle(output: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::{Cell, RefCell};
     use std::fs;
     use std::io::Write;
     use std::sync::Arc;
+    use std::sync::Barrier;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::thread;
     use std::time::Duration;
@@ -477,7 +533,10 @@ mod tests {
     use serde_json::Value;
     use tempfile::tempdir;
 
-    use super::{lsof_output_has_writable_handle, slim_transcript, slim_transcript_with};
+    use super::{
+        MAX_TRANSCRIPT_RECONCILE_WAIT, lsof_output_has_writable_handle, slim_transcript,
+        slim_transcript_with,
+    };
 
     #[test]
     fn slims_only_discardable_data_before_the_latest_compact_boundary() {
@@ -530,6 +589,7 @@ mod tests {
                 {"type":"assistant","uuid":"fixture-read","message":{"content":[{"type":"tool_use","id":"fixture-read-tool","name":"Read","input":{"file_path":"/fixture/source.png"}}]}}
                 {"type":"attachment","uuid":"fixture-skill-listing","parentUuid":"fixture-read","attachment":{"type":"skill_listing","content":["fixture-skill"]}}
                 {"type":"attachment","uuid":"fixture-queued-command","parentUuid":"fixture-read","attachment":{"type":"queued_command","prompt":"data:image/png;base64,fixture-payload"}}
+                {"type":"user","uuid":"fixture-tool-result-image","message":{"content":"fixture answer"},"toolUseResult":{"file":{"filePath":"/fixture/source.png","base64":"fixture-file-payload"},"answers":{"image":"data:image/png;base64,fixture-answer-image"}}}
                 {"type":"attachment","uuid":"fixture-task-notification","parentUuid":"fixture-read","attachment":{"type":"task-notification","content":"fixture task"}}
                 {"type":"attachment","uuid":"fixture-invoked-skills","parentUuid":"fixture-read","attachment":{"type":"invoked_skills","content":["fixture-skill"]}}
                 {"type":"attachment","uuid":"fixture-deferred-tools","parentUuid":"fixture-read","attachment":{"type":"deferred_tools_delta","content":"fixture tools"}}
@@ -555,7 +615,8 @@ mod tests {
             parse_jsonl(indoc! {r#"
                 {"type":"assistant","uuid":"fixture-read","message":{"content":[{"type":"tool_use","id":"fixture-read-tool","name":"Read","input":{"file_path":"/fixture/source.png"}}]}}
                 {"type":"attachment","uuid":"fixture-skill-listing","parentUuid":"fixture-read","attachment":{"type":"skill_listing","content":["fixture-skill"]}}
-                {"type":"attachment","uuid":"fixture-queued-command","parentUuid":"fixture-read","attachment":{"type":"queued_command","prompt":"[Image data omitted; source: /fixture/source.png]"}}
+                {"type":"attachment","uuid":"fixture-queued-command","parentUuid":"fixture-read","attachment":{"type":"queued_command","prompt":"[Image data omitted]"}}
+                {"type":"user","uuid":"fixture-tool-result-image","message":{"content":"fixture answer"},"toolUseResult":{"answers":{"image":"[Image data omitted]"}}}
                 {"type":"attachment","uuid":"fixture-task-notification","parentUuid":"fixture-read","attachment":{"type":"task-notification","content":"fixture task"}}
                 {"type":"attachment","uuid":"fixture-invoked-skills","parentUuid":"fixture-read","attachment":{"type":"invoked_skills"}}
                 {"type":"attachment","uuid":"fixture-deferred-tools","parentUuid":"fixture-read","attachment":{"type":"deferred_tools_delta"}}
@@ -587,6 +648,11 @@ mod tests {
             .expect("original transcript should be appendable");
         let writer_open = Arc::new(AtomicBool::new(true));
         let callback_writer_open = Arc::clone(&writer_open);
+        let replacement_is_live = Arc::new(AtomicBool::new(false));
+        let callback_replacement_is_live = Arc::clone(&replacement_is_live);
+        let split_row_barrier = Arc::new(Barrier::new(2));
+        let writer_split_row_barrier = Arc::clone(&split_row_barrier);
+        let mut inserted_new_path_row = false;
         let mut late_writer_thread = None;
 
         slim_transcript_with(
@@ -610,23 +676,35 @@ mod tests {
                     .expect("append before replacement should succeed");
             },
             || {
-                let mut replacement = fs::OpenOptions::new()
-                    .append(true)
-                    .open(&transcript)
-                    .expect("replacement transcript should be appendable");
-                replacement
-                    .write_all(b"{\"type\":\"user\",\"uuid\":\"fixture-new-path-after-replace\",\"message\":{\"content\":\"fixture new path after replace\"}}\n")
-                    .expect("append through the new path should succeed");
+                callback_replacement_is_live.store(true, Ordering::SeqCst);
                 late_writer_thread = Some(thread::spawn(move || {
                     thread::sleep(Duration::from_millis(100));
                     let mut old_writer = old_writer;
-                    let result = old_writer.write_all(b"{\"type\":\"user\",\"uuid\":\"fixture-old-fd-after-replace\",\"message\":{\"content\":\"fixture old fd after replace\"}}\n");
+                    old_writer.write_all(b"{\"type\":\"user\",\"uuid\":\"fixture-old-fd-after-replace\"")?;
+                    writer_split_row_barrier.wait();
+                    writer_split_row_barrier.wait();
+                    let result = old_writer.write_all(b",\"message\":{\"content\":\"fixture old fd after replace\"}}\n");
                     drop(old_writer);
                     callback_writer_open.store(false, Ordering::SeqCst);
                     result
                 }));
             },
-            |_| Ok(writer_open.load(Ordering::SeqCst)),
+            |_| {
+                if replacement_is_live.load(Ordering::SeqCst) && !inserted_new_path_row {
+                    split_row_barrier.wait();
+                    let mut replacement = fs::OpenOptions::new()
+                        .append(true)
+                        .open(&transcript)
+                        .expect("replacement transcript should be appendable");
+                    replacement
+                        .write_all(b"{\"type\":\"user\",\"uuid\":\"fixture-new-path-after-replace\",\"message\":{\"content\":\"fixture new path after replace\"}}\n")
+                        .expect("append through the new path should succeed");
+                    inserted_new_path_row = true;
+                    split_row_barrier.wait();
+                }
+                Ok(writer_open.load(Ordering::SeqCst))
+            },
+            Duration::from_secs(1),
         )
         .expect("transcript should be slimmed");
         late_writer_thread
@@ -636,15 +714,60 @@ mod tests {
             .expect("append through the old file handle should succeed");
 
         assert_eq!(
-            fs::read_to_string(&transcript).expect("transcript should be readable"),
-            indoc! {r#"
+            parse_jsonl(&fs::read_to_string(&transcript).expect("transcript should be readable")),
+            parse_jsonl(indoc! {r#"
                 {"type":"user","uuid":"fixture-old","message":{"content":"fixture old"}}
                 {"type":"system","subtype":"compact_boundary","compactMetadata":{"preservedMessages":{"uuids":[]}}}
                 {"type":"user","uuid":"fixture-during","message":{"content":"fixture during"}}
                 {"type":"user","uuid":"fixture-before-replace","message":{"content":"fixture before replace"}}
                 {"type":"user","uuid":"fixture-new-path-after-replace","message":{"content":"fixture new path after replace"}}
                 {"type":"user","uuid":"fixture-old-fd-after-replace","message":{"content":"fixture old fd after replace"}}
-            "#}
+            "#})
+        );
+    }
+
+    #[test]
+    fn stops_after_writer_inspection_timeout_and_cleans_monitor_link() {
+        let directory = tempdir().expect("temporary directory should be created");
+        let transcript = directory.path().join("fixture-transcript.jsonl");
+        fs::write(
+            &transcript,
+            indoc! {r#"
+                {"type":"user","uuid":"fixture-old","message":{"content":"fixture old"}}
+                {"type":"system","subtype":"compact_boundary","compactMetadata":{"preservedMessages":{"uuids":[]}}}
+            "#},
+        )
+        .expect("fixture transcript should be written");
+        let monitor_path = RefCell::new(None);
+        let inspection_count = Cell::new(0);
+
+        let result = slim_transcript_with(
+            &transcript,
+            || {},
+            || {},
+            || {},
+            |path| {
+                *monitor_path.borrow_mut() = Some(path.to_path_buf());
+                inspection_count.set(inspection_count.get() + 1);
+                if inspection_count.get() == 1 {
+                    Ok(false)
+                } else {
+                    Err(anyhow::anyhow!("fixture inspection failure"))
+                }
+            },
+            Duration::from_millis(50),
+        );
+        let monitor_path = monitor_path
+            .into_inner()
+            .expect("monitor path should be inspected");
+
+        assert_eq!(
+            (
+                result.is_err(),
+                inspection_count.get() > 1,
+                monitor_path.exists(),
+            ),
+            (true, true, false),
         );
     }
 
@@ -666,8 +789,15 @@ mod tests {
         fs::set_permissions(&transcript, fs::Permissions::from_mode(0o444))
             .expect("fixture transcript should become read-only");
 
-        slim_transcript_with(&transcript, || {}, || {}, || {}, |_| Ok(false))
-            .expect("read-only transcript should be slimmed");
+        slim_transcript_with(
+            &transcript,
+            || {},
+            || {},
+            || {},
+            |_| Ok(false),
+            MAX_TRANSCRIPT_RECONCILE_WAIT,
+        )
+        .expect("read-only transcript should be slimmed");
 
         assert_eq!(
             (
@@ -686,6 +816,36 @@ mod tests {
                 .to_owned(),
                 0o444,
             ),
+        );
+    }
+
+    #[test]
+    fn reduces_non_object_tool_use_results_without_changing_null() {
+        let directory = tempdir().expect("temporary directory should be created");
+        let transcript = directory.path().join("fixture-transcript.jsonl");
+        fs::write(
+            &transcript,
+            indoc! {r#"
+                {"type":"user","uuid":"fixture-string-result","toolUseResult":"fixture-payload"}
+                {"type":"user","uuid":"fixture-array-result","toolUseResult":["fixture-payload"]}
+                {"type":"user","uuid":"fixture-null-result","toolUseResult":null}
+                {"type":"system","subtype":"compact_boundary","compactMetadata":{"preservedMessages":{"uuids":[]}}}
+            "#},
+        )
+        .expect("fixture transcript should be written");
+
+        slim_transcript(&transcript).expect("transcript should be slimmed");
+
+        assert_eq!(
+            parse_jsonl(
+                &fs::read_to_string(transcript).expect("slimmed transcript should be readable")
+            ),
+            parse_jsonl(indoc! {r#"
+                {"type":"user","uuid":"fixture-string-result","toolUseResult":{}}
+                {"type":"user","uuid":"fixture-array-result","toolUseResult":{}}
+                {"type":"user","uuid":"fixture-null-result","toolUseResult":null}
+                {"type":"system","subtype":"compact_boundary","compactMetadata":{"preservedMessages":{"uuids":[]}}}
+            "#})
         );
     }
 

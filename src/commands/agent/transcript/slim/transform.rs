@@ -20,7 +20,6 @@ pub(super) fn analyze_transcript(
         boundary_offset: None,
         preserved_uuids: HashSet::new(),
         read_paths_by_tool_use: HashMap::new(),
-        read_paths_by_record: HashMap::new(),
     };
     let mut line = Vec::new();
     let mut offset = 0_u64;
@@ -49,9 +48,6 @@ fn collect_read_paths(record: &Value, analysis: &mut TranscriptAnalysis) {
     if record.get("type").and_then(Value::as_str) != Some("assistant") {
         return;
     }
-    let Some(record_uuid) = record.get("uuid").and_then(Value::as_str) else {
-        return;
-    };
     if let Some(content) = record.pointer("/message/content").and_then(Value::as_array) {
         for block in content {
             if block.get("type").and_then(Value::as_str) != Some("tool_use")
@@ -67,9 +63,6 @@ fn collect_read_paths(record: &Value, analysis: &mut TranscriptAnalysis) {
                     .read_paths_by_tool_use
                     .insert(id.to_owned(), path.to_owned());
             }
-            analysis
-                .read_paths_by_record
-                .insert(record_uuid.to_owned(), path.to_owned());
         }
     }
 }
@@ -80,7 +73,7 @@ pub(super) fn write_slimmed_prefix(
     boundary_offset: u64,
     analysis: &TranscriptAnalysis,
     output: &mut NamedTempFile,
-) -> Result<()> {
+) -> Result<u64> {
     source
         .seek(SeekFrom::Start(0))
         .context("rewind transcript before slimming")?;
@@ -93,6 +86,9 @@ pub(super) fn write_slimmed_prefix(
             .read_until(b'\n', &mut line)
             .context("read transcript while slimming")?;
         if read == 0 {
+            break;
+        }
+        if line.last() != Some(&b'\n') {
             break;
         }
         let line_offset = offset;
@@ -133,10 +129,10 @@ pub(super) fn write_slimmed_prefix(
             }
         }
     }
-    Ok(())
+    Ok(offset)
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 enum RecordAction {
     Drop,
     KeepUnchanged,
@@ -163,28 +159,33 @@ fn slim_record(record: &mut Value, analysis: &TranscriptAnalysis) -> RecordActio
         return RecordAction::KeepUnchanged;
     }
 
-    let mut changed = false;
+    let image_changed = sanitize_images(record, analysis) == RecordAction::KeepChanged;
+    let mut changed = image_changed;
     if let Some(tool_result) = record.get_mut("toolUseResult")
-        && let Some(result) = tool_result.as_object_mut()
+        && !tool_result.is_null()
     {
-        let allowed = [
-            "task_id",
-            "taskId",
-            "background_task_id",
-            "backgroundTaskId",
-            "shell_id",
-            "shellId",
-            "agentId",
-            "status",
-            "answers",
-            "questions",
-        ];
-        let before = result.len();
-        result.retain(|key, _| allowed.contains(&key.as_str()));
-        changed = before != result.len();
+        if let Some(result) = tool_result.as_object_mut() {
+            let allowed = [
+                "task_id",
+                "taskId",
+                "background_task_id",
+                "backgroundTaskId",
+                "shell_id",
+                "shellId",
+                "agentId",
+                "status",
+                "answers",
+                "questions",
+            ];
+            let before = result.len();
+            result.retain(|key, _| allowed.contains(&key.as_str()));
+            changed |= before != result.len();
+        } else {
+            *tool_result = json!({});
+            changed = true;
+        }
     }
-    let image_changed = sanitize_images(record, analysis, None) == RecordAction::KeepChanged;
-    if changed || image_changed {
+    if changed {
         RecordAction::KeepChanged
     } else {
         RecordAction::KeepUnchanged
@@ -206,30 +207,9 @@ fn is_discardable_attachment(record: &Value) -> bool {
     ) || attachment_type.starts_with("deferred_tools_")
 }
 
-fn sanitize_images(
-    record: &mut Value,
-    analysis: &TranscriptAnalysis,
-    inherited_path: Option<&str>,
-) -> RecordAction {
+fn sanitize_images(record: &mut Value, analysis: &TranscriptAnalysis) -> RecordAction {
     let mut changed = false;
-    let path_for_record = record
-        .pointer("/toolUseResult/file/filePath")
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .or_else(|| {
-            record
-                .get("tool_use_id")
-                .and_then(Value::as_str)
-                .and_then(|id| analysis.read_paths_by_tool_use.get(id).cloned())
-        })
-        .or_else(|| {
-            record
-                .get("parentUuid")
-                .and_then(Value::as_str)
-                .and_then(|id| analysis.read_paths_by_record.get(id).cloned())
-        })
-        .or_else(|| inherited_path.map(str::to_owned));
-    sanitize_value(record, analysis, path_for_record.as_deref(), &mut changed);
+    sanitize_value(record, analysis, None, &mut changed);
     if changed {
         RecordAction::KeepChanged
     } else {
@@ -263,14 +243,12 @@ fn sanitize_value(
             .get("tool_use_id")
             .and_then(Value::as_str)
             .and_then(|id| analysis.read_paths_by_tool_use.get(id).cloned())
-            .or_else(|| {
-                object
-                    .get("file")
-                    .and_then(|file| file.get("filePath"))
-                    .and_then(Value::as_str)
-                    .map(str::to_owned)
-            })
             .or_else(|| path.map(str::to_owned));
+        let file_path = object
+            .get("file")
+            .and_then(|file| file.get("filePath"))
+            .and_then(Value::as_str)
+            .map(str::to_owned);
         if object.get("base64").and_then(Value::as_str).is_some() {
             object.remove("base64");
             object.insert(
@@ -279,8 +257,13 @@ fn sanitize_value(
             );
             *changed = true;
         }
-        for child in object.values_mut() {
-            sanitize_value(child, analysis, local_path.as_deref(), changed);
+        for (key, child) in object.iter_mut() {
+            let child_path = if key == "file" {
+                file_path.as_deref().or(local_path.as_deref())
+            } else {
+                local_path.as_deref()
+            };
+            sanitize_value(child, analysis, child_path, changed);
         }
     } else if let Some(array) = value.as_array_mut() {
         for child in array {
@@ -316,4 +299,55 @@ fn preserved_uuids(record: &Value) -> HashSet<String> {
         .filter_map(Value::as_str)
         .map(str::to_owned)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{HashMap, HashSet};
+
+    use serde_json::json;
+
+    use super::{RecordAction, TranscriptAnalysis, sanitize_images};
+
+    #[test]
+    fn scopes_tool_result_file_paths_to_the_file_payload() {
+        let analysis = TranscriptAnalysis {
+            boundary_offset: None,
+            preserved_uuids: HashSet::new(),
+            read_paths_by_tool_use: HashMap::new(),
+        };
+        let mut record = json!({
+            "type": "user",
+            "toolUseResult": {
+                "file": {
+                    "filePath": "/fixture/source.png",
+                    "base64": "fixture-file-payload",
+                },
+                "answers": {
+                    "image": "data:image/png;base64,fixture-answer-image",
+                },
+            },
+        });
+
+        let action = sanitize_images(&mut record, &analysis);
+
+        assert_eq!(
+            (action, record),
+            (
+                RecordAction::KeepChanged,
+                json!({
+                    "type": "user",
+                    "toolUseResult": {
+                        "file": {
+                            "filePath": "/fixture/source.png",
+                            "text": "[Image data omitted; source: /fixture/source.png]",
+                        },
+                        "answers": {
+                            "image": "[Image data omitted]",
+                        },
+                    },
+                }),
+            ),
+        );
+    }
 }
