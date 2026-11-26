@@ -1,5 +1,5 @@
 use std::fs::{self, File, FileTimes};
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 use std::time::SystemTime;
 
 use crate::commands::agent::types::Engine;
@@ -9,7 +9,11 @@ pub(super) fn refresh(engine: Engine, session_id: &str) {
         return;
     }
 
-    let Some(config_dir) = crate::shared::dirs::claude_config_dir() else {
+    let Some(config_dir) = std::env::var_os("CLAUDE_CONFIG_DIR")
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| crate::shared::dirs::home_dir().map(|home_dir| home_dir.join(".claude")))
+    else {
         return;
     };
     let session_env_dir = config_dir.join("session-env").join(session_id);
