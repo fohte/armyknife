@@ -98,6 +98,10 @@ async fn bind_listener(port: u16) -> Result<(TcpListener, SocketAddr)> {
     Ok((listener, address))
 }
 
+fn watch_web_url(address: SocketAddr) -> String {
+    format!("http://{address}")
+}
+
 fn open_browser_on_startup(
     args: &WatchWebArgs,
     is_restarted_process: bool,
@@ -141,7 +145,7 @@ pub async fn run(args: &WatchWebArgs) -> Result<()> {
     let (listener, address) = bind_listener(args.port).await?;
     ensure_port_allowed(address.port(), own_session_id.as_deref())?;
     let restart_args = restart_args_with_port(std::env::args_os().skip(1), address.port());
-    let url = format!("http://{address}");
+    let url = watch_web_url(address);
     println!("Agent Watch Web UI: {url}");
     open_browser_on_startup(
         args,
@@ -371,6 +375,7 @@ mod tests {
     use super::{
         LISTEN_PORT, app, app_with_assets, app_with_assets_and_loader, bind_listener,
         compression_layer, ensure_port_allowed, open_browser_on_startup, restart_args_with_port,
+        watch_web_url,
     };
     use crate::cli::{Cli, Commands};
     use crate::commands::agent::AgentCommands;
@@ -432,7 +437,7 @@ mod tests {
     #[tokio::test]
     async fn watch_web_port_zero_binds_loopback_and_reports_the_selected_port() {
         let (_listener, address) = bind_listener(0).await.unwrap();
-        let url = format!("http://{address}");
+        let url = watch_web_url(address);
 
         assert_eq!(
             (address.ip(), address.port() > 0, url),
@@ -444,20 +449,23 @@ mod tests {
         );
     }
 
-    #[test]
-    fn watch_web_port_restart_arguments_keep_the_bound_port() {
-        let args = restart_args_with_port(
-            [
-                OsString::from("agent"),
-                OsString::from("watch-web"),
-                OsString::from("--port=0"),
-                OsString::from("--no-open"),
-            ],
-            43_210,
-        );
-
+    #[rstest]
+    #[case::inline_port_form(vec![
+        OsString::from("agent"),
+        OsString::from("watch-web"),
+        OsString::from("--port=0"),
+        OsString::from("--no-open"),
+    ])]
+    #[case::separate_port_form(vec![
+        OsString::from("agent"),
+        OsString::from("watch-web"),
+        OsString::from("--port"),
+        OsString::from("0"),
+        OsString::from("--no-open"),
+    ])]
+    fn watch_web_port_restart_arguments_keep_the_bound_port(#[case] args: Vec<OsString>) {
         assert_eq!(
-            args,
+            restart_args_with_port(args, 43_210),
             [
                 OsString::from("agent"),
                 OsString::from("watch-web"),
