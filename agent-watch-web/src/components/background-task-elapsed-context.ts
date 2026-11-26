@@ -1,6 +1,6 @@
-import { createContext, useContext, useSyncExternalStore } from 'react'
+import { createContext, useContext } from 'react'
 
-import { getPageClockTime, subscribeToPageClock } from '#page-clock'
+import { useLiveElapsedOffsetSeconds } from '#use-live-elapsed-offset-seconds'
 
 const BackgroundTaskElapsedStartedAtContext = createContext<number | null>(null)
 
@@ -11,17 +11,7 @@ export function useBackgroundTaskElapsedStartedAt() {
   return useContext(BackgroundTaskElapsedStartedAtContext)
 }
 
-const subscribeWithoutAnchor = () => () => undefined
-const getServerOffsetSeconds = () => 0
-
 export function useBackgroundTaskElapsedSeconds(elapsedSeconds: number) {
   const startedAt = useBackgroundTaskElapsedStartedAt()
-  const offsetSeconds = useSyncExternalStore(
-    startedAt === null ? subscribeWithoutAnchor : subscribeToPageClock,
-    startedAt === null
-      ? getServerOffsetSeconds
-      : () => Math.floor(Math.max(0, getPageClockTime() - startedAt) / 1_000),
-    getServerOffsetSeconds,
-  )
-  return elapsedSeconds + offsetSeconds
+  return elapsedSeconds + useLiveElapsedOffsetSeconds(startedAt)
 }
