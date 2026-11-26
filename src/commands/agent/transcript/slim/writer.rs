@@ -94,7 +94,7 @@ pub(super) fn has_writable_open_handle(path: &Path) -> Result<bool> {
             .context("file descriptor path has no process directory")?;
         let Some(pid) = process_path
             .file_name()
-            .to_str()
+            .and_then(|name| name.to_str())
             .and_then(|name| name.parse::<u32>().ok())
         else {
             continue;
