@@ -356,7 +356,7 @@ impl ConversationResponse {
         self.message_image_sources = std::mem::take(&mut self.message_image_sources)
             .into_iter()
             .filter_map(|(index, sources)| {
-                (start <= index && index < end).then_some((index - start, sources))
+                (start <= index && index < end).then(|| (index - start, sources))
             })
             .collect();
     }
@@ -609,6 +609,44 @@ mod tests {
                 ],
                 std::collections::BTreeMap::from([(3, sources("last"))]),
             ),
+        );
+    }
+
+    #[test]
+    fn initial_epoch_page_discards_image_sources_before_its_start() {
+        let sources = |key: &str| {
+            std::collections::BTreeMap::from([(
+                "/tmp/fixture.png".to_owned(),
+                Some(format!("/api/answer-images/{key}")),
+            )])
+        };
+        let mut conversation = ConversationResponse {
+            messages: (0..120)
+                .map(|index| ChatItem::Assistant {
+                    text: format!("Fixture message {index}."),
+                })
+                .collect(),
+            initial_epoch: true,
+            message_image_sources: std::collections::BTreeMap::from([
+                (0, sources("before-page")),
+                (25, sources("first-visible")),
+                (119, sources("last-visible")),
+            ]),
+            ..ConversationResponse::default()
+        };
+        conversation.update_metadata();
+
+        conversation.apply_range(MessageRange {
+            limit: Some(100),
+            ..MessageRange::default()
+        });
+
+        assert_eq!(
+            conversation.message_image_sources,
+            std::collections::BTreeMap::from([
+                (5, sources("first-visible")),
+                (99, sources("last-visible")),
+            ]),
         );
     }
 

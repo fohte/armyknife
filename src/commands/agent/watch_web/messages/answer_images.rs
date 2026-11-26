@@ -257,7 +257,8 @@ fn extract_inline_images(line: &str, paths: &mut Vec<String>, seen: &mut HashSet
         {
             destination_start += 1;
         }
-        let (destination, close_destination) = if bytes.get(destination_start) == Some(&b'<') {
+        let angle_destination = bytes.get(destination_start) == Some(&b'<');
+        let (destination, close_destination) = if angle_destination {
             let start = destination_start + 1;
             let Some(end) = find_unescaped(bytes, start, b'>') else {
                 offset = destination_start + 1;
@@ -266,31 +267,30 @@ fn extract_inline_images(line: &str, paths: &mut Vec<String>, seen: &mut HashSet
             (start, end)
         } else {
             let start = destination_start;
-            let mut end = start;
-            while bytes
-                .get(end)
-                .is_some_and(|byte| !byte.is_ascii_whitespace() && *byte != b')')
-            {
-                if bytes[end] == b'\\' && end + 1 < bytes.len() {
-                    end += 2;
-                } else {
-                    end += 1;
-                }
-            }
-            (start, end)
+            (start, find_unbracketed_destination_end(bytes, start))
         };
-        let mut close = close_destination;
+        let mut close = if angle_destination {
+            close_destination + 1
+        } else {
+            close_destination
+        };
+        let mut has_title_separator = false;
         while bytes.get(close).is_some_and(u8::is_ascii_whitespace) {
+            has_title_separator = true;
             close += 1;
         }
-        if bytes.get(destination_start) == Some(&b'<') {
-            close += 1;
+        if has_title_separator
+            && bytes.get(close) != Some(&b')')
+            && let Some(title_end) = find_markdown_title_end(bytes, close)
+        {
+            close = title_end;
             while bytes.get(close).is_some_and(u8::is_ascii_whitespace) {
                 close += 1;
             }
         }
         if bytes.get(close) == Some(&b')') && close_destination > destination {
             if let Ok(value) = std::str::from_utf8(&bytes[destination..close_destination])
+                && !value.starts_with("//")
                 && Path::new(value).is_absolute()
                 && seen.insert(value.to_owned())
             {
@@ -301,6 +301,60 @@ fn extract_inline_images(line: &str, paths: &mut Vec<String>, seen: &mut HashSet
             offset = close_alt + 2;
         }
     }
+}
+
+fn find_unbracketed_destination_end(bytes: &[u8], start: usize) -> usize {
+    let mut offset = start;
+    let mut nesting = 0_usize;
+    while let Some(byte) = bytes.get(offset) {
+        match *byte {
+            b'\\' if offset + 1 < bytes.len() => offset += 2,
+            b'(' => {
+                nesting += 1;
+                offset += 1;
+            }
+            b')' if nesting > 0 => {
+                nesting -= 1;
+                offset += 1;
+            }
+            b')' => break,
+            byte if byte.is_ascii_whitespace() => break,
+            _ => offset += 1,
+        }
+    }
+    offset
+}
+
+fn find_markdown_title_end(bytes: &[u8], start: usize) -> Option<usize> {
+    let opener = *bytes.get(start)?;
+    let quote = match opener {
+        b'\'' | b'"' => Some(opener),
+        b'(' => None,
+        _ => return None,
+    };
+    let mut nesting = usize::from(opener == b'(');
+    let mut offset = start + 1;
+    while let Some(byte) = bytes.get(offset) {
+        if *byte == b'\\' && offset + 1 < bytes.len() {
+            offset += 2;
+            continue;
+        }
+        if quote == Some(*byte) {
+            return Some(offset + 1);
+        }
+        match *byte {
+            b'(' if quote.is_none() => nesting += 1,
+            b')' if quote.is_none() => {
+                nesting -= 1;
+                if nesting == 0 {
+                    return Some(offset + 1);
+                }
+            }
+            _ => {}
+        }
+        offset += 1;
+    }
+    None
 }
 
 fn find_unescaped(bytes: &[u8], start: usize, needle: u8) -> Option<usize> {
@@ -382,6 +436,28 @@ mod tests {
             "}),
             vec!["/tmp/fixture image.png", "/tmp/画像.png", "/tmp/final.webp"],
         );
+    }
+
+    #[test]
+    fn extracts_paths_with_parentheses_and_markdown_titles() {
+        assert_eq!(
+            markdown_image_paths(indoc::indoc! {"
+                ![](/tmp/fixture(v1).png)
+                ![](/tmp/titled.png \"fixture title\")
+            "}),
+            vec!["/tmp/fixture(v1).png", "/tmp/titled.png"],
+        );
+    }
+
+    #[test]
+    fn leaves_scheme_relative_images_for_the_browser() {
+        let storage = tempfile::tempdir().unwrap();
+        let mut conversation =
+            conversation("![](<//images.example.invalid/fixture.png>)".to_owned());
+
+        attach_with_storage_root("fixture-session", &mut conversation, storage.path());
+
+        assert_eq!(conversation.message_image_sources, BTreeMap::new());
     }
 
     #[test]
