@@ -1,5 +1,6 @@
 use clap::Args;
 use std::fs;
+use std::path::Path;
 
 use super::common::{
     DraftFile, PrDraftError, RepoBranchArgs, RepoInfo, generate_frontmatter,
@@ -35,21 +36,6 @@ async fn run_impl(args: &NewArgs, gh_client: &impl RepoClient) -> anyhow::Result
     )?;
     let draft_path = DraftFile::path_for(&repo_info);
 
-    // Check if the draft file already exists
-    let old_content = if draft_path.exists() {
-        if !args.force {
-            return Err(PrDraftError::FileAlreadyExists(draft_path).into());
-        }
-        Some(fs::read_to_string(&draft_path)?)
-    } else {
-        None
-    };
-
-    // Create parent directories
-    if let Some(parent) = draft_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-
     // Check if the repo is private (defaults to true if network is unavailable)
     let is_private = match gh_client
         .is_repo_private(&repo_info.owner, &repo_info.repo)
@@ -71,6 +57,25 @@ async fn run_impl(args: &NewArgs, gh_client: &impl RepoClient) -> anyhow::Result
     let body = read_stdin_if_available().unwrap_or_default();
     let content = format!("{frontmatter}{body}");
 
+    persist_draft(&draft_path, content, args.force)
+}
+
+fn persist_draft(draft_path: &Path, content: String, force: bool) -> anyhow::Result<()> {
+    // Check if the draft file already exists
+    let old_content = if draft_path.exists() {
+        if !force {
+            return Err(PrDraftError::FileAlreadyExists(draft_path.to_path_buf()).into());
+        }
+        Some(fs::read_to_string(draft_path)?)
+    } else {
+        None
+    };
+
+    // Create parent directories
+    if let Some(parent) = draft_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
     // Show warning and diff when overwriting
     if let Some(old) = &old_content {
         eprintln!(
@@ -82,8 +87,8 @@ async fn run_impl(args: &NewArgs, gh_client: &impl RepoClient) -> anyhow::Result
         eprintln!();
     }
 
-    clear_action_result(&draft_path)?;
-    fs::write(&draft_path, content)?;
+    clear_action_result(draft_path)?;
+    fs::write(draft_path, content)?;
 
     println!("{}", draft_path.display());
 
@@ -146,21 +151,6 @@ mod tests {
         let repo_info = RepoInfo::from_path(repo_path)?;
         let draft_path = DraftFile::path_for(&repo_info);
 
-        // Check if the draft file already exists
-        let old_content = if draft_path.exists() {
-            if !args.force {
-                return Err(PrDraftError::FileAlreadyExists(draft_path).into());
-            }
-            Some(fs::read_to_string(&draft_path)?)
-        } else {
-            None
-        };
-
-        // Create parent directories
-        if let Some(parent) = draft_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-
         // Check if the repo is private using mock client
         let is_private = gh_client
             .is_repo_private(&repo_info.owner, &repo_info.repo)
@@ -172,23 +162,7 @@ mod tests {
 
         let body = read_stdin_if_available().unwrap_or_default();
         let content = format!("{frontmatter}{body}");
-
-        // Show warning and diff when overwriting
-        if let Some(old) = &old_content {
-            eprintln!(
-                "Warning: Overwriting existing draft file: {}",
-                draft_path.display()
-            );
-            eprintln!();
-            eprint_diff(old, &content);
-            eprintln!();
-        }
-
-        clear_action_result(&draft_path)?;
-        fs::write(&draft_path, content)?;
-
-        println!("{}", draft_path.display());
-
+        persist_draft(&draft_path, content, args.force)?;
         Ok(())
     }
 

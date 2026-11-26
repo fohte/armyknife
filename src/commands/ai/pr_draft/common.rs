@@ -10,7 +10,9 @@ use thiserror::Error;
 use crate::infra::git;
 use crate::infra::github::{self, RepoClient};
 use crate::shared::config::load_config;
-use crate::shared::human_in_the_loop::{ApprovalManager, DocumentSchema, HumanInTheLoopError};
+use crate::shared::human_in_the_loop::{
+    ApprovalManager, DocumentSchema, HumanInTheLoopError, canonical_document_path,
+};
 use crate::shared::repo_language::{copier_answers_path_for_current_repo, resolve_repo_language};
 use crate::shared::yaml_frontmatter;
 
@@ -234,8 +236,8 @@ impl DraftFile {
         path: &Path,
         draft_dir: &Path,
     ) -> Option<(String, String, String)> {
-        let path = fs::canonicalize(path).ok()?;
-        let draft_dir = fs::canonicalize(draft_dir).ok()?;
+        let path = canonical_document_path(path);
+        let draft_dir = canonical_document_path(draft_dir);
         let relative = path.strip_prefix(&draft_dir).ok()?;
         let components: Vec<_> = relative.components().collect();
 
@@ -469,6 +471,36 @@ mod tests {
 
         assert_eq!(
             DraftFile::parse_path_under(&canonicalized_path, &draft_dir_alias),
+            Some((
+                "sample-owner".to_string(),
+                "sample-repository".to_string(),
+                "feature/sample-branch".to_string(),
+            )),
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn parse_path_under_accepts_a_missing_document_under_a_symlinked_root() {
+        let directory = tempfile::tempdir().expect("temporary directory should be created");
+        let real_draft_dir = directory.path().join("drafts");
+        let draft_path = real_draft_dir
+            .join("sample-owner")
+            .join("sample-repository")
+            .join("feature")
+            .join("sample-branch.md");
+        fs::create_dir_all(
+            draft_path
+                .parent()
+                .expect("draft path should have a parent"),
+        )
+        .expect("draft directory should be created");
+        let draft_dir_alias = directory.path().join("drafts-alias");
+        std::os::unix::fs::symlink(&real_draft_dir, &draft_dir_alias)
+            .expect("draft directory alias should be created");
+
+        assert_eq!(
+            DraftFile::parse_path_under(&draft_path, &draft_dir_alias),
             Some((
                 "sample-owner".to_string(),
                 "sample-repository".to_string(),

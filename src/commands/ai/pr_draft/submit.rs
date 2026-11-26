@@ -1,5 +1,5 @@
 use clap::Args;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{File, OpenOptions};
 use std::io;
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::OpenOptionsExt;
@@ -19,7 +19,9 @@ use crate::infra::github::{
     UpdatePrParams,
 };
 use crate::shared::config::load_config;
-use crate::shared::human_in_the_loop::{LockGuard, ReviewDocumentAction, successful_action_result};
+use crate::shared::human_in_the_loop::{
+    LockGuard, ReviewDocumentAction, canonical_document_path, successful_action_result,
+};
 use crate::shared::repo_language::copier_answers_path_for_repo_at;
 
 mod post_submit;
@@ -114,26 +116,12 @@ async fn acquire_submit_lock(draft_path: &Path) -> anyhow::Result<SubmitGuard> {
     Ok(tokio::task::spawn_blocking(move || SubmitGuard::acquire(&draft_path)).await??)
 }
 
-fn canonicalize_path_or_parent(path: &Path) -> io::Result<PathBuf> {
-    if let Ok(canonicalized) = fs::canonicalize(path) {
-        return Ok(canonicalized);
-    }
-    let parent = path
-        .parent()
-        .ok_or_else(|| io::Error::other("draft path has no parent"))?;
-    let file_name = path
-        .file_name()
-        .ok_or_else(|| io::Error::other("draft path has no file name"))?;
-    Ok(fs::canonicalize(parent)?.join(file_name))
-}
-
 pub async fn run(args: &SubmitArgs) -> anyhow::Result<()> {
     let draft_path = match &args.filepath {
         Some(path) => path.clone(),
         None => DraftFile::path_for(&RepoInfo::from_git_only()?),
     };
-    let action_result_path =
-        canonicalize_path_or_parent(&draft_path).unwrap_or_else(|_| draft_path.clone());
+    let action_result_path = canonical_document_path(&draft_path);
     if let Some(result) =
         successful_action_result(&action_result_path, ReviewDocumentAction::CreatePr)?
     {
@@ -228,7 +216,26 @@ async fn run_impl_with_review_language_context<
         Some(path) => path.clone(),
         None => DraftFile::path_for(&RepoInfo::from_git_only()?),
     };
-    let draft_path = canonicalize_path_or_parent(&requested_draft_path)?;
+    let draft_path = canonical_document_path(&requested_draft_path);
+
+    let parsed_draft_path = match &args.filepath {
+        Some(path) => Some(DraftFile::parse_path(&draft_path).ok_or_else(|| {
+            PrDraftError::CommandFailed(format!("Invalid draft path: {}", path.display()))
+        })?),
+        None => None,
+    };
+
+    if let Some(result) = successful_action_result(&draft_path, ReviewDocumentAction::CreatePr)? {
+        if context.lock_policy == SubmitLockPolicy::RequireUnlocked {
+            result.print_for_agent();
+        }
+        return Ok(result.message);
+    }
+
+    if !draft_path.exists() {
+        return Err(PrDraftError::FileNotFound(draft_path).into());
+    }
+
     let _submit_lock = acquire_submit_lock(&draft_path).await?;
 
     if let Some(result) = successful_action_result(&draft_path, ReviewDocumentAction::CreatePr)? {
@@ -238,12 +245,8 @@ async fn run_impl_with_review_language_context<
         return Ok(result.message);
     }
 
-    let target = match &args.filepath {
-        Some(path) => {
-            // When filepath is provided, parse it to get owner/repo/branch
-            let (owner, repo, branch) = DraftFile::parse_path(path).ok_or_else(|| {
-                PrDraftError::CommandFailed(format!("Invalid draft path: {}", path.display()))
-            })?;
+    let target = match parsed_draft_path {
+        Some((owner, repo, branch)) => {
             let is_private = gh_client.is_repo_private(&owner, &repo).await?;
             PrTarget {
                 owner,
@@ -267,7 +270,8 @@ async fn run_impl_with_review_language_context<
 
     // Check for a live review holder before submitting.
     let lock_path = LockGuard::lock_path(&requested_draft_path);
-    if context.lock_policy == SubmitLockPolicy::RequireUnlocked && LockGuard::is_locked(&draft_path)
+    if context.lock_policy == SubmitLockPolicy::RequireUnlocked
+        && (LockGuard::is_locked(&draft_path) || LockGuard::is_locked(&requested_draft_path))
     {
         anyhow::bail!(
             "Please close the editor before submitting the PR (lock: {}).",
@@ -550,6 +554,47 @@ mod tests {
                     .expect("successful action result should remain available"),
             ),
             (Ok(()), Some(result)),
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_path_does_not_create_a_submit_lock() {
+        let directory = tempfile::tempdir().expect("temporary directory should be created");
+        let draft_path = directory.path().join("sample-draft.md");
+        fs::write(&draft_path, "draft").expect("draft should be written");
+        let mut lock_path = draft_path.as_os_str().to_os_string();
+        lock_path.push(".submit.lock");
+        let args = SubmitArgs {
+            filepath: Some(draft_path),
+            base: None,
+            draft: false,
+            no_review: false,
+        };
+        let client = SubmitClientStub::default();
+
+        let result = run_impl(
+            &args,
+            &client,
+            &noop_hook,
+            noop_config,
+            no_current_repo,
+            &NoopPostSubmitProcessor,
+            no_vibe_access,
+        )
+        .await;
+        let create_calls = client
+            .create_calls
+            .lock()
+            .expect("submit client mutex")
+            .clone();
+
+        assert_eq!(
+            (
+                result.is_err(),
+                PathBuf::from(lock_path).exists(),
+                create_calls
+            ),
+            (true, false, Vec::new())
         );
     }
 
@@ -1253,6 +1298,7 @@ mod tests {
             repo: &str,
             _branch: &str,
         ) -> GitHubResult<Option<crate::infra::github::PrInfo>> {
+            tokio::task::yield_now().await;
             Ok(self
                 .existing_pr_number
                 .map(|number| crate::infra::github::PrInfo {

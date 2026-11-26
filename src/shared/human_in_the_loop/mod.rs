@@ -41,6 +41,7 @@ use review_finish::{
     create_fifo_at_path, path_with_suffix, remove_fifo_if_present, try_read_fifo_byte,
 };
 
+pub(crate) use approval::canonical_document_path;
 pub use approval::{ApprovalManager, TEST_APPROVAL_DIR_OVERRIDE};
 pub use document::{Document, DocumentSchema};
 pub use editor::{LaunchOptions, launch_terminal, run_editor};
