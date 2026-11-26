@@ -199,28 +199,28 @@ where
     drop(persisted_file);
     after_replace();
     // A writer may open the old inode after the pre-replacement scan and before rename.
-    let final_bytes = (|| -> Result<u64> {
-        reconcile_in_flight_appends(
-            old_inode_monitor.path(),
-            &mut source,
-            &mut replacement_writer,
-            copied_to,
-            &mut has_writable_open_handle,
-            max_reconcile_wait,
-        )
-        .with_context(|| format!("preserve in-flight appends for {}", path.display()))?;
-
-        let final_bytes = fs::metadata(path)
-            .with_context(|| format!("inspect replaced transcript {}", path.display()))?
-            .len();
-        Ok(final_bytes)
-    })()
+    reconcile_in_flight_appends(
+        old_inode_monitor.path(),
+        &mut source,
+        &mut replacement_writer,
+        copied_to,
+        &mut has_writable_open_handle,
+        max_reconcile_wait,
+    )
     .with_context(|| {
         format!(
             "transcript replacement completed, but post-replacement reconciliation failed for {}",
             path.display()
         )
     })?;
+    let final_bytes = fs::metadata(path)
+        .with_context(|| {
+            format!(
+                "transcript replacement completed, but could not inspect the replaced transcript {}",
+                path.display()
+            )
+        })?
+        .len();
     Ok(SlimResult {
         original_bytes,
         final_bytes,
@@ -689,7 +689,7 @@ mod tests {
                 monitor_path.exists(),
             ),
             (
-                "transcript replacement completed, but post-replacement reconciliation failed for <transcript>: preserve in-flight appends for <transcript>: timed out inspecting old transcript writers: fixture inspection failure".to_owned(),
+                "transcript replacement completed, but post-replacement reconciliation failed for <transcript>: timed out inspecting old transcript writers: fixture inspection failure".to_owned(),
                 true,
                 false,
             ),
@@ -704,6 +704,7 @@ mod tests {
             &transcript,
             indoc! {r#"
                 {"type":"user","uuid":"fixture-old","message":{"content":"fixture old"}}
+                {"type":"api-request","body":"fixture payload"}
                 {"type":"system","subtype":"compact_boundary","compactMetadata":{"preservedMessages":{"uuids":[]}}}
             "#},
         )
@@ -734,67 +735,18 @@ mod tests {
         assert_eq!(
             (
                 error,
+                fs::read_to_string(&transcript).expect("replacement transcript should be readable"),
                 inspection_count.get() > 1,
                 monitor_path.exists(),
             ),
             (
-                "transcript replacement completed, but post-replacement reconciliation failed for <transcript>: preserve in-flight appends for <transcript>: timed out waiting for old transcript writers to close".to_owned(),
-                true,
-                false,
-            ),
-        );
-    }
-
-    #[test]
-    fn reports_post_replace_timeout_after_replacement_and_cleans_monitor_link() {
-        let directory = tempdir().expect("temporary directory should be created");
-        let transcript = directory.path().join("fixture-transcript.jsonl");
-        fs::write(
-            &transcript,
-            indoc! {r#"
-                {"type":"user","uuid":"fixture-old","message":{"content":"fixture old"}}
-                {"type":"api-request","body":"fixture payload"}
-                {"type":"system","subtype":"compact_boundary","compactMetadata":{"preservedMessages":{"uuids":[]}}}
-            "#},
-        )
-        .expect("fixture transcript should be written");
-        let monitor_path = RefCell::new(None);
-        let replacement_completed = Cell::new(false);
-
-        let result = slim_transcript_with(
-            &transcript,
-            || {},
-            || {},
-            || replacement_completed.set(true),
-            |path| {
-                *monitor_path.borrow_mut() = Some(path.to_path_buf());
-                Ok(replacement_completed.get())
-            },
-            Duration::from_millis(50),
-        );
-        let monitor_path = monitor_path
-            .into_inner()
-            .expect("monitor path should be inspected");
-        let error = normalized_error(
-            result
-                .err()
-                .expect("post-replacement writer should time out"),
-            &transcript,
-        );
-
-        assert_eq!(
-            (
-                error,
-                fs::read_to_string(&transcript).expect("replacement transcript should be readable"),
-                monitor_path.exists(),
-            ),
-            (
-                "transcript replacement completed, but post-replacement reconciliation failed for <transcript>: preserve in-flight appends for <transcript>: timed out waiting for old transcript writers to close".to_owned(),
+                "transcript replacement completed, but post-replacement reconciliation failed for <transcript>: timed out waiting for old transcript writers to close".to_owned(),
                 indoc! {r#"
                     {"type":"user","uuid":"fixture-old","message":{"content":"fixture old"}}
                     {"type":"system","subtype":"compact_boundary","compactMetadata":{"preservedMessages":{"uuids":[]}}}
                 "#}
                 .to_owned(),
+                true,
                 false,
             ),
         );
