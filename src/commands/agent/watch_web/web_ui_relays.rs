@@ -923,9 +923,6 @@ mod tests {
             load_relay_registrations(directory)?,
             calls.lock().expect("hook call lock should succeed").len(),
         );
-        tokio::time::sleep(std::time::Duration::from_millis(2_100)).await;
-        current.sync().await?;
-        let after_retry = load_relay_registrations(directory)?;
         let hook_names = calls
             .lock()
             .expect("hook call lock should succeed")
@@ -935,18 +932,60 @@ mod tests {
         current.stop_all().await;
 
         assert_eq!(
-            (after_failure, after_immediate_sync, after_retry, hook_names,),
+            (after_failure, after_immediate_sync, hook_names,),
             (
                 vec![previous_registration.clone(), current_registration.clone()],
                 (
                     vec![previous_registration.clone(), current_registration.clone()],
                     2
                 ),
-                vec![current_registration],
+                vec!["web-ui-unexpose".to_owned(), "web-ui-expose".to_owned(),],
+            ),
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn failed_active_unexpose_waits_for_backoff_on_the_next_sync() -> anyhow::Result<()> {
+        let directory = TempDir::new()?;
+        store::save_session_to(directory.path(), &session_with_one_web_ui())?;
+        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        let mut relays = WebUiRelays::with_hook_runner(
+            directory.path().to_path_buf(),
+            recording_hook_runner(sender, true, false),
+        );
+
+        relays.sync().await?;
+        let registration = load_relay_registrations(directory.path())?;
+        store::update_session_in(directory.path(), "fixture-session", |session| {
+            session.status = crate::commands::agent::types::SessionStatus::Ended;
+            true
+        })?;
+        relays.sync().await?;
+        let after_failure = load_relay_registrations(directory.path())?;
+        relays.sync().await?;
+        let after_immediate_sync = load_relay_registrations(directory.path())?;
+        let mut hook_calls = Vec::new();
+        while let Ok(call) = receiver.try_recv() {
+            hook_calls.push(call);
+        }
+        relays.stop_all().await;
+
+        assert_eq!(
+            (
+                after_failure,
+                after_immediate_sync,
+                summarize_hook_calls(&hook_calls),
+            ),
+            (
+                registration.clone(),
+                registration,
                 vec![
-                    "web-ui-unexpose".to_owned(),
-                    "web-ui-expose".to_owned(),
-                    "web-ui-unexpose".to_owned(),
+                    ("web-ui-expose".to_owned(), None),
+                    (
+                        "web-ui-unexpose".to_owned(),
+                        Some("https://public.example.invalid/relay/".to_owned()),
+                    ),
                 ],
             ),
         );

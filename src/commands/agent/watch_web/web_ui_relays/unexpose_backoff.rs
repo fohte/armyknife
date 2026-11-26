@@ -94,22 +94,18 @@ mod tests {
     fn retry_delay_does_not_exceed_ten_minutes(registration: RelayRegistration) {
         let mut now = Instant::now();
         let mut backoff = UnexposeBackoff::default();
-        let mut retry_delays = Vec::new();
+        let mut eligibility = Vec::new();
 
-        for _ in 0..12 {
+        for delay in [2, 4, 8, 16, 32, 64, 128, 256, 512, 600, 600, 600] {
             backoff.record_failure(registration.clone(), now);
-            let retry_at = backoff
-                .failures
-                .get(&registration)
-                .expect("failure should be tracked")
-                .next_attempt_at;
-            retry_delays.push(retry_at.duration_since(now).as_secs());
-            now = retry_at;
+            let deadline = now + Duration::from_secs(delay);
+            eligibility.push((
+                backoff.should_attempt(&registration, deadline - Duration::from_millis(1)),
+                backoff.should_attempt(&registration, deadline),
+            ));
+            now = deadline;
         }
 
-        assert_eq!(
-            retry_delays,
-            vec![2, 4, 8, 16, 32, 64, 128, 256, 512, 600, 600, 600]
-        );
+        assert_eq!(eligibility, vec![(false, true); 12]);
     }
 }
