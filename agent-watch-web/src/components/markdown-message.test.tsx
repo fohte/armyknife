@@ -74,6 +74,46 @@ it('uses the server source for a copied assistant image', () => {
   )
 })
 
+it('matches copied assistant images with spaces and non-ASCII path characters', () => {
+  const path = '/tmp/画像 samples/final image.png'
+  expect(
+    renderMessage(`![](<${path}>)`, undefined, {
+      [path]: '/api/sessions/fixture-session/answer-images/fixture-key',
+    }),
+  ).toBe(
+    '<div class="markdown-message"><p><button class="image-lightbox-trigger" type="button" aria-label="Enlarge image"><img class="chat-user-image" src="/api/sessions/fixture-session/answer-images/fixture-key" alt="" loading="lazy" decoding="async"/></button></p></div>',
+  )
+})
+
+const escapedPath = String.raw`/tmp/fixture\(v1\).png`
+
+it.each([
+  [
+    'a Markdown escape is not mapped',
+    `![](<${escapedPath}>)`,
+    '/tmp/fixture(v1).png',
+  ],
+  [
+    'a reference image is not mapped',
+    '![fixture][sample-image]\n\n[sample-image]: </tmp/fixture.png>',
+    '/tmp/fixture.png',
+  ],
+])('shows unavailable local images when %s', (_name, markdown, src) => {
+  expect(renderMessage(markdown, undefined, {})).toBe(
+    `<div class="markdown-message"><p><span class="markdown-image-unavailable">表示できません: ${src}</span></p></div>`,
+  )
+})
+
+it('shows unavailable when a Markdown escape changes the mapped path', () => {
+  expect(
+    renderMessage(`![](<${escapedPath}>)`, undefined, {
+      [escapedPath]: null,
+    }),
+  ).toBe(
+    '<div class="markdown-message"><p><span class="markdown-image-unavailable">表示できません: /tmp/fixture(v1).png</span></p></div>',
+  )
+})
+
 it('shows an unavailable message for an ineligible assistant image', () => {
   expect(
     renderMessage('![](/tmp/fixture.txt)', undefined, {

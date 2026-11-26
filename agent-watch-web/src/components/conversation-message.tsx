@@ -32,6 +32,8 @@ import type {
   SessionLinkTarget,
 } from '#types'
 
+const EMPTY_IMAGE_SOURCES: Readonly<Record<string, string | null>> = {}
+
 export type ConversationMessageRowProps = {
   actions: SessionActions | null
   actionsReady: boolean
@@ -147,6 +149,10 @@ export function renderConversationMessage({
     )
   }
   if (message.type === 'assistant' || message.type === 'narration') {
+    const effectiveImageSources =
+      message.type === 'assistant'
+        ? (imageSources ?? EMPTY_IMAGE_SOURCES)
+        : imageSources
     const className =
       message.type === 'narration'
         ? 'chat-assistant-message chat-narration-message'
@@ -154,7 +160,9 @@ export function renderConversationMessage({
     return (
       <article className={className}>
         <MarkdownMessage
-          {...(imageSources === undefined ? {} : { imageSources })}
+          {...(effectiveImageSources === undefined
+            ? {}
+            : { imageSources: effectiveImageSources })}
           {...(sessionId === undefined ? {} : { sessionId })}
           {...(onCommandExecuted === undefined ? {} : { onCommandExecuted })}
           {...(onCommandStarted === undefined ? {} : { onCommandStarted })}

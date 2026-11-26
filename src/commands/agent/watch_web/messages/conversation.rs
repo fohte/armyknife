@@ -312,7 +312,7 @@ fn load_conversation_with_tail_window_from(
         storage_root.as_deref(),
         &mut conversation.messages,
     );
-    super::answer_images::attach(session_id, &mut conversation)?;
+    super::answer_images::attach(session_id, &mut conversation);
 
     attach_question_request_if_present(
         &mut conversation.messages,

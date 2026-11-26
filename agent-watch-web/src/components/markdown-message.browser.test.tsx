@@ -621,6 +621,61 @@ it('renders a copied assistant image from its stored URL', () => {
   })
 })
 
+it('renders copied images with spaces and non-ASCII path characters', () => {
+  const path = '/tmp/画像 samples/final image.png'
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <MarkdownMessage
+        imageSources={{
+          [path]: '/api/sessions/fixture-session/answer-images/fixture-key',
+        }}
+      >
+        {`![](<${path}>)`}
+      </MarkdownMessage>,
+    )
+  })
+
+  const getActual = () => ({
+    imageSource:
+      container
+        .querySelector<HTMLImageElement>('.chat-user-image')
+        ?.getAttribute('src') ?? null,
+    unavailableMessage:
+      container.querySelector('.markdown-image-unavailable')?.textContent ??
+      null,
+  })
+  expect(getActual()).toEqual({
+    imageSource: '/api/sessions/fixture-session/answer-images/fixture-key',
+    unavailableMessage: null,
+  })
+})
+
+it('shows an unavailable message for an unmapped reference image', () => {
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <MarkdownMessage imageSources={{}}>
+        {'![fixture][sample-image]\n\n[sample-image]: </tmp/fixture.png>'}
+      </MarkdownMessage>,
+    )
+  })
+
+  const getActual = () => ({
+    imageSource:
+      container
+        .querySelector<HTMLImageElement>('.chat-user-image')
+        ?.getAttribute('src') ?? null,
+    unavailableMessage:
+      container.querySelector('.markdown-image-unavailable')?.textContent ??
+      null,
+  })
+  expect(getActual()).toEqual({
+    imageSource: null,
+    unavailableMessage: '表示できません: /tmp/fixture.png',
+  })
+})
+
 it('keeps the link next to an expandable linked Markdown image', async () => {
   root = createRoot(container)
   act(() => {

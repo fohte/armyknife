@@ -6,24 +6,29 @@ use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 
 use crate::commands::agent::file::{self, storage_root};
-use crate::commands::agent::file_attachment_support::{MAX_AGENT_FILE_BYTES, read_bounded_image};
+use crate::commands::agent::file_attachment_support::{
+    MAX_AGENT_FILE_BYTES, inspect_bounded_image, read_bounded_image,
+};
 
 const MAX_IMAGES_PER_ANSWER: usize = 16;
 const MAX_ANSWER_IMAGE_BYTES: u64 = 50 * 1024 * 1024;
 
-pub(super) fn attach(
-    session_id: &str,
-    conversation: &mut super::ConversationResponse,
-) -> Result<()> {
-    let storage_root = storage_root()?;
-    attach_with_storage_root(session_id, conversation, &storage_root)
+pub(super) fn attach(session_id: &str, conversation: &mut super::ConversationResponse) {
+    conversation.message_image_sources.clear();
+    match storage_root() {
+        Ok(storage_root) => attach_with_storage_root(session_id, conversation, &storage_root),
+        Err(error) => {
+            tracing::warn!(%error, "failed to locate assistant answer image storage");
+            attach_unavailable_images(conversation);
+        }
+    }
 }
 
 fn attach_with_storage_root(
     session_id: &str,
     conversation: &mut super::ConversationResponse,
     storage_root: &Path,
-) -> Result<()> {
+) {
     conversation.message_image_sources.clear();
     for (message_index, message) in conversation.messages.iter().enumerate() {
         let super::ChatItem::Assistant { text } = message else {
@@ -33,7 +38,6 @@ fn attach_with_storage_root(
         if paths.is_empty() {
             continue;
         }
-
         let mut sources = BTreeMap::new();
         let mut total_size = 0_u64;
         for (path_index, path) in paths.iter().enumerate() {
@@ -42,13 +46,19 @@ fn attach_with_storage_root(
                 continue;
             }
             let key = image_key(session_id, text, path);
-            let copied = snapshot_image(
+            let copied = match snapshot_image(
                 storage_root,
                 session_id,
                 &key,
                 Path::new(path),
                 MAX_ANSWER_IMAGE_BYTES - total_size,
-            )?;
+            ) {
+                Ok(copied) => copied,
+                Err(error) => {
+                    tracing::warn!(%error, path, "failed to snapshot assistant answer image");
+                    None
+                }
+            };
             let source = copied.and_then(|(size, _mime_type)| {
                 let next_total = total_size.checked_add(size as u64)?;
                 if next_total > MAX_ANSWER_IMAGE_BYTES {
@@ -63,7 +73,24 @@ fn attach_with_storage_root(
             .message_image_sources
             .insert(conversation.start + message_index, sources);
     }
-    Ok(())
+}
+
+fn attach_unavailable_images(conversation: &mut super::ConversationResponse) {
+    for (message_index, message) in conversation.messages.iter().enumerate() {
+        let super::ChatItem::Assistant { text } = message else {
+            continue;
+        };
+        let sources: BTreeMap<String, Option<String>> = markdown_image_paths(text)
+            .into_iter()
+            .map(|path| (path, None))
+            .collect();
+        if sources.is_empty() {
+            continue;
+        }
+        conversation
+            .message_image_sources
+            .insert(conversation.start + message_index, sources);
+    }
 }
 
 fn image_key(session_id: &str, answer: &str, path: &str) -> String {
@@ -88,14 +115,16 @@ fn snapshot_image(
     }
     let directory = file::session_directory(storage_root, session_id)?;
     let stored_path = stored_path(&directory, key);
-    if let Some(image) = read_bounded_image(&stored_path, MAX_AGENT_FILE_BYTES)? {
-        if image.bytes.len() as u64 > remaining_bytes {
+    if let Some(image) = inspect_bounded_image(&stored_path, MAX_AGENT_FILE_BYTES)? {
+        if image.size > remaining_bytes {
             return Ok(None);
         }
-        return Ok(Some((image.bytes.len(), image.mime_type)));
+        return Ok(Some((image.size as usize, image.mime_type)));
     }
-    if fs::symlink_metadata(&stored_path).is_ok() {
-        return Ok(None);
+    match fs::symlink_metadata(&stored_path) {
+        Ok(_) => return Ok(None),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
     }
     let image = match read_bounded_image(source, MAX_AGENT_FILE_BYTES) {
         Ok(Some(image)) => image,
@@ -111,8 +140,8 @@ fn snapshot_image(
     match file::write_new_file(&stored_path, &image.bytes) {
         Ok(()) => Ok(Some((image.bytes.len(), image.mime_type))),
         Err(error) if is_already_exists(&error) => {
-            Ok(read_bounded_image(&stored_path, MAX_AGENT_FILE_BYTES)?
-                .map(|saved| (saved.bytes.len(), saved.mime_type)))
+            Ok(inspect_bounded_image(&stored_path, MAX_AGENT_FILE_BYTES)?
+                .map(|saved| (saved.size as usize, saved.mime_type)))
         }
         Err(error) => Err(error).with_context(|| "saving answer image snapshot"),
     }
@@ -330,14 +359,14 @@ mod tests {
     fn extracts_only_absolute_markdown_image_paths_outside_code() {
         assert_eq!(
             markdown_image_paths(indoc::indoc! {"
-                ![plot](</tmp/fixture image.png>) and ![](relative.png)
+                ![plot](</tmp/fixture image.png>) and ![](/tmp/画像.png) and ![](relative.png)
                 `![](/tmp/inline.png)`
                 ```md
                 ![](/tmp/fenced.png)
                 ```
                 ![](/tmp/final.webp)
             "}),
-            vec!["/tmp/fixture image.png", "/tmp/final.webp"],
+            vec!["/tmp/fixture image.png", "/tmp/画像.png", "/tmp/final.webp"],
         );
     }
 
@@ -350,13 +379,19 @@ mod tests {
         let answer = format!("![](<{}>)", path.display());
         let mut messages = conversation(answer.clone());
 
-        attach_with_storage_root("fixture-session", &mut messages, storage.path()).unwrap();
+        attach_with_storage_root("fixture-session", &mut messages, storage.path());
         fs::write(&path, b"changed source").unwrap();
         let mut reloaded_messages = conversation(answer.clone());
-        attach_with_storage_root("fixture-session", &mut reloaded_messages, storage.path())
-            .unwrap();
+        attach_with_storage_root("fixture-session", &mut reloaded_messages, storage.path());
+        fs::remove_file(&path).unwrap();
+        let mut deleted_source_messages = conversation(answer.clone());
+        attach_with_storage_root(
+            "fixture-session",
+            &mut deleted_source_messages,
+            storage.path(),
+        );
 
-        let key = reloaded_messages.message_image_sources[&0][&path.display().to_string()]
+        let key = deleted_source_messages.message_image_sources[&0][&path.display().to_string()]
             .as_deref()
             .and_then(|url| url.rsplit('/').next())
             .unwrap()
@@ -364,13 +399,44 @@ mod tests {
         let snapshot = super::read_snapshot(storage.path(), "fixture-session", &key)
             .unwrap()
             .unwrap();
+        let expected_sources = messages.message_image_sources.clone();
 
         assert_eq!(
-            (messages.message_image_sources, snapshot),
             (
+                messages.message_image_sources,
                 reloaded_messages.message_image_sources,
+                deleted_source_messages.message_image_sources,
+                snapshot,
+            ),
+            (
+                expected_sources.clone(),
+                expected_sources.clone(),
+                expected_sources,
                 (original, "image/png"),
             ),
+        );
+    }
+
+    #[test]
+    fn snapshots_images_with_spaces_and_non_ascii_path_characters() {
+        let sources = tempfile::tempdir().unwrap();
+        let storage = tempfile::tempdir().unwrap();
+        let path = image_file(&sources, "画像 samples final image.png", 8);
+        let answer = format!("![](<{}>)", path.display());
+        let mut messages = conversation(answer.clone());
+
+        attach_with_storage_root("fixture-session", &mut messages, storage.path());
+
+        let key = image_key("fixture-session", &answer, &path.display().to_string());
+        assert_eq!(
+            messages.message_image_sources,
+            BTreeMap::from([(
+                0,
+                BTreeMap::from([(
+                    path.display().to_string(),
+                    Some(format!("/api/sessions/fixture-session/answer-images/{key}")),
+                )]),
+            )]),
         );
     }
 
@@ -380,7 +446,7 @@ mod tests {
         let storage = tempfile::tempdir().unwrap();
         let path = image_file(&sources, "fixture.png", 8);
         let mut conversation = conversation(format!("![](<{}>)", path.display()));
-        attach_with_storage_root("fixture-session", &mut conversation, storage.path()).unwrap();
+        attach_with_storage_root("fixture-session", &mut conversation, storage.path());
         let session_storage = file::session_directory(storage.path(), "fixture-session").unwrap();
 
         remove_session_storage(storage.path(), "fixture-session").unwrap();
@@ -401,16 +467,28 @@ mod tests {
         let source = parent_file.join("fixture.png");
         let mut conversation = conversation(format!("![](<{}>)", source.display()));
 
-        let error = attach_with_storage_root("fixture-session", &mut conversation, storage.path())
-            .err()
-            .map(|error| error.to_string());
+        attach_with_storage_root("fixture-session", &mut conversation, storage.path());
 
         assert_eq!(
-            (error, conversation.message_image_sources),
-            (
-                None,
-                BTreeMap::from([(0, BTreeMap::from([(source.display().to_string(), None)]),)]),
-            ),
+            conversation.message_image_sources,
+            BTreeMap::from([(0, BTreeMap::from([(source.display().to_string(), None)]),)]),
+        );
+    }
+
+    #[test]
+    fn storage_errors_make_only_assistant_images_unavailable() {
+        let sources = tempfile::tempdir().unwrap();
+        let storage = tempfile::tempdir().unwrap();
+        let path = image_file(&sources, "fixture.png", 8);
+        let invalid_storage_root = storage.path().join("not-a-directory");
+        fs::write(&invalid_storage_root, b"fixture").unwrap();
+        let mut conversation = conversation(format!("![](<{}>)", path.display()));
+
+        attach_with_storage_root("fixture-session", &mut conversation, &invalid_storage_root);
+
+        assert_eq!(
+            conversation.message_image_sources,
+            BTreeMap::from([(0, BTreeMap::from([(path.display().to_string(), None)]),)]),
         );
     }
 
@@ -437,7 +515,7 @@ mod tests {
         );
         let mut messages = conversation(answer);
 
-        attach_with_storage_root("fixture-session", &mut messages, storage.path()).unwrap();
+        attach_with_storage_root("fixture-session", &mut messages, storage.path());
 
         let sources = &messages.message_image_sources[&0];
         assert_eq!(
@@ -464,7 +542,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join(" ");
         let mut count_messages = conversation(count_answer.clone());
-        attach_with_storage_root("count-session", &mut count_messages, storage.path()).unwrap();
+        attach_with_storage_root("count-session", &mut count_messages, storage.path());
         let expected_count_sources = count_paths
             .iter()
             .enumerate()
@@ -509,7 +587,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join(" ");
         let mut byte_messages = conversation(byte_answer.clone());
-        attach_with_storage_root("bytes-session", &mut byte_messages, storage.path()).unwrap();
+        attach_with_storage_root("bytes-session", &mut byte_messages, storage.path());
         let expected_byte_sources = byte_paths
             .iter()
             .enumerate()

@@ -26,6 +26,15 @@ import {
   MarkdownComponentContext,
   type MarkdownComponentContextValue,
 } from '#components/markdown-component-context'
+import {
+  getMappedImageSource,
+  isUnmappedLocalImagePath,
+} from '#components/markdown-image-source'
+import type {
+  MarkdownFile,
+  MarkdownNode,
+  MarkdownRoot,
+} from '#components/markdown-message-types'
 import { useMarkdownSessionLinks } from '#components/markdown-session-links'
 import { SessionLink } from '#components/session-link'
 import {
@@ -35,26 +44,6 @@ import {
 import type { SessionLinkTarget } from '#types'
 
 export { MarkdownSessionLinksProvider } from '#components/markdown-session-links'
-
-type MarkdownNode = {
-  children?: MarkdownNode[]
-  position?: {
-    start: { offset?: number }
-    end: { offset?: number }
-  }
-  tagName?: string
-  type: string
-  url?: string
-  value?: string
-}
-
-type MarkdownRoot = MarkdownNode & {
-  children: MarkdownNode[]
-}
-
-type MarkdownFile = {
-  value: string | Uint8Array
-}
 
 const CodeBlockContext = createContext(false)
 
@@ -384,8 +373,13 @@ const MarkdownParagraph: NonNullable<Components['p']> = ({ children }) => (
 const MarkdownImage: NonNullable<Components['img']> = ({ src, alt, title }) => {
   const { imageSources } = useContext(MarkdownComponentContext)
   if (src === undefined || src === '') return null
-  const mappedSource = imageSources?.[src]
-  if (mappedSource === null) {
+  const mappedSource = getMappedImageSource(src, imageSources)
+  if (
+    mappedSource === null ||
+    (mappedSource === undefined &&
+      imageSources !== undefined &&
+      isUnmappedLocalImagePath(src))
+  ) {
     return (
       <span className="markdown-image-unavailable">表示できません: {src}</span>
     )

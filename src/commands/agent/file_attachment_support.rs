@@ -1,4 +1,4 @@
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::Read;
 use std::path::Path;
 
@@ -12,7 +12,46 @@ pub(crate) struct ImageFile {
     pub(crate) mime_type: &'static str,
 }
 
+pub(crate) struct ImageMetadata {
+    pub(crate) size: u64,
+    pub(crate) mime_type: &'static str,
+}
+
+pub(crate) fn inspect_bounded_image(path: &Path, max_bytes: u64) -> Result<Option<ImageMetadata>> {
+    let Some((mut file, size)) = open_bounded_file(path, max_bytes)? else {
+        return Ok(None);
+    };
+    let mut prefix = Vec::with_capacity((size as usize).min(FILE_TYPE_PREFIX_BYTES));
+    file.by_ref()
+        .take(FILE_TYPE_PREFIX_BYTES as u64)
+        .read_to_end(&mut prefix)?;
+    if prefix.len() as u64 != size.min(FILE_TYPE_PREFIX_BYTES as u64) {
+        return Ok(None);
+    }
+    let Some((mime_type, _)) = image_format_from_bytes(&prefix) else {
+        return Ok(None);
+    };
+    Ok(Some(ImageMetadata { size, mime_type }))
+}
+
 pub(crate) fn read_bounded_image(path: &Path, max_bytes: u64) -> Result<Option<ImageFile>> {
+    let Some((mut file, size)) = open_bounded_file(path, max_bytes)? else {
+        return Ok(None);
+    };
+    let mut bytes = Vec::with_capacity(size as usize);
+    file.by_ref()
+        .take(max_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 != size || bytes.len() as u64 > max_bytes {
+        return Ok(None);
+    }
+    let Some((mime_type, _)) = image_format_from_bytes(&bytes) else {
+        return Ok(None);
+    };
+    Ok(Some(ImageFile { bytes, mime_type }))
+}
+
+fn open_bounded_file(path: &Path, max_bytes: u64) -> Result<Option<(File, u64)>> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => metadata,
         Ok(_) => return Ok(None),
@@ -30,7 +69,7 @@ pub(crate) fn read_bounded_image(path: &Path, max_bytes: u64) -> Result<Option<I
         use std::os::unix::fs::OpenOptionsExt;
         options.custom_flags(libc::O_NOFOLLOW);
     }
-    let mut file = match options.open(path) {
+    let file = match options.open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) if error.raw_os_error() == Some(libc::ELOOP) => return Ok(None),
@@ -40,18 +79,7 @@ pub(crate) fn read_bounded_image(path: &Path, max_bytes: u64) -> Result<Option<I
     if !opened_metadata.is_file() || opened_metadata.len() != metadata.len() {
         return Ok(None);
     }
-
-    let mut bytes = Vec::with_capacity(opened_metadata.len() as usize);
-    file.by_ref()
-        .take(max_bytes.saturating_add(1))
-        .read_to_end(&mut bytes)?;
-    if bytes.len() as u64 != opened_metadata.len() || bytes.len() as u64 > max_bytes {
-        return Ok(None);
-    }
-    let Some((mime_type, _)) = image_format_from_bytes(&bytes) else {
-        return Ok(None);
-    };
-    Ok(Some(ImageFile { bytes, mime_type }))
+    Ok(Some((file, opened_metadata.len())))
 }
 
 const TEXT_EXTENSIONS: &[&str] = &[
