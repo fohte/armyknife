@@ -9,12 +9,13 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 use tempfile::{Builder, NamedTempFile, TempPath};
 
-#[cfg(not(test))]
-use crate::shared::command;
-
 use super::super::claude_sessions::session_jsonl_path;
 
 mod transform;
+mod writer;
+
+#[cfg(not(test))]
+use self::writer::has_writable_open_handle;
 
 const MAX_TRANSCRIPT_RECONCILE_WAIT: Duration = Duration::from_secs(5);
 
@@ -198,24 +199,28 @@ where
     drop(persisted_file);
     after_replace();
     // A writer may open the old inode after the pre-replacement scan and before rename.
-    reconcile_in_flight_appends(
-        old_inode_monitor.path(),
-        &mut source,
-        &mut replacement_writer,
-        copied_to,
-        &mut has_writable_open_handle,
-        max_reconcile_wait,
-    )
+    let final_bytes = (|| -> Result<u64> {
+        reconcile_in_flight_appends(
+            old_inode_monitor.path(),
+            &mut source,
+            &mut replacement_writer,
+            copied_to,
+            &mut has_writable_open_handle,
+            max_reconcile_wait,
+        )
+        .with_context(|| format!("preserve in-flight appends for {}", path.display()))?;
+
+        let final_bytes = fs::metadata(path)
+            .with_context(|| format!("inspect replaced transcript {}", path.display()))?
+            .len();
+        Ok(final_bytes)
+    })()
     .with_context(|| {
         format!(
-            "preserve in-flight transcript appends for {}",
+            "transcript replacement completed, but post-replacement reconciliation failed for {}",
             path.display()
         )
     })?;
-
-    let final_bytes = fs::metadata(path)
-        .with_context(|| format!("inspect replaced transcript {}", path.display()))?
-        .len();
     Ok(SlimResult {
         original_bytes,
         final_bytes,
@@ -430,111 +435,6 @@ where
     }
 }
 
-#[cfg(all(not(test), target_os = "macos"))]
-fn has_writable_open_handle(path: &Path) -> Result<bool> {
-    let output = command::new("lsof")
-        .args(["-nP", "-F0pfa"])
-        .arg(path)
-        .output()
-        .context("run lsof to inspect transcript writers")?;
-    if !output.status.success() {
-        bail!("lsof could not inspect transcript writers");
-    }
-    Ok(lsof_output_has_writable_handle(&output.stdout))
-}
-
-#[cfg(all(not(test), target_os = "linux"))]
-fn has_writable_open_handle(path: &Path) -> Result<bool> {
-    use std::os::unix::fs::MetadataExt;
-
-    let target = fs::metadata(path).context("inspect monitored transcript inode")?;
-    let current_uid = fs::metadata("/proc/self")
-        .context("inspect current process owner")?
-        .uid();
-    for process in fs::read_dir("/proc").context("list processes for transcript writer check")? {
-        let process = process.context("read process entry")?;
-        let Some(pid) = process
-            .file_name()
-            .to_str()
-            .and_then(|name| name.parse::<u32>().ok())
-        else {
-            continue;
-        };
-        let process_path = process.path();
-        let process_metadata = match fs::metadata(&process_path) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => {
-                return Err(error).with_context(|| format!("inspect process {pid} owner"));
-            }
-        };
-        if process_metadata.uid() != current_uid {
-            continue;
-        }
-        let fd_directory = process_path.join("fd");
-        let file_descriptors = match fs::read_dir(&fd_directory) {
-            Ok(file_descriptors) => file_descriptors,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => {
-                return Err(error)
-                    .with_context(|| format!("inspect file descriptors for process {pid}"));
-            }
-        };
-        for file_descriptor in file_descriptors {
-            let file_descriptor = file_descriptor.context("read process file descriptor")?;
-            let descriptor_path = file_descriptor.path();
-            let descriptor_metadata = match fs::metadata(&descriptor_path) {
-                Ok(metadata) => metadata,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(error) => {
-                    return Err(error).with_context(|| {
-                        format!("inspect process {pid} file descriptor {descriptor_path:?}")
-                    });
-                }
-            };
-            if descriptor_metadata.dev() != target.dev()
-                || descriptor_metadata.ino() != target.ino()
-            {
-                continue;
-            }
-            let Some(descriptor_id) = file_descriptor.file_name().to_str().map(str::to_owned)
-            else {
-                continue;
-            };
-            let descriptor_info =
-                match fs::read_to_string(process_path.join("fdinfo").join(descriptor_id)) {
-                    Ok(descriptor_info) => descriptor_info,
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                    Err(error) => {
-                        return Err(error)
-                            .with_context(|| format!("read process {pid} descriptor flags"));
-                    }
-                };
-            let flags = descriptor_info
-                .lines()
-                .find_map(|line| line.strip_prefix("flags:"))
-                .context("process file descriptor has no flags field")?;
-            let flags = u32::from_str_radix(flags.trim(), 8)
-                .context("parse process file descriptor flags")?;
-            if flags & (libc::O_ACCMODE as u32) != libc::O_RDONLY as u32 {
-                return Ok(true);
-            }
-        }
-    }
-    Ok(false)
-}
-
-#[cfg(all(not(test), not(any(target_os = "macos", target_os = "linux"))))]
-fn has_writable_open_handle(_path: &Path) -> Result<bool> {
-    bail!("transcript slimming requires macOS or Linux open-file inspection")
-}
-
-fn lsof_output_has_writable_handle(output: &[u8]) -> bool {
-    output
-        .split(|byte| *byte == 0)
-        .any(|field| field.starts_with(b"aw") || field.starts_with(b"au"))
-}
-
 #[cfg(test)]
 mod tests {
     use std::cell::{Cell, RefCell};
@@ -552,10 +452,7 @@ mod tests {
     use serde_json::Value;
     use tempfile::tempdir;
 
-    use super::{
-        MAX_TRANSCRIPT_RECONCILE_WAIT, lsof_output_has_writable_handle, slim_transcript,
-        slim_transcript_with,
-    };
+    use super::{MAX_TRANSCRIPT_RECONCILE_WAIT, slim_transcript, slim_transcript_with};
 
     #[test]
     fn slims_only_discardable_data_before_the_latest_compact_boundary() {
@@ -792,7 +689,7 @@ mod tests {
                 monitor_path.exists(),
             ),
             (
-                "preserve in-flight transcript appends for <transcript>: timed out inspecting old transcript writers: fixture inspection failure".to_owned(),
+                "transcript replacement completed, but post-replacement reconciliation failed for <transcript>: preserve in-flight appends for <transcript>: timed out inspecting old transcript writers: fixture inspection failure".to_owned(),
                 true,
                 false,
             ),
@@ -841,8 +738,63 @@ mod tests {
                 monitor_path.exists(),
             ),
             (
-                "preserve in-flight transcript appends for <transcript>: timed out waiting for old transcript writers to close".to_owned(),
+                "transcript replacement completed, but post-replacement reconciliation failed for <transcript>: preserve in-flight appends for <transcript>: timed out waiting for old transcript writers to close".to_owned(),
                 true,
+                false,
+            ),
+        );
+    }
+
+    #[test]
+    fn reports_post_replace_timeout_after_replacement_and_cleans_monitor_link() {
+        let directory = tempdir().expect("temporary directory should be created");
+        let transcript = directory.path().join("fixture-transcript.jsonl");
+        fs::write(
+            &transcript,
+            indoc! {r#"
+                {"type":"user","uuid":"fixture-old","message":{"content":"fixture old"}}
+                {"type":"api-request","body":"fixture payload"}
+                {"type":"system","subtype":"compact_boundary","compactMetadata":{"preservedMessages":{"uuids":[]}}}
+            "#},
+        )
+        .expect("fixture transcript should be written");
+        let monitor_path = RefCell::new(None);
+        let replacement_completed = Cell::new(false);
+
+        let result = slim_transcript_with(
+            &transcript,
+            || {},
+            || {},
+            || replacement_completed.set(true),
+            |path| {
+                *monitor_path.borrow_mut() = Some(path.to_path_buf());
+                Ok(replacement_completed.get())
+            },
+            Duration::from_millis(50),
+        );
+        let monitor_path = monitor_path
+            .into_inner()
+            .expect("monitor path should be inspected");
+        let error = normalized_error(
+            result
+                .err()
+                .expect("post-replacement writer should time out"),
+            &transcript,
+        );
+
+        assert_eq!(
+            (
+                error,
+                fs::read_to_string(&transcript).expect("replacement transcript should be readable"),
+                monitor_path.exists(),
+            ),
+            (
+                "transcript replacement completed, but post-replacement reconciliation failed for <transcript>: preserve in-flight appends for <transcript>: timed out waiting for old transcript writers to close".to_owned(),
+                indoc! {r#"
+                    {"type":"user","uuid":"fixture-old","message":{"content":"fixture old"}}
+                    {"type":"system","subtype":"compact_boundary","compactMetadata":{"preservedMessages":{"uuids":[]}}}
+                "#}
+                .to_owned(),
                 false,
             ),
         );
@@ -988,14 +940,6 @@ mod tests {
             super::validate_session_id(session_id).is_ok(),
             expected_valid
         );
-    }
-
-    #[rstest]
-    #[case::read_only(b"p123\0f4\0ar\0", false)]
-    #[case::write_only(b"p123\0f4\0aw\0", true)]
-    #[case::read_and_write(b"p123\0f4\0au\0", true)]
-    fn detects_writable_open_handles_in_lsof_output(#[case] output: &[u8], #[case] expected: bool) {
-        assert_eq!(lsof_output_has_writable_handle(output), expected);
     }
 
     fn parse_jsonl(source: &str) -> Vec<Value> {
