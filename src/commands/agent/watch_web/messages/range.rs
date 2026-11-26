@@ -13,14 +13,14 @@ const EPOCH_CURSOR_VERSION: u8 = 3;
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct MessageRange {
-    limit: Option<usize>,
-    before: Option<usize>,
-    from: Option<usize>,
-    stable_start: Option<usize>,
-    stable_end: Option<usize>,
-    stable_digest: Option<String>,
-    epoch: Option<String>,
-    older_cursor: Option<String>,
+    pub(super) limit: Option<usize>,
+    pub(super) before: Option<usize>,
+    pub(super) from: Option<usize>,
+    pub(super) stable_start: Option<usize>,
+    pub(super) stable_end: Option<usize>,
+    pub(super) stable_digest: Option<String>,
+    pub(super) epoch: Option<String>,
+    pub(super) older_cursor: Option<String>,
 }
 
 impl MessageRange {

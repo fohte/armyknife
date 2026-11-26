@@ -72,8 +72,14 @@ struct SkillSuggestionsResponse {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct MessagesQuery {
-    #[serde(flatten)]
-    range: MessageRange,
+    limit: Option<usize>,
+    before: Option<usize>,
+    from: Option<usize>,
+    stable_start: Option<usize>,
+    stable_end: Option<usize>,
+    stable_digest: Option<String>,
+    epoch: Option<String>,
+    older_cursor: Option<String>,
     pending_prompt_ids: Option<String>,
 }
 
@@ -302,7 +308,16 @@ async fn get_messages(
     AxumPath(session_id): AxumPath<String>,
     Query(query): Query<MessagesQuery>,
 ) -> Response {
-    let range = query.range;
+    let range = MessageRange {
+        limit: query.limit,
+        before: query.before,
+        from: query.from,
+        stable_start: query.stable_start,
+        stable_end: query.stable_end,
+        stable_digest: query.stable_digest,
+        epoch: query.epoch,
+        older_cursor: query.older_cursor,
+    };
     if !range.is_valid() {
         return StatusCode::BAD_REQUEST.into_response();
     }
