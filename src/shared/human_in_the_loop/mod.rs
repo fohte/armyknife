@@ -250,6 +250,7 @@ where
 pub(crate) struct ReviewResult<S> {
     pub(crate) document: Document<S>,
     pub(crate) finish_reason: Option<ReviewFinishReason>,
+    pub(crate) action_result: Option<ReviewDocumentActionResult>,
 }
 
 #[cfg(test)]
@@ -357,7 +358,7 @@ where
 
     let action_result = action_result_after_review_completion(completion_signal, document_path)?;
     let completed_by_watch_web = action_result.is_some();
-    if let Some(action_result) = action_result {
+    if let Some(action_result) = action_result.as_ref() {
         action_result.print_for_agent();
     }
 
@@ -394,6 +395,7 @@ where
     Ok(Some(ReviewResult {
         document,
         finish_reason,
+        action_result,
     }))
 }
 

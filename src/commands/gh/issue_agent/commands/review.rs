@@ -15,8 +15,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::shared::config::load_config;
 use crate::shared::human_in_the_loop::{
-    CleanupGuard, Document, DocumentSchema, FifoSignalGuard, Result as HilResult, ReviewHandler,
-    complete_review, start_review,
+    CleanupGuard, Document, DocumentSchema, FifoSignalGuard, Result as HilResult,
+    ReviewDocumentAction, ReviewDocumentActionResult, ReviewHandler, complete_review,
+    start_review_with_completion,
 };
 use crate::shared::yaml_frontmatter;
 
@@ -209,6 +210,20 @@ fn frontmatter_submit_is_truthy(content: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn review_was_approved(
+    approval_record_exists: bool,
+    action_result: Option<&ReviewDocumentActionResult>,
+) -> bool {
+    approval_record_exists
+        || action_result.is_some_and(|result| {
+            result.succeeded
+                && matches!(
+                    result.action,
+                    ReviewDocumentAction::PostComment | ReviewDocumentAction::UpdateIssue
+                )
+        })
+}
+
 pub fn run(args: &ReviewArgs) -> anyhow::Result<()> {
     let path = args
         .path
@@ -237,23 +252,24 @@ pub fn run(args: &ReviewArgs) -> anyhow::Result<()> {
 
     use crate::shared::human_in_the_loop::exit_code;
 
-    let document = exit_code::exit_on_review_failure(start_review::<SubmitSchema, _>(
-        &path,
-        &window_title,
-        &IssueReviewHandler,
-        &config.editor,
-        config.notification.enabled,
-    ))?;
+    let review =
+        exit_code::exit_on_review_failure(start_review_with_completion::<SubmitSchema, _>(
+            &path,
+            &window_title,
+            &IssueReviewHandler,
+            &config.editor,
+            config.notification.enabled,
+        ))?;
 
-    if document.is_none() {
+    let Some(review) = review else {
         std::process::exit(exit_code::ALREADY_OPEN);
-    }
+    };
 
     // Check approval via the approval record rather than the document's
     // frontmatter, because on_review_complete may have stripped the temporary
     // frontmatter (for comment files), making the re-read document appear unapproved.
     let approval = crate::shared::human_in_the_loop::ApprovalManager::new(&path);
-    if !approval.exists() {
+    if !review_was_approved(approval.exists(), review.action_result.as_ref()) {
         eprintln!("Review not approved.");
         std::process::exit(exit_code::NOT_APPROVED);
     }
@@ -288,9 +304,98 @@ pub fn run_complete(args: &ReviewCompleteArgs) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::human_in_the_loop::{
+        action_result_after_review_completion, document_hash, save_action_result,
+    };
     use indoc::indoc;
     use rstest::rstest;
     use tempfile::TempDir;
+
+    #[test]
+    fn successful_watch_web_comment_stays_approved_after_push_removes_the_record() {
+        crate::shared::testing::init_approval_dir();
+        let directory = TempDir::new().expect("fixture directory should be created");
+        let document_path = directory.path().join("comment.md");
+        std::fs::write(&document_path, "Approved comment.")
+            .expect("review document should be written");
+        let approval = crate::shared::human_in_the_loop::ApprovalManager::new(&document_path);
+        approval.save().expect("approval record should be saved");
+        let approved_hash = document_hash(&document_path).expect("document hash should be read");
+
+        approval
+            .remove()
+            .expect("successful push should remove approval");
+        std::fs::remove_file(&document_path).expect("posted comment draft should be removed");
+        let expected_result = ReviewDocumentActionResult::new(
+            ReviewDocumentAction::PostComment,
+            true,
+            "Issue comment posted.".to_owned(),
+            approved_hash,
+            None,
+        );
+        save_action_result(&document_path, &expected_result)
+            .expect("watch-web should save the result after pushing");
+        let action_result = action_result_after_review_completion(b'1', &document_path)
+            .expect("review completion should read the saved action result");
+
+        assert_eq!(
+            (
+                approval.exists(),
+                action_result.clone(),
+                review_was_approved(false, action_result.as_ref()),
+            ),
+            (false, Some(expected_result), true),
+        );
+    }
+
+    #[rstest]
+    #[case::comment_posted_without_approval_record(
+        false,
+        Some(ReviewDocumentAction::PostComment),
+        true,
+        true
+    )]
+    #[case::issue_updated_without_approval_record(
+        false,
+        Some(ReviewDocumentAction::UpdateIssue),
+        true,
+        true
+    )]
+    #[case::unrelated_successful_action_does_not_approve(
+        false,
+        Some(ReviewDocumentAction::CreatePr),
+        true,
+        false
+    )]
+    #[case::failed_action_does_not_approve(
+        false,
+        Some(ReviewDocumentAction::PostComment),
+        false,
+        false
+    )]
+    #[case::missing_review_action_remains_unapproved(false, None, false, false)]
+    #[case::editor_approval_still_succeeds(true, None, false, true)]
+    fn review_was_approved_uses_issue_actions_and_preserves_editor_approval(
+        #[case] approval_record_exists: bool,
+        #[case] action: Option<ReviewDocumentAction>,
+        #[case] action_succeeded: bool,
+        #[case] expected: bool,
+    ) {
+        let action_result = action.map(|action| {
+            ReviewDocumentActionResult::new(
+                action,
+                action_succeeded,
+                "Action result.".to_owned(),
+                "document-hash".to_owned(),
+                None,
+            )
+        });
+
+        assert_eq!(
+            review_was_approved(approval_record_exists, action_result.as_ref()),
+            expected,
+        );
+    }
 
     #[cfg(unix)]
     #[rstest]
