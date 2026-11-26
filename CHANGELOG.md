@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.956](https://github.com/fohte/armyknife/compare/v0.1.955...v0.1.956) (2026-11-26)
+
+
+### Bug Fixes
+
+* **agent:** alert parents to silent delegates ([#2338](https://github.com/fohte/armyknife/issues/2338)) ([8ff80b8](https://github.com/fohte/armyknife/commit/8ff80b8ba7390de5974fee47188f67ced775b04d))
+
 ## [0.1.955](https://github.com/fohte/armyknife/compare/v0.1.954...v0.1.955) (2026-11-26)
 
 
