@@ -2,6 +2,7 @@ type ProfilerFrame = {
   name: string
   resourceId?: number
   line?: number
+  column?: number
 }
 
 type ProfilerStack = {
@@ -25,6 +26,7 @@ export type LongTaskFunction = {
   name: string
   file: string
   line: number | null
+  column?: number
   percentage: number
 }
 
@@ -40,7 +42,13 @@ export function aggregateSamples(
 ): LongTaskFunction[] {
   const counts = new Map<
     string,
-    { name: string; file: string; line: number | null; samples: number }
+    {
+      name: string
+      file: string
+      line: number | null
+      column: number | undefined
+      samples: number
+    }
   >()
   let totalSamples = 0
 
@@ -77,11 +85,16 @@ export function aggregateSamples(
       const source = file || 'unknown'
       const line =
         frame.line !== undefined && frame.line > 0 ? frame.line : null
+      const column =
+        frame.column !== undefined && frame.column > 0
+          ? frame.column
+          : undefined
       const lineKey = line === null ? '' : String(line)
-      const key = `${name}\0${source}\0${lineKey}`
+      const columnKey = column === undefined ? '' : String(column)
+      const key = `${name}\0${source}\0${lineKey}\0${columnKey}`
       const existing = counts.get(key)
       if (existing === undefined) {
-        counts.set(key, { name, file: source, line, samples: 1 })
+        counts.set(key, { name, file: source, line, column, samples: 1 })
       } else {
         existing.samples += 1
       }
@@ -92,10 +105,11 @@ export function aggregateSamples(
   if (totalSamples === 0) return []
 
   return [...counts.values()]
-    .map(({ name, file, line, samples }) => ({
+    .map(({ name, file, line, column, samples }) => ({
       name,
       file,
       line,
+      column,
       percentage: Math.round((samples / totalSamples) * 1_000) / 10,
       sampleCount: samples,
     }))
@@ -104,13 +118,15 @@ export function aggregateSamples(
         right.sampleCount - left.sampleCount ||
         left.name.localeCompare(right.name) ||
         left.file.localeCompare(right.file) ||
-        (left.line ?? 0) - (right.line ?? 0),
+        (left.line ?? 0) - (right.line ?? 0) ||
+        (left.column ?? 0) - (right.column ?? 0),
     )
     .slice(0, MAX_REPORTED_FUNCTIONS)
-    .map(({ name, file, line, percentage }) => ({
+    .map(({ name, file, line, column, percentage }) => ({
       name: truncateUtf8(name, MAX_FUNCTION_NAME_BYTES),
       file: truncateUtf8(file, MAX_FUNCTION_FILE_BYTES),
       line,
+      ...(column === undefined ? {} : { column }),
       percentage,
     }))
 }

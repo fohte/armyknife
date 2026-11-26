@@ -88,6 +88,45 @@ it('truncates function names and files at the server byte limits', () => {
   ])
 })
 
+it('keeps functions at distinct source columns separate', () => {
+  expect(
+    aggregateSamples(
+      [
+        {
+          resources: ['/assets/app.js'],
+          frames: [
+            { name: 'callback', resourceId: 0, line: 12, column: 8 },
+            { name: 'callback', resourceId: 0, line: 12, column: 32 },
+          ],
+          stacks: [{ frameId: 0 }, { frameId: 1 }],
+          samples: [
+            { timestamp: 10, stackId: 0 },
+            { timestamp: 11, stackId: 0 },
+            { timestamp: 12, stackId: 1 },
+          ],
+        },
+      ],
+      10,
+      12,
+    ),
+  ).toEqual([
+    {
+      name: 'callback',
+      file: '/assets/app.js',
+      line: 12,
+      column: 8,
+      percentage: 66.7,
+    },
+    {
+      name: 'callback',
+      file: '/assets/app.js',
+      line: 12,
+      column: 32,
+      percentage: 33.3,
+    },
+  ])
+})
+
 it('labels anonymous samples without a source line', () => {
   expect(
     aggregateSamples(
