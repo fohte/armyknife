@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.959](https://github.com/fohte/armyknife/compare/v0.1.958...v0.1.959) (2026-11-26)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** keep sent prompts visible ([#2340](https://github.com/fohte/armyknife/issues/2340)) ([f0db665](https://github.com/fohte/armyknife/commit/f0db66500a676c00d182398317e20799c3569169))
+
 ## [0.1.958](https://github.com/fohte/armyknife/compare/v0.1.957...v0.1.958) (2026-11-26)
 
 
