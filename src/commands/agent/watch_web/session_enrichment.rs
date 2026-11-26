@@ -463,6 +463,7 @@ mod tests {
     use super::test_support::{
         branch_key, cache_with_fetchers, cache_with_task_github_link_fetcher, metadata, session,
         session_with_branch, session_with_branch_name, wait_for_refresh,
+        wait_for_refresh_with_timeout,
     };
     use super::*;
     use crate::commands::agent::tq_session_tasks::task_priority_metadata;
@@ -910,7 +911,7 @@ mod tests {
         });
         let cache = cache_with_task_github_link_fetcher(
             updates,
-            Duration::from_secs(1),
+            Duration::from_secs(5),
             task_fetcher,
             pull_request_fetcher,
             task_github_link_fetcher,
@@ -977,34 +978,19 @@ mod tests {
         };
 
         let initial = cache.task_metadata(&sessions_b).await;
-        receiver
-            .changed()
-            .await
-            .expect("TQ metadata refresh should notify");
+        wait_for_refresh_with_timeout(&mut receiver, Duration::from_secs(2 * 60)).await;
         let task_b_links_refreshing = cache.task_metadata(&sessions_b).await;
-        receiver
-            .changed()
-            .await
-            .expect("task B link refresh should notify");
+        wait_for_refresh_with_timeout(&mut receiver, Duration::from_secs(2 * 60)).await;
         let task_b_cached = cache.task_metadata(&sessions_b).await;
         tokio::time::advance(Duration::from_secs(4 * 60 + 55)).await;
         let before_session_refresh = cache.task_metadata(&sessions_a_b).await;
-        receiver
-            .changed()
-            .await
-            .expect("new session task refresh should notify");
+        wait_for_refresh_with_timeout(&mut receiver, Duration::from_secs(2 * 60)).await;
         let before_task_a_link_refresh = cache.task_metadata(&sessions_a_b).await;
-        receiver
-            .changed()
-            .await
-            .expect("new task A link refresh should notify");
+        wait_for_refresh_with_timeout(&mut receiver, Duration::from_secs(2 * 60)).await;
         let after_task_a_link_refresh = cache.task_metadata(&sessions_a_b).await;
         tokio::time::advance(Duration::from_secs(10)).await;
         let before_task_b_link_refresh = cache.task_metadata(&sessions_a_b).await;
-        receiver
-            .changed()
-            .await
-            .expect("expired task B link refresh should notify");
+        wait_for_refresh_with_timeout(&mut receiver, Duration::from_secs(2 * 60)).await;
         let after_task_b_link_refresh = cache.task_metadata(&sessions_a_b).await;
 
         assert_eq!(
@@ -1094,26 +1080,20 @@ mod tests {
             Arc::new(|_, _| Box::pin(async { Ok(HashMap::new()) }));
         let cache = cache_with_task_github_link_fetcher(
             updates,
-            Duration::from_secs(1),
+            Duration::from_secs(5),
             task_fetcher,
             pull_request_fetcher,
             task_github_link_fetcher,
         );
 
         let initial = cache.task_metadata(&sessions).await;
-        receiver
-            .changed()
-            .await
-            .expect("TQ metadata refresh should notify");
+        wait_for_refresh_with_timeout(&mut receiver, Duration::from_secs(2 * 60)).await;
         let before_link_refresh =
             tokio::time::timeout(Duration::from_secs(1), cache.task_metadata(&sessions))
                 .await
                 .ok();
         tokio::time::advance(Duration::from_secs(40)).await;
-        receiver
-            .changed()
-            .await
-            .expect("task-link refresh should notify");
+        wait_for_refresh_with_timeout(&mut receiver, Duration::from_secs(2 * 60)).await;
         let after_link_refresh = cache.task_metadata(&sessions).await;
 
         assert_eq!(
