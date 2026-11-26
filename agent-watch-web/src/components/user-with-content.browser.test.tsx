@@ -335,9 +335,9 @@ it('renders a text-only user message', () => {
   ])
 })
 
-it('offers Claude rewind modes and passes the selected message text', async () => {
-  const rewindCalls: Array<[string, RewindMode, string]> = []
-  const onRewind = vi.fn((...args: [string, RewindMode, string]) => {
+it('offers Claude rewind modes and passes the selected message position', async () => {
+  const rewindCalls: Array<[string, RewindMode, string, number?]> = []
+  const onRewind = vi.fn((...args: [string, RewindMode, string, number?]) => {
     rewindCalls.push(args)
     return Promise.resolve(true)
   })
@@ -351,6 +351,7 @@ it('offers Claude rewind modes and passes the selected message text', async () =
       canRewind: true,
       sessionEngine: 'claude',
       rewindMenuOpen: true,
+      conversationIndex: 12,
       onRewind,
     },
   )
@@ -376,6 +377,7 @@ it('offers Claude rewind modes and passes the selected message text', async () =
         'fixture-user-message',
         'conversation_and_code',
         'Review this request again.',
+        12,
       ],
     ],
   })

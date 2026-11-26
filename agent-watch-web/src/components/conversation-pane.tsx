@@ -9,6 +9,7 @@ import {
 } from 'react'
 
 import { commandResultMatchesCommands } from '#components/command-result-message'
+import { getConversationTimelineEndIndex } from '#components/conversation-message-timeline'
 import { ConversationPaneView } from '#components/conversation-pane-view'
 import { MarkdownSessionLinksProvider } from '#components/markdown-message'
 import type { PendingPermissionActions } from '#components/permission-card'
@@ -355,6 +356,15 @@ export function ConversationPane({
       operation.sessionId === session.id && operation.type === 'interrupt',
   )
   const { messages, backgroundTasks } = displayedConversation
+  const actionTimelineIndex =
+    loading && messages.length === 0
+      ? undefined
+      : getConversationTimelineEndIndex(
+          messages,
+          displayedConversation.start,
+          session.category,
+          session.isCompacting === true,
+        )
   const editorReviewDocument = useEditorReviewDocument(session)
   const backgroundTaskElapsedOffset =
     messagesLoadedAt === null
@@ -382,6 +392,7 @@ export function ConversationPane({
     pullRequestListTarget,
   } = useConversationStatusPanel({
     session,
+    actionTimelineIndex,
     reviewDocumentSummaries: editorReviewDocument?.summaries ?? null,
     ...(editorReviewDocument?.retrySummaries === undefined
       ? {}
@@ -416,11 +427,12 @@ export function ConversationPane({
   const conversationView = (
     <ConversationPaneView
       session={session}
+      actionTimelineIndex={actionTimelineIndex}
       vibeMode={conversation.vibeMode ?? session.vibeMode}
       sessions={sessions}
       sessionLinkTargets={sessionLinkTargets}
       messages={messages}
-      start={conversation.start}
+      start={displayedConversation.start}
       epoch={conversation.epoch}
       olderCursor={conversation.olderCursor}
       decisions={displayedConversation.decisions}

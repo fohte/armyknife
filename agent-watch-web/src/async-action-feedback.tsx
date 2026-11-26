@@ -17,8 +17,8 @@ import {
   type StartAsyncActionOptions,
 } from '#async-action-model'
 import {
-  shiftMergeTimelineIndices as shiftMergeActionTimelineIndices,
-  type ShiftMergeTimelineIndicesOptions,
+  shiftActionTimelineIndices as rebaseActionTimelineIndices,
+  type ShiftActionTimelineIndicesOptions,
 } from '#async-action-timeline'
 import { AsyncActionFeedbackHost } from '#components/async-action-feedback-host'
 
@@ -52,7 +52,9 @@ type AsyncActionFeedbackValue = {
   start: (options: StartAsyncActionOptions) => number
   retry: (id: number) => void
   retryWith: (id: number, update: AsyncActionRetryUpdate) => void
-  shiftMergeTimelineIndices: (options: ShiftMergeTimelineIndicesOptions) => void
+  shiftActionTimelineIndices: (
+    options: ShiftActionTimelineIndicesOptions,
+  ) => void
   requestMergeRetryConfirmation: (id: number) => void
   consumeMergeRetryConfirmation: (id: number) => void
   finishMergeRetryConfirmation: (id: number) => void
@@ -274,9 +276,9 @@ export function AsyncActionFeedbackProvider({
     [runAction],
   )
 
-  const shiftMergeTimelineIndices = useCallback(
-    (options: ShiftMergeTimelineIndicesOptions) => {
-      setActions((current) => shiftMergeActionTimelineIndices(current, options))
+  const shiftActionTimelineIndices = useCallback(
+    (options: ShiftActionTimelineIndicesOptions) => {
+      setActions((current) => rebaseActionTimelineIndices(current, options))
     },
     [],
   )
@@ -398,7 +400,7 @@ export function AsyncActionFeedbackProvider({
         start,
         retry,
         retryWith,
-        shiftMergeTimelineIndices,
+        shiftActionTimelineIndices,
         requestMergeRetryConfirmation,
         consumeMergeRetryConfirmation,
         finishMergeRetryConfirmation,

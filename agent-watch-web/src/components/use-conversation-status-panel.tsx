@@ -33,6 +33,7 @@ import type { BackgroundTask, ChatItem, Session, SessionTreeNode } from '#types'
 
 type UseConversationStatusPanelOptions = {
   session: Session
+  actionTimelineIndex?: number | undefined
   reviewDocumentSummaries?: ReviewDocumentSummariesState | null
   onRetryReviewDocumentSummaries?: () => void
   messages: readonly ChatItem[]
@@ -55,6 +56,7 @@ type UseConversationStatusPanelOptions = {
 
 export function useConversationStatusPanel({
   session,
+  actionTimelineIndex,
   messages,
   allDecisions,
   backgroundTasks,
@@ -482,6 +484,7 @@ export function useConversationStatusPanel({
                         run,
                         session.title,
                         actionFeedback,
+                        { timelineIndex: actionTimelineIndex },
                       )
                   }}
                   onFinish={() => {
@@ -496,12 +499,15 @@ export function useConversationStatusPanel({
                         run,
                         session.title,
                         actionFeedback,
-                        frontmatterForReviewFinish(
-                          document.frontmatter,
-                          false,
-                          selectedSummary.kind === 'draft' &&
-                            selectedSummary.target.repository !== undefined,
-                        ),
+                        {
+                          frontmatter: frontmatterForReviewFinish(
+                            document.frontmatter,
+                            false,
+                            selectedSummary.kind === 'draft' &&
+                              selectedSummary.target.repository !== undefined,
+                          ),
+                          timelineIndex: actionTimelineIndex,
+                        },
                       )
                   }}
                   onApproveForTranslation={() => {
@@ -516,7 +522,13 @@ export function useConversationStatusPanel({
                         run,
                         session.title,
                         actionFeedback,
-                        frontmatterForReviewFinish(document.frontmatter, true),
+                        {
+                          frontmatter: frontmatterForReviewFinish(
+                            document.frontmatter,
+                            true,
+                          ),
+                          timelineIndex: actionTimelineIndex,
+                        },
                       )
                   }}
                   onSubmit={(action) => {
@@ -531,6 +543,7 @@ export function useConversationStatusPanel({
                         run,
                         session.title,
                         actionFeedback,
+                        { timelineIndex: actionTimelineIndex },
                       )
                   }}
                 />

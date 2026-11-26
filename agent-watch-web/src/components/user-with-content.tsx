@@ -63,6 +63,7 @@ export function UserWithContent({
     messageId: string,
     mode: RewindMode,
     draft: string,
+    timelineIndex?: number,
   ) => Promise<boolean>
   rewindMenuOpen?: boolean
   navigationHighlighted?: boolean
@@ -124,7 +125,12 @@ export function UserWithContent({
                 <button
                   type="button"
                   onClick={() => {
-                    void onRewind(rewindId, 'conversation', draftText)
+                    void onRewind(
+                      rewindId,
+                      'conversation',
+                      draftText,
+                      conversationIndex,
+                    )
                   }}
                 >
                   Conversation only
@@ -138,6 +144,7 @@ export function UserWithContent({
                         rewindId,
                         'conversation_and_code',
                         draftText,
+                        conversationIndex,
                       )
                     }}
                   >
@@ -146,7 +153,12 @@ export function UserWithContent({
                   <button
                     type="button"
                     onClick={() => {
-                      void onRewind(rewindId, 'conversation', draftText)
+                      void onRewind(
+                        rewindId,
+                        'conversation',
+                        draftText,
+                        conversationIndex,
+                      )
                     }}
                   >
                     Conversation only
@@ -154,7 +166,12 @@ export function UserWithContent({
                   <button
                     type="button"
                     onClick={() => {
-                      void onRewind(rewindId, 'code', draftText)
+                      void onRewind(
+                        rewindId,
+                        'code',
+                        draftText,
+                        conversationIndex,
+                      )
                     }}
                   >
                     Code only

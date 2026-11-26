@@ -30,6 +30,31 @@ const mergeFailure: AsyncAction = {
   createdAt: Date.parse('2034-03-19T10:20:00.000Z'),
 }
 
+const reviewActionFailure: AsyncAction = {
+  id: 3,
+  sessionId,
+  sessionTitle,
+  kind: 'review_document',
+  status: 'reviewDocumentActionFailed',
+  reviewDocumentAction: 'Update issue',
+  timelineIndex: 2,
+  error: 'The issue update could not be posted.',
+  retryable: true,
+  createdAt: Date.parse('2034-03-19T10:20:00.000Z'),
+  completedAt: Date.parse('2034-03-19T10:21:00.000Z'),
+}
+
+const runningCommand: AsyncAction = {
+  id: 4,
+  sessionId,
+  sessionTitle,
+  kind: 'command',
+  status: 'runningCommand',
+  command: 'printf safe',
+  timelineIndex: 2,
+  createdAt: Date.parse('2034-03-19T10:20:00.000Z'),
+}
+
 const failedMessages: ChatItem[] = [
   { type: 'assistant' as const, text: 'The change is ready for review.' },
   { type: 'assistant' as const, text: 'I am starting the merge.' },
@@ -189,6 +214,32 @@ export const IPhoneConversationShowsTheFailedMergeAtItsStartPosition: Story = {
   args: { isMobile: true },
   decorators: [iPhoneViewportDecorator],
 }
+
+export const DesktopConversationShowsTheFailedReviewActionAtItsStartPosition: Story =
+  {
+    name: 'The failed issue update stays beside its starting messages',
+    args: { actions: [reviewActionFailure] },
+  }
+
+export const IPhoneConversationShowsTheFailedReviewActionAtItsStartPosition: Story =
+  {
+    name: 'The iPhone conversation keeps the failed issue update above later messages',
+    args: { isMobile: true, actions: [reviewActionFailure] },
+    decorators: [iPhoneViewportDecorator],
+  }
+
+export const DesktopConversationShowsTheRunningCommandAtItsStartPosition: Story =
+  {
+    name: 'The running command stays beside its starting messages with its start time',
+    args: { actions: [runningCommand] },
+  }
+
+export const IPhoneConversationShowsTheRunningCommandAtItsStartPosition: Story =
+  {
+    name: 'The iPhone conversation keeps the running command above later messages',
+    args: { isMobile: true, actions: [runningCommand] },
+    decorators: [iPhoneViewportDecorator],
+  }
 
 export const DesktopConversationShowsMergedResultsAtTheirStartPositions: Story =
   {
