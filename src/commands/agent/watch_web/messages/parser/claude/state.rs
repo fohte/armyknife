@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
 use serde_json::{Map, Value};
@@ -30,6 +30,7 @@ pub(super) fn is_attachment_record(record: &Value) -> bool {
 pub(super) struct ClaudeParserState {
     pub(super) transcript_nodes: BTreeMap<String, TranscriptNode>,
     pub(super) transcript_children: HashMap<String, Vec<String>>,
+    pub(super) forward_parent_uuids: HashSet<String>,
     branch_tracking: ClaudeBranchTracking,
     pub(super) latest_uuid: Option<String>,
     pub(super) latest_record_uuid: Option<String>,
@@ -47,6 +48,7 @@ impl ClaudeParserState {
         Self {
             transcript_nodes: BTreeMap::new(),
             transcript_children: HashMap::new(),
+            forward_parent_uuids: HashSet::new(),
             branch_tracking: ClaudeBranchTracking::default(),
             latest_uuid: None,
             latest_record_uuid: None,
@@ -63,6 +65,14 @@ impl ClaudeParserState {
     pub(super) fn latest_record_is_compact_boundary_branch(&self) -> bool {
         self.branch_tracking
             .is_compact_boundary_branch(self.latest_record_uuid.as_deref())
+    }
+
+    pub(super) fn is_compact_boundary_branch(&self, uuid: &str) -> bool {
+        self.branch_tracking.is_compact_boundary_branch(Some(uuid))
+    }
+
+    pub(super) fn is_side_branch_assistant_uuid(&self, uuid: &str) -> bool {
+        self.branch_tracking.is_side_branch_assistant_uuid(uuid)
     }
 
     pub(super) fn process_record(&mut self, record: Value, now: DateTime<Utc>) {
@@ -86,6 +96,7 @@ impl ClaudeParserState {
             && self.has_pending_tool_result_for_parent(&record, parent_uuid.as_deref());
         let uuid = record.get("uuid").and_then(Value::as_str);
         let pending_tool_result_on_active_branch = self.pending_tool_result_on_active_branch(
+            &record,
             uuid,
             parent_uuid.as_deref(),
             pending_tool_result,
@@ -147,6 +158,7 @@ impl ClaudeParserState {
             uuid,
             parent_uuid.as_deref(),
             pending_tool_result_on_active_branch,
+            side_branch_continuation,
         );
 
         if is_tool_result_only {

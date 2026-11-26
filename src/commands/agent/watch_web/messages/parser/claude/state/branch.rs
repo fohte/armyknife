@@ -25,6 +25,9 @@ impl ClaudeParserState {
         uuid: &str,
     ) {
         if let Some(parent_uuid) = parent_uuid {
+            if !self.transcript_nodes.contains_key(parent_uuid) {
+                self.forward_parent_uuids.insert(parent_uuid.to_owned());
+            }
             self.transcript_children
                 .entry(parent_uuid.to_owned())
                 .or_default()
@@ -34,6 +37,7 @@ impl ClaudeParserState {
 
     pub(super) fn pending_tool_result_on_active_branch(
         &mut self,
+        record: &Value,
         uuid: Option<&str>,
         parent_uuid: Option<&str>,
         pending_tool_result: bool,
@@ -57,17 +61,62 @@ impl ClaudeParserState {
                 self.transcript_nodes
                     .get(parent_uuid)
                     .is_some_and(|node| node.membership == BranchMembership::Active)
+                    || self.branch_tracking.is_tool_use_assistant_uuid(parent_uuid)
             }),
             Some(BranchMembership::Unknown) => false,
-            Some(BranchMembership::Disconnected | BranchMembership::Visiting) => false,
+            Some(BranchMembership::Disconnected) => {
+                self.pending_tool_result_from_active_owner(record)
+            }
+            Some(BranchMembership::Visiting) => false,
             None => true,
         }
+    }
+
+    fn pending_tool_result_from_active_owner(&self, record: &Value) -> bool {
+        let Some(owner_uuid) = record
+            .get("sourceToolAssistantUUID")
+            .and_then(Value::as_str)
+        else {
+            return false;
+        };
+        if !self.branch_tracking.is_tool_use_assistant_uuid(owner_uuid)
+            || !self
+                .branch_tracking
+                .is_compact_boundary_branch(Some(owner_uuid))
+            || !self
+                .transcript_nodes
+                .get(owner_uuid)
+                .is_some_and(|node| node.membership == BranchMembership::Active)
+        {
+            return false;
+        }
+        let Some(message) = record.get("message") else {
+            return false;
+        };
+        let mut blocks = tool_result_blocks(message).peekable();
+        blocks.peek().is_some()
+            && blocks.all(|block| {
+                block
+                    .get("tool_use_id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| {
+                        self.tool_uses.iter().any(|tool_use| {
+                            tool_use.id == id
+                                && tool_use.assistant_uuid.as_deref() == Some(owner_uuid)
+                        }) || self.question_uses.get(id).is_some_and(|assistant_uuid| {
+                            assistant_uuid.as_deref() == Some(owner_uuid)
+                        })
+                    })
+            })
     }
 
     pub(super) fn is_queued_peer_delivery(&mut self, record: &Value, uuid: Option<&str>) -> bool {
         let Some(uuid) = uuid.filter(|_| is_queued_peer_delivery_record(record)) else {
             return false;
         };
+        if !self.forward_parent_uuids.contains(uuid) {
+            return false;
+        }
         self.transcript_children.get(uuid).is_some_and(|children| {
             children
                 .iter()

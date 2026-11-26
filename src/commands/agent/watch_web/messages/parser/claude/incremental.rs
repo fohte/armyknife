@@ -29,10 +29,18 @@ impl IncrementalClaudeParser {
     ) -> io::Result<Self> {
         let mut graph_lines = JsonlLineBuffer::default();
         let mut transcript_nodes = std::collections::BTreeMap::new();
+        let mut seen_uuids = std::collections::HashSet::new();
+        let mut forward_parent_uuids = std::collections::HashSet::new();
         let mut latest_complete_uuid = None;
         let mut graph_latest_uuid = None;
         graph_lines.read_from(&mut reader, |line| {
             if let Some(record) = parse_record(line) {
+                let parent_uuid = record_parent_uuid(&record);
+                if let Some(parent_uuid) = parent_uuid.as_deref()
+                    && !seen_uuids.contains(parent_uuid)
+                {
+                    forward_parent_uuids.insert(parent_uuid.to_owned());
+                }
                 if !is_attachment_record(&record) {
                     latest_complete_uuid = record
                         .get("uuid")
@@ -42,10 +50,11 @@ impl IncrementalClaudeParser {
                 }
                 if let Some(uuid) = record.get("uuid").and_then(Value::as_str) {
                     graph_latest_uuid = Some(uuid.to_owned());
+                    seen_uuids.insert(uuid.to_owned());
                     transcript_nodes.insert(
                         uuid.to_owned(),
                         TranscriptNode {
-                            parent_uuid: record_parent_uuid(&record),
+                            parent_uuid,
                             membership: BranchMembership::Unknown,
                         },
                     );
@@ -56,6 +65,7 @@ impl IncrementalClaudeParser {
         reader.seek(SeekFrom::Start(0))?;
         let mut state = ClaudeParserState::new();
         state.transcript_nodes = transcript_nodes;
+        state.forward_parent_uuids = forward_parent_uuids;
         state.rebuild_transcript_children();
         activate_pending_record(
             &mut state,
@@ -104,9 +114,21 @@ impl IncrementalClaudeParser {
         pending_line: Vec<u8>,
     ) -> Self {
         let mut state = ClaudeParserState::new();
+        let mut seen_uuids = active_ancestor_uuids
+            .iter()
+            .cloned()
+            .collect::<std::collections::HashSet<_>>();
         let mut latest_complete_uuid = None;
         let mut graph_latest_uuid = None;
         for record in &records {
+            let parent_uuid = record_parent_uuid(record);
+            if parent_uuid
+                .as_deref()
+                .is_some_and(|parent_uuid| !seen_uuids.contains(parent_uuid))
+                && let Some(parent_uuid) = parent_uuid
+            {
+                state.forward_parent_uuids.insert(parent_uuid);
+            }
             if !is_attachment_record(record) {
                 latest_complete_uuid = record
                     .get("uuid")
@@ -116,6 +138,7 @@ impl IncrementalClaudeParser {
             }
             if let Some(uuid) = record.get("uuid").and_then(Value::as_str) {
                 graph_latest_uuid = Some(uuid.to_owned());
+                seen_uuids.insert(uuid.to_owned());
                 state.transcript_nodes.insert(
                     uuid.to_owned(),
                     TranscriptNode {
@@ -393,7 +416,8 @@ fn is_active_branch_continuation(state: &ClaudeParserState, record: &Value) -> b
     if is_tool_result_only {
         let latest_record_is_compact_boundary_branch =
             state.latest_record_is_compact_boundary_branch();
-        return !latest_record_is_compact_boundary_branch
+        let parent_is_compact_boundary_branch = state.is_compact_boundary_branch(&parent_uuid);
+        return (!latest_record_is_compact_boundary_branch || parent_is_compact_boundary_branch)
             && state.has_pending_tool_result_for_parent(record, Some(parent_uuid.as_str()));
     }
     let parent_is_latest = state.latest_record_uuid.as_deref() == Some(parent_uuid.as_str());
@@ -402,7 +426,9 @@ fn is_active_branch_continuation(state: &ClaudeParserState, record: &Value) -> b
     }
     if record.get("type").and_then(Value::as_str) == Some("assistant") {
         return parent_is_latest
-            || state.tool_result_parent.as_deref() == Some(parent_uuid.as_str());
+            || state.latest_uuid.as_deref() == Some(parent_uuid.as_str())
+            || state.tool_result_parent.as_deref() == Some(parent_uuid.as_str())
+            || state.is_side_branch_assistant_uuid(&parent_uuid);
     }
     parent_is_latest
 }

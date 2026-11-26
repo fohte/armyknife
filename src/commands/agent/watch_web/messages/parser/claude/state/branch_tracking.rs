@@ -9,6 +9,7 @@ use super::branch::has_tool_use_block;
 pub(super) struct ClaudeBranchTracking {
     tool_use_assistant_uuids: HashSet<String>,
     valid_tool_result_uuids: HashSet<String>,
+    side_branch_assistant_uuids: HashSet<String>,
     compact_boundary_branch_uuids: HashSet<String>,
 }
 
@@ -38,6 +39,7 @@ impl ClaudeBranchTracking {
         uuid: Option<&str>,
         parent_uuid: Option<&str>,
         pending_tool_result_on_active_branch: bool,
+        side_branch_continuation: bool,
     ) {
         let Some(uuid) = uuid else {
             return;
@@ -48,6 +50,11 @@ impl ClaudeBranchTracking {
         }
         if pending_tool_result_on_active_branch {
             self.valid_tool_result_uuids.insert(uuid.to_owned());
+        }
+        if side_branch_continuation
+            && record.get("type").and_then(Value::as_str) == Some("assistant")
+        {
+            self.side_branch_assistant_uuids.insert(uuid.to_owned());
         }
 
         let extends_compact_boundary_branch =
@@ -65,5 +72,13 @@ impl ClaudeBranchTracking {
 
     pub(super) fn is_valid_tool_result_uuid(&self, uuid: &str) -> bool {
         self.valid_tool_result_uuids.contains(uuid)
+    }
+
+    pub(super) fn is_tool_use_assistant_uuid(&self, uuid: &str) -> bool {
+        self.tool_use_assistant_uuids.contains(uuid)
+    }
+
+    pub(super) fn is_side_branch_assistant_uuid(&self, uuid: &str) -> bool {
+        self.side_branch_assistant_uuids.contains(uuid)
     }
 }

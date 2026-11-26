@@ -14,6 +14,8 @@ use crate::commands::agent::watch_web::messages::cache::MessageCache;
 use crate::commands::agent::watch_web::messages::incremental::{
     parse_initial_or_full, parse_session_transcript,
 };
+use crate::commands::agent::watch_web::messages::items::{EventKind, ToolOperation};
+use crate::commands::agent::watch_web::messages::questions::{QuestionChoice, QuestionPrompt};
 
 fn fixed_time() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).single().unwrap()
@@ -354,6 +356,21 @@ const PARALLEL_TOOL_RESULT_BRANCH_SUFFIX: &str = indoc! {r#"
     {"type":"user","uuid":"fixture-result-b","parentUuid":"fixture-second-call","timestamp":"2026-01-01T00:00:06Z","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-call-b","content":"second result"}]}}
 "#};
 
+const PARALLEL_TOOL_RESULT_WITH_FOLLOWUP_SUFFIX: &str = indoc! {r#"
+    {"type":"user","uuid":"fixture-result-b","parentUuid":"fixture-second-call","timestamp":"2026-01-01T00:00:06Z","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-call-b","content":"second result"}]}}
+    {"type":"assistant","uuid":"fixture-latest-followup","parentUuid":"fixture-followup","timestamp":"2026-01-01T00:00:07Z","message":{"content":[{"type":"text","text":"The active branch continues."}]}}
+"#};
+
+const COMPACT_BRANCH_PENDING_TOOL_PREFIX: &str = indoc! {r#"
+    {"type":"user","uuid":"fixture-root","parentUuid":null,"timestamp":"2026-01-01T00:00:01Z","message":{"content":"Run a fixture tool."}}
+    {"type":"system","uuid":"fixture-compact-boundary","parentUuid":"fixture-root","timestamp":"2026-01-01T00:00:02Z","subtype":"compact_boundary"}
+    {"type":"assistant","uuid":"fixture-post-compact-call","parentUuid":"fixture-compact-boundary","timestamp":"2026-01-01T00:00:03Z","message":{"content":[{"type":"tool_use","id":"fixture-post-compact-call-id","name":"Read","input":{"file_path":"/fixture/post-compact.md"}}]}}
+"#};
+
+const COMPACT_BRANCH_PENDING_TOOL_SUFFIX: &str = indoc! {r#"
+    {"type":"user","uuid":"fixture-post-compact-result","parentUuid":"fixture-post-compact-call","timestamp":"2026-01-01T00:00:04Z","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-post-compact-call-id","content":"fixture output"}]}}
+"#};
+
 const INITIAL_PENDING_SIBLING_TRANSCRIPT: &str = indoc! {r#"
     {"type":"user","uuid":"root","parentUuid":null,"message":{"content":"The original request."}}
     {"type":"assistant","uuid":"current","parentUuid":"root","message":{"content":[{"type":"text","text":"The current branch response."}]}}
@@ -614,6 +631,288 @@ fn parallel_tool_result_matches_a_full_parse_at_every_split_point() {
             "transcript split at byte {split}",
         );
     }
+}
+
+#[test]
+fn parallel_tool_result_after_an_active_followup_matches_a_full_parse_at_every_split_point() {
+    let mut transcript = PARALLEL_TOOL_RESULT_BRANCH_PREFIX.as_bytes().to_vec();
+    transcript.extend_from_slice(PARALLEL_TOOL_RESULT_WITH_FOLLOWUP_SUFFIX.as_bytes());
+    let transcript_text = std::str::from_utf8(&transcript).unwrap();
+    let expected = (
+        vec![
+            ChatItem::User {
+                rewind_id: Some("fixture-root".to_owned()),
+                text: "Run two fixture tools.".to_owned(),
+                timestamp: Some("2026-01-01T00:00:01+00:00".to_owned()),
+                from: None,
+                queued_prompt_id: None,
+            },
+            ChatItem::ToolSummary {
+                summary: "Read ×1".to_owned(),
+                operations: vec![ToolOperation {
+                    tool: "Read".to_owned(),
+                    target: Some("/fixture/a".to_owned()),
+                    failed: false,
+                }],
+            },
+            ChatItem::Assistant {
+                text: "The first tool result is ready.".to_owned(),
+            },
+            ChatItem::ToolSummary {
+                summary: "Read ×1".to_owned(),
+                operations: vec![ToolOperation {
+                    tool: "Read".to_owned(),
+                    target: Some("/fixture/b".to_owned()),
+                    failed: false,
+                }],
+            },
+            ChatItem::Assistant {
+                text: "The active branch continues.".to_owned(),
+            },
+        ],
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    );
+
+    for split in 0..=transcript.len() {
+        if !transcript_text.is_char_boundary(split) {
+            continue;
+        }
+        assert_eq!(
+            incremental_result(&transcript[..split], &transcript[split..]),
+            (IncrementalAppend::Applied, expected.clone()),
+            "transcript split at byte {split}",
+        );
+    }
+}
+
+#[test]
+fn compact_boundary_tool_result_matches_a_full_parse_at_every_split_point() {
+    let mut transcript = COMPACT_BRANCH_PENDING_TOOL_PREFIX.as_bytes().to_vec();
+    transcript.extend_from_slice(COMPACT_BRANCH_PENDING_TOOL_SUFFIX.as_bytes());
+    let transcript_text = std::str::from_utf8(&transcript).unwrap();
+    let expected = (
+        vec![
+            ChatItem::User {
+                rewind_id: Some("fixture-root".to_owned()),
+                text: "Run a fixture tool.".to_owned(),
+                timestamp: Some("2026-01-01T00:00:01+00:00".to_owned()),
+                from: None,
+                queued_prompt_id: None,
+            },
+            ChatItem::Event {
+                kind: EventKind::CompactBoundary,
+                text: "Context compacted".to_owned(),
+                timestamp: Some("2026-01-01T00:00:02+00:00".to_owned()),
+                failed: false,
+            },
+            ChatItem::ToolSummary {
+                summary: "Read ×1".to_owned(),
+                operations: vec![ToolOperation {
+                    tool: "Read".to_owned(),
+                    target: Some("/fixture/post-compact.md".to_owned()),
+                    failed: false,
+                }],
+            },
+        ],
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    );
+
+    for split in 0..=transcript.len() {
+        if !transcript_text.is_char_boundary(split) {
+            continue;
+        }
+        assert_eq!(
+            incremental_result(&transcript[..split], &transcript[split..]),
+            (IncrementalAppend::Applied, expected.clone()),
+            "transcript split at byte {split}",
+        );
+    }
+}
+
+#[test]
+fn full_parse_keeps_a_pending_tool_result_with_a_missing_parent_when_owner_is_active() {
+    let transcript = indoc! {r#"
+        {"type":"system","uuid":"fixture-compact-boundary","parentUuid":null,"logicalParentUuid":"fixture-pruned-parent","subtype":"compact_boundary"}
+        {"type":"assistant","uuid":"fixture-tool-owner","parentUuid":"fixture-compact-boundary","message":{"content":[{"type":"tool_use","id":"fixture-call-id","name":"Read","input":{"file_path":"/fixture/active.md"}}]}}
+        {"type":"user","uuid":"fixture-result","parentUuid":"fixture-pruned-parent","sourceToolAssistantUUID":"fixture-tool-owner","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-call-id","content":"fixture output"}]}}
+        {"type":"assistant","uuid":"fixture-current","parentUuid":"fixture-tool-owner","message":{"content":[{"type":"text","text":"Current response."}]}}
+    "#};
+
+    assert_eq!(
+        parse_all(transcript.as_bytes(), empty_additions()),
+        (
+            vec![
+                ChatItem::Event {
+                    kind: EventKind::CompactBoundary,
+                    text: "Context compacted".to_owned(),
+                    timestamp: None,
+                    failed: false,
+                },
+                ChatItem::ToolSummary {
+                    summary: "Read ×1".to_owned(),
+                    operations: vec![ToolOperation {
+                        tool: "Read".to_owned(),
+                        target: Some("/fixture/active.md".to_owned()),
+                        failed: false,
+                    }],
+                },
+                ChatItem::Assistant {
+                    text: "Current response.".to_owned(),
+                },
+            ],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        ),
+    );
+}
+
+#[test]
+fn chained_tool_results_match_a_full_parse_at_every_split_point() {
+    let transcript = indoc! {r#"
+        {"type":"user","uuid":"fixture-root","parentUuid":null,"timestamp":"2026-01-01T00:00:01Z","message":{"content":"Run fixture tools."}}
+        {"type":"assistant","uuid":"fixture-tool-owner","parentUuid":"fixture-root","timestamp":"2026-01-01T00:00:02Z","message":{"content":[{"type":"tool_use","id":"fixture-call-a","name":"Read","input":{"file_path":"/fixture/first.md"}},{"type":"tool_use","id":"fixture-call-b","name":"Read","input":{"file_path":"/fixture/second.md"}},{"type":"tool_use","id":"fixture-question-b","name":"AskUserQuestion","input":{"questions":[{"question":"Choose a fixture option","options":[{"label":"First option","description":"The first fixture choice."},{"label":"Second option","description":"The second fixture choice."}]}]}}]}}
+        {"type":"user","uuid":"fixture-result-a","parentUuid":"fixture-tool-owner","timestamp":"2026-01-01T00:00:03Z","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-call-a","content":"first result"}]}}
+        {"type":"user","uuid":"fixture-result-b","parentUuid":"fixture-result-a","timestamp":"2026-01-01T00:00:04Z","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-call-b","content":"second result"},{"type":"tool_result","tool_use_id":"fixture-question-b","content":"Your questions have been answered: \"Choose a fixture option\"=\"Second option\""}]}}
+    "#};
+    let transcript_text = transcript.trim_end_matches('\n');
+    let transcript_bytes = transcript_text.as_bytes();
+    let expected = (
+        vec![
+            ChatItem::User {
+                rewind_id: Some("fixture-root".to_owned()),
+                text: "Run fixture tools.".to_owned(),
+                timestamp: Some("2026-01-01T00:00:01+00:00".to_owned()),
+                from: None,
+                queued_prompt_id: None,
+            },
+            ChatItem::Question {
+                request_id: None,
+                cancelled: false,
+                questions: vec![QuestionPrompt {
+                    header: None,
+                    question: "Choose a fixture option".to_owned(),
+                    choices: vec![
+                        QuestionChoice {
+                            label: "First option".to_owned(),
+                            description: Some("The first fixture choice.".to_owned()),
+                        },
+                        QuestionChoice {
+                            label: "Second option".to_owned(),
+                            description: Some("The second fixture choice.".to_owned()),
+                        },
+                    ],
+                    multi_select: false,
+                    answer: Some("Second option".to_owned()),
+                }],
+            },
+            ChatItem::ToolSummary {
+                summary: "Read ×2".to_owned(),
+                operations: vec![
+                    ToolOperation {
+                        tool: "Read".to_owned(),
+                        target: Some("/fixture/first.md".to_owned()),
+                        failed: false,
+                    },
+                    ToolOperation {
+                        tool: "Read".to_owned(),
+                        target: Some("/fixture/second.md".to_owned()),
+                        failed: false,
+                    },
+                ],
+            },
+        ],
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    );
+
+    for split in 0..=transcript_bytes.len() {
+        if !transcript_text.is_char_boundary(split) {
+            continue;
+        }
+        assert_eq!(
+            incremental_result(&transcript_bytes[..split], &transcript_bytes[split..]),
+            (IncrementalAppend::Applied, expected.clone()),
+            "transcript split at byte {split}",
+        );
+    }
+}
+
+#[test]
+fn chained_tool_results_from_a_rewound_branch_do_not_resolve_pending_items() {
+    let transcript = indoc! {r#"
+        {"type":"user","uuid":"fixture-root","parentUuid":null,"timestamp":"2026-01-01T00:00:01Z","message":{"content":"Run fixture tools."}}
+        {"type":"assistant","uuid":"fixture-tool-owner","parentUuid":"fixture-root","timestamp":"2026-01-01T00:00:02Z","message":{"content":[{"type":"tool_use","id":"fixture-call-a","name":"Read","input":{"file_path":"/fixture/first.md"}},{"type":"tool_use","id":"fixture-call-b","name":"Read","input":{"file_path":"/fixture/second.md"}},{"type":"tool_use","id":"fixture-question-b","name":"AskUserQuestion","input":{"questions":[{"question":"Choose a fixture option","options":[{"label":"First option","description":"The first fixture choice."},{"label":"Second option","description":"The second fixture choice."}]}]}}]}}
+        {"type":"user","uuid":"fixture-result-a","parentUuid":"fixture-tool-owner","timestamp":"2026-01-01T00:00:03Z","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-call-a","content":"first result"}]}}
+        {"type":"user","uuid":"fixture-result-b","parentUuid":"fixture-result-a","timestamp":"2026-01-01T00:00:04Z","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-call-b","content":"second result"},{"type":"tool_result","tool_use_id":"fixture-question-b","content":"Your questions have been answered: \"Choose a fixture option\"=\"Second option\""}]}}
+        {"type":"user","uuid":"fixture-replacement","parentUuid":"fixture-tool-owner","timestamp":"2026-01-01T00:00:05Z","message":{"content":"The replacement request."}}
+        {"type":"assistant","uuid":"fixture-current","parentUuid":"fixture-replacement","timestamp":"2026-01-01T00:00:06Z","message":{"content":[{"type":"text","text":"The replacement response."}]}}
+    "#};
+
+    assert_eq!(
+        parse_all(transcript.as_bytes(), empty_additions()),
+        (
+            vec![
+                ChatItem::User {
+                    rewind_id: Some("fixture-root".to_owned()),
+                    text: "Run fixture tools.".to_owned(),
+                    timestamp: Some("2026-01-01T00:00:01+00:00".to_owned()),
+                    from: None,
+                    queued_prompt_id: None,
+                },
+                ChatItem::Question {
+                    request_id: None,
+                    cancelled: false,
+                    questions: vec![QuestionPrompt {
+                        header: None,
+                        question: "Choose a fixture option".to_owned(),
+                        choices: vec![
+                            QuestionChoice {
+                                label: "First option".to_owned(),
+                                description: Some("The first fixture choice.".to_owned()),
+                            },
+                            QuestionChoice {
+                                label: "Second option".to_owned(),
+                                description: Some("The second fixture choice.".to_owned()),
+                            },
+                        ],
+                        multi_select: false,
+                        answer: None,
+                    }],
+                },
+                ChatItem::ToolSummary {
+                    summary: "Read ×1".to_owned(),
+                    operations: vec![ToolOperation {
+                        tool: "Read".to_owned(),
+                        target: Some("/fixture/first.md".to_owned()),
+                        failed: false,
+                    }],
+                },
+                ChatItem::User {
+                    rewind_id: Some("fixture-replacement".to_owned()),
+                    text: "The replacement request.".to_owned(),
+                    timestamp: Some("2026-01-01T00:00:05+00:00".to_owned()),
+                    from: None,
+                    queued_prompt_id: None,
+                },
+                ChatItem::Assistant {
+                    text: "The replacement response.".to_owned(),
+                },
+                ChatItem::ToolInProgress {
+                    tool: "Read".to_owned(),
+                    target: Some("/fixture/second.md".to_owned()),
+                },
+            ],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        ),
+    );
 }
 
 #[test]
@@ -1289,6 +1588,62 @@ fn inactive_peer_delivery_does_not_resolve_queued_prompt(
                 Vec::new(),
                 Vec::new(),
             ),
+        ),
+    );
+}
+
+#[rstest]
+fn rewound_peer_delivery_with_an_in_order_child_does_not_resolve_queued_prompt(
+    saved_queued_prompt: WatchWebQueuedPrompt,
+) {
+    let transcript = indoc! {r#"
+        {"type":"user","uuid":"fixture-root","parentUuid":null,"message":{"content":"Initial request."}}
+        {"type":"assistant","uuid":"fixture-shared","parentUuid":"fixture-root","message":{"content":[{"type":"text","text":"Shared response."}]}}
+        {"type":"user","uuid":"fixture-old-delivery","parentUuid":"fixture-shared","isMeta":true,"origin":{"kind":"peer","from":"unknown"},"message":{"content":"⟦armyknife-user:fixture-marker-cobalt⟧\nThis message was typed by the human user in armyknife watch-web.\nEngine-formatted delivery.\n<!-- armyknife-queued-prompt-id:fixture-message-cyan -->"}}
+        {"type":"assistant","uuid":"fixture-old-child","parentUuid":"fixture-old-delivery","message":{"content":[{"type":"text","text":"Discard this response."}]}}
+        {"type":"user","uuid":"fixture-replacement","parentUuid":"fixture-shared","message":{"content":"Replacement request."}}
+        {"type":"assistant","uuid":"fixture-current","parentUuid":"fixture-replacement","message":{"content":[{"type":"text","text":"Keep this response."}]}}
+    "#};
+
+    assert_eq!(
+        parse_all(
+            transcript.as_bytes(),
+            queued_prompt_additions(&saved_queued_prompt)
+        ),
+        (
+            vec![
+                ChatItem::User {
+                    rewind_id: Some("fixture-root".to_owned()),
+                    text: "Initial request.".to_owned(),
+                    timestamp: None,
+                    from: None,
+                    queued_prompt_id: None,
+                },
+                ChatItem::Assistant {
+                    text: "Shared response.".to_owned(),
+                },
+                ChatItem::User {
+                    rewind_id: Some("fixture-replacement".to_owned()),
+                    text: "Replacement request.".to_owned(),
+                    timestamp: None,
+                    from: None,
+                    queued_prompt_id: None,
+                },
+                ChatItem::Assistant {
+                    text: "Keep this response.".to_owned(),
+                },
+                ChatItem::QueuedUser {
+                    content: vec![super::super::super::super::UserContentPart::Text {
+                        text: "Delivered request.".to_owned(),
+                    }],
+                    queued_prompt_id: Some("fixture-message-cyan".to_owned()),
+                    from: None,
+                    timestamp: Some("2026-01-01T00:00:00+00:00".to_owned()),
+                },
+            ],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
         ),
     );
 }
