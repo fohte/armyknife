@@ -2805,6 +2805,9 @@ mod tests {
     ) {
         let temp_dir = tempfile::TempDir::new().expect("temp dir");
         let sessions_dir = temp_dir.path();
+        let mut retry_session = create_test_session(None);
+        retry_session.session_id = "retry-session".to_string();
+        store::save_session_to(sessions_dir, &retry_session).expect("session should be saved");
         let default_denied_input = serde_json::json!({"command": "printf fixture"});
         let denied_input = scenario
             .denied_tool_input
