@@ -93,7 +93,7 @@ mod tests {
 
     use super::router;
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn records_function_locations_and_percentages() {
         let request = Request::post("/long-tasks")
             .header(CONTENT_TYPE, "application/json")
