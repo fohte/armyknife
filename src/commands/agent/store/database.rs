@@ -346,6 +346,10 @@ impl SessionLock {
         Ok(removed)
     }
 
+    pub(crate) fn has_incomplete_todos(&self) -> Result<bool> {
+        has_incomplete_todos(&self.connection, &self.session_id)
+    }
+
     fn ensure_transaction(&self) -> Result<()> {
         if !self.transaction_active.get() {
             self.connection.execute_batch("BEGIN IMMEDIATE")?;
@@ -593,15 +597,7 @@ fn read_revision(connection: &Connection) -> Result<i64> {
 /// Keeps sessions with incomplete todos available to watch-web.
 /// Returns false when a todo keeps the row available or the row was already absent.
 fn delete_session_row(connection: &Connection, session_id: &str) -> Result<bool> {
-    let has_incomplete_todos: bool = connection.query_row(
-        "SELECT EXISTS(
-            SELECT 1 FROM agent_todo
-            WHERE session_id = ?1 AND completed_at IS NULL
-        )",
-        [session_id],
-        |row| row.get(0),
-    )?;
-    if has_incomplete_todos {
+    if has_incomplete_todos(connection, session_id)? {
         return Ok(false);
     }
 
@@ -626,6 +622,17 @@ fn delete_session_row(connection: &Connection, session_id: &str) -> Result<bool>
         increment_revision(connection)?;
     }
     Ok(changed > 0)
+}
+
+fn has_incomplete_todos(connection: &Connection, session_id: &str) -> Result<bool> {
+    Ok(connection.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM agent_todo
+            WHERE session_id = ?1 AND completed_at IS NULL
+        )",
+        [session_id],
+        |row| row.get(0),
+    )?)
 }
 
 pub(crate) fn validate_session_id(session_id: &str) -> Result<()> {
