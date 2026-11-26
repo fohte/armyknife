@@ -228,7 +228,7 @@ mod tests {
 
     #[test]
     fn rejects_the_removed_file_subcommand() {
-        let result = Cli::try_parse_from(["a", "agent", concat!("fi", "le")]);
+        let result = Cli::try_parse_from(["a", "agent", "file"]);
 
         assert_eq!(
             result.err().map(|error| error.kind()),

@@ -2394,6 +2394,8 @@ mod tests {
                 )
                 .expect("attachment record should be inserted");
 
+            let stored_files = agent_files_from(&temp_session_dir.sessions_path, session_id)
+                .expect("file records should load");
             let removed = archive::cleanup_stale_sessions_in_with_archive_at_and_storage(
                 &temp_session_dir.sessions_path,
                 Some(&storage_root),
@@ -2413,9 +2415,10 @@ mod tests {
                         .expect("session record should resolve")
                         .is_stored(),
                     session_storage.exists(),
+                    stored_files,
                     remaining_files,
                 ),
-                (true, false, false, Vec::new()),
+                (true, false, false, vec![file], Vec::new()),
             );
         }
 
