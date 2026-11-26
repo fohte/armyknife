@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.958](https://github.com/fohte/armyknife/compare/v0.1.957...v0.1.958) (2026-11-26)
+
+
+### Features
+
+* **agent:** remove `a agent file send` ([#2343](https://github.com/fohte/armyknife/issues/2343)) ([c36b809](https://github.com/fohte/armyknife/commit/c36b80947d8555fd3d245657df163afba061edb9))
+
 ## [0.1.957](https://github.com/fohte/armyknife/compare/v0.1.956...v0.1.957) (2026-11-26)
 
 
