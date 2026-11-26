@@ -9,8 +9,10 @@ use super::branch::has_tool_use_block;
 pub(super) struct ClaudeBranchTracking {
     tool_use_assistant_uuids: HashSet<String>,
     valid_tool_result_uuids: HashSet<String>,
+    tool_result_lineage_uuids: HashSet<String>,
     side_branch_assistant_uuids: HashSet<String>,
     compact_boundary_branch_uuids: HashSet<String>,
+    blocked_side_branch_tip_uuid: Option<String>,
 }
 
 impl ClaudeBranchTracking {
@@ -40,6 +42,7 @@ impl ClaudeBranchTracking {
         parent_uuid: Option<&str>,
         pending_tool_result_on_active_branch: bool,
         side_branch_continuation: bool,
+        continues_tool_result_lineage: bool,
     ) {
         let Some(uuid) = uuid else {
             return;
@@ -50,6 +53,10 @@ impl ClaudeBranchTracking {
         }
         if pending_tool_result_on_active_branch {
             self.valid_tool_result_uuids.insert(uuid.to_owned());
+            self.tool_result_lineage_uuids.insert(uuid.to_owned());
+        }
+        if continues_tool_result_lineage {
+            self.tool_result_lineage_uuids.insert(uuid.to_owned());
         }
         if side_branch_continuation
             && record.get("type").and_then(Value::as_str) == Some("assistant")
@@ -80,5 +87,23 @@ impl ClaudeBranchTracking {
 
     pub(super) fn is_side_branch_assistant_uuid(&self, uuid: &str) -> bool {
         self.side_branch_assistant_uuids.contains(uuid)
+    }
+
+    pub(super) fn is_tool_result_lineage_uuid(&self, uuid: &str) -> bool {
+        self.tool_result_lineage_uuids.contains(uuid)
+    }
+
+    pub(super) fn block_side_branch_tip(&mut self, uuid: &str) {
+        self.blocked_side_branch_tip_uuid = Some(uuid.to_owned());
+    }
+
+    pub(super) fn clear_blocked_side_branch_tip(&mut self) {
+        self.blocked_side_branch_tip_uuid = None;
+    }
+
+    pub(super) fn is_retained_side_branch_tip_uuid(&self, uuid: &str) -> bool {
+        self.blocked_side_branch_tip_uuid.as_deref() != Some(uuid)
+            && (self.side_branch_assistant_uuids.contains(uuid)
+                || self.tool_result_lineage_uuids.contains(uuid))
     }
 }

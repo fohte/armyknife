@@ -75,6 +75,18 @@ impl ClaudeParserState {
         self.branch_tracking.is_side_branch_assistant_uuid(uuid)
     }
 
+    pub(super) fn is_retained_side_branch_tip_uuid(&self, uuid: &str) -> bool {
+        self.branch_tracking.is_retained_side_branch_tip_uuid(uuid)
+    }
+
+    pub(super) fn block_side_branch_tip(&mut self, uuid: &str) {
+        self.branch_tracking.block_side_branch_tip(uuid);
+    }
+
+    pub(super) fn clear_blocked_side_branch_tip(&mut self) {
+        self.branch_tracking.clear_blocked_side_branch_tip();
+    }
+
     pub(super) fn process_record(&mut self, record: Value, now: DateTime<Utc>) {
         if let Some(attachment) = record.get("attachment")
             && attachment.get("type").and_then(Value::as_str) == Some("skill_listing")
@@ -118,6 +130,12 @@ impl ClaudeParserState {
             parent_uuid.as_deref(),
             parent_membership,
         );
+        let continues_tool_result_lineage = record.get("type").and_then(Value::as_str)
+            != Some("user")
+            && parent_uuid.as_deref().is_some_and(|parent_uuid| {
+                self.branch_tracking
+                    .is_tool_result_lineage_uuid(parent_uuid)
+            });
         let queued_peer_delivery = self.is_queued_peer_delivery(&record, uuid);
         let mut active_record = uuid.is_none();
         if is_tool_result_only {
@@ -159,6 +177,7 @@ impl ClaudeParserState {
             parent_uuid.as_deref(),
             pending_tool_result_on_active_branch,
             side_branch_continuation,
+            continues_tool_result_lineage,
         );
 
         if is_tool_result_only {

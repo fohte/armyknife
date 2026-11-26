@@ -340,17 +340,27 @@ fn incremental_result(
 fn assert_incremental_matches_full_parse_at_every_split_point(
     transcript: &str,
     expected: &super::ParsedTranscript,
+    expected_append: Option<IncrementalAppend>,
 ) {
     let transcript_bytes = transcript.as_bytes();
     for split in 0..=transcript_bytes.len() {
         if !transcript.is_char_boundary(split) {
             continue;
         }
-        assert_eq!(
-            incremental_result(&transcript_bytes[..split], &transcript_bytes[split..]),
-            (IncrementalAppend::Applied, expected.clone()),
-            "transcript split at byte {split}",
-        );
+        let actual = incremental_result(&transcript_bytes[..split], &transcript_bytes[split..]);
+        if let Some(expected_append) = expected_append {
+            assert_eq!(
+                actual,
+                (expected_append, expected.clone()),
+                "transcript split at byte {split}",
+            );
+        } else {
+            assert_eq!(
+                actual.1,
+                expected.clone(),
+                "transcript split at byte {split}",
+            );
+        }
     }
 }
 
@@ -637,7 +647,11 @@ fn parallel_tool_result_matches_a_full_parse_at_every_split_point() {
     );
     let expected = parse_all(transcript.as_bytes(), empty_additions());
 
-    assert_incremental_matches_full_parse_at_every_split_point(&transcript, &expected);
+    assert_incremental_matches_full_parse_at_every_split_point(
+        &transcript,
+        &expected,
+        Some(IncrementalAppend::Applied),
+    );
 }
 
 #[test]
@@ -683,7 +697,11 @@ fn parallel_tool_result_after_an_active_followup_matches_a_full_parse_at_every_s
         Vec::new(),
     );
 
-    assert_incremental_matches_full_parse_at_every_split_point(&transcript, &expected);
+    assert_incremental_matches_full_parse_at_every_split_point(
+        &transcript,
+        &expected,
+        Some(IncrementalAppend::Applied),
+    );
 }
 
 #[test]
@@ -721,7 +739,11 @@ fn compact_boundary_tool_result_matches_a_full_parse_at_every_split_point() {
         Vec::new(),
     );
 
-    assert_incremental_matches_full_parse_at_every_split_point(&transcript, &expected);
+    assert_incremental_matches_full_parse_at_every_split_point(
+        &transcript,
+        &expected,
+        Some(IncrementalAppend::Applied),
+    );
 }
 
 #[test]
@@ -821,7 +843,68 @@ fn chained_tool_results_match_a_full_parse_at_every_split_point() {
         Vec::new(),
     );
 
-    assert_incremental_matches_full_parse_at_every_split_point(transcript_text, &expected);
+    assert_incremental_matches_full_parse_at_every_split_point(
+        transcript_text,
+        &expected,
+        Some(IncrementalAppend::Applied),
+    );
+}
+
+#[rstest]
+#[case::user_prompt(indoc! {r#"
+    {"type":"user","uuid":"fixture-queued-prompt","parentUuid":"fixture-main-followup","message":{"content":"A later fixture request."}}
+"#})]
+#[case::task_notification_without_uuid(indoc! {r#"
+    {"type":"user","parentUuid":"fixture-main-followup","origin":{"kind":"task-notification"},"message":{"content":"<task-notification><task-id>fixture-task</task-id><status>completed</status><summary>Fixture task completed</summary></task-notification>"}}
+"#})]
+fn assistant_after_a_prompt_or_task_notification_restarts_an_old_side_branch(
+    #[case] boundary_record: &str,
+) {
+    let prefix = format!(
+        "{}{}",
+        indoc! {r#"
+        {"type":"user","uuid":"fixture-root","parentUuid":null,"message":{"content":"Run two fixture tools."}}
+        {"type":"assistant","uuid":"fixture-main-call","parentUuid":"fixture-root","message":{"content":[{"type":"tool_use","id":"fixture-main-use","name":"Read","input":{"file_path":"/fixture/main.md"}}]}}
+        {"type":"assistant","uuid":"fixture-side-call","parentUuid":"fixture-main-call","message":{"content":[{"type":"tool_use","id":"fixture-side-use","name":"Read","input":{"file_path":"/fixture/side.md"}}]}}
+        {"type":"user","uuid":"fixture-main-result","parentUuid":"fixture-main-call","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-main-use","content":"main output"}]}}
+        {"type":"assistant","uuid":"fixture-main-followup","parentUuid":"fixture-main-result","message":{"content":[{"type":"text","text":"The main branch continued."}]}}
+    "#},
+        boundary_record,
+    );
+    let suffix = indoc! {r#"
+        {"type":"assistant","uuid":"fixture-side-followup","parentUuid":"fixture-side-call","message":{"content":[{"type":"text","text":"The side branch continued."}]}}
+    "#};
+    let transcript = format!("{prefix}{suffix}");
+    let expected = parse_all(transcript.as_bytes(), empty_additions());
+
+    assert_incremental_matches_full_parse_at_every_split_point(&transcript, &expected, None);
+    assert_eq!(
+        incremental_result(prefix.as_bytes(), suffix.as_bytes()).0,
+        IncrementalAppend::RestartRequired,
+    );
+}
+
+#[test]
+fn late_parallel_result_restarts_when_it_would_replace_a_user_branch() {
+    let prefix = indoc! {r#"
+        {"type":"user","uuid":"fixture-root","parentUuid":null,"message":{"content":"Run two fixture tools."}}
+        {"type":"assistant","uuid":"fixture-tool-owner","parentUuid":"fixture-root","message":{"content":[{"type":"tool_use","id":"fixture-call-a","name":"Read","input":{"file_path":"/fixture/a.md"}},{"type":"tool_use","id":"fixture-call-b","name":"Read","input":{"file_path":"/fixture/b.md"}}]}}
+        {"type":"user","uuid":"fixture-result-a","parentUuid":"fixture-tool-owner","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-call-a","content":"first result"}]}}
+        {"type":"assistant","uuid":"fixture-followup","parentUuid":"fixture-result-a","message":{"content":[{"type":"text","text":"The first result is ready."}]}}
+        {"type":"user","uuid":"fixture-replacement","parentUuid":"fixture-tool-owner","message":{"content":"A replacement fixture request."}}
+        {"type":"assistant","uuid":"fixture-replacement-followup","parentUuid":"fixture-replacement","message":{"content":[{"type":"text","text":"The replacement branch continues."}]}}
+    "#};
+    let suffix = indoc! {r#"
+        {"type":"user","uuid":"fixture-result-b","parentUuid":"fixture-tool-owner","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-call-b","content":"second result"}]}}
+    "#};
+    let transcript = format!("{prefix}{suffix}");
+    let expected = parse_all(transcript.as_bytes(), empty_additions());
+
+    assert_incremental_matches_full_parse_at_every_split_point(&transcript, &expected, None);
+    assert_eq!(
+        incremental_result(prefix.as_bytes(), suffix.as_bytes()).0,
+        IncrementalAppend::RestartRequired,
+    );
 }
 
 #[test]

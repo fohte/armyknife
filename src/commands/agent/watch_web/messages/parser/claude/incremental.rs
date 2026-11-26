@@ -378,7 +378,19 @@ fn ingest_record(
             state.latest_uuid = Some(uuid.to_owned());
         }
     }
+    let blocks_side_branch_continuation = !is_tool_result_only_user_record(&record)
+        && (record.get("type").and_then(Value::as_str) == Some("user")
+            || (is_attachment_record(&record)
+                && super::background_tasks::task_notification_text(&record).is_some()));
+    let has_uuid = record.get("uuid").and_then(Value::as_str).is_some();
     state.process_record(record, now);
+    if blocks_side_branch_continuation && !has_uuid {
+        if let Some(uuid) = state.latest_uuid.clone() {
+            state.block_side_branch_tip(&uuid);
+        }
+    } else if matches!(origin, RecordOrigin::Initial) && has_uuid {
+        state.clear_blocked_side_branch_tip();
+    }
     true
 }
 
@@ -415,7 +427,13 @@ fn is_active_branch_continuation(state: &ClaudeParserState, record: &Value) -> b
         let latest_record_is_compact_boundary_branch =
             state.latest_record_is_compact_boundary_branch();
         let parent_is_compact_boundary_branch = state.is_compact_boundary_branch(&parent_uuid);
+        let latest_tip_is_retained = state
+            .latest_uuid
+            .as_deref()
+            .is_some_and(|uuid| state.is_retained_side_branch_tip_uuid(uuid));
         return (!latest_record_is_compact_boundary_branch || parent_is_compact_boundary_branch)
+            && (state.latest_uuid.as_deref() == Some(parent_uuid.as_str())
+                || latest_tip_is_retained)
             && state.has_pending_tool_result_for_parent(record, Some(parent_uuid.as_str()));
     }
     let parent_is_latest = state.latest_record_uuid.as_deref() == Some(parent_uuid.as_str());
@@ -423,10 +441,15 @@ fn is_active_branch_continuation(state: &ClaudeParserState, record: &Value) -> b
         return parent_is_latest;
     }
     if record.get("type").and_then(Value::as_str) == Some("assistant") {
+        let side_branch_parent_continues_latest = state.is_side_branch_assistant_uuid(&parent_uuid)
+            && state
+                .latest_uuid
+                .as_deref()
+                .is_some_and(|uuid| state.is_retained_side_branch_tip_uuid(uuid));
         return parent_is_latest
             || state.latest_uuid.as_deref() == Some(parent_uuid.as_str())
             || state.tool_result_parent.as_deref() == Some(parent_uuid.as_str())
-            || state.is_side_branch_assistant_uuid(&parent_uuid);
+            || side_branch_parent_continues_latest;
     }
     parent_is_latest
 }
