@@ -15,8 +15,8 @@ use crate::infra::github::GitHubClient;
 use crate::shared::config::load_config;
 use crate::shared::human_in_the_loop::{
     CleanupGuard, Document, DocumentSchema, FifoSignalGuard, HumanInTheLoopError,
-    Result as HilResult, ReviewFinishReason, ReviewHandler, complete_review, request_review_finish,
-    start_review_with_completion,
+    Result as HilResult, ReviewDocumentAction, ReviewDocumentActionResult, ReviewFinishReason,
+    ReviewHandler, complete_review, request_review_finish, start_review_with_completion,
 };
 use crate::shared::yaml_frontmatter;
 
@@ -81,23 +81,33 @@ enum ReplyReviewOutcome {
     FinishedByResolvedThreads,
     FinishedByClosedPr,
     FinishedByMergedPr,
+    PostedByWatchWeb,
 }
 
 fn reply_review_outcome(
     document: &Document<ThreadsFrontmatter>,
     finish_reason: Option<ReviewFinishReason>,
+    action_result: Option<&ReviewDocumentActionResult>,
 ) -> ReplyReviewOutcome {
-    match finish_reason {
-        Some(ReviewFinishReason::RepliesPushed) => ReplyReviewOutcome::FinishedByPush,
-        Some(ReviewFinishReason::ReplyThreadsResolved) => {
-            ReplyReviewOutcome::FinishedByResolvedThreads
+    if action_result.is_some_and(|result| {
+        result.succeeded && result.action == ReviewDocumentAction::PostReplies
+    }) {
+        ReplyReviewOutcome::PostedByWatchWeb
+    } else {
+        match finish_reason {
+            Some(ReviewFinishReason::RepliesPushed) => ReplyReviewOutcome::FinishedByPush,
+            Some(ReviewFinishReason::ReplyThreadsResolved) => {
+                ReplyReviewOutcome::FinishedByResolvedThreads
+            }
+            Some(ReviewFinishReason::PullRequestClosed) => ReplyReviewOutcome::FinishedByClosedPr,
+            Some(ReviewFinishReason::PullRequestMerged) => ReplyReviewOutcome::FinishedByMergedPr,
+            Some(ReviewFinishReason::ExternalRequest) | None
+                if document.frontmatter.is_approved() =>
+            {
+                ReplyReviewOutcome::Approved
+            }
+            Some(ReviewFinishReason::ExternalRequest) | None => ReplyReviewOutcome::NotApproved,
         }
-        Some(ReviewFinishReason::PullRequestClosed) => ReplyReviewOutcome::FinishedByClosedPr,
-        Some(ReviewFinishReason::PullRequestMerged) => ReplyReviewOutcome::FinishedByMergedPr,
-        Some(ReviewFinishReason::ExternalRequest) | None if document.frontmatter.is_approved() => {
-            ReplyReviewOutcome::Approved
-        }
-        Some(ReviewFinishReason::ExternalRequest) | None => ReplyReviewOutcome::NotApproved,
     }
 }
 
@@ -333,7 +343,11 @@ pub async fn run_review(args: &ReviewArgs) -> anyhow::Result<()> {
         std::process::exit(exit_code::ALREADY_OPEN);
     };
 
-    match reply_review_outcome(&review.document, review.finish_reason) {
+    match reply_review_outcome(
+        &review.document,
+        review.finish_reason,
+        review.action_result.as_ref(),
+    ) {
         ReplyReviewOutcome::FinishedByPush => {
             println!("Reply review finished because push succeeded.");
             Ok(())
@@ -348,6 +362,10 @@ pub async fn run_review(args: &ReviewArgs) -> anyhow::Result<()> {
         }
         ReplyReviewOutcome::FinishedByMergedPr => {
             println!("Reply review finished because the pull request was merged.");
+            Ok(())
+        }
+        ReplyReviewOutcome::PostedByWatchWeb => {
+            println!("Reply review finished because watch-web posted the replies.");
             Ok(())
         }
         ReplyReviewOutcome::Approved => Ok(()),
@@ -527,7 +545,54 @@ mod tests {
         )
         .expect("threads document should parse");
 
-        assert_eq!(reply_review_outcome(&document, finish_reason), expected);
+        assert_eq!(
+            reply_review_outcome(&document, finish_reason, None),
+            expected
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::successful_reply_post(
+        ReviewDocumentAction::PostReplies,
+        true,
+        ReplyReviewOutcome::PostedByWatchWeb
+    )]
+    #[case::failed_reply_post(
+        ReviewDocumentAction::PostReplies,
+        false,
+        ReplyReviewOutcome::NotApproved
+    )]
+    #[case::unrelated_action(ReviewDocumentAction::CreatePr, true, ReplyReviewOutcome::NotApproved)]
+    fn reply_review_outcome_uses_only_successful_watch_web_reply_posts(
+        #[case] action: ReviewDocumentAction,
+        #[case] succeeded: bool,
+        #[case] expected: ReplyReviewOutcome,
+    ) {
+        let document = Document::<ThreadsFrontmatter>::from_content(
+            std::path::PathBuf::from("threads.md"),
+            indoc! {"
+                ---
+                pr: 123
+                repo: example/repo
+                pulled_at: '2024-01-15T10:00:00Z'
+                submit: false
+                ---
+                Draft reply
+            "},
+        )
+        .expect("threads document should parse");
+        let action_result = ReviewDocumentActionResult::new(
+            action,
+            succeeded,
+            "Action result.".to_owned(),
+            "document-hash".to_owned(),
+            None,
+        );
+
+        assert_eq!(
+            reply_review_outcome(&document, None, Some(&action_result)),
+            expected,
+        );
     }
 
     #[rstest::rstest]

@@ -7,8 +7,9 @@ use super::common::{DraftFile, Frontmatter, RepoInfo};
 use super::hooks::{HookContext, HookRunner, PRE_PR_REVIEW_HOOK, default_runner, run_pr_hook};
 use crate::shared::config::load_config;
 use crate::shared::human_in_the_loop::{
-    CleanupGuard, Document, DocumentSchema, FifoSignalGuard, Result as HilResult, ReviewHandler,
-    complete_review, start_review,
+    CleanupGuard, Document, DocumentSchema, FifoSignalGuard, Result as HilResult,
+    ReviewDocumentAction, ReviewDocumentActionResult, ReviewHandler, complete_review,
+    start_review_with_completion,
 };
 
 #[derive(Args, Clone, PartialEq, Eq)]
@@ -159,31 +160,42 @@ fn run_impl(args: &ReviewArgs, run_hook: HookRunner<'_>) -> anyhow::Result<()> {
 
     use crate::shared::human_in_the_loop::exit_code;
 
-    let document = exit_code::exit_on_review_failure(start_review::<Frontmatter, _>(
-        &draft_path,
-        &window_title,
-        &PrDraftReviewHandler,
-        &config.editor,
-        config.notification.enabled,
-    ))?;
+    let review =
+        exit_code::exit_on_review_failure(start_review_with_completion::<Frontmatter, _>(
+            &draft_path,
+            &window_title,
+            &PrDraftReviewHandler,
+            &config.editor,
+            config.notification.enabled,
+        ))?;
 
     // If the editor was already open, exit with a distinct code so callers
     // can distinguish "already open" from "user did not approve".
-    if document.is_none() {
+    let Some(review) = review else {
         std::process::exit(exit_code::ALREADY_OPEN);
-    }
+    };
 
-    let steps_changed = document
-        .as_ref()
-        .is_some_and(|doc| doc.frontmatter.steps != before.frontmatter.steps);
-    if !steps_changed {
+    let steps_changed = review.document.frontmatter.steps != before.frontmatter.steps;
+    if !review_was_approved(steps_changed, review.action_result.as_ref()) {
         eprintln!("No steps changed. Review not approved.");
         std::process::exit(exit_code::NOT_APPROVED);
     }
 
-    eprintln!("Review completed. Steps updated.");
+    if steps_changed {
+        eprintln!("Review completed. Steps updated.");
+    }
 
     Ok(())
+}
+
+fn review_was_approved(
+    steps_changed: bool,
+    action_result: Option<&ReviewDocumentActionResult>,
+) -> bool {
+    steps_changed
+        || action_result.is_some_and(|result| {
+            result.succeeded && result.action == ReviewDocumentAction::CreatePr
+        })
 }
 
 pub fn run_complete(args: &ReviewCompleteArgs) -> anyhow::Result<()> {
@@ -217,6 +229,49 @@ mod tests {
     use indoc::indoc;
     use std::fs;
     use std::sync::Mutex;
+
+    #[rstest::rstest]
+    #[case::pr_created_without_step_changes(
+        false,
+        Some(ReviewDocumentAction::CreatePr),
+        true,
+        true
+    )]
+    #[case::unrelated_successful_action_does_not_approve(
+        false,
+        Some(ReviewDocumentAction::PostReplies),
+        true,
+        false
+    )]
+    #[case::failed_pr_creation_does_not_approve(
+        false,
+        Some(ReviewDocumentAction::CreatePr),
+        false,
+        false
+    )]
+    #[case::no_action_and_no_step_changes_remains_unapproved(false, None, false, false)]
+    #[case::editor_step_changes_still_succeed(true, None, false, true)]
+    fn review_was_approved_uses_create_pr_result_and_preserves_editor_approval(
+        #[case] steps_changed: bool,
+        #[case] action: Option<ReviewDocumentAction>,
+        #[case] action_succeeded: bool,
+        #[case] expected: bool,
+    ) {
+        let action_result = action.map(|action| {
+            ReviewDocumentActionResult::new(
+                action,
+                action_succeeded,
+                "Action result.".to_owned(),
+                "document-hash".to_owned(),
+                None,
+            )
+        });
+
+        assert_eq!(
+            review_was_approved(steps_changed, action_result.as_ref()),
+            expected,
+        );
+    }
 
     #[cfg(unix)]
     #[test]
