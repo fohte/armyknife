@@ -80,6 +80,7 @@ mod tests {
     use axum::http::Request;
     use axum::http::header::{CONTENT_TYPE, ORIGIN};
     use axum::http::{HeaderValue, StatusCode};
+    use rstest::rstest;
     use tower::ServiceExt;
 
     use super::router;
@@ -102,16 +103,21 @@ mod tests {
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
     }
 
+    #[rstest]
+    #[case::duration_below_threshold(
+        r#"{"startedAtMs":1795737600000,"durationMs":999,"functions":[]}"#.to_owned()
+    )]
+    #[case::percentage_above_maximum(
+        r#"{"startedAtMs":1795737600000,"durationMs":1000,"functions":[{"name":"renderList","file":"/assets/app.js","line":42,"percentage":101.0}]}"#.to_owned()
+    )]
     #[tokio::test]
-    async fn rejects_reports_below_the_freeze_threshold() {
+    async fn rejects_invalid_long_task_reports(#[case] body: String) {
         let response = router()
             .oneshot(
                 Request::post("/long-tasks")
                     .header(CONTENT_TYPE, "application/json")
                     .header(ORIGIN, HeaderValue::from_static("http://localhost"))
-                    .body(Body::from(
-                        r#"{"startedAtMs":1795737600000,"durationMs":999,"functions":[]}"#,
-                    ))
+                    .body(Body::from(body))
                     .unwrap(),
             )
             .await

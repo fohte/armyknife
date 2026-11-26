@@ -53,27 +53,27 @@ export function startFreezeProfiler() {
   )()
   if (initialProfiler.isErr()) return () => undefined
 
-  let activeProfiler = initialProfiler.value
+  let activeProfiler: ProfilerInstance | null = initialProfiler.value
   let activeStartedAt = performance.now()
 
   const rotate = () => {
     const previous = activeProfiler
     const startedAt = activeStartedAt
     const endedAt = performance.now()
-    activeStartedAt = endedAt
-
     const nextProfiler = Result.fromThrowable(
       () => createProfiler(Profiler),
       toError,
     )()
-    if (nextProfiler.isErr()) return
-    activeProfiler = nextProfiler.value
+    activeProfiler = nextProfiler.isOk() ? nextProfiler.value : null
+    activeStartedAt = endedAt
 
-    const trace = previous.stop().then(
-      (result) => result,
-      () => null,
-    )
-    segments.push({ start: startedAt, end: endedAt, trace })
+    if (previous !== null) {
+      const trace = previous.stop().then(
+        (result) => result,
+        () => null,
+      )
+      segments.push({ start: startedAt, end: endedAt, trace })
+    }
     while (segments.length > 0) {
       const oldestSegment = segments[0]
       if (
@@ -127,10 +127,7 @@ export function startFreezeProfiler() {
     return observer
   }, toError)()
   if (observerResult.isErr()) {
-    void activeProfiler.stop().then(
-      () => undefined,
-      () => undefined,
-    )
+    stopProfiler(activeProfiler)
     return () => undefined
   }
   const observer = observerResult.value
@@ -139,10 +136,7 @@ export function startFreezeProfiler() {
   return () => {
     window.clearInterval(rotationTimer)
     observer.disconnect()
-    void activeProfiler.stop().then(
-      () => undefined,
-      () => undefined,
-    )
+    stopProfiler(activeProfiler)
   }
 }
 
@@ -157,4 +151,12 @@ function toError(error: unknown) {
   return error instanceof Error
     ? error
     : new Error('JavaScript profiling is unavailable', { cause: error })
+}
+
+function stopProfiler(profiler: ProfilerInstance | null) {
+  if (profiler === null) return
+  void profiler.stop().then(
+    () => undefined,
+    () => undefined,
+  )
 }

@@ -29,6 +29,8 @@ export function postLongTaskReport(report: LongTaskReport) {
     })
     .match(
       () => undefined,
-      () => undefined,
+      (error) => {
+        console.warn('Failed to send watch-web long-task profile', error)
+      },
     )
 }
