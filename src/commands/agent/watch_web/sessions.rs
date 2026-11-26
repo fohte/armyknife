@@ -220,9 +220,9 @@ struct SessionView {
     review_document_id: Option<String>,
     #[serde(skip_serializing_if = "is_zero")]
     review_document_count: usize,
-    // New attachment rows change `/messages` even when the session row stays the same.
+    // Side-table writes can change `/messages` without changing serialized session fields.
     #[serde(skip)]
-    agent_file_count: i64,
+    rev: i64,
 }
 
 impl std::ops::Deref for SessionView {
@@ -256,7 +256,7 @@ pub(super) struct SessionSnapshot {
     title_by_id: HashMap<String, String>,
     repo_by_id: HashMap<String, String>,
     decision_counts: HashMap<String, store::AgentDecisionCounts>,
-    agent_file_counts: HashMap<String, i64>,
+    session_revisions: HashMap<String, i64>,
     agent_response_timestamps: HashMap<String, DateTime<Utc>>,
     unanswered_proposal_titles: HashMap<String, String>,
     unanswered_todo_titles: HashMap<String, String>,
@@ -494,7 +494,7 @@ async fn list_sessions<S: SessionSource>(
         session_vibe_modes(&snapshot, &response_sessions, &snapshot.repo_by_id).await?;
     let now = source.now();
     let agent_response_timestamps = snapshot.agent_response_timestamps;
-    let agent_file_counts = snapshot.agent_file_counts;
+    let session_revisions = snapshot.session_revisions;
     let state_by_id = snapshot
         .web_states
         .into_iter()
@@ -730,7 +730,7 @@ async fn list_sessions<S: SessionSource>(
                 review_document_count: review_document_states
                     .get(&session.session_id)
                     .map_or(0, |state| state.count),
-                agent_file_count: agent_file_counts
+                rev: session_revisions
                     .get(&session.session_id)
                     .copied()
                     .unwrap_or_default(),
@@ -790,7 +790,7 @@ fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
     let vibe_sessions_dir = sessions_dir.clone();
     let agent_response_timestamps = store::agent_response_timestamps_from(&sessions_dir)?;
     let decision_counts = store::agent_decision_counts_by_session_from(&sessions_dir)?;
-    let agent_file_counts = store::agent_file_counts_by_session_from(&sessions_dir)?;
+    let session_revisions = store::session_revisions_by_session_from(&sessions_dir)?;
     let mut unanswered_proposal_titles = HashMap::new();
     let visible_session_ids = all_sessions
         .iter()
@@ -819,7 +819,7 @@ fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
         title_by_id,
         repo_by_id,
         decision_counts,
-        agent_file_counts,
+        session_revisions,
         agent_response_timestamps,
         unanswered_proposal_titles,
         unanswered_todo_titles,
@@ -933,7 +933,8 @@ mod tests {
         task_projects: HashMap<String, String>,
         pull_requests: HashMap<String, Vec<SessionPullRequestInfo>>,
         decision_counts: HashMap<String, store::AgentDecisionCounts>,
-        agent_file_counts: HashMap<String, i64>,
+        session_revisions: HashMap<String, i64>,
+        session_store_dir: Option<PathBuf>,
         agent_response_timestamps: HashMap<String, DateTime<Utc>>,
         work_type_nav_labels: HashMap<String, String>,
         agent_statuses: HashMap<String, AgentStatusConfig>,
@@ -947,8 +948,15 @@ mod tests {
 
     impl SessionSource for TestSessionSource {
         async fn load_snapshot(&self) -> anyhow::Result<SessionSnapshot> {
+            let (revision, session_revisions) = match self.session_store_dir.as_deref() {
+                Some(sessions_dir) => (
+                    store::session_store_revision_from(sessions_dir)?,
+                    store::session_revisions_by_session_from(sessions_dir)?,
+                ),
+                None => (self.revision, self.session_revisions.clone()),
+            };
             Ok(SessionSnapshot {
-                revision: self.revision,
+                revision,
                 sessions: self.sessions.clone(),
                 all_sessions: self.all_sessions.clone(),
                 closed_session_ids: self.closed_session_ids.clone(),
@@ -956,7 +964,7 @@ mod tests {
                 title_by_id: self.title_by_id.clone(),
                 repo_by_id: self.repo_by_id.clone(),
                 decision_counts: self.decision_counts.clone(),
-                agent_file_counts: self.agent_file_counts.clone(),
+                session_revisions,
                 agent_response_timestamps: self.agent_response_timestamps.clone(),
                 unanswered_proposal_titles: self.unanswered_proposal_titles.clone(),
                 unanswered_todo_titles: self.unanswered_todo_titles.clone(),
@@ -1061,7 +1069,7 @@ mod tests {
                     .all_sessions
                     .retain(|session| session.session_id != "removed-session");
                 snapshot
-                    .agent_file_counts
+                    .session_revisions
                     .insert("child-session".to_string(), 1);
             }
             Ok(snapshot)
@@ -1229,7 +1237,8 @@ mod tests {
                     unreviewed: 2,
                 },
             )]),
-            agent_file_counts: HashMap::new(),
+            session_revisions: HashMap::new(),
+            session_store_dir: None,
             agent_response_timestamps: HashMap::new(),
             work_type_nav_labels: HashMap::new(),
             agent_statuses: HashMap::new(),
@@ -1526,6 +1535,23 @@ mod tests {
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let value = serde_json::from_slice::<serde_json::Value>(&body).unwrap();
         (status, value)
+    }
+
+    async fn session_delta(
+        router: &Router,
+        token: &str,
+    ) -> (StatusCode, String, Vec<String>, serde_json::Value) {
+        let (status, mut response) =
+            sessions_request(router, &format!("/api/sessions?since={token}")).await;
+        let next_token = response["token"].as_str().unwrap().to_string();
+        let updated_session_ids = response["updatedSessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|session| session["id"].as_str().unwrap().to_string())
+            .collect();
+        response.as_object_mut().unwrap().remove("token");
+        (status, next_token, updated_session_ids, response)
     }
 
     async fn session_tree_response(
@@ -2109,7 +2135,8 @@ mod tests {
         let (_transcript_dir, transcript_path) = write_transcript(&[first_record]);
         source.sessions[0].transcript_path = Some(transcript_path.clone());
 
-        let first_response = sessions_response(source.clone()).await;
+        let router = Router::new().nest("/api", router_with_source(source));
+        let (first_status, first_response) = sessions_request(&router, "/api/sessions").await;
         let mut transcript = std::fs::read(&transcript_path).unwrap();
         transcript.extend(
             serde_json::to_vec(&serde_json::json!({
@@ -2125,16 +2152,32 @@ mod tests {
         );
         transcript.push(b'\n');
         std::fs::write(&transcript_path, transcript).unwrap();
-        let second_response = sessions_response(source).await;
-
-        let first_expected = question_inbox_response("Question", Some("Which initial layout?"));
-        let second_expected = question_inbox_response("Question", Some("Which updated layout?"));
+        let token = first_response["token"].as_str().unwrap();
+        let (second_status, _, updated_session_ids, second_response) =
+            session_delta(&router, token).await;
+        let mut expected_session = first_response["sessions"][0].clone();
+        expected_session["preview"] = serde_json::json!("Which updated layout?");
 
         assert_eq!(
-            (first_response, second_response),
             (
-                (StatusCode::OK, first_expected),
-                (StatusCode::OK, second_expected),
+                first_status,
+                first_response["sessions"][0]["preview"].clone(),
+                second_status,
+                updated_session_ids,
+                second_response,
+            ),
+            (
+                StatusCode::OK,
+                serde_json::json!("Which initial layout?"),
+                StatusCode::OK,
+                vec!["child-session".to_string()],
+                serde_json::json!({
+                    "mode": "delta",
+                    "revision": 7,
+                    "updatedSessions": [expected_session],
+                    "removedSessionIds": [],
+                    "sessionOrder": ["child-session"],
+                }),
             ),
         );
     }
@@ -2564,6 +2607,202 @@ mod tests {
                 }),
             ),
         );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn session_scoped_message_store_changes_update_only_the_affected_session(
+        mut source: TestSessionSource,
+    ) {
+        let sessions_dir = tempfile::tempdir().unwrap();
+        let mut sibling = source.sessions[0].clone();
+        sibling.session_id = "sibling-session".to_string();
+        source.sessions.push(sibling.clone());
+        source.all_sessions.push(sibling);
+        store::save_session_to(sessions_dir.path(), &source.sessions[0]).unwrap();
+        store::save_session_to(sessions_dir.path(), &source.sessions[1]).unwrap();
+        let initial_revision = store::session_store_revision_from(sessions_dir.path()).unwrap();
+        source.session_store_dir = Some(sessions_dir.path().to_path_buf());
+
+        let router = Router::new().nest("/api", router_with_source(source));
+        let (full_status, full) = sessions_request(&router, "/api/sessions").await;
+        let mut token = full["token"].as_str().unwrap().to_string();
+        let mut deltas = Vec::new();
+
+        macro_rules! record_delta {
+            () => {{
+                let (status, next_token, _, response) = session_delta(&router, &token).await;
+                token = next_token;
+                deltas.push((status, response));
+            }};
+        }
+
+        let session_id = "child-session";
+        let tool_input = serde_json::json!({"command": "fixture command"});
+        let permission_denial_seq = store::add_permission_denied_from(
+            sessions_dir.path(),
+            session_id,
+            Some("fixture-tool-use"),
+            "Bash",
+            &tool_input,
+            Some("fixture reason"),
+        )
+        .unwrap();
+        record_delta!();
+        store::resolve_permission_denied_from(
+            sessions_dir.path(),
+            session_id,
+            permission_denial_seq,
+            store::PermissionDeniedResolution::Approved,
+        )
+        .unwrap();
+        record_delta!();
+        store::add_permission_denied_from(
+            sessions_dir.path(),
+            session_id,
+            Some("fixture-unclassified-use"),
+            "Bash",
+            &tool_input,
+            None,
+        )
+        .unwrap();
+        record_delta!();
+        store::resolve_matching_unclassified_permission_denials_from(
+            sessions_dir.path(),
+            session_id,
+            "Bash",
+            &tool_input,
+            store::PermissionDeniedResolution::Dismissed,
+        )
+        .unwrap();
+        record_delta!();
+
+        let first_proposal_seq = store::add_agent_proposal_in(
+            sessions_dir.path(),
+            session_id,
+            r#"{"title":"fixture first proposal"}"#,
+        )
+        .unwrap();
+        record_delta!();
+        let second_proposal_seq = store::add_agent_proposal_in(
+            sessions_dir.path(),
+            session_id,
+            r#"{"title":"fixture second proposal"}"#,
+        )
+        .unwrap();
+        record_delta!();
+        store::edit_agent_proposal_from(
+            sessions_dir.path(),
+            session_id,
+            second_proposal_seq,
+            r#"{"title":"fixture edited proposal"}"#,
+        )
+        .unwrap();
+        record_delta!();
+        store::write_agent_proposal_answer_at_from(
+            sessions_dir.path(),
+            session_id,
+            second_proposal_seq,
+            "fixture answer",
+            Utc.timestamp_opt(1_100, 0).unwrap(),
+        )
+        .unwrap();
+        record_delta!();
+        store::resolve_agent_proposal_from(
+            sessions_dir.path(),
+            session_id,
+            first_proposal_seq,
+            Some("fixture comment"),
+        )
+        .unwrap();
+        record_delta!();
+
+        let todo_seq = store::add_agent_todo_in(
+            sessions_dir.path(),
+            session_id,
+            "fixture todo",
+            Some("fixture details"),
+            false,
+        )
+        .unwrap();
+        record_delta!();
+        store::edit_agent_todo_from(
+            sessions_dir.path(),
+            session_id,
+            todo_seq,
+            "fixture edited todo",
+            Some("fixture edited details"),
+            false,
+        )
+        .unwrap();
+        record_delta!();
+        store::set_agent_todo_folded_from(sessions_dir.path(), session_id, todo_seq, true).unwrap();
+        record_delta!();
+        store::resolve_agent_todo_from(
+            sessions_dir.path(),
+            session_id,
+            todo_seq,
+            store::TodoResolution::Completed,
+            Some("fixture completion"),
+        )
+        .unwrap();
+        record_delta!();
+        store::insert_agent_files_from(
+            sessions_dir.path(),
+            session_id,
+            &[store::AgentFile {
+                id: "fixture-file".to_string(),
+                position: 0,
+                name: "fixture.txt".to_string(),
+                caption: None,
+                mime_type: Some("text/plain".to_string()),
+                size: 7,
+                created_at: Utc.timestamp_opt(1_100, 0).unwrap(),
+            }],
+        )
+        .unwrap();
+        record_delta!();
+
+        let (unchanged_status, _, _, unchanged_response) = session_delta(&router, &token).await;
+        deltas.push((unchanged_status, unchanged_response));
+
+        let updated_session = full["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|session| session["id"] == session_id)
+            .unwrap()
+            .clone();
+        let session_order = full["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|session| session["id"].clone())
+            .collect::<Vec<_>>();
+        let changed_delta = serde_json::json!({
+            "mode": "delta",
+            "revision": 0,
+            "updatedSessions": [updated_session],
+            "removedSessionIds": [],
+            "sessionOrder": session_order.clone(),
+        });
+        let unchanged_delta = serde_json::json!({
+            "mode": "delta",
+            "revision": initial_revision + 14,
+            "updatedSessions": [],
+            "removedSessionIds": [],
+            "sessionOrder": session_order,
+        });
+        let expected_deltas = (1..=14)
+            .map(|offset| {
+                let mut delta = changed_delta.clone();
+                delta["revision"] = serde_json::json!(initial_revision + offset);
+                (StatusCode::OK, delta)
+            })
+            .chain(std::iter::once((StatusCode::OK, unchanged_delta)))
+            .collect::<Vec<_>>();
+
+        assert_eq!((full_status, deltas), (StatusCode::OK, expected_deltas),);
     }
 
     #[rstest]

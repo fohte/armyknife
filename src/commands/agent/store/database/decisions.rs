@@ -5,7 +5,7 @@ use anyhow::{Result, ensure};
 use chrono::Utc;
 use rusqlite::{TransactionBehavior, params};
 
-use super::{increment_revision, open_connection, validate_session_id};
+use super::{bump_session_revision, open_connection, validate_session_id};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AgentDecision {
@@ -172,19 +172,6 @@ pub(crate) fn set_agent_decision_review(
     );
     bump_session_revision(&transaction, session_id)?;
     transaction.commit()?;
-    Ok(())
-}
-
-fn bump_session_revision(transaction: &rusqlite::Transaction<'_>, session_id: &str) -> Result<()> {
-    let revision = increment_revision(transaction)?;
-    let updated = transaction.execute(
-        "UPDATE sessions SET rev = ?1 WHERE session_id = ?2",
-        params![revision, session_id],
-    )?;
-    ensure!(
-        updated == 1,
-        "session {session_id} disappeared during decision update"
-    );
     Ok(())
 }
 
