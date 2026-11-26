@@ -9092,6 +9092,9 @@ it('follows new messages at the bottom without moving a reader who scrolled up',
   scrollToPosition(scroll, 200)
   const initialBottom = scroll.scrollTop
 
+  act(() => {
+    scroll.dispatchEvent(new Event('wheel'))
+  })
   setHeight(500)
   renderView(onAction, session, undefined, [
     firstMessage,
@@ -9967,6 +9970,784 @@ it.each([
     buttonStates,
   ])
   expect(actual).toBe(expected)
+})
+
+it('keeps a message send error through refreshes until a send succeeds', async () => {
+  let refreshConversation: () => void = () => undefined
+  let sendCount = 0
+  const fetcher = vi.fn<typeof fetch>((input, init) => {
+    const url = requestUrl(input)
+    if (init?.method === 'POST' && url.endsWith('/messages')) {
+      sendCount += 1
+      return Promise.resolve(
+        sendCount === 1
+          ? jsonResponse({ error: 'The message could not be sent.' }, 503)
+          : jsonResponse({ queuedPromptId: 'fixture-queued-prompt' }),
+      )
+    }
+    if (url.includes('/messages?')) {
+      return Promise.resolve(jsonResponse(messagesResponse([permission])))
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    return Promise.resolve(jsonResponse({}))
+  })
+  const messageRefreshCount = () =>
+    fetcher.mock.calls.filter(
+      ([input, init]) =>
+        init?.method !== 'POST' && requestUrl(input).includes('/messages?'),
+    ).length
+  vi.stubGlobal('fetch', fetcher)
+
+  function ConversationHarness() {
+    const [refreshKey, setRefreshKey] = useState(0)
+    refreshConversation = () => {
+      setRefreshKey((current) => current + 1)
+    }
+    return (
+      <ConversationPane
+        session={session}
+        shouldSkipSessionTreeFetch
+        initialSessionTree={[]}
+        refreshKey={refreshKey}
+        sessionTreeRefreshKey={0}
+        onSelectSession={() => undefined}
+      />
+    )
+  }
+
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <SessionConversationCacheProvider>
+        <ConversationHarness />
+      </SessionConversationCacheProvider>,
+    )
+  })
+  await waitForState(
+    () =>
+      container.querySelector<HTMLTextAreaElement>('textarea')?.disabled ===
+      false,
+  )
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  setTextareaValue(textarea, 'Retain this prompt')
+  await act(async () => {
+    dispatchKey(textarea, 'Enter')
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  await waitForState(
+    () =>
+      container.querySelector('[role="alert"]')?.textContent ===
+      'The message could not be sent.',
+  )
+  const afterFailedSend = {
+    alert: container.querySelector('[role="alert"]')?.textContent ?? null,
+    draft: textarea.value,
+  }
+
+  await act(async () => {
+    await userEvent.click(
+      requireElement(
+        container.querySelector<HTMLButtonElement>(
+          '.permission-actions button',
+        ),
+      ),
+    )
+  })
+  const unrelatedActionRefreshCompleted = await waitForState(
+    () => messageRefreshCount() === 2,
+  )
+  const afterUnrelatedAction = {
+    completed: unrelatedActionRefreshCompleted,
+    alert: container.querySelector('[role="alert"]')?.textContent ?? null,
+    draft: textarea.value,
+  }
+
+  const refreshCountBeforeExplicitRefresh = messageRefreshCount()
+  await act(async () => {
+    refreshConversation()
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  const explicitRefreshCompleted = await waitForState(
+    () => messageRefreshCount() > refreshCountBeforeExplicitRefresh,
+  )
+  const afterRefresh = {
+    completed: explicitRefreshCompleted,
+    alert: container.querySelector('[role="alert"]')?.textContent ?? null,
+    draft: textarea.value,
+  }
+
+  await act(async () => {
+    dispatchKey(textarea, 'Enter')
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  await waitForState(
+    () => sendCount === 2 && container.querySelector('[role="alert"]') === null,
+  )
+
+  const snapshot = () => ({
+    afterFailedSend,
+    afterUnrelatedAction,
+    afterRefresh,
+    afterSuccessfulSend: {
+      alert: container.querySelector('[role="alert"]')?.textContent ?? null,
+      draft: textarea.value,
+    },
+  })
+  expect(snapshot()).toEqual({
+    afterFailedSend: {
+      alert: 'The message could not be sent.',
+      draft: 'Retain this prompt',
+    },
+    afterUnrelatedAction: {
+      completed: true,
+      alert: 'The message could not be sent.',
+      draft: 'Retain this prompt',
+    },
+    afterRefresh: {
+      completed: true,
+      alert: 'The message could not be sent.',
+      draft: 'Retain this prompt',
+    },
+    afterSuccessfulSend: { alert: null, draft: '' },
+  })
+})
+
+it('shows permission errors alongside a retained message send error', async () => {
+  let sendCount = 0
+  let permissionRequestCount = 0
+  const fetcher = vi.fn<typeof fetch>((input, init) => {
+    const url = requestUrl(input)
+    if (init?.method === 'POST' && url.endsWith('/messages')) {
+      sendCount += 1
+      return Promise.resolve(
+        sendCount === 1
+          ? jsonResponse({ error: 'The message could not be sent.' }, 503)
+          : jsonResponse({ queuedPromptId: 'fixture-queued-prompt' }),
+      )
+    }
+    if (init?.method === 'POST' && url.endsWith('/permission/approve')) {
+      permissionRequestCount += 1
+      return Promise.resolve(
+        permissionRequestCount === 1
+          ? jsonResponse(
+              { error: 'The permission could not be approved.' },
+              503,
+            )
+          : jsonResponse({}),
+      )
+    }
+    if (url.includes('/messages?')) {
+      return Promise.resolve(jsonResponse(messagesResponse([permission])))
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <SessionConversationCacheProvider>
+        <ConversationPane
+          session={session}
+          shouldSkipSessionTreeFetch
+          initialSessionTree={[]}
+          refreshKey={0}
+          sessionTreeRefreshKey={0}
+          onSelectSession={() => undefined}
+        />
+      </SessionConversationCacheProvider>,
+    )
+  })
+  await waitForState(
+    () =>
+      container.querySelector<HTMLTextAreaElement>('textarea')?.disabled ===
+      false,
+  )
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  setTextareaValue(textarea, 'Retain this prompt')
+  await act(async () => {
+    dispatchKey(textarea, 'Enter')
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  await waitForState(
+    () =>
+      container.querySelector('[role="alert"]')?.textContent ===
+      'The message could not be sent.',
+  )
+
+  const approveButton = () =>
+    requireElement(
+      container.querySelector<HTMLButtonElement>(
+        '.chat-permission-card .permission-actions button',
+      ),
+    )
+  await act(async () => userEvent.click(approveButton()))
+  await waitForState(
+    () =>
+      permissionRequestCount === 1 &&
+      container.querySelector('[role="alert"]')?.textContent ===
+        'The permission could not be approved.',
+  )
+  const afterFailedApproval =
+    container.querySelector('[role="alert"]')?.textContent ?? null
+
+  await act(async () => userEvent.click(approveButton()))
+  await waitForState(
+    () =>
+      permissionRequestCount === 2 &&
+      container.querySelector('[role="alert"]')?.textContent ===
+        'The message could not be sent.',
+  )
+  const afterSuccessfulApproval =
+    container.querySelector('[role="alert"]')?.textContent ?? null
+
+  await act(async () => {
+    dispatchKey(textarea, 'Enter')
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  const successfulSendCompleted = await waitForState(
+    () => sendCount === 2 && container.querySelector('[role="alert"]') === null,
+  )
+
+  const snapshot = () => ({
+    afterFailedApproval,
+    afterSuccessfulApproval,
+    successfulSendCompleted,
+  })
+  expect(snapshot()).toEqual({
+    afterFailedApproval: 'The permission could not be approved.',
+    afterSuccessfulApproval: 'The message could not be sent.',
+    successfulSendCompleted: true,
+  })
+})
+
+it('shows an attachment size warning over a retained message send error', async () => {
+  let sendCount = 0
+  const attachmentSession = { ...session, id: crypto.randomUUID() }
+  renderedSessionIds.add(attachmentSession.id)
+  const fetcher = vi.fn<typeof fetch>((input, init) => {
+    const url = requestUrl(input)
+    if (init?.method === 'POST' && url.endsWith('/messages')) {
+      sendCount += 1
+      return Promise.resolve(
+        jsonResponse({ error: 'The message could not be sent.' }, 503),
+      )
+    }
+    if (url.includes('/messages?')) {
+      return Promise.resolve(jsonResponse(messagesResponse([])))
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <SessionConversationCacheProvider>
+        <ConversationPane
+          session={attachmentSession}
+          shouldSkipSessionTreeFetch
+          initialSessionTree={[]}
+          refreshKey={0}
+          sessionTreeRefreshKey={0}
+          onSelectSession={() => undefined}
+        />
+      </SessionConversationCacheProvider>,
+    )
+  })
+  await waitForState(
+    () =>
+      container.querySelector<HTMLTextAreaElement>('textarea')?.disabled ===
+      false,
+  )
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  setTextareaValue(textarea, 'Retain this prompt')
+  await act(async () => {
+    dispatchKey(textarea, 'Enter')
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  await waitForState(
+    () =>
+      container.querySelector('[role="alert"]')?.textContent ===
+      'The message could not be sent.',
+  )
+
+  const firstFile = new File(['first'], 'first.bin', {
+    type: 'application/octet-stream',
+  })
+  const limitCrossingFile = new File(['second'], 'limit-crossing.bin', {
+    type: 'application/octet-stream',
+  })
+  Object.defineProperty(firstFile, 'size', { value: 30 * 1024 * 1024 })
+  Object.defineProperty(limitCrossingFile, 'size', { value: 21 * 1024 * 1024 })
+  const pasteEvent = new Event('paste', { bubbles: true, cancelable: true })
+  Object.defineProperty(pasteEvent, 'clipboardData', {
+    value: { files: [firstFile, limitCrossingFile] },
+  })
+  act(() => {
+    void textarea.dispatchEvent(pasteEvent)
+  })
+  const limitWarning =
+    'limit-crossing.bin would exceed the 50 MiB attachment limit'
+  const warningDisplayed = await waitForState(
+    () =>
+      container.querySelectorAll('.attachment-preview-item').length === 2 &&
+      container.querySelector('[role="alert"]')?.textContent === limitWarning,
+  )
+
+  await act(async () => {
+    await userEvent.click(
+      requireElement(
+        container.querySelector<HTMLButtonElement>(
+          '[aria-label="Remove limit-crossing.bin"]',
+        ),
+      ),
+    )
+  })
+  const retainedErrorRestored = await waitForState(
+    () =>
+      container.querySelectorAll('.attachment-preview-item').length === 1 &&
+      container.querySelector('[role="alert"]')?.textContent ===
+        'The message could not be sent.',
+  )
+
+  await act(async () => {
+    dispatchKey(textarea, 'Enter')
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    warningDisplayed,
+    retainedErrorRestored,
+    alert: container.querySelector('[role="alert"]')?.textContent ?? null,
+    sendCount,
+  })
+  expect(snapshot()).toEqual({
+    warningDisplayed: true,
+    retainedErrorRestored: true,
+    alert: 'The message could not be sent.',
+    sendCount: 1,
+  })
+})
+
+it('keeps a retained message error visible after an empty attachment error', async () => {
+  let sendCount = 0
+  let encodingFailureCount = 0
+  const attachmentSession = { ...session, id: crypto.randomUUID() }
+  renderedSessionIds.add(attachmentSession.id)
+  const fetcher = vi.fn<typeof fetch>((input, init) => {
+    const url = requestUrl(input)
+    if (init?.method === 'POST' && url.endsWith('/messages')) {
+      sendCount += 1
+      return Promise.resolve(
+        jsonResponse({ error: 'The message could not be sent.' }, 503),
+      )
+    }
+    if (url.includes('/messages?')) {
+      return Promise.resolve(jsonResponse(messagesResponse([])))
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <SessionConversationCacheProvider>
+        <ConversationPane
+          session={attachmentSession}
+          shouldSkipSessionTreeFetch
+          initialSessionTree={[]}
+          refreshKey={0}
+          sessionTreeRefreshKey={0}
+          onSelectSession={() => undefined}
+        />
+      </SessionConversationCacheProvider>,
+    )
+  })
+  await waitForState(
+    () =>
+      container.querySelector<HTMLTextAreaElement>('textarea')?.disabled ===
+      false,
+  )
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  setTextareaValue(textarea, 'Retain this prompt')
+  await act(async () => {
+    dispatchKey(textarea, 'Enter')
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  await waitForState(
+    () =>
+      container.querySelector('[role="alert"]')?.textContent ===
+      'The message could not be sent.',
+  )
+
+  const brokenFile = new File(['payload'], 'broken.bin', {
+    type: 'application/octet-stream',
+  })
+  vi.spyOn(Blob.prototype, 'arrayBuffer').mockImplementation(() => {
+    encodingFailureCount += 1
+    return Promise.reject(new Error(''))
+  })
+  const pasteEvent = new Event('paste', { bubbles: true, cancelable: true })
+  Object.defineProperty(pasteEvent, 'clipboardData', {
+    value: { files: [brokenFile] },
+  })
+  act(() => {
+    void textarea.dispatchEvent(pasteEvent)
+  })
+  await waitForState(
+    () => container.querySelector('.attachment-preview-item') !== null,
+  )
+  await waitForState(
+    () =>
+      container
+        .querySelector('.conversation-composer')
+        ?.getAttribute('aria-busy') === 'false',
+  )
+
+  await act(async () => {
+    dispatchKey(textarea, 'Enter')
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  const retainedErrorAfterEncodingFailure = await waitForState(
+    () =>
+      encodingFailureCount > 0 &&
+      container.querySelector('[role="alert"]')?.textContent ===
+        'The message could not be sent.',
+  )
+
+  const snapshot = () => ({
+    retainedErrorAfterEncodingFailure,
+    alert: container.querySelector('[role="alert"]')?.textContent ?? null,
+    encodingFailed: encodingFailureCount > 0,
+    sendCount,
+  })
+  expect(snapshot()).toEqual({
+    retainedErrorAfterEncodingFailure: true,
+    alert: 'The message could not be sent.',
+    encodingFailed: true,
+    sendCount: 1,
+  })
+})
+
+it('keeps a permission error until the same request succeeds', async () => {
+  let permissionRequestCount = 0
+  const fetcher = vi.fn<typeof fetch>((input, init) => {
+    const url = requestUrl(input)
+    if (init?.method === 'POST' && url.endsWith('/permission/approve')) {
+      permissionRequestCount += 1
+      return Promise.resolve(
+        permissionRequestCount === 1
+          ? jsonResponse(
+              { error: 'The permission could not be approved.' },
+              503,
+            )
+          : jsonResponse({}),
+      )
+    }
+    if (url.includes('/messages?')) {
+      return Promise.resolve(
+        jsonResponse(messagesResponse([permission, otherPermission])),
+      )
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <SessionConversationCacheProvider>
+        <ConversationPane
+          session={session}
+          shouldSkipSessionTreeFetch
+          initialSessionTree={[]}
+          refreshKey={0}
+          sessionTreeRefreshKey={0}
+          onSelectSession={() => undefined}
+        />
+      </SessionConversationCacheProvider>,
+    )
+  })
+  await waitForState(
+    () =>
+      container.querySelectorAll<HTMLButtonElement>(
+        '.chat-permission-card .permission-actions button',
+      ).length === 4 &&
+      Array.from(
+        container.querySelectorAll<HTMLButtonElement>(
+          '.chat-permission-card .permission-actions button',
+        ),
+      ).every((button) => !button.disabled),
+  )
+  const approveButtons = () =>
+    container.querySelectorAll<HTMLButtonElement>(
+      '.chat-permission-card .permission-actions button',
+    )
+  await act(async () => {
+    await userEvent.click(requireElement(approveButtons().item(0)))
+  })
+  await waitForState(
+    () =>
+      container.querySelector('[role="alert"]')?.textContent ===
+      'The permission could not be approved.',
+  )
+  const afterFailedRequest =
+    container.querySelector('[role="alert"]')?.textContent ?? null
+
+  await act(async () => {
+    await userEvent.click(requireElement(approveButtons().item(2)))
+  })
+  const unrelatedRequestCompleted = await waitForState(
+    () =>
+      permissionRequestCount === 2 &&
+      fetcher.mock.calls.filter(
+        ([input, init]) =>
+          init?.method !== 'POST' && requestUrl(input).includes('/messages?'),
+      ).length === 2,
+  )
+  const afterDifferentRequestSucceeded = {
+    completed: unrelatedRequestCompleted,
+    alert: container.querySelector('[role="alert"]')?.textContent ?? null,
+  }
+
+  await act(async () => {
+    await userEvent.click(requireElement(approveButtons().item(0)))
+  })
+  const sameRequestCompleted = await waitForState(
+    () =>
+      permissionRequestCount === 3 &&
+      container.querySelector('[role="alert"]') === null,
+  )
+
+  const snapshot = () => ({
+    afterFailedRequest,
+    afterDifferentRequestSucceeded,
+    afterSameRequestSucceeded: sameRequestCompleted,
+  })
+  expect(snapshot()).toEqual({
+    afterFailedRequest: 'The permission could not be approved.',
+    afterDifferentRequestSucceeded: {
+      completed: true,
+      alert: 'The permission could not be approved.',
+    },
+    afterSameRequestSucceeded: true,
+  })
+})
+
+it('clears a proposal error after an edited answer succeeds', async () => {
+  let answerCount = 0
+  const answerComments: string[] = []
+  const fetcher = vi.fn<typeof fetch>((input, init) => {
+    const url = requestUrl(input)
+    if (init?.method === 'POST' && url.endsWith('/proposals/3/answer')) {
+      answerCount += 1
+      if (typeof init.body === 'string') {
+        const body: unknown = JSON.parse(init.body)
+        if (typeof body === 'object' && body !== null) {
+          const comment = 'comment' in body ? body.comment : undefined
+          if (typeof comment === 'string') answerComments.push(comment)
+        }
+      }
+      return Promise.resolve(
+        answerCount === 1
+          ? jsonResponse(
+              { error: 'The proposal answer could not be saved.' },
+              503,
+            )
+          : jsonResponse({}),
+      )
+    }
+    if (url.includes('/messages?')) {
+      return Promise.resolve(jsonResponse(messagesResponse([proposal])))
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <SessionConversationCacheProvider>
+        <ConversationPane
+          session={session}
+          shouldSkipSessionTreeFetch
+          initialSessionTree={[]}
+          refreshKey={0}
+          sessionTreeRefreshKey={0}
+          onSelectSession={() => undefined}
+        />
+      </SessionConversationCacheProvider>,
+    )
+  })
+  await waitForState(
+    () => container.querySelector('.chat-proposal-comment') !== null,
+  )
+  const comment = requireElement(
+    container.querySelector<HTMLTextAreaElement>('.chat-proposal-comment'),
+  )
+  setTextareaValue(comment, 'First answer')
+  act(() => {
+    requireElement(
+      container.querySelector<HTMLInputElement>('.chat-proposal-option input'),
+    ).click()
+  })
+  const submit = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      '.chat-proposal-actions .aw-button--primary',
+    ),
+  )
+  await act(async () => {
+    await userEvent.click(submit)
+  })
+  await waitForState(
+    () =>
+      container.querySelector('[role="alert"]')?.textContent ===
+      'The proposal answer could not be saved.',
+  )
+  const afterFailedAnswer =
+    container.querySelector('[role="alert"]')?.textContent ?? null
+
+  const updatedComment = requireElement(
+    container.querySelector<HTMLTextAreaElement>('.chat-proposal-comment'),
+  )
+  setTextareaValue(updatedComment, 'Revised answer')
+  const updatedSubmit = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      '.chat-proposal-actions .aw-button--primary',
+    ),
+  )
+  await act(async () => userEvent.click(updatedSubmit))
+  const editedAnswerCompleted = await waitForState(
+    () =>
+      answerCount === 2 && container.querySelector('[role="alert"]') === null,
+  )
+
+  const snapshot = () => ({
+    afterFailedAnswer,
+    editedAnswerCompleted,
+    submittedComments: answerComments,
+  })
+  expect(snapshot()).toEqual({
+    afterFailedAnswer: 'The proposal answer could not be saved.',
+    editedAnswerCompleted: true,
+    submittedComments: ['First answer', 'Revised answer'],
+  })
+})
+
+it('clears a todo error after a retry with an edited comment succeeds', async () => {
+  const todo: ChatItem = {
+    type: 'todo',
+    seq: 4,
+    title: 'Check a status panel',
+    detail: 'Confirm the panel closes after resolution.',
+    completed: false,
+    resolution: null,
+    comment: null,
+  }
+  let resolutionCount = 0
+  const submittedComments: string[] = []
+  const fetcher = vi.fn<typeof fetch>((input, init) => {
+    const url = requestUrl(input)
+    if (init?.method === 'POST' && url.endsWith('/todos/4/resolve')) {
+      resolutionCount += 1
+      if (typeof init.body === 'string') {
+        const body: unknown = JSON.parse(init.body)
+        if (typeof body === 'object' && body !== null && 'comment' in body) {
+          const comment = body.comment
+          if (typeof comment === 'string') submittedComments.push(comment)
+        }
+      }
+      return Promise.resolve(
+        resolutionCount === 1
+          ? jsonResponse({ error: 'The todo could not be resolved.' }, 503)
+          : jsonResponse({}),
+      )
+    }
+    if (url.includes('/messages?')) {
+      return Promise.resolve(jsonResponse(messagesResponse([todo])))
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <SessionConversationCacheProvider>
+        <ConversationPane
+          session={session}
+          shouldSkipSessionTreeFetch
+          initialSessionTree={[]}
+          refreshKey={0}
+          sessionTreeRefreshKey={0}
+          onSelectSession={() => undefined}
+        />
+      </SessionConversationCacheProvider>,
+    )
+  })
+  await waitForState(
+    () => container.querySelector('.chat-todo-comment') !== null,
+  )
+  const comment = requireElement(
+    container.querySelector<HTMLTextAreaElement>('.chat-todo-comment'),
+  )
+  setTextareaValue(comment, 'First resolution')
+  const markDone = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      '.chat-todo-footer .aw-button--primary',
+    ),
+  )
+  await act(async () => userEvent.click(markDone))
+  await waitForState(
+    () =>
+      container.querySelector('[role="alert"]')?.textContent ===
+      'The todo could not be resolved.',
+  )
+  const afterFailedResolution =
+    container.querySelector('[role="alert"]')?.textContent ?? null
+
+  const updatedComment = requireElement(
+    container.querySelector<HTMLTextAreaElement>('.chat-todo-comment'),
+  )
+  setTextareaValue(updatedComment, 'Revised resolution')
+  const updatedMarkDone = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      '.chat-todo-footer .aw-button--primary',
+    ),
+  )
+  await act(async () => userEvent.click(updatedMarkDone))
+  const editedResolutionCompleted = await waitForState(
+    () =>
+      resolutionCount === 2 &&
+      container.querySelector('[role="alert"]') === null,
+  )
+
+  const snapshot = () => ({
+    afterFailedResolution,
+    editedResolutionCompleted,
+    submittedComments,
+  })
+  expect(snapshot()).toEqual({
+    afterFailedResolution: 'The todo could not be resolved.',
+    editedResolutionCompleted: true,
+    submittedComments: ['First resolution', 'Revised resolution'],
+  })
 })
 
 it.each([

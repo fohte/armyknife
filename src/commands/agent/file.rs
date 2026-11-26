@@ -284,7 +284,7 @@ pub(crate) fn remove_session_storage(storage_root: &Path, session_id: &str) -> R
     Ok(())
 }
 
-fn session_directory(storage_root: &Path, session_id: &str) -> Result<PathBuf> {
+pub(crate) fn session_directory(storage_root: &Path, session_id: &str) -> Result<PathBuf> {
     fs::create_dir_all(storage_root)?;
     let metadata = fs::symlink_metadata(storage_root)?;
     ensure!(
@@ -318,7 +318,7 @@ fn ensure_directory(parent: &Path, name: &str) -> Result<PathBuf> {
     Ok(canonical)
 }
 
-fn write_new_file(path: &Path, bytes: &[u8]) -> Result<()> {
+pub(crate) fn write_new_file(path: &Path, bytes: &[u8]) -> Result<()> {
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]

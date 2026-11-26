@@ -22,6 +22,9 @@ import type {
 
 type UseConversationMessageElementsOptions = {
   messages: readonly ChatItem[]
+  messageImageSources?: Readonly<
+    Record<string, Readonly<Record<string, string | null>>>
+  >
   start: number
   decisions?: readonly Extract<ChatItem, { type: 'decision' }>[]
   hasUnansweredProposal?: boolean
@@ -166,6 +169,7 @@ function getConversationMessageIdentity(message: ChatItem): string {
 
 export function useConversationMessageElements({
   messages,
+  messageImageSources,
   start,
   decisions: allDecisions,
   hasUnansweredProposal: proposalPending,
@@ -239,6 +243,12 @@ export function useConversationMessageElements({
               : undefined,
           onSelectDecision,
           message,
+          ...(message.type === 'assistant' &&
+          messageImageSources?.[String(start + index)] !== undefined
+            ? {
+                imageSources: messageImageSources[String(start + index)],
+              }
+            : {}),
           onAction,
           ...(onCommandExecuted === undefined ? {} : { onCommandExecuted }),
           ...(onCommandStarted === undefined ? {} : { onCommandStarted }),
@@ -272,6 +282,7 @@ export function useConversationMessageElements({
     isCompacting,
     isMobile,
     messages,
+    messageImageSources,
     start,
     now,
     onAction,

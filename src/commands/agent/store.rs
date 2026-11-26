@@ -74,6 +74,10 @@ pub fn crit_dir() -> Result<PathBuf> {
         .ok_or_else(|| CcError::CacheDirNotFound.into())
 }
 
+pub(crate) fn lock_crit_port_from(sessions_dir: &Path, port: u16) -> Result<fs::File> {
+    database::lock_crit_port(sessions_dir, port)
+}
+
 /// Returns the file path for storing the last selected session ID.
 /// Path: ~/.cache/armyknife/cc/last_selected_session
 pub fn last_selected_session_file() -> Result<PathBuf> {
@@ -496,6 +500,10 @@ pub(crate) fn list_all_sessions_from(sessions_dir: &Path) -> Result<Vec<Session>
     sessions.retain(|session| session.archived_at.is_none());
     sort_sessions(&mut sessions);
     Ok(sessions)
+}
+
+pub(crate) fn all_session_rows_from(sessions_dir: &Path) -> Result<Vec<Session>> {
+    database::all_sessions(sessions_dir)
 }
 
 pub(crate) fn session_store_revision() -> Result<i64> {

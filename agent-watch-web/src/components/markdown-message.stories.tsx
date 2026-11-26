@@ -161,3 +161,23 @@ export const GenericMarkdownCodeBlock: Story = {
     children: '~~~text\nRendered with a toolbar.\n~~~',
   },
 }
+
+const localImagePath = '/tmp/fixture.png'
+const savedImagePreview =
+  'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22160%22 height=%2296%22 viewBox=%220 0 160 96%22%3E%3Crect width=%22160%22 height=%2296%22 rx=%2212%22 fill=%22%233b82f6%22/%3E%3C/svg%3E'
+
+export const CopiedAssistantImage: Story = {
+  name: 'An assistant image renders from its copied source',
+  args: {
+    children: `![Chart preview](${localImagePath})`,
+    imageSources: { [localImagePath]: savedImagePreview },
+  },
+}
+
+export const UnavailableAssistantImage: Story = {
+  name: 'An unavailable assistant image shows its local path',
+  args: {
+    children: '![Draft diagram](/tmp/missing.png)',
+    imageSources: { '/tmp/missing.png': null },
+  },
+}

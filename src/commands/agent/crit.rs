@@ -1,5 +1,7 @@
 //! Link crit reviews to agent sessions and open them in tmux floating panes.
 
+pub(in crate::commands::agent) mod daemon_registry;
+mod expiry;
 mod monitor;
 pub(super) mod toggle;
 pub(super) mod url;
@@ -21,6 +23,20 @@ use crate::shared::env_var::EnvVars;
 use crate::shared::log::short_run_id;
 
 use self::url::parse_port;
+
+pub(super) fn stop_expired_session_daemons(
+    session: &Session,
+    sessions_dir: &std::path::Path,
+) -> Result<()> {
+    expiry::stop_expired_session_daemons(session, sessions_dir)
+}
+
+pub(in crate::commands::agent) fn lock_port_for_registration(
+    sessions_dir: &std::path::Path,
+    url: &str,
+) -> Result<std::fs::File> {
+    store::lock_crit_port_from(sessions_dir, parse_port(url)?)
+}
 
 const CRIT_TITLE: &str = "■ crit - Review requested";
 

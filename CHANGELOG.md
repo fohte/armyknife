@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.1.954](https://github.com/fohte/armyknife/compare/v0.1.953...v0.1.954) (2026-11-26)
+
+
+### Bug Fixes
+
+* **agent:** stop crit daemons on session expiry ([#2332](https://github.com/fohte/armyknife/issues/2332)) ([f60d4e2](https://github.com/fohte/armyknife/commit/f60d4e271ae78080d030d42f8d39be41bc3b1c23))
+
+## [0.1.953](https://github.com/fohte/armyknife/compare/v0.1.952...v0.1.953) (2026-11-26)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** keep send errors visible ([#2331](https://github.com/fohte/armyknife/issues/2331)) ([5dadbbf](https://github.com/fohte/armyknife/commit/5dadbbf7290046abeafd6f8216a164e8988086e1))
+
+## [0.1.952](https://github.com/fohte/armyknife/compare/v0.1.951...v0.1.952) (2026-11-26)
+
+
+### Bug Fixes
+
+* **agent/watch-web:** follow latest messages ([#2329](https://github.com/fohte/armyknife/issues/2329)) ([c1e0438](https://github.com/fohte/armyknife/commit/c1e043805bb94514c510aa74c037e8489d2cb3a6))
+
+## [0.1.951](https://github.com/fohte/armyknife/compare/v0.1.950...v0.1.951) (2026-11-26)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** reserve production port ([#2327](https://github.com/fohte/armyknife/issues/2327)) ([3c7b55e](https://github.com/fohte/armyknife/commit/3c7b55e0d2cd0249f4c4a51b745a5f157253c91b))
+
 ## [0.1.950](https://github.com/fohte/armyknife/compare/v0.1.949...v0.1.950) (2026-11-26)
 
 

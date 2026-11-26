@@ -14,6 +14,7 @@ use crate::commands::agent::types::Session;
 #[cfg(test)]
 use axum::Router;
 
+pub(super) mod answer_images;
 mod background_task_outputs;
 mod background_tasks;
 mod command_source;

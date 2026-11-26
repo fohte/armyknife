@@ -11,6 +11,7 @@ export type MarkdownComponentContextValue = {
   sessionsById: ReadonlyMap<string, SessionLinkTarget>
   onSelectSession?: (id: string) => void
   webUis: readonly WebUiLinkTarget[]
+  imageSources?: Readonly<Record<string, string | null>>
   onOpenWebUi?: (webUi: WebUiLinkTarget, url: string) => void
   mobile?: boolean
   commandContext?: {
