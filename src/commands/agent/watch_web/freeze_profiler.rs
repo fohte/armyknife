@@ -91,28 +91,54 @@ mod tests {
     use rstest::rstest;
     use tower::ServiceExt;
 
-    use super::{FunctionSample, format_functions, router};
+    use super::router;
 
-    #[test]
-    fn formats_function_locations_and_percentages() {
+    #[tokio::test]
+    async fn records_function_locations_and_percentages() {
+        let request = Request::post("/long-tasks")
+            .header(CONTENT_TYPE, "application/json")
+            .header(ORIGIN, HeaderValue::from_static("http://localhost"))
+            .body(Body::from(
+                serde_json::json!({
+                    "startedAtMs": 1795737600000_i64,
+                    "durationMs": 8200.0,
+                    "functions": [
+                        {
+                            "name": "callback",
+                            "file": "/assets/app.js",
+                            "line": 12,
+                            "column": 8,
+                            "percentage": 66.7,
+                        },
+                        {
+                            "name": "renderList",
+                            "file": "/assets/app.js",
+                            "line": 42,
+                            "percentage": 33.3,
+                        },
+                    ],
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let (response, events) = crate::shared::testing::capture_json_events_async(
+            tracing::Level::WARN,
+            router().oneshot(request),
+        )
+        .await;
+
         assert_eq!(
-            format_functions(&[
-                FunctionSample {
-                    name: "callback".to_owned(),
-                    file: "/assets/app.js".to_owned(),
-                    line: Some(12),
-                    column: Some(8),
-                    percentage: 66.7,
-                },
-                FunctionSample {
-                    name: "renderList".to_owned(),
-                    file: "/assets/app.js".to_owned(),
-                    line: Some(42),
-                    column: None,
-                    percentage: 33.3,
-                },
-            ]),
-            "callback (/assets/app.js:12:8, 66.7%), renderList (/assets/app.js:42, 33.3%)"
+            (response.unwrap().status(), events),
+            (
+                StatusCode::NO_CONTENT,
+                vec![serde_json::json!({
+                    "event": "agent.watch_web.long_task",
+                    "started_at_ms": 1795737600000_i64,
+                    "duration_ms": 8200.0,
+                    "top_functions": "callback (/assets/app.js:12:8, 66.7%), renderList (/assets/app.js:42, 33.3%)",
+                    "message": "watch-web detected a long JavaScript task",
+                })],
+            ),
         );
     }
 

@@ -127,6 +127,30 @@ it('keeps functions at distinct source columns separate', () => {
   ])
 })
 
+it('omits nonpositive source columns', () => {
+  expect(
+    aggregateSamples(
+      [
+        {
+          resources: ['/assets/app.js'],
+          frames: [{ name: 'callback', resourceId: 0, line: 12, column: 0 }],
+          stacks: [{ frameId: 0 }],
+          samples: [{ timestamp: 10, stackId: 0 }],
+        },
+      ],
+      10,
+      10,
+    ),
+  ).toEqual([
+    {
+      name: 'callback',
+      file: '/assets/app.js',
+      line: 12,
+      percentage: 100,
+    },
+  ])
+})
+
 it('labels anonymous samples without a source line', () => {
   expect(
     aggregateSamples(
