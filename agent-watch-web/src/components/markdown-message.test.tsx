@@ -187,11 +187,11 @@ Body content is parsed as Markdown. http://example.com/日本語
 
 it('renders an inline summary on the details opening line', () => {
   const html = renderMessage(
-    '<details><summary>Inline summary</summary>\nBody content\n</details>',
+    '<details open><summary>Inline summary</summary>\nBody content\n</details>',
   )
 
   expect(html).toBe(
-    '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="false" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Inline summary</span></button></div></div>',
+    '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Inline summary</span></button><div class="markdown-details-body"><p>Body content</p></div></div></div>',
   )
 })
 
