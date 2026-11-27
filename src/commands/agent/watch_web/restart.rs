@@ -438,8 +438,8 @@ mod tests {
         let ExecutableReplacement {
             _directory,
             executable,
+            replacement,
             identity,
-            ..
         } = executable_replacement;
         let mut events = super::create_watcher_or_warn(|| {
             Err::<mpsc::UnboundedReceiver<notify::Result<notify::Event>>, _>(io::Error::other(
@@ -454,7 +454,7 @@ mod tests {
         };
         let (restart_sender, restart_receiver) = watch::channel(false);
         let mut startup_replacement_pending = false;
-        let replacement = super::wait_for_replacement(
+        let replacement_wait = super::wait_for_replacement(
             &executable,
             identity,
             &mut startup_replacement_pending,
@@ -462,15 +462,21 @@ mod tests {
         );
         let waiting = super::wait_for_server_or_restart(
             server,
-            replacement,
+            replacement_wait,
             restart_sender,
             Duration::from_secs(1),
         );
         tokio::pin!(waiting);
 
-        let server_keeps_running = tokio::time::timeout(Duration::from_millis(1), &mut waiting)
-            .await
-            .is_err();
+        let server_keeps_running_before_replacement =
+            tokio::time::timeout(Duration::from_millis(1), &mut waiting)
+                .await
+                .is_err();
+        fs::rename(&replacement, &executable).expect("replacement should be atomic");
+        let server_keeps_running_after_replacement =
+            tokio::time::timeout(Duration::from_millis(1), &mut waiting)
+                .await
+                .is_err();
         server_exit_sender
             .send(())
             .expect("server should stay active until its shutdown signal");
@@ -482,11 +488,12 @@ mod tests {
         assert_eq!(
             (
                 watcher_unavailable,
-                server_keeps_running,
+                server_keeps_running_before_replacement,
+                server_keeps_running_after_replacement,
                 outcome,
                 *restart_receiver.borrow()
             ),
-            (true, true, ServerOutcome::Exited, false),
+            (true, true, true, ServerOutcome::Exited, false),
         );
     }
 
