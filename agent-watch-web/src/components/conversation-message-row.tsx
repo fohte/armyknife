@@ -1,10 +1,9 @@
-import { memo, useContext } from 'react'
+import { memo } from 'react'
 
 import {
   type ConversationMessageRowProps,
   renderConversationMessage,
 } from '#components/conversation-message'
-import { MarkdownComponentContext } from '#components/markdown-component-context'
 
 function areConversationMessagePropsEqual(
   previous: ConversationMessageRowProps,
@@ -91,15 +90,5 @@ function areConversationMessagePropsEqual(
 export const ConversationMessageRow = memo(function ConversationMessageRow(
   props: ConversationMessageRowProps,
 ) {
-  const markdownContext = useContext(MarkdownComponentContext)
-  return (
-    <MarkdownComponentContext.Provider
-      value={{
-        ...markdownContext,
-        unmappedImagePathsAreLocal: props.message.type !== 'decision',
-      }}
-    >
-      {renderConversationMessage(props)}
-    </MarkdownComponentContext.Provider>
-  )
+  return renderConversationMessage(props)
 }, areConversationMessagePropsEqual)

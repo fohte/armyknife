@@ -24,6 +24,7 @@ type TodoCardProps = {
   imageSources?: Readonly<Record<string, string | null>>
   folded?: boolean
   addedFolded?: boolean
+  defaultDetailExpanded?: boolean
   resolution: 'completed' | 'rejected' | 'withdrawn' | null
   defaultComment?: string
   onResolve: (
@@ -42,6 +43,7 @@ export function TodoCard({
   imageSources,
   folded = false,
   addedFolded = false,
+  defaultDetailExpanded = false,
   resolution,
   defaultComment = '',
   onResolve,
@@ -68,7 +70,7 @@ export function TodoCard({
       ),
     [detail, imageSources],
   )
-  const [detailExpanded, setDetailExpanded] = useState(false)
+  const [detailExpanded, setDetailExpanded] = useState(defaultDetailExpanded)
   const [resolutionLocally, setResolutionLocally] = useState<
     'completed' | 'rejected' | null
   >(null)
