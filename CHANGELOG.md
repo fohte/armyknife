@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.987](https://github.com/fohte/armyknife/compare/v0.1.986...v0.1.987) (2026-11-27)
+
+
+### Bug Fixes
+
+* **agent/hook:** avoid ps forks in ancestry checks ([#2399](https://github.com/fohte/armyknife/issues/2399)) ([f5e0ea0](https://github.com/fohte/armyknife/commit/f5e0ea0bdd1c02ca6155ad298e07fb9e6fee43b0))
+
 ## [0.1.986](https://github.com/fohte/armyknife/compare/v0.1.985...v0.1.986) (2026-11-27)
 
 
