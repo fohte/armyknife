@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.962](https://github.com/fohte/armyknife/compare/v0.1.961...v0.1.962) (2026-11-27)
+
+
+### Bug Fixes
+
+* **agent:** limit monitor lsof to crit processes ([#2351](https://github.com/fohte/armyknife/issues/2351)) ([60930b8](https://github.com/fohte/armyknife/commit/60930b83b115a857f8e0b8b7e6cc4bf90fda402c))
+
 ## [0.1.961](https://github.com/fohte/armyknife/compare/v0.1.960...v0.1.961) (2026-11-27)
 
 
