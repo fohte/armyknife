@@ -10,7 +10,7 @@ use super::super::{ToolSummary, append_text_with_image_directory, classifier, to
 use super::events::{ClaudeEffect, TimedClaudeEvent};
 use super::questions::{apply_question_answers, mark_questions_cancelled};
 use super::state::{ClaudeParserState, ToolUse};
-use super::transcript_branch::{BranchMembership, active_record_uuids};
+use super::transcript_branch::BranchMembership;
 use super::{ParsedTranscript, ParserAdditions};
 use crate::commands::agent::store::PermissionRequestData;
 
@@ -19,7 +19,7 @@ pub(super) fn render(
     image_directory: Option<&Path>,
     now: DateTime<Utc>,
     additions: ParserAdditions<'_>,
-    apply_master_branch_filter: bool,
+    active_record_uuids: Option<&HashSet<String>>,
 ) -> ParsedTranscript {
     let mut items = Vec::new();
     let mut tools = ToolSummary::default();
@@ -32,12 +32,10 @@ pub(super) fn render(
     );
     let mut card_timeline = CardTimeline::new(&source_cards);
     let mut question_indices = HashMap::<String, Vec<usize>>::new();
-    let active_record_uuids = apply_master_branch_filter
-        .then(|| active_record_uuids(&state.transcript_nodes, state.latest_record_uuid.as_deref()));
     let event_context = EventRenderContext {
         image_directory,
         additions,
-        active_record_uuids: active_record_uuids.as_ref(),
+        active_record_uuids,
         transcript_nodes: &state.transcript_nodes,
     };
 
@@ -65,7 +63,7 @@ pub(super) fn render(
         .filter(|tool_use| {
             is_on_active_branch(
                 tool_use.assistant_uuid.as_deref(),
-                active_record_uuids.as_ref(),
+                active_record_uuids,
                 &state.transcript_nodes,
             )
         })

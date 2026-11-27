@@ -39,8 +39,8 @@ impl TranscriptNode {
             parent_uuid,
             membership: BranchMembership::Unknown,
             has_tool_use: is_tool_use_assistant(record),
-            tool_use_ids: content_ids(record, "tool_use"),
-            tool_result_ids: content_ids(record, "tool_result"),
+            tool_use_ids: content_ids(record, "tool_use", &["id", "tool_use_id"]),
+            tool_result_ids: content_ids(record, "tool_result", &["id", "tool_use_id"]),
             is_tool_result_only: is_tool_result_only_user_record(record),
             is_task_notification: task_notification_text(record).is_some(),
             was_valid_tool_result: false,
@@ -49,7 +49,7 @@ impl TranscriptNode {
     }
 }
 
-fn content_ids(record: &Value, kind: &str) -> Vec<String> {
+pub(super) fn content_ids(record: &Value, kind: &str, id_keys: &[&str]) -> Vec<String> {
     record
         .get("message")
         .and_then(|message| message.get("content"))
@@ -57,9 +57,13 @@ fn content_ids(record: &Value, kind: &str) -> Vec<String> {
         .into_iter()
         .flatten()
         .filter(|block| block.get("type").and_then(Value::as_str) == Some(kind))
-        .filter_map(|block| block.get("id").or_else(|| block.get("tool_use_id")))
-        .filter_map(Value::as_str)
-        .map(str::to_owned)
+        .filter_map(|block| {
+            id_keys
+                .iter()
+                .fold(None, |value, key| value.or_else(|| block.get(*key)))
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
         .collect()
 }
 

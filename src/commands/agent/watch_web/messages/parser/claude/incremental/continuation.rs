@@ -2,7 +2,7 @@ use serde_json::Value;
 
 use super::super::background_tasks::task_notification_text;
 use super::super::state::{ClaudeParserState, is_attachment_record, record_parent_uuid};
-use super::super::transcript_branch::BranchMembership;
+use super::super::transcript_branch::{BranchMembership, content_ids};
 use super::super::user_input::{content_blocks, is_tool_result_only_user_record};
 
 #[derive(Clone, Default)]
@@ -51,8 +51,8 @@ impl AppendRecord {
             is_assistant: is_assistant(record),
             is_tool_use_assistant: is_tool_use_assistant(record),
             is_tool_result_only: is_tool_result_only_user_record(record),
-            tool_use_ids: tool_use_ids(record),
-            tool_result_ids: tool_result_ids(record),
+            tool_use_ids: content_ids(record, "tool_use", &["id"]),
+            tool_result_ids: content_ids(record, "tool_result", &["tool_use_id"]),
         }
     }
 }
@@ -146,7 +146,10 @@ fn is_first_parallel_result(
         && is_simple_record(record)
         && second_call.parent_uuid.as_deref() == Some(first_uuid)
         && record_parent_uuid(record).as_deref() == Some(first_uuid)
-        && result_ids_belong_to_owner(&tool_result_ids(record), &first_call.tool_use_ids)
+        && result_ids_belong_to_owner(
+            &content_ids(record, "tool_result", &["tool_use_id"]),
+            &first_call.tool_use_ids,
+        )
         && state.has_pending_tool_result_for_owner(record, first_uuid)
         && state
             .transcript_nodes
@@ -196,7 +199,10 @@ fn is_final_parallel_result(
         && followup.parent_uuid.as_deref() == Some(result_uuid)
         && record_parent_uuid(record).as_deref() == Some(second_uuid)
         && result_ids_belong_to_owner(&first_result.tool_result_ids, &first_call.tool_use_ids)
-        && result_ids_belong_to_owner(&tool_result_ids(record), &second_call.tool_use_ids)
+        && result_ids_belong_to_owner(
+            &content_ids(record, "tool_result", &["tool_use_id"]),
+            &second_call.tool_use_ids,
+        )
         && state.has_pending_tool_result_for_owner(record, second_uuid)
         && state.is_valid_tool_result_uuid(result_uuid)
         && state
@@ -239,35 +245,6 @@ fn latest_is_current_or_pending_parent(
 
 fn result_ids_belong_to_owner(result_ids: &[String], owner_ids: &[String]) -> bool {
     !result_ids.is_empty() && result_ids.iter().all(|id| owner_ids.contains(id))
-}
-
-fn tool_use_ids(record: &Value) -> Vec<String> {
-    record
-        .get("message")
-        .and_then(|message| message.get("content"))
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter(|block| block.get("type").and_then(Value::as_str) == Some("tool_use"))
-        .filter_map(|block| block.get("id").and_then(Value::as_str).map(str::to_owned))
-        .collect()
-}
-
-fn tool_result_ids(record: &Value) -> Vec<String> {
-    record
-        .get("message")
-        .and_then(|message| message.get("content"))
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter(|block| block.get("type").and_then(Value::as_str) == Some("tool_result"))
-        .filter_map(|block| {
-            block
-                .get("tool_use_id")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-        })
-        .collect()
 }
 
 fn is_simple_record(record: &Value) -> bool {

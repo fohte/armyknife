@@ -1,9 +1,14 @@
+use std::cell::RefCell;
+use std::collections::HashSet;
 use std::io::{self, BufRead, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use super::super::super::parser::jsonl::JsonlLineBuffer;
 use super::state::{ClaudeParserState, is_attachment_record, record_parent_uuid};
-use super::transcript_branch::{BranchMembership, TranscriptNode, mark_active_branch};
+use super::transcript_branch::{
+    BranchMembership, TranscriptNode, active_record_uuids, mark_active_branch,
+};
 use super::user_input::is_tool_result_only_user_record;
 use super::{ParsedTranscript, ParserAdditions};
 use chrono::{DateTime, Utc};
@@ -24,6 +29,13 @@ pub(in crate::commands::agent::watch_web::messages) struct IncrementalClaudePars
     append_history: AppendHistory,
     tail_window_start: Option<DateTime<Utc>>,
     tail_window_start_offset: Option<u64>,
+    active_record_cache: RefCell<Option<ActiveRecordCache>>,
+}
+
+#[derive(Clone)]
+struct ActiveRecordCache {
+    latest_record_uuid: Option<String>,
+    active_record_uuids: Arc<HashSet<String>>,
 }
 
 impl IncrementalClaudeParser {
@@ -97,6 +109,7 @@ impl IncrementalClaudeParser {
             append_history,
             tail_window_start: None,
             tail_window_start_offset: None,
+            active_record_cache: RefCell::default(),
         })
     }
 
@@ -183,6 +196,7 @@ impl IncrementalClaudeParser {
             append_history,
             tail_window_start: None,
             tail_window_start_offset: None,
+            active_record_cache: RefCell::default(),
         }
     }
 
@@ -223,6 +237,7 @@ impl IncrementalClaudeParser {
         if suffix.is_empty() {
             return Ok(IncrementalAppend::Applied);
         }
+        self.active_record_cache.get_mut().take();
         let mut restart_required = false;
         let state = &mut self.state;
         let append_history = &mut self.append_history;
@@ -273,21 +288,54 @@ impl IncrementalClaudeParser {
                     "Claude transcript tail forks from the cached active branch",
                 ));
             }
+            let active_record_uuids = self.tail_window_start_offset.is_none().then(|| {
+                Arc::new(active_record_uuids(
+                    &state.transcript_nodes,
+                    state.latest_record_uuid.as_deref(),
+                ))
+            });
             return Ok(super::render::render(
                 &state,
                 self.image_directory.as_deref(),
                 now,
                 additions,
-                self.tail_window_start_offset.is_none(),
+                active_record_uuids.as_deref(),
             ));
         }
+        let active_record_uuids = self
+            .tail_window_start_offset
+            .is_none()
+            .then(|| self.cached_active_record_uuids(&self.state));
         Ok(super::render::render(
             &self.state,
             self.image_directory.as_deref(),
             now,
             additions,
-            self.tail_window_start_offset.is_none(),
+            active_record_uuids.as_deref(),
         ))
+    }
+
+    fn cached_active_record_uuids(&self, state: &ClaudeParserState) -> Arc<HashSet<String>> {
+        let latest_record_uuid = state.latest_record_uuid.clone();
+        let cached = self
+            .active_record_cache
+            .borrow()
+            .as_ref()
+            .filter(|cache| cache.latest_record_uuid == latest_record_uuid)
+            .map(|cache| Arc::clone(&cache.active_record_uuids));
+        if let Some(cached) = cached {
+            return cached;
+        }
+
+        let active_record_uuids = Arc::new(active_record_uuids(
+            &state.transcript_nodes,
+            latest_record_uuid.as_deref(),
+        ));
+        *self.active_record_cache.borrow_mut() = Some(ActiveRecordCache {
+            latest_record_uuid,
+            active_record_uuids: Arc::clone(&active_record_uuids),
+        });
+        active_record_uuids
     }
 }
 

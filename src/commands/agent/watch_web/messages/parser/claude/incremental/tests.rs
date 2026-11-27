@@ -1601,6 +1601,72 @@ fn generated_transcripts_match_full_parse_at_record_byte_and_three_chunk_splits(
         Vec::new(),
     ),
 )]
+#[case::rewound_send_user_file_result_is_hidden(
+    indoc! {r#"
+        {"type":"user","uuid":"fixture-root","parentUuid":null,"message":{"content":"Root request."}}
+        {"type":"assistant","uuid":"fixture-active-tool","parentUuid":"fixture-root","message":{"content":[{"type":"tool_use","id":"fixture-active-call","name":"Read","input":{"file_path":"/fixture/active.md"}}]}}
+        {"type":"assistant","uuid":"fixture-stale-file-call","parentUuid":"fixture-active-tool","message":{"content":[{"type":"tool_use","id":"fixture-stale-file-use","name":"SendUserFile","input":{"files":["/fixture/hidden.png"],"caption":"Stale file."}}]}}
+        {"type":"user","uuid":"fixture-replacement","parentUuid":"fixture-active-tool","message":{"content":"Replacement request."}}
+        {"type":"assistant","uuid":"fixture-response","parentUuid":"fixture-replacement","message":{"content":[{"type":"text","text":"Current response."}]}}
+        {"type":"user","parentUuid":"fixture-stale-file-call","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-stale-file-use","content":"File sent."}]}}
+    "#},
+    (
+        vec![
+            ChatItem::User {
+                text: "Root request.".to_owned(),
+                rewind_id: Some("fixture-root".to_owned()),
+                timestamp: None,
+                from: None,
+                queued_prompt_id: None,
+            },
+            ChatItem::User {
+                text: "Replacement request.".to_owned(),
+                rewind_id: Some("fixture-replacement".to_owned()),
+                timestamp: None,
+                from: None,
+                queued_prompt_id: None,
+            },
+            ChatItem::Assistant {
+                text: "Current response.".to_owned(),
+            },
+            ChatItem::ToolInProgress {
+                tool: "Read".to_owned(),
+                target: Some("/fixture/active.md".to_owned()),
+            },
+        ],
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    ),
+)]
+#[case::forward_parent_membership_matches_master(
+    indoc! {r#"
+        {"type":"user","uuid":"fixture-root","parentUuid":null,"message":{"content":"Root request."}}
+        {"type":"assistant","uuid":"fixture-early-child","parentUuid":"fixture-future-parent","message":{"content":[{"type":"text","text":"Discard the earlier child."}]}}
+        {"type":"assistant","uuid":"fixture-future-parent","parentUuid":"fixture-root","message":{"content":[{"type":"text","text":"Keep the forward parent."}]}}
+        {"type":"assistant","uuid":"fixture-current-child","parentUuid":"fixture-future-parent","message":{"content":[{"type":"text","text":"Keep the current response."}]}}
+    "#},
+    (
+        vec![
+            ChatItem::User {
+                text: "Root request.".to_owned(),
+                rewind_id: Some("fixture-root".to_owned()),
+                timestamp: None,
+                from: None,
+                queued_prompt_id: None,
+            },
+            ChatItem::Assistant {
+                text: "Keep the forward parent.".to_owned(),
+            },
+            ChatItem::Assistant {
+                text: "Keep the current response.".to_owned(),
+            },
+        ],
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    ),
+)]
 fn full_parse_preserves_master_branch_output(
     #[case] transcript: &str,
     #[case] expected: super::ParsedTranscript,

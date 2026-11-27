@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-use super::super::transcript_branch::{BranchMembership, is_inactive_branch};
+use super::super::transcript_branch::{BranchMembership, content_ids, is_inactive_branch};
 use super::ClaudeParserState;
 use super::tool_results::tool_result_blocks;
 
@@ -14,7 +14,7 @@ impl ClaudeParserState {
         }
         let owner_uuid = super::record_parent_uuid(record)?;
         let owner = self.transcript_nodes.get(&owner_uuid)?;
-        let result_ids = record_tool_result_ids(record);
+        let result_ids = content_ids(record, "tool_result", &["tool_use_id"]);
         if owner.tool_use_ids.len() != 1 || result_ids != owner.tool_use_ids {
             return None;
         }
@@ -165,14 +165,4 @@ impl ClaudeParserState {
                     })
             })
     }
-}
-
-fn record_tool_result_ids(record: &Value) -> Vec<String> {
-    let Some(message) = record.get("message") else {
-        return Vec::new();
-    };
-    tool_result_blocks(message)
-        .filter_map(|block| block.get("tool_use_id").and_then(Value::as_str))
-        .map(str::to_owned)
-        .collect()
 }
