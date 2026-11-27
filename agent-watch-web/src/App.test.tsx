@@ -1735,6 +1735,10 @@ it('hides the phone update until the server reports a different version', () => 
   if (noticeBeforeDismiss === null || mobileHeader === null) {
     throw new Error('Update notice not found')
   }
+  const noticeFollowsHeader =
+    (mobileHeader.compareDocumentPosition(noticeBeforeDismiss) &
+      Node.DOCUMENT_POSITION_FOLLOWING) !==
+    0
   clickButton('.update-notice-dismiss')
   act(() => {
     capturedFeed.onUpdateAvailable?.('fixture-version-next')
@@ -1745,10 +1749,7 @@ it('hides the phone update until the server reports a different version', () => 
   })
   const snapshot = () => ({
     noticeBeforeDismiss: noticeBeforeDismiss.textContent,
-    noticeFollowsHeader:
-      (mobileHeader.compareDocumentPosition(noticeBeforeDismiss) &
-        Node.DOCUMENT_POSITION_FOLLOWING) !==
-      0,
+    noticeFollowsHeader,
     noticeAfterDismiss: noticeAfterDismiss?.textContent ?? null,
     noticeForNextVersion:
       container.querySelector('.update-notice')?.textContent ?? null,
