@@ -69,7 +69,10 @@ pub(crate) fn wait_for_exit_or_dir_change(
 /// Blocks until one of `pids` exits or `fd` becomes readable.
 ///
 /// macOS uses kqueue. Other platforms and kqueue setup failures poll the process and descriptor
-/// at the fallback interval. `fd` must remain open for the duration of this call.
+/// at the fallback interval. `fd` must remain open for the duration of this call. Some readiness
+/// backends can report a FIFO's EOF as readable; callers must handle EOF without re-registering in
+/// a loop. The polling fallback sleeps after non-readable events, and `kill(pid, 0)` considers an
+/// unreaped child alive.
 pub(crate) fn wait_for_exit_or_readable_fd(
     pids: &[u32],
     fd: std::os::fd::RawFd,
@@ -156,8 +159,11 @@ fn poll_for_exit_or_readable_fd(
         };
         // SAFETY: `descriptor` is a valid one-element poll array for the open fd.
         let result = unsafe { libc::poll(&mut descriptor, 1, timeout_ms) };
-        if result > 0 && descriptor.revents & libc::POLLIN != 0 {
-            return FdWake::Readable;
+        if result > 0 {
+            if descriptor.revents & libc::POLLIN != 0 {
+                return FdWake::Readable;
+            }
+            thread::sleep(wait);
         }
         if result == -1 && io::Error::last_os_error().kind() != io::ErrorKind::Interrupted {
             thread::sleep(wait);
@@ -352,7 +358,13 @@ fn wait_for_exit_or_readable_fd_with_kqueue(
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::CString;
+    use std::fs::{File, OpenOptions};
     use std::io;
+    use std::io::Write;
+    use std::os::fd::{AsRawFd, RawFd};
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::OpenOptionsExt;
     use std::process::{Child, ChildStdin, Command, Stdio};
     use std::thread::JoinHandle;
 
@@ -362,6 +374,7 @@ mod tests {
     use super::*;
 
     type Wait = fn(&[u32], &Path, &[String], Option<Duration>) -> Wake;
+    type FdWait = fn(&[u32], RawFd, Option<Duration>) -> FdWake;
 
     #[cfg(target_os = "macos")]
     fn wait_with_kqueue_only(
@@ -374,9 +387,152 @@ mod tests {
             .expect("kqueue should be usable in tests")
     }
 
+    #[cfg(target_os = "macos")]
+    fn wait_for_exit_or_readable_fd_with_kqueue_only(
+        pids: &[u32],
+        fd: RawFd,
+        timeout: Option<Duration>,
+    ) -> FdWake {
+        wait_for_exit_or_readable_fd_with_kqueue(pids, fd, timeout)
+            .expect("kqueue should be usable in tests")
+    }
+
     #[fixture]
     fn dir() -> TempDir {
         TempDir::new().expect("temporary directory should be created")
+    }
+
+    struct ReadableFifo {
+        _temp: TempDir,
+        reader: File,
+        writer: Option<File>,
+    }
+
+    fn readable_fifo(with_writer: bool) -> ReadableFifo {
+        let temp = TempDir::new().expect("temporary directory should be created");
+        let path = temp.path().join("signal");
+        let c_path = CString::new(path.as_os_str().as_bytes()).expect("FIFO path should be valid");
+        // SAFETY: `c_path` is a valid NUL-terminated path inside the test's temporary directory.
+        assert_eq!(unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) }, 0);
+        let reader = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(&path)
+            .expect("FIFO reader should open");
+        let writer = with_writer.then(|| {
+            OpenOptions::new()
+                .write(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(&path)
+                .expect("FIFO writer should open")
+        });
+        ReadableFifo {
+            _temp: temp,
+            reader,
+            writer,
+        }
+    }
+
+    #[rstest]
+    #[case::default(wait_for_exit_or_readable_fd as FdWait)]
+    #[case::polling(poll_for_exit_or_readable_fd as FdWait)]
+    #[cfg_attr(target_os = "macos", case::kqueue(wait_for_exit_or_readable_fd_with_kqueue_only as FdWait))]
+    fn descriptor_wait_times_out_for_an_empty_fifo_with_a_writer(#[case] wait: FdWait) {
+        let fifo = readable_fifo(true);
+
+        assert_eq!(
+            wait(
+                &[],
+                fifo.reader.as_raw_fd(),
+                Some(Duration::from_millis(50))
+            ),
+            FdWake::TimedOut,
+        );
+    }
+
+    #[rstest]
+    #[case::default(wait_for_exit_or_readable_fd as FdWait)]
+    #[case::polling(poll_for_exit_or_readable_fd as FdWait)]
+    #[cfg_attr(target_os = "macos", case::kqueue(wait_for_exit_or_readable_fd_with_kqueue_only as FdWait))]
+    fn descriptor_wait_reports_fifo_data_as_readable(#[case] wait: FdWait) {
+        let mut fifo = readable_fifo(true);
+        fifo.writer
+            .as_mut()
+            .expect("FIFO writer should be open")
+            .write_all(b"x")
+            .expect("FIFO byte should be written");
+
+        assert_eq!(
+            wait(&[], fifo.reader.as_raw_fd(), Some(Duration::from_secs(1))),
+            FdWake::Readable,
+        );
+    }
+
+    #[rstest]
+    #[case::default(wait_for_exit_or_readable_fd as FdWait)]
+    #[case::polling(poll_for_exit_or_readable_fd as FdWait)]
+    #[cfg_attr(target_os = "macos", case::kqueue(wait_for_exit_or_readable_fd_with_kqueue_only as FdWait))]
+    fn descriptor_wait_reports_a_gone_pid_as_exited(#[case] wait: FdWait) {
+        let fifo = readable_fifo(true);
+
+        assert_eq!(
+            wait(
+                &[u32::MAX],
+                fifo.reader.as_raw_fd(),
+                Some(Duration::from_secs(1))
+            ),
+            FdWake::Exited,
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[rstest]
+    fn kqueue_does_not_report_writerless_fifo_eof_as_readable() {
+        let fifo = readable_fifo(false);
+        let first = wait_for_exit_or_readable_fd_with_kqueue_only(
+            &[],
+            fifo.reader.as_raw_fd(),
+            Some(Duration::from_millis(50)),
+        );
+        let second = wait_for_exit_or_readable_fd_with_kqueue_only(
+            &[],
+            fifo.reader.as_raw_fd(),
+            Some(Duration::from_millis(50)),
+        );
+
+        assert_eq!((first, second), (FdWake::TimedOut, FdWake::TimedOut));
+    }
+
+    fn thread_cpu_time() -> Duration {
+        let mut time = libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
+        // SAFETY: `time` points to a valid writable timespec.
+        assert_eq!(
+            unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut time) },
+            0
+        );
+        Duration::new(
+            u64::try_from(time.tv_sec).expect("thread cpu time should be non-negative"),
+            u32::try_from(time.tv_nsec).expect("nanoseconds should fit in u32"),
+        )
+    }
+
+    #[test]
+    fn polling_descriptor_wait_sleeps_on_fifo_hangup() {
+        let fifo = readable_fifo(false);
+        let cpu_time_before = thread_cpu_time();
+
+        assert_eq!(
+            poll_for_exit_or_readable_fd(
+                &[],
+                fifo.reader.as_raw_fd(),
+                Some(Duration::from_millis(200)),
+            ),
+            FdWake::TimedOut,
+        );
+        assert!(thread_cpu_time() - cpu_time_before < Duration::from_millis(100));
     }
 
     /// A `sh` child that exits once its stdin closes. A thread reaps it so the

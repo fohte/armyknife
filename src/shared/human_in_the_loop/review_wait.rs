@@ -39,6 +39,7 @@ fn wait_for_fifo_signal_or_session_exit_with_interval(
     check_interval: Duration,
     mut resolve_shell_pid: impl FnMut(&str) -> Result<Option<u32>>,
 ) -> Result<u8> {
+    // Prevent a writer-less FIFO EOF from becoming a persistent readiness event during the review.
     let keep_writer = OpenOptions::new()
         .write(true)
         .custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW)
@@ -332,7 +333,7 @@ mod tests {
     }
 
     #[rstest]
-    fn waits_without_rechecking_when_no_fifo_writer_is_attached(fifo_reader: FifoReader) {
+    fn waits_for_fifo_signal_without_reresolving_the_session(fifo_reader: FifoReader) {
         let checks = Cell::new(0);
         let path = fifo_reader.path.clone();
         let writer = thread::spawn(move || {
