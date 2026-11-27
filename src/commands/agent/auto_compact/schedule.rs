@@ -33,6 +33,7 @@ use chrono::Utc;
 use clap::Args;
 use tracing::Instrument;
 
+use super::super::compact_transcript_slim::spawn_compact_resume_with;
 use super::decision::{CompactDecision, CompactInputs, decide_compact};
 use crate::commands::agent::auto_pause;
 use crate::commands::agent::claude_sessions;
@@ -388,11 +389,10 @@ fn spawn_compact_resume(session: &Session) -> Result<()> {
     // top of `agent hook run`, so the compaction itself doesn't recursively
     // schedule another auto-compact. A separate marker lets compact
     // SessionStart schedule transcript slimming without enabling other hooks.
-    let result = process::spawn_detached(
-        "claude",
-        ["-r", &session.session_id, "-p", "/compact"],
-        Some(&session.cwd),
-        compact_resume_env(),
+    let result = spawn_compact_resume_with(
+        &session.session_id,
+        &session.cwd,
+        |program, args, cwd, env| process::spawn_detached(program, args, cwd, env),
     );
     if let Err(e) = result {
         tracing::warn!(
@@ -403,13 +403,6 @@ fn spawn_compact_resume(session: &Session) -> Result<()> {
         return Err(e).context("spawn claude -r");
     }
     Ok(())
-}
-
-fn compact_resume_env() -> &'static [(&'static str, &'static str)] {
-    &[
-        ("ARMYKNIFE_SKIP_HOOKS", "1"),
-        ("ARMYKNIFE_SLIM_TRANSCRIPT_ON_COMPACT", "1"),
-    ]
 }
 
 fn mark_paused(session: &Session) -> Result<()> {
@@ -435,17 +428,6 @@ mod tests {
     use rstest::rstest;
     use std::path::PathBuf;
     use tempfile::TempDir;
-
-    #[test]
-    fn compact_resume_enables_only_the_compact_transcript_slim_hook() {
-        assert_eq!(
-            compact_resume_env(),
-            &[
-                ("ARMYKNIFE_SKIP_HOOKS", "1"),
-                ("ARMYKNIFE_SLIM_TRANSCRIPT_ON_COMPACT", "1"),
-            ],
-        );
-    }
 
     #[rstest]
     #[case::valid_pid("4242", 1, Some(4242))]

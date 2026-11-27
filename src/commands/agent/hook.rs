@@ -14,6 +14,9 @@ use lazy_regex::regex_replace_all;
 
 use self::side_effects::SideEffects;
 use super::claude_sessions;
+use super::compact_transcript_slim::{
+    maybe_schedule_transcript_slim, process_skipped_hook_compact_slim,
+};
 use super::error::CcError;
 use super::session_init;
 use super::session_status;
@@ -56,9 +59,6 @@ const TRANSCRIPT_RETRY_DELAY: Duration = Duration::from_millis(100);
 /// Maximum number of retries when transcript hasn't been updated yet.
 const TRANSCRIPT_MAX_RETRIES: u32 = 5;
 
-/// Compact hooks only schedule slimming when the transcript is larger than 20 MiB.
-const TRANSCRIPT_SLIM_MIN_BYTES: u64 = 20 * 1024 * 1024;
-
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct HookArgs {
     /// Hook event name (e.g., user-prompt-submit, stop, stop-failure)
@@ -93,8 +93,8 @@ pub fn run(args: &HookArgs) -> Result<()> {
                 event,
                 args.engine,
                 &env_vars,
-                &side_effects,
                 || parse_stdin_json(&read_raw_stdin()?),
+                |session_id, path| side_effects.schedule_transcript_slim(session_id, path),
             ) {
                 tracing::warn!(
                     event = "agent.transcript.slim.compact_hook_input_failed",
@@ -440,56 +440,6 @@ fn process_hook_event_impl(
         side_effects,
         stop_hook_instruction,
     )
-}
-
-fn maybe_schedule_transcript_slim(event: HookEvent, input: &HookInput, side_effects: &SideEffects) {
-    if !side_effects.transcript_slim
-        || event != HookEvent::SessionStart
-        || input.engine != Engine::Claude
-        || input.source.as_deref() != Some("compact")
-    {
-        return;
-    }
-    let Some(transcript_path) = input.transcript_path.as_deref() else {
-        return;
-    };
-
-    match fs::metadata(transcript_path) {
-        Ok(metadata) if metadata.len() > TRANSCRIPT_SLIM_MIN_BYTES => {
-            side_effects.schedule_transcript_slim(&input.session_id, transcript_path);
-        }
-        Ok(_) => {}
-        Err(error) => tracing::warn!(
-            event = "agent.transcript.slim.inspect_failed",
-            session = %input.session_id,
-            transcript = %transcript_path.display(),
-            error = %error,
-        ),
-    }
-}
-
-fn process_skipped_hook_compact_slim<F>(
-    event: HookEvent,
-    engine: Engine,
-    env_vars: &EnvVars,
-    side_effects: &SideEffects,
-    read_input: F,
-) -> Result<()>
-where
-    F: FnOnce() -> Result<HookInput>,
-{
-    if !env_vars.skip_hooks
-        || !env_vars.slim_transcript_on_compact
-        || event != HookEvent::SessionStart
-        || engine != Engine::Claude
-    {
-        return Ok(());
-    }
-
-    let mut input = read_input()?;
-    input.engine = engine;
-    maybe_schedule_transcript_slim(event, &input, side_effects);
-    Ok(())
 }
 
 fn process_hook_event_impl_with_instruction(
@@ -1316,7 +1266,11 @@ fn process_hook_event_impl_with_env_and_unreported_stop(
         }
     }
 
-    maybe_schedule_transcript_slim(event, &input, side_effects);
+    if side_effects.transcript_slim {
+        maybe_schedule_transcript_slim(event, &input, |session_id, path| {
+            side_effects.schedule_transcript_slim(session_id, path);
+        });
+    }
 
     if let Some(reason) = stop_block_reason {
         return Ok(ProcessResult::StopBlocked(reason.to_string()));
@@ -1807,6 +1761,7 @@ fn build_subtitle(session: &Session) -> Option<String> {
 mod tests {
     use super::side_effects::PaneBindingOperations;
     use super::*;
+    use crate::commands::agent::compact_transcript_slim::TRANSCRIPT_SLIM_MIN_BYTES;
     use crate::commands::agent::session_pr_context::fixed_context_capture;
     use crate::commands::agent::types::{AgentStatus, TMUX_SESSION_OPTION, WebUiRegistration};
     use chrono::TimeZone;
@@ -1925,18 +1880,18 @@ mod tests {
     }
 
     #[rstest]
-    #[case::large_compact_starts_worker(HookEvent::SessionStart, Engine::Claude, "compact", super::TRANSCRIPT_SLIM_MIN_BYTES + 1, true)]
+    #[case::large_compact_starts_worker(HookEvent::SessionStart, Engine::Claude, "compact", TRANSCRIPT_SLIM_MIN_BYTES + 1, true)]
     #[case::at_limit_skips_worker(
         HookEvent::SessionStart,
         Engine::Claude,
         "compact",
-        super::TRANSCRIPT_SLIM_MIN_BYTES,
+        TRANSCRIPT_SLIM_MIN_BYTES,
         false
     )]
-    #[case::resume_skips_worker(HookEvent::SessionStart, Engine::Claude, "resume", super::TRANSCRIPT_SLIM_MIN_BYTES + 1, false)]
-    #[case::startup_skips_worker(HookEvent::SessionStart, Engine::Claude, "startup", super::TRANSCRIPT_SLIM_MIN_BYTES + 1, false)]
-    #[case::codex_skips_worker(HookEvent::SessionStart, Engine::Codex, "compact", super::TRANSCRIPT_SLIM_MIN_BYTES + 1, false)]
-    #[case::other_hook_skips_worker(HookEvent::PostModelSwitch, Engine::Claude, "compact", super::TRANSCRIPT_SLIM_MIN_BYTES + 1, false)]
+    #[case::resume_skips_worker(HookEvent::SessionStart, Engine::Claude, "resume", TRANSCRIPT_SLIM_MIN_BYTES + 1, false)]
+    #[case::startup_skips_worker(HookEvent::SessionStart, Engine::Claude, "startup", TRANSCRIPT_SLIM_MIN_BYTES + 1, false)]
+    #[case::codex_skips_worker(HookEvent::SessionStart, Engine::Codex, "compact", TRANSCRIPT_SLIM_MIN_BYTES + 1, false)]
+    #[case::other_hook_skips_worker(HookEvent::PostModelSwitch, Engine::Claude, "compact", TRANSCRIPT_SLIM_MIN_BYTES + 1, false)]
     fn compact_session_start_schedules_transcript_slim_only_for_large_claude_transcripts(
         #[case] event: HookEvent,
         #[case] engine: Engine,
@@ -2101,10 +2056,16 @@ mod tests {
         input.engine = engine;
         input.transcript_path = Some(transcript_path);
 
-        process_skipped_hook_compact_slim(event, engine, &env_vars, &side_effects, || {
-            read_count.set(read_count.get() + 1);
-            Ok(input)
-        })
+        process_skipped_hook_compact_slim(
+            event,
+            engine,
+            &env_vars,
+            || {
+                read_count.set(read_count.get() + 1);
+                Ok(input)
+            },
+            |session_id, path| side_effects.schedule_transcript_slim(session_id, path),
+        )
         .expect("skipped hook processing should succeed");
 
         let expected_calls = if expected_scheduled {
