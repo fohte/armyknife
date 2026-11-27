@@ -65,6 +65,8 @@ fn resolve_with(
     if let Some((pane, pane_pid)) = get_pane_info(pid) {
         let has_parent_agent = match parent_agent_resolution {
             ParentAgentResolution::Check => has_parent_agent(pid, pane_pid),
+            // Missing state must fail closed because nested hooks can share their
+            // parent's session ID.
             ParentAgentResolution::Cached(state) => state,
         };
         return Resolution {

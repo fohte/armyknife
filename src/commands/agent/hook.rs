@@ -2255,6 +2255,7 @@ mod tests {
         pane_info: tmux::PaneInfo,
         option_writes: std::sync::Arc<std::sync::Mutex<Vec<(String, String, String)>>>,
         resolve_calls: PaneBindingResolveCallSink,
+        session_start_calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     }
 
     impl PaneBindingOperations for RecordingPaneBinding {
@@ -2268,13 +2269,18 @@ mod tests {
                 .lock()
                 .expect("pane binding resolve calls lock should not be poisoned")
                 .push((is_session_start, cached_has_parent_agent));
+            let has_parent_agent = if is_session_start {
+                Some(
+                    self.session_start_calls
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                        > 0,
+                )
+            } else {
+                cached_has_parent_agent
+            };
             pane_binding::Resolution {
-                pane_info: Some(self.pane_info.clone()),
-                has_parent_agent: if is_session_start {
-                    Some(false)
-                } else {
-                    cached_has_parent_agent
-                },
+                pane_info: (has_parent_agent == Some(false)).then(|| self.pane_info.clone()),
+                has_parent_agent,
             }
         }
 
@@ -2588,6 +2594,7 @@ mod tests {
         };
         let option_writes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let resolve_calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let session_start_calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let pane_info = tmux::PaneInfo {
             session_name: "main".to_string(),
             window_name: "claude".to_string(),
@@ -2599,6 +2606,7 @@ mod tests {
                 pane_info,
                 option_writes: option_writes.clone(),
                 resolve_calls: resolve_calls.clone(),
+                session_start_calls,
             })),
             ..SideEffects::none()
         };
@@ -2701,7 +2709,7 @@ mod tests {
                     .clone(),
             ),
             (
-                Some(false),
+                Some(true),
                 vec![(true, None), (false, Some(false)), (true, None)],
             ),
         );

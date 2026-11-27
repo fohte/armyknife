@@ -89,4 +89,19 @@ mod tests {
         );
         Ok(())
     }
+
+    #[rstest]
+    fn parent_agent_state_is_replaced_after_a_later_session_start(
+        sessions_dir: tempfile::TempDir,
+    ) -> Result<()> {
+        set_has_parent_agent_process(sessions_dir.path(), "fixture-session-cedar", Some(false))?;
+        set_has_parent_agent_process(sessions_dir.path(), "fixture-session-cedar", Some(true))?;
+        let connection = open_connection(sessions_dir.path())?;
+
+        assert_eq!(
+            has_parent_agent_process_from_connection(&connection, "fixture-session-cedar")?,
+            Some(true),
+        );
+        Ok(())
+    }
 }

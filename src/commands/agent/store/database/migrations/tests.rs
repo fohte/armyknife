@@ -729,3 +729,57 @@ fn adds_vibe_setting_revision_to_version_twenty_two_database(database_fixture: D
 
     assert_eq!(actual, (true, true, false, current_version()));
 }
+
+#[rstest]
+fn adds_pane_binding_state_to_version_thirty_four_database(database_fixture: DatabaseFixture) {
+    let DatabaseFixture {
+        temp_dir,
+        mut connection,
+    } = database_fixture;
+    Migrations::from_slice(&MIGRATION_ENTRIES[..34])
+        .to_latest(&mut connection)
+        .expect("version thirty-four schema should be created");
+    connection
+        .execute(
+            "INSERT INTO sessions (session_id, data, rev) VALUES ('fixture-session-cedar', '{}', 0)",
+            [],
+        )
+        .expect("session row should be inserted");
+    drop(connection);
+
+    let connection = super::super::open_connection(temp_dir.path())
+        .expect("version thirty-four database should migrate");
+    connection
+        .execute(
+            "INSERT INTO agent_session_pane_binding_state (session_id, has_parent_agent)
+             VALUES ('fixture-session-cedar', 1)",
+            [],
+        )
+        .expect("pane binding state should be inserted");
+    connection
+        .execute(
+            "DELETE FROM sessions WHERE session_id = 'fixture-session-cedar'",
+            [],
+        )
+        .expect("session row should be deleted");
+    let actual = connection
+        .query_row(
+            "SELECT
+                EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'agent_session_pane_binding_state'),
+                EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = 'agent_session_pane_binding_state_delete_session'),
+                EXISTS(SELECT 1 FROM agent_session_pane_binding_state WHERE session_id = 'fixture-session-cedar'),
+                (SELECT user_version FROM pragma_user_version)",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, bool>(0)?,
+                    row.get::<_, bool>(1)?,
+                    row.get::<_, bool>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            },
+        )
+        .expect("pane binding state schema should be queryable");
+
+    assert_eq!(actual, (true, true, false, current_version()));
+}
