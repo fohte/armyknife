@@ -28,7 +28,7 @@
   position: absolute;
   z-index: 20;
   top: calc(100% + 5px);
-  right: -4px;
+  right: 0;
   width: 236px;
   padding: 6px 0;
   border: 1px solid var(--aw-border);

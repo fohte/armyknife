@@ -1,6 +1,12 @@
-import type { Meta, StoryObj } from '@storybook/react-vite'
+import type { Decorator, Meta, StoryObj } from '@storybook/react-vite'
 
 import { InboxSortControl } from '#components/inbox-sort-control'
+
+const desktopDecorator: Decorator = (Story) => (
+  <div style={{ width: 320, minHeight: 230, position: 'relative' }}>
+    <Story />
+  </div>
+)
 
 const meta = {
   component: InboxSortControl,
@@ -12,13 +18,6 @@ const meta = {
     onOpenChange: () => undefined,
     onSortChange: () => undefined,
   },
-  decorators: [
-    (Story) => (
-      <div style={{ width: 320, minHeight: 230, position: 'relative' }}>
-        <Story />
-      </div>
-    ),
-  ],
 } satisfies Meta<typeof InboxSortControl>
 
 export default meta
@@ -26,11 +25,13 @@ type Story = StoryObj<typeof meta>
 
 export const PriorityMenuIsOpen: Story = {
   name: 'The menu shows Priority selected by default',
+  decorators: [desktopDecorator],
 }
 
 export const ProjectMenuIsOpen: Story = {
   name: 'The menu shows Project selected for grouped sessions',
   args: { sort: 'project' },
+  decorators: [desktopDecorator],
 }
 
 export const IPhoneSortSheetIsOpen: Story = {
@@ -52,4 +53,5 @@ export const IPhoneSortSheetIsOpen: Story = {
 export const StorageUnavailable: Story = {
   name: 'The menu explains when this browser cannot save the selection',
   args: { storageAvailable: false },
+  decorators: [desktopDecorator],
 }
