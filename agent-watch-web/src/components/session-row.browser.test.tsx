@@ -359,6 +359,92 @@ it('truncates a long task title only after the repository reaches its minimum wi
   })
 })
 
+it('shortens a clipped owner within the one-pixel repository fit tolerance', async () => {
+  const clippedOwnerSession: Session = {
+    ...session,
+    engine: null,
+    task: null,
+    tasks: [],
+    repo: 'example-team/service',
+  }
+  renderRow('full', clippedOwnerSession)
+  await resizeFrame('1100px')
+
+  const repository = container.querySelector<HTMLElement>('.session-repo')
+  const repositoryMeasure = container.querySelector<HTMLElement>(
+    '.session-repo-measure',
+  )
+  const repositoryOwner = container.querySelector<HTMLElement>(
+    '.session-repo-owner',
+  )
+  const repositoryOwnerSeparator = container.querySelector<HTMLElement>(
+    '.session-repo-owner-separator',
+  )
+  const metaLine = repository?.parentElement ?? null
+  if (
+    repository === null ||
+    repositoryMeasure === null ||
+    repositoryOwner === null ||
+    repositoryOwnerSeparator === null ||
+    metaLine === null
+  ) {
+    throw new Error('The full row repository details were not rendered')
+  }
+
+  const metaLineStyle = getComputedStyle(metaLine)
+  const metaSiblings = Array.from(metaLine.children).filter(
+    (child): child is HTMLElement =>
+      child instanceof HTMLElement && child !== repository,
+  )
+  const metaSiblingWidth = metaSiblings.reduce(
+    (width, sibling) =>
+      width + Math.max(sibling.clientWidth, sibling.scrollWidth),
+    0,
+  )
+  const parentPadding =
+    (Number.parseFloat(metaLineStyle.paddingLeft) || 0) +
+    (Number.parseFloat(metaLineStyle.paddingRight) || 0)
+  const columnGap = Number.parseFloat(metaLineStyle.columnGap) || 0
+  const availableWidth = () =>
+    metaLine.clientWidth -
+    parentPadding -
+    metaSiblingWidth -
+    columnGap * metaSiblings.length
+  const repositoryWidth = repositoryMeasure.getBoundingClientRect().width
+  const targetAvailableWidth = Math.ceil(repositoryWidth) - 1
+  const targetFrameWidth =
+    Number.parseFloat(frame.style.width) +
+    targetAvailableWidth -
+    availableWidth()
+
+  repositoryOwner.style.width = '1ch'
+  const ownerWasClipped =
+    repositoryOwner.scrollWidth > repositoryOwner.clientWidth
+  await resizeFrame(`${String(targetFrameWidth)}px`)
+
+  const rowSnapshot = () => ({
+    ownerWasClipped,
+    repositoryIsWithinToleranceButDoesNotFit:
+      repositoryWidth > availableWidth() &&
+      repositoryWidth <= availableWidth() + 1,
+    repository: repository.querySelector('.session-repo-label')?.textContent,
+    repositoryTitle: repository.title,
+    ownerMarkerVisible:
+      repositoryOwner.textContent === '…' &&
+      repositoryOwner.getBoundingClientRect().width > 0,
+    ownerSeparatorVisible:
+      repositoryOwnerSeparator.getBoundingClientRect().width > 0,
+  })
+  expect(rowSnapshot()).toEqual({
+    ownerWasClipped: true,
+    repositoryIsWithinToleranceButDoesNotFit: true,
+    repository: '…/service',
+    repositoryTitle: 'example-team/service',
+    ownerMarkerVisible: true,
+    ownerSeparatorVisible: true,
+  })
+})
+
 it('shortens the owner before a repository name ellipsizes near the compact-row threshold', async () => {
   renderRow('compact')
   await resizeFrame('1100px')

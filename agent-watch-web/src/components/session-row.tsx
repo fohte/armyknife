@@ -157,9 +157,12 @@ function RepositoryLabel({ repository }: { repository: string }) {
             metaSiblingWidth -
             columnGap * metaGapCount
           : repositoryElement.clientWidth
+      const isOwnerShortened =
+        repositoryElement.classList.contains('is-owner-shortened')
+      const repositoryWidth = measureElement.getBoundingClientRect().width
       const shouldShorten =
         ownerPrefixIsClipped ||
-        measureElement.getBoundingClientRect().width > availableWidth + 1
+        repositoryWidth > availableWidth + (isOwnerShortened ? 0 : 1)
       setShortenOwner(shouldShorten)
     }
 
