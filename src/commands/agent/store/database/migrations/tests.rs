@@ -731,93 +731,6 @@ fn adds_vibe_setting_revision_to_version_twenty_two_database(database_fixture: D
 }
 
 #[rstest]
-fn scopes_pane_binding_state_to_agents_in_version_thirty_five_database(
-    database_fixture: DatabaseFixture,
-) {
-    let DatabaseFixture {
-        temp_dir,
-        mut connection,
-    } = database_fixture;
-    Migrations::from_slice(&MIGRATION_ENTRIES[..35])
-        .to_latest(&mut connection)
-        .expect("version thirty-five schema should be created");
-    connection
-        .execute(
-            indoc! {"
-                INSERT INTO sessions (session_id, data, rev)
-                VALUES ('fixture-session-cedar', '{}', 0)
-            "},
-            [],
-        )
-        .expect("session row should be inserted");
-    connection
-        .execute(
-            indoc! {"
-                INSERT INTO agent_session_pane_binding_state (session_id, has_parent_agent)
-                VALUES ('fixture-session-cedar', 1)
-            "},
-            [],
-        )
-        .expect("session pane state should be inserted");
-    drop(connection);
-
-    let connection = super::super::open_connection(temp_dir.path())
-        .expect("version thirty-five database should migrate");
-    connection
-        .execute(
-            indoc! {"
-                INSERT INTO agent_session_pane_binding_state (session_id, agent_id, has_parent_agent)
-                VALUES ('fixture-session-cedar', 'fixture-agent-cobalt', 1)
-            "},
-            [],
-        )
-        .expect("subagent pane state should be inserted");
-    let actual = connection
-        .query_row(
-            indoc! {"
-                SELECT
-                (SELECT has_parent_agent FROM agent_session_pane_binding_state
-                 WHERE session_id = 'fixture-session-cedar' AND agent_id = ''),
-                (SELECT has_parent_agent FROM agent_session_pane_binding_state
-                 WHERE session_id = 'fixture-session-cedar' AND agent_id = 'fixture-agent-cobalt'),
-                (SELECT user_version FROM pragma_user_version)
-            "},
-            [],
-            |row| {
-                Ok((
-                    row.get::<_, Option<bool>>(0)?,
-                    row.get::<_, bool>(1)?,
-                    row.get::<_, i64>(2)?,
-                ))
-            },
-        )
-        .expect("agent-scoped pane binding state should be queryable");
-
-    assert_eq!(actual, (None, true, current_version()));
-    connection
-        .execute(
-            indoc! {"
-                DELETE FROM sessions
-                WHERE session_id = 'fixture-session-cedar'
-            "},
-            [],
-        )
-        .expect("session row should be deleted");
-    let remaining_states = connection
-        .query_row(
-            indoc! {"
-                SELECT COUNT(*) FROM agent_session_pane_binding_state
-                WHERE session_id = 'fixture-session-cedar'
-            "},
-            [],
-            |row| row.get::<_, i64>(0),
-        )
-        .expect("deleted session state count should be queryable");
-
-    assert_eq!(remaining_states, 0);
-}
-
-#[rstest]
 fn adds_pane_binding_state_to_version_thirty_four_database(database_fixture: DatabaseFixture) {
     let DatabaseFixture {
         temp_dir,
@@ -838,8 +751,10 @@ fn adds_pane_binding_state_to_version_thirty_four_database(database_fixture: Dat
         .expect("version thirty-four database should migrate");
     connection
         .execute(
-            "INSERT INTO agent_session_pane_binding_state (session_id, agent_id, has_parent_agent)
-             VALUES ('fixture-session-cedar', '', 1)",
+            indoc! {"
+                INSERT INTO agent_session_pane_binding_state (session_id, has_parent_agent)
+                VALUES ('fixture-session-cedar', 1)
+            "},
             [],
         )
         .expect("pane binding state should be inserted");

@@ -5,36 +5,45 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use super::{open_connection, validate_session_id};
 
+// A NULL row records an unavailable fallback result so later hooks do not retry ancestry.
 pub(super) fn has_parent_agent_process_from_connection(
     connection: &Connection,
     session_id: &str,
-    agent_id: Option<&str>,
-) -> Result<Option<bool>> {
+) -> Result<Option<Option<bool>>> {
     let state = connection
         .query_row(
             "SELECT has_parent_agent FROM agent_session_pane_binding_state
-             WHERE session_id = ?1 AND agent_id = ?2",
-            params![session_id, agent_id.unwrap_or_default()],
+             WHERE session_id = ?1",
+            [session_id],
             |row| row.get::<_, Option<bool>>(0),
         )
         .optional()?;
-    Ok(state.flatten())
+    Ok(state)
 }
 
 pub(crate) fn set_has_parent_agent_process(
     sessions_dir: &Path,
     session_id: &str,
-    agent_id: Option<&str>,
-    has_parent_agent: Option<bool>,
+    has_parent_agent: Option<Option<bool>>,
 ) -> Result<()> {
     validate_session_id(session_id)?;
     let connection = open_connection(sessions_dir)?;
-    connection.execute(
-        "INSERT INTO agent_session_pane_binding_state (session_id, agent_id, has_parent_agent)
-         VALUES (?1, ?2, ?3)
-         ON CONFLICT(session_id, agent_id) DO UPDATE SET has_parent_agent = excluded.has_parent_agent",
-        params![session_id, agent_id.unwrap_or_default(), has_parent_agent],
-    )?;
+    match has_parent_agent {
+        Some(has_parent_agent) => {
+            connection.execute(
+                "INSERT INTO agent_session_pane_binding_state (session_id, has_parent_agent)
+                 VALUES (?1, ?2)
+                 ON CONFLICT(session_id) DO UPDATE SET has_parent_agent = excluded.has_parent_agent",
+                params![session_id, has_parent_agent],
+            )?;
+        }
+        None => {
+            connection.execute(
+                "DELETE FROM agent_session_pane_binding_state WHERE session_id = ?1",
+                [session_id],
+            )?;
+        }
+    }
     Ok(())
 }
 
@@ -50,14 +59,14 @@ mod tests {
     }
 
     #[rstest]
-    #[case::direct_agent(Some(false))]
-    #[case::nested_agent(Some(true))]
-    #[case::unavailable(None)]
-    fn parent_agent_state_persists_per_agent(
+    #[case::direct_agent(Some(Some(false)))]
+    #[case::nested_agent(Some(Some(true)))]
+    #[case::unavailable(Some(None))]
+    fn parent_agent_state_persists_per_session(
         sessions_dir: tempfile::TempDir,
-        #[case] state: Option<bool>,
+        #[case] state: Option<Option<bool>>,
     ) -> Result<()> {
-        set_has_parent_agent_process(sessions_dir.path(), "fixture-session-cedar", None, state)?;
+        set_has_parent_agent_process(sessions_dir.path(), "fixture-session-cedar", state)?;
         let connection = open_connection(sessions_dir.path())?;
         let state_exists = connection.query_row(
             "SELECT EXISTS(SELECT 1 FROM agent_session_pane_binding_state WHERE session_id = ?1)",
@@ -67,14 +76,10 @@ mod tests {
 
         assert_eq!(
             (
-                has_parent_agent_process_from_connection(
-                    &connection,
-                    "fixture-session-cedar",
-                    None,
-                )?,
+                has_parent_agent_process_from_connection(&connection, "fixture-session-cedar",)?,
                 state_exists,
             ),
-            (state, true),
+            (state, state.is_some()),
         );
         Ok(())
     }
@@ -89,11 +94,7 @@ mod tests {
         )?;
         assert_eq!(
             (
-                has_parent_agent_process_from_connection(
-                    &connection,
-                    "fixture-session-cedar",
-                    None,
-                )?,
+                has_parent_agent_process_from_connection(&connection, "fixture-session-cedar",)?,
                 state_exists,
             ),
             (None, false),
@@ -108,61 +109,45 @@ mod tests {
         set_has_parent_agent_process(
             sessions_dir.path(),
             "fixture-session-cedar",
-            None,
-            Some(false),
+            Some(Some(false)),
         )?;
         set_has_parent_agent_process(
             sessions_dir.path(),
             "fixture-session-cedar",
-            None,
-            Some(true),
+            Some(Some(true)),
         )?;
         let connection = open_connection(sessions_dir.path())?;
 
         assert_eq!(
-            has_parent_agent_process_from_connection(&connection, "fixture-session-cedar", None,)?,
-            Some(true),
+            has_parent_agent_process_from_connection(&connection, "fixture-session-cedar",)?,
+            Some(Some(true)),
         );
         Ok(())
     }
 
     #[rstest]
-    fn parent_agent_state_is_scoped_to_the_subagent_id(
+    fn clearing_session_start_classification_removes_the_cached_state(
         sessions_dir: tempfile::TempDir,
     ) -> Result<()> {
         set_has_parent_agent_process(
             sessions_dir.path(),
             "fixture-session-cedar",
-            None,
-            Some(false),
+            Some(Some(false)),
         )?;
-        set_has_parent_agent_process(
-            sessions_dir.path(),
-            "fixture-session-cedar",
-            Some("fixture-agent-cobalt"),
-            Some(true),
-        )?;
+        set_has_parent_agent_process(sessions_dir.path(), "fixture-session-cedar", None)?;
         let connection = open_connection(sessions_dir.path())?;
+        let state_exists = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM agent_session_pane_binding_state WHERE session_id = ?1)",
+            ["fixture-session-cedar"],
+            |row| row.get::<_, bool>(0),
+        )?;
 
         assert_eq!(
             (
-                has_parent_agent_process_from_connection(
-                    &connection,
-                    "fixture-session-cedar",
-                    None,
-                )?,
-                has_parent_agent_process_from_connection(
-                    &connection,
-                    "fixture-session-cedar",
-                    Some("fixture-agent-cobalt"),
-                )?,
-                has_parent_agent_process_from_connection(
-                    &connection,
-                    "fixture-session-cedar",
-                    Some("fixture-agent-amber"),
-                )?,
+                has_parent_agent_process_from_connection(&connection, "fixture-session-cedar",)?,
+                state_exists,
             ),
-            (Some(false), Some(true), None),
+            (None, false),
         );
         Ok(())
     }

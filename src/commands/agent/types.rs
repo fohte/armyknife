@@ -230,12 +230,10 @@ pub struct HookInput {
     #[serde(default)]
     pub reason: Option<String>,
 
-    /// Identifies which subagent fired this hook event. Subagent hooks can
-    /// share their parent's session ID, so this distinguishes their pane
-    /// classification. `Stop`'s `background_tasks[].id` uses the same value
-    /// for a `type == "subagent"` entry, which is what lets the `Stop`
-    /// handler in `hook.rs` reconcile `Session::pending_permission_agent_ids`
-    /// against still-live subagents.
+    /// Identifies which subagent fired this hook event. `Stop`'s
+    /// `background_tasks[].id` uses the same value for a `type == "subagent"`
+    /// entry, which lets the `Stop` handler reconcile
+    /// `Session::pending_permission_agent_ids` against still-live subagents.
     #[serde(default)]
     pub agent_id: Option<String>,
 

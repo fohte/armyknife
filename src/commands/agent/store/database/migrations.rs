@@ -24,7 +24,7 @@ CREATE TRIGGER agent_file_delete_session
         DELETE FROM agent_file WHERE session_id = OLD.session_id;
     END;";
 
-static MIGRATION_ENTRIES: [M<'static>; 36] = [
+static MIGRATION_ENTRIES: [M<'static>; 35] = [
     M::up(
         "CREATE TABLE sessions (
             session_id TEXT PRIMARY KEY,
@@ -334,26 +334,6 @@ static MIGRATION_ENTRIES: [M<'static>; 36] = [
             session_id TEXT PRIMARY KEY,
             has_parent_agent INTEGER CHECK (has_parent_agent IN (0, 1))
         );
-        CREATE TRIGGER agent_session_pane_binding_state_delete_session
-            AFTER DELETE ON sessions
-            BEGIN
-                DELETE FROM agent_session_pane_binding_state WHERE session_id = OLD.session_id;
-            END;",
-    ),
-    M::up(
-        "DROP TRIGGER agent_session_pane_binding_state_delete_session;
-        ALTER TABLE agent_session_pane_binding_state
-            RENAME TO agent_session_pane_binding_state_by_session;
-        CREATE TABLE agent_session_pane_binding_state (
-            session_id TEXT NOT NULL,
-            agent_id TEXT NOT NULL,
-            has_parent_agent INTEGER CHECK (has_parent_agent IN (0, 1)),
-            PRIMARY KEY (session_id, agent_id)
-        );
-        INSERT INTO agent_session_pane_binding_state (session_id, agent_id, has_parent_agent)
-            SELECT session_id, '', NULL
-            FROM agent_session_pane_binding_state_by_session;
-        DROP TABLE agent_session_pane_binding_state_by_session;
         CREATE TRIGGER agent_session_pane_binding_state_delete_session
             AFTER DELETE ON sessions
             BEGIN

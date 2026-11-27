@@ -571,28 +571,29 @@ fn process_hook_event_impl_with_env_and_unreported_stop(
     let startup_metadata = startup_metadata_for_resume(sessions_dir, &input)?;
 
     // Pane lookup stays per event because `Session::tmux_info` follows pane changes.
-    // Known ancestry results are reused; unknown results are retried until determined.
+    // Missing state gets one fallback check; unresolved ancestry stays closed until SessionStart.
     let is_session_start = event == HookEvent::SessionStart;
     let (mut stored_session, cached_has_parent_agent) = if is_session_start {
         (None, None)
     } else {
-        store::load_hook_session_state_from(
-            sessions_dir,
-            &input.session_id,
-            input.agent_id.as_deref(),
-        )?
+        store::load_hook_session_state_from(sessions_dir, &input.session_id)?
     };
     let pane_resolution =
         side_effects.resolve_pane(&input, is_session_start, cached_has_parent_agent);
     let pane_info = pane_resolution.pane_info;
-    if is_session_start
-        || (cached_has_parent_agent.is_none() && pane_resolution.has_parent_agent.is_some())
+    if is_session_start {
+        store::set_has_parent_agent_process_from(
+            sessions_dir,
+            &input.session_id,
+            pane_resolution.has_parent_agent.map(Some),
+        )?;
+    } else if cached_has_parent_agent.is_none()
+        && (pane_resolution.has_parent_agent.is_some() || pane_resolution.ancestry_checked)
     {
         store::set_has_parent_agent_process_from(
             sessions_dir,
             &input.session_id,
-            input.agent_id.as_deref(),
-            pane_resolution.has_parent_agent,
+            Some(pane_resolution.has_parent_agent),
         )?;
     }
 
@@ -2256,7 +2257,7 @@ mod tests {
         side_effects: SideEffects,
     }
 
-    type PaneBindingResolveCall = (bool, Option<String>, Option<bool>);
+    type PaneBindingResolveCall = (bool, Option<Option<bool>>);
     type PaneBindingResolveCallSink = std::sync::Arc<std::sync::Mutex<Vec<PaneBindingResolveCall>>>;
 
     struct RecordingPaneBinding {
@@ -2271,34 +2272,38 @@ mod tests {
     impl PaneBindingOperations for RecordingPaneBinding {
         fn resolve(
             &self,
-            input: &HookInput,
+            _input: &HookInput,
             is_session_start: bool,
-            cached_has_parent_agent: Option<bool>,
+            cached_has_parent_agent: Option<Option<bool>>,
         ) -> pane_binding::Resolution {
             self.resolve_calls
                 .lock()
                 .expect("pane binding resolve calls lock should not be poisoned")
-                .push((
-                    is_session_start,
-                    input.agent_id.clone(),
-                    cached_has_parent_agent,
-                ));
-            let has_parent_agent = if is_session_start {
-                Some(
-                    self.session_start_calls
-                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-                        > 0,
+                .push((is_session_start, cached_has_parent_agent));
+            let (has_parent_agent, ancestry_checked) = if is_session_start {
+                (
+                    Some(
+                        self.session_start_calls
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                            > 0,
+                    ),
+                    true,
                 )
-            } else if cached_has_parent_agent.is_some() {
-                cached_has_parent_agent
             } else {
-                self.classification_checks
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                self.fallback_has_parent_agent
+                match cached_has_parent_agent {
+                    Some(Some(state)) => (Some(state), false),
+                    Some(None) => (None, false),
+                    None => {
+                        self.classification_checks
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        (self.fallback_has_parent_agent, true)
+                    }
+                }
             };
             pane_binding::Resolution {
                 pane_info: (has_parent_agent == Some(false)).then(|| self.pane_info.clone()),
                 has_parent_agent,
+                ancestry_checked,
             }
         }
 
@@ -2627,7 +2632,7 @@ mod tests {
                 resolve_calls: resolve_calls.clone(),
                 session_start_calls,
                 classification_checks: classification_checks.clone(),
-                fallback_has_parent_agent: Some(true),
+                fallback_has_parent_agent: None,
             })),
             ..SideEffects::none()
         };
@@ -2694,7 +2699,7 @@ mod tests {
             .expect("session should exist");
         assert_eq!(
             (
-                store::load_hook_session_state_from(temp_dir.path(), "test-123", None)
+                store::load_hook_session_state_from(temp_dir.path(), "test-123")
                     .expect("hook state should load")
                     .1,
                 resolve_calls
@@ -2704,8 +2709,8 @@ mod tests {
                 session.tmux_info.map(|info| info.pane_id),
             ),
             (
-                Some(false),
-                vec![(true, None, None), (false, None, Some(false))],
+                Some(Some(false)),
+                vec![(true, None), (false, Some(Some(false)))],
                 Some("%42".to_string()),
             ),
         );
@@ -2720,7 +2725,9 @@ mod tests {
             None,
             EnvVars::default(),
         )
-        .expect("a subagent without cached state should be classified");
+        .expect("a subagent should reuse the session classification");
+        store::set_has_parent_agent_process_from(temp_dir.path(), "test-123", None)
+            .expect("session classification should be unavailable");
         let mut subagent_input = create_test_input_with_source(None, None);
         subagent_input.agent_id = Some("fixture-agent-cobalt".to_string());
         process_hook_event_impl_with_env(
@@ -2731,22 +2738,26 @@ mod tests {
             None,
             EnvVars::default(),
         )
-        .expect("a subagent should reuse its saved classification");
+        .expect("a subagent should classify a missing session state");
+        let mut subagent_input = create_test_input_with_source(None, None);
+        subagent_input.agent_id = Some("fixture-agent-cobalt".to_string());
+        process_hook_event_impl_with_env(
+            HookEvent::PostToolUse,
+            subagent_input,
+            temp_dir.path(),
+            &side_effects,
+            None,
+            EnvVars::default(),
+        )
+        .expect("a subagent should reuse an unavailable classification");
         let session = store::load_session_from(temp_dir.path(), "test-123")
             .expect("session should load")
             .expect("session should exist");
         assert_eq!(
             (
-                store::load_hook_session_state_from(temp_dir.path(), "test-123", None)
+                store::load_hook_session_state_from(temp_dir.path(), "test-123")
                     .expect("main agent hook state should load")
                     .1,
-                store::load_hook_session_state_from(
-                    temp_dir.path(),
-                    "test-123",
-                    Some("fixture-agent-cobalt"),
-                )
-                .expect("subagent hook state should load")
-                .1,
                 resolve_calls
                     .lock()
                     .expect("pane binding resolve calls lock should not be poisoned")
@@ -2755,13 +2766,13 @@ mod tests {
                 session.tmux_info.map(|info| info.pane_id),
             ),
             (
-                Some(false),
-                Some(true),
+                Some(None),
                 vec![
-                    (true, None, None),
-                    (false, None, Some(false)),
-                    (false, Some("fixture-agent-cobalt".to_string()), None),
-                    (false, Some("fixture-agent-cobalt".to_string()), Some(true),),
+                    (true, None),
+                    (false, Some(Some(false))),
+                    (false, Some(Some(false))),
+                    (false, None),
+                    (false, Some(None)),
                 ],
                 1,
                 Some("%42".to_string()),
@@ -2779,7 +2790,7 @@ mod tests {
         .expect("a later SessionStart should refresh the saved classification");
         assert_eq!(
             (
-                store::load_hook_session_state_from(temp_dir.path(), "test-123", None)
+                store::load_hook_session_state_from(temp_dir.path(), "test-123")
                     .expect("hook state should load")
                     .1,
                 resolve_calls
@@ -2788,13 +2799,14 @@ mod tests {
                     .clone(),
             ),
             (
-                Some(true),
+                Some(Some(true)),
                 vec![
-                    (true, None, None),
-                    (false, None, Some(false)),
-                    (false, Some("fixture-agent-cobalt".to_string()), None),
-                    (false, Some("fixture-agent-cobalt".to_string()), Some(true),),
-                    (true, None, None),
+                    (true, None),
+                    (false, Some(Some(false))),
+                    (false, Some(Some(false))),
+                    (false, None),
+                    (false, Some(None)),
+                    (true, None),
                 ],
             ),
         );
