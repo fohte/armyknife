@@ -62,7 +62,7 @@ mod tests {
         write_hook_response(HookEvent::SessionStart, engine, None, marker, &mut output)
             .expect("SessionStart response should serialize");
 
-        let web_ui_instruction = crate::commands::agent::web_ui::session_start_instruction();
+        let web_ui_instruction = "When you start a local web UI (an HTTP server with a port), register it with `a agent web-ui add <URL> --name <NAME>`.";
         let mut expected_context = web_ui_instruction.to_string();
         if let Some(marker) = marker {
             expected_context.push('\n');
