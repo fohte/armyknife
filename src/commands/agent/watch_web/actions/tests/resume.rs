@@ -351,12 +351,17 @@ async fn actions_report_stuck_resume_after_twenty_seconds_and_clear_it_when_star
 }
 
 #[rstest]
+#[case::started_before_deadline(SessionStatus::Ended, true, None)]
+#[case::unrelated_update_while_paused(SessionStatus::Paused, false, Some("stuck"))]
 #[tokio::test(start_paused = true)]
-async fn started_resume_does_not_remain_stuck_after_sweep_pauses_the_session(
+async fn startup_status_uses_the_session_start_marker(
+    #[case] initial_status: SessionStatus,
+    #[case] started_before_deadline: bool,
+    #[case] expected_startup: Option<&str>,
     action_context: ActionContext,
 ) {
     let mut session = session("fixture-session");
-    session.status = SessionStatus::Ended;
+    session.status = initial_status;
     action_context.save_session(&session);
     let app = action_context.router();
     let mut updates = action_context.resume_updates.subscribe();
@@ -368,16 +373,23 @@ async fn started_resume_does_not_remain_stuck_after_sweep_pauses_the_session(
     updates.changed().await.unwrap();
 
     advance(Duration::from_secs(10)).await;
-    session.status = SessionStatus::Running;
-    session.updated_at += chrono::Duration::seconds(1);
-    action_context.save_session(&session);
+    if started_before_deadline {
+        session.status = SessionStatus::Running;
+        session.updated_at += chrono::Duration::seconds(1);
+        action_context.record_session_start(&session);
+    } else {
+        session.updated_at += chrono::Duration::seconds(1);
+        action_context.save_session(&session);
+    }
 
     advance(Duration::from_secs(10)).await;
     updates.changed().await.unwrap();
 
-    session.status = SessionStatus::Paused;
-    session.updated_at += chrono::Duration::seconds(1);
-    action_context.save_session(&session);
+    if started_before_deadline {
+        session.status = SessionStatus::Paused;
+        session.updated_at += chrono::Duration::seconds(1);
+        action_context.save_session(&session);
+    }
 
     let actions = app
         .oneshot(
@@ -389,22 +401,35 @@ async fn started_resume_does_not_remain_stuck_after_sweep_pauses_the_session(
         .await
         .unwrap();
 
+    let expected_body = match expected_startup {
+        Some(startup) => json!({
+            "message": true,
+            "answerQuestion": false,
+            "resume": true,
+            "startup": startup,
+            "interrupt": false,
+            "openInTerminal": true,
+            "rewind": false,
+        }),
+        None => json!({
+            "message": true,
+            "answerQuestion": false,
+            "resume": true,
+            "interrupt": false,
+            "openInTerminal": true,
+            "rewind": false,
+        }),
+    };
+
     assert_eq!(
         response_snapshot(actions, &action_context).await,
         json!({
             "status": StatusCode::OK.as_u16(),
-            "body": {
-                "message": true,
-                "answerQuestion": false,
-                "resume": true,
-                "interrupt": false,
-                "openInTerminal": true,
-                "rewind": false,
-            },
+            "body": expected_body,
             "calls": [{
                 "kind": "resume",
                 "sessionId": "fixture-session",
-                "status": SessionStatus::Ended,
+                "status": initial_status,
             }],
         }),
     );

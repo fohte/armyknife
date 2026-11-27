@@ -49,8 +49,8 @@ use permission_denied_locks::PermissionDeniedLocks;
 use proposal_answer_locks::ProposalAnswerLocks;
 use runtime::LiveActionRuntime;
 use support::{
-    Success, load_session, require_tmux, resolve_current_session_id, resolve_sessions_dir,
-    run_blocking, send_claude_escape,
+    Success, load_session, load_session_start_generation, require_tmux, resolve_current_session_id,
+    resolve_sessions_dir, run_blocking, send_claude_escape,
 };
 
 pub(super) fn router(
@@ -242,9 +242,10 @@ async fn actions(
 ) -> Result<Json<ActionCapabilities>, ApiError> {
     let current_id = resolve_current_session_id(&state, &id).await?;
     let session = load_session(state.clone(), current_id.clone()).await?;
+    let session_start_generation = load_session_start_generation(&state, &current_id).await?;
     let startup = state
         .resume_pending
-        .startup_status(&current_id, session.status, &session.updated_at)
+        .startup_status(&current_id, session.status, session_start_generation)
         .await;
     let has_tmux = session.tmux_info.is_some();
     let has_live_session = session.status != SessionStatus::Ended;
@@ -900,6 +901,13 @@ mod tests {
 
         fn save_session(&self, session: &Session) {
             store::save_session_to(&self.temp_dir.path().join("sessions"), session).unwrap();
+        }
+
+        fn record_session_start(&self, session: &Session) {
+            let sessions_dir = self.temp_dir.path().join("sessions");
+            let lock = store::lock_session_for_update(&sessions_dir, &session.session_id).unwrap();
+            lock.record_watch_web_session_start().unwrap();
+            lock.save(session).unwrap();
         }
 
         fn save_pending_permission_request(

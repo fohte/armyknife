@@ -6,12 +6,14 @@ use std::time::Duration;
 use anyhow::Result;
 use axum::Json;
 use axum::extract::{Path as RoutePath, State};
-use chrono::{DateTime, Utc};
 use tokio::sync::Mutex;
 use tokio::time::Instant;
 
 use super::super::super::types::{Session, SessionStatus};
-use super::{ActionState, ApiError, Success, load_session, resolve_current_session_id};
+use super::{
+    ActionState, ApiError, Success, load_session, load_session_start_generation,
+    resolve_current_session_id,
+};
 use crate::commands::agent::watch_web::EnrichmentUpdates;
 use crate::infra::tmux::layout::ResumeLayoutSpec;
 use crate::shared::config::LayoutNode;
@@ -65,17 +67,23 @@ enum ResumeStartupState {
     Pending {
         attempt_id: u64,
         deadline: Instant,
-        resume_marker: DateTime<Utc>,
+        session_start_generation: i64,
     },
     Stuck {
-        resume_marker: DateTime<Utc>,
+        session_start_generation: i64,
     },
 }
 
 impl ResumeStartupState {
-    fn resume_marker(&self) -> &DateTime<Utc> {
+    fn session_start_generation(&self) -> i64 {
         match self {
-            Self::Pending { resume_marker, .. } | Self::Stuck { resume_marker } => resume_marker,
+            Self::Pending {
+                session_start_generation,
+                ..
+            }
+            | Self::Stuck {
+                session_start_generation,
+            } => *session_start_generation,
         }
     }
 }
@@ -100,13 +108,13 @@ impl PendingSessionResumes {
         &self,
         session_id: &str,
         status: SessionStatus,
-        updated_at: &DateTime<Utc>,
+        session_start_generation: i64,
     ) -> bool {
         let mut states = self.states.lock().await;
         let Some(state) = states.get(session_id).cloned() else {
             return false;
         };
-        if updated_at > state.resume_marker()
+        if session_start_generation > state.session_start_generation()
             || !matches!(status, SessionStatus::Ended | SessionStatus::Paused)
         {
             states.remove(session_id);
@@ -119,7 +127,7 @@ impl PendingSessionResumes {
         )
     }
 
-    async fn mark_pending(&self, session_id: String, resume_marker: DateTime<Utc>) {
+    async fn mark_pending(&self, session_id: String, session_start_generation: i64) {
         let attempt_id = self.next_attempt_id.fetch_add(1, Ordering::Relaxed);
         let deadline = Instant::now() + RESUME_START_TIMEOUT;
         self.states.lock().await.insert(
@@ -127,7 +135,7 @@ impl PendingSessionResumes {
             ResumeStartupState::Pending {
                 attempt_id,
                 deadline,
-                resume_marker,
+                session_start_generation,
             },
         );
         self.updates.notify();
@@ -145,7 +153,7 @@ impl PendingSessionResumes {
         let mut states = self.states.lock().await;
         let Some(ResumeStartupState::Pending {
             attempt_id: current_attempt_id,
-            resume_marker,
+            session_start_generation,
             ..
         }) = states.get(session_id).cloned()
         else {
@@ -157,7 +165,9 @@ impl PendingSessionResumes {
 
         states.insert(
             session_id.to_string(),
-            ResumeStartupState::Stuck { resume_marker },
+            ResumeStartupState::Stuck {
+                session_start_generation,
+            },
         );
         true
     }
@@ -166,11 +176,11 @@ impl PendingSessionResumes {
         &self,
         session_id: &str,
         status: SessionStatus,
-        updated_at: &DateTime<Utc>,
+        session_start_generation: i64,
     ) -> Option<ResumeStartupStatus> {
         let mut states = self.states.lock().await;
         let state = states.get(session_id).cloned()?;
-        if updated_at > state.resume_marker()
+        if session_start_generation > state.session_start_generation()
             || !matches!(status, SessionStatus::Ended | SessionStatus::Paused)
         {
             states.remove(session_id);
@@ -195,9 +205,10 @@ pub(super) async fn resume_session(
         .try_lock_owned()
         .map_err(|_| ApiError::conflict("session resume is already in progress"))?;
     let session = load_session(state.clone(), current_id.clone()).await?;
+    let session_start_generation = load_session_start_generation(&state, &current_id).await?;
     if state
         .resume_pending
-        .is_pending(&current_id, session.status, &session.updated_at)
+        .is_pending(&current_id, session.status, session_start_generation)
         .await
     {
         return Err(ApiError::conflict("session resume is already in progress"));
@@ -206,8 +217,6 @@ pub(super) async fn resume_session(
         return Err(ApiError::conflict("session is not ended or paused"));
     }
 
-    // SessionStart may update this timestamp before the blocking resume call returns.
-    let resume_marker = session.updated_at;
     let runtime = state.runtime;
     tokio::task::spawn_blocking(move || runtime.resume_session(&session))
         .await
@@ -215,7 +224,7 @@ pub(super) async fn resume_session(
         .map_err(ApiError::operation)?;
     state
         .resume_pending
-        .mark_pending(current_id, resume_marker)
+        .mark_pending(current_id, session_start_generation)
         .await;
 
     Ok(Json(Success::new()))
