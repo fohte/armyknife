@@ -209,20 +209,23 @@ const fullRowSession: Session = {
   task: {
     id: 'sample-task',
     number: 27,
-    title: 'Review retries',
+    title:
+      'Keep the task title readable while repository and branch names are long',
     priority: 1,
   },
   repo: 'sample-contributor-automation-team/notification-delivery-service',
 }
 
+const longFullRowTaskTitle = fullRowSession.task?.title ?? ''
+
 const fullRowSnapshots = [
   {
     title: 'Keep the session title visible',
     sessionTitleTooltip: 'Keep the session title visible',
-    task: 'Review retries',
+    task: longFullRowTaskTitle,
     taskHasVisibleWidth: true,
     taskTitleOverflowing: false,
-    taskTooltip: 'P1 #27 Review retries',
+    taskTooltip: `P1 #27 ${longFullRowTaskTitle}`,
     repository:
       'sample-contributor-automation-team/notification-delivery-service',
     repositoryTitle:
@@ -238,14 +241,14 @@ const fullRowSnapshots = [
   {
     title: 'Keep the session title visible',
     sessionTitleTooltip: 'Keep the session title visible',
-    task: 'Review retries',
+    task: longFullRowTaskTitle,
     taskHasVisibleWidth: true,
-    taskTitleOverflowing: false,
-    taskTooltip: 'P1 #27 Review retries',
+    taskTitleOverflowing: true,
+    taskTooltip: `P1 #27 ${longFullRowTaskTitle}`,
     repository: '…/notification-delivery-service',
     repositoryTitle:
       'sample-contributor-automation-team/notification-delivery-service',
-    repositoryNameOverflowing: false,
+    repositoryNameOverflowing: true,
     repositoryNameTextOverflow: 'ellipsis',
     branch: undefined,
     branchTitle: undefined,
@@ -256,15 +259,15 @@ const fullRowSnapshots = [
   {
     title: 'Keep the session title visible',
     sessionTitleTooltip: 'Keep the session title visible',
-    task: 'Review retries',
+    task: longFullRowTaskTitle,
     taskHasVisibleWidth: true,
-    taskTitleOverflowing: false,
-    taskTooltip: 'P1 #27 Review retries',
+    taskTitleOverflowing: true,
+    taskTooltip: `P1 #27 ${longFullRowTaskTitle}`,
     repository:
       'sample-contributor-automation-team/notification-delivery-service',
     repositoryTitle:
       'sample-contributor-automation-team/notification-delivery-service',
-    repositoryNameOverflowing: false,
+    repositoryNameOverflowing: true,
     repositoryNameTextOverflow: 'ellipsis',
     branch: undefined,
     branchTitle: undefined,
@@ -285,6 +288,41 @@ it.each([
     ).toEqual(fullRowSnapshots)
   },
 )
+
+it('truncates a long task title only after the repository reaches its minimum width', async () => {
+  renderRow('full', fullRowSession)
+  await resizeFrame('320px')
+
+  const repository = container.querySelector<HTMLElement>('.session-repo')
+  const taskTitle = container.querySelector<HTMLElement>('.session-task-title')
+  const task = container.querySelector<HTMLElement>('.session-task')
+  if (repository === null || taskTitle === null || task === null) {
+    throw new Error('The full row details were not rendered')
+  }
+
+  const repositoryMinimum = document.createElement('span')
+  repositoryMinimum.style.position = 'fixed'
+  repositoryMinimum.style.width = '10ch'
+  repositoryMinimum.style.font = getComputedStyle(repository).font
+  document.body.append(repositoryMinimum)
+  const repositoryMinimumWidth = repositoryMinimum.getBoundingClientRect().width
+  repositoryMinimum.remove()
+
+  const rowState = () => ({
+    taskTitleOverflowing: taskTitle.scrollWidth > taskTitle.clientWidth,
+    taskTooltip: task.title,
+    repositoryAtMinimumWidth:
+      Math.abs(
+        repository.getBoundingClientRect().width - repositoryMinimumWidth,
+      ) <= 1,
+  })
+
+  expect(rowState()).toEqual({
+    taskTitleOverflowing: true,
+    taskTooltip: `P1 #27 ${longFullRowTaskTitle}`,
+    repositoryAtMinimumWidth: true,
+  })
+})
 
 it('shortens the owner before a repository name ellipsizes near the compact-row threshold', async () => {
   renderRow('compact')
