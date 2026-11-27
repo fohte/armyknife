@@ -30,12 +30,17 @@ pub(super) fn router(
     updates: EnrichmentUpdates,
     restart: watch::Receiver<bool>,
     session_store_events: broadcast::Receiver<()>,
+    session_store_watcher_available: bool,
 ) -> Router {
     Router::new()
         .route("/events", get(events))
         .with_state(EventUpdates {
             enrichment: updates,
-            revisions: RevisionMonitor::new(current_revision, session_store_events),
+            revisions: RevisionMonitor::new(
+                current_revision,
+                session_store_events,
+                session_store_watcher_available,
+            ),
             restart,
         })
 }
@@ -86,6 +91,7 @@ struct RevisionMonitor {
 struct RevisionMonitorInner {
     revisions: watch::Sender<Option<i64>>,
     subscribers: watch::Sender<usize>,
+    session_store_watcher_available: watch::Sender<bool>,
 }
 
 struct RevisionSubscription {
@@ -108,27 +114,31 @@ impl RevisionMonitor {
     fn new(
         read_revision: impl Fn() -> anyhow::Result<i64> + Send + Sync + 'static,
         session_store_events: broadcast::Receiver<()>,
+        session_store_watcher_available: bool,
     ) -> Self {
         let (revisions, _) = watch::channel(None);
         let (subscribers, subscriber_receiver) = watch::channel(0);
+        let (session_store_watcher_available, _) = watch::channel(session_store_watcher_available);
         let read_revision: RevisionReader = Arc::new(read_revision);
         tokio::spawn(run_revision_monitor(
             subscriber_receiver,
             revisions.clone(),
             Arc::clone(&read_revision),
             session_store_events,
+            session_store_watcher_available.clone(),
         ));
         Self {
             inner: Arc::new(RevisionMonitorInner {
                 revisions,
                 subscribers,
+                session_store_watcher_available,
             }),
         }
     }
 
     fn subscribe(&self) -> RevisionSubscription {
         self.inner.subscribers.send_modify(|count| {
-            if *count == 0 {
+            if *count == 0 || !*self.inner.session_store_watcher_available.borrow() {
                 self.inner.revisions.send_replace(None);
             }
             *count = count.saturating_add(1);
@@ -148,6 +158,7 @@ async fn run_revision_monitor(
     revision_sender: watch::Sender<Option<i64>>,
     read_revision: RevisionReader,
     mut session_store_events: broadcast::Receiver<()>,
+    session_store_watcher_available: watch::Sender<bool>,
 ) {
     let mut event_channel_open = true;
     let mut last_warning_at = None;
@@ -197,7 +208,7 @@ async fn run_revision_monitor(
                     if *subscriber_receiver.borrow() == 0 {
                         break;
                     }
-                    if refresh_pending {
+                    if refresh_pending || !*session_store_watcher_available.borrow() {
                         match publish_revision_with_retries(
                             &mut subscriber_receiver,
                             &revision_sender,
@@ -215,6 +226,7 @@ async fn run_revision_monitor(
                 signal = session_store_events.recv(), if event_channel_open => {
                     if matches!(signal, Err(broadcast::error::RecvError::Closed)) {
                         event_channel_open = false;
+                        session_store_watcher_available.send_replace(false);
                     } else {
                         time::sleep(WATCHER_DEBOUNCE).await;
                         while matches!(
@@ -445,7 +457,7 @@ mod tests {
     #[tokio::test]
     async fn sends_the_server_instance_before_session_revisions() {
         let (_event_sender, event_receiver) = broadcast::channel(1);
-        let revisions = RevisionMonitor::new(|| Ok(12), event_receiver);
+        let revisions = RevisionMonitor::new(|| Ok(12), event_receiver, true);
         let (_enrichment_tx, enrichment_rx) = watch::channel(());
         let (_restart_tx, restart_rx) = watch::channel(false);
         let body = Sse::new(event_stream(
@@ -502,6 +514,7 @@ mod tests {
                 }
             },
             event_receiver,
+            true,
         );
         event_sender.send(()).unwrap();
         tokio::time::sleep(WATCHER_DEBOUNCE + Duration::from_millis(50)).await;
@@ -603,6 +616,7 @@ mod tests {
                 }
             },
             event_receiver,
+            true,
         );
         let mut stream = Sse::new(test_revision_stream(
             monitor.subscribe(),
@@ -642,6 +656,7 @@ mod tests {
                 }
             },
             event_receiver,
+            false,
         );
         let mut first = Sse::new(test_revision_stream(
             monitor.subscribe(),
@@ -706,6 +721,7 @@ mod tests {
                 }
             },
             event_receiver,
+            false,
         );
         let mut first = Sse::new(test_revision_stream(
             monitor.subscribe(),
@@ -721,7 +737,6 @@ mod tests {
             .await
             .is_err();
         let reads_after_first_connection = read_count.load(Ordering::SeqCst);
-        drop(first);
 
         let mut second = Sse::new(test_revision_stream(
             monitor.subscribe(),
@@ -730,7 +745,8 @@ mod tests {
         .into_response()
         .into_body()
         .into_data_stream();
-        let second_event = next_chunk(&mut second).await;
+        let (first_update, second_event) =
+            tokio::join!(next_chunk(&mut first), next_chunk(&mut second),);
         let reads_after_second_connection = read_count.load(Ordering::SeqCst);
 
         assert_eq!(
@@ -738,10 +754,18 @@ mod tests {
                 first_event,
                 no_follow_up_event,
                 reads_after_first_connection,
+                first_update,
                 second_event,
                 reads_after_second_connection,
             ),
-            (sessions_event(41), true, 1, sessions_event(42), 2,),
+            (
+                sessions_event(41),
+                true,
+                1,
+                sessions_event(42),
+                sessions_event(42),
+                2,
+            ),
         );
     }
 
@@ -760,6 +784,7 @@ mod tests {
                 }
             },
             event_receiver,
+            true,
         );
         let mut stream = Sse::new(test_revision_stream(
             monitor.subscribe(),
@@ -807,6 +832,7 @@ mod tests {
                 }
             },
             event_receiver,
+            true,
         );
         let mut stream = Sse::new(test_revision_stream(
             monitor.subscribe(),
@@ -849,7 +875,7 @@ mod tests {
     #[tokio::test]
     async fn emits_restart_and_closes_the_event_stream() {
         let (_event_sender, event_receiver) = broadcast::channel(1);
-        let revisions = RevisionMonitor::new(|| Ok(12), event_receiver);
+        let revisions = RevisionMonitor::new(|| Ok(12), event_receiver, true);
         let (_enrichment_tx, enrichment_rx) = watch::channel(());
         let (restart_tx, restart_rx) = watch::channel(false);
         let stream = revision_stream(revisions.subscribe(), enrichment_rx, restart_rx);

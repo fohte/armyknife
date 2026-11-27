@@ -162,6 +162,7 @@ pub async fn run(args: &WatchWebArgs) -> Result<()> {
     let sessions_dir = store::sessions_dir()?;
     std::fs::create_dir_all(&sessions_dir)?;
     let session_store_watcher = SessionStoreWatcher::start_or_warn(&sessions_dir);
+    let session_store_watcher_available = session_store_watcher.is_some();
 
     let executable = std::env::current_exe()?;
     let mut executable_identity = restart::ExecutableIdentity::read(&executable)?;
@@ -195,15 +196,22 @@ pub async fn run(args: &WatchWebArgs) -> Result<()> {
             .await;
             let cleanup_task = stale_session_cleanup::start(relay_shutdown_receiver);
             let shutdown_signal_sender = relay_shutdown_sender.clone();
-            let result = axum::serve(listener, app(restart_receiver, session_store_events))
-                .with_graceful_shutdown(async move {
-                    tokio::select! {
-                        _ = shutdown_receiver.changed() => {}
-                        _ = process_shutdown_signal() => {}
-                    }
-                    shutdown_signal_sender.send_replace(true);
-                })
-                .await;
+            let result = axum::serve(
+                listener,
+                app(
+                    restart_receiver,
+                    session_store_events,
+                    session_store_watcher_available,
+                ),
+            )
+            .with_graceful_shutdown(async move {
+                tokio::select! {
+                    _ = shutdown_receiver.changed() => {}
+                    _ = process_shutdown_signal() => {}
+                }
+                shutdown_signal_sender.send_replace(true);
+            })
+            .await;
             relay_shutdown_sender.send_replace(true);
             if let Err(error) = cleanup_task.await {
                 tracing::warn!(%error, "stale session cleanup task failed to stop");
@@ -265,6 +273,7 @@ async fn process_shutdown_signal() {
 fn app(
     restart_signal: watch::Receiver<bool>,
     session_store_events: tokio::sync::broadcast::Receiver<()>,
+    session_store_watcher_available: bool,
 ) -> Router {
     app_with_assets_and_queued_prompt_loaders_and_restart_signal(
         &assets::DIST,
@@ -296,6 +305,7 @@ fn app(
         ),
         restart_signal,
         session_store_events,
+        session_store_watcher_available,
     )
 }
 
@@ -338,6 +348,7 @@ fn app_with_assets_and_loader_and_restart_signal(
         ),
         restart_signal,
         tokio::sync::broadcast::channel(1).1,
+        true,
     )
 }
 
@@ -348,6 +359,7 @@ fn app_with_assets_and_queued_prompt_loaders_and_restart_signal(
     loaders: messages::RouteLoaders,
     restart_signal: watch::Receiver<bool>,
     session_store_events: tokio::sync::broadcast::Receiver<()>,
+    session_store_watcher_available: bool,
 ) -> Router {
     let enrichment_updates = EnrichmentUpdates::new();
     let api = Router::new()
@@ -365,6 +377,7 @@ fn app_with_assets_and_queued_prompt_loaders_and_restart_signal(
             enrichment_updates,
             restart_signal,
             session_store_events,
+            session_store_watcher_available,
         ))
         .merge(messages::routes_with_proposals_and_peer_out_messages(
             load_session,
@@ -682,6 +695,7 @@ mod tests {
         let response = app(
             watch::channel(false).1,
             tokio::sync::broadcast::channel(1).1,
+            true,
         )
         .oneshot(request(method, uri, host, origin))
         .await
@@ -891,6 +905,7 @@ mod tests {
         let response = app(
             watch::channel(false).1,
             tokio::sync::broadcast::channel(1).1,
+            true,
         )
         .oneshot(
             Request::builder()
