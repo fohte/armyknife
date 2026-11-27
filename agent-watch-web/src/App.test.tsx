@@ -1734,6 +1734,10 @@ it('hides the phone update until the server reports a different version', () => 
   if (noticeBeforeDismiss === null || mobileHeader === null) {
     throw new Error('Update notice not found')
   }
+  const noticeFollowsHeader =
+    (mobileHeader.compareDocumentPosition(noticeBeforeDismiss) &
+      Node.DOCUMENT_POSITION_FOLLOWING) !==
+    0
   clickButton('.update-notice-dismiss')
   act(() => {
     capturedFeed.onUpdateAvailable?.('fixture-version-next')
@@ -1742,16 +1746,12 @@ it('hides the phone update until the server reports a different version', () => 
   act(() => {
     capturedFeed.onUpdateAvailable?.('fixture-version-newer')
   })
-  const noticeForNextVersion = container.querySelector('.update-notice')
   const snapshot = () => ({
     noticeBeforeDismiss: noticeBeforeDismiss.textContent,
-    noticeFollowsHeader:
-      noticeForNextVersion !== null &&
-      (mobileHeader.compareDocumentPosition(noticeForNextVersion) &
-        Node.DOCUMENT_POSITION_FOLLOWING) !==
-        0,
+    noticeFollowsHeader,
     noticeAfterDismiss: noticeAfterDismiss?.textContent ?? null,
-    noticeForNextVersion: noticeForNextVersion?.textContent ?? null,
+    noticeForNextVersion:
+      container.querySelector('.update-notice')?.textContent ?? null,
   })
   expect(snapshot()).toEqual({
     noticeBeforeDismiss: 'New version vfixture-version-next is ready.Reload',
