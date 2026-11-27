@@ -21,15 +21,14 @@ pub(super) fn router() -> Router {
 }
 
 fn router_with_host(host: Arc<dyn LaunchHost>) -> Router {
-    Router::new()
-        .route("/sessions", post(launch_session))
-        .layer(DefaultBodyLimit::max(
-            super::messages::MAX_MESSAGE_BODY_BYTES,
-        ))
-        .with_state(LaunchState {
-            host,
-            attachment_dir: None,
-        })
+    router_with_state(LaunchState {
+        host,
+        attachment_dir: None,
+        branch_name_for_message: Arc::new(|message| {
+            let backend = crate::commands::name_branch::detect_backend();
+            crate::commands::name_branch::generate_branch_name(message, backend.as_ref())
+        }),
+    })
 }
 
 #[cfg(test)]
@@ -37,22 +36,30 @@ fn router_with_host_and_attachment_dir(
     host: Arc<dyn LaunchHost>,
     attachment_dir: PathBuf,
 ) -> Router {
+    router_with_state(LaunchState {
+        host,
+        attachment_dir: Some(attachment_dir),
+        branch_name_for_message: Arc::new(|message| Ok(format!("branch-from-{message}"))),
+    })
+}
+
+fn router_with_state(state: LaunchState) -> Router {
     Router::new()
         .route("/sessions", post(launch_session))
         .layer(DefaultBodyLimit::max(
             super::messages::MAX_MESSAGE_BODY_BYTES,
         ))
-        .with_state(LaunchState {
-            host,
-            attachment_dir: Some(attachment_dir),
-        })
+        .with_state(state)
 }
 
 #[derive(Clone)]
 struct LaunchState {
     host: Arc<dyn LaunchHost>,
     attachment_dir: Option<PathBuf>,
+    branch_name_for_message: Arc<BranchNameGenerator>,
 }
+
+type BranchNameGenerator = dyn Fn(&str) -> Result<String> + Send + Sync;
 
 trait LaunchHost: Send + Sync {
     fn launch(&self, args: NewArgs) -> Result<()>;
@@ -120,6 +127,7 @@ async fn launch_session(
         .iter()
         .map(|attachment| attachment.path.clone())
         .collect::<Vec<_>>();
+    let has_attachments = !attachment_paths.is_empty();
     let prompt = attachments::append_paths_to_message(
         initial_message.clone().unwrap_or_default(),
         &attachment_paths,
@@ -130,6 +138,7 @@ async fn launch_session(
         from: None,
         force: false,
         vibe: false,
+        watch_web_prompt_cache: has_attachments.then(|| initial_message.clone()),
         common: CommonNewArgs {
             watch_web_launch_id: Some(launch_id.clone()),
             watch_web_directory: (!request.worktree).then_some(directory.clone()),
@@ -150,7 +159,7 @@ async fn launch_session(
 
     let host = state.host;
     let branch_message = initial_message;
-    let has_attachments = !attachment_paths.is_empty();
+    let branch_name_for_message = state.branch_name_for_message;
     let launch_time = Utc::now();
     let branch_launch_id = launch_id.clone();
     let launch_result = tokio::task::spawn_blocking(move || {
@@ -161,10 +170,7 @@ async fn launch_session(
             has_attachments,
             &branch_launch_id,
             launch_time,
-            |message| {
-                let backend = crate::commands::name_branch::detect_backend();
-                crate::commands::name_branch::generate_branch_name(message, backend.as_ref())
-            },
+            |message| branch_name_for_message(message),
         )?;
         host.launch(args)
     })
@@ -172,16 +178,26 @@ async fn launch_session(
     match launch_result {
         Ok(Ok(())) => {}
         Ok(Err(error)) => {
-            attachments::remove(&attachment_paths);
+            remove_saved_attachments(&launch_id, &attachment_paths);
             return Err(ApiError::operation(error));
         }
         Err(error) => {
-            attachments::remove(&attachment_paths);
+            remove_saved_attachments(&launch_id, &attachment_paths);
             return Err(ApiError::internal(error));
         }
     }
 
     Ok(Json(LaunchResponse { launch_id }))
+}
+
+fn remove_saved_attachments(launch_id: &str, paths: &[PathBuf]) {
+    if let Err(error) = attachments::remove(paths) {
+        tracing::warn!(
+            launch_id,
+            %error,
+            "failed to remove initial message attachments after launch failure"
+        );
+    }
 }
 
 fn resolve_worktree(
@@ -369,17 +385,21 @@ mod tests {
             (
                 status,
                 args.common.prompt,
-                std::fs::metadata(&saved_path).unwrap().len()
+                std::fs::read(&saved_path).unwrap()
             ),
             (
                 StatusCode::OK,
-                Some(indoc::formatdoc! {"
-                    Inspect this image.
+                Some(
+                    indoc::formatdoc! {"
+                        Inspect this image.
 
-                    Attached file(s):
-                    - {}
-                ", saved_path.display()}),
-                image.len() as u64,
+                        Attached file(s):
+                        - {}
+                    ", saved_path.display()}
+                    .trim_end()
+                    .to_string(),
+                ),
+                image,
             ),
         );
     }
@@ -400,21 +420,27 @@ mod tests {
                 "directory": directory.path(),
                 "engine": "claude",
                 "worktree": false,
+                "initialMessage": "Recover this request.",
                 "attachments": [image_request("fixture.png", PNG_SIGNATURE)],
             }),
         )
         .await;
+        let args = host.calls.lock().unwrap().pop().unwrap();
 
         assert_eq!(
             (
                 status,
+                args.watch_web_prompt_cache,
                 std::fs::read_dir(storage.path())
                     .unwrap()
                     .map(|entry| entry.unwrap().path())
                     .collect::<Vec<_>>(),
-                host.calls.lock().unwrap().len(),
             ),
-            (StatusCode::BAD_GATEWAY, vec![], 1),
+            (
+                StatusCode::BAD_GATEWAY,
+                Some(Some("Recover this request.".to_string())),
+                vec![],
+            ),
         );
     }
 
@@ -445,22 +471,56 @@ mod tests {
         );
     }
 
-    #[test]
-    fn worktree_branch_uses_the_user_message_when_attachments_are_present() {
-        let now = Utc.with_ymd_and_hms(2026, 11, 16, 3, 4, 5).unwrap();
-        let worktree = resolve_worktree(
-            true,
-            Some("Update the dashboard layout"),
-            true,
-            "launch-fixture",
-            now,
-            |message| Ok(format!("branch-from-{message}")),
+    #[tokio::test]
+    async fn worktree_launch_generates_its_branch_from_the_user_message() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = tempfile::tempdir().unwrap();
+        let host = Arc::new(FakeLaunchHost::default());
+        let router =
+            router_with_host_and_attachment_dir(host.clone(), storage.path().to_path_buf());
+        let (status, _) = request(
+            &router,
+            json!({
+                "directory": directory.path(),
+                "engine": "codex",
+                "worktree": true,
+                "initialMessage": "Update the dashboard layout",
+                "attachments": [image_request("fixture.png", PNG_SIGNATURE)],
+            }),
         )
-        .unwrap();
+        .await;
+        let args = host.calls.lock().unwrap().pop().unwrap();
+        let saved_path = std::fs::read_dir(storage.path())
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path()
+            .canonicalize()
+            .unwrap();
 
         assert_eq!(
-            worktree,
-            Some(Some("branch-from-Update the dashboard layout".to_string())),
+            (
+                status,
+                args.worktree,
+                args.common.prompt,
+                args.watch_web_prompt_cache,
+            ),
+            (
+                StatusCode::OK,
+                Some(Some("branch-from-Update the dashboard layout".to_string())),
+                Some(
+                    indoc::formatdoc! {"
+                        Update the dashboard layout
+
+                        Attached file(s):
+                        - {}
+                    ", saved_path.display()}
+                    .trim_end()
+                    .to_string(),
+                ),
+                Some(Some("Update the dashboard layout".to_string())),
+            ),
         );
     }
 

@@ -136,6 +136,10 @@ pub struct NewArgs {
     #[arg(long)]
     pub vibe: bool,
 
+    /// Keeps prompt recovery independent of files removed after a failed watch-web launch.
+    #[arg(skip)]
+    pub(crate) watch_web_prompt_cache: Option<Option<String>>,
+
     #[command(flatten)]
     pub common: CommonNewArgs,
 
@@ -237,8 +241,13 @@ fn run_worktree_mode(
     let resolved = resolve_args(worktree_value, args.common.prompt.as_deref())?;
     let name = resolved.branch_name;
     let prompt = resolved.prompt;
+    let prompt_for_cache = args
+        .watch_web_prompt_cache
+        .as_ref()
+        .unwrap_or(&args.common.prompt)
+        .as_deref();
 
-    with_prompt_cache_recovery(repo_root, prompt.as_deref(), || {
+    with_prompt_cache_recovery(repo_root, prompt_for_cache, || {
         run_worktree_creation(args, &name, prompt.as_deref(), repo_root, config)
     })
 }
@@ -320,9 +329,13 @@ fn run_session_only(
     repo_root: &str,
     config: &Config,
 ) -> Result<()> {
-    let raw_prompt = args.common.prompt.as_deref();
+    let prompt_for_cache = args
+        .watch_web_prompt_cache
+        .as_ref()
+        .unwrap_or(&args.common.prompt)
+        .as_deref();
 
-    with_prompt_cache_recovery(repo_root, raw_prompt, || {
+    with_prompt_cache_recovery(repo_root, prompt_for_cache, || {
         run_session_only_inner(args, repo, repo_root, config)
     })
 }

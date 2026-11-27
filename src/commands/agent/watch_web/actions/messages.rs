@@ -332,7 +332,7 @@ pub(super) async fn remove_attachments(paths: Vec<PathBuf>) {
         return;
     }
     if let Err(error) = run_blocking(move || {
-        attachments::remove(&paths);
+        attachments::remove(&paths)?;
         Ok(())
     })
     .await

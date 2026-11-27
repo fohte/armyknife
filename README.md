@@ -1257,7 +1257,7 @@ Files sent by an agent are served by `GET /api/sessions/{id}/files/{file_id}` on
 - `GET /api/sessions/{id}/review-documents` returns all open review documents, with the editor document first. This includes legacy v2 and unversioned markers without a live lock because they may still represent reviews waiting in the queue. Each entry has an `id`, a `kind` (`pr_draft`, `issue_comment`, `issue_body`, `review_replies`, or `draft`), a `target`, and `isEditor`, `canSave`, and `canFinish` flags. Target fields depend on the kind, such as `repository`, `branch`, `issueNumber`, `pullRequestNumber`, `title`, and `threadCount`. Entries may include `startedAt` as the Unix epoch timestamp in milliseconds. A generic `draft` target may include `path`, relative to the session working directory when possible and otherwise containing only the filename.
 - `GET /api/sessions/{id}/review-documents/{document_id}` returns that document's metadata, `revision`, `frontmatter`, and Markdown `body`, including for documents waiting in the review queue.
 - `POST /api/sessions/{id}/review-documents/{document_id}/save` and `/finish` accept the same edit payload as the singular routes. The URL and payload IDs must match, and only the current editor document can be saved or finished. A different current document or unavailable FIFO returns `409`; a missing marker returns `404`.
-- `POST /api/sessions` with `{"directory":"/workspace/example","engine":"claude","worktree":false,"initialMessage":"Inspect this project."}` starts a Claude Code or Codex session in an existing directory and returns `{"launchId":"..."}`. `engine` accepts `claude` or `codex`; `initialMessage`, `model`, and `reasoningEffort` are optional. When `model` or `reasoningEffort` is omitted, the agent profile and engine defaults apply.
+- `POST /api/sessions` with `{"directory":"/workspace/example","engine":"claude","worktree":false,"initialMessage":"Inspect this project.","attachments":[{"name":"reference.png","mimeType":"image/png","size":8,"data":"iVBORw0KGgo="}]}` starts a Claude Code or Codex session in an existing directory and returns `{"launchId":"..."}`. `engine` accepts `claude` or `codex`; `initialMessage`, `model`, `reasoningEffort`, and `attachments` are optional. When `model` or `reasoningEffort` is omitted, the agent profile and engine defaults apply. Attachment paths are appended to the first message.
 - `GET /api/model-options?engine=claude|codex` returns the engine's model choices, the effective default model and effort, and the effort levels supported by each model.
 - `GET /api/directories` returns recent repository roots for sessions under the configured ghq root, ordered by recent activity with one result per repository. Sessions outside discovered repositories are omitted. Add `?q=<search>` to match paths relative to the ghq root and include matching repositories; an existing absolute or `~/` directory matching the query is also included.
 - `GET /api/skill-suggestions?engine=claude&directory=/workspace/example` returns the skill listing from the most recent matching session, preferring the selected directory. Omit `directory` to use the most recent listing for that engine.
@@ -1292,7 +1292,7 @@ Files sent by an agent are served by `GET /api/sessions/{id}/files/{file_id}` on
 - `POST /api/sessions/{id}/decisions/{seq}/ok` to mark a decision reviewed
 - `POST /api/sessions/{id}/decisions/{seq}/change` with `{"comment":"Revise the fixture choice."}` to request a change
 
-Messages, proposal answers, and todo resolutions may include up to 16 file attachments with a combined size of 50 MiB. Each attachment has a sanitized file name, MIME type, byte size, and base64-encoded data. PNG, JPEG, GIF, and WebP attachments with matching file signatures keep their conversation previews; other files appear by name:
+Session launches, messages, proposal answers, and todo resolutions may include up to 16 file attachments with a combined size of 50 MiB. Each attachment has a sanitized file name, MIME type, byte size, and base64-encoded data. PNG, JPEG, GIF, and WebP attachments with matching file signatures keep their conversation previews; other files appear by name:
 
 ```json
 {
@@ -1308,7 +1308,7 @@ Messages, proposal answers, and todo resolutions may include up to 16 file attac
 }
 ```
 
-The server stores attachments for 30 days, subject to a 1 GiB storage cap, and appends their absolute paths to the message sent to the session. Image attachments in todo resolutions and proposal answers also appear in the saved card comment.
+The server stores attachments for 30 days, subject to a 1 GiB storage cap, and appends their absolute paths to the message sent to the session, including the first message for a session launch. Image attachments in todo resolutions and proposal answers also appear in the saved card comment.
 
 For example, send a message with:
 
