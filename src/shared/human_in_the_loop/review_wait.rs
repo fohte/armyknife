@@ -140,6 +140,43 @@ mod tests {
         reader: File,
     }
 
+    struct PausedChild {
+        pid: u32,
+        reaped: bool,
+    }
+
+    impl PausedChild {
+        fn spawn() -> Self {
+            // SAFETY: the forked child only calls `pause` and `_exit`, which do not touch Rust
+            // runtime state inherited from the multithreaded test process.
+            let pid = unsafe { libc::fork() };
+            assert!(pid >= 0, "child process should fork");
+            if pid == 0 {
+                // SAFETY: the child exits immediately if a signal interrupts `pause`.
+                unsafe {
+                    libc::pause();
+                    libc::_exit(0);
+                }
+            }
+            Self {
+                pid: u32::try_from(pid).expect("child pid should fit in u32"),
+                reaped: false,
+            }
+        }
+    }
+
+    impl Drop for PausedChild {
+        fn drop(&mut self) {
+            if !self.reaped {
+                // SAFETY: this guard owns the child pid and reaps it if a test exits early.
+                unsafe {
+                    libc::kill(self.pid as libc::pid_t, libc::SIGKILL);
+                    libc::waitpid(self.pid as libc::pid_t, std::ptr::null_mut(), 0);
+                }
+            }
+        }
+    }
+
     #[fixture]
     fn fifo_reader() -> FifoReader {
         let temp = TempDir::new().expect("temporary directory should be created");
@@ -206,6 +243,45 @@ mod tests {
         assert_eq!(
             result,
             Err("Review editor session ended before the review completed".to_string()),
+        );
+    }
+
+    #[rstest]
+    fn returns_session_closed_when_the_resolved_process_exits_during_the_wait(
+        fifo_reader: FifoReader,
+    ) {
+        let child = PausedChild::spawn();
+        let child_pid = child.pid;
+        let releaser = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(250));
+            // SAFETY: the child guard owns this pid and is waiting in `pause`.
+            let killed = unsafe { libc::kill(child_pid as libc::pid_t, libc::SIGTERM) };
+            let mut status = 0;
+            // SAFETY: wait for the exact child sent the signal above.
+            let reaped = unsafe { libc::waitpid(child_pid as libc::pid_t, &mut status, 0) };
+            (killed, reaped)
+        });
+
+        let result = wait_for_fifo_signal_or_session_exit_with_interval(
+            fifo_reader.reader,
+            &fifo_reader.path,
+            "review-session",
+            &mut session_watch(),
+            Duration::ZERO,
+            |_| Ok(Some(child_pid)),
+        )
+        .map_err(|error| error.to_string());
+        let reap_result = releaser.join();
+        let mut child = child;
+        child.reaped = true;
+        let reap_result = reap_result.expect("child releaser should finish");
+
+        assert_eq!(
+            (result, reap_result),
+            (
+                Err("Review editor session ended before the review completed".to_string()),
+                (0, child_pid as libc::pid_t),
+            ),
         );
     }
 

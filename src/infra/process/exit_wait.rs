@@ -188,6 +188,78 @@ fn register_kevent(kq: std::os::fd::RawFd, change: &libc::kevent) -> io::Result<
 }
 
 #[cfg(target_os = "macos")]
+fn register_process_exit_watches(
+    kq: std::os::fd::RawFd,
+    pids: &[u32],
+) -> io::Result<Option<Vec<u32>>> {
+    let mut exited = Vec::new();
+    for &pid in pids {
+        if pid == 0 || libc::pid_t::try_from(pid).is_err() {
+            exited.push(pid);
+            continue;
+        }
+        let change = new_kevent(
+            pid as libc::uintptr_t,
+            libc::EVFILT_PROC,
+            libc::EV_ADD | libc::EV_ONESHOT,
+            libc::NOTE_EXIT,
+        );
+        match register_kevent(kq, &change) {
+            Ok(()) => {}
+            Err(error) if error.raw_os_error() == Some(libc::ESRCH) => exited.push(pid),
+            Err(error) => return Err(error),
+        }
+    }
+    Ok((!exited.is_empty()).then_some(exited))
+}
+
+#[cfg(target_os = "macos")]
+fn wait_for_kqueue_events(
+    kq: std::os::fd::RawFd,
+    capacity: usize,
+    timeout: Option<Duration>,
+) -> io::Result<Option<Vec<libc::kevent>>> {
+    use std::ptr;
+
+    let mut events = vec![new_kevent(0, 0, 0, 0); capacity];
+    let capacity = libc::c_int::try_from(events.len()).unwrap_or(libc::c_int::MAX);
+    let deadline = timeout.map(|timeout| Instant::now() + timeout);
+    loop {
+        let timespec = deadline.map(|deadline| {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            libc::timespec {
+                tv_sec: libc::time_t::try_from(remaining.as_secs()).unwrap_or(libc::time_t::MAX),
+                tv_nsec: libc::c_long::from(remaining.subsec_nanos()),
+            }
+        });
+        // SAFETY: `events` has room for `capacity` events, and `timespec` outlives the call.
+        let ready = unsafe {
+            libc::kevent(
+                kq,
+                ptr::null(),
+                0,
+                events.as_mut_ptr(),
+                capacity,
+                timespec.as_ref().map_or(ptr::null(), ptr::from_ref),
+            )
+        };
+        match ready {
+            -1 => {
+                let error = io::Error::last_os_error();
+                if error.kind() != io::ErrorKind::Interrupted {
+                    return Err(error);
+                }
+            }
+            0 => return Ok(None),
+            ready => {
+                events.truncate(ready as usize);
+                return Ok(Some(events));
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
 fn wait_with_kqueue(
     pids: &[u32],
     dir: &Path,
@@ -196,7 +268,6 @@ fn wait_with_kqueue(
 ) -> io::Result<Wake> {
     use std::fs::File;
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-    use std::ptr;
 
     // SAFETY: `kqueue` takes no arguments and returns a new descriptor or -1.
     let raw = unsafe { libc::kqueue() };
@@ -220,80 +291,27 @@ fn wait_with_kqueue(
         ),
     )?;
 
-    let mut exited = Vec::new();
-    for &pid in pids {
-        // Mirrors `is_process_alive`: an unrepresentable or zero pid is not a live process.
-        if pid == 0 || libc::pid_t::try_from(pid).is_err() {
-            exited.push(pid);
-            continue;
-        }
-        let change = new_kevent(
-            pid as libc::uintptr_t,
-            libc::EVFILT_PROC,
-            libc::EV_ADD | libc::EV_ONESHOT,
-            libc::NOTE_EXIT,
-        );
-        match register_kevent(kq.as_raw_fd(), &change) {
-            Ok(()) => {}
-            // ESRCH means the process exited before it could be registered.
-            Err(error) if error.raw_os_error() == Some(libc::ESRCH) => exited.push(pid),
-            Err(error) => return Err(error),
-        }
-    }
-    if !exited.is_empty() {
+    if let Some(exited) = register_process_exit_watches(kq.as_raw_fd(), pids)? {
         return Ok(Wake::Exited(exited));
     }
     if dir_changed(dir, known_entries) {
         return Ok(Wake::DirChanged);
     }
 
-    // Room for one event per pid plus the directory, so a batch of exits is reported together.
-    let mut events = vec![new_kevent(0, 0, 0, 0); pids.len() + 1];
-    let capacity = libc::c_int::try_from(events.len()).unwrap_or(libc::c_int::MAX);
-    let deadline = timeout.map(|timeout| Instant::now() + timeout);
-    loop {
-        let timespec = deadline.map(|deadline| {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            libc::timespec {
-                tv_sec: libc::time_t::try_from(remaining.as_secs()).unwrap_or(libc::time_t::MAX),
-                tv_nsec: libc::c_long::from(remaining.subsec_nanos()),
-            }
-        });
-        // SAFETY: `events` has room for `capacity` events, and `timespec` outlives the call.
-        let ready = unsafe {
-            libc::kevent(
-                kq.as_raw_fd(),
-                ptr::null(),
-                0,
-                events.as_mut_ptr(),
-                capacity,
-                timespec.as_ref().map_or(ptr::null(), ptr::from_ref),
-            )
-        };
-        match ready {
-            -1 => {
-                let error = io::Error::last_os_error();
-                if error.kind() != io::ErrorKind::Interrupted {
-                    return Err(error);
-                }
-            }
-            0 => return Ok(Wake::TimedOut),
-            ready => {
-                let exited = events
-                    .iter()
-                    .take(ready as usize)
-                    .filter(|event| event.filter == libc::EVFILT_PROC)
-                    .map(|event| event.ident as u32)
-                    .collect::<Vec<_>>();
-                // Only the directory watch is left when no process exited.
-                return Ok(if exited.is_empty() {
-                    Wake::DirChanged
-                } else {
-                    Wake::Exited(exited)
-                });
-            }
-        }
-    }
+    let Some(events) = wait_for_kqueue_events(kq.as_raw_fd(), pids.len() + 1, timeout)? else {
+        return Ok(Wake::TimedOut);
+    };
+    let exited = events
+        .iter()
+        .filter(|event| event.filter == libc::EVFILT_PROC)
+        .map(|event| event.ident as u32)
+        .collect::<Vec<_>>();
+    // Only the directory watch is left when no process exited.
+    Ok(if exited.is_empty() {
+        Wake::DirChanged
+    } else {
+        Wake::Exited(exited)
+    })
 }
 
 #[cfg(target_os = "macos")]
@@ -303,7 +321,6 @@ fn wait_for_exit_or_readable_fd_with_kqueue(
     timeout: Option<Duration>,
 ) -> io::Result<FdWake> {
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-    use std::ptr;
 
     // SAFETY: `kqueue` takes no arguments and returns a new descriptor or -1.
     let raw = unsafe { libc::kqueue() };
@@ -317,73 +334,20 @@ fn wait_for_exit_or_readable_fd_with_kqueue(
         &new_kevent(fd as libc::uintptr_t, libc::EVFILT_READ, libc::EV_ADD, 0),
     )?;
 
-    let mut exited = Vec::new();
-    for &pid in pids {
-        if pid == 0 || libc::pid_t::try_from(pid).is_err() {
-            exited.push(pid);
-            continue;
-        }
-        let change = new_kevent(
-            pid as libc::uintptr_t,
-            libc::EVFILT_PROC,
-            libc::EV_ADD | libc::EV_ONESHOT,
-            libc::NOTE_EXIT,
-        );
-        match register_kevent(kq.as_raw_fd(), &change) {
-            Ok(()) => {}
-            Err(error) if error.raw_os_error() == Some(libc::ESRCH) => exited.push(pid),
-            Err(error) => return Err(error),
-        }
-    }
-    if !exited.is_empty() {
+    if register_process_exit_watches(kq.as_raw_fd(), pids)?.is_some() {
         return Ok(FdWake::Exited);
     }
 
-    let mut events = vec![new_kevent(0, 0, 0, 0); pids.len() + 1];
-    let capacity = libc::c_int::try_from(events.len()).unwrap_or(libc::c_int::MAX);
-    let deadline = timeout.map(|timeout| Instant::now() + timeout);
-    loop {
-        let timespec = deadline.map(|deadline| {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            libc::timespec {
-                tv_sec: libc::time_t::try_from(remaining.as_secs()).unwrap_or(libc::time_t::MAX),
-                tv_nsec: libc::c_long::from(remaining.subsec_nanos()),
-            }
-        });
-        // SAFETY: `events` has room for `capacity` events, and `timespec` outlives the call.
-        let ready = unsafe {
-            libc::kevent(
-                kq.as_raw_fd(),
-                ptr::null(),
-                0,
-                events.as_mut_ptr(),
-                capacity,
-                timespec.as_ref().map_or(ptr::null(), ptr::from_ref),
-            )
-        };
-        match ready {
-            -1 => {
-                let error = io::Error::last_os_error();
-                if error.kind() != io::ErrorKind::Interrupted {
-                    return Err(error);
-                }
-            }
-            0 => return Ok(FdWake::TimedOut),
-            ready => {
-                let events = &events[..ready as usize];
-                let exited = events
-                    .iter()
-                    .filter(|event| event.filter == libc::EVFILT_PROC)
-                    .map(|event| event.ident as u32)
-                    .collect::<Vec<_>>();
-                return Ok(if !exited.is_empty() {
-                    FdWake::Exited
-                } else {
-                    FdWake::Readable
-                });
-            }
-        }
-    }
+    let Some(events) = wait_for_kqueue_events(kq.as_raw_fd(), pids.len() + 1, timeout)? else {
+        return Ok(FdWake::TimedOut);
+    };
+    Ok(
+        if events.iter().any(|event| event.filter == libc::EVFILT_PROC) {
+            FdWake::Exited
+        } else {
+            FdWake::Readable
+        },
+    )
 }
 
 #[cfg(test)]
