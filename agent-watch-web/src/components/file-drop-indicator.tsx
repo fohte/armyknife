@@ -4,21 +4,24 @@ import { Plus } from 'lucide-react'
 
 export function FileDropIndicator({
   label,
+  variant,
   className,
 }: {
   label: string
+  variant: 'conversation' | 'card'
   className?: string
 }) {
   return (
     <div
       className={
-        className === undefined
-          ? 'file-drop-indicator'
-          : `file-drop-indicator ${className}`
+        `file-drop-indicator file-drop-indicator--${variant}` +
+        (className === undefined ? '' : ` ${className}`)
       }
       role="status"
     >
-      <Plus aria-hidden="true" size={22} />
+      {variant === 'conversation' ? (
+        <Plus aria-hidden="true" size={22} />
+      ) : null}
       <span>{label}</span>
     </div>
   )

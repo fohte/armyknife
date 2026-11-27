@@ -323,7 +323,7 @@ export function ProposalCard({
           </label>
           <div className="chat-card-comment-drop-zone">
             {isFileDragActive ? (
-              <FileDropIndicator label="Drop files to attach" />
+              <FileDropIndicator label="Drop files to attach" variant="card" />
             ) : null}
             <textarea
               id={`${proposalFieldId}-comment`}

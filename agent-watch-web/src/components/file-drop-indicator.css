@@ -1,17 +1,30 @@
 .file-drop-indicator {
   position: absolute;
+  inset: var(--file-drop-indicator-inset, 0);
+  background: var(--aw-bg-scrim-overlay);
+  color: var(--aw-text-primary);
+  pointer-events: none;
+}
+
+.file-drop-indicator--card {
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  border: 2px dashed var(--aw-text-muted);
+  border-radius: var(--aw-radius);
+  font-size: 16px;
+}
+
+.file-drop-indicator--conversation {
   z-index: 15;
   display: flex;
   flex-direction: column;
-  inset: var(--file-drop-indicator-inset, 8px);
   align-items: center;
   justify-content: center;
   gap: 8px;
   border: 1px dashed var(--aw-text-muted);
-  background: rgb(10 10 10 / 88%);
-  color: var(--aw-text-primary);
   font-size: 14px;
-  pointer-events: none;
+  inset: var(--file-drop-indicator-inset, 0);
 }
 
 .chat-card-comment-drop-zone {

@@ -377,6 +377,7 @@ export function ConversationPaneView({
         <FileDropIndicator
           className="conversation-drop-target"
           label="Drop images to attach"
+          variant="conversation"
         />
       ) : null}
       <ConversationPaneHeader
