@@ -407,16 +407,21 @@ mod tests {
     }
 
     #[rstest]
-    fn lists_entry_names_sorted_and_treats_a_missing_directory_as_empty(dir: TempDir) {
-        fs::write(dir.path().join("b"), "").expect("entry should be written");
-        fs::write(dir.path().join("a"), "").expect("entry should be written");
+    #[case::sorted_entries(&["b", "a"], "", Ok(vec!["a".to_string(), "b".to_string()]))]
+    #[case::missing_directory_has_none(&[], "absent", Ok(Vec::new()))]
+    fn lists_entry_names(
+        dir: TempDir,
+        #[case] files: &[&str],
+        #[case] subdir: &str,
+        #[case] expected: Result<Vec<String>, io::ErrorKind>,
+    ) {
+        for file in files {
+            fs::write(dir.path().join(file), "").expect("entry should be written");
+        }
 
         assert_eq!(
-            (
-                dir_entry_names(dir.path()).map_err(|error| error.kind()),
-                dir_entry_names(&dir.path().join("absent")).map_err(|error| error.kind()),
-            ),
-            (Ok(vec!["a".to_string(), "b".to_string()]), Ok(Vec::new())),
+            dir_entry_names(&dir.path().join(subdir)).map_err(|error| error.kind()),
+            expected,
         );
     }
 }
