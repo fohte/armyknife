@@ -362,7 +362,6 @@ it('truncates a long task title only after the repository reaches its minimum wi
 it('shortens a clipped owner within the one-pixel repository fit tolerance', async () => {
   const clippedOwnerSession: Session = {
     ...session,
-    engine: null,
     task: null,
     tasks: [],
     repo: 'example-team/service',

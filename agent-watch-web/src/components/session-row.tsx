@@ -57,6 +57,7 @@ type SessionRowProps = {
 function RepositoryLabel({ repository }: { repository: string }) {
   const repositoryRef = useRef<HTMLSpanElement>(null)
   const measureRef = useRef<HTMLSpanElement>(null)
+  const clippedPrefixWidthRef = useRef(0)
   const [shortenOwner, setShortenOwner] = useState(false)
   const separator = repository.lastIndexOf('/')
   const isPlaceholder = repository === '—'
@@ -74,6 +75,7 @@ function RepositoryLabel({ repository }: { repository: string }) {
       return
     }
 
+    clippedPrefixWidthRef.current = 0
     let active = true
     const update = () => {
       if (!active) return
@@ -112,11 +114,19 @@ function RepositoryLabel({ repository }: { repository: string }) {
         repositoryElement.querySelector<HTMLElement>(
           '.session-repo-owner-separator',
         )
-      const ownerPrefixIsClipped =
-        (ownerElement !== null &&
-          ownerElement.scrollWidth > ownerElement.clientWidth) ||
-        (ownerSeparatorElement !== null &&
-          ownerSeparatorElement.scrollWidth > ownerSeparatorElement.clientWidth)
+      const clippedPrefixWidth = Math.max(
+        (ownerElement?.scrollWidth ?? 0) - (ownerElement?.clientWidth ?? 0),
+        (ownerSeparatorElement?.scrollWidth ?? 0) -
+          (ownerSeparatorElement?.clientWidth ?? 0),
+        0,
+      )
+      const ownerPrefixIsClipped = clippedPrefixWidth > 0
+      if (ownerPrefixIsClipped) {
+        clippedPrefixWidthRef.current = Math.max(
+          clippedPrefixWidthRef.current,
+          clippedPrefixWidth,
+        )
+      }
       const metaSiblings = isMetaLine
         ? Array.from(parentElement.children).filter(
             (child): child is HTMLElement =>
@@ -162,7 +172,12 @@ function RepositoryLabel({ repository }: { repository: string }) {
       const repositoryWidth = measureElement.getBoundingClientRect().width
       const shouldShorten =
         ownerPrefixIsClipped ||
-        repositoryWidth > availableWidth + (isOwnerShortened ? 0 : 1)
+        repositoryWidth > availableWidth + (isOwnerShortened ? 0 : 1) ||
+        // Reserve the observed clip as slack because flex widths round independently.
+        (isOwnerShortened &&
+          clippedPrefixWidthRef.current > 0 &&
+          repositoryWidth + clippedPrefixWidthRef.current + 1 > availableWidth)
+      if (!shouldShorten) clippedPrefixWidthRef.current = 0
       setShortenOwner(shouldShorten)
     }
 
