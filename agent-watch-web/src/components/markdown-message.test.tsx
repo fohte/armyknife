@@ -7,10 +7,14 @@ function renderMessage(
   markdown: string,
   className?: string,
   imageSources?: Readonly<Record<string, string | null>>,
+  unmappedImagePathsAreLocal?: boolean,
 ) {
   const props = {
     ...(className === undefined ? {} : { className }),
     ...(imageSources === undefined ? {} : { imageSources }),
+    ...(unmappedImagePathsAreLocal === undefined
+      ? {}
+      : { unmappedImagePathsAreLocal }),
   }
   return renderToStaticMarkup(
     <MarkdownMessage {...props}>{markdown}</MarkdownMessage>,
@@ -63,9 +67,15 @@ it('renders markdown images with the shared conversation image treatment', () =>
   )
 })
 
-it('shows unavailable for a local image without an image mapping', () => {
+it('shows unavailable for an unmapped local image by default', () => {
   expect(renderMessage('![](/Users/guest/screenshot.png)')).toBe(
     '<div class="markdown-message"><p><span class="markdown-image-unavailable">表示できません: /Users/guest/screenshot.png</span></p></div>',
+  )
+})
+
+it('keeps standalone root-relative image URLs', () => {
+  expect(renderMessage('![Sample](/fixture-illustration.png)')).toBe(
+    '<div class="markdown-message"><p><button class="image-lightbox-trigger" type="button" aria-label="Enlarge Sample"><img class="chat-user-image" src="/fixture-illustration.png" alt="Sample" loading="lazy" decoding="async"/></button></p></div>',
   )
 })
 
@@ -105,7 +115,7 @@ it.each([
     '/tmp/fixture.png',
   ],
 ])('shows unavailable local images when %s', (_name, markdown, src) => {
-  expect(renderMessage(markdown, undefined, {})).toBe(
+  expect(renderMessage(markdown, undefined, {}, true)).toBe(
     `<div class="markdown-message"><p><span class="markdown-image-unavailable">表示できません: ${src}</span></p></div>`,
   )
 })
@@ -140,7 +150,7 @@ it.each([
     '<div class="markdown-message"><p><span class="markdown-image-unavailable">表示できません: /tmp/fixture%20name.png</span></p></div>',
   ],
 ])('shows the original path for %s', (_name, imageSources, path, expected) => {
-  expect(renderMessage(`![](<${path}>)`, undefined, imageSources)).toBe(
+  expect(renderMessage(`![](<${path}>)`, undefined, imageSources, true)).toBe(
     expected,
   )
 })

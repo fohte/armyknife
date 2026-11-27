@@ -391,7 +391,10 @@ export function ReviewDocumentPreview({
   if (summary?.kind === 'issue_comment') {
     const comment = parseIssueComment(body)
     return (
-      <MarkdownMessage className="review-document-issue-comment-body">
+      <MarkdownMessage
+        className="review-document-issue-comment-body"
+        unmappedImagePathsAreLocal={false}
+      >
         {comment.body}
       </MarkdownMessage>
     )
@@ -402,7 +405,10 @@ export function ReviewDocumentPreview({
     if (threads.length === 0) {
       const messages = parseReviewMessages(body)
       return (
-        <MarkdownMessage className="review-document-body">
+        <MarkdownMessage
+          className="review-document-body"
+          unmappedImagePathsAreLocal={false}
+        >
           {messages.length > 0 ? messages.join('\n\n') : body}
         </MarkdownMessage>
       )
@@ -466,7 +472,10 @@ export function ReviewDocumentPreview({
                         {readableTime(comment.createdAt)}
                       </time>
                     </p>
-                    <MarkdownMessage className="review-document-thread-comment-body">
+                    <MarkdownMessage
+                      className="review-document-thread-comment-body"
+                      unmappedImagePathsAreLocal={false}
+                    >
                       {comment.body}
                     </MarkdownMessage>
                   </div>
@@ -495,6 +504,11 @@ export function ReviewDocumentPreview({
   }
 
   return (
-    <MarkdownMessage className="review-document-body">{body}</MarkdownMessage>
+    <MarkdownMessage
+      className="review-document-body"
+      unmappedImagePathsAreLocal={false}
+    >
+      {body}
+    </MarkdownMessage>
   )
 }

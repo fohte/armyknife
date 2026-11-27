@@ -9,8 +9,8 @@ use crate::commands::agent::file::{self, storage_root};
 use crate::commands::agent::file_attachment_support::{
     MAX_AGENT_FILE_BYTES, inspect_bounded_image, read_bounded_image,
 };
+use crate::commands::agent::watch_web::image_attachments::MAX_IMAGES_PER_MESSAGE;
 
-const MAX_IMAGES_PER_MESSAGE: usize = 16;
 const MAX_MESSAGE_IMAGE_BYTES: u64 = 50 * 1024 * 1024;
 
 pub(super) fn attach(session_id: &str, conversation: &mut super::ConversationResponse) {
@@ -429,6 +429,7 @@ mod tests {
     use std::fs;
     use std::io::Write;
 
+    use rstest::{fixture, rstest};
     use tempfile::TempDir;
 
     use crate::commands::agent::proposal::{ProposalAnswer, ProposalOption};
@@ -441,6 +442,11 @@ mod tests {
     use crate::commands::agent::watch_web::messages::{ChatItem, ConversationResponse};
 
     const PNG_HEADER: &[u8] = &[137, 80, 78, 71, 13, 10, 26, 10];
+
+    #[fixture]
+    fn image_directories() -> (TempDir, TempDir) {
+        (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap())
+    }
 
     fn image_file(directory: &TempDir, name: &str, size: u64) -> std::path::PathBuf {
         let path = directory.path().join(name);
@@ -568,10 +574,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn snapshots_images_from_todo_and_proposal_card_text() {
-        let sources = tempfile::tempdir().unwrap();
-        let storage = tempfile::tempdir().unwrap();
+    #[rstest]
+    fn snapshots_images_from_todo_and_proposal_card_text(image_directories: (TempDir, TempDir)) {
+        let (sources, storage) = image_directories;
         let texts = [
             "todo detail",
             "todo comment",
@@ -660,10 +665,11 @@ mod tests {
         assert_eq!(conversation.message_image_sources, expected_sources);
     }
 
-    #[test]
-    fn marks_todo_and_proposal_images_unavailable_when_storage_is_unavailable() {
-        let sources = tempfile::tempdir().unwrap();
-        let storage = tempfile::tempdir().unwrap();
+    #[rstest]
+    fn marks_todo_and_proposal_images_unavailable_when_storage_is_unavailable(
+        image_directories: (TempDir, TempDir),
+    ) {
+        let (sources, storage) = image_directories;
         let invalid_storage_root = storage.path().join("not-a-directory");
         fs::write(&invalid_storage_root, b"fixture").unwrap();
         let todo_path = image_file(&sources, "todo.png", 8);
@@ -707,6 +713,77 @@ mod tests {
                     BTreeMap::from([(proposal_path.display().to_string(), None)]),
                 ),
             ]),
+        );
+    }
+
+    #[rstest]
+    fn enforces_the_image_count_limit_across_proposal_fields(
+        image_directories: (TempDir, TempDir),
+    ) {
+        let (sources, storage) = image_directories;
+        let paths = (0..=MAX_IMAGES_PER_MESSAGE)
+            .map(|index| image_file(&sources, &format!("proposal-{index}.png"), 8))
+            .collect::<Vec<_>>();
+        let markdown = |paths: &[std::path::PathBuf]| {
+            paths
+                .iter()
+                .map(|path| format!("![](<{}>)", path.display()))
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let summary = markdown(&paths[..8]);
+        let option_description = markdown(&paths[8..]);
+        let mut conversation = ConversationResponse {
+            messages: vec![ChatItem::Proposal {
+                seq: 1,
+                title: "A choice".to_owned(),
+                summary: Some(summary.clone()),
+                options: vec![ProposalOption {
+                    label: "Option".to_owned(),
+                    description: Some(option_description.clone()),
+                    pros: Vec::new(),
+                    cons: Vec::new(),
+                    recommended: false,
+                }],
+                answer: None,
+                resolved: false,
+                resolution: None,
+                comment: None,
+            }],
+            ..ConversationResponse::default()
+        };
+
+        attach_with_storage_root("fixture-session", &mut conversation, storage.path());
+
+        let expected_sources = paths
+            .iter()
+            .enumerate()
+            .map(|(index, path)| {
+                let path = path.display().to_string();
+                let text = if index < 8 {
+                    &summary
+                } else {
+                    &option_description
+                };
+                let source = (index < MAX_IMAGES_PER_MESSAGE).then(|| {
+                    let key = image_key("fixture-session", text, &path);
+                    format!("/api/sessions/fixture-session/answer-images/{key}")
+                });
+                (path, source)
+            })
+            .collect::<BTreeMap<_, _>>();
+        let stored_images = file::session_directory(storage.path(), "fixture-session")
+            .unwrap()
+            .read_dir()
+            .unwrap()
+            .count();
+
+        assert_eq!(
+            (conversation.message_image_sources, stored_images),
+            (
+                BTreeMap::from([(0, expected_sources)]),
+                MAX_IMAGES_PER_MESSAGE,
+            ),
         );
     }
 

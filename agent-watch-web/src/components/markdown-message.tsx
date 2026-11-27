@@ -207,6 +207,7 @@ type MarkdownMessageProps = {
   children: string
   className?: string
   imageSources?: Readonly<Record<string, string | null>>
+  unmappedImagePathsAreLocal?: boolean
   inline?: boolean
   mobile?: boolean
   sessionId?: string
@@ -372,12 +373,16 @@ const MarkdownParagraph: NonNullable<Components['p']> = ({ children }) => (
 )
 
 const MarkdownImage: NonNullable<Components['img']> = ({ src, alt, title }) => {
-  const { imageSources } = useContext(MarkdownComponentContext)
+  const { imageSources, unmappedImagePathsAreLocal } = useContext(
+    MarkdownComponentContext,
+  )
   if (src === undefined || src === '') return null
   const mappedImage = getMappedImageSource(src, imageSources)
   if (
     mappedImage?.source === null ||
-    (mappedImage === undefined && isUnmappedLocalImagePath(src))
+    (unmappedImagePathsAreLocal === true &&
+      mappedImage === undefined &&
+      isUnmappedLocalImagePath(src))
   ) {
     return (
       <span className="markdown-image-unavailable">
@@ -415,6 +420,7 @@ export const MarkdownMessage = memo(function MarkdownMessage({
   children,
   className,
   imageSources,
+  unmappedImagePathsAreLocal,
   inline = false,
   mobile = false,
   sessionId,
@@ -422,6 +428,7 @@ export const MarkdownMessage = memo(function MarkdownMessage({
   onCommandStarted,
 }: MarkdownMessageProps) {
   const sessionLinks = useMarkdownSessionLinks()
+  const inheritedMarkdownContext = useContext(MarkdownComponentContext)
   const inheritedCommandContext = useMarkdownCommandContext()
   const commandSessionId = sessionId ?? inheritedCommandContext?.sessionId
   const commandSessionTitle = inheritedCommandContext?.sessionTitle ?? 'Session'
@@ -442,6 +449,10 @@ export const MarkdownMessage = memo(function MarkdownMessage({
     sessionsById,
     webUis: sessionLinks.webUis ?? [],
     ...(imageSources === undefined ? {} : { imageSources }),
+    unmappedImagePathsAreLocal:
+      unmappedImagePathsAreLocal ??
+      inheritedMarkdownContext.unmappedImagePathsAreLocal ??
+      true,
     mobile,
     ...(sessionLinks.onSelectSession === undefined
       ? {}

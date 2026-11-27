@@ -67,6 +67,7 @@ export function displayMarkdownImagePath(src: string): string {
 export function isUnmappedLocalImagePath(src: string): boolean {
   return (
     src.startsWith('/') &&
+    src.slice(1).includes('/') &&
     !src.startsWith('//') &&
     !src.startsWith('/api/images/') &&
     !src.startsWith('/api/sessions/')
