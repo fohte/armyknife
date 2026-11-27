@@ -94,9 +94,17 @@ function RepositoryLabel({ repository }: { repository: string }) {
         branchElement === null
           ? 0
           : Number.parseFloat(getComputedStyle(branchElement).minWidth) || 0
+      const parentStyle =
+        parentElement === null ? null : getComputedStyle(parentElement)
+      const parentPadding =
+        parentStyle === null
+          ? 0
+          : (Number.parseFloat(parentStyle.paddingLeft) || 0) +
+            (Number.parseFloat(parentStyle.paddingRight) || 0)
       const availableWidth =
         parentElement?.classList.contains('session-repo-line') === true
           ? parentElement.clientWidth -
+            parentPadding -
             branchMinimumWidth -
             (separatorElement?.getBoundingClientRect().width ?? 0) -
             (branchElement === null ? 0 : columnGap * 2)

@@ -250,7 +250,7 @@
 .session-row-content .session-branch {
   overflow: hidden;
   min-width: 7ch;
-  flex: 1 1 auto;
+  flex: 1 1 0;
   font-family: var(--font-mono);
   text-overflow: ellipsis;
   white-space: nowrap;

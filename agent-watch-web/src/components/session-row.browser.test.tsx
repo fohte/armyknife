@@ -71,17 +71,32 @@ function snapshot() {
     repositoryNameOverflowing:
       repositoryName !== null &&
       repositoryName.scrollWidth > repositoryName.clientWidth,
+    repositoryNameTextOverflow:
+      repositoryName === null
+        ? null
+        : getComputedStyle(repositoryName).textOverflow,
     branch: branch?.textContent,
     branchTitle: branch?.title,
     branchSeparator:
       container.querySelector('.session-branch-separator')?.textContent ?? null,
     branchOverflowing:
       branch !== null && branch.scrollWidth > branch.clientWidth,
+    branchTextOverflow:
+      branch === null ? null : getComputedStyle(branch).textOverflow,
   }
 }
 
-function rowStates(...states: ReturnType<typeof snapshot>[]) {
-  return states
+async function resizeRowSnapshots(
+  density: 'full' | 'compact',
+  viewSession: Session = session,
+) {
+  renderRow(density, viewSession)
+  await resizeFrame('1100px')
+  const wideSnapshot = snapshot()
+  await resizeFrame('300px')
+  const narrowSnapshot = snapshot()
+  await resizeFrame('1100px')
+  return [wideSnapshot, narrowSnapshot, snapshot()]
 }
 
 beforeEach(() => {
@@ -101,18 +116,7 @@ afterEach(() => {
 })
 
 it('shortens the repository owner before its name as the row narrows', async () => {
-  renderRow('compact')
-  await resizeFrame('1100px')
-
-  const wideSnapshot = snapshot()
-
-  await resizeFrame('300px')
-  const narrowSnapshot = snapshot()
-
-  await resizeFrame('1100px')
-  const restoredSnapshot = snapshot()
-
-  expect(rowStates(wideSnapshot, narrowSnapshot, restoredSnapshot)).toEqual([
+  expect(await resizeRowSnapshots('compact')).toEqual([
     {
       title: 'Keep the session title visible',
       task: 'Keep the task readable beside long names',
@@ -120,10 +124,12 @@ it('shortens the repository owner before its name as the row narrows', async () 
       repository: 'example-platform/notification-delivery-service',
       repositoryTitle: 'example-platform/notification-delivery-service',
       repositoryNameOverflowing: false,
+      repositoryNameTextOverflow: 'ellipsis',
       branch: 'feature/preserve-task-details-with-long-identifiers',
       branchTitle: 'feature/preserve-task-details-with-long-identifiers',
       branchSeparator: '⑂',
       branchOverflowing: false,
+      branchTextOverflow: 'ellipsis',
     },
     {
       title: 'Keep the session title visible',
@@ -131,11 +137,13 @@ it('shortens the repository owner before its name as the row narrows', async () 
       taskHasVisibleWidth: true,
       repository: '…/notification-delivery-service',
       repositoryTitle: 'example-platform/notification-delivery-service',
-      repositoryNameOverflowing: true,
+      repositoryNameOverflowing: false,
+      repositoryNameTextOverflow: 'ellipsis',
       branch: 'feature/preserve-task-details-with-long-identifiers',
       branchTitle: 'feature/preserve-task-details-with-long-identifiers',
       branchSeparator: '⑂',
       branchOverflowing: true,
+      branchTextOverflow: 'ellipsis',
     },
     {
       title: 'Keep the session title visible',
@@ -144,27 +152,18 @@ it('shortens the repository owner before its name as the row narrows', async () 
       repository: 'example-platform/notification-delivery-service',
       repositoryTitle: 'example-platform/notification-delivery-service',
       repositoryNameOverflowing: false,
+      repositoryNameTextOverflow: 'ellipsis',
       branch: 'feature/preserve-task-details-with-long-identifiers',
       branchTitle: 'feature/preserve-task-details-with-long-identifiers',
       branchSeparator: '⑂',
       branchOverflowing: false,
+      branchTextOverflow: 'ellipsis',
     },
   ])
 })
 
 it('preserves the task and repository name in a narrow full row', async () => {
-  renderRow('full')
-  await resizeFrame('1100px')
-
-  const wideSnapshot = snapshot()
-
-  await resizeFrame('300px')
-  const narrowSnapshot = snapshot()
-
-  await resizeFrame('1100px')
-  const restoredSnapshot = snapshot()
-
-  expect(rowStates(wideSnapshot, narrowSnapshot, restoredSnapshot)).toEqual([
+  expect(await resizeRowSnapshots('full')).toEqual([
     {
       title: 'Keep the session title visible',
       task: 'Keep the task readable beside long names',
@@ -172,10 +171,12 @@ it('preserves the task and repository name in a narrow full row', async () => {
       repository: 'example-platform/notification-delivery-service',
       repositoryTitle: 'example-platform/notification-delivery-service',
       repositoryNameOverflowing: false,
+      repositoryNameTextOverflow: 'ellipsis',
       branch: undefined,
       branchTitle: undefined,
       branchSeparator: null,
       branchOverflowing: false,
+      branchTextOverflow: null,
     },
     {
       title: 'Keep the session title visible',
@@ -184,10 +185,12 @@ it('preserves the task and repository name in a narrow full row', async () => {
       repository: '…/notification-delivery-service',
       repositoryTitle: 'example-platform/notification-delivery-service',
       repositoryNameOverflowing: true,
+      repositoryNameTextOverflow: 'ellipsis',
       branch: undefined,
       branchTitle: undefined,
       branchSeparator: null,
       branchOverflowing: false,
+      branchTextOverflow: null,
     },
     {
       title: 'Keep the session title visible',
@@ -196,12 +199,81 @@ it('preserves the task and repository name in a narrow full row', async () => {
       repository: 'example-platform/notification-delivery-service',
       repositoryTitle: 'example-platform/notification-delivery-service',
       repositoryNameOverflowing: false,
+      repositoryNameTextOverflow: 'ellipsis',
       branch: undefined,
       branchTitle: undefined,
       branchSeparator: null,
       branchOverflowing: false,
+      branchTextOverflow: null,
     },
   ])
+})
+
+it('shortens the owner before a repository name ellipsizes near the compact-row threshold', async () => {
+  renderRow('compact')
+  await resizeFrame('1100px')
+
+  const repositoryLine =
+    container.querySelector<HTMLElement>('.session-repo-line')
+  const repositoryMeasure = container.querySelector<HTMLElement>(
+    '.session-repo-measure',
+  )
+  const branch = container.querySelector<HTMLElement>('.session-branch')
+  const separator = container.querySelector<HTMLElement>(
+    '.session-branch-separator',
+  )
+  if (
+    repositoryLine === null ||
+    repositoryMeasure === null ||
+    branch === null ||
+    separator === null
+  ) {
+    throw new Error('The compact row details were not rendered')
+  }
+
+  const lineStyle = getComputedStyle(repositoryLine)
+  const desiredRepositoryWidth =
+    repositoryMeasure.getBoundingClientRect().width - 5
+  const reservedWidth =
+    (Number.parseFloat(getComputedStyle(branch).minWidth) || 0) +
+    separator.getBoundingClientRect().width +
+    (Number.parseFloat(lineStyle.columnGap) || 0) * 2
+  const desiredLineWidth =
+    desiredRepositoryWidth +
+    reservedWidth +
+    (Number.parseFloat(lineStyle.paddingLeft) || 0) +
+    (Number.parseFloat(lineStyle.paddingRight) || 0)
+  const targetFrameWidth =
+    Number.parseFloat(frame.style.width) +
+    desiredLineWidth -
+    repositoryLine.clientWidth
+
+  await resizeFrame(`${String(targetFrameWidth)}px`)
+
+  const repository = container.querySelector<HTMLElement>('.session-repo')
+  const repositoryName =
+    container.querySelector<HTMLElement>('.session-repo-name')
+  const rowSnapshot = () => {
+    if (repository === null || repositoryName === null) {
+      throw new Error('The repository label was not rendered')
+    }
+    return {
+      repository: repository.querySelector('.session-repo-label')?.textContent,
+      repositoryTitle: repository.title,
+      repositoryNameOverflowing:
+        repositoryName.scrollWidth > repositoryName.clientWidth,
+      branch: branch.textContent,
+      branchTitle: branch.title,
+    }
+  }
+
+  expect(rowSnapshot()).toEqual({
+    repository: '…/notification-delivery-service',
+    repositoryTitle: 'example-platform/notification-delivery-service',
+    repositoryNameOverflowing: false,
+    branch: 'feature/preserve-task-details-with-long-identifiers',
+    branchTitle: 'feature/preserve-task-details-with-long-identifiers',
+  })
 })
 
 it('does not reserve repository width for the blank-repository placeholder', async () => {
