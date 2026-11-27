@@ -1742,15 +1742,16 @@ it('hides the phone update until the server reports a different version', () => 
   act(() => {
     capturedFeed.onUpdateAvailable?.('fixture-version-newer')
   })
+  const noticeForNextVersion = container.querySelector('.update-notice')
   const snapshot = () => ({
     noticeBeforeDismiss: noticeBeforeDismiss.textContent,
     noticeFollowsHeader:
-      (mobileHeader.compareDocumentPosition(noticeBeforeDismiss) &
+      noticeForNextVersion !== null &&
+      (mobileHeader.compareDocumentPosition(noticeForNextVersion) &
         Node.DOCUMENT_POSITION_FOLLOWING) !==
-      0,
+        0,
     noticeAfterDismiss: noticeAfterDismiss?.textContent ?? null,
-    noticeForNextVersion:
-      container.querySelector('.update-notice')?.textContent ?? null,
+    noticeForNextVersion: noticeForNextVersion?.textContent ?? null,
   })
   expect(snapshot()).toEqual({
     noticeBeforeDismiss: 'New version vfixture-version-next is ready.Reload',
