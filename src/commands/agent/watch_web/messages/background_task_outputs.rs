@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
+use std::future;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -79,6 +80,7 @@ pub(super) async fn get_background_task_output_events(
     State((load_session, _, loaders)): State<MessagesRouteState>,
     AxumPath((session_id, task_id)): AxumPath<(String, String)>,
 ) -> Response {
+    let create_event_stream = loaders.background_task_output_event_stream.clone();
     let output_path = match tokio::task::spawn_blocking(move || -> Result<Option<PathBuf>> {
         let Some(session) = load_session(&session_id)? else {
             return Ok(None);
@@ -99,13 +101,14 @@ pub(super) async fn get_background_task_output_events(
         }
     };
 
-    let changes = match watch_output_changes(output_path.clone()) {
-        Ok(changes) => changes,
+    let output_events = match create_event_stream(output_path.clone()) {
+        Ok(events) => events,
         Err(error) => {
             tracing::warn!(%error, path = %output_path.display(), "failed to watch background task output");
             return output_unavailable_response(StatusCode::INTERNAL_SERVER_ERROR);
         }
     };
+    let changes = output_change_signals(output_path.clone(), output_events);
     let events = output_updates(output_path, changes)
         .map(|output| Ok::<Event, std::convert::Infallible>(Event::default().data(output)));
     let mut response = Sse::new(events)
@@ -133,23 +136,20 @@ fn output_unavailable_response(status: StatusCode) -> Response {
         .into_response()
 }
 
-fn watch_output_changes(path: PathBuf) -> Result<impl Stream<Item = ()> + Send> {
+pub(super) fn watch_output_events(
+    path: PathBuf,
+) -> Result<impl Stream<Item = notify::Result<notify::Event>> + Send> {
     let (sender, receiver) = mpsc::channel(1);
     let watched_path = path.clone();
-    let mut watcher: RecommendedWatcher =
-        notify::recommended_watcher(move |result: notify::Result<notify::Event>| {
-            let changed = result.is_err()
-                || result.is_ok_and(|event| {
-                    event
-                        .paths
-                        .iter()
-                        .any(|event_path| event_path == &watched_path)
-                });
-            if changed {
-                // Each event rereads the full tail, so a pending notification covers newer writes.
-                let _ = sender.try_send(());
+    let mut watcher: RecommendedWatcher = notify::recommended_watcher(
+        move |event: notify::Result<notify::Event>| {
+            if let Err(error) = &event {
+                tracing::warn!(%error, path = %watched_path.display(), "background task output watcher failed");
             }
-        })?;
+            // Each event rereads the full tail, so a pending notification covers newer writes.
+            let _ = sender.try_send(event);
+        },
+    )?;
     let parent = path
         .parent()
         .ok_or_else(|| anyhow::anyhow!("background task output path has no parent"))?;
@@ -158,10 +158,23 @@ fn watch_output_changes(path: PathBuf) -> Result<impl Stream<Item = ()> + Send> 
     Ok(stream::unfold(
         (receiver, watcher),
         |(mut receiver, _watcher)| async move {
-            receiver.recv().await?;
-            Some(((), (receiver, _watcher)))
+            let event = receiver.recv().await?;
+            Some((event, (receiver, _watcher)))
         },
     ))
+}
+
+fn output_change_signals(
+    path: PathBuf,
+    events: impl Stream<Item = notify::Result<notify::Event>> + Send + 'static,
+) -> impl Stream<Item = ()> + Send {
+    events.filter_map(move |event| {
+        let changed = match event {
+            Ok(event) => event.paths.iter().any(|event_path| event_path == &path),
+            Err(_) => true,
+        };
+        future::ready(changed.then_some(()))
+    })
 }
 
 fn output_updates(
@@ -313,11 +326,7 @@ fn read_output_tail(path: &Path) -> std::io::Result<Option<String>> {
 mod tests {
     use std::fs;
 
-    use futures_util::StreamExt;
-    use futures_util::stream;
-    use tokio::sync::mpsc;
-
-    use super::{MAX_OUTPUT_BYTES, output_updates, read_output_tail};
+    use super::{MAX_OUTPUT_BYTES, read_output_tail};
 
     #[test]
     fn reads_only_the_last_twenty_lines() {
@@ -344,29 +353,5 @@ mod tests {
         let expected =
             output[output.len() - usize::try_from(MAX_OUTPUT_BYTES).unwrap()..].to_owned();
         assert_eq!(read_output_tail(&path).unwrap(), Some(expected));
-    }
-
-    #[tokio::test]
-    async fn streams_the_initial_output_and_each_injected_change() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("output.log");
-        fs::write(&path, "initial output\n").unwrap();
-        let (sender, receiver) = mpsc::channel(1);
-        let changes = stream::unfold(receiver, |mut receiver| async move {
-            receiver.recv().await.map(|change| (change, receiver))
-        });
-        let mut updates = Box::pin(output_updates(path.clone(), changes));
-        let initial = updates.next().await;
-        fs::write(&path, "updated output\n").unwrap();
-        sender.send(()).await.unwrap();
-        let updated = updates.next().await;
-
-        assert_eq!(
-            vec![initial, updated],
-            vec![
-                Some("initial output\n".to_owned()),
-                Some("updated output\n".to_owned()),
-            ],
-        );
     }
 }
