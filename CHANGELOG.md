@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.976](https://github.com/fohte/armyknife/compare/v0.1.975...v0.1.976) (2026-11-27)
+
+
+### Bug Fixes
+
+* **human-in-the-loop:** ignore stale markers ([#2382](https://github.com/fohte/armyknife/issues/2382)) ([72d1e77](https://github.com/fohte/armyknife/commit/72d1e77b7459bdf34a70acac05c40a1e7f43e9e7))
+
 ## [0.1.975](https://github.com/fohte/armyknife/compare/v0.1.974...v0.1.975) (2026-11-27)
 
 
