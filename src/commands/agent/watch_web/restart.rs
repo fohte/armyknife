@@ -67,12 +67,13 @@ pub(super) struct ExecutableWatcher {
 
 impl ExecutableWatcher {
     pub(super) fn new(executable: &Path) -> anyhow::Result<Self> {
-        let parent = executable_watch_directory(executable)?;
         let (sender, events) = mpsc::unbounded_channel::<notify::Result<notify::Event>>();
         let mut watcher = notify::recommended_watcher(move |event| {
             let _ = sender.send(event);
         })?;
-        watcher.watch(&parent, RecursiveMode::NonRecursive)?;
+        register_executable_watches(executable, |path| {
+            watcher.watch(path, RecursiveMode::NonRecursive)
+        })?;
         Ok(Self {
             _watcher: watcher,
             events,
@@ -87,6 +88,24 @@ fn executable_watch_directory(executable: &Path) -> anyhow::Result<PathBuf> {
         .filter(|parent| !parent.as_os_str().is_empty())
         .ok_or_else(|| anyhow::anyhow!("executable has no parent directory"))?;
     Ok(parent.to_path_buf())
+}
+
+fn register_executable_watches(
+    executable: &Path,
+    mut register: impl FnMut(&Path) -> notify::Result<()>,
+) -> anyhow::Result<()> {
+    let launch_directory = executable
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("executable has no parent directory"))?;
+    let launch_directory = fs::canonicalize(launch_directory)?;
+    let target_directory = executable_watch_directory(executable)?;
+
+    register(&launch_directory)?;
+    if target_directory != launch_directory {
+        register(&target_directory)?;
+    }
+    Ok(())
 }
 
 pub(super) fn create_watcher_or_warn<T, E>(create: impl FnOnce() -> Result<T, E>) -> Option<T>
@@ -516,7 +535,7 @@ mod tests {
     }
 
     #[test]
-    fn watches_the_target_directory_for_symlinked_executables() {
+    fn registers_launch_and_target_directories_for_symlinked_executables() {
         let directory = tempfile::tempdir().expect("temporary directory should be created");
         let launch_directory = directory.path().join("bin");
         let target_directory = directory.path().join("libexec");
@@ -526,13 +545,21 @@ mod tests {
         let symlink = launch_directory.join("a");
         fs::write(&executable, "binary").expect("executable should be written");
         std::os::unix::fs::symlink(&executable, &symlink).expect("symlink should be created");
+        let launch_directory =
+            fs::canonicalize(launch_directory).expect("launch directory should be canonical");
         let target_directory =
             fs::canonicalize(target_directory).expect("target directory should be canonical");
+        let mut registered_directories = Vec::new();
+
+        super::register_executable_watches(&symlink, |path| {
+            registered_directories.push(path.to_path_buf());
+            Ok(())
+        })
+        .expect("watch directories should be registered");
 
         assert_eq!(
-            super::executable_watch_directory(&symlink)
-                .expect("watch directory should be resolved"),
-            target_directory,
+            registered_directories,
+            vec![launch_directory, target_directory],
         );
     }
 
