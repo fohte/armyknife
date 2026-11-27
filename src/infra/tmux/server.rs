@@ -259,7 +259,8 @@ fn capture_pane_for_session_for_socket_result_with(
     let format = format!("#{{pane_id}}\t#{{session_name}}\t#{{{option}}}\t#{{{legacy_option}}}");
     let args = socket_command_args(socket_path, &["list-panes", "-a", "-F", format.as_str()]);
     let output = run_tmux_output(&args)?;
-    let pane_id = find_session_pane_id(&output, session_name, session_id).unwrap_or(stored_pane_id);
+    let pane_id = find_session_pane_id(&output, session_name, session_id, stored_pane_id)
+        .unwrap_or(stored_pane_id);
 
     capture_pane_for_socket_result_with(socket_path, pane_id, |args| run_tmux_output(args))
 }
@@ -268,8 +269,9 @@ fn find_session_pane_id<'a>(
     output: &'a str,
     session_name: &str,
     session_id: &str,
+    stored_pane_id: &'a str,
 ) -> Option<&'a str> {
-    let mut latest_pane = None;
+    let mut stored_pane = None;
     for line in output.lines() {
         let mut fields = line.split('\t');
         let (Some(pane_id), Some(listed_session_name), Some(option_value)) =
@@ -281,24 +283,22 @@ fn find_session_pane_id<'a>(
         let option_value = [option_value, legacy_option_value]
             .into_iter()
             .find(|value| !value.is_empty());
-        let Some(pane_number) = pane_id
-            .strip_prefix('%')
-            .and_then(|number| number.parse::<u32>().ok())
-        else {
-            continue;
-        };
 
-        if listed_session_name != session_name || option_value != Some(session_id) {
+        if listed_session_name != session_name
+            || !is_safe_pane_id(pane_id)
+            || option_value != Some(session_id)
+        {
             continue;
         }
 
-        // Resume leaves the old pane marker in place, so select the pane created most recently.
-        if latest_pane.is_none_or(|(latest_number, _)| pane_number > latest_number) {
-            latest_pane = Some((pane_number, pane_id));
+        // Resume marks its replacement pane before sending the startup command.
+        if pane_id != stored_pane_id {
+            return Some(pane_id);
         }
+        stored_pane = Some(pane_id);
     }
 
-    latest_pane.map(|(_, pane_id)| pane_id)
+    stored_pane
 }
 
 /// Sends keys to a pane on its recorded server.
@@ -519,31 +519,22 @@ mod tests {
         );
     }
 
-    #[rstest]
-    #[case::stale_stored_pane_uses_current_option("%17", "fixture-session", "")]
-    #[case::updated_stored_pane_uses_current_option("%29", "fixture-session", "")]
-    #[case::stale_stored_pane_uses_legacy_option("%17", "", "fixture-session")]
-    #[case::updated_stored_pane_uses_legacy_option("%29", "", "fixture-session")]
-    fn session_pane_capture_uses_the_latest_marked_pane(
-        #[case] stored_pane_id: &str,
-        #[case] current_option: &str,
-        #[case] legacy_option: &str,
-    ) {
+    #[test]
+    fn session_pane_capture_prefers_a_replacement_pane_bound_to_the_session() {
         let pane_listing = indoc! {"
-                %17\tfixture-tmux\t{current_option}\t{legacy_option}
-                %29\tfixture-tmux\t{current_option}\t{legacy_option}
-                %31\tother-tmux\tfixture-session\t
-                %33\tfixture-tmux\tother-session\t
-            "}
-        .replace("{current_option}", current_option)
-        .replace("{legacy_option}", legacy_option);
+            %17\tfixture-tmux\tfixture-session\t
+            %29\tfixture-tmux\tfixture-session\t
+            %31\tother-tmux\tfixture-session\t
+            %33\tfixture-tmux\tother-session\t
+        "}
+        .to_string();
         let expected_output = ["", "fixture startup error", ""].join("\n");
         let mut actual_calls = Vec::new();
         let actual_output = capture_pane_for_session_for_socket_result_with(
             Some("/fixture/tmux.sock"),
             "fixture-tmux",
             "fixture-session",
-            stored_pane_id,
+            "%17",
             "@fixture-session-id",
             "@fixture-session-id-legacy",
             |args| {
