@@ -38,8 +38,8 @@ impl CurrentAgentContext for ProcessContext {
 pub fn run(context: &impl CurrentAgentContext) -> CurrentCommandOutput {
     let engine = context
         .process_engine()
-        .or_else(|| context.codex_session_id_is_set().then_some("codex"))
-        .or_else(|| context.claude_code_env_is_set().then_some("claude-code"));
+        .or_else(|| context.claude_code_env_is_set().then_some("claude-code"))
+        .or_else(|| context.codex_session_id_is_set().then_some("codex"));
 
     match engine {
         Some(engine) => CurrentCommandOutput {
@@ -98,12 +98,12 @@ mod tests {
             exit_code: 0,
         },
     )]
-    #[case::codex_session_environment_overrides_claude_code_environment(
+    #[case::claude_code_environment_overrides_codex_session_environment(
         None,
         true,
         true,
         CurrentCommandOutput {
-            stdout: Some(r#"{"engine":"codex"}"#.to_string()),
+            stdout: Some(r#"{"engine":"claude-code"}"#.to_string()),
             exit_code: 0,
         },
     )]

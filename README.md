@@ -585,7 +585,7 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | `window-status <window_id>`                                                                           |         | Print status symbols for the sessions in a tmux window                                      |
 | `pane-has-paused <pane_id>`                                                                           |         | Print `1` when the pane holds a Paused Claude Code session, else empty                      |
 
-`a agent current` prints JSON with an `engine` value of `claude-code` or `codex` when it detects a supported agent. For example:
+`a agent current` prints JSON with an `engine` value of `claude-code` or `codex` when it detects a supported agent. If process ancestry is unavailable, it uses `CLAUDECODE` or `CODEX_SESSION_ID` as a fallback. For example:
 
 ```console
 $ a agent current
