@@ -530,9 +530,21 @@ mod tests {
     }
 
     #[rstest]
-    #[case::unanswered_todo(true)]
-    #[case::unanswered_proposal(false)]
-    fn waiting_status_with_unanswered_items_needs_action(#[case] has_unanswered_todo: bool) {
+    #[case::unanswered_todo(
+        true,
+        false,
+        (SessionCategory::NeedsAction, SessionCategory::Waiting)
+    )]
+    #[case::unanswered_proposal(
+        false,
+        true,
+        (SessionCategory::NeedsAction, SessionCategory::NeedsAction)
+    )]
+    fn waiting_status_with_unanswered_items_needs_action(
+        #[case] has_unanswered_todo: bool,
+        #[case] needs_action: bool,
+        #[case] expected: (SessionCategory, SessionCategory),
+    ) {
         let mut session = session(SessionStatus::Stopped);
         session.agent_status = Some(AgentStatus {
             kind: "fixture_waiting_status".to_string(),
@@ -544,7 +556,7 @@ mod tests {
                 &session,
                 TodoLaterCategoryContext {
                     turn: None,
-                    needs_action: true,
+                    needs_action,
                     has_unanswered_todo,
                     has_folded_todo: false,
                     has_running_background_task: false,
@@ -553,7 +565,7 @@ mod tests {
                     now: Utc.timestamp_opt(2_000, 0).unwrap(),
                 },
             ),
-            (SessionCategory::NeedsAction, SessionCategory::NeedsAction),
+            expected,
         );
     }
 

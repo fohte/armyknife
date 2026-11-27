@@ -256,9 +256,10 @@ export const WorkIsInProgress: Story = {
 }
 
 export const WorkIsWaitingForExternalWork: Story = {
-  name: 'A waiting session shows the reason it is paused',
+  name: 'A Board compact waiting row shows why it is paused',
   args: {
     density: 'compact',
+    showWaitingReason: true,
     session: {
       ...session,
       category: 'waiting',

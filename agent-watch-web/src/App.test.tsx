@@ -714,6 +714,40 @@ it('reveals a selected Waiting session beyond the Inbox row limit', () => {
   })
 })
 
+it('reopens the mobile Waiting section when another session is selected', () => {
+  renderMobileApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-waiting-one', 'First waiting session', 'waiting', 8),
+      session('session-waiting-two', 'Second waiting session', 'waiting', 16),
+    ],
+  })
+
+  clickButton('.mobile-waiting-row')
+  window.history.pushState(null, '', '/?session=session-waiting-two')
+  act(() => {
+    window.dispatchEvent(new PopStateEvent('popstate'))
+  })
+
+  const snapshot = () => ({
+    expanded: container
+      .querySelector('.mobile-waiting-row')
+      ?.getAttribute('aria-expanded'),
+    selectedTitle: readSelectedTitle(),
+    visibleTitles: Array.from(
+      container.querySelectorAll('.waiting-section .session-title'),
+      (title) => title.textContent,
+    ),
+  })
+
+  expect(snapshot()).toEqual({
+    expanded: 'true',
+    selectedTitle: 'Second waiting session',
+    visibleTitles: ['First waiting session', 'Second waiting session'],
+  })
+})
+
 function readActiveView() {
   const active = container.querySelector<HTMLButtonElement>(
     '.view-switch-button[aria-pressed="true"]',
