@@ -284,6 +284,7 @@ async fn ended_session_without_tmux_location_cannot_be_resumed(action_context: A
                 "message": false,
                 "answerQuestion": false,
                 "resume": false,
+                "resumeDisabledReason": "noTmux",
                 "interrupt": false,
                 "openInTerminal": false,
                 "rewind": false,
