@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.988](https://github.com/fohte/armyknife/compare/v0.1.987...v0.1.988) (2026-11-27)
+
+
+### Features
+
+* **agent/watch-web:** stream task output live ([#2398](https://github.com/fohte/armyknife/issues/2398)) ([ac010cb](https://github.com/fohte/armyknife/commit/ac010cb12cc290280664fa14b76903bbe2cec8b3))
+
 ## [0.1.987](https://github.com/fohte/armyknife/compare/v0.1.986...v0.1.987) (2026-11-27)
 
 
