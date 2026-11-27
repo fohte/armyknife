@@ -180,7 +180,9 @@ function RepositoryLabel({ repository }: { repository: string }) {
             <span className="session-repo-owner">
               {shortenOwner ? '…' : owner}
             </span>
-            <span aria-hidden="true">/</span>
+            <span aria-hidden="true" className="session-repo-owner-separator">
+              /
+            </span>
           </>
         ) : null}
         <span className="session-repo-name">{name}</span>

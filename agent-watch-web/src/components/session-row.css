@@ -224,6 +224,12 @@
   overflow: hidden;
 }
 
+.session-row-content .session-repo-owner,
+.session-row-content .session-repo-owner-separator {
+  min-width: 0;
+  overflow: hidden;
+}
+
 .session-row-content .session-repo-name {
   min-width: 10ch;
   flex: 1 1 auto;
