@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.963](https://github.com/fohte/armyknife/compare/v0.1.962...v0.1.963) (2026-11-27)
+
+
+### Performance Improvements
+
+* **agent:** wait for crit daemon exit via kqueue ([#2353](https://github.com/fohte/armyknife/issues/2353)) ([d805d5b](https://github.com/fohte/armyknife/commit/d805d5b6cb98e55a0b4f1b2ac87275d9f6598802))
+
 ## [0.1.962](https://github.com/fohte/armyknife/compare/v0.1.961...v0.1.962) (2026-11-27)
 
 
