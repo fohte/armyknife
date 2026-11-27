@@ -3837,7 +3837,12 @@ it.each([
       path: '/worktrees/example-unmerged',
       files: [],
       changes: [],
-      commits: [{ sha: 'abc1234', subject: 'add example implementation' }],
+      commits: [
+        {
+          sha: '1111111111111111111111111111111111111111',
+          subject: 'add example implementation',
+        },
+      ],
       branch: 'feature/example-unmerged',
       merged: false,
       reason: 'The example pull request is still open.',
@@ -4133,7 +4138,10 @@ it('offers a keep-worktree retry after a non-Done session close fails', async ()
                 files: [],
                 changes: [],
                 commits: [
-                  { sha: 'abc1234', subject: 'add example implementation' },
+                  {
+                    sha: '1111111111111111111111111111111111111111',
+                    subject: 'add example implementation',
+                  },
                 ],
                 branch: 'feature/example-session',
                 merged: false,

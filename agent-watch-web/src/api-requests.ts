@@ -1,6 +1,9 @@
 import { err, ok, Result, ResultAsync } from 'neverthrow'
 
-import type { CloseWorktreeChecks } from '#session-operation-types'
+import type {
+  CloseChangeStatus,
+  CloseWorktreeChecks,
+} from '#session-operation-types'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
@@ -10,6 +13,16 @@ function toError(error: unknown) {
   return error instanceof Error
     ? error
     : new Error('Request failed', { cause: error })
+}
+
+function isCloseChangeStatus(value: unknown): value is CloseChangeStatus {
+  return (
+    value === 'M' ||
+    value === 'A' ||
+    value === 'D' ||
+    value === 'R' ||
+    value === '??'
+  )
 }
 
 function isCloseWorktreeChecks(value: unknown): value is CloseWorktreeChecks {
@@ -22,7 +35,7 @@ function isCloseWorktreeChecks(value: unknown): value is CloseWorktreeChecks {
     value['changes'].every(
       (change) =>
         isRecord(change) &&
-        typeof change['status'] === 'string' &&
+        isCloseChangeStatus(change['status']) &&
         typeof change['path'] === 'string',
     ) &&
     Array.isArray(value['commits']) &&

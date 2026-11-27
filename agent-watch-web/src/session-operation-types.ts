@@ -140,10 +140,12 @@ export type SessionOperation =
       expectedPullRequestTarget?: ExpectedPullRequestTarget
     }
 
+export type CloseChangeStatus = 'M' | 'A' | 'D' | 'R' | '??'
+
 export type CloseWorktreeChecks = {
   path: string
   files: string[]
-  changes: { status: string; path: string }[]
+  changes: { status: CloseChangeStatus; path: string }[]
   commits: { sha: string; subject: string }[]
   commitInspectionUnavailable: boolean
   branch: string | null

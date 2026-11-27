@@ -10,7 +10,12 @@ const exampleChecks: CloseWorktreeChecks = {
     { status: 'M', path: 'src/example.ts' },
     { status: '??', path: 'src/example.test.ts' },
   ],
-  commits: [{ sha: 'abc1234', subject: 'add example implementation' }],
+  commits: [
+    {
+      sha: '1111111111111111111111111111111111111111',
+      subject: 'add example implementation',
+    },
+  ],
   branch: 'feature/example-work',
   merged: false,
   reason: 'The example pull request is still open.',

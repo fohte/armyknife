@@ -12,7 +12,12 @@ it('accepts close checks with changes and commits', async () => {
           path: '/fictional/worktree',
           files: ['src/fictional.rs'],
           changes: [{ status: 'M', path: 'src/fictional.rs' }],
-          commits: [{ sha: 'abc1234', subject: 'preserve fictional work' }],
+          commits: [
+            {
+              sha: '1111111111111111111111111111111111111111',
+              subject: 'preserve fictional work',
+            },
+          ],
           commitInspectionUnavailable: false,
           branch: 'feature/fictional',
           merged: false,
@@ -39,7 +44,12 @@ it('accepts close checks with changes and commits', async () => {
       path: '/fictional/worktree',
       files: ['src/fictional.rs'],
       changes: [{ status: 'M', path: 'src/fictional.rs' }],
-      commits: [{ sha: 'abc1234', subject: 'preserve fictional work' }],
+      commits: [
+        {
+          sha: '1111111111111111111111111111111111111111',
+          subject: 'preserve fictional work',
+        },
+      ],
       commitInspectionUnavailable: false,
       branch: 'feature/fictional',
       merged: false,
@@ -60,7 +70,7 @@ it.each([
   {
     kind: 'commit',
     changes: [],
-    commits: [{ sha: 'abc1234' }],
+    commits: [{ sha: '1111111111111111111111111111111111111111' }],
     commitInspectionUnavailable: false,
   },
   {
@@ -69,8 +79,14 @@ it.each([
     commits: [],
     commitInspectionUnavailable: 'unknown',
   },
+  {
+    kind: 'change status',
+    changes: [{ status: 'UU', path: 'src/fictional.rs' }],
+    commits: [],
+    commitInspectionUnavailable: false,
+  },
 ])(
-  'rejects close checks with an incomplete $kind',
+  'rejects close checks with an invalid $kind',
   async ({ changes, commits, commitInspectionUnavailable }) => {
     const result = await errorFromResponse(
       new Response(

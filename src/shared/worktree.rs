@@ -146,10 +146,8 @@ fn parse_uncommitted_changes(status: &str) -> Vec<UncommittedChange> {
             "A"
         } else if status_code.contains('D') {
             "D"
-        } else if status_code.contains('M') {
-            "M"
         } else {
-            status_code.trim()
+            "M"
         };
         changes.push(UncommittedChange {
             status: status.to_string(),
@@ -551,11 +549,11 @@ mod tests {
     }
 
     #[test]
-    fn uncommitted_changes_preserve_status_and_destination_path() {
+    fn uncommitted_changes_normalize_status_to_close_dialog_union() {
         let directory = tempfile::tempdir().expect("temporary worktree should be created");
         let lock_dir = tempfile::tempdir().expect("temporary lock directory should be created");
         let changes = uncommitted_changes_with_status(directory.path(), lock_dir.path(), |_| {
-            Ok(" M src/changed.rs\0A  src/added.rs\0 D src/deleted.rs\0R  src/renamed.rs\0src/old.rs\0?? src/new.rs\0".into())
+            Ok(" M src/changed.rs\0A  src/added.rs\0 D src/deleted.rs\0R  src/renamed.rs\0src/old.rs\0?? src/new.rs\0 T src/type-changed.rs\0C  src/copied.rs\0src/source.rs\0UU src/conflicted.rs\0".into())
         })
         .expect("status should be parsed");
 
@@ -581,6 +579,18 @@ mod tests {
                 UncommittedChange {
                     status: "??".into(),
                     path: "src/new.rs".into()
+                },
+                UncommittedChange {
+                    status: "M".into(),
+                    path: "src/type-changed.rs".into()
+                },
+                UncommittedChange {
+                    status: "M".into(),
+                    path: "src/copied.rs".into()
+                },
+                UncommittedChange {
+                    status: "M".into(),
+                    path: "src/conflicted.rs".into()
                 },
             ],
         );

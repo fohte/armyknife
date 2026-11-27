@@ -201,8 +201,8 @@ impl CloseChecks {
             Some(branch) => inspect_merge_status(branch).await,
             None => None,
         };
-        let commit_inspection = match merge_status.as_ref() {
-            Some(status) if !status.should_cleanup => {
+        let commit_inspection = match (merge_status.as_ref(), branch.as_ref()) {
+            (Some(status), _) if !status.should_cleanup => {
                 let branch = status.branch.clone();
                 tokio::task::spawn_blocking(move || inspect_commits(branch))
                     .await
@@ -211,6 +211,10 @@ impl CloseChecks {
                         unavailable: true,
                     })
             }
+            (None, Some(_)) => CommitInspection {
+                commits: Vec::new(),
+                unavailable: true,
+            },
             _ => CommitInspection {
                 commits: Vec::new(),
                 unavailable: false,
@@ -313,7 +317,7 @@ fn read_branch_commits_with(
         };
     };
     let range = format!("origin/{default_branch}..refs/heads/{branch}");
-    let Some(log) = run_git(worktree_path, ["log", "--format=%h%x00%s", range.as_str()]) else {
+    let Some(log) = run_git(worktree_path, ["log", "--format=%H%x00%s", range.as_str()]) else {
         return CommitInspection {
             commits: Vec::new(),
             unavailable: true,
@@ -356,7 +360,10 @@ mod tests {
         let checks = CloseChecks::from_observations(
             PathBuf::from("/fictional/worktree"),
             vec![change("M", "src/fictional.rs")],
-            vec![commit("abc1234", "preserve fictional work")],
+            vec![commit(
+                "1111111111111111111111111111111111111111",
+                "preserve fictional work",
+            )],
             false,
             Some("feature/fictional".to_string()),
             Some(worktree_delete::classify_merge_guard_status(
@@ -381,7 +388,10 @@ mod tests {
                 "path": "/fictional/worktree",
                 "files": ["src/fictional.rs"],
                 "changes": [{ "status": "M", "path": "src/fictional.rs" }],
-                "commits": [{ "sha": "abc1234", "subject": "preserve fictional work" }],
+                "commits": [{
+                    "sha": "1111111111111111111111111111111111111111",
+                    "subject": "preserve fictional work",
+                }],
                 "commitInspectionUnavailable": false,
                 "branch": "feature/fictional",
                 "merged": false,
@@ -441,7 +451,10 @@ mod tests {
                 .await
             },
             |_| CommitInspection {
-                commits: vec![commit("abc1234", "must not be listed")],
+                commits: vec![commit(
+                    "1111111111111111111111111111111111111111",
+                    "must not be listed",
+                )],
                 unavailable: false,
             },
             |_| Ok(Vec::new()),
@@ -502,7 +515,7 @@ mod tests {
             PathBuf::from("/fictional/worktree"),
             Vec::new(),
             Vec::new(),
-            false,
+            true,
             Some("feature/fictional".to_string()),
             None,
             Some(Ok(Vec::new())),
@@ -515,13 +528,59 @@ mod tests {
                 "files": [],
                 "changes": [],
                 "commits": [],
-                "commitInspectionUnavailable": false,
+                "commitInspectionUnavailable": true,
                 "branch": "feature/fictional",
                 "merged": null,
                 "reason": null,
                 "processes": [],
                 "processInspectionUnavailable": false,
             }),
+        );
+    }
+
+    #[tokio::test]
+    async fn missing_merge_status_marks_commit_inspection_unavailable() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let commits_checked = Arc::new(AtomicBool::new(false));
+        let commits_flag = Arc::clone(&commits_checked);
+        let checks = CloseChecks::inspect_with(
+            PathBuf::from("/fictional/worktree"),
+            Some("feature/fictional".to_string()),
+            |_| Vec::new(),
+            |_| async { None },
+            move |_| {
+                commits_flag.store(true, Ordering::SeqCst);
+                CommitInspection {
+                    commits: Vec::new(),
+                    unavailable: false,
+                }
+            },
+            |_| Ok(Vec::new()),
+        )
+        .await;
+
+        assert_eq!(
+            (
+                commits_checked.load(Ordering::SeqCst),
+                serde_json::to_value(checks).unwrap(),
+            ),
+            (
+                false,
+                json!({
+                    "path": "/fictional/worktree",
+                    "files": [],
+                    "changes": [],
+                    "commits": [],
+                    "commitInspectionUnavailable": true,
+                    "branch": "feature/fictional",
+                    "merged": null,
+                    "reason": null,
+                    "processes": [],
+                    "processInspectionUnavailable": false,
+                }),
+            ),
         );
     }
 
@@ -639,7 +698,10 @@ mod tests {
                 }
             },
             |_| CommitInspection {
-                commits: vec![commit("abc1234", "preserve fictional work")],
+                commits: vec![commit(
+                    "1111111111111111111111111111111111111111",
+                    "preserve fictional work",
+                )],
                 unavailable: false,
             },
             move |path| {
@@ -671,7 +733,10 @@ mod tests {
                     "path": "/fictional/worktree",
                     "files": ["src/fictional.rs"],
                     "changes": [{ "status": "M", "path": "src/fictional.rs" }],
-                    "commits": [{ "sha": "abc1234", "subject": "preserve fictional work" }],
+                    "commits": [{
+                        "sha": "1111111111111111111111111111111111111111",
+                        "subject": "preserve fictional work",
+                    }],
                     "commitInspectionUnavailable": false,
                     "branch": "feature/fictional",
                     "merged": false,
@@ -687,8 +752,8 @@ mod tests {
     fn parses_commit_log_records_without_running_git() {
         let log = indoc::indoc! {
             r#"
-            abc1234\0preserve fictional work
-            def5678\0add fictional detail
+            1111111111111111111111111111111111111111\0preserve fictional work
+            2222222222222222222222222222222222222222\0add fictional detail
             "#
         }
         .replace("\\0", "\0");
@@ -696,8 +761,14 @@ mod tests {
         assert_eq!(
             parse_commits(&log),
             vec![
-                commit("abc1234", "preserve fictional work"),
-                commit("def5678", "add fictional detail"),
+                commit(
+                    "1111111111111111111111111111111111111111",
+                    "preserve fictional work"
+                ),
+                commit(
+                    "2222222222222222222222222222222222222222",
+                    "add fictional detail"
+                ),
             ],
         );
     }
@@ -714,8 +785,8 @@ mod tests {
                 Some(
                     indoc::indoc! {
                         r#"
-                        abc1234\0preserve fictional work
-                        def5678\0add fictional detail
+                        1111111111111111111111111111111111111111\0preserve fictional work
+                        2222222222222222222222222222222222222222\0add fictional detail
                         "#
                     }
                     .replace("\\0", "\0"),
@@ -728,8 +799,14 @@ mod tests {
             (
                 CommitInspection {
                     commits: vec![
-                        commit("abc1234", "preserve fictional work"),
-                        commit("def5678", "add fictional detail"),
+                        commit(
+                            "1111111111111111111111111111111111111111",
+                            "preserve fictional work"
+                        ),
+                        commit(
+                            "2222222222222222222222222222222222222222",
+                            "add fictional detail"
+                        ),
                     ],
                     unavailable: false,
                 },
@@ -737,7 +814,7 @@ mod tests {
                     PathBuf::from("/fictional/worktree"),
                     [
                         "log".to_string(),
-                        "--format=%h%x00%s".to_string(),
+                        "--format=%H%x00%s".to_string(),
                         "origin/main..refs/heads/feature/fictional".to_string(),
                     ],
                 )),

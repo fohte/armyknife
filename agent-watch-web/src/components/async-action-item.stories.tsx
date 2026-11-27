@@ -393,7 +393,12 @@ export const UnmergedBranchShowsItsReason: Story = {
         path: '/worktrees/example-project',
         files: [],
         changes: [],
-        commits: [{ sha: 'abc1234', subject: 'add example implementation' }],
+        commits: [
+          {
+            sha: '1111111111111111111111111111111111111111',
+            subject: 'add example implementation',
+          },
+        ],
         branch: 'feature/example-work',
         merged: false,
         reason: 'The example pull request is still open.',
@@ -440,7 +445,12 @@ export const AllThreeChecksAreVisible: Story = {
         path: '/worktrees/example-project',
         files: ['src/example.ts'],
         changes: [{ status: 'M', path: 'src/example.ts' }],
-        commits: [{ sha: 'abc1234', subject: 'add example implementation' }],
+        commits: [
+          {
+            sha: '1111111111111111111111111111111111111111',
+            subject: 'add example implementation',
+          },
+        ],
         branch: 'feature/example-work',
         merged: false,
         reason: 'The example pull request is still open.',
