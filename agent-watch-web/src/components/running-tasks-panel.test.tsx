@@ -8,8 +8,13 @@ import { RunningTasksPanel } from '#components/running-tasks-panel'
 import type { BackgroundTask } from '#types'
 
 class FakeEventSource {
+  static readonly CONNECTING = 0
+  static readonly OPEN = 1
+  static readonly CLOSED = 2
+
   private listeners = new Map<string, EventListener>()
   closed = false
+  readyState = FakeEventSource.CONNECTING
 
   constructor(readonly url: string) {}
 
@@ -26,6 +31,7 @@ class FakeEventSource {
   }
 
   emit(type: string, data?: string) {
+    if (type === 'open') this.readyState = FakeEventSource.OPEN
     const event =
       data === undefined ? new Event(type) : new MessageEvent(type, { data })
     this.listeners.get(type)?.(event)
@@ -183,11 +189,18 @@ it('renders each output update received from the event stream', () => {
   )
   act(() => outputButton?.click())
   const source = eventSources[0]
-  act(() => source?.emit('message', 'first output\n'))
+  act(() =>
+    source?.emit('message', JSON.stringify({ output: 'first output\n' })),
+  )
   const firstOutput = container.querySelector(
     '.running-task-output',
   )?.textContent
-  act(() => source?.emit('message', 'first output\nsecond output\n'))
+  act(() =>
+    source?.emit(
+      'message',
+      JSON.stringify({ output: 'first output\nsecond output\n' }),
+    ),
+  )
   const secondOutput = container.querySelector(
     '.running-task-output',
   )?.textContent
@@ -202,4 +215,45 @@ it('renders each output update received from the event stream', () => {
     firstOutput: 'first output\n',
     secondOutput: 'first output\nsecond output\n',
   })
+})
+
+it('renders an empty output received from the event stream', () => {
+  act(() => {
+    root?.render(
+      <RunningTasksPanel sessionId="fixture-session" tasks={tasks} />,
+    )
+  })
+  const outputButton = container.querySelector<HTMLButtonElement>(
+    '.running-task-output-button',
+  )
+  act(() => outputButton?.click())
+  const source = eventSources[0]
+  act(() => source?.emit('message', JSON.stringify({ output: '' })))
+
+  expect(
+    container.querySelector('.running-task-output')?.textContent ?? null,
+  ).toBe('')
+})
+
+it('shows a failure when the event stream is permanently closed', () => {
+  act(() => {
+    root?.render(
+      <RunningTasksPanel sessionId="fixture-session" tasks={tasks} />,
+    )
+  })
+  const outputButton = container.querySelector<HTMLButtonElement>(
+    '.running-task-output-button',
+  )
+  act(() => outputButton?.click())
+  const source = eventSources[0]
+  if (source !== undefined) {
+    source.readyState = FakeEventSource.CLOSED
+    act(() => {
+      source.emit('error')
+    })
+  }
+
+  expect(
+    container.querySelector('.running-task-output')?.textContent ?? null,
+  ).toBe('Unable to load task output.')
 })

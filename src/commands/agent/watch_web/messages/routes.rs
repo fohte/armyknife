@@ -301,10 +301,6 @@ pub(in crate::commands::agent::watch_web) fn routes_with_proposals_and_peer_out_
     let load_session = Arc::new(load_session) as SessionLoader;
     Router::new()
         .route(
-            "/sessions/{id}/background-tasks/{task_id}/output",
-            get(background_task_outputs::get_background_task_output),
-        )
-        .route(
             "/sessions/{id}/background-tasks/{task_id}/output/events",
             get(background_task_outputs::get_background_task_output_events),
         )

@@ -38,88 +38,53 @@ struct CachedOutputPaths {
     paths: HashMap<String, PathBuf>,
 }
 
-pub(super) async fn get_background_task_output(
-    State((load_session, _, loaders)): State<MessagesRouteState>,
-    AxumPath((session_id, task_id)): AxumPath<(String, String)>,
-) -> Response {
-    let output = match tokio::task::spawn_blocking(move || -> Result<Option<String>> {
-        let Some(session) = load_session(&session_id)? else {
-            return Ok(None);
-        };
-        let Some(path) = output_path_for_task(&session, &task_id, &loaders)? else {
-            return Ok(None);
-        };
-        Ok(read_output_tail(&path)?)
-    })
-    .await
-    {
-        Ok(Ok(Some(output))) => output,
-        Ok(Ok(None)) => OUTPUT_UNAVAILABLE.to_owned(),
-        Ok(Err(error)) => {
-            tracing::warn!(%error, "failed to read background task output");
-            OUTPUT_UNAVAILABLE.to_owned()
-        }
-        Err(error) => {
-            tracing::error!(%error, "background task output worker failed");
-            OUTPUT_UNAVAILABLE.to_owned()
-        }
-    };
-    (
-        StatusCode::OK,
-        [
-            (CONTENT_TYPE, "text/plain; charset=utf-8"),
-            (X_CONTENT_TYPE_OPTIONS, "nosniff"),
-            (CACHE_CONTROL, "no-store"),
-        ],
-        Body::from(output),
-    )
-        .into_response()
-}
-
 pub(super) async fn get_background_task_output_events(
     State((load_session, _, loaders)): State<MessagesRouteState>,
     AxumPath((session_id, task_id)): AxumPath<(String, String)>,
 ) -> Response {
     let create_event_stream = loaders.background_task_output_event_stream.clone();
-    let output_path = match tokio::task::spawn_blocking(move || -> Result<Option<PathBuf>> {
-        let Some(session) = load_session(&session_id)? else {
-            return Ok(None);
-        };
-        output_path_for_task(&session, &task_id, &loaders)
-    })
+    let (output_path, output_events) = match tokio::task::spawn_blocking(
+        move || -> Result<Option<(PathBuf, super::routes::BackgroundTaskOutputEventStream)>> {
+            let Some(session) = load_session(&session_id)? else {
+                return Ok(None);
+            };
+            let Some(output_path) = output_path_for_task(&session, &task_id, &loaders)? else {
+                return Ok(None);
+            };
+            let events = create_event_stream(output_path.clone())?;
+            Ok(Some((output_path, events)))
+        },
+    )
     .await
     {
-        Ok(Ok(Some(path))) => path,
+        Ok(Ok(Some((path, events)))) => (path, events),
         Ok(Ok(None)) => return output_unavailable_event_response(),
         Ok(Err(error)) => {
-            tracing::warn!(%error, "failed to resolve background task output path");
+            tracing::warn!(%error, "failed to prepare background task output event stream");
             return output_unavailable_response(StatusCode::INTERNAL_SERVER_ERROR);
         }
         Err(error) => {
-            tracing::error!(%error, "background task output path worker failed");
+            tracing::error!(%error, "background task output event stream worker failed");
             return output_unavailable_response(StatusCode::INTERNAL_SERVER_ERROR);
         }
     };
 
-    let output_events = match create_event_stream(output_path.clone()) {
-        Ok(events) => events,
-        Err(error) => {
-            tracing::warn!(%error, path = %output_path.display(), "failed to watch background task output");
-            return output_unavailable_response(StatusCode::INTERNAL_SERVER_ERROR);
-        }
-    };
     let changes = output_events.map(|_| ());
     let events = output_updates(output_path, changes)
-        .map(|output| Ok::<Event, std::convert::Infallible>(Event::default().data(output)));
+        .map(|output| Ok::<Event, std::convert::Infallible>(output_event(output)));
     output_event_stream_response(events)
 }
 
 fn output_unavailable_event_response() -> Response {
     let events = stream::once(future::ready(Ok::<_, std::convert::Infallible>(
-        Event::default().data(OUTPUT_UNAVAILABLE),
+        output_event(OUTPUT_UNAVAILABLE.to_owned()),
     )))
     .chain(stream::pending());
     output_event_stream_response(events)
+}
+
+fn output_event(output: String) -> Event {
+    Event::default().data(serde_json::json!({"output": output}).to_string())
 }
 
 fn output_event_stream_response(

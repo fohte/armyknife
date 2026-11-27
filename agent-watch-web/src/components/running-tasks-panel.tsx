@@ -1,5 +1,6 @@
 import '#components/running-tasks-panel.css'
 
+import { Result } from 'neverthrow'
 import { useEffect, useState } from 'react'
 
 import { BackgroundTaskRowView } from '#components/running-task-row-view'
@@ -9,6 +10,15 @@ import type { BackgroundTask } from '#types'
 type RunningTasksPanelProps = {
   sessionId: string
   tasks: readonly BackgroundTask[]
+}
+
+function isOutputMessage(value: unknown): value is { output: string } {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'output' in value &&
+    typeof value.output === 'string'
+  )
 }
 
 export function RunningTasksPanel({
@@ -53,13 +63,23 @@ function BackgroundTaskRowContainer({
       setError(null)
     }
     const onMessage = (event: Event) => {
-      if (event instanceof MessageEvent && typeof event.data === 'string') {
-        setOutput(event.data)
-        setError(null)
-      }
+      if (!(event instanceof MessageEvent)) return
+      const data: unknown = event.data
+      if (typeof data !== 'string') return
+      const parsed = Result.fromThrowable(
+        () => JSON.parse(data) as unknown,
+        (error: unknown) => error,
+      )()
+      if (parsed.isErr() || !isOutputMessage(parsed.value)) return
+      setOutput(parsed.value.output)
+      setError(null)
     }
     const onError = () => {
-      setError('Connection interrupted. Reconnecting…')
+      setError(
+        eventSource.readyState === EventSource.CLOSED
+          ? 'Unable to load task output.'
+          : 'Connection interrupted. Reconnecting…',
+      )
     }
     eventSource.addEventListener('open', onOpen)
     eventSource.addEventListener('message', onMessage)
