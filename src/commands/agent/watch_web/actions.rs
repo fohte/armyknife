@@ -514,7 +514,12 @@ mod tests {
                 );
                 CloseChecks::from_observations(
                     worktree_path,
-                    vec!["src/fictional.rs".to_string()],
+                    vec![crate::shared::worktree::UncommittedChange {
+                        status: "M".to_string(),
+                        path: "src/fictional.rs".to_string(),
+                    }],
+                    Vec::new(),
+                    false,
                     Some("feature/fictional".to_string()),
                     Some(crate::shared::worktree_delete::classify_merge_guard_status(
                         "feature/fictional".to_string(),
@@ -2844,6 +2849,9 @@ mod tests {
                     "checks": {
                         "path": "/fictional/worktree",
                         "files": ["src/fictional.rs"],
+                        "changes": [{ "status": "M", "path": "src/fictional.rs" }],
+                        "commits": [],
+                        "commitInspectionUnavailable": false,
                         "branch": "feature/fictional",
                         "merged": false,
                         "reason": "pull request is open",
@@ -2931,6 +2939,9 @@ mod tests {
                     "checks": {
                         "path": "/fictional/worktree",
                         "files": ["src/fictional.rs"],
+                        "changes": [{ "status": "M", "path": "src/fictional.rs" }],
+                        "commits": [],
+                        "commitInspectionUnavailable": false,
                         "branch": "feature/fictional",
                         "merged": false,
                         "reason": "pull request is open",
