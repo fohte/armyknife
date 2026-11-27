@@ -7,8 +7,9 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 
+use super::{lock_marker, marker_is_active, marker_path};
 use crate::commands::agent::store;
 use crate::infra::process;
 
@@ -16,8 +17,22 @@ fn clients_dir(port: u16) -> Result<PathBuf> {
     Ok(store::crit_dir()?.join(format!("{port}.clients")))
 }
 
-pub(super) fn record_client(port: u16, pid: u32) -> Result<()> {
-    record_client_in(&clients_dir(port)?, pid)
+/// Records a client only while a monitor owns `port`, so no pid file outlives its monitor.
+///
+/// The marker lock is the one the monitor holds while it removes the clients and its marker on
+/// exit, so a client is either removed with the monitor or refused here.
+pub(super) fn record_client_if_monitored(port: u16, pid: u32) -> Result<()> {
+    record_if_monitored(&marker_path(port)?, || {
+        record_client_in(&clients_dir(port)?, pid)
+    })
+}
+
+fn record_if_monitored(marker: &Path, record: impl FnOnce() -> Result<()>) -> Result<()> {
+    let _lock = lock_marker(marker)?;
+    if !marker_is_active(marker)? {
+        bail!("the crit monitor stopped before the client could be recorded");
+    }
+    record()
 }
 
 /// Removes pid files of exited processes while looking for a live one.
@@ -181,6 +196,43 @@ mod tests {
                 nothing_new
             ),
             (false, true, true, false),
+        );
+        Ok(())
+    }
+
+    #[rstest]
+    #[case::monitor_owns_the_port(Some(std::process::id().to_string()), Ok(()), 1)]
+    #[case::no_marker(
+        None,
+        Err("the crit monitor stopped before the client could be recorded"),
+        0
+    )]
+    #[case::monitor_exited(
+        Some("0".to_string()),
+        Err("the crit monitor stopped before the client could be recorded"),
+        0
+    )]
+    fn clients_are_recorded_only_while_a_monitor_owns_the_port(
+        dir: TempDir,
+        #[case] marker_contents: Option<String>,
+        #[case] expected: std::result::Result<(), &str>,
+        #[case] expected_records: usize,
+    ) -> Result<()> {
+        let marker = dir.path().join("43210.monitor");
+        if let Some(contents) = marker_contents {
+            fs::write(&marker, contents)?;
+        }
+        let records = std::cell::Cell::new(0);
+
+        let result = record_if_monitored(&marker, || {
+            records.set(records.get() + 1);
+            Ok(())
+        })
+        .map_err(|error| error.to_string());
+
+        assert_eq!(
+            (result, records.get()),
+            (expected.map_err(str::to_string), expected_records),
         );
         Ok(())
     }

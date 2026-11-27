@@ -154,8 +154,7 @@ pub(super) fn run(args: &MonitorArgs) -> Result<()> {
             error = %error,
         );
     }
-    clients::remove_clients(args.port);
-    remove_marker_if_owned(&marker);
+    remove_marker_if_owned(&marker, || clients::remove_clients(args.port));
     tracing::info!(event = "agent.crit.monitor.exit", daemon_pid = watched_pid);
     Ok(())
 }
@@ -242,7 +241,9 @@ fn write_marker_owner(path: &Path, reservation: &str) -> Result<()> {
         .with_context(|| format!("failed to update crit monitor marker {}", path.display()))
 }
 
-fn remove_marker_if_owned(path: &Path) {
+/// Runs `on_owned` and removes the marker in one critical section, so state tied to the marker
+/// cannot be recreated by a process that still saw the monitor as alive.
+fn remove_marker_if_owned(path: &Path, on_owned: impl FnOnce()) {
     let Ok(_lock) = lock_marker(path) else {
         return;
     };
@@ -250,6 +251,7 @@ fn remove_marker_if_owned(path: &Path) {
         .ok()
         .and_then(|contents| contents.trim().parse::<u32>().ok());
     if marker_pid == Some(std::process::id()) {
+        on_owned();
         let _ = fs::remove_file(path);
     }
 }
@@ -486,8 +488,32 @@ fn unix_time_secs() -> u64 {
 mod tests {
     use std::cell::Cell;
 
+    use rstest::rstest;
+
     use super::*;
     use crate::commands::agent::types::WebUiRegistration;
+
+    #[rstest]
+    #[case::owned_marker(std::process::id().to_string(), true, false)]
+    #[case::marker_of_another_monitor("1".to_string(), false, true)]
+    fn marker_state_is_removed_only_by_its_owner(
+        #[case] marker_contents: String,
+        #[case] expected_cleanup: bool,
+        #[case] expected_marker_left: bool,
+    ) -> Result<()> {
+        let dir = tempfile::TempDir::new()?;
+        let marker = dir.path().join("43210.monitor");
+        fs::write(&marker, marker_contents)?;
+        let cleanups = Cell::new(false);
+
+        remove_marker_if_owned(&marker, || cleanups.set(true));
+
+        assert_eq!(
+            (cleanups.get(), marker.exists()),
+            (expected_cleanup, expected_marker_left),
+        );
+        Ok(())
+    }
 
     #[test]
     fn uses_registered_status_snapshot_without_rereading() {
