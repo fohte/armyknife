@@ -209,8 +209,10 @@ pub(super) async fn resume_session(
     let _guard = lock
         .try_lock_owned()
         .map_err(|_| ApiError::conflict("session resume is already in progress"))?;
-    let session = load_session(state.clone(), current_id.clone()).await?;
     let session_start_generation = load_session_start_generation(&state, &current_id).await?;
+    // SessionStart writes this marker with the session row, so reading it first avoids pairing a
+    // newer marker with a stale resumable status.
+    let session = load_session(state.clone(), current_id.clone()).await?;
     if state
         .resume_pending
         .is_pending(&current_id, session.status, session_start_generation)
