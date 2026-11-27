@@ -229,6 +229,17 @@ Hidden context
   )
 })
 
+it('trims non-ASCII autolinks immediately after an inline details block', () => {
+  expect(
+    renderMessage(`<details open>
+<summary>Context</summary>
+Hidden context
+</details>http://example.com/日本語 説明`),
+  ).toBe(
+    '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Context</span></button><div class="markdown-details-body"><p>Hidden context</p></div></div><p><a href="http://example.com/" target="_blank" rel="noopener noreferrer">http://example.com/</a>日本語 説明</p></div>',
+  )
+})
+
 it('preserves a second details block immediately after the first', () => {
   expect(
     renderMessage(`<details>
@@ -434,6 +445,11 @@ Hidden body content
 </details>`,
   },
   {
+    name: 'a fenced block with CRLF line endings',
+    markdown:
+      '<details>\r\n<summary>Example</summary>\r\n\r\n~~~\r\n</details>\r\n~~~\r\nHidden body content\r\n</details>',
+  },
+  {
     name: 'a fence inside a blockquote',
     markdown: `<details>
 <summary>Example</summary>
@@ -511,7 +527,7 @@ Text <!--
 Hidden body content
 </details>`,
   },
-])('keeps a fake closing tag inside $name', ({ markdown }) => {
+])('the parser skips non-closing content in $name', ({ markdown }) => {
   expect(renderMessage(markdown)).toBe(
     '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="false" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Example</span></button></div></div>',
   )

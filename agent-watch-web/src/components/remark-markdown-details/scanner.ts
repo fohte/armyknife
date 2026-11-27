@@ -161,7 +161,7 @@ function findCodeBlockLines(lines: readonly string[]) {
             ? fencedBlockquote.content
             : stripIndentation(fencedBlockquote.content, fence.listIndent)
       const closingFence = new RegExp(
-        `^ {0,3}${fence.marker}{${String(fence.length)},}[\\t ]*$`,
+        `^ {0,3}${fence.marker}{${String(fence.length)},}[\\t ]*\\r?$`,
       )
       if (listContent !== null) {
         codeBlockLines.push(true)
