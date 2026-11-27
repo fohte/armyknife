@@ -2,7 +2,7 @@ import { err, type Result } from 'neverthrow'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { userEvent } from 'vitest/browser'
+import { page, userEvent } from 'vitest/browser'
 
 import {
   MarkdownMessage,
@@ -57,6 +57,127 @@ afterEach(() => {
   root = null
   container.remove()
   vi.unstubAllGlobals()
+})
+
+it('toggles nested Markdown details from their summary rows', async () => {
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <MarkdownMessage>{`<details>
+<summary>A long summary wraps without being shortened</summary>
+
+Outer body.
+
+<details>
+<summary>Nested summary</summary>
+
+Nested body.
+</details>
+</details>`}</MarkdownMessage>,
+    )
+  })
+
+  const getSummaryRow = () => {
+    const row = container.querySelector<HTMLButtonElement>(
+      '.markdown-details-summary',
+    )
+    if (row === null) throw new Error('Expected a details summary row')
+    return row
+  }
+  const getSummaryContent = () => {
+    const content = container.querySelector<HTMLElement>(
+      '.markdown-details-summary-content',
+    )
+    if (content === null) throw new Error('Expected details summary content')
+    return content
+  }
+
+  const snapshot = () => ({
+    buttons: Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '.markdown-details-summary',
+      ),
+    ).map((button) => ({
+      expanded: button.getAttribute('aria-expanded'),
+      summary: button.textContent,
+    })),
+    bodies: Array.from(
+      container.querySelectorAll('.markdown-details-body'),
+    ).map((body) => body.textContent),
+    summaryPadding: [
+      getComputedStyle(getSummaryRow()).paddingTop,
+      getComputedStyle(getSummaryRow()).paddingBottom,
+    ],
+    summaryMinHeight: getComputedStyle(getSummaryRow()).minHeight,
+    summaryWrap: getComputedStyle(getSummaryContent()).overflowWrap,
+  })
+
+  await page.viewport(1280, 800)
+  expect(snapshot()).toEqual({
+    buttons: [
+      {
+        expanded: 'false',
+        summary: 'A long summary wraps without being shortened',
+      },
+    ],
+    bodies: [],
+    summaryPadding: ['2px', '2px'],
+    summaryMinHeight: '0px',
+    summaryWrap: 'anywhere',
+  })
+
+  await page.viewport(390, 844)
+  expect(snapshot()).toEqual({
+    buttons: [
+      {
+        expanded: 'false',
+        summary: 'A long summary wraps without being shortened',
+      },
+    ],
+    bodies: [],
+    summaryPadding: ['11px', '11px'],
+    summaryMinHeight: '44px',
+    summaryWrap: 'anywhere',
+  })
+
+  const outerSummary = container.querySelector<HTMLButtonElement>(
+    '.markdown-details-summary',
+  )
+  if (outerSummary === null) throw new Error('Expected the outer summary row')
+  await act(async () => userEvent.click(outerSummary))
+  expect(snapshot()).toEqual({
+    buttons: [
+      {
+        expanded: 'true',
+        summary: 'A long summary wraps without being shortened',
+      },
+      { expanded: 'false', summary: 'Nested summary' },
+    ],
+    bodies: ['Outer body.Nested summary'],
+    summaryPadding: ['11px', '11px'],
+    summaryMinHeight: '44px',
+    summaryWrap: 'anywhere',
+  })
+
+  const nestedSummary = container.querySelectorAll<HTMLButtonElement>(
+    '.markdown-details-summary',
+  )[1]
+  if (nestedSummary === undefined)
+    throw new Error('Expected the nested summary row')
+  await act(async () => userEvent.click(nestedSummary))
+  expect(snapshot()).toEqual({
+    buttons: [
+      {
+        expanded: 'true',
+        summary: 'A long summary wraps without being shortened',
+      },
+      { expanded: 'true', summary: 'Nested summary' },
+    ],
+    bodies: ['Outer body.Nested summaryNested body.', 'Nested body.'],
+    summaryPadding: ['11px', '11px'],
+    summaryMinHeight: '44px',
+    summaryWrap: 'anywhere',
+  })
 })
 
 it('opens a registered web UI link in its tab instead of navigating the browser', async () => {
@@ -655,7 +776,7 @@ it('shows an unavailable message for an unmapped reference image', () => {
   root = createRoot(container)
   act(() => {
     root?.render(
-      <MarkdownMessage imageSources={{}}>
+      <MarkdownMessage imageSources={{}} unmappedImagePathsAreLocal>
         {'![fixture][sample-image]\n\n[sample-image]: </tmp/fixture.png>'}
       </MarkdownMessage>,
     )

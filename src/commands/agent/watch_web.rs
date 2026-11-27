@@ -18,6 +18,7 @@ mod rewind;
 mod security;
 mod session_enrichment;
 mod session_state;
+mod session_store_watcher;
 mod sessions;
 mod stale_session_cleanup;
 mod usage;
@@ -45,6 +46,7 @@ use super::error::CcError;
 use crate::commands::agent::store;
 use crate::commands::agent::types::Session;
 use crate::shared::env_var::EnvVars;
+use session_store_watcher::SessionStoreWatcher;
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct WatchWebArgs {
@@ -138,6 +140,11 @@ pub(super) struct EnrichmentUpdates {
     sender: watch::Sender<()>,
 }
 
+struct SessionStoreWatch {
+    events: tokio::sync::broadcast::Receiver<()>,
+    available: bool,
+}
+
 impl EnrichmentUpdates {
     fn new() -> Self {
         let (sender, _) = watch::channel(());
@@ -157,9 +164,16 @@ pub async fn run(args: &WatchWebArgs) -> Result<()> {
     let own_session_id = EnvVars::load().own_session_id();
     ensure_port_allowed(args.port, own_session_id.as_deref())?;
     let is_agent_session = own_session_id.is_some();
+    let sessions_dir = store::sessions_dir()?;
+    let session_store_watcher = SessionStoreWatcher::start_or_warn(&sessions_dir);
+    let session_store_watcher_available = session_store_watcher.is_some();
 
     let executable = std::env::current_exe()?;
     let mut executable_identity = restart::ExecutableIdentity::read(&executable)?;
+    let mut executable_watcher =
+        restart::create_watcher_or_warn(|| restart::ExecutableWatcher::new(&executable));
+    let mut startup_replacement_pending = executable_watcher.is_some()
+        && restart::ExecutableIdentity::read(&executable)? != executable_identity;
     let (listener, address) = bind_listener(args.port).await?;
     ensure_port_allowed(address.port(), own_session_id.as_deref())?;
     let restart_args = restart_args_with_port(std::env::args_os().skip(1), address.port());
@@ -173,12 +187,12 @@ pub async fn run(args: &WatchWebArgs) -> Result<()> {
     );
 
     let mut listener = listener;
-    let mut restart_retry_interval = restart::POLL_INTERVAL;
-    let sessions_dir = store::sessions_dir()?;
     loop {
         let (restart_sender, restart_receiver) = watch::channel(false);
         let mut shutdown_receiver = restart_sender.subscribe();
         let relay_sessions_dir = sessions_dir.clone();
+        let session_store_events =
+            SessionStoreWatcher::subscribe_or_closed(session_store_watcher.as_ref());
         let watch_web_server = async move {
             let (relay_shutdown_sender, relay_shutdown_receiver) = watch::channel(false);
             // Relay registrations are shared, so a development process must not reconcile them.
@@ -190,15 +204,25 @@ pub async fn run(args: &WatchWebArgs) -> Result<()> {
             let output_shutdown_receiver = relay_shutdown_receiver.clone();
             let cleanup_task = stale_session_cleanup::start(relay_shutdown_receiver);
             let shutdown_signal_sender = relay_shutdown_sender.clone();
-            let result = axum::serve(listener, app(restart_receiver, output_shutdown_receiver))
-                .with_graceful_shutdown(async move {
-                    tokio::select! {
-                        _ = shutdown_receiver.changed() => {}
-                        _ = process_shutdown_signal() => {}
-                    }
-                    shutdown_signal_sender.send_replace(true);
-                })
-                .await;
+            let result = axum::serve(
+                listener,
+                app(
+                    restart_receiver,
+                    SessionStoreWatch {
+                        events: session_store_events,
+                        available: session_store_watcher_available,
+                    },
+                    output_shutdown_receiver,
+                ),
+            )
+            .with_graceful_shutdown(async move {
+                tokio::select! {
+                    _ = shutdown_receiver.changed() => {}
+                    _ = process_shutdown_signal() => {}
+                }
+                shutdown_signal_sender.send_replace(true);
+            })
+            .await;
             relay_shutdown_sender.send_replace(true);
             if let Err(error) = cleanup_task.await {
                 tracing::warn!(%error, "stale session cleanup task failed to stop");
@@ -213,7 +237,14 @@ pub async fn run(args: &WatchWebArgs) -> Result<()> {
         let server = watch_web_server;
         match restart::wait_for_server_or_restart(
             server,
-            restart::wait_for_replacement(&executable, executable_identity, restart_retry_interval),
+            restart::wait_for_replacement(
+                &executable,
+                executable_identity,
+                &mut startup_replacement_pending,
+                executable_watcher
+                    .as_mut()
+                    .map(|watcher| &mut watcher.events),
+            ),
             restart_sender,
             restart::SERVER_SHUTDOWN_TIMEOUT,
         )
@@ -222,13 +253,12 @@ pub async fn run(args: &WatchWebArgs) -> Result<()> {
             restart::ServerOutcome::Exited => return Ok(()),
             restart::ServerOutcome::Restart => {
                 match restart::exec_replacement(&executable, executable_identity, &restart_args) {
-                    Ok(_) => restart_retry_interval = restart::POLL_INTERVAL,
+                    Ok(_) => {}
                     Err(error) => {
                         eprintln!("Could not restart the Agent Watch Web UI: {error}");
                         if let Ok(identity) = restart::ExecutableIdentity::read(&executable) {
                             executable_identity = identity;
                         }
-                        restart_retry_interval = restart::EXEC_RETRY_INTERVAL;
                     }
                 }
                 listener = bind_listener(address.port()).await?.0;
@@ -259,6 +289,7 @@ async fn process_shutdown_signal() {
 
 fn app(
     restart_signal: watch::Receiver<bool>,
+    session_store_watch: SessionStoreWatch,
     output_shutdown_signal: watch::Receiver<bool>,
 ) -> Router {
     app_with_assets_and_queued_prompt_loaders_and_restart_signal(
@@ -290,6 +321,7 @@ fn app(
             crate::commands::agent::vibe::repo_identity_for_path,
         ),
         restart_signal,
+        session_store_watch,
         output_shutdown_signal,
     )
 }
@@ -332,6 +364,10 @@ fn app_with_assets_and_loader_and_restart_signal(
             |_| Ok(Vec::new()),
         ),
         restart_signal,
+        SessionStoreWatch {
+            events: tokio::sync::broadcast::channel(1).1,
+            available: true,
+        },
         watch::channel(false).1,
     )
 }
@@ -342,11 +378,16 @@ fn app_with_assets_and_queued_prompt_loaders_and_restart_signal(
     load_user_marker: impl Fn(&str) -> anyhow::Result<Option<String>> + Send + Sync + 'static,
     loaders: messages::RouteLoaders,
     restart_signal: watch::Receiver<bool>,
+    session_store_watch: SessionStoreWatch,
     output_shutdown_signal: watch::Receiver<bool>,
 ) -> Router {
+    let SessionStoreWatch {
+        events: session_store_events,
+        available: session_store_watcher_available,
+    } = session_store_watch;
     let enrichment_updates = EnrichmentUpdates::new();
     let api = Router::new()
-        .merge(actions::router(loaders.clone()))
+        .merge(actions::router(loaders.clone(), enrichment_updates.clone()))
         .merge(session_state::router())
         .merge(sessions::router(
             enrichment_updates.clone(),
@@ -356,7 +397,12 @@ fn app_with_assets_and_queued_prompt_loaders_and_restart_signal(
         .merge(freeze_profiler::router())
         .merge(directories::router())
         .merge(model_options::router())
-        .merge(events::router(enrichment_updates, restart_signal))
+        .merge(events::router(
+            enrichment_updates,
+            restart_signal,
+            session_store_events,
+            session_store_watcher_available,
+        ))
         .merge(messages::routes_with_proposals_and_peer_out_messages(
             load_session,
             load_user_marker,
@@ -405,7 +451,7 @@ mod tests {
 
     use super::messages::{BackgroundTask, BackgroundTaskKind, RouteLoaders};
     use super::{
-        LISTEN_PORT, app, app_with_assets, app_with_assets_and_loader,
+        LISTEN_PORT, SessionStoreWatch, app, app_with_assets, app_with_assets_and_loader,
         app_with_assets_and_queued_prompt_loaders_and_restart_signal, bind_listener,
         compression_layer, ensure_port_allowed, open_browser_on_startup, restart_args_with_port,
         start_web_ui_relay_manager_if_allowed, watch_web_url,
@@ -672,10 +718,17 @@ mod tests {
         #[case] expected_content_type: Option<&str>,
         #[case] expected_body: &str,
     ) {
-        let response = app(watch::channel(false).1, watch::channel(false).1)
-            .oneshot(request(method, uri, host, origin))
-            .await
-            .unwrap();
+        let response = app(
+            watch::channel(false).1,
+            SessionStoreWatch {
+                events: tokio::sync::broadcast::channel(1).1,
+                available: true,
+            },
+            watch::channel(false).1,
+        )
+        .oneshot(request(method, uri, host, origin))
+        .await
+        .unwrap();
 
         assert_eq!(
             response_snapshot(response).await,
@@ -771,6 +824,10 @@ mod tests {
             |_| Ok(None),
             loaders,
             restart_signal,
+            SessionStoreWatch {
+                events: tokio::sync::broadcast::channel(1).1,
+                available: false,
+            },
             shutdown_signal,
         );
         let response = router
@@ -961,19 +1018,26 @@ mod tests {
 
     #[tokio::test]
     async fn matching_origin_reaches_the_action_route() {
-        let response = app(watch::channel(false).1, watch::channel(false).1)
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/sessions/not-found/answer")
-                    .header(HOST, "localhost")
-                    .header(ORIGIN, "http://localhost")
-                    .header(CONTENT_TYPE, "application/json")
-                    .body(Body::from(r#"{"skip":"invalid"}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let response = app(
+            watch::channel(false).1,
+            SessionStoreWatch {
+                events: tokio::sync::broadcast::channel(1).1,
+                available: true,
+            },
+            watch::channel(false).1,
+        )
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/sessions/not-found/answer")
+                .header(HOST, "localhost")
+                .header(ORIGIN, "http://localhost")
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"skip":"invalid"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(
             response_snapshot(response).await,

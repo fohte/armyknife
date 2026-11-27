@@ -1,0 +1,26 @@
+{
+  "name": "agent-watch-desktop",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Agent Watch desktop app",
+  "type": "module",
+  "main": "dist/index.js",
+  "packageManager": "pnpm@12.21.0",
+  "scripts": {
+    "build": "tsup",
+    "start": "pnpm run build && electron .",
+    "package": "pnpm run build && electron-builder --config electron-builder.yml",
+    "test": "pnpm run test:type && pnpm run test:unit",
+    "test:type": "tsc --noEmit",
+    "test:unit": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.6",
+    "electron": "44.11.5",
+    "electron-builder": "26.18.0",
+    "neverthrow": "8.2.0",
+    "tsup": "8.5.1",
+    "typescript": "6.0.3",
+    "vitest": "4.1.12"
+  }
+}

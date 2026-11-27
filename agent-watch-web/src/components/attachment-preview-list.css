@@ -46,10 +46,6 @@
   font-size: 16px;
 }
 
-.conversation-composer .attachment-preview-list {
-  padding: 0 12px 8px;
-}
-
 .chat-todo-card .attachment-preview-list,
 .chat-proposal-card .attachment-preview-list {
   margin-top: 8px;

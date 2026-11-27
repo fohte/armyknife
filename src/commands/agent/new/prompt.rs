@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, bail};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::commands::agent::error::CcError;
@@ -6,11 +7,7 @@ use crate::commands::name_branch::{detect_backend, generate_branch_name};
 use crate::shared::cache;
 use crate::shared::command;
 
-/// Get the cache path for prompt recovery.
-// Path is per-repo, not per-invocation, so concurrent `a agent new` calls
-// against the same repo can race on save/delete. Not locked (see
-// infra::git::fetch_lock for the pattern) since a single repo rarely
-// receives concurrent invocations in practice.
+/// Get the cache path template for prompt recovery.
 fn get_prompt_cache_path(repo_root: &str) -> Option<PathBuf> {
     let repo_name = Path::new(repo_root).file_name()?.to_str()?;
     cache::wm_prompt(repo_name)
@@ -19,31 +16,30 @@ fn get_prompt_cache_path(repo_root: &str) -> Option<PathBuf> {
 /// Save prompt to cache directory for recovery.
 pub(super) fn save_prompt_cache(repo_root: &str, prompt: &str) -> Result<PathBuf> {
     let path = get_prompt_cache_path(repo_root).context("Failed to determine cache directory")?;
-    save_prompt_cache_to(&path, prompt)?;
-    Ok(path)
+    save_prompt_cache_to(&path, prompt)
 }
 
-/// Internal implementation for saving prompt to a specific path.
-/// Allows testing with temporary directories.
-fn save_prompt_cache_to(path: &Path, prompt: &str) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).context("Failed to create cache directory")?;
-    }
+/// Save prompt into a unique file under the cache directory.
+fn save_prompt_cache_to(path: &Path, prompt: &str) -> Result<PathBuf> {
+    let parent = path
+        .parent()
+        .context("Failed to determine cache directory")?;
+    std::fs::create_dir_all(parent).context("Failed to create cache directory")?;
 
-    std::fs::write(path, prompt).context("Failed to save prompt")?;
+    let mut file = tempfile::Builder::new()
+        .prefix("prompt-")
+        .suffix(".md")
+        .tempfile_in(parent)
+        .context("Failed to create prompt cache file")?;
+    file.write_all(prompt.as_bytes())
+        .context("Failed to save prompt")?;
+    let (_, saved_path) = file.keep().context("Failed to persist prompt cache")?;
 
-    Ok(())
+    Ok(saved_path)
 }
 
 /// Delete the saved prompt cache after successful completion.
-pub(super) fn delete_prompt_cache(repo_root: &str) {
-    if let Some(path) = get_prompt_cache_path(repo_root) {
-        delete_prompt_cache_at(&path);
-    }
-}
-
-/// Internal implementation for deleting prompt cache at a specific path.
-fn delete_prompt_cache_at(path: &Path) {
+pub(super) fn delete_prompt_cache(path: &Path) {
     let _ = std::fs::remove_file(path);
 }
 
@@ -143,8 +139,16 @@ where
 mod tests {
     use super::*;
     use crate::commands::name_branch::{Backend, Result as NameBranchResult};
+    use clap::Parser;
     use rstest::rstest;
+    use std::cell::{Cell, RefCell};
     use tempfile::TempDir;
+
+    #[derive(Parser)]
+    struct TestNewCli {
+        #[command(flatten)]
+        args: super::super::NewArgs,
+    }
 
     /// Mock backend for testing
     struct MockBackend {
@@ -228,6 +232,58 @@ mod tests {
         }
     }
 
+    #[test]
+    fn worktree_failure_caches_the_resolved_editor_prompt() {
+        let args = TestNewCli::try_parse_from(["a", "--worktree"])
+            .unwrap()
+            .args;
+        let saved_prompt = RefCell::new(None);
+        let launched = RefCell::new(None);
+        let deleted = Cell::new(false);
+
+        let result = super::super::run_worktree_mode_with_deps(
+            &args,
+            args.worktree.as_ref().and_then(Option::as_deref),
+            "/repo",
+            |worktree, prompt| {
+                resolve_args_with_deps(
+                    worktree,
+                    prompt,
+                    || mock_backend("editor-branch"),
+                    || Ok(Some("editor draft".to_string())),
+                )
+            },
+            |_repo, prompt| {
+                saved_prompt.replace(Some(prompt.to_string()));
+                Ok(PathBuf::from("prompt-cache.md"))
+            },
+            |_path| deleted.set(true),
+            |_, branch_name, prompt, _| {
+                launched.replace(Some((branch_name.to_string(), prompt.map(str::to_string))));
+                anyhow::bail!("worktree creation failed")
+            },
+        )
+        .map_err(|error| error.to_string());
+
+        assert_eq!(
+            (
+                result,
+                saved_prompt.into_inner(),
+                launched.into_inner(),
+                deleted.get(),
+            ),
+            (
+                Err("worktree creation failed".to_string()),
+                Some("editor draft".to_string()),
+                Some((
+                    "editor-branch".to_string(),
+                    Some("editor draft".to_string()),
+                )),
+                false,
+            ),
+        );
+    }
+
     #[rstest]
     #[case::extracts_repo_name("/home/user/projects/my-repo", Some("my-repo"))]
     #[case::root_returns_none("/", None)]
@@ -249,28 +305,28 @@ mod tests {
     #[rstest]
     fn save_and_delete_prompt_cache() {
         let temp_dir = TempDir::new().unwrap();
-        let cache_path = temp_dir
+        let cache_path_template = temp_dir
             .path()
             .join("wm")
             .join("test-repo")
             .join("prompt.md");
 
         let prompt = "test prompt content";
-        save_prompt_cache_to(&cache_path, prompt).unwrap();
+        let cache_path = save_prompt_cache_to(&cache_path_template, prompt).unwrap();
 
         // File should exist with correct content
         assert!(cache_path.exists());
         assert_eq!(std::fs::read_to_string(&cache_path).unwrap(), prompt);
 
         // Delete should remove the file
-        delete_prompt_cache_at(&cache_path);
+        delete_prompt_cache(&cache_path);
         assert!(!cache_path.exists());
     }
 
     #[rstest]
     fn save_prompt_cache_creates_parent_directories() {
         let temp_dir = TempDir::new().unwrap();
-        let cache_path = temp_dir
+        let cache_path_template = temp_dir
             .path()
             .join("wm")
             .join("nested")
@@ -278,17 +334,43 @@ mod tests {
             .join("repo")
             .join("prompt.md");
 
-        save_prompt_cache_to(&cache_path, "test").unwrap();
+        let cache_path = save_prompt_cache_to(&cache_path_template, "test").unwrap();
         assert!(cache_path.exists());
+    }
+
+    #[rstest]
+    fn save_prompt_cache_uses_a_unique_file_per_invocation() {
+        let temp_dir = TempDir::new().unwrap();
+        let cache_path_template = temp_dir.path().join("repo").join("prompt.md");
+        let cache_dir = cache_path_template.parent().unwrap().to_path_buf();
+
+        let first = save_prompt_cache_to(&cache_path_template, "first prompt").unwrap();
+        let second = save_prompt_cache_to(&cache_path_template, "second prompt").unwrap();
+
+        assert_eq!(
+            (
+                first.parent().unwrap().to_path_buf(),
+                second.parent().unwrap().to_path_buf(),
+                first == second,
+                std::fs::read_to_string(&first).unwrap(),
+                std::fs::read_to_string(&second).unwrap(),
+            ),
+            (
+                cache_dir.clone(),
+                cache_dir,
+                false,
+                "first prompt".to_string(),
+                "second prompt".to_string(),
+            ),
+        );
     }
 
     #[rstest]
     fn delete_prompt_cache_does_not_fail_for_nonexistent() {
         let temp_dir = TempDir::new().unwrap();
-        let repo_root = temp_dir.path().join("nonexistent-repo");
-        std::fs::create_dir_all(&repo_root).unwrap();
+        let cache_path = temp_dir.path().join("nonexistent-repo").join("prompt.md");
 
         // Should not panic or error
-        delete_prompt_cache(repo_root.to_str().unwrap());
+        delete_prompt_cache(&cache_path);
     }
 }

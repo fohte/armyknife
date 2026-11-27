@@ -1032,6 +1032,30 @@ fn process_hook_event_impl_with_env_and_unreported_stop(
             )?;
         }
     }
+    if session.engine == Engine::Claude && input.agent_id.is_none() {
+        let compacting = match event {
+            HookEvent::PreCompact => Some(true),
+            HookEvent::PreToolUse
+            | HookEvent::PostToolUse
+            | HookEvent::PermissionRequest
+            | HookEvent::Stop
+            | HookEvent::StopFailure => Some(false),
+            HookEvent::SessionStart
+                if matches!(input.source.as_deref(), Some("compact" | "resume")) =>
+            {
+                Some(false)
+            }
+            _ => None,
+        };
+        if let Some(compacting) = compacting {
+            session_lock.queue_watch_web_compacting(compacting);
+        }
+    }
+
+    if event == HookEvent::SessionStart && input.agent_id.is_none() {
+        session_lock.record_watch_web_session_start()?;
+    }
+
     if vibe_setting_requested {
         session_lock.save_vibe_setting(&session)?;
     } else {
@@ -1080,22 +1104,6 @@ fn process_hook_event_impl_with_env_and_unreported_stop(
             tool_input,
             store::PermissionDeniedResolution::Approved,
         )?;
-    }
-
-    if session.engine == Engine::Claude && input.agent_id.is_none() {
-        let compacting = match event {
-            HookEvent::PreCompact => Some(true),
-            HookEvent::Stop | HookEvent::StopFailure => Some(false),
-            HookEvent::SessionStart
-                if matches!(input.source.as_deref(), Some("compact" | "resume")) =>
-            {
-                Some(false)
-            }
-            _ => None,
-        };
-        if let Some(compacting) = compacting {
-            store::set_watch_web_compacting(sessions_dir, &session.session_id, compacting)?;
-        }
     }
 
     if let Some(startup_metadata) = startup_metadata
@@ -2677,6 +2685,19 @@ mod tests {
         tempfile::TempDir::new().expect("temp dir")
     }
 
+    #[fixture]
+    fn compacting_hook_sessions_dir() -> tempfile::TempDir {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir creation should succeed");
+        process_hook_event_without_instruction(
+            HookEvent::PreCompact,
+            create_test_input(None),
+            temp_dir.path(),
+            &SideEffects::none(),
+        )
+        .expect("pre-compact hook should succeed");
+        temp_dir
+    }
+
     #[rstest]
     #[case::pre_tool_use_after_stop(HookEvent::PreToolUse, SessionStatus::Stopped)]
     #[case::pre_tool_use_while_running(HookEvent::PreToolUse, SessionStatus::Running)]
@@ -3242,26 +3263,22 @@ mod tests {
     }
 
     #[rstest]
+    #[case::pre_tool_use(HookEvent::PreToolUse, None, false)]
+    #[case::post_tool_use(HookEvent::PostToolUse, None, false)]
+    #[case::permission_request(HookEvent::PermissionRequest, None, false)]
     #[case::stop(HookEvent::Stop, None, false)]
     #[case::stop_failure(HookEvent::StopFailure, None, false)]
     #[case::session_end(HookEvent::SessionEnd, None, false)]
     #[case::compaction_start(HookEvent::SessionStart, Some("compact"), false)]
     #[case::resume(HookEvent::SessionStart, Some("resume"), false)]
     #[case::startup_preserves_marker(HookEvent::SessionStart, Some("startup"), true)]
-    fn compaction_state_clears_only_for_expected_lifecycle_events(
+    fn compaction_state_clears_after_main_thread_tool_and_lifecycle_events(
         #[case] event: HookEvent,
         #[case] source: Option<&str>,
         #[case] expected: bool,
+        compacting_hook_sessions_dir: tempfile::TempDir,
     ) {
-        let temp_dir = tempfile::TempDir::new().expect("temp dir creation should succeed");
-        let sessions_dir = temp_dir.path();
-        process_hook_event_without_instruction(
-            HookEvent::PreCompact,
-            create_test_input(None),
-            sessions_dir,
-            &SideEffects::none(),
-        )
-        .expect("pre-compact hook should succeed");
+        let sessions_dir = compacting_hook_sessions_dir.path();
 
         process_hook_event_without_instruction(
             event,
@@ -3277,6 +3294,59 @@ mod tests {
                 .first()
                 .map(|state| state.is_compacting),
             Some(expected),
+        );
+    }
+
+    #[rstest]
+    fn main_thread_tool_hook_updates_compaction_with_session_revision(
+        compacting_hook_sessions_dir: tempfile::TempDir,
+    ) {
+        let sessions_dir = compacting_hook_sessions_dir.path();
+        let revision_before = store::session_store_revision_from(sessions_dir)
+            .expect("session store revision should load");
+
+        process_hook_event_without_instruction(
+            HookEvent::PreToolUse,
+            create_test_input(None),
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("tool hook should succeed");
+
+        let revision_after = store::session_store_revision_from(sessions_dir)
+            .expect("session store revision should load");
+        let is_compacting = store::watch_web_session_states_from(sessions_dir)
+            .expect("watch-web state should load")
+            .first()
+            .map(|state| state.is_compacting);
+
+        assert_eq!(
+            (revision_after - revision_before, is_compacting),
+            (1, Some(false))
+        );
+    }
+
+    #[rstest]
+    fn subagent_tool_event_does_not_clear_main_thread_compaction_state(
+        compacting_hook_sessions_dir: tempfile::TempDir,
+    ) {
+        let sessions_dir = compacting_hook_sessions_dir.path();
+        let mut input = create_test_input(None);
+        input.agent_id = Some("fixture-agent".to_string());
+        process_hook_event_without_instruction(
+            HookEvent::PreToolUse,
+            input,
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("subagent tool hook should succeed");
+
+        assert_eq!(
+            store::watch_web_session_states_from(sessions_dir)
+                .expect("watch-web state should load")
+                .first()
+                .map(|state| state.is_compacting),
+            Some(true),
         );
     }
 
@@ -6153,6 +6223,41 @@ mod tests {
                 result, expected_result,
                 "source={:?} should return {:?}",
                 source, expected_result
+            );
+        }
+
+        #[test]
+        fn resume_session_start_advances_watch_web_generation() {
+            let temp_dir = create_temp_sessions_dir();
+            let first_input = create_test_input_with_source(None, Some("resume"));
+
+            process_hook_event_impl(
+                HookEvent::SessionStart,
+                first_input,
+                temp_dir.path(),
+                &SideEffects::none(),
+            )
+            .expect("resume SessionStart should save the session");
+            let first_generation =
+                store::watch_web_session_start_generation_from(temp_dir.path(), "test-123")
+                    .expect("first session start generation should load");
+
+            let second_input = create_test_input_with_source(None, Some("resume"));
+            process_hook_event_impl(
+                HookEvent::SessionStart,
+                second_input,
+                temp_dir.path(),
+                &SideEffects::none(),
+            )
+            .expect("second resume SessionStart should save the session");
+
+            assert_eq!(
+                (
+                    first_generation,
+                    store::watch_web_session_start_generation_from(temp_dir.path(), "test-123",)
+                        .expect("second session start generation should load"),
+                ),
+                (1, 2),
             );
         }
 

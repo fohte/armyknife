@@ -4,7 +4,7 @@ import type {
   ReviewDocumentSummary,
 } from '#components/conversation-pane-response'
 import { getSessionPullRequests } from '#components/session-pull-request-utils'
-import type { BackgroundTask, ChatItem, Session } from '#types'
+import type { BackgroundTask, ChatItem, Session, ToolOperation } from '#types'
 
 export type ConversationStatusBandState = {
   kind:
@@ -72,11 +72,13 @@ export function getConversationStatusBandState({
   session,
   messages,
   backgroundTasks,
+  activeTool,
   editorReviewDocument = null,
 }: {
   session: Session
   messages: readonly ChatItem[]
   backgroundTasks: readonly BackgroundTask[]
+  activeTool?: ToolOperation
   editorReviewDocument?: EditorReviewDocumentState | null
 }): ConversationStatusBandState | null {
   const isCompacting = session.isCompacting === true
@@ -89,7 +91,7 @@ export function getConversationStatusBandState({
     !isWaitingForBackgroundTasks &&
     (session.activityStatus === 'working' || session.activityStatus == null)
 
-  if (isCompacting) {
+  if (isCompacting && !(isWorking && activeTool !== undefined)) {
     return { kind: 'compacting', detail: null }
   }
   if (isWaitingForUser) {

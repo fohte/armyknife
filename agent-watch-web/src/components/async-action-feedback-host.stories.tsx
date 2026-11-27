@@ -74,7 +74,8 @@ function withDesktopLayout(
     (action) =>
       action.status === 'merging' ||
       action.status === 'closing' ||
-      action.status === 'rewinding',
+      action.status === 'rewinding' ||
+      action.status === 'launching',
   ).length
   const count = failed
     ? failedCount
@@ -161,6 +162,8 @@ const desktopFailureAction = {
   checks: {
     path: '~/work/example-service',
     files: [],
+    changes: [],
+    commits: [],
     branch: 'feature/example-route',
     merged: true,
     reason: null,
@@ -168,6 +171,7 @@ const desktopFailureAction = {
       { pid: 23451, name: 'example server' },
       { pid: 23452, name: 'example worker' },
     ],
+    commitInspectionUnavailable: false,
     processInspectionUnavailable: false,
   },
   createdAt: 1_799_000_000_000,
@@ -438,7 +442,7 @@ export const ActivityKeepsTheResult: Story = {
 }
 
 export const ActivityShowsEmptyState: Story = {
-  name: 'Activity explains where merge, close, rewind, and command results will appear.',
+  name: 'Activity explains where session launches and other results will appear.',
   args: { actions: [], toastIds: [], activityOpen: true },
 }
 
@@ -489,7 +493,7 @@ export const DesktopActivityShowsCloseFailure: Story = {
 }
 
 export const PhoneShowsEmptyActivity: Story = {
-  name: 'The phone sheet explains where merge, close, rewind, and command results appear.',
+  name: 'The phone sheet explains where session launches and other results appear.',
   parameters: {
     layout: 'fullscreen',
     viewport: { defaultViewport: 'mobile2' },

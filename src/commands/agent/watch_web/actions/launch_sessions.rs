@@ -1,7 +1,8 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
-use axum::extract::State;
+use axum::extract::{DefaultBodyLimit, State};
 use axum::routing::post;
 use axum::{Json, Router};
 use chrono::Utc;
@@ -10,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::commands::agent::new::{CommonNewArgs, NewArgs};
 use crate::commands::agent::types::{Engine, ReasoningEffort};
+use crate::commands::agent::watch_web::attachments;
 use crate::commands::agent::watch_web::paths::normalize_directory;
 
 use super::ApiError;
@@ -19,15 +21,45 @@ pub(super) fn router() -> Router {
 }
 
 fn router_with_host(host: Arc<dyn LaunchHost>) -> Router {
+    router_with_state(LaunchState {
+        host,
+        attachment_dir: None,
+        branch_name_for_message: Arc::new(|message| {
+            let backend = crate::commands::name_branch::detect_backend();
+            crate::commands::name_branch::generate_branch_name(message, backend.as_ref())
+        }),
+    })
+}
+
+#[cfg(test)]
+fn router_with_host_and_attachment_dir(
+    host: Arc<dyn LaunchHost>,
+    attachment_dir: PathBuf,
+) -> Router {
+    router_with_state(LaunchState {
+        host,
+        attachment_dir: Some(attachment_dir),
+        branch_name_for_message: Arc::new(|message| Ok(format!("branch-from-{message}"))),
+    })
+}
+
+fn router_with_state(state: LaunchState) -> Router {
     Router::new()
         .route("/sessions", post(launch_session))
-        .with_state(LaunchState { host })
+        .layer(DefaultBodyLimit::max(
+            super::messages::MAX_MESSAGE_BODY_BYTES,
+        ))
+        .with_state(state)
 }
 
 #[derive(Clone)]
 struct LaunchState {
     host: Arc<dyn LaunchHost>,
+    attachment_dir: Option<PathBuf>,
+    branch_name_for_message: Arc<BranchNameGenerator>,
 }
+
+type BranchNameGenerator = dyn Fn(&str) -> Result<String> + Send + Sync;
 
 trait LaunchHost: Send + Sync {
     fn launch(&self, args: NewArgs) -> Result<()>;
@@ -50,6 +82,8 @@ struct LaunchRequest {
     model: Option<String>,
     reasoning_effort: Option<String>,
     initial_message: Option<String>,
+    #[serde(default)]
+    attachments: Vec<attachments::Request>,
 }
 
 #[derive(Serialize)]
@@ -76,24 +110,40 @@ async fn launch_session(
         .map(parse_reasoning_effort)
         .transpose()
         .map_err(ApiError::bad_request)?;
+    let validated_attachments = attachments::validate(request.attachments, vec![])
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
     let launch_id = uuid::Uuid::new_v4().to_string();
     let initial_message = request
         .initial_message
         .filter(|message| !message.trim().is_empty());
-    let worktree = request.worktree.then(|| {
-        initial_message
-            .is_none()
-            .then(|| branch_name_for_time(Utc::now(), &launch_id))
-    });
+    let saved_attachments = tokio::task::spawn_blocking({
+        let attachment_dir = state.attachment_dir.clone();
+        move || attachments::save(validated_attachments, attachment_dir)
+    })
+    .await
+    .map_err(ApiError::internal)?
+    .map_err(ApiError::operation)?;
+    let attachment_paths = saved_attachments
+        .iter()
+        .map(|attachment| attachment.path.clone())
+        .collect::<Vec<_>>();
+    let has_attachments = !attachment_paths.is_empty();
+    // The prompt gives the agent access to saved files; conversation thumbnails are presentation data.
+    let prompt = attachments::append_paths_to_message(
+        initial_message.clone().unwrap_or_default(),
+        &attachment_paths,
+    );
+    let prompt = (!prompt.trim().is_empty()).then_some(prompt);
     let args = NewArgs {
-        worktree,
+        worktree: request.worktree.then_some(None),
         from: None,
         force: false,
         vibe: false,
+        watch_web_prompt_cache: has_attachments.then(|| initial_message.clone()),
         common: CommonNewArgs {
             watch_web_launch_id: Some(launch_id.clone()),
             watch_web_directory: (!request.worktree).then_some(directory.clone()),
-            prompt: initial_message,
+            prompt,
             child_launch: None,
             label: None,
             kind: None,
@@ -109,12 +159,56 @@ async fn launch_session(
     };
 
     let host = state.host;
-    tokio::task::spawn_blocking(move || host.launch(args))
-        .await
-        .map_err(ApiError::internal)?
-        .map_err(ApiError::operation)?;
+    let branch_message = initial_message;
+    let branch_name_for_message = state.branch_name_for_message;
+    let launch_time = Utc::now();
+    let branch_launch_id = launch_id.clone();
+    let launch_result = tokio::task::spawn_blocking(move || {
+        let mut args = args;
+        args.worktree = resolve_worktree(
+            args.worktree.is_some(),
+            branch_message.as_deref(),
+            has_attachments,
+            &branch_launch_id,
+            launch_time,
+            |message| branch_name_for_message(message),
+        )?;
+        host.launch(args)
+    })
+    .await;
+    match launch_result {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            super::messages::remove_attachments(attachment_paths).await;
+            return Err(ApiError::operation(error));
+        }
+        Err(error) => {
+            super::messages::remove_attachments(attachment_paths).await;
+            return Err(ApiError::internal(error));
+        }
+    }
 
     Ok(Json(LaunchResponse { launch_id }))
+}
+
+fn resolve_worktree(
+    requested: bool,
+    initial_message: Option<&str>,
+    has_attachments: bool,
+    launch_id: &str,
+    now: chrono::DateTime<Utc>,
+    branch_name_for_message: impl FnOnce(&str) -> Result<String>,
+) -> Result<Option<Option<String>>> {
+    if !requested {
+        return Ok(None);
+    }
+    let Some(message) = initial_message else {
+        return Ok(Some(Some(branch_name_for_time(now, launch_id))));
+    };
+    if has_attachments {
+        return Ok(Some(Some(branch_name_for_message(message)?)));
+    }
+    Ok(Some(None))
 }
 
 fn parse_reasoning_effort(value: &str) -> Result<ReasoningEffort, String> {
@@ -134,15 +228,17 @@ mod tests {
     use super::*;
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD;
     use chrono::TimeZone;
     use serde_json::{Value, json};
-    use std::path::PathBuf;
     use std::sync::Mutex;
     use tower::ServiceExt;
 
     #[derive(Default)]
     struct FakeLaunchHost {
         calls: Mutex<Vec<NewArgs>>,
+        fail: bool,
     }
 
     #[derive(Debug, PartialEq, Eq)]
@@ -175,8 +271,22 @@ mod tests {
     impl LaunchHost for FakeLaunchHost {
         fn launch(&self, args: NewArgs) -> Result<()> {
             self.calls.lock().unwrap().push(args);
+            if self.fail {
+                anyhow::bail!("launch failed");
+            }
             Ok(())
         }
+    }
+
+    const PNG_SIGNATURE: &[u8] = &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+
+    fn image_request(name: &str, bytes: &[u8]) -> Value {
+        json!({
+            "name": name,
+            "mimeType": "image/png",
+            "size": bytes.len(),
+            "data": STANDARD.encode(bytes),
+        })
     }
 
     async fn request(router: &Router, body: Value) -> (StatusCode, Value) {
@@ -228,6 +338,179 @@ mod tests {
                     reasoning_effort: None,
                     worktree: None,
                 },
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn saves_initial_images_and_appends_their_paths_to_the_first_message() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = tempfile::tempdir().unwrap();
+        let host = Arc::new(FakeLaunchHost::default());
+        let router =
+            router_with_host_and_attachment_dir(host.clone(), storage.path().to_path_buf());
+        let mut image = PNG_SIGNATURE.to_vec();
+        image.resize(2 * 1024 * 1024 + 1, 0);
+        let (status, _) = request(
+            &router,
+            json!({
+                "directory": directory.path(),
+                "engine": "codex",
+                "worktree": false,
+                "initialMessage": "Inspect this image.",
+                "attachments": [image_request("fixture.png", &image)],
+            }),
+        )
+        .await;
+        let args = host.calls.lock().unwrap().pop().unwrap();
+        let saved_path = std::fs::read_dir(storage.path())
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path()
+            .canonicalize()
+            .unwrap();
+
+        assert_eq!(
+            (
+                status,
+                args.common.prompt,
+                std::fs::read(&saved_path).unwrap()
+            ),
+            (
+                StatusCode::OK,
+                Some(
+                    indoc::formatdoc! {"
+                        Inspect this image.
+
+                        Attached file(s):
+                        - {}
+                    ", saved_path.display()}
+                    .trim_end()
+                    .to_string(),
+                ),
+                image,
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn removes_saved_images_when_launch_fails() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = tempfile::tempdir().unwrap();
+        let host = Arc::new(FakeLaunchHost {
+            fail: true,
+            ..FakeLaunchHost::default()
+        });
+        let router =
+            router_with_host_and_attachment_dir(host.clone(), storage.path().to_path_buf());
+        let (status, _) = request(
+            &router,
+            json!({
+                "directory": directory.path(),
+                "engine": "claude",
+                "worktree": false,
+                "initialMessage": "Recover this request.",
+                "attachments": [image_request("fixture.png", PNG_SIGNATURE)],
+            }),
+        )
+        .await;
+        let args = host.calls.lock().unwrap().pop().unwrap();
+
+        assert_eq!(
+            (
+                status,
+                args.watch_web_prompt_cache,
+                std::fs::read_dir(storage.path())
+                    .unwrap()
+                    .map(|entry| entry.unwrap().path())
+                    .collect::<Vec<_>>(),
+            ),
+            (
+                StatusCode::BAD_GATEWAY,
+                Some(Some("Recover this request.".to_string())),
+                vec![],
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_invalid_initial_image_data_without_launching() {
+        let directory = tempfile::tempdir().unwrap();
+        let host = Arc::new(FakeLaunchHost::default());
+        let router = router_with_host(host.clone());
+        let (status, _) = request(
+            &router,
+            json!({
+                "directory": directory.path(),
+                "engine": "claude",
+                "worktree": false,
+                "attachments": [{
+                    "name": "fixture.png",
+                    "mimeType": "image/png",
+                    "size": 1,
+                    "data": "?",
+                }],
+            }),
+        )
+        .await;
+
+        assert_eq!(
+            (status, host.calls.lock().unwrap().len()),
+            (StatusCode::BAD_REQUEST, 0),
+        );
+    }
+
+    #[tokio::test]
+    async fn worktree_launch_generates_its_branch_from_the_user_message() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = tempfile::tempdir().unwrap();
+        let host = Arc::new(FakeLaunchHost::default());
+        let router =
+            router_with_host_and_attachment_dir(host.clone(), storage.path().to_path_buf());
+        let (status, _) = request(
+            &router,
+            json!({
+                "directory": directory.path(),
+                "engine": "codex",
+                "worktree": true,
+                "initialMessage": "Update the dashboard layout",
+                "attachments": [image_request("fixture.png", PNG_SIGNATURE)],
+            }),
+        )
+        .await;
+        let args = host.calls.lock().unwrap().pop().unwrap();
+        let saved_path = std::fs::read_dir(storage.path())
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path()
+            .canonicalize()
+            .unwrap();
+
+        assert_eq!(
+            (
+                status,
+                args.worktree,
+                args.common.prompt,
+                args.watch_web_prompt_cache,
+            ),
+            (
+                StatusCode::OK,
+                Some(Some("branch-from-Update the dashboard layout".to_string())),
+                Some(
+                    indoc::formatdoc! {"
+                        Update the dashboard layout
+
+                        Attached file(s):
+                        - {}
+                    ", saved_path.display()}
+                    .trim_end()
+                    .to_string(),
+                ),
+                Some(Some("Update the dashboard layout".to_string())),
             ),
         );
     }
