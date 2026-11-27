@@ -92,8 +92,8 @@ pub(super) fn run(args: &MonitorArgs) -> Result<()> {
     loop {
         while process::is_process_alive(watched_pid) {
             // Re-evaluated on every wake (daemon or client exit, clients directory change); lsof
-            // runs only when no announced client is alive. A client that never announced itself
-            // is therefore seen only if one of these wakes happens while it is connected.
+            // runs only when no client with a pid file (announced or found by lsof) is alive. One
+            // that never announced itself is first seen only if a wake finds it connected.
             let waiting = match crit_client_waiting(
                 args.port,
                 watched_pid,

@@ -44,7 +44,8 @@ fn client_waiting_from(
     lsof_clients: impl FnOnce() -> Result<Vec<u32>>,
     mut record: impl FnMut(u32),
 ) -> Result<bool> {
-    // A live announced client settles the answer without paying for lsof.
+    // A live client with a pid file (announced or found by lsof) settles the answer without
+    // paying for lsof.
     if matches!(announced, Ok(true)) {
         return Ok(true);
     }
