@@ -6,6 +6,7 @@ import type { WatchTarget } from './config.js'
 import { createConnectionController } from './connection.js'
 import { installApplicationMenu } from './menu.js'
 import { classifyNavigation, isAllowedWatchUrl } from './navigation.js'
+import { createQuitLifecycle } from './quit-lifecycle.js'
 
 const targetResult = resolveWatchTarget(process.env.AGENT_WATCH_URL)
 const appName = 'Agent Watch'
@@ -33,8 +34,10 @@ let mainWindow: BrowserWindow | undefined
 let watchTarget: WatchTarget | undefined
 let connectionController:
   ReturnType<typeof createConnectionController> | undefined
-let isQuitting = false
 let retryTimer: NodeJS.Timeout | undefined
+const quitLifecycle = createQuitLifecycle(() => {
+  if (retryTimer !== undefined) clearInterval(retryTimer)
+})
 
 const reportPromise = (promise: Promise<unknown>, message: string) => {
   void ResultAsync.fromPromise(promise, (cause) => cause).match(
@@ -105,7 +108,7 @@ const createMainWindow = () => {
   })
 
   mainWindow.on('close', (event) => {
-    if (isQuitting) return
+    if (quitLifecycle.isQuitting()) return
     event.preventDefault()
     mainWindow?.hide()
   })
@@ -198,6 +201,29 @@ const configureWebContents = (contents: Electron.WebContents) => {
       connectionController?.mainFrameDidLoad(contents.getURL())
     }
   })
+
+  contents.on('will-prevent-unload', (event) => {
+    const options = {
+      type: 'warning' as const,
+      title: appName,
+      message: '送信していないメッセージがあります',
+      detail: '破棄して続行しますか',
+      buttons: [
+        '編集を続ける',
+        quitLifecycle.isQuitting() ? '破棄して終了' : '破棄して続行',
+      ],
+      defaultId: 0,
+      cancelId: 0,
+    }
+    const window = BrowserWindow.fromWebContents(contents)
+    const choice =
+      window === null
+        ? dialog.showMessageBoxSync(options)
+        : dialog.showMessageBoxSync(window, options)
+    if (quitLifecycle.rendererPreventedUnload(choice === 1)) {
+      event.preventDefault()
+    }
+  })
 }
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
@@ -205,10 +231,8 @@ if (!hasSingleInstanceLock) {
   app.quit()
 } else {
   app.setName(appName)
-  app.on('before-quit', () => {
-    isQuitting = true
-    if (retryTimer !== undefined) clearInterval(retryTimer)
-  })
+  app.on('before-quit', () => quitLifecycle.beforeQuit())
+  app.on('will-quit', () => quitLifecycle.willQuit())
   app.on('web-contents-created', (_event, contents) =>
     configureWebContents(contents),
   )
