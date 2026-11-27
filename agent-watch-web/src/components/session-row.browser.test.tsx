@@ -261,13 +261,13 @@ const fullRowSnapshots = [
     sessionTitleTooltip: 'Keep the session title visible',
     task: longFullRowTaskTitle,
     taskHasVisibleWidth: true,
-    taskTitleOverflowing: true,
+    taskTitleOverflowing: false,
     taskTooltip: `P1 #27 ${longFullRowTaskTitle}`,
     repository:
       'sample-contributor-automation-team/notification-delivery-service',
     repositoryTitle:
       'sample-contributor-automation-team/notification-delivery-service',
-    repositoryNameOverflowing: true,
+    repositoryNameOverflowing: false,
     repositoryNameTextOverflow: 'ellipsis',
     branch: undefined,
     branchTitle: undefined,
