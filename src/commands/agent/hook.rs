@@ -437,7 +437,7 @@ fn maybe_schedule_transcript_slim(event: HookEvent, input: &HookInput, side_effe
 
     match fs::metadata(transcript_path) {
         Ok(metadata) if metadata.len() > TRANSCRIPT_SLIM_MIN_BYTES => {
-            side_effects.schedule_transcript_slim(&input.session_id, &input.cwd);
+            side_effects.schedule_transcript_slim(&input.session_id, transcript_path);
         }
         Ok(_) => {}
         Err(error) => tracing::warn!(
@@ -1906,8 +1906,11 @@ mod tests {
 
         let temp_dir = tempfile::TempDir::new().expect("hook fixture directory should be created");
         let project_dir = temp_dir.path().join("fixture-project");
+        let transcript_dir = temp_dir.path().join("fixture-transcripts");
         std::fs::create_dir(&project_dir).expect("project directory should be created");
-        let transcript_path = project_dir.join("fixture-transcript.jsonl");
+        std::fs::create_dir(&transcript_dir).expect("transcript directory should be created");
+        let transcript_path = transcript_dir.join("fixture-session.jsonl");
+        let expected_transcript_path = transcript_path.clone();
         let assistant_row = br#"{"type":"assistant","message":{"model":"fixture-model"}}"#;
         let mut transcript =
             File::create(&transcript_path).expect("transcript fixture should be created");
@@ -1962,7 +1965,7 @@ mod tests {
                 .expect("transcript slim calls should lock")
                 .clone(),
             if expected_scheduled {
-                vec![("test-123".to_string(), project_dir)]
+                vec![("test-123".to_string(), expected_transcript_path)]
             } else {
                 Vec::new()
             },

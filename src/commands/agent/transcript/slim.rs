@@ -37,6 +37,10 @@ pub struct SlimArgs {
     /// Project directory used to resolve the session transcript
     #[arg(long, default_value = ".")]
     pub cwd: PathBuf,
+
+    /// Transcript path provided by the Claude Code hook
+    #[arg(long, hide = true)]
+    pub transcript_path: Option<PathBuf>,
 }
 
 fn validate_session_id(session_id: &str) -> Result<()> {

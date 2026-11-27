@@ -1,5 +1,5 @@
 use std::fs::{self, File, OpenOptions};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
@@ -44,11 +44,19 @@ pub(super) fn run(command: &TranscriptCommands) -> Result<()> {
 fn slim_session_transcript(args: &SlimArgs) -> Result<SlimResult> {
     validate_session_id(&args.session_id)?;
     let _lock = lock_transcript_session(&args.session_id)?;
+    let path = resolve_transcript_path(args)?;
+    slim_transcript(&path)
+}
+
+fn resolve_transcript_path(args: &SlimArgs) -> Result<PathBuf> {
+    if let Some(path) = &args.transcript_path {
+        return Ok(path.clone());
+    }
+
     let cwd = fs::canonicalize(&args.cwd)
         .with_context(|| format!("resolve project directory {}", args.cwd.display()))?;
-    let path = super::super::super::claude_sessions::session_jsonl_path(&cwd, &args.session_id)
-        .context("resolve Claude Code home directory")?;
-    slim_transcript(&path)
+    super::super::super::claude_sessions::session_jsonl_path(&cwd, &args.session_id)
+        .context("resolve Claude Code home directory")
 }
 
 fn lock_transcript_session(session_id: &str) -> Result<File> {
@@ -93,11 +101,15 @@ fn slim_failure_event(error: &anyhow::Error) -> &'static str {
 #[cfg(test)]
 mod tests {
     use std::fs::{self, OpenOptions};
+    use std::path::Path;
 
     use rstest::rstest;
     use tempfile::tempdir;
 
-    use super::{PostReplacementFailure, lock_transcript_session_in, slim_failure_event};
+    use super::{
+        PostReplacementFailure, SlimArgs, lock_transcript_session_in, resolve_transcript_path,
+        slim_failure_event,
+    };
 
     #[test]
     fn session_lock_prevents_a_second_slim_from_running_concurrently() {
@@ -121,6 +133,22 @@ mod tests {
                 .is_err_and(|error| matches!(error, std::fs::TryLockError::WouldBlock))
         );
         drop(first_lock);
+    }
+
+    #[test]
+    fn hook_transcript_path_takes_precedence_over_project_directory() {
+        let args = SlimArgs {
+            session_id: "fixture-session".to_string(),
+            cwd: Path::new("/fixture/other-project").to_path_buf(),
+            transcript_path: Some(
+                Path::new("/fixture/transcripts/fixture-session.jsonl").to_path_buf(),
+            ),
+        };
+
+        assert_eq!(
+            resolve_transcript_path(&args).expect("hook transcript path should be used"),
+            Path::new("/fixture/transcripts/fixture-session.jsonl"),
+        );
     }
 
     #[rstest]

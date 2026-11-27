@@ -92,7 +92,7 @@ pub(super) struct SideEffects {
     /// Test-only sink that records sessions passed to the auto-compact worker.
     #[cfg(test)]
     pub(super) auto_compact_calls: Option<std::sync::Arc<std::sync::Mutex<Vec<String>>>>,
-    /// Test-only sink that records (session, cwd) passed to the transcript slimmer.
+    /// Test-only sink that records (session, transcript path) passed to the transcript slimmer.
     #[cfg(test)]
     pub(super) transcript_slim_calls: Option<TranscriptSlimCallSink>,
     /// Test-only sink that records detached title-generation requests.
@@ -208,7 +208,7 @@ impl SideEffects {
         super::super::auto_compact::spawn_in_background(session_id);
     }
 
-    pub(super) fn schedule_transcript_slim(&self, session_id: &str, cwd: &Path) {
+    pub(super) fn schedule_transcript_slim(&self, session_id: &str, transcript_path: &Path) {
         if !self.transcript_slim {
             return;
         }
@@ -217,16 +217,23 @@ impl SideEffects {
             calls
                 .lock()
                 .expect("transcript_slim_calls mutex poisoned")
-                .push((session_id.to_string(), cwd.to_path_buf()));
+                .push((session_id.to_string(), transcript_path.to_path_buf()));
         }
         #[cfg(not(test))]
         {
-            let cwd = cwd.to_string_lossy().into_owned();
+            let transcript_path = transcript_path.to_string_lossy().into_owned();
             crate::infra::process::spawn_self_detached(
                 "agent.transcript.slim.spawn",
                 "agent.transcript.slim.spawn_failed",
                 session_id,
-                &["agent", "transcript", "slim", session_id, "--cwd", &cwd],
+                &[
+                    "agent",
+                    "transcript",
+                    "slim",
+                    session_id,
+                    "--transcript-path",
+                    &transcript_path,
+                ],
             );
         }
     }
