@@ -18,6 +18,8 @@ use crate::commands::agent::watch_web::messages::incremental::{
 use crate::commands::agent::watch_web::messages::items::{EventKind, ToolOperation};
 use crate::commands::agent::watch_web::messages::questions::{QuestionChoice, QuestionPrompt};
 
+mod benchmark;
+
 fn fixed_time() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).single().unwrap()
 }
@@ -2048,6 +2050,83 @@ fn assistant_appended_after_an_attachment_in_a_separate_update_matches_a_full_pa
             IncrementalAppend::RestartRequired,
             IncrementalAppend::RestartRequired,
             parse_all(&transcript, empty_additions()),
+        ),
+    );
+}
+
+#[rstest]
+#[case::hook_success(indoc! {r#"
+    {"type":"attachment","uuid":"fixture-hook","parentUuid":"fixture-tool-result","attachment":{"type":"hook_success","hookName":"PostToolUse"}}
+    {"type":"assistant","uuid":"fixture-followup","parentUuid":"fixture-hook","message":{"content":[{"type":"text","text":"The fixture tool completed."}]}}
+"#})]
+#[case::empty_queued_command(indoc! {r#"
+    {"type":"attachment","uuid":"fixture-queued-command","parentUuid":"fixture-tool-result","attachment":{"type":"queued_command","prompt":""}}
+    {"type":"assistant","uuid":"fixture-followup","parentUuid":"fixture-queued-command","message":{"content":[{"type":"text","text":"The fixture tool completed."}]}}
+"#})]
+fn transparent_tip_attachments_and_their_children_remain_incremental(
+    #[case] appended_records: &str,
+) {
+    let transcript = format!(
+        "{}{}",
+        indoc! {r#"
+            {"type":"user","uuid":"fixture-request","parentUuid":null,"message":{"content":"Run the fixture tool."}}
+            {"type":"assistant","uuid":"fixture-tool-call","parentUuid":"fixture-request","message":{"content":[{"type":"tool_use","id":"fixture-tool-use","name":"Read","input":{"file_path":"/fixture/input.md"}}]}}
+            {"type":"user","uuid":"fixture-tool-result","parentUuid":"fixture-tool-call","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-tool-use","content":"fixture output"}]}}
+        "#},
+        appended_records,
+    );
+    let expected = parse_all(transcript.as_bytes(), empty_additions());
+
+    assert_incremental_matches_full_parse_at_every_split_point(
+        &transcript,
+        &expected,
+        Some(IncrementalAppend::Applied),
+        "transparent tip attachment and its assistant child",
+    );
+}
+
+#[test]
+fn active_record_cache_tracks_a_tip_append_after_render() {
+    let prefix = PARALLEL_TOOL_USE_RESULT_BRANCH_PREFIX;
+    let suffix = indoc! {r#"
+        {"type":"assistant","uuid":"fixture-active-cache-followup","parentUuid":"fixture-next-call","message":{"content":[{"type":"text","text":"The active branch continues."}]}}
+    "#};
+    let transcript = format!("{prefix}{suffix}");
+    let mut parser = incremental_parser(prefix.as_bytes());
+    let rendered_before = parser.render_with(fixed_time(), empty_additions()).unwrap();
+    let append = parser
+        .append_bytes(suffix.as_bytes(), fixed_time())
+        .unwrap();
+    let rendered_after = parser.render_with(fixed_time(), empty_additions()).unwrap();
+
+    assert_eq!(
+        (rendered_before, append, rendered_after,),
+        (
+            parse_all(prefix.as_bytes(), empty_additions()),
+            IncrementalAppend::Applied,
+            parse_all(transcript.as_bytes(), empty_additions()),
+        ),
+    );
+}
+
+#[test]
+fn active_record_cache_tracks_a_parallel_result_branch_switch_after_render() {
+    let prefix = PARALLEL_TOOL_RESULT_BRANCH_PREFIX;
+    let suffix = PARALLEL_TOOL_RESULT_BRANCH_SUFFIX;
+    let transcript = format!("{prefix}{suffix}");
+    let mut parser = incremental_parser(prefix.as_bytes());
+    let rendered_before = parser.render_with(fixed_time(), empty_additions()).unwrap();
+    let append = parser
+        .append_bytes(suffix.as_bytes(), fixed_time())
+        .unwrap();
+    let rendered_after = parser.render_with(fixed_time(), empty_additions()).unwrap();
+
+    assert_eq!(
+        (rendered_before, append, rendered_after,),
+        (
+            parse_all(prefix.as_bytes(), empty_additions()),
+            IncrementalAppend::Applied,
+            parse_all(transcript.as_bytes(), empty_additions()),
         ),
     );
 }

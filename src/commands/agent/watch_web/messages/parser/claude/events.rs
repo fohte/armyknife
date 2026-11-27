@@ -6,7 +6,7 @@ use super::state::ToolUse;
 
 #[derive(Clone)]
 pub(super) struct TimedClaudeEvent {
-    pub(super) uuid: Option<String>,
+    pub(super) uuid_id: Option<usize>,
     pub(super) timestamp: Option<DateTime<Utc>>,
     pub(super) effects: Vec<ClaudeEffect>,
 }
@@ -34,7 +34,7 @@ pub(super) enum ClaudeEffect {
         rewind_id: Option<String>,
     },
     ToolAction {
-        tool_assistant_uuid: Option<String>,
+        tool_assistant_uuid_id: Option<usize>,
         name: String,
         input: Option<Value>,
         failed: bool,

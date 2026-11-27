@@ -19,7 +19,7 @@ pub(super) fn render(
     image_directory: Option<&Path>,
     now: DateTime<Utc>,
     additions: ParserAdditions<'_>,
-    active_record_uuids: Option<&HashSet<String>>,
+    active_record_ids: Option<&HashSet<usize>>,
 ) -> ParsedTranscript {
     let mut items = Vec::new();
     let mut tools = ToolSummary::default();
@@ -35,51 +35,59 @@ pub(super) fn render(
     let event_context = EventRenderContext {
         image_directory,
         additions,
-        active_record_uuids,
-        transcript_nodes: &state.transcript_nodes,
+        active_record_ids,
     };
 
-    for event in &state.events {
-        if !is_on_active_branch(
-            event.uuid.as_deref(),
-            event_context.active_record_uuids,
-            event_context.transcript_nodes,
-        ) {
-            continue;
+    if active_record_ids.is_some() {
+        for event in &state.events {
+            if !is_on_active_branch(event.uuid_id, event_context.active_record_ids) {
+                continue;
+            }
+            render_timed_event(
+                event,
+                event_context,
+                &mut card_timeline,
+                &mut tools,
+                &mut items,
+                &mut question_indices,
+            );
         }
-        render_timed_event(
-            event,
-            event_context,
-            &mut card_timeline,
-            &mut tools,
-            &mut items,
-            &mut question_indices,
-        );
+    } else {
+        for event in &state.events {
+            render_timed_event(
+                event,
+                event_context,
+                &mut card_timeline,
+                &mut tools,
+                &mut items,
+                &mut question_indices,
+            );
+        }
     }
 
-    let active_tool_uses = state
-        .tool_uses
-        .iter()
-        .filter(|tool_use| {
-            is_on_active_branch(
-                tool_use.assistant_uuid.as_deref(),
-                active_record_uuids,
-                &state.transcript_nodes,
-            )
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    let active_tool =
-        active_tool_item(&active_tool_uses, additions.pending_tool).map(|(item, timestamp)| {
-            let mut thinking_items = tools.take_pending_thinking();
-            if thinking_items.is_empty() {
-                return (item, timestamp);
-            }
-            (
-                active_tool_with_thinking(item, &mut thinking_items),
-                timestamp,
-            )
-        });
+    let active_tool_item = if let Some(active_record_ids) = active_record_ids {
+        let active_tool_uses = state
+            .tool_uses
+            .iter()
+            .filter(|tool_use| {
+                is_on_active_branch(tool_use.assistant_uuid_id, Some(active_record_ids))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        active_tool_item(&active_tool_uses, additions.pending_tool)
+    } else {
+        active_tool_item(&state.tool_uses, additions.pending_tool)
+    };
+    let active_tool = active_tool_item.map(|(item, timestamp)| {
+        let mut thinking_items = tools.take_pending_thinking();
+        if thinking_items.is_empty() {
+            return (item, timestamp);
+        }
+        (
+            active_tool_with_thinking(item, &mut thinking_items),
+            timestamp,
+        )
+    });
     tools.flush_into(&mut items);
     if let Some((item, timestamp)) = active_tool {
         if matches!(
@@ -171,9 +179,7 @@ fn active_tool_with_thinking(
 struct EventRenderContext<'a> {
     image_directory: Option<&'a Path>,
     additions: ParserAdditions<'a>,
-    active_record_uuids: Option<&'a HashSet<String>>,
-    transcript_nodes:
-        &'a std::collections::BTreeMap<String, super::transcript_branch::TranscriptNode>,
+    active_record_ids: Option<&'a HashSet<usize>>,
 }
 
 fn render_timed_event(
@@ -240,25 +246,16 @@ fn render_timed_event(
                 );
             }
             ClaudeEffect::ToolAction {
-                tool_assistant_uuid,
+                tool_assistant_uuid_id,
                 name,
                 input,
                 failed,
-            } if is_on_active_branch(
-                tool_assistant_uuid.as_deref(),
-                context.active_record_uuids,
-                context.transcript_nodes,
-            ) =>
-            {
+            } if is_on_active_branch(*tool_assistant_uuid_id, context.active_record_ids) => {
                 tools.record(name, input.as_ref(), *failed)
             }
             ClaudeEffect::ToolAction { .. } => {}
             ClaudeEffect::SendUserFile { tool_use, failed } => {
-                if !is_on_active_branch(
-                    tool_use.assistant_uuid.as_deref(),
-                    context.active_record_uuids,
-                    context.transcript_nodes,
-                ) {
+                if !is_on_active_branch(tool_use.assistant_uuid_id, context.active_record_ids) {
                     continue;
                 }
                 let file_item = send_user_file_item(
@@ -295,18 +292,14 @@ fn render_timed_event(
     }
 }
 
-fn is_on_active_branch(
-    uuid: Option<&str>,
-    active_record_uuids: Option<&HashSet<String>>,
-    transcript_nodes: &std::collections::BTreeMap<String, super::transcript_branch::TranscriptNode>,
-) -> bool {
-    let Some(active_record_uuids) = active_record_uuids else {
+fn is_on_active_branch(uuid_id: Option<usize>, active_record_ids: Option<&HashSet<usize>>) -> bool {
+    let Some(active_record_ids) = active_record_ids else {
         return true;
     };
-    let Some(uuid) = uuid else {
+    let Some(uuid_id) = uuid_id else {
         return true;
     };
-    !transcript_nodes.contains_key(uuid) || active_record_uuids.contains(uuid)
+    active_record_ids.contains(&uuid_id)
 }
 
 fn send_user_file_item(
@@ -420,6 +413,7 @@ mod tests {
             ToolUse {
                 id: "first-call".to_string(),
                 assistant_uuid: None,
+                assistant_uuid_id: None,
                 name: "Bash".to_string(),
                 input: Some(json!({"command": "run fixture"})),
                 started_at: None,
@@ -427,6 +421,7 @@ mod tests {
             ToolUse {
                 id: "different-call".to_string(),
                 assistant_uuid: None,
+                assistant_uuid_id: None,
                 name: "Read".to_string(),
                 input: Some(json!({"file_path": "fixture.txt"})),
                 started_at: None,
@@ -434,6 +429,7 @@ mod tests {
             ToolUse {
                 id: "latest-call".to_string(),
                 assistant_uuid: None,
+                assistant_uuid_id: None,
                 name: "Bash".to_string(),
                 input: Some(json!({"command": "run fixture"})),
                 started_at: None,

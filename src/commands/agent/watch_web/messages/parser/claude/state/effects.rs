@@ -97,7 +97,7 @@ impl ClaudeParserState {
                                 effects.push(ClaudeEffect::SendUserFile { tool_use, failed });
                             } else {
                                 effects.push(ClaudeEffect::ToolAction {
-                                    tool_assistant_uuid: tool_use.assistant_uuid.clone(),
+                                    tool_assistant_uuid_id: tool_use.assistant_uuid_id,
                                     name: tool_use.name.clone(),
                                     input: tool_use.input.clone(),
                                     failed,
@@ -211,6 +211,11 @@ impl ClaudeParserState {
                                             .get("uuid")
                                             .and_then(Value::as_str)
                                             .map(str::to_owned),
+                                        assistant_uuid_id: record
+                                            .get("uuid")
+                                            .and_then(Value::as_str)
+                                            .and_then(|uuid| self.transcript_nodes.get(uuid))
+                                            .map(|node| node.uuid_id),
                                         name: name.to_owned(),
                                         input: input.cloned(),
                                         started_at: timestamp,

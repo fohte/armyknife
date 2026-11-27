@@ -105,9 +105,41 @@ pub(super) fn task_notification_text(record: &Value) -> Option<String> {
     if origin_kind == Some("human") {
         return None;
     }
+    let is_task_notification_origin = origin_kind == Some("task-notification");
+    if !is_task_notification_origin && !has_task_notification_marker(record) {
+        return None;
+    }
     let text = notification_text(record)?;
-    (origin_kind == Some("task-notification") || task_notification_body(&text).is_some())
-        .then_some(text)
+    (is_task_notification_origin || task_notification_body(&text).is_some()).then_some(text)
+}
+
+fn has_task_notification_marker(record: &Value) -> bool {
+    let user_content = (record.get("type").and_then(Value::as_str) == Some("user"))
+        .then(|| {
+            record
+                .get("message")
+                .and_then(|message| message.get("content"))
+        })
+        .flatten();
+    let attachment_prompt = record
+        .get("attachment")
+        .filter(|attachment| {
+            attachment.get("type").and_then(Value::as_str) == Some("queued_command")
+        })
+        .and_then(|attachment| attachment.get("prompt"));
+    let content = user_content.or(attachment_prompt);
+    const MARKER: &str = "<task-notification>";
+    match content {
+        Some(Value::String(text)) => text.contains(MARKER),
+        Some(Value::Array(blocks)) => blocks.iter().any(|block| {
+            block.get("type").and_then(Value::as_str) != Some("tool_result")
+                && block
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .is_some_and(|text| text.contains(MARKER))
+        }),
+        _ => false,
+    }
 }
 
 pub(super) fn finished_task_notification_id(text: &str) -> Option<&str> {

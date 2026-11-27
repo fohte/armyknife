@@ -15,7 +15,8 @@ impl ClaudeParserState {
         let owner_uuid = super::record_parent_uuid(record)?;
         let owner = self.transcript_nodes.get(&owner_uuid)?;
         let result_ids = content_ids(record, "tool_result", &["tool_use_id"]);
-        if owner.tool_use_ids.len() != 1 || result_ids != owner.tool_use_ids {
+        let owner_tool_use_ids = owner.tool_use_ids.as_deref()?;
+        if owner_tool_use_ids.len() != 1 || result_ids.as_slice() != owner_tool_use_ids {
             return None;
         }
         let mut candidates = self
@@ -25,9 +26,14 @@ impl ClaudeParserState {
             .filter_map(|uuid| {
                 let node = self.transcript_nodes.get(uuid)?;
                 (node.has_tool_use
-                    && node.tool_use_ids.len() == 1
+                    && node
+                        .tool_use_ids
+                        .as_deref()
+                        .is_some_and(|tool_use_ids| tool_use_ids.len() == 1)
                     && node.parent_uuid.as_deref() == Some(owner_uuid.as_str())
-                    && !self.has_tool_result_for_tool(uuid, &node.tool_use_ids[0]))
+                    && !node.tool_use_ids.as_deref().is_some_and(|tool_use_ids| {
+                        self.has_tool_result_for_tool(uuid, &tool_use_ids[0])
+                    }))
                 .then(|| uuid.clone())
             });
         let candidate = candidates.next()?;
@@ -43,6 +49,8 @@ impl ClaudeParserState {
                         child.is_tool_result_only
                             && child
                                 .tool_result_ids
+                                .as_deref()
+                                .unwrap_or_default()
                                 .iter()
                                 .any(|result_id| result_id == tool_use_id)
                     })
@@ -54,12 +62,34 @@ impl ClaudeParserState {
         &mut self,
     ) {
         self.transcript_children.clear();
+        let record_count = self
+            .transcript_nodes
+            .values()
+            .map(|node| node.record_order)
+            .max()
+            .and_then(|order| usize::try_from(order).ok())
+            .and_then(|order| order.checked_add(1))
+            .unwrap_or_default();
+        self.transcript_parent_child_counts = vec![0; record_count];
+        self.has_transcript_forks = false;
         for (uuid, node) in &self.transcript_nodes {
             if let Some(parent_uuid) = &node.parent_uuid {
-                self.transcript_children
-                    .entry(parent_uuid.clone())
-                    .or_default()
-                    .push(uuid.clone());
+                let parent = self.transcript_nodes.get(parent_uuid);
+                if let Some(parent) = parent {
+                    let parent_order = parent.record_order as usize;
+                    let child_count = &mut self.transcript_parent_child_counts[parent_order];
+                    self.has_transcript_forks |= *child_count > 0;
+                    *child_count = child_count.saturating_add(1).min(2);
+                }
+                if (self.forward_parent_uuids.contains(parent_uuid)
+                    || parent.is_some_and(|parent| parent.has_tool_use))
+                    && (node.has_tool_use || node.is_tool_result_only)
+                {
+                    self.transcript_children
+                        .entry(parent_uuid.clone())
+                        .or_default()
+                        .push(uuid.clone());
+                }
             }
         }
     }
@@ -69,25 +99,47 @@ impl ClaudeParserState {
         parent_uuid: Option<&str>,
         uuid: &str,
     ) {
+        if let Some(node) = self.transcript_nodes.get(uuid) {
+            let prior_children = self
+                .transcript_children
+                .get(uuid)
+                .map_or(0, |children| children.len().min(2)) as u8;
+            if prior_children > 0 {
+                let order = node.record_order as usize;
+                if self.transcript_parent_child_counts.len() <= order {
+                    self.transcript_parent_child_counts.resize(order + 1, 0);
+                }
+                self.transcript_parent_child_counts[order] = prior_children;
+                self.has_transcript_forks |= prior_children > 1;
+            }
+        }
         if let Some(parent_uuid) = parent_uuid {
             if !self.transcript_nodes.contains_key(parent_uuid) {
                 self.forward_parent_uuids.insert(parent_uuid.to_owned());
             }
-            self.transcript_children
-                .entry(parent_uuid.to_owned())
-                .or_default()
-                .push(uuid.to_owned());
-        }
-    }
-
-    pub(super) fn mark_record_processed(
-        &mut self,
-        uuid: Option<&str>,
-        was_valid_tool_result: bool,
-    ) {
-        if let Some(node) = uuid.and_then(|uuid| self.transcript_nodes.get_mut(uuid)) {
-            node.processed = true;
-            node.was_valid_tool_result |= was_valid_tool_result;
+            let parent = self.transcript_nodes.get(parent_uuid);
+            if let Some(parent) = parent {
+                let parent_order = parent.record_order as usize;
+                if self.transcript_parent_child_counts.len() <= parent_order {
+                    self.transcript_parent_child_counts
+                        .resize(parent_order + 1, 0);
+                }
+                let child_count = &mut self.transcript_parent_child_counts[parent_order];
+                self.has_transcript_forks |= *child_count > 0;
+                *child_count = child_count.saturating_add(1).min(2);
+            }
+            if (self.forward_parent_uuids.contains(parent_uuid)
+                || parent.is_some_and(|parent| parent.has_tool_use))
+                && self
+                    .transcript_nodes
+                    .get(uuid)
+                    .is_some_and(|node| node.has_tool_use || node.is_tool_result_only)
+            {
+                self.transcript_children
+                    .entry(parent_uuid.to_owned())
+                    .or_default()
+                    .push(uuid.to_owned());
+            }
         }
     }
 
@@ -104,6 +156,12 @@ impl ClaudeParserState {
         let Some(uuid) = uuid else {
             return true;
         };
+        if self.all_transcript_records_active
+            && !self.has_transcript_forks
+            && !self.branch_tracking.has_compact_boundary()
+        {
+            return true;
+        }
         if self
             .transcript_nodes
             .get(uuid)
@@ -114,10 +172,10 @@ impl ClaudeParserState {
         match self.transcript_nodes.get(uuid).map(|node| node.membership) {
             Some(BranchMembership::Active) => true,
             Some(BranchMembership::ReachesActive) => parent_uuid.is_some_and(|parent_uuid| {
-                self.transcript_nodes
-                    .get(parent_uuid)
-                    .is_some_and(|node| node.membership == BranchMembership::Active)
-                    || self.branch_tracking.is_tool_use_assistant_uuid(parent_uuid)
+                self.transcript_nodes.get(parent_uuid).is_some_and(|node| {
+                    node.membership == BranchMembership::Active
+                        || self.branch_tracking.is_tool_use_assistant_id(node.uuid_id)
+                })
             }),
             Some(BranchMembership::Unknown) => false,
             Some(BranchMembership::Disconnected) => {
@@ -135,14 +193,14 @@ impl ClaudeParserState {
         else {
             return false;
         };
-        if !self.branch_tracking.is_tool_use_assistant_uuid(owner_uuid)
+        let Some(owner) = self.transcript_nodes.get(owner_uuid) else {
+            return false;
+        };
+        if !self.branch_tracking.is_tool_use_assistant_id(owner.uuid_id)
             || !self
                 .branch_tracking
-                .is_compact_boundary_branch(Some(owner_uuid))
-            || !self
-                .transcript_nodes
-                .get(owner_uuid)
-                .is_some_and(|node| node.membership == BranchMembership::Active)
+                .is_compact_boundary_branch(Some(owner.uuid_id))
+            || owner.membership != BranchMembership::Active
         {
             return false;
         }

@@ -44,7 +44,7 @@ pub(in crate::commands::agent::watch_web::messages) fn matching_pending_tool_use
         let Ok(record) = serde_json::from_str(&line) else {
             continue;
         };
-        state.process_record(record, Utc::now());
+        state.process_record(&record, Utc::now());
         // Permission matching needs unresolved tool uses, not the render timelines.
         state.events.clear();
         state.queue_events.clear();

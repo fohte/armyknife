@@ -1,7 +1,6 @@
 use serde_json::Value;
 
 use super::super::transcript_branch::BranchMembership;
-use super::super::user_input::content_blocks;
 use super::ClaudeParserState;
 
 impl ClaudeParserState {
@@ -86,29 +85,12 @@ fn tool_owner_matches(
             || parent_uuid == Some(tool_assistant_uuid)
             || source_assistant_uuid == Some(tool_assistant_uuid)
             || parent_uuid.is_some_and(|parent_uuid| {
-                state.branch_tracking.is_valid_tool_result_uuid(parent_uuid)
-                    && state
-                        .transcript_nodes
-                        .get(parent_uuid)
-                        .is_some_and(|node| node.membership == BranchMembership::Active)
+                state.transcript_nodes.get(parent_uuid).is_some_and(|node| {
+                    state.branch_tracking.is_valid_tool_result_id(node.uuid_id)
+                        && node.membership == BranchMembership::Active
+                })
             })
     })
-}
-
-pub(super) fn has_tool_use_block(record: &Value) -> bool {
-    record.get("type").and_then(Value::as_str) == Some("assistant")
-        && record
-            .get("message")
-            .and_then(|message| message.get("content"))
-            .is_some_and(|content| {
-                content_blocks(content)
-                    .iter()
-                    .any(|block| is_tool_use_block(block))
-            })
-}
-
-fn is_tool_use_block(block: &Value) -> bool {
-    block.get("type").and_then(Value::as_str) == Some("tool_use")
 }
 
 pub(super) fn tool_result_blocks(message: &Value) -> impl Iterator<Item = &Value> {

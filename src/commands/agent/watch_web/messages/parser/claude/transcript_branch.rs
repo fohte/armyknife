@@ -1,9 +1,8 @@
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 
 use serde_json::Value;
 
 use super::background_tasks::task_notification_text;
-use super::user_input::is_tool_result_only_user_record;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum BranchMembership {
@@ -16,35 +15,120 @@ pub(super) enum BranchMembership {
 
 #[derive(Clone)]
 pub(super) struct TranscriptNode {
+    pub(super) uuid_id: usize,
     pub(super) record_order: u64,
     pub(super) parent_uuid: Option<String>,
     pub(super) membership: BranchMembership,
     pub(super) has_tool_use: bool,
-    pub(super) tool_use_ids: Vec<String>,
-    pub(super) tool_result_ids: Vec<String>,
+    pub(super) tool_use_ids: Option<Box<[String]>>,
+    pub(super) tool_result_ids: Option<Box<[String]>>,
     pub(super) is_tool_result_only: bool,
     pub(super) is_task_notification: bool,
-    pub(super) was_valid_tool_result: bool,
-    pub(super) processed: bool,
 }
 
 impl TranscriptNode {
-    pub(super) fn from_record(
-        record: &Value,
+    pub(super) fn from_simple_append(
         parent_uuid: Option<String>,
+        uuid_id: usize,
         record_order: u64,
+        tool_use_flags: (bool, bool, bool),
     ) -> Self {
+        let (has_tool_use, is_tool_result_only, is_task_notification) = tool_use_flags;
         Self {
+            uuid_id,
             record_order,
             parent_uuid,
             membership: BranchMembership::Unknown,
-            has_tool_use: is_tool_use_assistant(record),
-            tool_use_ids: content_ids(record, "tool_use", &["id", "tool_use_id"]),
-            tool_result_ids: content_ids(record, "tool_result", &["id", "tool_use_id"]),
-            is_tool_result_only: is_tool_result_only_user_record(record),
-            is_task_notification: task_notification_text(record).is_some(),
-            was_valid_tool_result: false,
-            processed: false,
+            has_tool_use,
+            tool_use_ids: None,
+            tool_result_ids: None,
+            is_tool_result_only,
+            is_task_notification,
+        }
+    }
+
+    pub(super) fn from_graph_record(
+        record: &Value,
+        parent_uuid: Option<String>,
+        uuid_id: usize,
+        record_order: u64,
+    ) -> Self {
+        Self::from_record_with_tool_ids(record, parent_uuid, uuid_id, record_order, true)
+    }
+
+    pub(super) fn from_record(
+        record: &Value,
+        parent_uuid: Option<String>,
+        uuid_id: usize,
+        record_order: u64,
+    ) -> Self {
+        Self::from_record_with_tool_ids(record, parent_uuid, uuid_id, record_order, true)
+    }
+
+    fn from_record_with_tool_ids(
+        record: &Value,
+        parent_uuid: Option<String>,
+        uuid_id: usize,
+        record_order: u64,
+        collect_tool_ids: bool,
+    ) -> Self {
+        let record_type = record.get("type").and_then(Value::as_str);
+        let mut has_tool_use = false;
+        let mut tool_use_ids = Vec::new();
+        let mut tool_result_ids = Vec::new();
+        let mut has_content_block = false;
+        let mut has_non_result_content_block = false;
+        if matches!(record_type, Some("assistant" | "user"))
+            && let Some(blocks) = record
+                .get("message")
+                .and_then(|message| message.get("content"))
+                .and_then(Value::as_array)
+        {
+            for block in blocks {
+                match block.get("type").and_then(Value::as_str) {
+                    Some("tool_use") if record_type == Some("assistant") => {
+                        has_tool_use = true;
+                        if collect_tool_ids
+                            && let Some(id) = block
+                                .get("id")
+                                .or_else(|| block.get("tool_use_id"))
+                                .and_then(Value::as_str)
+                        {
+                            tool_use_ids.push(id.to_owned());
+                        }
+                    }
+                    Some("tool_result") if record_type == Some("user") => {
+                        has_content_block = true;
+                        if collect_tool_ids
+                            && let Some(id) = block
+                                .get("id")
+                                .or_else(|| block.get("tool_use_id"))
+                                .and_then(Value::as_str)
+                        {
+                            tool_result_ids.push(id.to_owned());
+                        }
+                    }
+                    _ if record_type == Some("user") => {
+                        has_content_block = true;
+                        has_non_result_content_block = true;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let is_tool_result_only =
+            record_type == Some("user") && has_content_block && !has_non_result_content_block;
+        Self {
+            uuid_id,
+            record_order,
+            parent_uuid,
+            membership: BranchMembership::Unknown,
+            has_tool_use: record_type == Some("assistant") && has_tool_use,
+            tool_use_ids: (!tool_use_ids.is_empty()).then(|| tool_use_ids.into_boxed_slice()),
+            tool_result_ids: (!tool_result_ids.is_empty())
+                .then(|| tool_result_ids.into_boxed_slice()),
+            is_tool_result_only,
+            is_task_notification: !is_tool_result_only && task_notification_text(record).is_some(),
         }
     }
 }
@@ -67,22 +151,8 @@ pub(super) fn content_ids(record: &Value, kind: &str, id_keys: &[&str]) -> Vec<S
         .collect()
 }
 
-pub(super) fn is_tool_use_assistant(record: &Value) -> bool {
-    record.get("type").and_then(Value::as_str) == Some("assistant")
-        && record
-            .get("message")
-            .and_then(|message| message.get("content"))
-            .is_some_and(|content| {
-                content.as_array().is_some_and(|blocks| {
-                    blocks
-                        .iter()
-                        .any(|block| block.get("type").and_then(Value::as_str) == Some("tool_use"))
-                })
-            })
-}
-
 pub(super) fn mark_active_branch(
-    transcript_nodes: &mut BTreeMap<String, TranscriptNode>,
+    transcript_nodes: &mut HashMap<String, TranscriptNode>,
     latest_uuid: Option<&str>,
 ) {
     let Some(mut uuid) = latest_uuid.map(str::to_owned) else {
@@ -110,7 +180,7 @@ pub(super) fn mark_active_branch(
 
 pub(super) fn is_inactive_branch(
     uuid: &str,
-    transcript_nodes: &mut BTreeMap<String, TranscriptNode>,
+    transcript_nodes: &mut HashMap<String, TranscriptNode>,
 ) -> bool {
     let mut current_uuid = uuid.to_owned();
     let mut path = Vec::new();
@@ -143,10 +213,144 @@ pub(super) fn is_inactive_branch(
     reaches_active
 }
 
-pub(super) fn active_record_uuids(
-    transcript_nodes: &BTreeMap<String, TranscriptNode>,
+pub(super) fn active_record_ids(
+    transcript_nodes: &HashMap<String, TranscriptNode>,
     latest_uuid: Option<&str>,
-) -> std::collections::HashSet<String> {
+) -> std::collections::HashSet<usize> {
+    let max_record_order = transcript_nodes
+        .values()
+        .map(|node| node.record_order)
+        .max()
+        .and_then(|order| usize::try_from(order).ok());
+    let Some(max_record_order) = max_record_order else {
+        return active_record_ids_sorted(transcript_nodes, latest_uuid);
+    };
+    let Some(record_count) = max_record_order.checked_add(1) else {
+        return active_record_ids_sorted(transcript_nodes, latest_uuid);
+    };
+    let mut record_uuids = vec![None; record_count];
+    let mut bypass_branch_checks = vec![false; record_count];
+    let mut record_indices = std::collections::HashMap::with_capacity(transcript_nodes.len());
+    for (uuid, node) in transcript_nodes {
+        let Ok(index) = usize::try_from(node.record_order) else {
+            return active_record_ids_sorted(transcript_nodes, latest_uuid);
+        };
+        if record_uuids[index].is_some() {
+            return active_record_ids_sorted(transcript_nodes, latest_uuid);
+        }
+        record_uuids[index] = Some(uuid.as_str());
+        bypass_branch_checks[index] = node.is_tool_result_only || node.is_task_notification;
+        record_indices.insert(uuid.as_str(), index);
+    }
+
+    let mut memberships = vec![BranchMembership::Unknown; record_count];
+    mark_ordered_active_branch(
+        transcript_nodes,
+        &record_indices,
+        &mut memberships,
+        latest_uuid,
+    );
+
+    let mut active_ids = std::collections::HashSet::with_capacity(transcript_nodes.len());
+    for (index, uuid) in record_uuids.iter().enumerate() {
+        let Some(uuid) = *uuid else {
+            continue;
+        };
+        let active_record = match memberships[index] {
+            BranchMembership::Unknown if !bypass_branch_checks[index] => {
+                !is_ordered_inactive_branch(
+                    transcript_nodes,
+                    &record_indices,
+                    &record_uuids,
+                    &mut memberships,
+                    index,
+                )
+            }
+            _ => true,
+        };
+        if active_record && let Some(node) = transcript_nodes.get(uuid) {
+            active_ids.insert(node.uuid_id);
+        }
+    }
+    active_ids
+}
+
+fn mark_ordered_active_branch(
+    transcript_nodes: &HashMap<String, TranscriptNode>,
+    record_indices: &std::collections::HashMap<&str, usize>,
+    memberships: &mut [BranchMembership],
+    latest_uuid: Option<&str>,
+) {
+    let Some(mut uuid) = latest_uuid else {
+        return;
+    };
+    loop {
+        let Some(index) = record_indices.get(uuid).copied() else {
+            return;
+        };
+        if memberships[index] == BranchMembership::Active {
+            return;
+        }
+        memberships[index] = BranchMembership::Active;
+        let Some(parent_uuid) = transcript_nodes
+            .get(uuid)
+            .and_then(|node| node.parent_uuid.as_deref())
+        else {
+            return;
+        };
+        if !record_indices.contains_key(parent_uuid) {
+            return;
+        }
+        uuid = parent_uuid;
+    }
+}
+
+fn is_ordered_inactive_branch(
+    transcript_nodes: &HashMap<String, TranscriptNode>,
+    record_indices: &std::collections::HashMap<&str, usize>,
+    record_uuids: &[Option<&str>],
+    memberships: &mut [BranchMembership],
+    start_index: usize,
+) -> bool {
+    let mut current_index = start_index;
+    let mut path = Vec::new();
+    let reaches_active = loop {
+        match memberships[current_index] {
+            BranchMembership::Active | BranchMembership::ReachesActive => break true,
+            BranchMembership::Disconnected | BranchMembership::Visiting => break false,
+            BranchMembership::Unknown => memberships[current_index] = BranchMembership::Visiting,
+        }
+        path.push(current_index);
+        let Some(uuid) = record_uuids[current_index] else {
+            break false;
+        };
+        let Some(parent_uuid) = transcript_nodes
+            .get(uuid)
+            .and_then(|node| node.parent_uuid.as_deref())
+        else {
+            break false;
+        };
+        let Some(parent_index) = record_indices.get(parent_uuid).copied() else {
+            break false;
+        };
+        current_index = parent_index;
+    };
+
+    let membership = if reaches_active {
+        BranchMembership::ReachesActive
+    } else {
+        BranchMembership::Disconnected
+    };
+    for index in path {
+        memberships[index] = membership;
+    }
+    reaches_active
+}
+
+fn active_record_ids_sorted(
+    transcript_nodes: &HashMap<String, TranscriptNode>,
+    latest_uuid: Option<&str>,
+) -> std::collections::HashSet<usize> {
     let mut transcript_nodes = transcript_nodes.clone();
     for node in transcript_nodes.values_mut() {
         node.membership = BranchMembership::Unknown;
@@ -165,7 +369,7 @@ pub(super) fn active_record_uuids(
         .collect::<Vec<_>>();
     records.sort_by(|left, right| (left.0, &left.1).cmp(&(right.0, &right.1)));
 
-    let mut active_uuids = std::collections::HashSet::new();
+    let mut active_ids = std::collections::HashSet::new();
     for (_, uuid, bypass_branch_check) in records {
         let membership = transcript_nodes.get(&uuid).map(|node| node.membership);
         let active_record = match membership {
@@ -175,10 +379,10 @@ pub(super) fn active_record_uuids(
             Some(_) => true,
             None => bypass_branch_check,
         };
-        if active_record {
-            active_uuids.insert(uuid);
+        if active_record && let Some(node) = transcript_nodes.get(&uuid) {
+            active_ids.insert(node.uuid_id);
         }
     }
 
-    active_uuids
+    active_ids
 }
