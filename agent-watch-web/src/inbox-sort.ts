@@ -4,10 +4,10 @@ import type { Session } from '#types'
 
 export type InboxSort = 'priority' | 'updated' | 'project'
 
-export const DEFAULT_INBOX_SORT: InboxSort = 'priority'
-export const INBOX_SORT_STORAGE_KEY = 'agent-watch-web:inbox-sort'
+const DEFAULT_INBOX_SORT: InboxSort = 'priority'
+const INBOX_SORT_STORAGE_KEY = 'agent-watch-web:inbox-sort'
 
-export type InboxSortRead = {
+type InboxSortRead = {
   sort: InboxSort
   storageAvailable: boolean
 }

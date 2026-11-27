@@ -1,13 +1,9 @@
 import { expect, it } from 'vitest'
 
-import {
-  DEFAULT_INBOX_SORT,
-  INBOX_SORT_STORAGE_KEY,
-  readInboxSort,
-  sortInboxSessions,
-  writeInboxSort,
-} from '#inbox-sort'
+import { readInboxSort, sortInboxSessions, writeInboxSort } from '#inbox-sort'
 import type { Session } from '#types'
+
+const storageKey = 'agent-watch-web:inbox-sort'
 
 class MemoryStorage implements Storage {
   private readonly values = new Map<string, string>()
@@ -160,13 +156,50 @@ it.each(['priority', 'updated', 'project'] as const)(
   },
 )
 
+it('places sessions without update timestamps after timestamped sessions', () => {
+  const missingUpdatedAtFirst = session(
+    'sample-missing-updated-at-first',
+    'sample-project',
+    null,
+    '2030-01-01T10:00:00.000Z',
+  )
+  const missingUpdatedAtSecond = session(
+    'sample-missing-updated-at-second',
+    'sample-project',
+    null,
+    '2030-01-01T10:00:00.000Z',
+  )
+  delete missingUpdatedAtFirst.updatedAt
+  delete missingUpdatedAtSecond.updatedAt
+
+  expect(
+    sortInboxSessions(
+      [
+        missingUpdatedAtFirst,
+        session(
+          'sample-timestamped',
+          'sample-project',
+          null,
+          '2030-01-01T12:00:00.000Z',
+        ),
+        missingUpdatedAtSecond,
+      ],
+      'updated',
+    ).map(({ id }) => id),
+  ).toEqual([
+    'sample-timestamped',
+    'sample-missing-updated-at-first',
+    'sample-missing-updated-at-second',
+  ])
+})
+
 it('reads and writes a browser-specific sort selection', () => {
   const storage = new MemoryStorage()
   const written = writeInboxSort(storage, 'updated')
 
   const snapshot = () => ({
     written,
-    stored: storage.getItem(INBOX_SORT_STORAGE_KEY),
+    stored: storage.getItem(storageKey),
     restored: readInboxSort(storage),
   })
   expect(snapshot()).toEqual({
@@ -181,10 +214,10 @@ it.each([
   { value: 'unknown', label: 'invalid' },
 ])('defaults to Priority for $label stored selections', ({ value }) => {
   const storage = new MemoryStorage()
-  if (value !== null) storage.setItem(INBOX_SORT_STORAGE_KEY, value)
+  if (value !== null) storage.setItem(storageKey, value)
 
   expect(readInboxSort(storage)).toEqual({
-    sort: DEFAULT_INBOX_SORT,
+    sort: 'priority',
     storageAvailable: true,
   })
 })
@@ -198,7 +231,7 @@ it('reports when browser storage is unavailable', () => {
   })
 
   expect(snapshot()).toEqual({
-    read: { sort: DEFAULT_INBOX_SORT, storageAvailable: false },
+    read: { sort: 'priority', storageAvailable: false },
     written: false,
   })
 })

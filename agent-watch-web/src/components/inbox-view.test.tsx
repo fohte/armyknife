@@ -5,7 +5,6 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 import { InboxView } from '#components/inbox-view'
-import { INBOX_SORT_STORAGE_KEY } from '#inbox-sort'
 import type { Session } from '#types'
 
 let container: HTMLDivElement
@@ -279,7 +278,7 @@ function checkboxSnapshot() {
 
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
-  localStorage.removeItem(INBOX_SORT_STORAGE_KEY)
+  localStorage.removeItem('agent-watch-web:inbox-sort')
   container = document.createElement('div')
   document.body.append(container)
 })
@@ -314,19 +313,17 @@ it('keeps Inbox categories and groups their sessions by project when selected', 
   const trigger = container.querySelector<HTMLButtonElement>(
     '[aria-label="Sort Priority"]',
   )
-  if (trigger !== null) {
-    act(() => {
-      trigger.click()
-    })
-  }
-  const projectOption = container.querySelector<HTMLButtonElement>(
-    '[role="menuitemradio"][aria-checked="false"]:last-child',
-  )
-  if (projectOption !== null) {
-    act(() => {
-      projectOption.click()
-    })
-  }
+  if (trigger === null) throw new Error('Expected sort trigger')
+  act(() => {
+    trigger.click()
+  })
+  const projectOption = Array.from(
+    container.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]'),
+  ).find((option) => option.textContent.includes('Project'))
+  if (projectOption === undefined) throw new Error('Expected Project option')
+  act(() => {
+    projectOption.click()
+  })
 
   const projectSortSnapshot = () => ({
     headings: Array.from(container.querySelectorAll('.section-heading')).map(
@@ -346,7 +343,7 @@ it('keeps Inbox categories and groups their sessions by project when selected', 
       container.querySelectorAll('.done-section .session-row').length,
       container.querySelectorAll('.later-session-list .session-row').length,
     ],
-    savedSort: localStorage.getItem(INBOX_SORT_STORAGE_KEY),
+    savedSort: localStorage.getItem('agent-watch-web:inbox-sort'),
   })
   expect(projectSortSnapshot()).toEqual({
     headings: ['Needs action2', 'In progress1', 'Done1'],
@@ -386,7 +383,7 @@ it('saves and restores the selected sort from the iPhone sheet', () => {
     triggerLabel: container
       .querySelector<HTMLButtonElement>('[aria-label="Sort Updated"]')
       ?.getAttribute('aria-label'),
-    savedSort: localStorage.getItem(INBOX_SORT_STORAGE_KEY),
+    savedSort: localStorage.getItem('agent-watch-web:inbox-sort'),
   }
 
   act(() => root?.unmount())
