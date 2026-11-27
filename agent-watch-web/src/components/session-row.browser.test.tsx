@@ -416,13 +416,9 @@ it('shortens a clipped owner within the one-pixel repository fit tolerance', asy
     targetAvailableWidth -
     availableWidth()
 
-  repositoryOwner.style.width = '1ch'
-  const ownerWasClipped =
-    repositoryOwner.scrollWidth > repositoryOwner.clientWidth
   await resizeFrame(`${String(targetFrameWidth)}px`)
 
   const rowSnapshot = () => ({
-    ownerWasClipped,
     repositoryIsWithinToleranceButDoesNotFit:
       repositoryWidth > availableWidth() &&
       repositoryWidth <= availableWidth() + 1,
@@ -434,14 +430,26 @@ it('shortens a clipped owner within the one-pixel repository fit tolerance', asy
     ownerSeparatorVisible:
       repositoryOwnerSeparator.getBoundingClientRect().width > 0,
   })
-  expect(rowSnapshot()).toEqual({
-    ownerWasClipped: true,
-    repositoryIsWithinToleranceButDoesNotFit: true,
-    repository: '…/service',
-    repositoryTitle: 'example-team/service',
-    ownerMarkerVisible: true,
-    ownerSeparatorVisible: true,
-  })
+  const narrowSnapshot = rowSnapshot()
+  await resizeFrame('1100px')
+
+  const rowSnapshots = () => [narrowSnapshot, rowSnapshot()]
+  expect(rowSnapshots()).toEqual([
+    {
+      repositoryIsWithinToleranceButDoesNotFit: true,
+      repository: '…/service',
+      repositoryTitle: 'example-team/service',
+      ownerMarkerVisible: true,
+      ownerSeparatorVisible: true,
+    },
+    {
+      repositoryIsWithinToleranceButDoesNotFit: false,
+      repository: 'example-team/service',
+      repositoryTitle: 'example-team/service',
+      ownerMarkerVisible: true,
+      ownerSeparatorVisible: true,
+    },
+  ])
 })
 
 it('shortens the owner before a repository name ellipsizes near the compact-row threshold', async () => {

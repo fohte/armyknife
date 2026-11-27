@@ -114,12 +114,16 @@ function RepositoryLabel({ repository }: { repository: string }) {
         repositoryElement.querySelector<HTMLElement>(
           '.session-repo-owner-separator',
         )
-      const clippedPrefixWidth = Math.max(
-        (ownerElement?.scrollWidth ?? 0) - (ownerElement?.clientWidth ?? 0),
-        (ownerSeparatorElement?.scrollWidth ?? 0) -
-          (ownerSeparatorElement?.clientWidth ?? 0),
-        0,
-      )
+      const clippedPrefixWidth =
+        Math.max(
+          (ownerElement?.scrollWidth ?? 0) - (ownerElement?.clientWidth ?? 0),
+          0,
+        ) +
+        Math.max(
+          (ownerSeparatorElement?.scrollWidth ?? 0) -
+            (ownerSeparatorElement?.clientWidth ?? 0),
+          0,
+        )
       const ownerPrefixIsClipped = clippedPrefixWidth > 0
       if (ownerPrefixIsClipped) {
         clippedPrefixWidthRef.current = Math.max(
