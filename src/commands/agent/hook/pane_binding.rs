@@ -156,17 +156,20 @@ mod tests {
         #[case] has_parent_agent: bool,
         #[case] expected: Option<PaneInfo>,
     ) {
-        assert_eq!(
-            resolve_with(
-                Engine::Claude,
-                "session-example",
-                123,
-                |_| Some((pane_info(), 100)),
-                |_, _| Some(has_parent_agent),
-                |_| None,
-            ),
-            expected,
+        let mut ancestry_arguments = None;
+        let result = resolve_with(
+            Engine::Claude,
+            "session-example",
+            123,
+            |_| Some((pane_info(), 100)),
+            |hook_pid, pane_pid| {
+                ancestry_arguments = Some((hook_pid, pane_pid));
+                Some(has_parent_agent)
+            },
+            |_| None,
         );
+
+        assert_eq!((result, ancestry_arguments), (expected, Some((123, 100))),);
     }
 
     #[rstest]
