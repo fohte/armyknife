@@ -331,6 +331,7 @@ export function ConversationPaneView({
     session,
     messages,
     backgroundTasks,
+    ...(activeTool === undefined ? {} : { activeTool }),
     editorReviewDocument: editorReviewDocument ?? null,
   })
   const returnToRequestCard = () => {
@@ -373,7 +374,11 @@ export function ConversationPaneView({
       onDrop={onDrop}
     >
       {fileDropActive || isFileDragActive ? (
-        <FileDropIndicator className="conversation-drop-target" />
+        <FileDropIndicator
+          className="conversation-drop-target"
+          label="Drop images to attach"
+          variant="conversation"
+        />
       ) : null}
       <ConversationPaneHeader
         key={session.id}

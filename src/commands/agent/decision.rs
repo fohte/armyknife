@@ -33,8 +33,6 @@ pub struct AddArgs {
     pub easy_to_change: String,
 }
 
-const SESSION_START_INSTRUCTION: &str = "When unsure about a choice that is cheap to reverse, do not stop to ask. Pick an option, record it with `a agent decision add <TITLE> --why <WHY> --considered <ALT> --easy-to-change <TEXT>`, and keep working. Choices that are hard to reverse still require stopping and asking the user.";
-
 pub fn run(command: &DecisionCommands) -> Result<()> {
     match command {
         DecisionCommands::Add(args) => add(args),
@@ -86,10 +84,6 @@ fn validate(args: &AddArgs) -> Result<()> {
         "decision considered options must not be empty"
     );
     Ok(())
-}
-
-pub(crate) fn session_start_instruction() -> &'static str {
-    SESSION_START_INSTRUCTION
 }
 
 #[cfg(test)]

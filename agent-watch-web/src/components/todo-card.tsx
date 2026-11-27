@@ -232,7 +232,9 @@ export function TodoCard({
         </p>
       ) : null}
       <div className="chat-card-comment-drop-zone">
-        {isFileDragActive ? <FileDropIndicator /> : null}
+        {isFileDragActive ? (
+          <FileDropIndicator label="Drop files to attach" variant="card" />
+        ) : null}
         <textarea
           id={commentId}
           className="chat-todo-comment"

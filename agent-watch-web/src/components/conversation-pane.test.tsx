@@ -475,6 +475,17 @@ function renderView(
   })
 }
 
+function getCompactingStatusSnapshot() {
+  return {
+    workingStatus: container.querySelector('.conversation-status-band-label')
+      ?.textContent,
+    detail:
+      container.querySelector('.conversation-status-band-inline-detail')
+        ?.textContent ?? null,
+    inProgressItems: container.querySelectorAll('.tool-in-progress').length,
+  }
+}
+
 it('keeps the phone composer reachable when several merge rows fill the viewport', () => {
   container.style.cssText =
     'position: fixed; inset: 0 auto auto 0; width: 390px; height: 260px'
@@ -4800,17 +4811,36 @@ it('shows the compacting status and summary instead of stale tool details', () =
     ],
   )
 
-  const getSnapshot = () => ({
-    workingStatus: container.querySelector('.conversation-status-band-label')
-      ?.textContent,
-    detail:
-      container.querySelector('.conversation-status-band-inline-detail')
-        ?.textContent ?? null,
-    inProgressItems: container.querySelectorAll('.tool-in-progress').length,
-  })
-  expect(getSnapshot()).toEqual({
+  expect(getCompactingStatusSnapshot()).toEqual({
     workingStatus: 'Compacting…',
     detail: '古い会話を要約しています',
+    inProgressItems: 0,
+  })
+})
+
+it('shows an active tool while a working session is marked as compacting', () => {
+  renderView(
+    vi.fn().mockResolvedValue(true),
+    {
+      ...session,
+      category: 'in_progress',
+      activityStatus: 'working',
+      isCompacting: true,
+      elapsedSeconds: 92,
+    },
+    undefined,
+    [
+      {
+        type: 'tool_in_progress',
+        tool: 'exec',
+        target: 'cargo check --package fixture',
+      },
+    ],
+  )
+
+  expect(getCompactingStatusSnapshot()).toEqual({
+    workingStatus: 'Working · 1m 32s',
+    detail: 'Bash  cargo check --package fixture',
     inProgressItems: 0,
   })
 })
@@ -8264,7 +8294,7 @@ it('attaches dropped files through the composer and sends their data', async () 
     actionCalls: onAction.mock.calls,
   })
   expect(snapshot()).toEqual({
-    targetVisibleDuringDrag: 'Drop files to attach',
+    targetVisibleDuringDrag: 'Drop images to attach',
     targetAfterDrop: null,
     dropPrevented: true,
     attachmentNames: [],
@@ -8395,7 +8425,7 @@ it('hides the drop target when a file drag leaves the conversation', () => {
       container.querySelector('.conversation-drop-target')?.textContent ?? null,
   })
   expect(snapshot()).toEqual({
-    targetAfterEnter: 'Drop files to attach',
+    targetAfterEnter: 'Drop images to attach',
     targetAfterLeave: null,
   })
 })

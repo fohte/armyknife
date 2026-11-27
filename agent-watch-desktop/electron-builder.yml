@@ -1,0 +1,10 @@
+appId: net.fohte.agent-watch
+productName: Agent Watch
+directories:
+  output: release
+files:
+  - dist/**
+mac:
+  target: dir
+  identity: null
+  hardenedRuntime: false

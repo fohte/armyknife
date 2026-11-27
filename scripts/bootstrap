@@ -3,7 +3,7 @@
 # Bootstrap the development environment.
 #
 # Usage:
-#   scripts/bootstrap
+#   scripts/bootstrap [--worktree]
 
 set -euo pipefail
 
@@ -44,6 +44,13 @@ fi
 # prettier and commitlint live in mise (see .mise.toml); install each
 # node subpackage's dependencies separately.
 (cd agent-watch-web && pnpm_install)
+
+# Seed dependencies before Cargo fetches or builds anything in a new worktree.
+if [ "${1:-}" = "--worktree" ]; then
+  if ! "$SCRIPT_DIR/seed-worktree-target"; then
+    printf 'Warning: could not seed the Cargo target; continuing bootstrap.\n' >&2
+  fi
+fi
 
 # Fetch Rust dependencies
 cargo fetch

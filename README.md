@@ -730,8 +730,6 @@ Session-local sequence: 7
 To refer to it in another session or task, describe its contents; this sequence only works in this session.
 ```
 
-Tracked, hook-processed Claude Code and Codex sessions receive the instruction on `SessionStart` to record choices that are cheap to reverse and continue working. They should stop and ask about choices that are hard to reverse. Codex must have the `SessionStart` hook registered as described under [Hooks](#hooks). Internal and headless invocations do not receive this instruction.
-
 `a agent web-ui add <url> --name <name>` registers a named local HTTP interface with the calling session. The URL must use `localhost` or `127.0.0.1` and include an explicit port. Tracked, hook-processed Claude Code sessions and Codex sessions with a registered `SessionStart` hook receive an instruction to register local web UIs they start. Registered interfaces appear in the watch-web conversation's right panel. When watch-web is opened at `localhost` or `127.0.0.1`, it uses the local URL; other hostnames use the URL returned by the optional `web-ui-expose` hook. watch-web gives each local registration its own loopback relay, which forwards HTTP, streaming responses, and WebSocket connections to the registered interface. Run the command from the session that owns the interface:
 
 Within a session, registering an interface with an existing trimmed name replaces its previous URL. Registering an existing URL also replaces that entry.
@@ -1346,6 +1344,22 @@ pnpm run build
 cd ..
 cargo build
 ```
+
+### Agent Watch desktop app
+
+On macOS, build and install the unsigned `Agent Watch.app` from the repository:
+
+```sh
+cd agent-watch-desktop
+pnpm install --frozen-lockfile
+./scripts/install
+```
+
+Run the same install command after pulling updates to replace the app in `/Applications`; it does not invoke `sudo` and requires write access to `/Applications`. The installer stages the new app before replacing the existing one and restores the previous app if the replacement fails. If it cannot remove the previous app after a successful update, it leaves a backup and prints a warning. If Agent Watch is running during an update, macOS displays a notification asking you to reopen it.
+
+The app opens the watch-web server at `http://127.0.0.1:4317`; it does not start or stop the server. If the initial page load fails, the app shows the command to start the server and retries. If an already loaded page loses the connection, watch-web reports the reconnecting state in that page and keeps its current session. The app is unsigned, so macOS may ask you to confirm the first launch.
+
+For development, set `AGENT_WATCH_URL` to an `http://localhost` or `http://127.0.0.1` URL with the development server's port, then run `pnpm run start` from `agent-watch-desktop`.
 
 ### `a agent clean`
 
