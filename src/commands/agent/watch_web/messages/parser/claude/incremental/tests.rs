@@ -7,7 +7,7 @@ use rstest::rstest;
 use super::super::super::super::ChatItem;
 use super::super::ParserAdditions;
 use super::{IncrementalAppend, IncrementalClaudeParser};
-use crate::commands::agent::store::{AgentDecision, AgentTodo, WatchWebQueuedPrompt};
+use crate::commands::agent::store::WatchWebQueuedPrompt;
 use crate::commands::agent::types::Engine;
 use crate::commands::agent::watch_web::messages::TranscriptInput;
 use crate::commands::agent::watch_web::messages::cache::MessageCache;
@@ -41,7 +41,6 @@ fn empty_additions() -> ParserAdditions<'static> {
         parent: None,
         pending_tool: None,
         user_marker: None,
-        decisions: &[],
         queued_prompts: &[],
         peer_out_messages: &[],
         proposals: &[],
@@ -1096,7 +1095,6 @@ fn initial_parse_falls_back_when_window_expansion_reaches_file_start(oversized_t
             parent: None,
             pending_tool: None,
             user_marker: None,
-            decisions: &[],
             queued_prompts: &[],
             peer_out_messages: &[],
             proposals: &[],
@@ -1238,58 +1236,4 @@ fn inactive_peer_delivery_does_not_resolve_queued_prompt(
             ),
         ),
     );
-}
-
-#[test]
-fn overlay_changes_render_the_cached_transcript_without_reingestion() {
-    let prefix = indoc! {r#"
-        {"type":"user","uuid":"message-one","parentUuid":null,"timestamp":"2026-01-01T00:00:01Z","message":{"content":"A question."}}
-    "#};
-    let suffix = indoc! {r#"
-        {"type":"assistant","uuid":"message-two","parentUuid":"message-one","timestamp":"2026-01-01T00:00:02Z","message":{"content":[{"type":"text","text":"An answer."}]}}
-    "#};
-    let decision = AgentDecision {
-        session_id: "fixture-session".to_owned(),
-        seq: 1,
-        title: "Choose a fixture option".to_owned(),
-        why: "The fixture requires a choice.".to_owned(),
-        considered: vec!["Option A".to_owned()],
-        easy_to_change: "The fixture choice can be changed.".to_owned(),
-        created_at: "2026-01-01T00:00:01.500Z".to_owned(),
-        review: None,
-        reviewed_at: None,
-    };
-    let todo = AgentTodo {
-        session_id: "fixture-session".to_owned(),
-        seq: 1,
-        title: "Review the sample report".to_owned(),
-        detail: None,
-        folded: false,
-        added_folded: false,
-        created_at: DateTime::parse_from_rfc3339("2026-01-01T00:00:01.500Z")
-            .unwrap()
-            .with_timezone(&Utc),
-        completed_at: None,
-        resolution: None,
-        comment: None,
-    };
-    let mut parser = incremental_parser(prefix.as_bytes());
-    match parser
-        .append_bytes(suffix.as_bytes(), fixed_time())
-        .unwrap()
-    {
-        IncrementalAppend::Applied => {}
-        IncrementalAppend::RestartRequired => {
-            panic!("the fixture continues the active transcript branch")
-        }
-    }
-    let additions = ParserAdditions {
-        decisions: std::slice::from_ref(&decision),
-        todos: std::slice::from_ref(&todo),
-        ..empty_additions()
-    };
-    let actual = parser.render_with(fixed_time(), additions).unwrap();
-    let mut transcript = prefix.as_bytes().to_vec();
-    transcript.extend_from_slice(suffix.as_bytes());
-    assert_eq!(actual, parse_all(&transcript, additions));
 }

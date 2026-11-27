@@ -89,6 +89,18 @@ type StatusCase = {
 
 const statusCases: StatusCase[] = [
   {
+    name: 'waiting category',
+    input: {
+      session: {
+        ...session,
+        category: 'waiting',
+        activityStatus: 'waiting',
+        waitingReason: 'Waiting for the build to finish',
+      },
+    },
+    expected: { kind: 'waiting', detail: 'Waiting for the build to finish' },
+  },
+  {
     name: 'working',
     input: { session: { ...session, activityStatus: 'working' as const } },
     expected: { kind: 'working', detail: null },

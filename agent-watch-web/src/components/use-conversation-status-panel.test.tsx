@@ -73,7 +73,6 @@ function StatusPanelHarness({
     ...(onRetryReviewDocumentSummaries === undefined
       ? {}
       : { onRetryReviewDocumentSummaries }),
-    messages: [],
     backgroundTasks,
     statusPanelOpen,
     isMobile,
@@ -735,7 +734,6 @@ it('preserves unsaved review edits when a preview link opens a web UI', async ()
           },
         ],
       },
-      messages: [],
       backgroundTasks: [],
       statusPanelOpen: true,
       onAction: () => Promise.resolve(true),
@@ -1264,7 +1262,6 @@ it('opens a linked web UI URL in its fullscreen status tab', async () => {
   function LinkHarness() {
     const panel = useConversationStatusPanel({
       session: { ...session, webUis: [webUi] },
-      messages: [],
       backgroundTasks: [],
       statusPanelOpen: true,
       onAction: () => Promise.resolve(true),
@@ -1320,7 +1317,6 @@ it('opens crit through the shared fullscreen web UI request', async () => {
   function CritHarness() {
     const panel = useConversationStatusPanel({
       session: { ...session, webUis: [crit] },
-      messages: [],
       backgroundTasks: [],
       statusPanelOpen: true,
       hostname: 'watch.example.invalid',
@@ -1372,7 +1368,6 @@ it('opens a linked web UI as a tabless mobile page and returns to conversation',
   function MobileLinkHarness() {
     const panel = useConversationStatusPanel({
       session: { ...session, webUis: [webUi] },
-      messages: [],
       backgroundTasks: [],
       isMobile: true,
       onAction: () => Promise.resolve(true),

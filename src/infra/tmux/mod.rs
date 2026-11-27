@@ -16,8 +16,6 @@ use std::path::Path;
 use indoc::writedoc;
 use thiserror::Error;
 
-use crate::infra::process;
-
 pub(crate) use batch::pane_option_command;
 pub use batch::{PaneInfoWithPid, list_all_panes, run_batch};
 pub(crate) use command::{run_tmux_output, run_tmux_output_untrimmed};
@@ -31,8 +29,9 @@ pub(crate) use editor_pane::{
 };
 pub(crate) use floating_pane::{FloatingPaneSpec, open_floating_pane};
 pub(crate) use format::escape_format_value;
-pub use pane_info::{get_pane_info_by_pane_id, get_window_pane_pids};
-pub(crate) use server::PaneLiveness;
+pub(crate) use pane_info::get_pane_info_and_pid_by_pid;
+pub use pane_info::{get_pane_info_by_pane_id, get_pane_info_by_pid, get_window_pane_pids};
+pub(crate) use server::{PaneLiveness, capture_pane_for_socket_result};
 pub use server::{
     capture_pane_for_socket, capture_pane_with_escapes_for_socket, current_socket_path,
     focus_pane_for_socket, get_pane_current_command_for_socket, get_pane_option_for_socket,
@@ -592,46 +591,6 @@ pub fn send_sigterm_to_pane(pane_id: &str) {
     }
 }
 
-/// Gets tmux pane information for a given process ID.
-/// Searches for a pane whose pane_pid matches the given PID or any of its ancestor PIDs.
-/// Returns None if not running in tmux or if no matching pane is found.
-pub fn get_pane_info_by_pid(pid: u32) -> Option<PaneInfo> {
-    let output = run_tmux_output(&[
-        "list-panes",
-        "-a",
-        "-F",
-        "#{pane_pid}\t#{session_name}\t#{window_name}\t#{window_index}\t#{pane_id}",
-    ])
-    .ok()?;
-
-    // Collect all pane PIDs for ancestor matching
-    let pane_pids: std::collections::HashSet<u32> = output
-        .lines()
-        .filter_map(|line| line.split('\t').next()?.parse::<u32>().ok())
-        .collect();
-
-    // Traverse ancestor processes to find one that matches a pane PID
-    let mut current_pid = pid;
-    const MAX_DEPTH: usize = 20;
-
-    for _ in 0..MAX_DEPTH {
-        if pane_pids.contains(&current_pid) {
-            // Found a matching pane, parse the full info
-            return output
-                .lines()
-                .find_map(|line| parse_pane_line_by_pid(line, current_pid));
-        }
-
-        // Get parent PID
-        match process::get_parent_pid(current_pid) {
-            Some(ppid) if ppid != current_pid && ppid != 0 => current_pid = ppid,
-            _ => break,
-        }
-    }
-
-    None
-}
-
 /// Captures the current visible contents of `pane_id` as plain text.
 ///
 /// Thin wrapper over `tmux capture-pane -p -t <pane>`; ANSI styling is
@@ -652,29 +611,6 @@ pub fn capture_pane(pane_id: &str) -> Option<String> {
 #[deprecated(note = "Use capture_pane_with_escapes_for_socket for stored session panes")]
 pub fn capture_pane_with_escapes(pane_id: &str) -> Option<String> {
     run_tmux_output(&["capture-pane", "-p", "-e", "-t", pane_id]).ok()
-}
-
-/// Parses a single line from tmux list-panes output for PID matching.
-/// Format: "#{pane_pid}\t#{session_name}\t#{window_name}\t#{window_index}\t#{pane_id}"
-fn parse_pane_line_by_pid(line: &str, target_pid: u32) -> Option<PaneInfo> {
-    let mut parts = line.split('\t');
-
-    let pane_pid: u32 = parts.next()?.parse().ok()?;
-    if pane_pid != target_pid {
-        return None;
-    }
-
-    let session_name = parts.next()?.to_string();
-    let window_name = parts.next()?.to_string();
-    let window_index = parts.next()?.parse::<u32>().ok()?;
-    let pane_id = parts.next()?.to_string();
-
-    Some(PaneInfo {
-        session_name,
-        window_name,
-        window_index,
-        pane_id,
-    })
 }
 
 #[cfg(test)]
@@ -824,44 +760,6 @@ mod tests {
             ),
             "_worktrees/feature"
         );
-    }
-
-    #[rstest]
-    #[case::standard_line(
-        "12345\tmain\teditor\t0\t%0",
-        12345,
-        Some(("main", "editor", 0, "%0"))
-    )]
-    #[case::different_pid("12345\twork\tterminal\t1\t%5", 99999, None)]
-    #[case::high_window_index(
-        "54321\tsession\twindow\t99\t%123",
-        54321,
-        Some(("session", "window", 99, "%123"))
-    )]
-    #[case::session_with_spaces(
-        "12345\tmy session\tmy window\t0\t%0",
-        12345,
-        Some(("my session", "my window", 0, "%0"))
-    )]
-    #[case::insufficient_parts("12345\tmain", 12345, None)]
-    #[case::empty_line("", 12345, None)]
-    fn test_parse_pane_line_by_pid(
-        #[case] line: &str,
-        #[case] target_pid: u32,
-        #[case] expected: Option<(&str, &str, u32, &str)>,
-    ) {
-        let result = parse_pane_line_by_pid(line, target_pid);
-
-        match expected {
-            Some((session, window, index, pane)) => {
-                let info = result.expect("expected Some(PaneInfo)");
-                assert_eq!(info.session_name, session);
-                assert_eq!(info.window_name, window);
-                assert_eq!(info.window_index, index);
-                assert_eq!(info.pane_id, pane);
-            }
-            None => assert!(result.is_none()),
-        }
     }
 
     #[rstest]

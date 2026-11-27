@@ -53,6 +53,7 @@ function renderRow(
   viewSession: Session = session,
   isMobile = false,
   inTree = false,
+  showWaitingReason = false,
 ) {
   if (root !== null) act(() => root?.unmount())
   root = createRoot(container)
@@ -64,6 +65,7 @@ function renderRow(
             session={viewSession}
             density={density}
             isMobile={isMobile}
+            showWaitingReason={showWaitingReason}
           />
         </div>
       ) : (
@@ -71,6 +73,7 @@ function renderRow(
           session={viewSession}
           density={density}
           isMobile={isMobile}
+          showWaitingReason={showWaitingReason}
         />
       ),
     )
@@ -107,7 +110,7 @@ function snapshot() {
     engine: container.querySelector('.session-engine')?.textContent ?? null,
     task: task?.textContent,
     repositoryLines: Array.from(
-      container.querySelectorAll('.session-repo'),
+      container.querySelectorAll('.session-repo-label'),
       (repo) => repo.textContent,
     ),
   }
@@ -148,6 +151,50 @@ afterEach(() => {
   root = null
   container.remove()
   vi.unstubAllGlobals()
+})
+
+it('hides the waiting reason on compact rows with a gray hourglass', () => {
+  renderRow('compact', {
+    ...session,
+    category: 'waiting',
+    kind: null,
+    waitingReason: 'Waiting for the checks to finish',
+  })
+
+  const icon = container.querySelector<HTMLElement>('.session-row-status')
+
+  const snapshot = () => ({
+    label: icon?.getAttribute('aria-label'),
+    title: icon?.getAttribute('title'),
+    icon: icon?.querySelector('svg')?.classList.contains('lucide-hourglass'),
+    preview: container.querySelector('.session-preview')?.textContent ?? null,
+  })
+
+  expect(snapshot()).toEqual({
+    label: 'Waiting',
+    title: 'Waiting',
+    icon: true,
+    preview: null,
+  })
+})
+
+it('shows the waiting reason on compact Board rows', () => {
+  renderRow(
+    'compact',
+    {
+      ...session,
+      category: 'waiting',
+      kind: null,
+      waitingReason: 'Waiting for the checks to finish',
+    },
+    false,
+    false,
+    true,
+  )
+
+  expect(
+    container.querySelector('.session-preview')?.textContent ?? null,
+  ).toEqual('Waiting for the checks to finish')
 })
 
 it('shows the full Inbox row with role, engine, task and repository', () => {
@@ -319,48 +366,25 @@ it('keeps the full layout for mobile Inbox rows', () => {
   })
 })
 
-it('shows folded to-dos alongside unreviewed decisions in the Done preview', () => {
+it('shows folded to-dos in the Done preview', () => {
   renderRow('full', {
     ...session,
     category: 'done',
-    decisionCount: 3,
-    unreviewedDecisionCount: 2,
     todoLaterCount: 1,
     todoLaterTitle: 'Review the alert sound',
   })
 
-  const decisionPreviewSnapshot = () => ({
+  const previewSnapshot = () => ({
     preview: container.querySelector('.session-preview')?.textContent,
     previewClassName: container.querySelector('.session-preview')?.className,
-    decisionCount:
-      container.querySelector('.session-decision-count')?.textContent ?? null,
   })
 
-  expect(decisionPreviewSnapshot()).toEqual({
-    preview: '◇ 2 decisions to review · To-do · later · Review the alert sound',
-    previewClassName: 'session-preview is-decision-preview',
-    decisionCount: null,
+  expect(previewSnapshot()).toEqual({
+    preview:
+      'Should retries stop after three attempts? · To-do · later · Review the alert sound',
+    previewClassName: 'session-preview',
   })
 })
-
-it.each([
-  ['single unreviewed decision', 'done', 0, 1, '◇ 1 decision to review'],
-  ['multiple decisions', 'needs_action', 2, 0, '◇ 2 decisions'],
-] as const)(
-  'shows the %s count with the shared label',
-  (_label, category, decisionCount, unreviewedDecisionCount, expectedLabel) => {
-    renderRow('compact', {
-      ...session,
-      category,
-      decisionCount,
-      unreviewedDecisionCount,
-    })
-
-    expect(
-      container.querySelector('.session-decision-count')?.textContent,
-    ).toEqual(expectedLabel)
-  },
-)
 
 it.each([
   [

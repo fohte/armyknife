@@ -35,8 +35,6 @@ function MessageImageSourceProbe() {
     actions: null,
     actionsReady: true,
     isMobile: false,
-    selectedDecisionSeq: null,
-    onSelectDecision: () => undefined,
     onAction: () => Promise.resolve(true),
     onOpenInTerminal: () => undefined,
     openInTerminalStatus: null,

@@ -26,6 +26,7 @@ import {
   MarkdownComponentContext,
   type MarkdownComponentContextValue,
 } from '#components/markdown-component-context'
+import { MarkdownDetails } from '#components/markdown-details'
 import {
   displayMarkdownImagePath,
   getMappedImageSource,
@@ -37,11 +38,13 @@ import type {
   MarkdownRoot,
 } from '#components/markdown-message-types'
 import { useMarkdownSessionLinks } from '#components/markdown-session-links'
+import { remarkMarkdownDetails } from '#components/remark-markdown-details'
 import { SessionLink } from '#components/session-link'
 import {
   SyntaxCodeBlock,
   type SyntaxCodeBlockLink,
 } from '#components/syntax-code-block'
+import { unwrapTaggedMessage } from '#components/unwrap-tagged-message'
 import type { SessionLinkTarget } from '#types'
 
 export { MarkdownSessionLinksProvider } from '#components/markdown-session-links'
@@ -240,17 +243,6 @@ function blockBangCommands(code: string): string[] {
   })
 }
 
-function unwrapTaggedMessage(value: string): string {
-  const match = value
-    .trim()
-    .match(/^<([A-Za-z_][A-Za-z0-9._:-]*)>\r?\n?([\s\S]*?)\r?\n?<\/\1>$/)
-  const tag = match?.[1]
-  const body = match?.[2]
-  return tag === undefined || body === undefined
-    ? value
-    : `## ${tag}\n\n${body.trim()}`
-}
-
 const MarkdownCode: NonNullable<Components['code']> = ({ node, ...props }) => {
   const isCodeBlock = useContext(CodeBlockContext)
   const { sessionsById, onSelectSession, commandContext, mobile } = useContext(
@@ -406,6 +398,7 @@ const MarkdownImage: NonNullable<Components['img']> = ({ src, alt, title }) => {
 const markdownComponents: Components = {
   a: MarkdownAnchor,
   code: MarkdownCode,
+  details: MarkdownDetails,
   img: MarkdownImage,
   pre: MarkdownPre,
 }
@@ -482,6 +475,7 @@ export const MarkdownMessage = memo(function MarkdownMessage({
         components={inline ? inlineMarkdownComponents : markdownComponents}
         remarkPlugins={[
           remarkGfm,
+          remarkMarkdownDetails,
           remarkHtmlBreaks,
           () => remarkLinkSessionIds(sessionsById),
           remarkTrimNonAsciiAutolinks,

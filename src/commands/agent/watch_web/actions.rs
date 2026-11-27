@@ -23,12 +23,12 @@ mod api_error;
 mod bang_commands;
 mod close;
 mod close_checks;
-mod decisions;
 mod interrupt_locks;
 mod keyed_mutex_registry;
 mod launch_sessions;
 mod merge_pull_request;
 mod messages;
+mod pane;
 mod permission_denied;
 mod permission_denied_locks;
 mod proposal_answer_locks;
@@ -49,11 +49,14 @@ use permission_denied_locks::PermissionDeniedLocks;
 use proposal_answer_locks::ProposalAnswerLocks;
 use runtime::LiveActionRuntime;
 use support::{
-    Success, load_session, require_tmux, resolve_current_session_id, resolve_sessions_dir,
-    run_blocking, send_claude_escape,
+    Success, load_session, load_session_start_generation, require_tmux, resolve_current_session_id,
+    resolve_sessions_dir, run_blocking, send_claude_escape,
 };
 
-pub(super) fn router(message_loaders: RouteLoaders) -> Router {
+pub(super) fn router(
+    message_loaders: RouteLoaders,
+    resume_updates: super::EnrichmentUpdates,
+) -> Router {
     router_with_state(ActionState {
         sessions_dir: None,
         attachment_dir: None,
@@ -65,7 +68,7 @@ pub(super) fn router(message_loaders: RouteLoaders) -> Router {
         bang_command_locks: KeyedMutexRegistry::default(),
         interrupt_locks: InterruptLocks::default(),
         resume_locks: KeyedMutexRegistry::default(),
-        resume_pending: resume::PendingSessionResumes::default(),
+        resume_pending: resume::PendingSessionResumes::new(resume_updates),
         message_loaders,
         close_checks_inspector: Arc::new(|session, stop_and_close| {
             Box::pin(
@@ -78,6 +81,7 @@ pub(super) fn router(message_loaders: RouteLoaders) -> Router {
 fn router_with_state(state: ActionState) -> Router {
     Router::new()
         .route("/sessions/{id}/actions", get(actions))
+        .route("/sessions/{id}/pane", get(pane::get_pane_snapshot))
         .route("/sessions/{id}/resume", post(resume::resume_session))
         .route("/sessions/{id}/vibe", post(vibe::set_vibe))
         .route(
@@ -93,14 +97,6 @@ fn router_with_state(state: ActionState) -> Router {
         .route(
             "/sessions/{id}/commands/execute",
             post(bang_commands::execute),
-        )
-        .route(
-            "/sessions/{id}/decisions/{seq}/ok",
-            post(decisions::mark_ok),
-        )
-        .route(
-            "/sessions/{id}/decisions/{seq}/change",
-            post(decisions::request_change),
         )
         .route(
             "/sessions/{id}/proposals/{seq}/answer",
@@ -190,6 +186,7 @@ trait ActionRuntime: Send + Sync {
         mode: super::rewind::RewindMode,
     ) -> Result<String>;
     fn pane_current_command(&self, tmux_info: &TmuxInfo) -> Option<String>;
+    fn capture_pane(&self, tmux_info: &TmuxInfo) -> Result<String>;
     fn send_claude_escape_if_agent_is_running(
         &self,
         tmux_info: &TmuxInfo,
@@ -219,10 +216,21 @@ struct ActionCapabilities {
     answer_question: bool,
     resume: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    startup: Option<resume::ResumeStartupStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    resume_disabled_reason: Option<ResumeDisabledReason>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     permission: Option<PermissionCapabilities>,
     interrupt: bool,
     open_in_terminal: bool,
     rewind: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+enum ResumeDisabledReason {
+    NoTmux,
+    WorkingDirectoryMissing,
 }
 
 #[derive(Serialize)]
@@ -237,18 +245,42 @@ async fn actions(
 ) -> Result<Json<ActionCapabilities>, ApiError> {
     let current_id = resolve_current_session_id(&state, &id).await?;
     let session = load_session(state.clone(), current_id.clone()).await?;
-    state
+    let session_start_generation = load_session_start_generation(&state, &current_id).await?;
+    let startup = state
         .resume_pending
-        .clear_if_not_resumable(&current_id, session.status)
+        .startup_status(&current_id, session.status, session_start_generation)
         .await;
     let has_tmux = session.tmux_info.is_some();
+    let can_resume_by_status =
+        matches!(session.status, SessionStatus::Ended | SessionStatus::Paused);
+    let has_working_directory = if can_resume_by_status && has_tmux {
+        let cwd = session.cwd.clone();
+        tokio::task::spawn_blocking(move || cwd.is_dir())
+            .await
+            .map_err(ApiError::internal)?
+    } else {
+        false
+    };
+    let resume_disabled_reason = if can_resume_by_status {
+        if !has_tmux {
+            Some(ResumeDisabledReason::NoTmux)
+        } else if !has_working_directory {
+            Some(ResumeDisabledReason::WorkingDirectoryMissing)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
     let has_live_session = session.status != SessionStatus::Ended;
     Ok(Json(ActionCapabilities {
         message: has_live_session,
         answer_question: has_live_session
             && session.engine == Engine::Claude
             && session.has_pending_permission_requests(),
-        resume: matches!(session.status, SessionStatus::Ended | SessionStatus::Paused) && has_tmux,
+        resume: can_resume_by_status && resume_disabled_reason.is_none(),
+        startup,
+        resume_disabled_reason,
         permission: (has_live_session
             && matches!(session.engine, Engine::Claude | Engine::Codex)
             && session.has_pending_permission_requests())
@@ -480,7 +512,12 @@ mod tests {
                 );
                 CloseChecks::from_observations(
                     worktree_path,
-                    vec!["src/fictional.rs".to_string()],
+                    vec![crate::shared::worktree::UncommittedChange {
+                        status: "M".to_string(),
+                        path: "src/fictional.rs".to_string(),
+                    }],
+                    Vec::new(),
+                    false,
                     Some("feature/fictional".to_string()),
                     Some(crate::shared::worktree_delete::classify_merge_guard_status(
                         "feature/fictional".to_string(),
@@ -503,9 +540,6 @@ mod tests {
     #[path = "bang_commands.rs"]
     mod bang_commands;
 
-    #[path = "decisions.rs"]
-    mod decisions;
-
     #[path = "proposals.rs"]
     mod proposals;
 
@@ -520,6 +554,9 @@ mod tests {
 
     #[path = "title.rs"]
     mod title;
+
+    #[path = "pane.rs"]
+    mod pane;
 
     #[path = "merge_pull_request.rs"]
     mod merge_pull_request;
@@ -550,6 +587,8 @@ mod tests {
             )>,
         >,
         pane_command: Mutex<Option<String>>,
+        pane_snapshot: Mutex<Option<String>>,
+        pane_snapshot_error: Mutex<Option<String>>,
         pane_has_agent_process: Mutex<bool>,
         pane_command_matches: Mutex<bool>,
         close_error: Mutex<Option<FakeCloseFailure>>,
@@ -575,6 +614,8 @@ mod tests {
                 message_gate: Mutex::new(None),
                 command_gate: Mutex::new(None),
                 pane_command: Mutex::new(Some("claude".to_string())),
+                pane_snapshot: Mutex::new(None),
+                pane_snapshot_error: Mutex::new(None),
                 pane_has_agent_process: Mutex::new(true),
                 pane_command_matches: Mutex::new(true),
                 close_error: Mutex::new(None),
@@ -664,6 +705,22 @@ mod tests {
                 "socketPath": tmux_info.socket_path,
             }));
             self.pane_command.lock().unwrap().clone()
+        }
+
+        fn capture_pane(&self, tmux_info: &TmuxInfo) -> Result<String> {
+            self.calls.lock().unwrap().push(json!({
+                "kind": "pane-snapshot",
+                "paneId": tmux_info.pane_id,
+                "socketPath": tmux_info.socket_path,
+            }));
+            if let Some(error) = self.pane_snapshot_error.lock().unwrap().clone() {
+                return Err(anyhow::anyhow!(error));
+            }
+            self.pane_snapshot
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("pane snapshot is not configured"))
         }
 
         fn send_claude_escape_if_agent_is_running(
@@ -800,6 +857,7 @@ mod tests {
     struct ActionContext {
         temp_dir: TempDir,
         runtime: Arc<FakeRuntime>,
+        resume_updates: super::super::EnrichmentUpdates,
     }
 
     impl ActionContext {
@@ -837,7 +895,9 @@ mod tests {
                 bang_command_locks: KeyedMutexRegistry::default(),
                 interrupt_locks: InterruptLocks::default(),
                 resume_locks: KeyedMutexRegistry::default(),
-                resume_pending: super::resume::PendingSessionResumes::default(),
+                resume_pending: super::resume::PendingSessionResumes::new(
+                    self.resume_updates.clone(),
+                ),
                 message_loaders: empty_message_loaders(),
             })
         }
@@ -856,7 +916,9 @@ mod tests {
                 bang_command_locks: KeyedMutexRegistry::default(),
                 interrupt_locks: InterruptLocks::default(),
                 resume_locks: KeyedMutexRegistry::default(),
-                resume_pending: super::resume::PendingSessionResumes::default(),
+                resume_pending: super::resume::PendingSessionResumes::new(
+                    self.resume_updates.clone(),
+                ),
                 message_loaders: empty_message_loaders(),
             });
             (router, permission_denied_locks)
@@ -879,7 +941,9 @@ mod tests {
                 bang_command_locks: KeyedMutexRegistry::default(),
                 interrupt_locks: InterruptLocks::default(),
                 resume_locks: KeyedMutexRegistry::default(),
-                resume_pending: super::resume::PendingSessionResumes::default(),
+                resume_pending: super::resume::PendingSessionResumes::new(
+                    self.resume_updates.clone(),
+                ),
                 message_loaders,
             });
             (router, proposal_answer_locks)
@@ -887,6 +951,13 @@ mod tests {
 
         fn save_session(&self, session: &Session) {
             store::save_session_to(&self.temp_dir.path().join("sessions"), session).unwrap();
+        }
+
+        fn record_session_start(&self, session: &Session) {
+            let sessions_dir = self.temp_dir.path().join("sessions");
+            let lock = store::lock_session_for_update(&sessions_dir, &session.session_id).unwrap();
+            lock.record_watch_web_session_start().unwrap();
+            lock.save(session).unwrap();
         }
 
         fn save_pending_permission_request(
@@ -934,6 +1005,14 @@ mod tests {
 
         fn set_pane_command(&self, command: Option<&str>) {
             *self.runtime.pane_command.lock().unwrap() = command.map(str::to_string);
+        }
+
+        fn set_pane_snapshot(&self, snapshot: &str) {
+            *self.runtime.pane_snapshot.lock().unwrap() = Some(snapshot.to_string());
+        }
+
+        fn set_pane_snapshot_error(&self, error: &str) {
+            *self.runtime.pane_snapshot_error.lock().unwrap() = Some(error.to_string());
         }
 
         fn set_pane_has_agent_process(&self, has_agent_process: bool) {
@@ -1018,12 +1097,15 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let runtime = Arc::new(FakeRuntime::default());
         *runtime.sessions_dir.lock().unwrap() = Some(temp_dir.path().join("sessions"));
-        ActionContext { temp_dir, runtime }
+        ActionContext {
+            temp_dir,
+            runtime,
+            resume_updates: super::super::EnrichmentUpdates::new(),
+        }
     }
 
     fn empty_message_loaders() -> super::super::messages::RouteLoaders {
         super::super::messages::RouteLoaders::new(
-            |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_, _| Ok(()),
@@ -1042,7 +1124,7 @@ mod tests {
             crit_not_waiting_urls: Default::default(),
             web_uis: Vec::new(),
             pending_human_review_ids: BTreeSet::new(),
-            cwd: PathBuf::from("/tmp/example"),
+            cwd: PathBuf::from("."),
             transcript_path: None,
             tty: None,
             tmux_info: Some(TmuxInfo {
@@ -2143,22 +2225,80 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(
-            response_snapshot(response, &action_context).await,
-            json!({
-                "status": StatusCode::OK.as_u16(),
-                "body": {
-                    "message": status != SessionStatus::Ended,
-                    "answerQuestion": false,
-                    "resume": matches!(status, SessionStatus::Ended | SessionStatus::Paused)
-                        && has_pane,
-                    "interrupt": status == SessionStatus::Running,
-                    "openInTerminal": has_pane,
-                    "rewind": rewind_available,
-                },
-                "calls": [],
-            }),
-        );
+        let mut expected = json!({
+            "status": StatusCode::OK.as_u16(),
+            "body": {
+                "message": status != SessionStatus::Ended,
+                "answerQuestion": false,
+                "resume": matches!(status, SessionStatus::Ended | SessionStatus::Paused)
+                    && has_pane,
+                "interrupt": status == SessionStatus::Running,
+                "openInTerminal": has_pane,
+                "rewind": rewind_available,
+            },
+            "calls": [],
+        });
+        if status == SessionStatus::Paused && !has_pane {
+            expected["body"]["resumeDisabledReason"] = json!("noTmux");
+        }
+        assert_eq!(response_snapshot(response, &action_context).await, expected);
+    }
+
+    #[rstest]
+    #[case::working_directory_is_available(true, true, true, None)]
+    #[case::working_directory_is_missing(true, false, false, Some("workingDirectoryMissing"))]
+    #[case::tmux_is_missing(false, true, false, Some("noTmux"))]
+    #[case::tmux_and_working_directory_are_missing(false, false, false, Some("noTmux"))]
+    #[tokio::test]
+    async fn resume_capability_requires_tmux_and_an_existing_working_directory(
+        #[case] has_tmux: bool,
+        #[case] has_working_directory: bool,
+        #[case] expected_resume: bool,
+        #[case] expected_disabled_reason: Option<&str>,
+        action_context: ActionContext,
+    ) {
+        let mut session = session("sample-session");
+        session.status = SessionStatus::Ended;
+        session.cwd = if has_working_directory {
+            action_context.temp_dir.path().to_path_buf()
+        } else {
+            action_context
+                .temp_dir
+                .path()
+                .join("missing-working-directory")
+        };
+        if !has_tmux {
+            session.tmux_info = None;
+        }
+        action_context.save_session(&session);
+
+        let response = action_context
+            .router()
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/sample-session/actions")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let mut expected = json!({
+            "status": StatusCode::OK.as_u16(),
+            "body": {
+                "message": false,
+                "answerQuestion": false,
+                "resume": expected_resume,
+                "interrupt": false,
+                "openInTerminal": has_tmux,
+                "rewind": false,
+            },
+            "calls": [],
+        });
+        if let Some(reason) = expected_disabled_reason {
+            expected["body"]["resumeDisabledReason"] = json!(reason);
+        }
+        assert_eq!(response_snapshot(response, &action_context).await, expected);
     }
 
     #[rstest]
@@ -2721,6 +2861,9 @@ mod tests {
                     "checks": {
                         "path": "/fictional/worktree",
                         "files": ["src/fictional.rs"],
+                        "changes": [{ "status": "M", "path": "src/fictional.rs" }],
+                        "commits": [],
+                        "commitInspectionUnavailable": false,
                         "branch": "feature/fictional",
                         "merged": false,
                         "reason": "pull request is open",
@@ -2808,6 +2951,9 @@ mod tests {
                     "checks": {
                         "path": "/fictional/worktree",
                         "files": ["src/fictional.rs"],
+                        "changes": [{ "status": "M", "path": "src/fictional.rs" }],
+                        "commits": [],
+                        "commitInspectionUnavailable": false,
                         "branch": "feature/fictional",
                         "merged": false,
                         "reason": "pull request is open",

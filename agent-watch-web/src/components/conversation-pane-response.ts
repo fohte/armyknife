@@ -293,19 +293,6 @@ function isChatItem(value: unknown): value is ChatItem {
           value['resolution'] === 'approved' ||
           value['resolution'] === 'dismissed')
       )
-    case 'decision':
-      return (
-        typeof value['seq'] === 'number' &&
-        typeof value['title'] === 'string' &&
-        typeof value['why'] === 'string' &&
-        Array.isArray(value['considered']) &&
-        value['considered'].every((item) => typeof item === 'string') &&
-        typeof value['easyToChange'] === 'string' &&
-        (value['review'] === null ||
-          value['review'] === 'ok' ||
-          value['review'] === 'change') &&
-        typeof value['createdAt'] === 'string'
-      )
     default:
       return false
   }
@@ -394,10 +381,6 @@ export function isConversationResponse(
         value['stableEnd'] >= value['stableStart'] &&
         value['stableEnd'] <= value['total'] &&
         typeof value['stableDigest'] === 'string')) &&
-    Array.isArray(value['decisions']) &&
-    value['decisions'].every(
-      (decision) => isChatItem(decision) && decision.type === 'decision',
-    ) &&
     typeof value['hasUnansweredProposal'] === 'boolean' &&
     (value['activeQuestionIndex'] === null ||
       (typeof value['activeQuestionIndex'] === 'number' &&

@@ -124,6 +124,20 @@ export const InProgressTodaySession: Story = {
   args: { todaySessions: [todaySessionInProgress] },
 }
 
+export const WaitingTodaySession: Story = {
+  name: 'A waiting starred session shows the Waiting status',
+  args: {
+    todaySessions: [
+      {
+        ...todaySessionInProgress,
+        id: 'today-session-waiting',
+        category: 'waiting',
+        waitingReason: 'Waiting for the checks to finish',
+      },
+    ],
+  },
+}
+
 export const TodaySessionStatusesUseTheirCategoryColors: Story = {
   name: 'Starred sessions show kind icons in category colors',
   args: {

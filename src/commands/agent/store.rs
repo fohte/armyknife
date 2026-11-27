@@ -235,6 +235,10 @@ pub(crate) fn insert_agent_decision(
     )
 }
 
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "Part of the persisted agent decision API.")
+)]
 pub(crate) fn agent_decisions_from(
     sessions_dir: &Path,
     session_id: &str,
@@ -242,12 +246,20 @@ pub(crate) fn agent_decisions_from(
     database::agent_decisions(sessions_dir, session_id)
 }
 
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "Part of the persisted agent decision API.")
+)]
 pub(crate) fn agent_decision_counts_by_session_from(
     sessions_dir: &Path,
 ) -> Result<HashMap<String, AgentDecisionCounts>> {
     database::agent_decision_counts_by_session(sessions_dir)
 }
 
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "Part of the persisted agent decision API.")
+)]
 pub(crate) fn set_agent_decision_review_from(
     sessions_dir: &Path,
     session_id: &str,
@@ -787,6 +799,13 @@ pub(crate) fn watch_web_session_states_from(
     sessions_dir: &Path,
 ) -> Result<Vec<WatchWebSessionState>> {
     database::watch_web_session_states(sessions_dir)
+}
+
+pub(crate) fn watch_web_session_start_generation_from(
+    sessions_dir: &Path,
+    session_id: &str,
+) -> Result<i64> {
+    database::watch_web_session_start_generation(sessions_dir, session_id)
 }
 
 pub(crate) fn set_watch_web_later(

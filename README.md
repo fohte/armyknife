@@ -548,6 +548,7 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | ----------------------------------------------------------------------------------------------------- | ------- | ------------------------------------------------------------------------------------------- |
 | `new [--worktree[=<branch>]] [options]`                                                               |         | Start a Claude Code session, optionally in a new or existing linked worktree                |
 | `codex [<args>...]`                                                                                   |         | Start Codex and bind its thread ID to the current tmux pane                                 |
+| `current`                                                                                             |         | Print the current engine as JSON, or exit 1 when no supported agent is detected             |
 | `close [target] [--child] [--force] [--skip-hooks] [--keep-worktree]`                                 | `c`     | Close an agent session and optionally keep its linked worktree                              |
 | `clean [--dry-run] [--all] [--force]`                                                                 |         | Delete merged or closed worktrees                                                           |
 | `hook <event>`                                                                                        |         | Record coding agent hook events                                                             |
@@ -556,7 +557,7 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | `focus <session_id> [--review-pane-id <pane_id>]`                                                     |         | Focus the review pane when available, then the session's tmux pane                          |
 | `mark-read [-t <pane_id>]`                                                                            |         | Mark the pane's session as read (wire from tmux `pane-focus-in`)                            |
 | `status set <kind> <note>`                                                                            |         | Set the calling session's reason for stopping                                               |
-| `decision add <TITLE> --why <WHY> --considered <ALT> [--considered <ALT>...] --easy-to-change <TEXT>` |         | Record a provisional decision for later review                                              |
+| `decision add <TITLE> --why <WHY> --considered <ALT> [--considered <ALT>...] --easy-to-change <TEXT>` |         | Record a provisional decision in the session store                                          |
 | `proposal add`                                                                                        |         | Record a structured proposal from JSON read from stdin                                      |
 | `proposal edit <seq>`                                                                                 |         | Replace a pending proposal from the calling session using JSON read from stdin              |
 | `proposal withdraw <seq> [--comment <reason>]`                                                        |         | Withdraw a pending proposal from the calling session                                        |
@@ -592,6 +593,15 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | `auto-compact schedule --session <id>`                                                                |         | Detached worker spawned by the Stop hook (not for direct use)                               |
 | `window-status <window_id>`                                                                           |         | Print status symbols for the sessions in a tmux window                                      |
 | `pane-has-paused <pane_id>`                                                                           |         | Print `1` when the pane holds a Paused Claude Code session, else empty                      |
+
+`a agent current` prints JSON with an `engine` value of `claude-code` or `codex` when it detects a supported agent. If process ancestry is unavailable, it uses `CLAUDECODE` or `CODEX_SESSION_ID` as a fallback. For example:
+
+```console
+$ a agent current
+{"engine":"claude-code"}
+```
+
+Otherwise, it prints nothing and exits with status 1.
 
 ### `a agent transcript slim`
 
@@ -729,8 +739,6 @@ Decision recorded for this session.
 Session-local sequence: 7
 To refer to it in another session or task, describe its contents; this sequence only works in this session.
 ```
-
-Tracked, hook-processed Claude Code and Codex sessions receive the instruction on `SessionStart` to record choices that are cheap to reverse and continue working. They should stop and ask about choices that are hard to reverse. Codex must have the `SessionStart` hook registered as described under [Hooks](#hooks). Internal and headless invocations do not receive this instruction.
 
 `a agent web-ui add <url> --name <name>` registers a named local HTTP interface with the calling session. The URL must use `localhost` or `127.0.0.1` and include an explicit port. Tracked, hook-processed Claude Code sessions and Codex sessions with a registered `SessionStart` hook receive an instruction to register local web UIs they start. Registered interfaces appear in the watch-web conversation's right panel. When watch-web is opened at `localhost` or `127.0.0.1`, it uses the local URL; other hostnames use the URL returned by the optional `web-ui-expose` hook. watch-web gives each local registration its own loopback relay, which forwards HTTP, streaming responses, and WebSocket connections to the registered interface. Run the command from the session that owns the interface:
 
@@ -1240,7 +1248,7 @@ Logs are saved to `~/Library/Caches/armyknife/cc/logs/` (macOS) or `~/.cache/arm
 
 ### `a agent watch-web`
 
-`a agent watch-web` starts an HTTP server at `http://127.0.0.1:4317` by default and opens it in the default browser. Pass `--port <PORT>` to use another port; `--port 0` lets the OS choose an available port and prints the selected URL. Agent sessions cannot use port `4317`, which is reserved for the production server, and do not manage shared Web UI relays. Pass `--no-open` to keep it from opening a browser, such as when running it as a background service. If a replacement server has a different version, open pages show an update notice with a Reload action; restarts with the same version keep the current page loaded without a notice. It serves the SPA embedded in the binary, with an Inbox grouped into Needs action, Later, In progress, and Done, plus a Board grouped by project. Sessions can be starred for TODAY from the Inbox and Nav. Later sessions return to Needs action when their timer expires or when they change. The Board puts projects that need action first and can hide quiet projects. Both views reload session metadata when the server sends an update. When a session has an active parent or child, the conversation pane adds a Tree tab that shows their hierarchy and lets users open available sessions. A session with an active review document adds a Review tab that displays its frontmatter and Markdown body. The backend provides `GET /api/sessions` for session metadata, including the selected session's own branch PR in `pullRequest` when available and its branch PR plus PRs recorded at submit time and PRs linked from its tq tasks in `pullRequests`, `GET /api/events` for session-store and enrichment updates, and `GET /api/sessions/{id}/messages` for conversation items. `GET /api/sessions/{id}/review-document` returns the frontmatter and Markdown body for the active review document, or `404` when no live review lock is active. `GET /api/sessions/{id}/background-tasks/{task_id}/output` returns plain-text output for a running Claude Code Bash task or an `a agent bg run` command, capped to the last 20 lines and 64 KiB. It reads registered command output from the background-task registry, or Claude task output from the session transcript. Saved conversation images are served by `GET /api/images/{name}`; the route only serves files in watch-web's image storage directory, and expired images return `404`. Session actions are available through the routes below. If the SPA has not been built, the page shows the build instructions; build it with:
+`a agent watch-web` starts an HTTP server at `http://127.0.0.1:4317` by default and opens it in the default browser. Pass `--port <PORT>` to use another port; `--port 0` lets the OS choose an available port and prints the selected URL. Agent sessions cannot use port `4317`, which is reserved for the production server, and do not manage shared Web UI relays. Pass `--no-open` to keep it from opening a browser, such as when running it as a background service. If a replacement server has a different version, open pages show an update notice with a Reload action; restarts with the same version keep the current page loaded without a notice. It serves the SPA embedded in the binary, with an Inbox grouped into Needs action, Later, Waiting, In progress, and Done, plus a Board grouped by project. Sessions can be starred for TODAY from the Inbox and Nav. Later sessions return to Needs action when their timer expires or when they change. The Board puts projects that need action first and can hide quiet projects. Both views reload session metadata when the server sends an update. When a session has an active parent or child, the conversation pane adds a Tree tab that shows their hierarchy and lets users open available sessions. A session with an active review document adds a Review tab that displays its frontmatter and Markdown body. The backend provides `GET /api/sessions` for session metadata, including the selected session's own branch PR in `pullRequest` when available and its branch PR plus PRs recorded at submit time and PRs linked from its tq tasks in `pullRequests`, `GET /api/events` for session-store and enrichment updates, and `GET /api/sessions/{id}/messages` for conversation items. `GET /api/sessions/{id}/review-document` returns the frontmatter and Markdown body for the active review document, or `404` when no live review lock is active. `GET /api/sessions/{id}/background-tasks/{task_id}/output/events` sends the complete output tail on connection and when output-file changes are observed; notifications can coalesce, so rapid changes may appear in one update. Each event contains a JSON object with the output string, capped to the last 20 lines and 64 KiB; tasks without output paths receive `Output is unavailable for this task.` It reads registered command output from the background-task registry, or Claude task output from the session transcript. Saved conversation images are served by `GET /api/images/{name}`; the route only serves files in watch-web's image storage directory, and expired images return `404`. Session actions are available through the routes below. If the SPA has not been built, the page shows the build instructions; build it with:
 
 Assistant replies and to-do/proposal cards can display local images written as Markdown image destinations such as `![](/absolute/path/to/image.png)`. The server snapshots eligible PNG, JPEG, GIF, and WebP files from those message fields when the conversation is loaded and serves them from `GET /api/sessions/{id}/answer-images/{image_id}`. Unavailable absolute local image paths in conversation messages are shown as unavailable.
 
@@ -1252,22 +1260,23 @@ By default, watch-web accepts loopback Host values. To access it through a proxy
 
 Files sent by an agent are served by `GET /api/sessions/{id}/files/{file_id}` only when recorded for that session, or by `GET /api/sessions/{id}/transcript-files/{tool_use_id}/{index}` only when the session transcript contains the matching file-send record and file index.
 
-- `GET /api/sessions/{id}/review-document` returns a `revision` with the active review document's frontmatter and Markdown body. The session list includes `reviewDocumentCount` for open review markers and `reviewDocumentId` when an editor lock is active. Legacy v2 and unversioned markers remain included because their format cannot distinguish an abandoned review from a queued review.
+- `GET /api/sessions/{id}/review-document` returns a `revision` with the active review document's frontmatter and Markdown body. The session list includes `reviewDocumentCount` for recognized review markers and `reviewDocumentId` when an editor lock is active. Legacy v2 and unversioned markers are recognized only while their document lock is active.
 - `POST /api/sessions/{id}/review-document/save` with `{"id":"review-id","revision":"revision-from-get","frontmatter":{"approved":true},"body":"Updated Markdown."}` saves edits to the active review document path recorded by the server. Both save and finish return `409` when the document changed since its revision was read.
 - `POST /api/sessions/{id}/review-document/finish` accepts the same payload, saves the edits, then asks the review process to close its editor and run the completion handler. It returns `504` if the review process does not acknowledge the request in time.
 - `POST /api/sessions/{id}/review-document/action` accepts the same payload with an `action` field set to `post_comment`, `create_pr`, `post_replies`, or `update_issue`. It saves the edits, marks the document approved, and runs the corresponding submission immediately. It returns `{"success":true,"revision":"..."}` when the action completes, or `{"success":false,"revision":"...","error":"..."}` when submission fails. Repeating a completed action for the same document returns success without submitting again.
-- `GET /api/sessions/{id}/review-documents` returns all open review documents, with the editor document first. This includes legacy v2 and unversioned markers without a live lock because they may still represent reviews waiting in the queue. Each entry has an `id`, a `kind` (`pr_draft`, `issue_comment`, `issue_body`, `review_replies`, or `draft`), a `target`, and `isEditor`, `canSave`, and `canFinish` flags. Target fields depend on the kind, such as `repository`, `branch`, `issueNumber`, `pullRequestNumber`, `title`, and `threadCount`. Entries may include `startedAt` as the Unix epoch timestamp in milliseconds. A generic `draft` target may include `path`, relative to the session working directory when possible and otherwise containing only the filename.
+- `GET /api/sessions/{id}/review-documents` returns all open review documents, with the editor document first. Legacy v2 and unversioned markers are included only while their document lock is active. Each entry has an `id`, a `kind` (`pr_draft`, `issue_comment`, `issue_body`, `review_replies`, or `draft`), a `target`, and `isEditor`, `canSave`, and `canFinish` flags. Target fields depend on the kind, such as `repository`, `branch`, `issueNumber`, `pullRequestNumber`, `title`, and `threadCount`. Entries may include `startedAt` as the Unix epoch timestamp in milliseconds. A generic `draft` target may include `path`, relative to the session working directory when possible and otherwise containing only the filename.
 - `GET /api/sessions/{id}/review-documents/{document_id}` returns that document's metadata, `revision`, `frontmatter`, and Markdown `body`, including for documents waiting in the review queue.
 - `POST /api/sessions/{id}/review-documents/{document_id}/save` and `/finish` accept the same edit payload as the singular routes. The URL and payload IDs must match, and only the current editor document can be saved or finished. A different current document or unavailable FIFO returns `409`; a missing marker returns `404`.
-- `POST /api/sessions` with `{"directory":"/workspace/example","engine":"claude","worktree":false,"initialMessage":"Inspect this project."}` starts a Claude Code or Codex session in an existing directory and returns `{"launchId":"..."}`. `engine` accepts `claude` or `codex`; `initialMessage`, `model`, and `reasoningEffort` are optional. When `model` or `reasoningEffort` is omitted, the agent profile and engine defaults apply.
+- `POST /api/sessions` with `{"directory":"/workspace/example","engine":"claude","worktree":false,"initialMessage":"Inspect this project.","attachments":[{"name":"reference.png","mimeType":"image/png","size":8,"data":"iVBORw0KGgo="}]}` starts a Claude Code or Codex session in an existing directory and returns `{"launchId":"..."}`. `engine` accepts `claude` or `codex`; `initialMessage`, `model`, `reasoningEffort`, and `attachments` are optional. When `model` or `reasoningEffort` is omitted, the agent profile and engine defaults apply. Attachment paths are appended to the first message.
 - `GET /api/model-options?engine=claude|codex` returns the engine's model choices, the effective default model and effort, and the effort levels supported by each model.
 - `GET /api/directories` returns recent repository roots for sessions under the configured ghq root, ordered by recent activity with one result per repository. Sessions outside discovered repositories are omitted. Add `?q=<search>` to match paths relative to the ghq root and include matching repositories; an existing absolute or `~/` directory matching the query is also included.
 - `GET /api/skill-suggestions?engine=claude&directory=/workspace/example` returns the skill listing from the most recent matching session, preferring the selected directory. Omit `directory` to use the most recent listing for that engine.
 
 - `GET /api/sessions/{id}/actions`
+- `GET /api/sessions/{id}/pane` returns `{"content":"...","capturedAt":"..."}` with plain pane text and an RFC 3339 capture timestamp. It returns `404` for a missing session, `409` when no tmux pane is recorded, and `502` when capture fails.
 - `GET /api/sessions/{id}/tree` returns the ancestor-rooted session tree, excluding ended sessions.
 - `POST /api/sessions/{id}/pull-requests/{number}/merge` with `{"owner":"sample-owner","repo":"sample-repo","expectedHeadSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}` merges the PR identified by the route number and request repository when its head SHA still matches. The watch-web header and PR list use this route for a selected PR. It returns `merged`, `alreadyMerged`, or `enqueued`; the merge flow runs `pre-pr-merge` and closes the head worktree after a completed merge.
-- `GET /api/sessions/{id}/background-tasks/{task_id}/output` for the running task's output tail
+- `GET /api/sessions/{id}/background-tasks/{task_id}/output/events` for the complete output tail on connection and when file-change notifications arrive; notifications can coalesce, and each event carries a JSON object with the output string, capped to 20 lines and 64 KiB. Tasks without output paths send `Output is unavailable for this task.`
 - `GET /api/images/{name}` for saved conversation images
 - `GET /api/sessions/later-options` for server-calculated return times
 - `POST /api/sessions/{id}/messages` with `{"content":"..."}`
@@ -1291,10 +1300,8 @@ Files sent by an agent are served by `GET /api/sessions/{id}/files/{file_id}` on
 - `POST /api/sessions/{id}/later` with `{"preset":"one_hour"}` (also accepts `this_evening`, `tomorrow`, `next_week`, `until_it_changes`, and `back_now`)
 - `POST /api/sessions/{id}/today` with `{"isToday":true}` or `{"isToday":false}`
 - `POST /api/sessions/{id}/title` with `{"title":"A fixture title"}`; an empty or whitespace-only title restores the automatic title
-- `POST /api/sessions/{id}/decisions/{seq}/ok` to mark a decision reviewed
-- `POST /api/sessions/{id}/decisions/{seq}/change` with `{"comment":"Revise the fixture choice."}` to request a change
 
-Messages, proposal answers, and todo resolutions may include up to 16 file attachments with a combined size of 50 MiB. Each attachment has a sanitized file name, MIME type, byte size, and base64-encoded data. PNG, JPEG, GIF, and WebP attachments with matching file signatures keep their conversation previews; other files appear by name:
+Session launches, messages, proposal answers, and todo resolutions may include up to 16 file attachments with a combined size of 50 MiB. Each attachment has a sanitized file name, MIME type, byte size, and base64-encoded data. PNG, JPEG, GIF, and WebP attachments with matching file signatures keep their conversation previews; other files appear by name:
 
 ```json
 {
@@ -1310,7 +1317,7 @@ Messages, proposal answers, and todo resolutions may include up to 16 file attac
 }
 ```
 
-The server stores attachments for 30 days, subject to a 1 GiB storage cap, and appends their absolute paths to the message sent to the session. Image attachments in todo resolutions and proposal answers also appear in the saved card comment.
+The server stores attachments for 30 days, subject to a 1 GiB storage cap, and appends their absolute paths to the message sent to the session, including the first message for a session launch. Image attachments in todo resolutions and proposal answers also appear in the saved card comment.
 
 For example, send a message with:
 
@@ -1346,6 +1353,22 @@ pnpm run build
 cd ..
 cargo build
 ```
+
+### Agent Watch desktop app
+
+On macOS, build and install the unsigned `Agent Watch.app` from the repository:
+
+```sh
+cd agent-watch-desktop
+pnpm install --frozen-lockfile
+./scripts/install
+```
+
+Run the same install command after pulling updates to replace the app in `/Applications`; it does not invoke `sudo` and requires write access to `/Applications`. The installer stages the new app before replacing the existing one and restores the previous app if the replacement fails. If it cannot remove the previous app after a successful update, it leaves a backup and prints a warning. If Agent Watch is running during an update, macOS displays a notification asking you to reopen it.
+
+The app opens the watch-web server at `http://127.0.0.1:4317`; it does not start or stop the server. If the initial page load fails, the app shows the command to start the server and retries. If an already loaded page loses the connection, watch-web reports the reconnecting state in that page and keeps its current session. The app is unsigned, so macOS may ask you to confirm the first launch.
+
+For development, set `AGENT_WATCH_URL` to an `http://localhost` or `http://127.0.0.1` URL with the development server's port, then run `pnpm run start` from `agent-watch-desktop`.
 
 ### `a agent clean`
 

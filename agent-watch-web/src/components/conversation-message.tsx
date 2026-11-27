@@ -6,7 +6,6 @@ import type {
   CommandOutputRefresh,
   CommandOutputStart,
 } from '#components/command-result-message'
-import { DecisionCard } from '#components/decision-card'
 import { FileAttachmentCard } from '#components/file-attachment-card'
 import { MarkdownMessage } from '#components/markdown-message'
 import { formatMessageTime } from '#components/message-time'
@@ -38,9 +37,6 @@ export type ConversationMessageRowProps = {
   actions: SessionActions | null
   actionsReady: boolean
   isMobile: boolean
-  selected: boolean
-  decisionPosition: string | undefined
-  onSelectDecision: (seq: number) => void
   message: ChatItem
   imageSources?: Readonly<Record<string, string | null>>
   pendingAction: PendingPermissionActionState
@@ -71,9 +67,6 @@ export function renderConversationMessage({
   actions,
   actionsReady,
   isMobile,
-  selected,
-  decisionPosition,
-  onSelectDecision,
   message,
   imageSources,
   conversationIndex,
@@ -236,26 +229,6 @@ export function renderConversationMessage({
           onAction('answer', { requestId: message.requestId, skip: true })
         }
         onOpenInTerminal={onOpenInTerminal}
-      />
-    )
-  }
-  if (message.type === 'decision') {
-    return (
-      <DecisionCard
-        {...(sessionId === undefined ? {} : { sessionId })}
-        decision={message}
-        variant="conversation"
-        selected={selected}
-        {...(decisionPosition === undefined
-          ? {}
-          : { position: decisionPosition })}
-        onSelect={() => {
-          onSelectDecision(message.seq)
-        }}
-        onOk={() => onAction(`decisions/${String(message.seq)}/ok`)}
-        onRequestChange={(comment) =>
-          onAction(`decisions/${String(message.seq)}/change`, { comment })
-        }
       />
     )
   }

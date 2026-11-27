@@ -18,6 +18,9 @@ beforeEach(() => {
   act(() => {
     root?.render(
       <InboxView
+        sort="priority"
+        sortStorageAvailable
+        onSortChange={() => undefined}
         sessions={[]}
         selectedId={null}
         loaded
@@ -26,6 +29,8 @@ beforeEach(() => {
         lastUpdatedAt={0}
         showAllInProgress={false}
         onShowMore={() => undefined}
+        showAllWaiting={false}
+        onShowMoreWaiting={() => undefined}
         onSelect={() => undefined}
         laterExpanded={false}
         onToggleLater={() => undefined}
@@ -35,6 +40,8 @@ beforeEach(() => {
         isMobile={false}
         inProgressExpanded={false}
         onToggleInProgress={() => undefined}
+        waitingExpanded
+        onToggleWaiting={() => undefined}
         doneExpanded={false}
         onToggleDone={() => undefined}
       />,

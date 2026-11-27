@@ -22,7 +22,8 @@ pub use branch::{
 pub use error::GitError;
 pub use github::{get_owner_repo, github_owner_and_repo};
 pub use repo::{
-    GitRepo, current_branch, fetch_with_prune, get_main_branch_for_repo, get_repo_owner_and_name,
-    get_repo_root, get_repo_root_in, open_repo, open_repo_at, parse_repo,
+    GitRepo, current_branch, fetch_with_prune, get_default_branch_for_repo,
+    get_main_branch_for_repo, get_repo_owner_and_name, get_repo_root, get_repo_root_in, open_repo,
+    open_repo_at, parse_repo,
 };
 pub(crate) use worktree_creation_lock::WorktreeCreationLock;
