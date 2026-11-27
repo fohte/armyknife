@@ -185,6 +185,25 @@ Body content is parsed as Markdown. http://example.com/日本語
   )
 })
 
+it('keeps closing details tags inside fenced and indented code blocks', () => {
+  const html = renderMessage(`<details open>
+<summary>Code samples</summary>
+
+~~~
+</details>
+~~~
+
+    </details>
+    Still indented.
+
+Still inside.
+</details>`)
+
+  expect(html).toBe(
+    '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Code samples</span></button><div class="markdown-details-body"><div class="syntax-code-block-container"><div class="syntax-code-block-toolbar"><span class="syntax-code-block-language">text</span><button class="syntax-code-block-copy-button" type="button" aria-label="Copy code" title="Copy code">Copy</button></div><pre class="syntax-code-block" data-language="text"><code class="language-text">&lt;/details&gt;\n</code></pre></div><div class="syntax-code-block-container"><div class="syntax-code-block-toolbar"><span class="syntax-code-block-language">text</span><button class="syntax-code-block-copy-button" type="button" aria-label="Copy code" title="Copy code">Copy</button></div><pre class="syntax-code-block" data-language="text"><code class="language-text">&lt;/details&gt;\nStill indented.\n</code></pre></div><p>Still inside.</p></div></div></div>',
+  )
+})
+
 it('renders br tags as line breaks in paragraphs and table cells', () => {
   const html = renderMessage(
     `before<br>middle<BR/>after<br />last

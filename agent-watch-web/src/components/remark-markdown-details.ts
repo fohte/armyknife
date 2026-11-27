@@ -10,6 +10,8 @@ const summaryOpenPattern = /^<summary\s*>$/i
 const summaryClosePattern = /^<\/summary\s*>$/i
 const inlineSummaryPattern = /^<summary\s*>(.*?)<\/summary\s*>$/i
 const codeFencePattern = /^ {0,3}(`{3,}|~{3,})/
+// The body parser reruns for each wrapper, so bound its work on nested input.
+const maxDetailsNesting = 32
 
 type MarkdownProcessor = {
   parse: (value: string) => unknown
@@ -109,6 +111,7 @@ function findDetailsClose(lines: readonly string[], start: number) {
   for (let index = start; index < lines.length; index += 1) {
     const rawLine = lineAt(lines, index)
     const line = rawLine.trim()
+    const isIndentedCode = /^(?: {4,}|\t)/.test(rawLine)
     if (fence !== null) {
       const closingFence = new RegExp(
         `^${fence.marker}{${String(fence.length)},}\\s*$`,
@@ -139,10 +142,12 @@ function findDetailsClose(lines: readonly string[], start: number) {
       continue
     }
 
-    if (detailsOpenPattern.test(line)) depth += 1
-    if (detailsClosePattern.test(line)) {
-      depth -= 1
-      if (depth === 0) return index
+    if (!isIndentedCode) {
+      if (detailsOpenPattern.test(line)) depth += 1
+      if (detailsClosePattern.test(line)) {
+        depth -= 1
+        if (depth === 0) return index
+      }
     }
   }
 
@@ -162,7 +167,11 @@ function parseSummary(source: string, parse: MarkdownParser) {
   } satisfies MarkdownNode
 }
 
-function parseDetailsSource(source: string, parse: MarkdownParser) {
+function parseDetailsSource(
+  source: string,
+  parse: MarkdownParser,
+  nestingLevel: number,
+) {
   const lines = source.split('\n')
   const firstLine = lines.findIndex((line) => line.trim() !== '')
   if (firstLine < 0) return null
@@ -216,7 +225,12 @@ function parseDetailsSource(source: string, parse: MarkdownParser) {
   const bodyLeadingWhitespace = rawBody.length - rawBody.trimStart().length
   const bodySource = rawBody.trim()
   const bodyTree = parse(bodySource)
-  const body = transformNodes(bodyTree.children, parse, bodySource)
+  const body = transformNodes(
+    bodyTree.children,
+    parse,
+    bodySource,
+    nestingLevel + 1,
+  )
   shiftNodeOffsets(body, bodyLeadingWhitespace + bodyStart)
   const summary = parseSummary(summaryText, parse)
   shiftNodeOffsets(summary.children, summaryOffset)
@@ -236,12 +250,17 @@ function transformNodes(
   nodes: MarkdownNode[],
   parse: MarkdownParser,
   source: string,
+  nestingLevel = 0,
 ) {
   const result: MarkdownNode[] = []
   for (let index = 0; index < nodes.length; index += 1) {
     const node = nodes[index]
     if (node === undefined) continue
-    if (node.type === 'html' && node.value !== undefined) {
+    if (
+      nestingLevel < maxDetailsNesting &&
+      node.type === 'html' &&
+      node.value !== undefined
+    ) {
       const openTag = (node.value.split('\n', 1)[0] ?? '').trim()
       const start = node.position?.start.offset
       if (start === undefined || !detailsOpenPattern.test(openTag)) {
@@ -256,7 +275,9 @@ function transformNodes(
           ? null
           : suffixLines.slice(0, closeLine + 1).join('\n')
       const details =
-        detailsSource === null ? null : parseDetailsSource(detailsSource, parse)
+        detailsSource === null
+          ? null
+          : parseDetailsSource(detailsSource, parse, nestingLevel)
       if (details !== null) {
         shiftNodeOffsets([details], start)
         result.push(details)
@@ -272,7 +293,7 @@ function transformNodes(
     }
 
     if (node.children !== undefined) {
-      node.children = transformNodes(node.children, parse, source)
+      node.children = transformNodes(node.children, parse, source, nestingLevel)
     }
     result.push(node)
   }
