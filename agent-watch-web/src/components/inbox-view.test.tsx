@@ -5,6 +5,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 import { InboxView } from '#components/inbox-view'
+import { INBOX_SORT_STORAGE_KEY } from '#inbox-sort'
 import type { Session } from '#types'
 
 let container: HTMLDivElement
@@ -278,6 +279,7 @@ function checkboxSnapshot() {
 
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  localStorage.removeItem(INBOX_SORT_STORAGE_KEY)
   container = document.createElement('div')
   document.body.append(container)
 })
@@ -303,6 +305,54 @@ it('filters each inbox section and updates the visible counts', () => {
       'Document request limits',
     ],
     resultCount: '1 of 2',
+  })
+})
+
+it('keeps Inbox categories and groups their sessions by project when selected', () => {
+  renderInbox()
+
+  const trigger = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Sort Priority"]',
+  )
+  if (trigger !== null) {
+    act(() => {
+      trigger.click()
+    })
+  }
+  const projectOption = container.querySelector<HTMLButtonElement>(
+    '[role="menuitemradio"][aria-checked="false"]:last-child',
+  )
+  if (projectOption !== null) {
+    act(() => {
+      projectOption.click()
+    })
+  }
+
+  const projectSortSnapshot = () => ({
+    headings: Array.from(container.querySelectorAll('.section-heading')).map(
+      (heading) =>
+        Array.from(heading.children)
+          .filter((child) => !child.matches('button'))
+          .map((child) => child.textContent)
+          .join(''),
+    ),
+    projectHeadings: Array.from(
+      container.querySelectorAll('.inbox-project-heading'),
+      (heading) => heading.textContent,
+    ),
+    categorySessionCounts: [
+      container.querySelectorAll('.needs-action-section .session-row').length,
+      container.querySelectorAll('.in-progress-section .session-row').length,
+      container.querySelectorAll('.done-section .session-row').length,
+      container.querySelectorAll('.later-session-list .session-row').length,
+    ],
+    savedSort: localStorage.getItem(INBOX_SORT_STORAGE_KEY),
+  })
+  expect(projectSortSnapshot()).toEqual({
+    headings: ['Needs action2', 'In progress1', 'Done1'],
+    projectHeadings: ['web-app', 'worker', 'web-app', 'web-app', 'web-app'],
+    categorySessionCounts: [2, 1, 1, 1],
+    savedSort: 'project',
   })
 })
 

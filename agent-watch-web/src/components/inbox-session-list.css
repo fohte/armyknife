@@ -1,0 +1,11 @@
+.inbox-project-heading {
+  display: flex;
+  height: 24px;
+  align-items: flex-end;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0 18px 2px;
+  color: var(--aw-text-muted);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
