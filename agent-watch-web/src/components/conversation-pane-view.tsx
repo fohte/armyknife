@@ -374,7 +374,10 @@ export function ConversationPaneView({
       onDrop={onDrop}
     >
       {fileDropActive || isFileDragActive ? (
-        <FileDropIndicator className="conversation-drop-target" />
+        <FileDropIndicator
+          className="conversation-drop-target"
+          label="Drop images to attach"
+        />
       ) : null}
       <ConversationPaneHeader
         key={session.id}

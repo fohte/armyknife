@@ -1,6 +1,14 @@
 import '#components/file-drop-indicator.css'
 
-export function FileDropIndicator({ className }: { className?: string }) {
+import { Plus } from 'lucide-react'
+
+export function FileDropIndicator({
+  label,
+  className,
+}: {
+  label: string
+  className?: string
+}) {
   return (
     <div
       className={
@@ -10,7 +18,8 @@ export function FileDropIndicator({ className }: { className?: string }) {
       }
       role="status"
     >
-      Drop files to attach
+      <Plus aria-hidden="true" size={22} />
+      <span>{label}</span>
     </div>
   )
 }

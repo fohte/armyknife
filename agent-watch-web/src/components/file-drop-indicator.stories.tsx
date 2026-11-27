@@ -4,6 +4,7 @@ import { FileDropIndicator } from '#components/file-drop-indicator'
 
 const meta = {
   component: FileDropIndicator,
+  args: { label: 'Drop images to attach' },
 } satisfies Meta<typeof FileDropIndicator>
 
 export default meta
