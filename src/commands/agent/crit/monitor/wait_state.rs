@@ -17,14 +17,14 @@ const CRIT_CLIENT_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 pub(super) fn crit_client_waiting(
     port: u16,
     daemon_pid: u32,
-    announced: Result<bool>,
+    recorded_client_alive: Result<bool>,
     run_with_timeout: impl FnOnce(
         std::process::Command,
         Duration,
     ) -> std::io::Result<std::process::Output>,
 ) -> Result<bool> {
     client_waiting_from(
-        announced,
+        recorded_client_alive,
         || crit_client_pids_on_port(port, daemon_pid, run_with_timeout),
         |pid| {
             if let Err(error) = super::clients::record_client_if_monitored(port, pid) {
@@ -40,13 +40,12 @@ pub(super) fn crit_client_waiting(
 }
 
 fn client_waiting_from(
-    announced: Result<bool>,
+    recorded_client_alive: Result<bool>,
     lsof_clients: impl FnOnce() -> Result<Vec<u32>>,
     mut record: impl FnMut(u32),
 ) -> Result<bool> {
-    // A live client with a pid file (announced or found by lsof) settles the answer without
-    // paying for lsof.
-    if matches!(announced, Ok(true)) {
+    // A live recorded client settles the answer without paying for lsof.
+    if matches!(recorded_client_alive, Ok(true)) {
         return Ok(true);
     }
     let found = lsof_clients()?;
@@ -57,7 +56,7 @@ fn client_waiting_from(
         record(*pid);
     }
     // An unreadable pid directory stays unknown unless lsof finds a client.
-    Ok(!found.is_empty() || announced?)
+    Ok(!found.is_empty() || recorded_client_alive?)
 }
 
 fn crit_client_pids_on_port(
