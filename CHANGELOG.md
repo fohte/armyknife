@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.972](https://github.com/fohte/armyknife/compare/v0.1.971...v0.1.972) (2026-11-27)
+
+
+### Features
+
+* **agent-watch-web:** match drop overlay design ([#2374](https://github.com/fohte/armyknife/issues/2374)) ([f04ee0b](https://github.com/fohte/armyknife/commit/f04ee0b28b8a336843aa0a863c3e9ab38dab6b4c))
+
 ## [0.1.971](https://github.com/fohte/armyknife/compare/v0.1.970...v0.1.971) (2026-11-27)
 
 
