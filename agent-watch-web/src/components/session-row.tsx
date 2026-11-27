@@ -57,7 +57,7 @@ type SessionRowProps = {
 function RepositoryLabel({ repository }: { repository: string }) {
   const repositoryRef = useRef<HTMLSpanElement>(null)
   const measureRef = useRef<HTMLSpanElement>(null)
-  const clippedPrefixWidthRef = useRef(0)
+  const clippedAtAvailableWidthRef = useRef<number | null>(null)
   const [shortenOwner, setShortenOwner] = useState(false)
   const separator = repository.lastIndexOf('/')
   const isPlaceholder = repository === '—'
@@ -75,7 +75,13 @@ function RepositoryLabel({ repository }: { repository: string }) {
       return
     }
 
-    clippedPrefixWidthRef.current = 0
+    clippedAtAvailableWidthRef.current = null
+    const ownerElement = repositoryElement.querySelector<HTMLElement>(
+      '.session-repo-owner',
+    )
+    const ownerSeparatorElement = repositoryElement.querySelector<HTMLElement>(
+      '.session-repo-owner-separator',
+    )
     let active = true
     const update = () => {
       if (!active) return
@@ -107,30 +113,11 @@ function RepositoryLabel({ repository }: { repository: string }) {
         parentElement?.classList.contains('session-repo-line') === true
       const isMetaLine =
         parentElement?.classList.contains('session-meta-line') === true
-      const ownerElement = repositoryElement.querySelector<HTMLElement>(
-        '.session-repo-owner',
-      )
-      const ownerSeparatorElement =
-        repositoryElement.querySelector<HTMLElement>(
-          '.session-repo-owner-separator',
-        )
-      const clippedPrefixWidth =
-        Math.max(
-          (ownerElement?.scrollWidth ?? 0) - (ownerElement?.clientWidth ?? 0),
-          0,
-        ) +
-        Math.max(
-          (ownerSeparatorElement?.scrollWidth ?? 0) -
-            (ownerSeparatorElement?.clientWidth ?? 0),
-          0,
-        )
-      const ownerPrefixIsClipped = clippedPrefixWidth > 0
-      if (ownerPrefixIsClipped) {
-        clippedPrefixWidthRef.current = Math.max(
-          clippedPrefixWidthRef.current,
-          clippedPrefixWidth,
-        )
-      }
+      const ownerPrefixIsClipped =
+        (ownerElement !== null &&
+          ownerElement.scrollWidth > ownerElement.clientWidth) ||
+        (ownerSeparatorElement !== null &&
+          ownerSeparatorElement.scrollWidth > ownerSeparatorElement.clientWidth)
       const metaSiblings = isMetaLine
         ? Array.from(parentElement.children).filter(
             (child): child is HTMLElement =>
@@ -171,26 +158,41 @@ function RepositoryLabel({ repository }: { repository: string }) {
             metaSiblingWidth -
             columnGap * metaGapCount
           : repositoryElement.clientWidth
+      if (ownerPrefixIsClipped) {
+        clippedAtAvailableWidthRef.current = Math.max(
+          clippedAtAvailableWidthRef.current ?? 0,
+          availableWidth,
+        )
+      }
       const isOwnerShortened =
         repositoryElement.classList.contains('is-owner-shortened')
+      const isStillAtClippedWidth =
+        isOwnerShortened &&
+        clippedAtAvailableWidthRef.current !== null &&
+        availableWidth <= clippedAtAvailableWidthRef.current
       const repositoryWidth = measureElement.getBoundingClientRect().width
       const shouldShorten =
         ownerPrefixIsClipped ||
         repositoryWidth > availableWidth + (isOwnerShortened ? 0 : 1) ||
-        // Reserve the observed clip as slack because flex widths round independently.
-        (isOwnerShortened &&
-          clippedPrefixWidthRef.current > 0 &&
-          repositoryWidth + clippedPrefixWidthRef.current + 1 > availableWidth)
-      if (!shouldShorten) clippedPrefixWidthRef.current = 0
+        isStillAtClippedWidth
+      if (!shouldShorten) clippedAtAvailableWidthRef.current = null
       setShortenOwner(shouldShorten)
     }
 
     update()
     const observer = new ResizeObserver(update)
     observer.observe(repositoryElement)
-    if (repositoryElement.parentElement !== null) {
-      observer.observe(repositoryElement.parentElement)
+    const lineElement = repositoryElement.parentElement
+    if (lineElement !== null) {
+      observer.observe(lineElement)
+      for (const sibling of lineElement.children) {
+        if (sibling instanceof HTMLElement && sibling !== repositoryElement) {
+          observer.observe(sibling)
+        }
+      }
     }
+    if (ownerElement !== null) observer.observe(ownerElement)
+    if (ownerSeparatorElement !== null) observer.observe(ownerSeparatorElement)
     const rowElement = repositoryElement.closest('.session-row-content')
     if (rowElement !== null) {
       observer.observe(rowElement)

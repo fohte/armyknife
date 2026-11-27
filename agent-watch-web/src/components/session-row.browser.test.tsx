@@ -424,9 +424,8 @@ it('shortens a clipped owner within the one-pixel repository fit tolerance', asy
       repositoryWidth <= availableWidth() + 1,
     repository: repository.querySelector('.session-repo-label')?.textContent,
     repositoryTitle: repository.title,
-    ownerMarkerVisible:
-      repositoryOwner.textContent === '…' &&
-      repositoryOwner.getBoundingClientRect().width > 0,
+    owner: repositoryOwner.textContent,
+    ownerVisible: repositoryOwner.getBoundingClientRect().width > 0,
     ownerSeparatorVisible:
       repositoryOwnerSeparator.getBoundingClientRect().width > 0,
   })
@@ -439,14 +438,16 @@ it('shortens a clipped owner within the one-pixel repository fit tolerance', asy
       repositoryIsWithinToleranceButDoesNotFit: true,
       repository: '…/service',
       repositoryTitle: 'example-team/service',
-      ownerMarkerVisible: true,
+      owner: '…',
+      ownerVisible: true,
       ownerSeparatorVisible: true,
     },
     {
       repositoryIsWithinToleranceButDoesNotFit: false,
       repository: 'example-team/service',
       repositoryTitle: 'example-team/service',
-      ownerMarkerVisible: true,
+      owner: 'example-team',
+      ownerVisible: true,
       ownerSeparatorVisible: true,
     },
   ])
