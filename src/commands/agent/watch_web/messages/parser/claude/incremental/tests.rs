@@ -581,15 +581,17 @@ fn assert_append_matches_full_parse_at_record_boundary(
     let actual = incremental_result(prefix.as_bytes(), suffix.as_bytes());
     if let Some(expected_append) = expected_append {
         assert_eq!(
-            actual.0, expected_append,
+            actual,
+            (expected_append, expected.clone()),
+            "{context}: append at the record boundary",
+        );
+    } else {
+        assert_eq!(
+            actual.1,
+            expected.clone(),
             "{context}: append at the record boundary",
         );
     }
-    assert_eq!(
-        actual.1,
-        expected.clone(),
-        "{context}: append at the record boundary",
-    );
     assert_incremental_matches_full_parse_at_every_split_point(
         &transcript,
         &expected,
@@ -1307,14 +1309,12 @@ fn generated_transcripts_match_full_parse_at_record_byte_and_three_chunk_splits(
         {"type":"assistant","uuid":"fixture-owner-a","parentUuid":null,"message":{"content":[{"type":"tool_use","id":"fixture-call-a","name":"Read","input":{"file_path":"/fixture/a.md"}}]}}
         {"type":"assistant","uuid":"fixture-owner-b","parentUuid":"fixture-owner-a","message":{"content":[{"type":"tool_use","id":"fixture-call-b","name":"Read","input":{"file_path":"/fixture/b.md"}},{"type":"tool_use","id":"fixture-call-c","name":"Read","input":{"file_path":"/fixture/c.md"}}]}}
         {"type":"user","uuid":"fixture-result-a","parentUuid":"fixture-owner-a","sourceToolAssistantUUID":"fixture-owner-a","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-call-a","content":"first result"}]}}
-        {"type":"user","uuid":"fixture-result-b","parentUuid":"fixture-result-a","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-call-b","content":"second result"}]}}
-        {"type":"assistant","uuid":"fixture-followup","parentUuid":"fixture-result-a","message":{"content":[{"type":"text","text":"The first result is ready."}]}}
     "#},
     indoc! {r#"
-        {"type":"user","uuid":"fixture-result-c","parentUuid":"fixture-owner-b","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-call-c","content":"third result"}]}}
+        {"type":"user","uuid":"fixture-result-b","parentUuid":"fixture-result-a","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-call-b","content":"second result"}]}}
     "#},
-    "result chain crosses tool owners",
-    None,
+    "result parent belongs to another tool owner",
+    Some(IncrementalAppend::RestartRequired),
 )]
 fn branch_ambiguities_match_full_parse_across_all_byte_splits(
     #[case] prefix: &str,

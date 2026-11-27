@@ -118,6 +118,7 @@ impl ClaudeBranchTracking {
         self.side_branch_tool_use_assistant_uuids.clear();
         self.valid_tool_result_uuids.clear();
         self.side_branch_assistant_uuids.clear();
+        self.tool_result_owner_uuids.clear();
     }
 }
 
