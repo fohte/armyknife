@@ -1,5 +1,54 @@
 # Changelog
 
+## [0.1.985](https://github.com/fohte/armyknife/compare/v0.1.984...v0.1.985) (2026-11-27)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** truncate long session labels ([#2371](https://github.com/fohte/armyknife/issues/2371)) ([4ac9182](https://github.com/fohte/armyknife/commit/4ac918288350e857f502a6a83c05102a07de3b54))
+
+## [0.1.984](https://github.com/fohte/armyknife/compare/v0.1.983...v0.1.984) (2026-11-27)
+
+
+### Features
+
+* **agent-watch:** accept files on session launch ([#2390](https://github.com/fohte/armyknife/issues/2390)) ([8cf9ea1](https://github.com/fohte/armyknife/commit/8cf9ea19a598b5b3be25be2204eb0def09f9037c))
+
+## [0.1.983](https://github.com/fohte/armyknife/compare/v0.1.982...v0.1.983) (2026-11-27)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show card images ([#2392](https://github.com/fohte/armyknife/issues/2392)) ([0305e8f](https://github.com/fohte/armyknife/commit/0305e8f520fd71c6b3f05838e91a6a7fde6d2da1))
+
+## [0.1.982](https://github.com/fohte/armyknife/compare/v0.1.981...v0.1.982) (2026-11-27)
+
+
+### Features
+
+* **agent-watch-web:** return close check details ([#2393](https://github.com/fohte/armyknife/issues/2393)) ([6c77722](https://github.com/fohte/armyknife/commit/6c777221781d97f35c734209a896aa95266d32c9))
+
+## [0.1.981](https://github.com/fohte/armyknife/compare/v0.1.980...v0.1.981) (2026-11-27)
+
+
+### Features
+
+* **agent-watch-web:** add pane snapshot API ([#2385](https://github.com/fohte/armyknife/issues/2385)) ([6ba36d2](https://github.com/fohte/armyknife/commit/6ba36d2a91c03caa3363dca6f5e65a7ab240b099))
+
+## [0.1.980](https://github.com/fohte/armyknife/compare/v0.1.979...v0.1.980) (2026-11-27)
+
+
+### Features
+
+* **agent-watch-web:** apply Composer to replies ([#2383](https://github.com/fohte/armyknife/issues/2383)) ([15a6f45](https://github.com/fohte/armyknife/commit/15a6f45ab5fa1991c7d9654c5b8154049da5058d))
+
+## [0.1.979](https://github.com/fohte/armyknife/compare/v0.1.978...v0.1.979) (2026-11-27)
+
+
+### Features
+
+* **agent/watch-web:** push session updates ([#2379](https://github.com/fohte/armyknife/issues/2379)) ([24c18ed](https://github.com/fohte/armyknife/commit/24c18edb99c62d7eb0d57a240828a8c380482b20))
+
 ## [0.1.978](https://github.com/fohte/armyknife/compare/v0.1.977...v0.1.978) (2026-11-27)
 
 

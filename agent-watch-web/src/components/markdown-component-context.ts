@@ -12,6 +12,7 @@ export type MarkdownComponentContextValue = {
   onSelectSession?: (id: string) => void
   webUis: readonly WebUiLinkTarget[]
   imageSources?: Readonly<Record<string, string | null>>
+  unmappedImagePathsAreLocal?: boolean
   onOpenWebUi?: (webUi: WebUiLinkTarget, url: string) => void
   mobile?: boolean
   commandContext?: {

@@ -324,7 +324,7 @@ it('uses the shared compact row without a starred marker', () => {
           ?.getAttribute('aria-label'),
         engine: row.querySelector('.session-engine')?.textContent,
         task: row.querySelector('.session-task')?.textContent,
-        repo: row.querySelector('.session-repo')?.textContent,
+        repo: row.querySelector('.session-repo-label')?.textContent,
       }),
     ),
     starMarkers: container.querySelectorAll('.today-star').length,

@@ -4268,10 +4268,18 @@ it.each([
     checks: {
       path: '/worktrees/example-unmerged',
       files: [],
+      changes: [],
+      commits: [
+        {
+          sha: '1111111111111111111111111111111111111111',
+          subject: 'add example implementation',
+        },
+      ],
       branch: 'feature/example-unmerged',
       merged: false,
       reason: 'The example pull request is still open.',
       processes: [],
+      commitInspectionUnavailable: false,
       processInspectionUnavailable: false,
     },
     summary: 'Left in the worktree: branch not merged',
@@ -4285,10 +4293,13 @@ it.each([
     checks: {
       path: '/worktrees/example-dirty',
       files: ['src/example.ts'],
+      changes: [{ status: 'M', path: 'src/example.ts' }],
+      commits: [],
       branch: 'feature/example-dirty',
       merged: true,
       reason: null,
       processes: [],
+      commitInspectionUnavailable: false,
       processInspectionUnavailable: false,
     },
     summary: 'Left in the worktree: 1 uncommitted file',
@@ -4302,10 +4313,13 @@ it.each([
     checks: {
       path: '/worktrees/example-busy',
       files: [],
+      changes: [],
+      commits: [],
       branch: 'feature/example-busy',
       merged: true,
       reason: null,
       processes: [{ pid: 12345, name: 'example-server' }],
+      commitInspectionUnavailable: false,
       processInspectionUnavailable: false,
     },
     summary: 'Left in the worktree: 1 running process',
@@ -4319,10 +4333,13 @@ it.each([
     checks: {
       path: '/worktrees/example-unknown',
       files: [],
+      changes: [],
+      commits: [],
       branch: null,
       merged: null,
       reason: null,
       processes: [],
+      commitInspectionUnavailable: false,
       processInspectionUnavailable: true,
     },
     summary: 'Left in the worktree: process inspection unavailable',
@@ -4405,6 +4422,16 @@ it('shows every close check in Activity and opens the failed worktree in a termi
   const checks = {
     path: '/worktrees/example-project',
     files: ['src/example.ts', 'src/example.test.ts'],
+    changes: [
+      { status: 'M', path: 'src/example.ts' },
+      { status: 'A', path: 'src/example.test.ts' },
+    ],
+    commits: [
+      {
+        sha: '1111111111111111111111111111111111111111',
+        subject: 'add fictional example coverage',
+      },
+    ],
     branch: 'feature/example-work',
     merged: false,
     reason: 'The example pull request is still open.',
@@ -4412,6 +4439,7 @@ it('shows every close check in Activity and opens the failed worktree in a termi
       { pid: 12345, name: 'example-server' },
       { pid: 23456, name: 'example-watcher' },
     ],
+    commitInspectionUnavailable: false,
     processInspectionUnavailable: false,
   }
   const closeBodies: unknown[] = []
@@ -4550,10 +4578,18 @@ it('offers a keep-worktree retry after a non-Done session close fails', async ()
               checks: {
                 path: '/worktrees/example-session',
                 files: [],
+                changes: [],
+                commits: [
+                  {
+                    sha: '1111111111111111111111111111111111111111',
+                    subject: 'add example implementation',
+                  },
+                ],
                 branch: 'feature/example-session',
                 merged: false,
                 reason: 'The example pull request is still open.',
                 processes: [],
+                commitInspectionUnavailable: false,
                 processInspectionUnavailable: false,
               },
             }),
@@ -6410,6 +6446,10 @@ it('advances elapsed time for all rows with one shared timer', async () => {
       session('session-b', 'Working session', 'in_progress', 30),
     ],
   })
+  await act(async () => {
+    await document.fonts.ready
+    await vi.advanceTimersByTimeAsync(32)
+  })
   const before = Array.from(
     container.querySelectorAll<HTMLElement>('.session-age'),
     (element) => element.textContent,
@@ -6456,7 +6496,7 @@ it('advances elapsed time for all rows with one shared timer', async () => {
   )
 
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(1_000)
+    await vi.advanceTimersByTimeAsync(1_968)
   })
 
   const snapshot = () => ({

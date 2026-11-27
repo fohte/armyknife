@@ -311,7 +311,8 @@ it('shows the primary task and the count of other linked tasks on a card', () =>
   const rowSnapshot = () => ({
     title: container.querySelector('.board-card .session-title')?.textContent,
     task: container.querySelector('.board-card .session-task')?.textContent,
-    repo: container.querySelector('.board-card .session-repo')?.textContent,
+    repo: container.querySelector('.board-card .session-repo-label')
+      ?.textContent,
   })
   expect(rowSnapshot()).toEqual({
     title: 'Document the deployment procedure',
@@ -332,7 +333,8 @@ it('shows the task placeholder on cards without an assigned task', () => {
 
   const rowSnapshot = () => ({
     task: container.querySelector('.board-card .session-task')?.textContent,
-    repo: container.querySelector('.board-card .session-repo')?.textContent,
+    repo: container.querySelector('.board-card .session-repo-label')
+      ?.textContent,
   })
   expect(rowSnapshot()).toEqual({ task: '— No task', repo: 'example/service' })
 })

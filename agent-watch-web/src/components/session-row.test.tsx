@@ -110,7 +110,7 @@ function snapshot() {
     engine: container.querySelector('.session-engine')?.textContent ?? null,
     task: task?.textContent,
     repositoryLines: Array.from(
-      container.querySelectorAll('.session-repo'),
+      container.querySelectorAll('.session-repo-label'),
       (repo) => repo.textContent,
     ),
   }

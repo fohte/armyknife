@@ -178,8 +178,7 @@
 }
 
 .session-row-content .session-engine,
-.session-row-content .session-task-reference,
-.session-row-content .session-repo {
+.session-row-content .session-task-reference {
   flex: none;
   font-family: var(--font-mono);
 }
@@ -209,26 +208,90 @@
 }
 
 .session-row-content .session-repo {
+  position: relative;
+  display: flex;
+  min-width: 10ch;
+  flex: 0 1 auto;
+  align-items: center;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+.session-row-content.density-full .session-repo {
+  flex: 1 1 0;
+  max-width: max-content;
+  min-width: 10ch;
+  margin-left: auto;
+}
+
+.session-row-content .session-repo.is-owner-shortened {
+  min-width: 12ch;
+}
+
+.session-row-content .session-repo-label {
+  display: flex;
+  min-width: 10ch;
+  max-width: 100%;
+  flex: 0 1 auto;
+  overflow: hidden;
+}
+
+.session-row-content .session-repo-owner,
+.session-row-content .session-repo-owner-separator {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.session-row-content .session-repo.is-owner-shortened .session-repo-owner,
+.session-row-content
+  .session-repo.is-owner-shortened
+  .session-repo-owner-separator {
+  flex: 0 0 auto;
+}
+
+.session-row-content .session-repo-name {
+  min-width: 10ch;
+  flex: 1 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+}
+
+.session-row-content .session-repo.is-placeholder,
+.session-row-content .session-repo.is-placeholder .session-repo-label,
+.session-row-content .session-repo.is-placeholder .session-repo-name {
+  min-width: 0;
+}
+
+.session-row-content .session-repo-measure {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: max-content;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.session-row-content .session-branch-separator {
+  flex: none;
+  color: var(--aw-text-secondary);
 }
 
 .session-row-content .session-branch {
   overflow: hidden;
-  min-width: 0;
-  flex: 1 1 auto;
+  min-width: 7ch;
+  flex: 1 1 0;
   font-family: var(--font-mono);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.session-row-content.density-full .session-repo {
-  margin-left: auto;
-}
-
 .session-row-content.density-compact .session-repo-line {
   padding-left: 19px;
+}
+
+.session-row-content .session-repo-line .session-repo {
+  flex: 0 1 auto;
 }
 
 .session-row-content .session-decision-count {

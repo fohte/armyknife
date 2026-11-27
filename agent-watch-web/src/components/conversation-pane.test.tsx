@@ -3714,16 +3714,14 @@ it('ignores Alt-arrow shortcuts on mobile', () => {
 it('shows desktop newline shortcuts with the applicable interrupt hint', () => {
   const onAction = () => Promise.resolve(true)
   renderView(onAction)
-  const interruptibleHint = container.querySelector(
-    '.composer-footer > span',
+  const interruptibleHint =
+    container.querySelector('.composer-key-hint')?.textContent
+  const ownMessageHint = container.querySelector(
+    '.composer-key-hint2',
   )?.textContent
   renderView(onAction, session, undefined, [], { ...actions, interrupt: false })
-  const nonInterruptibleHint = container.querySelector(
-    '.composer-footer > span',
-  )?.textContent
-  const ownMessageHint = container.querySelectorAll(
-    '.composer-footer > span',
-  )[1]?.textContent
+  const nonInterruptibleHint =
+    container.querySelector('.composer-key-hint')?.textContent
 
   const snapshot = () => ({
     interruptibleHint,
@@ -3760,8 +3758,9 @@ it('keeps Enter for newlines and exposes mobile conversation actions', async () 
       enterEvent.defaultPrevented,
       shiftEnterEvent.defaultPrevented,
     ],
-    keyboardHint: container.querySelector('.composer-footer > span')
-      ?.textContent,
+    keyboardHint: container.querySelector('.composer-key-hint')?.textContent,
+    keyboardHint2:
+      container.querySelector('.composer-key-hint2')?.textContent ?? null,
     choiceShortcutBadges: container.querySelectorAll(
       '.chat-question-choices kbd',
     ).length,
@@ -3779,7 +3778,8 @@ it('keeps Enter for newlines and exposes mobile conversation actions', async () 
   expect(duringInterrupt).toEqual({
     actions: [['interrupt']],
     defaultPrevented: [false, false],
-    keyboardHint: undefined,
+    keyboardHint: '',
+    keyboardHint2: null,
     choiceShortcutBadges: 0,
     interruptLabel: 'Interrupting…',
     interruptBusy: 'true',
@@ -8183,8 +8183,8 @@ it('sends pasted file data with the message and keeps it when sending fails', as
   expect(
     await waitForState(
       () =>
-        container.querySelector('.attachment-preview-item span')
-          ?.textContent === file.name,
+        container.querySelector('.composer-attachment-name')?.textContent ===
+        file.name,
     ),
   ).toBe(true)
   act(() => {
@@ -8195,7 +8195,7 @@ it('sends pasted file data with the message and keeps it when sending fails', as
   const snapshot = () => ({
     actionCalls: onAction.mock.calls,
     attachmentNames: Array.from(
-      container.querySelectorAll('.attachment-preview-item span'),
+      container.querySelectorAll('.composer-attachment-name'),
       (element) => element.textContent,
     ),
   })
@@ -8247,7 +8247,7 @@ it('warns before leaving after its conversation pane unmounts', async () => {
   })
   expect(
     await waitForState(
-      () => container.querySelector('.attachment-preview-item') !== null,
+      () => container.querySelector('.composer-attachment') !== null,
     ),
   ).toBe(true)
   const event = new Event('beforeunload', { cancelable: true })
@@ -8303,7 +8303,7 @@ it('warns before leaving while an attachment is being processed', async () => {
     await Promise.resolve()
   })
   await waitForState(
-    () => container.querySelector('.attachment-preview-item') !== null,
+    () => container.querySelector('.composer-attachment') !== null,
   )
   const whileQueued = new Event('beforeunload', { cancelable: true })
   act(() => {
@@ -8339,8 +8339,9 @@ it('attaches dropped files through the composer and sends their data', async () 
   expect(
     await waitForState(
       () =>
-        container.querySelector('.attachment-preview-item span')
-          ?.textContent === file.name,
+        container
+          .querySelector('.composer-attachment-image')
+          ?.getAttribute('alt') === file.name,
     ),
   ).toBe(true)
   const textarea = requireElement(
@@ -8353,7 +8354,7 @@ it('attaches dropped files through the composer and sends their data', async () 
     await waitForState(
       () =>
         onAction.mock.calls.length === 1 &&
-        container.querySelector('.attachment-preview-item') === null,
+        container.querySelector('.composer-attachment') === null,
     ),
   ).toBe(true)
 
@@ -8363,7 +8364,7 @@ it('attaches dropped files through the composer and sends their data', async () 
       container.querySelector('.conversation-drop-target')?.textContent ?? null,
     dropPrevented: drop.defaultPrevented,
     attachmentNames: Array.from(
-      container.querySelectorAll('.attachment-preview-item span'),
+      container.querySelectorAll('.composer-attachment-name'),
       (element) => element.textContent,
     ),
     actionCalls: onAction.mock.calls,
@@ -8452,12 +8453,9 @@ it('attaches files dropped on a proposal comment without activating the conversa
       ),
       (element) => element.textContent,
     ),
-    composerAttachmentNames: Array.from(
-      container.querySelectorAll(
-        '.conversation-composer .attachment-preview-item span',
-      ),
-      (element) => element.textContent,
-    ),
+    composerAttachmentCount: container.querySelectorAll(
+      '.conversation-composer .composer-attachment',
+    ).length,
     actionCalls: onAction.mock.calls,
   })
   expect(snapshot()).toEqual({
@@ -8470,7 +8468,7 @@ it('attaches files dropped on a proposal comment without activating the conversa
     targetAfterDragOver: 'Drop files to attach',
     targetAfterDrop: null,
     commentAttachmentNames: ['dropped.png'],
-    composerAttachmentNames: [],
+    composerAttachmentCount: 0,
     actionCalls: [],
   })
 })
@@ -8524,8 +8522,8 @@ it('clears pasted attachments after a successful send', async () => {
   expect(
     await waitForState(
       () =>
-        container.querySelector('.attachment-preview-item span')
-          ?.textContent === file.name,
+        container.querySelector('.composer-attachment-name')?.textContent ===
+        file.name,
     ),
   ).toBe(true)
   act(() => {
@@ -8535,14 +8533,14 @@ it('clears pasted attachments after a successful send', async () => {
     await waitForState(
       () =>
         onAction.mock.calls.length === 1 &&
-        container.querySelector('.attachment-preview-item') === null,
+        container.querySelector('.composer-attachment') === null,
     ),
   ).toBe(true)
 
   const snapshot = () => ({
     actionCalls: onAction.mock.calls,
     attachmentNames: Array.from(
-      container.querySelectorAll('.attachment-preview-item span'),
+      container.querySelectorAll('.composer-attachment-name'),
       (element) => element.textContent,
     ),
   })
@@ -8594,7 +8592,7 @@ it('names the attachment that crosses the message size limit before sending', as
   })
   expect(
     await waitForState(
-      () => container.querySelectorAll('.attachment-preview-item').length === 2,
+      () => container.querySelectorAll('.composer-attachment').length === 2,
     ),
   ).toBe(true)
   act(() => {
@@ -8611,7 +8609,7 @@ it('names the attachment that crosses the message size limit before sending', as
   const snapshot = () => ({
     error: container.querySelector('[role="alert"]')?.textContent ?? null,
     attachmentNames: Array.from(
-      container.querySelectorAll('.attachment-preview-item span'),
+      container.querySelectorAll('.composer-attachment-name'),
       (element) => element.textContent,
     ),
     actionCalls: onAction.mock.calls,
@@ -8643,7 +8641,7 @@ it('names and blocks the attachment that crosses the attachment count limit', as
   expect(
     await waitForState(
       () =>
-        container.querySelectorAll('.attachment-preview-item').length ===
+        container.querySelectorAll('.composer-attachment').length ===
         files.length,
     ),
   ).toBe(true)
@@ -8661,7 +8659,7 @@ it('names and blocks the attachment that crosses the attachment count limit', as
   const snapshot = () => ({
     error: container.querySelector('[role="alert"]')?.textContent ?? null,
     attachmentNames: Array.from(
-      container.querySelectorAll('.attachment-preview-item span'),
+      container.querySelectorAll('.composer-attachment-name'),
       (element) => element.textContent,
     ),
     actionCalls: onAction.mock.calls,
@@ -8749,8 +8747,8 @@ it('shows a server attachment validation error and retains the rejected attachme
   expect(
     await waitForState(
       () =>
-        container.querySelector('.attachment-preview-item span')
-          ?.textContent === file.name,
+        container.querySelector('.composer-attachment-name')?.textContent ===
+        file.name,
     ),
   ).toBe(true)
   act(() => {
@@ -8762,14 +8760,14 @@ it('shows a server attachment validation error and retains the rejected attachme
         container.querySelector('[role="alert"]')?.textContent ===
           'file attachment data is invalid' &&
         fetcher.mock.calls.length === 3 &&
-        container.querySelector('.attachment-preview-item span')
-          ?.textContent === file.name,
+        container.querySelector('.composer-attachment-name')?.textContent ===
+          file.name,
     ),
   ).toBe(true)
 
   const snapshot = () => ({
     error: container.querySelector('[role="alert"]')?.textContent ?? null,
-    attachmentName: container.querySelector('.attachment-preview-item span')
+    attachmentName: container.querySelector('.composer-attachment-name')
       ?.textContent,
     postBody: normalizeQueuedMessagePostBody(fetcher.mock.calls[2]?.[1]?.body),
   })
@@ -8873,8 +8871,9 @@ it('waits for pasted image optimization and sends the optimized attachment', asy
   expect(
     await waitForState(
       () =>
-        container.querySelector('.attachment-preview-item span')
-          ?.textContent === 'photo.jpg' && !sendButton.disabled,
+        container
+          .querySelector('.composer-attachment-image')
+          ?.getAttribute('alt') === 'photo.jpg' && !sendButton.disabled,
     ),
   ).toBe(true)
   act(() => {
@@ -9157,9 +9156,7 @@ it('blocks duplicate sends and shows their pending status', async () => {
     buttonDisabled: sendButton.disabled,
     defaultPrevented: events.map((event) => event.defaultPrevented),
     draft: textarea.value,
-    status:
-      container.querySelector('.composer-footer [role="status"]')
-        ?.textContent ?? null,
+    status: container.querySelector('.composer-status')?.textContent ?? null,
   })
   const pendingSnapshot = duringSend()
 
@@ -9173,9 +9170,7 @@ it('blocks duplicate sends and shows their pending status', async () => {
     afterSend: {
       buttonDisabled: sendButton.disabled,
       draft: textarea.value,
-      status:
-        container.querySelector('.composer-footer [role="status"]')
-          ?.textContent ?? null,
+      status: container.querySelector('.composer-status')?.textContent ?? null,
     },
   })
   const expected = {
@@ -10417,7 +10412,7 @@ it('shows an attachment size warning over a retained message send error', async 
     'limit-crossing.bin would exceed the 50 MiB attachment limit'
   const warningDisplayed = await waitForState(
     () =>
-      container.querySelectorAll('.attachment-preview-item').length === 2 &&
+      container.querySelectorAll('.composer-attachment').length === 2 &&
       container.querySelector('[role="alert"]')?.textContent === limitWarning,
   )
 
@@ -10432,7 +10427,7 @@ it('shows an attachment size warning over a retained message send error', async 
   })
   const retainedErrorRestored = await waitForState(
     () =>
-      container.querySelectorAll('.attachment-preview-item').length === 1 &&
+      container.querySelectorAll('.composer-attachment').length === 1 &&
       container.querySelector('[role="alert"]')?.textContent ===
         'The message could not be sent.',
   )
@@ -10526,7 +10521,7 @@ it('keeps a retained message error visible after an empty attachment error', asy
     void textarea.dispatchEvent(pasteEvent)
   })
   await waitForState(
-    () => container.querySelector('.attachment-preview-item') !== null,
+    () => container.querySelector('.composer-attachment') !== null,
   )
   await waitForState(
     () =>

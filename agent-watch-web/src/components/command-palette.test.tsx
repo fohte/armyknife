@@ -192,7 +192,7 @@ it('shows the primary task and the count of other linked tasks for a session', (
 
   const snapshot = () => ({
     task: container.querySelector('.session-task')?.textContent,
-    repo: container.querySelector('.session-repo')?.textContent,
+    repo: container.querySelector('.session-repo-label')?.textContent,
   })
   expect(snapshot()).toEqual({
     task: 'P1 #42 Improve notifications +1',
@@ -637,7 +637,7 @@ it('matches a session by branch name and renders the shared session row', () => 
   const snapshot = () => ({
     title: container.querySelector('.session-title')?.textContent,
     task: container.querySelector('.session-task')?.textContent,
-    repo: container.querySelector('.session-repo')?.textContent,
+    repo: container.querySelector('.session-repo-label')?.textContent,
     branch: container.querySelector('.session-branch')?.textContent,
   })
   expect(snapshot()).toEqual({
@@ -665,7 +665,7 @@ it.each([
 
     const snapshot = () => ({
       task: container.querySelector('.session-task')?.textContent,
-      repo: container.querySelector('.session-repo')?.textContent,
+      repo: container.querySelector('.session-repo-label')?.textContent,
       branch: container.querySelector('.session-branch')?.textContent ?? null,
     })
     expect(snapshot()).toEqual({
@@ -689,7 +689,7 @@ it('keeps the branch after the task when the repository is blank', () => {
 
   const snapshot = () => ({
     task: container.querySelector('.session-task')?.textContent,
-    repo: container.querySelector('.session-repo')?.textContent,
+    repo: container.querySelector('.session-repo-label')?.textContent,
     branch: container.querySelector('.session-branch')?.textContent,
   })
   expect(snapshot()).toEqual({

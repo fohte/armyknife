@@ -162,6 +162,8 @@ const desktopFailureAction = {
   checks: {
     path: '~/work/example-service',
     files: [],
+    changes: [],
+    commits: [],
     branch: 'feature/example-route',
     merged: true,
     reason: null,
@@ -169,6 +171,7 @@ const desktopFailureAction = {
       { pid: 23451, name: 'example server' },
       { pid: 23452, name: 'example worker' },
     ],
+    commitInspectionUnavailable: false,
     processInspectionUnavailable: false,
   },
   createdAt: 1_799_000_000_000,
