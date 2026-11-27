@@ -91,8 +91,9 @@ pub(super) fn run(args: &MonitorArgs) -> Result<()> {
     let mut clients_watch = clients::ClientsWatch::new(args.port)?;
     loop {
         while process::is_process_alive(watched_pid) {
-            // Runs on start, when a client is announced, and when one exits: lsof is only
-            // spawned if no announced client is alive, so it never runs on a timer.
+            // Re-evaluated on every wake (daemon or client exit, clients directory change); lsof
+            // runs only when no announced client is alive. A client that never announced itself
+            // is therefore seen only if one of these wakes happens while it is connected.
             let waiting = match crit_client_waiting(
                 args.port,
                 watched_pid,

@@ -66,13 +66,14 @@ impl ClientsWatch {
         })
     }
 
-    /// Looks at the clients directory again and reports whether a live client remains.
+    /// Creates the clients directory if needed, removes the pid files of exited clients, and
+    /// reports whether a live client remains. On error the watch forgets every client it knew.
     ///
     /// `exited` are pids whose exit event already arrived: `kill(pid, 0)` still reports such a
     /// process alive until its parent reaps it, and no further event would correct that.
     pub(super) fn scan(&mut self, exited: &[u32]) -> Result<bool> {
-        // A kqueue directory watch needs the directory to exist, and it is absent until the first
-        // client is announced and again after a stale one is discarded.
+        // The kqueue directory watch in `wait` needs the directory to exist, and other code may
+        // remove it at any time.
         let scanned = fs::create_dir_all(&self.dir)
             .with_context(|| {
                 format!(

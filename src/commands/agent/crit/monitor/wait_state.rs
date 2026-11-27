@@ -61,7 +61,7 @@ fn crit_client_waiting_on_port(
 
 fn crit_client_lsof_command(port: u16) -> std::process::Command {
     let mut command = ExternalTool::Lsof.command();
-    // `-a -c crit` keeps lsof from inspecting every process's fds on each poll.
+    // `-a -c crit` keeps lsof from inspecting every process's fds on each run.
     command.args([
         "-nP",
         "-a",
