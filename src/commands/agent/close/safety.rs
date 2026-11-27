@@ -233,6 +233,33 @@ mod tests {
     }
 
     #[rstest]
+    #[case::v2("v2")]
+    #[case::legacy("legacy")]
+    fn pending_work_error_omits_unlocked_older_review_markers(
+        mut session: Session,
+        #[case] format: &str,
+    ) {
+        session.pending_bg_task_ids.clear();
+        session.pending_agent_task_ids.clear();
+        session.pending_human_review_ids.clear();
+        let review_id = match format {
+            "v2" => ["review-id", "v2", "12345", "/fixture/review.md", "queue"].join("\0"),
+            "legacy" => "review-id\0/fixture/review.md".to_string(),
+            _ => unreachable!("test case uses a known marker format"),
+        };
+        session.pending_human_review_ids.insert(review_id);
+
+        assert_eq!(
+            pending_work_error(&session, &[]),
+            indoc! {"
+                Agent session `fixture-session` has pending background or agent tasks:
+                Finish the pending work, then retry this command.
+            "}
+            .trim_end(),
+        );
+    }
+
+    #[rstest]
     fn pending_work_error_lists_runtime_marker_task_details_without_exposing_marker(
         mut session: Session,
         pending_task: PendingTask,

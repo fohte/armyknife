@@ -135,7 +135,6 @@ fn review_document_marker_with(
     let (id, metadata) = review_id.split_once('\0')?;
     let mut fields = metadata.split('\0');
     let first = fields.next()?;
-    // A lockless legacy marker may still be queued; old formats do not record process identity.
     let (started_at, path, queue_key) = if first == "v3" {
         let started_at = fields.next().and_then(|value| value.parse::<u128>().ok())?;
         let path = fields.next()?;
@@ -155,7 +154,7 @@ fn review_document_marker_with(
     } else {
         (0, first, None)
     };
-    if path.is_empty() {
+    if path.is_empty() || (first != "v3" && !LockGuard::is_locked(Path::new(path))) {
         return None;
     }
     Some(ReviewDocumentMarker {
@@ -482,28 +481,41 @@ mod tests {
     }
 
     #[rstest]
-    #[case::v2(
-        concat!("legacy-id\0v2\0", "123", "\0/fixture/draft.md\0queue"),
-        ReviewDocumentMarker {
-            id: "legacy-id".to_string(),
-            path: PathBuf::from("/fixture/draft.md"),
-            queue_key: Some("queue".to_string()),
-            started_at: 123,
-        }
-    )]
-    #[case::legacy(
-        "legacy-id\0/fixture/draft.md",
-        ReviewDocumentMarker {
-            id: "legacy-id".to_string(),
-            path: PathBuf::from("/fixture/draft.md"),
-            queue_key: None,
-            started_at: 0,
-        }
-    )]
-    fn older_review_document_markers_remain_readable_without_a_lock(
-        #[case] review_id: &str,
-        #[case] expected: ReviewDocumentMarker,
+    #[case::v2_without_lock("v2", false)]
+    #[case::v2_with_lock("v2", true)]
+    #[case::legacy_without_lock("legacy", false)]
+    #[case::legacy_with_lock("legacy", true)]
+    fn older_review_document_markers_require_a_lock(
+        #[case] format: &str,
+        #[case] lock_active: bool,
+        review_marker_fixture: ReviewMarkerFixture,
     ) {
-        assert_eq!(review_document_marker(review_id), Some(expected));
+        let _lock = lock_active.then(|| {
+            LockGuard::acquire(&review_marker_fixture.draft_path)
+                .expect("review lock should be active")
+        });
+        let review_id = match format {
+            "v2" => [
+                "legacy-id".to_string(),
+                "v2".to_string(),
+                "123".to_string(),
+                review_marker_fixture.draft_path.display().to_string(),
+                "queue".to_string(),
+            ]
+            .join("\0"),
+            "legacy" => format!("legacy-id\0{}", review_marker_fixture.draft_path.display()),
+            _ => unreachable!("test case uses a known marker format"),
+        };
+        let expected = lock_active.then(|| ReviewDocumentMarker {
+            id: "legacy-id".to_string(),
+            path: review_marker_fixture.draft_path,
+            queue_key: (format == "v2").then(|| "queue".to_string()),
+            started_at: if format == "v2" { 123 } else { 0 },
+        });
+
+        assert_eq!(
+            review_document_marker_with(&review_id, |_, _| false),
+            expected
+        );
     }
 }
