@@ -108,7 +108,7 @@ const createMainWindow = () => {
     mainWindow = undefined
   })
 
-  installApplicationMenu(() => mainWindow)
+  installApplicationMenu()
   reportPromise(mainWindow.loadURL(target.url), 'failed to load watch-web')
   retryTimer = setInterval(() => void refreshConnection(), retryIntervalMs)
   void refreshConnection()

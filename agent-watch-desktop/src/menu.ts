@@ -1,8 +1,6 @@
-import { Menu, type BrowserWindow } from 'electron'
+import { BrowserWindow, Menu } from 'electron'
 
-export const installApplicationMenu = (
-  getWindow: () => BrowserWindow | undefined,
-) => {
+export const installApplicationMenu = () => {
   Menu.setApplicationMenu(
     Menu.buildFromTemplate([
       { role: 'appMenu' },
@@ -16,7 +14,8 @@ export const installApplicationMenu = (
             label: 'Back',
             accelerator: 'Cmd+[',
             click: () => {
-              const history = getWindow()?.webContents.navigationHistory
+              const history =
+                BrowserWindow.getFocusedWindow()?.webContents.navigationHistory
               if (history?.canGoBack()) history.goBack()
             },
           },
@@ -24,7 +23,8 @@ export const installApplicationMenu = (
             label: 'Forward',
             accelerator: 'Cmd+]',
             click: () => {
-              const history = getWindow()?.webContents.navigationHistory
+              const history =
+                BrowserWindow.getFocusedWindow()?.webContents.navigationHistory
               if (history?.canGoForward()) history.goForward()
             },
           },
