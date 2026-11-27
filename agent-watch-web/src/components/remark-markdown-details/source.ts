@@ -14,24 +14,26 @@ export function shiftMarkdownNodeOffsets(
   nodes: MarkdownNode[],
   offset: number,
 ) {
-  for (const node of nodes) {
+  const pending = [...nodes]
+  while (pending.length > 0) {
+    const node = pending.pop()
+    if (node === undefined) continue
     if (node.position !== undefined) {
-      const start = node.position.start.offset
-      const end = node.position.end.offset
+      const { start, end } = node.position
       node.position = {
         start: {
-          ...node.position.start,
-          ...(start === undefined ? {} : { offset: start + offset }),
+          ...start,
+          ...(start.offset === undefined
+            ? {}
+            : { offset: start.offset + offset }),
         },
         end: {
-          ...node.position.end,
-          ...(end === undefined ? {} : { offset: end + offset }),
+          ...end,
+          ...(end.offset === undefined ? {} : { offset: end.offset + offset }),
         },
       }
     }
-    if (node.children !== undefined) {
-      shiftMarkdownNodeOffsets(node.children, offset)
-    }
+    if (node.children !== undefined) pending.push(...node.children)
   }
 }
 
@@ -40,7 +42,14 @@ export function getReferenceDefinitionSources(
   source: string,
 ): ReferenceDefinitionSource[] {
   const definitions: ReferenceDefinitionSource[] = []
-  for (const node of nodes) {
+  const pending: MarkdownNode[] = []
+  for (let index = nodes.length - 1; index >= 0; index -= 1) {
+    const node = nodes[index]
+    if (node !== undefined) pending.push(node)
+  }
+  while (pending.length > 0) {
+    const node = pending.pop()
+    if (node === undefined) continue
     if (node.type === 'definition') {
       const start = node.position?.start.offset
       const end = node.position?.end.offset
@@ -49,10 +58,13 @@ export function getReferenceDefinitionSources(
       }
     }
     if (node.children !== undefined) {
-      definitions.push(...getReferenceDefinitionSources(node.children, source))
+      for (let index = node.children.length - 1; index >= 0; index -= 1) {
+        const child = node.children[index]
+        if (child !== undefined) pending.push(child)
+      }
     }
   }
-  return definitions.sort((left, right) => left.offset - right.offset)
+  return definitions
 }
 
 export function parseMarkdownSection(
@@ -61,20 +73,23 @@ export function parseMarkdownSection(
   referenceDefinitions: readonly ReferenceDefinitionSource[],
   sourceOffset: number,
 ) {
-  const precedingDefinitions = referenceDefinitions.filter(
-    (definition) => definition.offset < sourceOffset,
-  )
-  const followingDefinitions = referenceDefinitions.filter(
-    (definition) => definition.offset >= sourceOffset + source.length,
-  )
+  const precedingDefinitions: string[] = []
+  const followingDefinitions: string[] = []
+  for (const definition of referenceDefinitions) {
+    if (definition.offset < sourceOffset)
+      precedingDefinitions.push(definition.source)
+    else if (definition.offset >= sourceOffset + source.length) {
+      followingDefinitions.push(definition.source)
+    }
+  }
   const prefix =
     precedingDefinitions.length === 0
       ? ''
-      : `${precedingDefinitions.map(({ source }) => source).join('\n\n')}\n\n`
+      : `${precedingDefinitions.join('\n\n')}\n\n`
   const suffix =
     followingDefinitions.length === 0
       ? ''
-      : `\n\n${followingDefinitions.map(({ source }) => source).join('\n\n')}`
+      : `\n\n${followingDefinitions.join('\n\n')}`
   const sectionStart = prefix.length
   const sectionEnd = sectionStart + source.length
   const tree = parse(`${prefix}${source}${suffix}`)
@@ -84,12 +99,4 @@ export function parseMarkdownSection(
   })
   shiftMarkdownNodeOffsets(tree.children, -sectionStart)
   return { source, tree }
-}
-
-export function trimBlankLines(source: string) {
-  const leadingBlankLines = /^(?:[\t ]*\r?\n)+/.exec(source)?.[0] ?? ''
-  const trimmedSource = source
-    .slice(leadingBlankLines.length)
-    .replace(/(?:\r?\n[\t ]*)+$/, '')
-  return { offset: leadingBlankLines.length, source: trimmedSource }
 }

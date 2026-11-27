@@ -2,109 +2,235 @@ import type {
   MarkdownNode,
   MarkdownRoot,
 } from '#components/markdown-message-types'
-import { findDetailsClose } from '#components/remark-markdown-details/scanner'
-import type {
-  MarkdownParser,
-  ReferenceDefinitionSource,
-} from '#components/remark-markdown-details/source'
 import {
   getReferenceDefinitionSources,
+  type MarkdownParser,
   parseMarkdownSection,
+  type ReferenceDefinitionSource,
   shiftMarkdownNodeOffsets,
-  trimBlankLines,
 } from '#components/remark-markdown-details/source'
 
-const detailsOpenTagPattern =
-  /^<details(?:\s+open(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?)?\s*>/i
+const detailsOpenPattern =
+  /^<details(?:\s+open(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?)?\s*>$/i
+const detailsStartPattern =
+  /^\s*<details(?:\s+open(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?)?\s*>/i
+const detailsClosePattern = /^<\/details\s*>$/i
 const summaryOpenPattern = /^<summary\s*>$/i
 const summaryClosePattern = /^<\/summary\s*>$/i
-const inlineSummaryPrefixPattern = /^<summary\s*>(.*?)<\/summary\s*>/i
-// The body parser reruns for each wrapper, so bound its work on nested input.
-const maxDetailsNesting = 32
+const htmlLexemePattern =
+  /<!--[\s\S]*?(?:-->|$)|<(script|style|pre|textarea)\b[\s\S]*?(?:<\/\1\s*>|$)|<\/?(?:details|summary)\b(?:[^>"']|"[^"]*"|'[^']*')*>/gi
 
-type MarkdownProcessor = {
-  parse: (value: string) => unknown
+type MarkdownProcessor = { parse: (value: string) => unknown }
+
+type Token = {
+  kind:
+    'text' | 'details-open' | 'details-close' | 'summary-open' | 'summary-close'
+  value: string
+  offset: number
+  group: HtmlGroup
+  pair?: Token
+  summaryOpen?: Token
+  summaryClose?: Token
+  matched?: boolean
+  index?: number
+  pairIndex?: number
+  summaryOpenIndex?: number
+  summaryCloseIndex?: number
+  afterMatchedClose?: boolean
 }
+
+type HtmlGroup = {
+  node: MarkdownNode
+  tokens: Token[]
+}
+
+type Unit = { node: MarkdownNode } | { token: Token }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
 
-function isPositionOffset(value: unknown): value is { offset?: number } {
+function isRoot(value: unknown): value is MarkdownRoot {
   return (
     isRecord(value) &&
-    (value['offset'] === undefined || typeof value['offset'] === 'number')
+    value['type'] === 'root' &&
+    Array.isArray(value['children'])
   )
 }
 
-function isPosition(
-  value: unknown,
-): value is NonNullable<MarkdownNode['position']> {
-  return (
-    isRecord(value) &&
-    isPositionOffset(value['start']) &&
-    isPositionOffset(value['end'])
-  )
+function tokenizeHtml(node: MarkdownNode): HtmlGroup | null {
+  if (node.type !== 'html' || node.value === undefined) return null
+  const value = node.value
+  const firstTag = /^\s*(<[^>]+>)/.exec(value)?.[1]
+  if (
+    firstTag === undefined ||
+    (!detailsStartPattern.test(value) &&
+      !detailsClosePattern.test(firstTag) &&
+      !summaryOpenPattern.test(firstTag))
+  ) {
+    return null
+  }
+
+  const group: HtmlGroup = { node, tokens: [] }
+  const add = (kind: Token['kind'], value: string, offset: number) => {
+    group.tokens.push({ kind, value, offset, group })
+  }
+  let cursor = 0
+  htmlLexemePattern.lastIndex = 0
+  for (const match of value.matchAll(htmlLexemePattern)) {
+    const tag = match[0]
+    if (
+      tag.startsWith('<!--') ||
+      /^<(?:script|style|pre|textarea)\b/i.test(tag)
+    ) {
+      continue
+    }
+    const matchIndex = match.index
+    const openDetails = detailsOpenPattern.test(tag)
+    const closeDetails = detailsClosePattern.test(tag)
+    const openSummary = summaryOpenPattern.test(tag)
+    const closeSummary = summaryClosePattern.test(tag)
+    const kind = openDetails
+      ? 'details-open'
+      : closeDetails
+        ? 'details-close'
+        : openSummary
+          ? 'summary-open'
+          : closeSummary
+            ? 'summary-close'
+            : null
+    if (kind === null) {
+      continue
+    }
+    if (matchIndex > cursor)
+      add('text', value.slice(cursor, matchIndex), cursor)
+    add(kind, tag, matchIndex)
+    cursor = matchIndex + tag.length
+  }
+  if (cursor < value.length) add('text', value.slice(cursor), cursor)
+  return group
 }
 
-function isMarkdownNode(value: unknown): value is MarkdownNode {
-  if (!isRecord(value) || typeof value['type'] !== 'string') return false
-  if (value['value'] !== undefined && typeof value['value'] !== 'string') {
-    return false
+function toUnits(
+  nodes: MarkdownNode[],
+  parse: MarkdownParser,
+  references: readonly ReferenceDefinitionSource[],
+): Unit[] {
+  const units: Unit[] = []
+  for (const node of nodes) {
+    if (node.children !== undefined) {
+      node.children = transformNodes(node.children, parse, references)
+    }
+    const group = tokenizeHtml(node)
+    if (group === null) units.push({ node })
+    else for (const token of group.tokens) units.push({ token })
   }
-  if (value['url'] !== undefined && typeof value['url'] !== 'string') {
-    return false
-  }
-  if (value['tagName'] !== undefined && typeof value['tagName'] !== 'string') {
-    return false
-  }
-  if (value['position'] !== undefined && !isPosition(value['position'])) {
-    return false
-  }
-  const children = value['children']
-  return (
-    children === undefined ||
-    (Array.isArray(children) &&
-      children.every((child: unknown) => isMarkdownNode(child)))
-  )
+  return units
 }
 
-function isMarkdownRoot(value: unknown): value is MarkdownRoot {
-  return (
-    isMarkdownNode(value) &&
-    value.type === 'root' &&
-    Array.isArray(value.children)
-  )
+function pairDetails(units: Unit[]) {
+  const stack: Array<{
+    open: Token
+    summaryOpen?: Token
+    summaryClose?: Token
+  }> = []
+  for (const [index, unit] of units.entries()) {
+    if (!('token' in unit)) continue
+    const token = unit.token
+    token.index = index
+    if (token.kind === 'details-open') {
+      stack.push({ open: token })
+    } else if (token.kind === 'summary-open') {
+      const frame = stack.at(-1)
+      if (frame !== undefined && frame.summaryOpen === undefined) {
+        frame.summaryOpen = token
+      }
+    } else if (token.kind === 'summary-close') {
+      const frame = stack.at(-1)
+      if (
+        frame?.summaryOpen !== undefined &&
+        frame.summaryClose === undefined
+      ) {
+        frame.summaryClose = token
+      }
+    } else if (token.kind === 'details-close') {
+      const frame = stack.pop()
+      if (
+        frame?.summaryOpen !== undefined &&
+        frame.summaryClose !== undefined &&
+        frame.summaryOpen.index !== undefined &&
+        frame.summaryClose.index !== undefined &&
+        frame.open.index !== undefined
+      ) {
+        frame.open.pair = token
+        frame.open.pairIndex = index
+        frame.open.summaryOpen = frame.summaryOpen
+        frame.open.summaryClose = frame.summaryClose
+        frame.open.summaryOpenIndex = frame.summaryOpen.index
+        frame.open.summaryCloseIndex = frame.summaryClose.index
+        token.pair = frame.open
+        token.pairIndex = frame.open.index
+        token.matched = true
+        frame.open.matched = true
+      }
+    }
+  }
+  const afterClose = new Map<HtmlGroup, boolean>()
+  for (const unit of units) {
+    if (!('token' in unit)) continue
+    const token = unit.token
+    if (token.kind === 'details-close' && token.matched === true) {
+      afterClose.set(token.group, true)
+    }
+    token.afterMatchedClose = afterClose.get(token.group) ?? false
+  }
 }
 
-function lineAt(lines: readonly string[], index: number) {
-  return lines[index] ?? ''
-}
-
-function lineOffset(lines: readonly string[], index: number) {
-  return lines
-    .slice(0, index)
-    .reduce((offset, line) => offset + line.length + 1, 0)
+function markdownNodes(
+  source: string,
+  offset: number,
+  parse: MarkdownParser,
+  references: readonly ReferenceDefinitionSource[],
+) {
+  if (source.trim() === '') return []
+  const parsed = parseMarkdownSection(source, parse, references, offset)
+  shiftMarkdownNodeOffsets(parsed.tree.children, offset)
+  return transformNodes(parsed.tree.children, parse, references)
 }
 
 function parseSummary(
+  units: Unit[],
+  start: number,
+  end: number,
   source: string,
   parse: MarkdownParser,
-  referenceDefinitions: readonly ReferenceDefinitionSource[],
-  sourceOffset: number,
+  references: readonly ReferenceDefinitionSource[],
 ) {
-  const { tree } = parseMarkdownSection(
-    source,
-    parse,
-    referenceDefinitions,
-    sourceOffset,
-  )
-  const paragraphs = tree.children.filter((node) => node.type === 'paragraph')
-  const children = paragraphs.flatMap((paragraph, index) =>
-    index === 0
-      ? (paragraph.children ?? [])
-      : [{ type: 'break' }, ...(paragraph.children ?? [])],
-  )
+  const children: MarkdownNode[] = []
+  const appendParagraphs = (nodes: MarkdownNode[]) => {
+    for (const node of nodes) {
+      if (node.type !== 'paragraph') continue
+      if (children.length > 0) children.push({ type: 'break' })
+      children.push(...(node.children ?? []))
+    }
+  }
+  for (let index = start; index < end; index += 1) {
+    const unit = units[index]
+    if (unit === undefined) continue
+    if ('token' in unit && unit.token.kind === 'text') {
+      appendParagraphs(
+        markdownNodes(
+          unit.token.value,
+          (unit.token.group.node.position?.start.offset ?? 0) +
+            unit.token.offset,
+          parse,
+          references,
+        ),
+      )
+    } else if (!('token' in unit) && unit.node.type === 'paragraph') {
+      appendParagraphs([unit.node])
+    }
+  }
   return {
     type: 'summary',
     children:
@@ -116,278 +242,127 @@ function parseSummary(
   } satisfies MarkdownNode
 }
 
-function parseInlineSummary(value: string) {
-  const match = inlineSummaryPrefixPattern.exec(value)
-  if (match === null) return null
-
-  const summaryTag = /^<summary\s*>/i.exec(match[0])
-  if (summaryTag === null) return null
-
-  return {
-    content: match[1] ?? '',
-    contentOffset: summaryTag[0].length,
-    consumedLength: match[0].length,
-  }
+function renderUnits(
+  units: Unit[],
+  parse: MarkdownParser,
+  references: readonly ReferenceDefinitionSource[],
+  markdownContext: boolean,
+): MarkdownNode[] {
+  pairDetails(units)
+  return renderRange(units, 0, units.length, parse, references, markdownContext)
 }
 
-function parseDetailsSource(
-  source: string,
+function renderRange(
+  units: Unit[],
+  start: number,
+  end: number,
   parse: MarkdownParser,
-  nestingLevel: number,
-  referenceDefinitions: readonly ReferenceDefinitionSource[],
-  sourceOffset: number,
-) {
-  const lines = source.split('\n')
-  const firstLine = lines.findIndex((line) => line.trim() !== '')
-  if (firstLine < 0) return null
-
-  const openLine = lineAt(lines, firstLine)
-  const openLineContent = openLine.trimStart()
-  const openTagMatch = detailsOpenTagPattern.exec(openLineContent)
-  if (openTagMatch === null) return null
-  const openTag = openTagMatch[0]
-  const openingRemainder = openLineContent.slice(openTag.length)
-  const openingRemainderContent = openingRemainder.trimStart()
-  const openingRemainderWhitespace =
-    openingRemainder.length - openingRemainderContent.length
-  const inlineOpeningSummary = parseInlineSummary(openingRemainderContent)
-
-  const close = findDetailsClose(lines, firstLine)
-  if (close === null) return null
-  const closeLine = close.line
-
-  let summaryStart = firstLine + 1
-  while (
-    summaryStart < closeLine &&
-    lineAt(lines, summaryStart).trim() === ''
-  ) {
-    summaryStart += 1
-  }
-
-  let summaryEnd = summaryStart
-  let summaryText = ''
-  let summaryOffset: number
-  let bodyStart: number
-  if (inlineOpeningSummary !== null) {
-    const openingLineOffset =
-      lineOffset(lines, firstLine) + (openLine.length - openLineContent.length)
-    summaryText = inlineOpeningSummary.content
-    summaryOffset =
-      openingLineOffset +
-      openTag.length +
-      openingRemainderWhitespace +
-      inlineOpeningSummary.contentOffset
-    summaryEnd = firstLine
-    bodyStart =
-      openingLineOffset +
-      openTag.length +
-      openingRemainderWhitespace +
-      inlineOpeningSummary.consumedLength
-  } else {
-    if (openingRemainderContent !== '') return null
-    const summaryLine = lineAt(lines, summaryStart)
-    const summaryLineContent = summaryLine.trim()
-    const inlineSummary = parseInlineSummary(summaryLineContent)
-    if (
-      inlineSummary !== null &&
-      inlineSummary.consumedLength === summaryLineContent.length
-    ) {
-      summaryText = inlineSummary.content
-      summaryOffset =
-        lineOffset(lines, summaryStart) +
-        (summaryLine.length - summaryLine.trimStart().length) +
-        inlineSummary.contentOffset
-    } else if (summaryOpenPattern.test(summaryLine.trim())) {
-      const closeSummary = lines.findIndex(
-        (line, index) =>
-          index > summaryStart && summaryClosePattern.test(line.trim()),
-      )
-      if (closeSummary < 0 || closeSummary >= closeLine) return null
-      summaryEnd = closeSummary
-      summaryText = lines
-        .slice(summaryStart + 1, closeSummary)
-        .join('\n')
-        .trim()
-      const contentStart = lineOffset(lines, summaryStart + 1)
-      summaryOffset = summaryText.length
-        ? source.indexOf(summaryText, contentStart)
-        : contentStart
-      if (summaryOffset < 0) summaryOffset = contentStart
-    } else {
-      return null
+  references: readonly ReferenceDefinitionSource[],
+  markdownContext: boolean,
+): MarkdownNode[] {
+  const result: MarkdownNode[] = []
+  for (let index = start; index < end; index += 1) {
+    const unit = units[index]
+    if (unit === undefined) continue
+    if ('token' in unit) {
+      const token = unit.token
+      if (token.kind === 'details-open' && token.pair !== undefined) {
+        const closeIndex = token.pairIndex ?? -1
+        const summaryStart = token.summaryOpen
+        const summaryEnd = token.summaryClose
+        if (
+          closeIndex < 0 ||
+          summaryStart === undefined ||
+          summaryEnd === undefined
+        ) {
+          continue
+        }
+        const summaryStartIndex = token.summaryOpenIndex ?? -1
+        const summaryEndIndex = token.summaryCloseIndex ?? -1
+        const summaryUnits = units.slice(summaryStartIndex + 1, summaryEndIndex)
+        const summaryText = summaryUnits
+          .map((summaryUnit) =>
+            'token' in summaryUnit ? summaryUnit.token.value : '',
+          )
+          .join('')
+        const openAttribute = /^<details\s+open(?:\s*=|\s*>)/i.test(token.value)
+        const children = renderRange(
+          units,
+          summaryEndIndex + 1,
+          closeIndex,
+          parse,
+          references,
+          true,
+        )
+        result.push({
+          type: 'details',
+          children: [
+            parseSummary(
+              units,
+              summaryStartIndex + 1,
+              summaryEndIndex,
+              summaryText,
+              parse,
+              references,
+            ),
+            ...children,
+          ],
+          data: {
+            hName: 'details',
+            ...(openAttribute ? { hProperties: { open: true } } : {}),
+          },
+        })
+        index = closeIndex
+        continue
+      }
+      if (token.kind === 'text') {
+        const base = token.group.node.position?.start.offset ?? 0
+        if (markdownContext || token.afterMatchedClose === true) {
+          result.push(
+            ...markdownNodes(
+              token.value,
+              base + token.offset,
+              parse,
+              references,
+            ),
+          )
+        } else {
+          result.push({ ...token.group.node, value: token.value })
+        }
+      } else if (token.matched !== true) {
+        result.push({ ...token.group.node, value: token.value })
+      }
+      continue
     }
-    bodyStart = lineOffset(lines, summaryEnd + 1)
+    result.push(unit.node)
   }
-
-  const bodyOffset = lineOffset(lines, closeLine) + close.start
-  const rawBody = source.slice(bodyStart, bodyOffset)
-  const trimmedBody = trimBlankLines(rawBody)
-  const bodySource = trimmedBody.source
-  const bodySourceOffset = sourceOffset + bodyStart + trimmedBody.offset
-  const parsedBody = parseMarkdownSection(
-    bodySource,
-    parse,
-    referenceDefinitions,
-    bodySourceOffset,
-  )
-  const bodyReferenceDefinitions = [
-    ...referenceDefinitions,
-    ...getReferenceDefinitionSources(parsedBody.tree.children, bodySource).map(
-      (definition) => ({
-        ...definition,
-        offset: definition.offset + bodySourceOffset,
-      }),
-    ),
-  ].sort((left, right) => left.offset - right.offset)
-  const body = transformNodes(
-    parsedBody.tree.children,
-    parse,
-    parsedBody.source,
-    nestingLevel + 1,
-    bodyReferenceDefinitions,
-    bodySourceOffset,
-  )
-  shiftMarkdownNodeOffsets(body, trimmedBody.offset + bodyStart)
-  const summary = parseSummary(
-    summaryText,
-    parse,
-    bodyReferenceDefinitions,
-    sourceOffset + summaryOffset,
-  )
-  shiftMarkdownNodeOffsets(summary.children, summaryOffset)
-  const openAttribute = /^<details\s+open(?:\s*=|\s*>)/i.test(openTag)
-
-  return {
-    type: 'details',
-    children: [summary, ...body],
-    data: {
-      hName: 'details',
-      ...(openAttribute ? { hProperties: { open: true } } : {}),
-    },
-  } satisfies MarkdownNode
+  return result
 }
 
 function transformNodes(
   nodes: MarkdownNode[],
   parse: MarkdownParser,
-  source: string,
-  nestingLevel = 0,
-  referenceDefinitions: readonly ReferenceDefinitionSource[] = [],
-  sourceOffset = 0,
-) {
-  const result: MarkdownNode[] = []
-  for (let index = 0; index < nodes.length; index += 1) {
-    const node = nodes[index]
-    if (node === undefined) continue
-    if (
-      nestingLevel < maxDetailsNesting &&
-      node.type === 'html' &&
-      node.value !== undefined
-    ) {
-      const openTag = (node.value.split('\n', 1)[0] ?? '').trim()
-      const start = node.position?.start.offset
-      if (start === undefined || !detailsOpenTagPattern.test(openTag)) {
-        result.push(node)
-        continue
-      }
-
-      const suffixLines = source.slice(start).split('\n')
-      const close = findDetailsClose(suffixLines, 0)
-      const detailsLength =
-        close === null ? null : lineOffset(suffixLines, close.line) + close.end
-      const detailsSource =
-        detailsLength === null
-          ? null
-          : source.slice(start, start + detailsLength)
-      const details =
-        detailsSource === null
-          ? null
-          : parseDetailsSource(
-              detailsSource,
-              parse,
-              nestingLevel,
-              referenceDefinitions,
-              sourceOffset + start,
-            )
-      if (details !== null) {
-        shiftMarkdownNodeOffsets([details], start)
-        result.push(details)
-        const detailsEnd = start + (detailsSource?.length ?? 0)
-        let nodeEnd = Math.max(
-          detailsEnd,
-          node.position?.end.offset ?? detailsEnd,
-        )
-        let consumedIndex = index + 1
-        while (consumedIndex < nodes.length) {
-          const consumedNode = nodes[consumedIndex]
-          const consumedStart = consumedNode?.position?.start.offset
-          if (consumedStart === undefined || consumedStart >= nodeEnd) break
-          nodeEnd = Math.max(
-            nodeEnd,
-            consumedNode.position?.end.offset ?? nodeEnd,
-          )
-          consumedIndex += 1
-        }
-        const unconsumedSource = source.slice(detailsEnd, nodeEnd)
-        if (unconsumedSource.length > 0) {
-          const parsedSuffix = parseMarkdownSection(
-            unconsumedSource,
-            parse,
-            referenceDefinitions,
-            sourceOffset + detailsEnd,
-          )
-          const suffixNodes = transformNodes(
-            parsedSuffix.tree.children,
-            parse,
-            parsedSuffix.source,
-            nestingLevel,
-            referenceDefinitions,
-            sourceOffset + detailsEnd,
-          )
-          shiftMarkdownNodeOffsets(suffixNodes, detailsEnd)
-          result.push(...suffixNodes)
-        }
-        index = consumedIndex - 1
-        continue
-      }
-    }
-
-    if (node.children !== undefined) {
-      node.children = transformNodes(
-        node.children,
-        parse,
-        source,
-        nestingLevel,
-        referenceDefinitions,
-        sourceOffset,
-      )
-    }
-    result.push(node)
-  }
-  return result
+  references: readonly ReferenceDefinitionSource[],
+): MarkdownNode[] {
+  return renderUnits(
+    toUnits(nodes, parse, references),
+    parse,
+    references,
+    false,
+  )
 }
 
 export function remarkMarkdownDetails(this: MarkdownProcessor) {
   const parse: MarkdownParser = (value) => {
     const tree = this.parse(value)
-    return isMarkdownRoot(tree) ? tree : { type: 'root', children: [] }
+    return isRoot(tree) ? tree : { type: 'root', children: [] }
   }
   return (tree: MarkdownRoot, file: { value: string | Uint8Array }) => {
     const source =
       typeof file.value === 'string'
         ? file.value
         : new TextDecoder().decode(file.value)
-    const referenceDefinitions = getReferenceDefinitionSources(
-      tree.children,
-      source,
-    )
-    tree.children = transformNodes(
-      tree.children,
-      parse,
-      source,
-      0,
-      referenceDefinitions,
-      0,
-    )
+    const references = getReferenceDefinitionSources(tree.children, source)
+    tree.children = transformNodes(tree.children, parse, references)
   }
 }

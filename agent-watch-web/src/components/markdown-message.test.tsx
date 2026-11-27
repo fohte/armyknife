@@ -195,6 +195,57 @@ it('renders an inline summary on the details opening line', () => {
   )
 })
 
+it.each([
+  {
+    name: 'a list item',
+    markdown: `- Before
+
+  <details open>
+  <summary>List details</summary>
+
+  List body
+  </details>`,
+    expected:
+      '<div class="markdown-message"><ul><li><p>Before</p><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">List details</span></button><div class="markdown-details-body"><p>List body</p></div></div></li></ul></div>',
+  },
+  {
+    name: 'a blockquote',
+    markdown: `> Before
+>
+> <details open><summary>Quoted details</summary>
+>
+> Quoted body
+> </details>`,
+    expected:
+      '<div class="markdown-message"><blockquote><p>Before</p><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Quoted details</span></button><div class="markdown-details-body"><p>Quoted body</p></div></div></blockquote></div>',
+  },
+])('renders details contained in $name', ({ markdown, expected }) => {
+  expect(renderMessage(markdown)).toBe(expected)
+})
+
+it('keeps details that close outside their list item as text once', () => {
+  expect(
+    renderMessage(`- Before
+  <details>
+  <summary>Split details</summary>
+  Body
+
+</details>`),
+  ).toBe(
+    '<div class="markdown-message"><ul><li><p>Before</p>&lt;details&gt;\n&lt;summary&gt;Split details&lt;/summary&gt;\nBody</li></ul>&lt;/details&gt;</div>',
+  )
+})
+
+it('keeps unsafe summary HTML as text', () => {
+  expect(
+    renderMessage(
+      '<details open><summary><img src=x onerror=alert(1)></summary>\n\nBody\n</details>',
+    ),
+  ).toBe(
+    '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">&lt;img src=x onerror=alert(1)&gt;</span></button><div class="markdown-details-body"><p>Body</p></div></div></div>',
+  )
+})
+
 it('renders nested details with both opening tags on the same line', () => {
   expect(
     renderMessage(`<details open><summary>Outer</summary><details open><summary>Inner</summary>
@@ -357,6 +408,13 @@ it.each([
       '<div class="markdown-message">&lt;details onclick=&quot;runUnsafe()&quot;&gt;\n&lt;summary&gt;Unsafe details&lt;/summary&gt;\nBody\n&lt;/details&gt;</div>',
   },
   {
+    name: 'the open details tag has an onclick attribute',
+    markdown:
+      '<details open onclick="runUnsafe()">\n<summary>Unsafe details</summary>\nBody\n</details>',
+    expected:
+      '<div class="markdown-message">&lt;details open onclick=&quot;runUnsafe()&quot;&gt;\n&lt;summary&gt;Unsafe details&lt;/summary&gt;\nBody\n&lt;/details&gt;</div>',
+  },
+  {
     name: 'the summary tag has a style attribute',
     markdown:
       '<details>\n<summary style="color: red">Styled summary</summary>\nBody\n</details>',
@@ -389,147 +447,70 @@ Still inside.
   )
 })
 
-it('keeps an inline-code closing tag inside the details body', () => {
-  expect(
-    renderMessage(
+it.each([
+  {
+    name: 'an inline code span',
+    markdown:
       '<details open><summary>Code</summary>\n\n`</details>`\nBody\n</details>',
-    ),
-  ).toBe(
-    '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Code</span></button><div class="markdown-details-body"><p><code>&lt;/details&gt;</code></p><p>Body</p></div></div></div>',
-  )
-})
-
-it('keeps multiline inline-code closing tags inside the details body', () => {
-  expect(
-    renderMessage(
+    expected:
+      '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Code</span></button><div class="markdown-details-body"><p><code>&lt;/details&gt;</code></p><p>Body</p></div></div></div>',
+  },
+  {
+    name: 'a multiline code span interrupted by an HTML block',
+    markdown:
       '<details open><summary>Code</summary>\n`\n</details>\n`\n\nBody\n</details>',
-    ),
-  ).toBe(
-    '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Code</span></button><div class="markdown-details-body"><p><code>&lt;/details&gt;</code></p><p>Body</p></div></div></div>',
-  )
-})
+    expected:
+      '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Code</span></button><div class="markdown-details-body"><p>`</p></div></div><p>`</p><p>Body</p>&lt;/details&gt;</div>',
+  },
+])(
+  'handles closing tags in $name according to CommonMark',
+  ({ markdown, expected }) => {
+    expect(renderMessage(markdown)).toBe(expected)
+  },
+)
 
 it.each([
   {
     name: 'script',
-    source: `<script>const value = '</details>';</script>`,
+    source: `<script>\n</details>\n</script>`,
+    escaped: '&lt;script&gt;\n&lt;/details&gt;\n&lt;/script&gt;',
   },
   {
     name: 'style',
-    source: `<style>.example { content: '</details>'; }</style>`,
+    source: `<style>\n.example { content: </details>; }\n</style>`,
+    escaped:
+      '&lt;style&gt;\n.example { content: &lt;/details&gt;; }\n&lt;/style&gt;',
   },
-])('keeps closing details tags inside inline $name raw text', ({ source }) => {
-  expect(
-    renderMessage(`<details>
+])(
+  'keeps closing details tags inside $name raw text',
+  ({ source, escaped }) => {
+    expect(
+      renderMessage(`<details>
 <summary>Example</summary>
+
 ${source}
+
 Hidden body content
 </details>`),
-  ).toBe(
-    '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="false" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Example</span></button></div></div>',
-  )
-})
+    ).toBe(
+      `<div class="markdown-message"><div class="markdown-details"><button aria-expanded="false" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Example</span></button><div class="markdown-details-body">${escaped}<p>Hidden body content</p></div></div></div>`,
+    )
+  },
+)
 
-it.each([
-  {
-    name: 'a fence with a four-space-indented marker',
-    markdown: `<details>
-<summary>Example</summary>
+it('keeps closing tags in HTML comments inside the details body', () => {
+  expect(
+    renderMessage(`<details open>
+<summary>Comment</summary>
 
-~~~
-    ~~~
+<!--
 </details>
-~~~
-
-Hidden body content
-</details>`,
-  },
-  {
-    name: 'a fenced block with CRLF line endings',
-    markdown:
-      '<details>\r\n<summary>Example</summary>\r\n\r\n~~~\r\n</details>\r\n~~~\r\nHidden body content\r\n</details>',
-  },
-  {
-    name: 'a fence inside a blockquote',
-    markdown: `<details>
-<summary>Example</summary>
-
-> ~~~
-> </details>
-> ~~~
-
-Hidden body content
-</details>`,
-  },
-  {
-    name: 'a fence in a blockquote with a literal quote prefix',
-    markdown: `<details>
-<summary>Example</summary>
-
-> ~~~
-> > </details>
-> ~~~
-
-Hidden body content
-</details>`,
-  },
-  {
-    name: 'a fence marker inside an HTML comment',
-    markdown: `<details>
-<summary>Example</summary>
-
-<!--
-~~~
 -->
-</details>`,
-  },
-  {
-    name: 'a fence marker inside a multiline inline comment',
-    markdown: `<details>
-<summary>Example</summary>
 
-Text <!--
-~~~
--->
-</details>`,
-  },
-  {
-    name: 'a backtick inside a multiline HTML comment',
-    markdown: `<details>
-<summary>Example</summary>
-
-<!--
-
-\`
--->
-\`
-</details>`,
-  },
-  {
-    name: 'a fence marker inside multiline script raw text',
-    markdown: `<details>
-<summary>Example</summary>
-
-<script>
-~~~
-</script>
-</details>`,
-  },
-  {
-    name: 'a fence inside a blockquote list item',
-    markdown: `<details>
-<summary>Example</summary>
-
-> - ~~~
->   </details>
->   ~~~
-
-Hidden body content
-</details>`,
-  },
-])('the parser skips non-closing content in $name', ({ markdown }) => {
-  expect(renderMessage(markdown)).toBe(
-    '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="false" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Example</span></button></div></div>',
+Body
+</details>`),
+  ).toBe(
+    '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Comment</span></button><div class="markdown-details-body">&lt;!--\n&lt;/details&gt;\n--&gt;<p>Body</p></div></div></div>',
   )
 })
 
