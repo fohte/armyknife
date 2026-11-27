@@ -2,7 +2,7 @@ import '#components/later-today.css'
 
 import { Button } from '@fohte/ui/button'
 import { Filter, X } from 'lucide-react'
-import { type ReactNode, useCallback, useEffect, useState } from 'react'
+import { type ReactNode, useCallback, useState } from 'react'
 
 import { InboxFilterBar } from '#components/inbox-filter-bar'
 import { InboxSessionList } from '#components/inbox-session-list'
@@ -109,7 +109,8 @@ export function InboxView({
   onNewSession = () => undefined,
   mobileUpdateNotice,
 }: InboxViewProps) {
-  const [inboxSort, setInboxSort] = useState<InboxSort>(() => readInboxSort())
+  const [inboxSortState, setInboxSortState] = useState(() => readInboxSort())
+  const inboxSort = inboxSortState.sort
   const [sortMenuOpen, setSortMenuOpen] = useState(false)
   const [localFilterQuery, setLocalFilterQuery] = useState('')
   const [localDialogOpen, setLocalDialogOpen] = useState(false)
@@ -153,9 +154,10 @@ export function InboxView({
   )
   const laterTodoLaterCount = sumTodoLaterCount(later)
   const doneTodoLaterCount = sumTodoLaterCount(done)
-  useEffect(() => {
-    writeInboxSort(undefined, inboxSort)
-  }, [inboxSort])
+  const setInboxSort = (sort: InboxSort) => {
+    const storageAvailable = writeInboxSort(undefined, sort)
+    setInboxSortState({ sort, storageAvailable })
+  }
   const setFilterQuery = useCallback(
     (query: string) => {
       if (onFilterQueryChange !== undefined) {
@@ -221,6 +223,7 @@ export function InboxView({
         <h1 id="inbox-title">Inbox</h1>
         <InboxSortControl
           sort={inboxSort}
+          storageAvailable={inboxSortState.storageAvailable}
           isMobile={isMobile}
           open={sortMenuOpen}
           onOpenChange={setSortMenuOpen}

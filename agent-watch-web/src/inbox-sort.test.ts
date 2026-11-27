@@ -37,6 +37,16 @@ class MemoryStorage implements Storage {
   }
 }
 
+class UnavailableStorage extends MemoryStorage {
+  override getItem(key: string): string | null {
+    throw new Error(`Storage is blocked: ${key}`)
+  }
+
+  override setItem(key: string, value: string): void {
+    throw new Error(`Storage is blocked: ${key}=${value}`)
+  }
+}
+
 function session(
   id: string,
   project: string,
@@ -76,10 +86,10 @@ it.each([
   {
     sort: 'priority' as const,
     expected: [
+      'sample-zeta-low',
       'sample-alpha-late',
       'sample-alpha-early',
       'sample-zeta-high',
-      'sample-zeta-low',
     ],
   },
   {
@@ -96,8 +106,8 @@ it.each([
     expected: [
       'sample-alpha-late',
       'sample-alpha-early',
-      'sample-zeta-high',
       'sample-zeta-low',
+      'sample-zeta-high',
     ],
   },
 ])(
@@ -121,7 +131,7 @@ it.each([
   },
 )
 
-it('places sessions without a priority after prioritized sessions', () => {
+it('preserves the server order for Priority regardless of numeric priority', () => {
   expect(
     sortInboxSessions(
       [
@@ -135,7 +145,7 @@ it('places sessions without a priority after prioritized sessions', () => {
       ],
       'priority',
     ).map(({ id }) => id),
-  ).toEqual(['sample-prioritized', 'sample-unprioritized'])
+  ).toEqual(['sample-unprioritized', 'sample-prioritized'])
 })
 
 it.each(['priority', 'updated', 'project'] as const)(
@@ -162,7 +172,7 @@ it('reads and writes a browser-specific sort selection', () => {
   expect(snapshot()).toEqual({
     written: true,
     stored: 'updated',
-    restored: 'updated',
+    restored: { sort: 'updated', storageAvailable: true },
   })
 })
 
@@ -173,5 +183,22 @@ it.each([
   const storage = new MemoryStorage()
   if (value !== null) storage.setItem(INBOX_SORT_STORAGE_KEY, value)
 
-  expect(readInboxSort(storage)).toBe(DEFAULT_INBOX_SORT)
+  expect(readInboxSort(storage)).toEqual({
+    sort: DEFAULT_INBOX_SORT,
+    storageAvailable: true,
+  })
+})
+
+it('reports when browser storage is unavailable', () => {
+  const storage = new UnavailableStorage()
+
+  const snapshot = () => ({
+    read: readInboxSort(storage),
+    written: writeInboxSort(storage, 'updated'),
+  })
+
+  expect(snapshot()).toEqual({
+    read: { sort: DEFAULT_INBOX_SORT, storageAvailable: false },
+    written: false,
+  })
 })

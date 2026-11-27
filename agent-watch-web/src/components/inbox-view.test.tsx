@@ -356,6 +356,83 @@ it('keeps Inbox categories and groups their sessions by project when selected', 
   })
 })
 
+it('saves and restores the selected sort from the iPhone sheet', () => {
+  renderInbox({ isMobile: true })
+
+  const initialTrigger = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Sort Priority"]',
+  )
+  if (initialTrigger === null) throw new Error('Expected sort trigger')
+  act(() => {
+    initialTrigger.click()
+  })
+
+  const updatedOption = Array.from(
+    container.querySelectorAll<HTMLButtonElement>(
+      '.inbox-sort-sheet [role="menuitemradio"]',
+    ),
+  ).find((option) => option.textContent.includes('Updated'))
+  if (updatedOption === undefined) throw new Error('Expected Updated option')
+  const openedDialog = container.querySelector(
+    '[role="dialog"][aria-label="Sort"]',
+  )
+  act(() => {
+    updatedOption.click()
+  })
+
+  const afterSelection = {
+    dialogOpen:
+      container.querySelector('[role="dialog"][aria-label="Sort"]') !== null,
+    triggerLabel: container
+      .querySelector<HTMLButtonElement>('[aria-label="Sort Updated"]')
+      ?.getAttribute('aria-label'),
+    savedSort: localStorage.getItem(INBOX_SORT_STORAGE_KEY),
+  }
+
+  act(() => root?.unmount())
+  root = null
+  renderInbox({ isMobile: true })
+
+  const restoredTrigger = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Sort Updated"]',
+  )
+  if (restoredTrigger === null)
+    throw new Error('Expected restored sort trigger')
+  act(() => {
+    restoredTrigger.click()
+  })
+  const selectedOption = container.querySelector<HTMLButtonElement>(
+    '.inbox-sort-sheet [role="menuitemradio"][aria-checked="true"]',
+  )
+  if (selectedOption === null) throw new Error('Expected selected sort option')
+  const cancelButton =
+    container.querySelector<HTMLButtonElement>('.inbox-sort-cancel')
+  if (cancelButton === null) throw new Error('Expected Cancel button')
+  act(() => {
+    cancelButton.click()
+  })
+
+  const snapshot = () => ({
+    openedDialog: openedDialog !== null,
+    afterSelection,
+    restoredSort: restoredTrigger.getAttribute('aria-label'),
+    restoredSelectedOption: selectedOption.textContent.trim(),
+    closedByCancel:
+      container.querySelector('[role="dialog"][aria-label="Sort"]') === null,
+  })
+  expect(snapshot()).toEqual({
+    openedDialog: true,
+    afterSelection: {
+      dialogOpen: false,
+      triggerLabel: 'Sort Updated',
+      savedSort: 'updated',
+    },
+    restoredSort: 'Sort Updated',
+    restoredSelectedOption: 'UpdatedNewest first',
+    closedByCancel: true,
+  })
+})
+
 it('shows folded to-dos in their session categories without adding Needs action count', () => {
   const progressSession = sessions.at(2)
   if (progressSession === undefined) {

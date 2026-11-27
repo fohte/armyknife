@@ -6,6 +6,7 @@ const meta = {
   component: InboxSortControl,
   args: {
     sort: 'priority',
+    storageAvailable: true,
     isMobile: false,
     open: true,
     onOpenChange: () => undefined,
@@ -46,4 +47,9 @@ export const IPhoneSortSheetIsOpen: Story = {
       </div>
     ),
   ],
+}
+
+export const StorageUnavailable: Story = {
+  name: 'The menu explains when this browser cannot save the selection',
+  args: { storageAvailable: false },
 }

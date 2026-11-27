@@ -7,17 +7,25 @@ export type InboxSort = 'priority' | 'updated' | 'project'
 export const DEFAULT_INBOX_SORT: InboxSort = 'priority'
 export const INBOX_SORT_STORAGE_KEY = 'agent-watch-web:inbox-sort'
 
+export type InboxSortRead = {
+  sort: InboxSort
+  storageAvailable: boolean
+}
+
 function isInboxSort(value: string | null): value is InboxSort {
   return value === 'priority' || value === 'updated' || value === 'project'
 }
 
-export function readInboxSort(storage?: Storage): InboxSort {
+export function readInboxSort(storage?: Storage): InboxSortRead {
   return Result.fromThrowable(
     () => (storage ?? window.localStorage).getItem(INBOX_SORT_STORAGE_KEY),
     (error: unknown) => error,
   )().match(
-    (value) => (isInboxSort(value) ? value : DEFAULT_INBOX_SORT),
-    () => DEFAULT_INBOX_SORT,
+    (value) => ({
+      sort: isInboxSort(value) ? value : DEFAULT_INBOX_SORT,
+      storageAvailable: true,
+    }),
+    () => ({ sort: DEFAULT_INBOX_SORT, storageAvailable: false }),
   )
 }
 
@@ -36,24 +44,16 @@ function updatedAt(session: Session) {
   return Number.isNaN(timestamp) ? Number.NEGATIVE_INFINITY : timestamp
 }
 
-function comparePriority(left: Session, right: Session) {
-  const leftPriority = left.task?.priority ?? Number.POSITIVE_INFINITY
-  const rightPriority = right.task?.priority ?? Number.POSITIVE_INFINITY
-  if (leftPriority !== rightPriority) return leftPriority - rightPriority
-  return updatedAt(right) - updatedAt(left)
-}
-
-function compareInboxSessions(sort: InboxSort, left: Session, right: Session) {
+function compareInboxSessions(
+  sort: Exclude<InboxSort, 'priority'>,
+  left: Session,
+  right: Session,
+) {
   switch (sort) {
-    case 'priority':
-      return comparePriority(left, right)
     case 'updated':
       return updatedAt(right) - updatedAt(left)
     case 'project':
-      return (
-        left.project.localeCompare(right.project) ||
-        comparePriority(left, right)
-      )
+      return left.project.localeCompare(right.project)
   }
 }
 
@@ -61,6 +61,8 @@ export function sortInboxSessions(
   sessions: readonly Session[],
   sort: InboxSort,
 ): Session[] {
+  if (sort === 'priority') return [...sessions]
+
   return sessions
     .map((session, index) => ({ session, index }))
     .sort(

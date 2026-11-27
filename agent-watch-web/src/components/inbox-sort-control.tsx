@@ -20,6 +20,7 @@ const OPTIONS: {
 
 type InboxSortControlProps = {
   sort: InboxSort
+  storageAvailable: boolean
   isMobile: boolean
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -28,6 +29,7 @@ type InboxSortControlProps = {
 
 export function InboxSortControl({
   sort,
+  storageAvailable,
   isMobile,
   open,
   onOpenChange,
@@ -84,7 +86,9 @@ export function InboxSortControl({
         <section className="inbox-sort-menu" aria-label="Sort inbox">
           {options}
           <p className="inbox-sort-note">
-            Sections stay. Saved in this browser.
+            {storageAvailable
+              ? 'Sections stay. Saved in this browser.'
+              : 'Sections stay. This browser could not save the selection.'}
           </p>
         </section>
       ) : null}
@@ -99,7 +103,9 @@ export function InboxSortControl({
           <h2>Sort</h2>
           {options}
           <p className="inbox-sort-note">
-            Sections stay. Saved in this browser.
+            {storageAvailable
+              ? 'Sections stay. Saved in this browser.'
+              : 'Sections stay. This browser could not save the selection.'}
           </p>
           <Button
             type="button"
