@@ -78,7 +78,7 @@ while IFS= read -r line; do
     'worktree '*)
       SOURCE_ROOT="${line#worktree }"
       SOURCE_BINARY="$SOURCE_ROOT/target/debug/a"
-      if [ "$SOURCE_ROOT" = "$WORKTREE_ROOT" ] || [ ! -f "$SOURCE_BINARY" ]; then
+      if [ "$SOURCE_ROOT" = "$WORKTREE_ROOT" ] || [ -L "$SOURCE_ROOT/target/debug" ] || [ ! -f "$SOURCE_BINARY" ]; then
         continue
       fi
 
