@@ -381,13 +381,14 @@ fn read_output_tail(path: &Path) -> std::io::Result<Option<String>> {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
 
     use futures_util::StreamExt;
     use futures_util::stream;
     use notify::event::{AccessKind, AccessMode, ModifyKind};
     use notify::{Event, EventKind};
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
     use tokio::sync::watch;
 
     use super::{
@@ -395,11 +396,28 @@ mod tests {
         read_output_tail, stop_on_shutdown, watch_output_events_with,
     };
 
-    #[tokio::test]
-    async fn background_task_output_unrelated_events_do_not_suppress_matching_updates() {
+    struct OutputFile {
+        _directory: tempfile::TempDir,
+        path: PathBuf,
+    }
+
+    #[fixture]
+    fn output_file() -> OutputFile {
         let directory = tempfile::tempdir().unwrap();
-        let output_path = directory.path().join("current.output");
-        fs::write(&output_path, "initial output").unwrap();
+        let path = directory.path().join("output.log");
+        fs::write(&path, "initial output").unwrap();
+        OutputFile {
+            _directory: directory,
+            path,
+        }
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn background_task_output_unrelated_events_do_not_suppress_matching_updates(
+        output_file: OutputFile,
+    ) {
+        let output_path = output_file.path;
         let callback = Arc::new(Mutex::new(None));
         let registered_callback = Arc::clone(&callback);
         let events = watch_output_events_with(output_path.clone(), move |_, handler| {
@@ -429,10 +447,9 @@ mod tests {
     #[case::close(AccessKind::Close(AccessMode::Read))]
     fn background_task_output_access_events_do_not_trigger_rereads(
         #[case] access_kind: AccessKind,
+        output_file: OutputFile,
     ) {
-        let directory = tempfile::tempdir().unwrap();
-        let watched_path = directory.path().join("output.log");
-        fs::write(&watched_path, "initial output").unwrap();
+        let watched_path = output_file.path;
         let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
 
         forward_matching_output_event(
@@ -469,11 +486,13 @@ mod tests {
 
         let initial_output = events.next().await;
         shutdown_sender.send_replace(true);
-        let after_shutdown = events.next().await;
+        let after_shutdown = tokio::time::timeout(std::time::Duration::from_secs(1), events.next())
+            .await
+            .map_err(|_| "shutdown timed out");
 
         assert_eq!(
             (initial_output, after_shutdown),
-            (Some("initial output".to_owned()), None),
+            (Some("initial output".to_owned()), Ok(None)),
         );
     }
 
