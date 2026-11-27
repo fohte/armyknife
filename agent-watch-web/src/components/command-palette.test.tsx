@@ -8,6 +8,7 @@ import {
   getCommandPaletteShortcut,
 } from '#command-palette-shortcut'
 import { CommandPalette } from '#components/command-palette'
+import { itemIcon } from '#components/command-palette-item'
 import type { Session } from '#types'
 
 let container: HTMLDivElement
@@ -364,6 +365,28 @@ it.each([
     expect(actual).toEqual(`${icon}${title}`)
   },
 )
+
+it('uses a monochrome hourglass for Waiting sessions', () => {
+  renderPalette({
+    sessions: [{ ...session, category: 'waiting', kind: null }],
+    initialQuery: 'Review notification settings',
+  })
+
+  const snapshot = () => ({
+    paletteIcon: itemIcon({
+      type: 'session',
+      id: session.id,
+      session: { ...session, category: 'waiting', kind: null },
+    }),
+    icon: container
+      .querySelector(
+        '.command-palette-item .session-row-status svg.lucide-hourglass',
+      )
+      ?.getAttribute('aria-hidden'),
+  })
+
+  expect(snapshot()).toEqual({ paletteIcon: '⌛︎', icon: 'true' })
+})
 
 it('adds the task number to result rows but not action headings', async () => {
   renderPalette({ initialQuery: '#notification' })

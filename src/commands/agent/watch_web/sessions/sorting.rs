@@ -129,11 +129,13 @@ mod tests {
         vec![
             row("done", SessionCategory::Done, Some((Some(0), Some(0), 1)), 1),
             row("working", SessionCategory::InProgress, Some((Some(0), Some(0), 2)), 1),
+            row("waiting", SessionCategory::Waiting, Some((Some(0), Some(0), 3)), 1),
+            row("later", SessionCategory::Later, Some((Some(0), Some(0), 4)), 1),
             row("needs_low", SessionCategory::NeedsAction, Some((Some(2), Some(1), 3)), 1),
             row("needs_high", SessionCategory::NeedsAction, Some((Some(1), Some(0), 4)), 1),
             row("needs_without_task", SessionCategory::NeedsAction, None, 0),
         ],
-        vec!["needs_high", "needs_low", "needs_without_task", "working", "done"]
+        vec!["needs_high", "needs_low", "needs_without_task", "later", "waiting", "working", "done"]
     )]
     #[case::unset_priority_between_regular_and_deferred(
         vec![

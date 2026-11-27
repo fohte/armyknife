@@ -18,6 +18,7 @@ export function useMobileLayout() {
     () => false,
   )
   const [inProgressExpanded, setInProgressExpanded] = useState(false)
+  const [waitingExpanded, setWaitingExpanded] = useState(true)
   const [doneExpanded, setDoneExpanded] = useState(false)
 
   useEffect(() => {
@@ -63,6 +64,8 @@ export function useMobileLayout() {
     isMobile,
     inProgressExpanded,
     setInProgressExpanded,
+    waitingExpanded,
+    setWaitingExpanded,
     doneExpanded,
     setDoneExpanded,
   }

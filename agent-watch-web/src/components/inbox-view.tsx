@@ -31,6 +31,8 @@ type InboxViewProps = {
   lastUpdatedAt: number
   showAllInProgress: boolean
   onShowMore: () => void
+  showAllWaiting: boolean
+  onShowMoreWaiting: () => void
   onSelect: (id: string) => void
   onLater?: (id: string) => void
   onCloseSession?: (id: string) => void
@@ -42,6 +44,8 @@ type InboxViewProps = {
   isMobile: boolean
   inProgressExpanded: boolean
   onToggleInProgress: () => void
+  waitingExpanded: boolean
+  onToggleWaiting: () => void
   doneExpanded: boolean
   onToggleDone: () => void
   onCloseDone?: (sessions: readonly Session[]) => void
@@ -79,6 +83,8 @@ export function InboxView({
   lastUpdatedAt,
   showAllInProgress,
   onShowMore,
+  showAllWaiting,
+  onShowMoreWaiting,
   onSelect,
   onLater,
   onCloseSession,
@@ -89,6 +95,8 @@ export function InboxView({
   isMobile,
   inProgressExpanded,
   onToggleInProgress,
+  waitingExpanded,
+  onToggleWaiting,
   doneExpanded,
   onToggleDone,
   onCloseDone = () => undefined,
@@ -130,6 +138,10 @@ export function InboxView({
   )
   const inProgress = sortInboxSessions(
     filteredSessions.filter((session) => session.category === 'in_progress'),
+    inboxSort,
+  )
+  const waiting = sortInboxSessions(
+    filteredSessions.filter((session) => session.category === 'waiting'),
     inboxSort,
   )
   const todoLaterCount = sumTodoLaterCount(inProgress)
@@ -188,6 +200,14 @@ export function InboxView({
       ? inProgress
       : inProgress.slice(0, 2)
   const hiddenInProgressCount = inProgress.length - visibleInProgress.length
+  const visibleWaiting = isMobile
+    ? waitingExpanded
+      ? waiting
+      : []
+    : showAllWaiting
+      ? waiting
+      : waiting.slice(0, 2)
+  const hiddenWaitingCount = waiting.length - visibleWaiting.length
 
   return (
     <section className="inbox-view" aria-labelledby="inbox-title">
@@ -374,6 +394,46 @@ export function InboxView({
             onCloseSession={onCloseSession}
             onOpenActions={setActionSheetSession}
           />
+        ) : null}
+        {isMobile && waiting.length > 0 ? (
+          <Button
+            type="button"
+            variant="plain"
+            className="mobile-collapse-row mobile-waiting-row cursor-pointer"
+            aria-expanded={waitingExpanded}
+            onClick={onToggleWaiting}
+          >
+            <span>Waiting</span>
+            <span className="mobile-collapse-count">{waiting.length}</span>
+            <span className="mobile-collapse-chevron" aria-hidden="true">
+              {waitingExpanded ? '⌄' : '›'}
+            </span>
+          </Button>
+        ) : null}
+        {waiting.length > 0
+          ? renderInboxSessionSection({
+              title: 'Waiting',
+              className: 'waiting-section',
+              sessions: visibleWaiting,
+              count: waiting.length,
+              selectedId,
+              onSelect,
+              isMobile,
+              onLater,
+              onCloseSession,
+              onOpenActions: setActionSheetSession,
+            })
+          : null}
+        {hiddenWaitingCount > 0 && !isMobile ? (
+          <Button
+            className="show-more-button cursor-pointer"
+            type="button"
+            variant="plain"
+            aria-expanded={showAllWaiting}
+            onClick={onShowMoreWaiting}
+          >
+            {hiddenWaitingCount} more ▸
+          </Button>
         ) : null}
         <Button
           type="button"

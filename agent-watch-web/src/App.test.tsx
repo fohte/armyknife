@@ -667,6 +667,87 @@ function readSessionTitles() {
   )
 }
 
+it('keeps waiting sessions from the feed visible in the Inbox', () => {
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-waiting', 'Wait for the build', 'waiting')],
+  })
+
+  expect(
+    Array.from(
+      container.querySelectorAll('.waiting-section .session-title'),
+      (title) => title.textContent,
+    ),
+  ).toEqual(['Wait for the build'])
+})
+
+it('reveals a selected Waiting session beyond the Inbox row limit', () => {
+  window.history.replaceState(null, '', '/?session=session-waiting-three')
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-waiting-one', 'First waiting session', 'waiting', 8),
+      session('session-waiting-two', 'Second waiting session', 'waiting', 16),
+      session('session-waiting-three', 'Third waiting session', 'waiting', 24),
+    ],
+  })
+
+  const snapshot = () => ({
+    visibleTitles: Array.from(
+      container.querySelectorAll('.waiting-section .session-title'),
+      (title) => title.textContent,
+    ),
+    selectedTitle: readSelectedTitle(),
+    showMore: container.querySelector('.show-more-button')?.textContent,
+  })
+
+  expect(snapshot()).toEqual({
+    visibleTitles: [
+      'First waiting session',
+      'Second waiting session',
+      'Third waiting session',
+    ],
+    selectedTitle: 'Third waiting session',
+    showMore: undefined,
+  })
+})
+
+it('reopens the mobile Waiting section when another session is selected', () => {
+  renderMobileApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-waiting-one', 'First waiting session', 'waiting', 8),
+      session('session-waiting-two', 'Second waiting session', 'waiting', 16),
+    ],
+  })
+
+  clickButton('.mobile-waiting-row')
+  window.history.pushState(null, '', '/?session=session-waiting-two')
+  act(() => {
+    window.dispatchEvent(new PopStateEvent('popstate'))
+  })
+
+  const snapshot = () => ({
+    expanded: container
+      .querySelector('.mobile-waiting-row')
+      ?.getAttribute('aria-expanded'),
+    selectedTitle: readSelectedTitle(),
+    visibleTitles: Array.from(
+      container.querySelectorAll('.waiting-section .session-title'),
+      (title) => title.textContent,
+    ),
+  })
+
+  expect(snapshot()).toEqual({
+    expanded: 'true',
+    selectedTitle: 'Second waiting session',
+    visibleTitles: ['First waiting session', 'Second waiting session'],
+  })
+})
+
 function readActiveView() {
   const active = container.querySelector<HTMLButtonElement>(
     '.view-switch-button[aria-pressed="true"]',
@@ -1119,6 +1200,257 @@ it('persists the selected Inbox sort and moves with the visible project order', 
     storedSort: 'project',
     visibleTitles: ['Alpha session', 'Beta session', 'Zeta session'],
     selectedTitle: 'Beta session',
+  })
+})
+
+it('moves to Waiting with j and k under a non-priority Inbox sort', () => {
+  window.localStorage.setItem('agent-watch-web:inbox-sort', 'project')
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session(
+        'session-needs-action',
+        'Zeta request',
+        'needs_action',
+        8,
+        'zeta',
+      ),
+      session('session-waiting-zeta', 'Zeta waiting', 'waiting', 8, 'zeta'),
+      session('session-waiting-beta', 'Beta waiting', 'waiting', 8, 'beta'),
+      session('session-waiting-alpha', 'Alpha waiting', 'waiting', 8, 'alpha'),
+    ],
+  })
+
+  const needsActionRow = Array.from(
+    container.querySelectorAll<HTMLButtonElement>('[data-session-row]'),
+  ).find((row) => row.innerText.includes('Zeta request'))
+  if (needsActionRow === undefined) {
+    throw new Error('Expected the Needs action row')
+  }
+  act(() => {
+    needsActionRow.click()
+  })
+  act(() => {
+    dispatchKey(window, 'j')
+  })
+  const firstWaitingTitle = readSelectedTitle()
+  act(() => {
+    dispatchKey(window, 'j')
+  })
+  const secondWaitingTitle = readSelectedTitle()
+  act(() => {
+    dispatchKey(window, 'k')
+  })
+
+  const snapshot = () => ({
+    firstWaitingTitle,
+    secondWaitingTitle,
+    previousWaitingTitle: readSelectedTitle(),
+  })
+  expect(snapshot()).toEqual({
+    firstWaitingTitle: 'Alpha waiting',
+    secondWaitingTitle: 'Beta waiting',
+    previousWaitingTitle: 'Alpha waiting',
+  })
+})
+
+it('keeps visible In progress rows collapsed under a non-priority Inbox sort', () => {
+  window.localStorage.setItem('agent-watch-web:inbox-sort', 'project')
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session(
+        'session-progress-zeta',
+        'Zeta progress',
+        'in_progress',
+        8,
+        'zeta',
+      ),
+      session(
+        'session-progress-beta',
+        'Beta progress',
+        'in_progress',
+        8,
+        'beta',
+      ),
+      session(
+        'session-progress-alpha',
+        'Alpha progress',
+        'in_progress',
+        8,
+        'alpha',
+      ),
+    ],
+  })
+
+  const alphaRow = Array.from(
+    container.querySelectorAll<HTMLButtonElement>('[data-session-row]'),
+  ).find((row) => row.innerText.includes('Alpha progress'))
+  if (alphaRow === undefined) throw new Error('Expected the Alpha progress row')
+  act(() => {
+    alphaRow.click()
+  })
+
+  const snapshot = () => ({
+    selectedTitle: readSelectedTitle(),
+    visibleTitles: Array.from(
+      container.querySelectorAll('.in-progress-section .session-title'),
+      (title) => title.textContent,
+    ),
+    showMore: container.querySelector('.show-more-button')?.textContent,
+  })
+  expect(snapshot()).toEqual({
+    selectedTitle: 'Alpha progress',
+    visibleTitles: ['Alpha progress', 'Beta progress'],
+    showMore: '1 more ▸',
+  })
+})
+
+it('does not scroll the selected row when Waiting is expanded', () => {
+  const scrollIntoView = vi.spyOn(HTMLElement.prototype, 'scrollIntoView')
+  window.history.replaceState(null, '', '/?session=session-selected')
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-selected', 'Selected session'),
+      session('session-waiting-alpha', 'Alpha waiting', 'waiting', 8, 'alpha'),
+      session('session-waiting-beta', 'Beta waiting', 'waiting', 8, 'beta'),
+      session('session-waiting-gamma', 'Gamma waiting', 'waiting', 8, 'gamma'),
+    ],
+  })
+  scrollIntoView.mockClear()
+
+  act(() => {
+    container.querySelector<HTMLButtonElement>('.show-more-button')?.click()
+  })
+
+  const snapshot = () => ({
+    selectedTitle: readSelectedTitle(),
+    waitingTitles: Array.from(
+      container.querySelectorAll('.waiting-section .session-title'),
+      (title) => title.textContent,
+    ),
+    scrollOptions: scrollIntoView.mock.calls.map(([options]) => options),
+  })
+  expect(snapshot()).toEqual({
+    selectedTitle: 'Selected session',
+    waitingTitles: ['Alpha waiting', 'Beta waiting', 'Gamma waiting'],
+    scrollOptions: [],
+  })
+})
+
+it('scrolls the selected row when the Inbox sort changes', () => {
+  const scrollIntoView = vi.spyOn(HTMLElement.prototype, 'scrollIntoView')
+  window.history.replaceState(null, '', '/?session=session-selected')
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-selected', 'Selected session', 'in_progress', 8, 'zeta'),
+      session('session-alpha', 'Alpha progress', 'in_progress', 8, 'alpha'),
+    ],
+  })
+
+  act(() => {
+    container.querySelector<HTMLButtonElement>('.inbox-sort-trigger')?.click()
+  })
+  scrollIntoView.mockClear()
+  const projectOption = Array.from(
+    container.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]'),
+  ).find((option) => option.textContent.includes('Project'))
+  if (projectOption === undefined) throw new Error('Expected the Project sort')
+  act(() => {
+    projectOption.click()
+  })
+
+  const snapshot = () => ({
+    selectedTitle: readSelectedTitle(),
+    sort: container.querySelector('.inbox-sort-trigger strong')?.textContent,
+    scrollOptions: scrollIntoView.mock.calls.map(([options]) => options),
+  })
+  expect(snapshot()).toEqual({
+    selectedTitle: 'Selected session',
+    sort: 'Project',
+    scrollOptions: [{ block: 'nearest' }],
+  })
+})
+
+it('scrolls the selected row when the Inbox filter changes', async () => {
+  const scrollIntoView = vi.spyOn(HTMLElement.prototype, 'scrollIntoView')
+  window.history.replaceState(null, '', '/?session=session-selected')
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session(
+        'session-selected',
+        'Selected session',
+        'needs_action',
+        8,
+        'zeta',
+      ),
+      session('session-alpha', 'Alpha session', 'needs_action', 8, 'alpha'),
+    ],
+  })
+  scrollIntoView.mockClear()
+
+  act(() => {
+    container.querySelector<HTMLButtonElement>('.inbox-filter-open')?.click()
+  })
+  const filterInput = container.querySelector<HTMLInputElement>(
+    '[aria-label="Inbox filter query"]',
+  )
+  if (filterInput === null) throw new Error('Expected the Inbox filter input')
+  await act(async () => {
+    await userEvent.fill(filterInput, 'project:zeta')
+    await userEvent.keyboard('{Enter}')
+  })
+
+  const snapshot = () => ({
+    selectedTitle: readSelectedTitle(),
+    scrollOptions: scrollIntoView.mock.calls.map(([options]) => options),
+  })
+  expect(snapshot()).toEqual({
+    selectedTitle: 'Selected session',
+    scrollOptions: [{ block: 'nearest' }],
+  })
+})
+
+it('does not scroll the selected row when mobile In progress is expanded', () => {
+  const scrollIntoView = vi.spyOn(HTMLElement.prototype, 'scrollIntoView')
+  setMobileViewport(true)
+  window.history.replaceState(null, '', '/?session=session-selected')
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-selected', 'Selected session'),
+      session('session-progress-alpha', 'Alpha progress', 'in_progress'),
+      session('session-progress-beta', 'Beta progress', 'in_progress'),
+    ],
+  })
+  scrollIntoView.mockClear()
+
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>('.mobile-in-progress-row')
+      ?.click()
+  })
+
+  const snapshot = () => ({
+    selectedTitle: readSelectedTitle(),
+    inProgressExpanded: container
+      .querySelector('.mobile-in-progress-row')
+      ?.getAttribute('aria-expanded'),
+    scrollOptions: scrollIntoView.mock.calls.map(([options]) => options),
+  })
+  expect(snapshot()).toEqual({
+    selectedTitle: 'Selected session',
+    inProgressExpanded: 'true',
+    scrollOptions: [],
   })
 })
 

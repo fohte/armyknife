@@ -7,6 +7,7 @@ export type InboxSort = 'priority' | 'updated' | 'project'
 const INBOX_CATEGORY_ORDER: readonly Session['category'][] = [
   'needs_action',
   'later',
+  'waiting',
   'in_progress',
   'done',
 ]
@@ -92,17 +93,44 @@ export function sortInboxSessionsByCategory(
   )
 }
 
-export function isSelectedSessionBeyondVisibleInProgress(
+function isSelectedSessionBeyondVisibleCategory(
   sessions: readonly Session[],
   selectedId: string | null,
+  category: Session['category'],
   sort: InboxSort,
 ): boolean {
   if (selectedId === null) return false
 
   return sortInboxSessions(
-    sessions.filter((session) => session.category === 'in_progress'),
+    sessions.filter((session) => session.category === category),
     sort,
   )
     .slice(2)
     .some((session) => session.id === selectedId)
+}
+
+export function isSelectedSessionBeyondVisibleInProgress(
+  sessions: readonly Session[],
+  selectedId: string | null,
+  sort: InboxSort,
+): boolean {
+  return isSelectedSessionBeyondVisibleCategory(
+    sessions,
+    selectedId,
+    'in_progress',
+    sort,
+  )
+}
+
+export function isSelectedSessionBeyondVisibleWaiting(
+  sessions: readonly Session[],
+  selectedId: string | null,
+  sort: InboxSort,
+): boolean {
+  return isSelectedSessionBeyondVisibleCategory(
+    sessions,
+    selectedId,
+    'waiting',
+    sort,
+  )
 }

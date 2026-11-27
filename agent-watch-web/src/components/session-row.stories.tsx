@@ -323,6 +323,21 @@ export const WorkIsInProgress: Story = {
   },
 }
 
+export const WorkIsWaitingForExternalWork: Story = {
+  name: 'A Board compact waiting row shows why it is paused',
+  args: {
+    density: 'compact',
+    showWaitingReason: true,
+    session: {
+      ...session,
+      category: 'waiting',
+      kind: null,
+      waitingReason: 'Waiting for the checks to finish',
+      unread: false,
+    },
+  },
+}
+
 export const WorkIsDone: Story = {
   name: 'A completed session shows its merged pull request',
   args: {

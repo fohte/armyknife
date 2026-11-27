@@ -592,8 +592,7 @@ async fn list_sessions<S: SessionSource>(
                     now,
                 },
             );
-            let waiting =
-                agent_is_waiting && category_when_not_later == SessionCategory::InProgress;
+            let waiting = agent_is_waiting && category_when_not_later == SessionCategory::Waiting;
             let crit_url = session.crit_urls.last().cloned();
             let crit_exposed_url = crit_url.as_ref().and_then(|url| {
                 session
@@ -674,7 +673,8 @@ async fn list_sessions<S: SessionSource>(
                     SessionActivityStatus::Stopped
                 },
                 waiting_reason: if agent_is_waiting
-                    && (category_when_not_later == SessionCategory::InProgress
+                    && (category_when_not_later == SessionCategory::Waiting
+                        || category_when_not_later == SessionCategory::InProgress
                         || is_waiting_for_crit_review)
                 {
                     session
@@ -3452,12 +3452,12 @@ mod tests {
         source.web_states[0].later_until = None;
 
         let mut expected = expected_response(
-            "in_progress",
+            "waiting",
             None,
             true,
             ExpectedSessionDetails {
                 kind: Some("Stopped"),
-                category_when_not_later: "in_progress",
+                category_when_not_later: "waiting",
                 is_paused: false,
                 unread: true,
                 crit_url: None,

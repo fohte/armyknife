@@ -1,12 +1,13 @@
 import type { Session } from '#types'
 
-type ProjectStatus = 'Review' | 'Working' | 'Idle'
+type ProjectStatus = 'Review' | 'Working' | 'Waiting' | 'Idle'
 
 export type BoardProject = {
   name: string
   sessions: Session[]
   repos: string[]
   needsActionCount: number
+  waitingCount: number
   inProgressCount: number
   quiet: boolean
   status: ProjectStatus
@@ -36,6 +37,9 @@ export function buildBoardProjects(
     const inProgressCount = projectSessions.filter(
       (session) => session.category === 'in_progress',
     ).length
+    const waitingCount = projectSessions.filter(
+      (session) => session.category === 'waiting',
+    ).length
     const repos = Array.from(
       new Set(
         projectSessions
@@ -44,21 +48,30 @@ export function buildBoardProjects(
       ),
     ).sort((left, right) => left.localeCompare(right, 'en'))
     const status: ProjectStatus =
-      needsActionCount > 0 ? 'Review' : inProgressCount > 0 ? 'Working' : 'Idle'
+      needsActionCount > 0
+        ? 'Review'
+        : inProgressCount > 0
+          ? 'Working'
+          : waitingCount > 0
+            ? 'Waiting'
+            : 'Idle'
 
     return {
       name,
       sessions: projectSessions,
       repos,
       needsActionCount,
+      waitingCount,
       inProgressCount,
-      quiet: needsActionCount === 0 && inProgressCount === 0,
+      quiet:
+        needsActionCount === 0 && waitingCount === 0 && inProgressCount === 0,
       status,
     }
   }).sort(
     (left, right) =>
       right.needsActionCount - left.needsActionCount ||
       right.inProgressCount - left.inProgressCount ||
+      right.waitingCount - left.waitingCount ||
       left.name.localeCompare(right.name, 'en'),
   )
 }
@@ -96,12 +109,13 @@ function compareNavSessions(left: Session, right: Session) {
     needs_action: 0,
     in_progress: 1,
     later: 2,
-    done: 3,
+    waiting: 3,
+    done: 4,
   }
 
   return (
-    (categoryOrder[left.category] ?? 4) -
-      (categoryOrder[right.category] ?? 4) ||
+    (categoryOrder[left.category] ?? 5) -
+      (categoryOrder[right.category] ?? 5) ||
     left.elapsedSeconds - right.elapsedSeconds ||
     left.id.localeCompare(right.id, 'en')
   )
