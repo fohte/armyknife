@@ -3454,6 +3454,41 @@ it('opens the session when its launch ID appears in the feed', async () => {
   })
 })
 
+it('opens a launched session from a new-session palette on the Board', async () => {
+  vi.stubGlobal(
+    'fetch',
+    createSessionLaunchFetcher(jsonResponse({ launchId: 'launch-fixture' })),
+  )
+  window.history.replaceState(null, '', '/?view=board&newSession=palette')
+  renderApp()
+  publishSessions({ revision: 1, sessions: [] })
+  await waitForDirectoryResults()
+  clickButton('[aria-label="Select directory /Users/example/work/service"]')
+  await clickButtonAndFlush('.new-session-picker-start-desktop')
+  publishSessions({
+    revision: 2,
+    sessions: [
+      {
+        ...session('session-launched', 'Created session'),
+        launchId: 'launch-fixture',
+      },
+    ],
+  })
+
+  const snapshot = () => ({
+    view: readActiveView(),
+    pickerOpen: container.querySelector('.new-session-picker') !== null,
+    selectedTitle: readSelectedTitle(),
+    selectedId: new URLSearchParams(window.location.search).get('session'),
+  })
+  expect(snapshot()).toEqual({
+    view: 'Inbox',
+    pickerOpen: false,
+    selectedTitle: 'Created session',
+    selectedId: 'session-launched',
+  })
+})
+
 it('keeps the selected session when a launched session appears after returning from the new-session form', async () => {
   const fetcher = createSessionLaunchFetcher(
     jsonResponse({ launchId: 'launch-fixture' }),

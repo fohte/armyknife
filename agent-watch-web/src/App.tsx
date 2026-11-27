@@ -378,7 +378,12 @@ function AppContent() {
     )
     if (launchedSession === undefined) return
     setPendingLaunchId(null)
-    if (view !== 'inbox' || newSessionMode === null) return
+    if (
+      newSessionMode !== 'palette' &&
+      !(newSessionMode === 'form' && view === 'inbox')
+    ) {
+      return
+    }
     setCommandPaletteOpen(false)
     openSessionInInbox(launchedSession.id, 'replace')
   }, [
