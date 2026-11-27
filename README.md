@@ -1357,7 +1357,7 @@ pnpm install --frozen-lockfile
 ./scripts/install
 ```
 
-Run the same install command after pulling updates to replace the app in `/Applications`. The installer stages the new app before replacing the existing one and restores the previous app if the replacement fails. If Agent Watch is running during an update, macOS displays a notification asking you to reopen it.
+Run the same install command after pulling updates to replace the app in `/Applications`; it does not invoke `sudo` and requires write access to `/Applications`. The installer stages the new app before replacing the existing one and restores the previous app if the replacement fails. If it cannot remove the previous app after a successful update, it leaves a backup and prints a warning. If Agent Watch is running during an update, macOS displays a notification asking you to reopen it.
 
 The app opens the watch-web server at `http://127.0.0.1:4317`; it does not start or stop the server. If the initial page load fails, the app shows the command to start the server and retries. If an already loaded page loses the connection, watch-web reports the reconnecting state in that page and keeps its current session. The app is unsigned, so macOS may ask you to confirm the first launch.
 
