@@ -91,10 +91,7 @@ export function getConversationStatusBandState({
     !isWaitingForBackgroundTasks &&
     (session.activityStatus === 'working' || session.activityStatus == null)
 
-  if (isWorking && activeTool !== undefined) {
-    return { kind: 'working', detail: null }
-  }
-  if (isCompacting) {
+  if (isCompacting && !(isWorking && activeTool !== undefined)) {
     return { kind: 'compacting', detail: null }
   }
   if (isWaitingForUser) {

@@ -390,6 +390,27 @@ it('shows an active tool while the session is working and marked as compacting',
   ).toEqual({ kind: 'working', detail: null })
 })
 
+it('keeps draft review primary while an active tool is marked as compacting', () => {
+  expect(
+    getConversationStatusBandState({
+      session: {
+        ...session,
+        activityStatus: 'working',
+        isCompacting: true,
+        reviewDocumentId: editorIssueComment.id,
+        reviewDocumentCount: 1,
+      },
+      messages: [],
+      backgroundTasks: [],
+      activeTool: { tool: 'Bash', target: 'cargo test --package sample' },
+      editorReviewDocument: editorIssueCommentState,
+    }),
+  ).toEqual({
+    kind: 'draft-review',
+    detail: '1 draft · Issue comment #1234 is in the editor',
+  })
+})
+
 it('keeps Crit review primary while background tasks continue', () => {
   expect(
     getConversationStatusBandState({
