@@ -76,7 +76,7 @@ fn event_stream(
         ))
 }
 
-type RevisionReader = Arc<dyn Fn() -> anyhow::Result<Option<i64>> + Send + Sync>;
+type RevisionReader = Arc<dyn Fn() -> anyhow::Result<i64> + Send + Sync>;
 
 #[derive(Clone)]
 struct RevisionMonitor {
@@ -106,7 +106,7 @@ impl Drop for RevisionSubscriberGuard {
 
 impl RevisionMonitor {
     fn new(
-        read_revision: impl Fn() -> anyhow::Result<Option<i64>> + Send + Sync + 'static,
+        read_revision: impl Fn() -> anyhow::Result<i64> + Send + Sync + 'static,
         session_store_events: broadcast::Receiver<()>,
     ) -> Self {
         let (revisions, _) = watch::channel(None);
@@ -236,9 +236,7 @@ async fn publish_revision(
     read_revision: &RevisionReader,
 ) -> anyhow::Result<()> {
     let read_revision = Arc::clone(read_revision);
-    let Some(revision) = tokio::task::spawn_blocking(move || read_revision()).await?? else {
-        anyhow::bail!("session store revision read returned no revision");
-    };
+    let revision = tokio::task::spawn_blocking(move || read_revision()).await??;
     if *revision_sender.borrow() != Some(revision) {
         revision_sender.send_replace(Some(revision));
     }
@@ -284,8 +282,8 @@ async fn publish_revision_until_success(
     }
 }
 
-fn current_revision() -> anyhow::Result<Option<i64>> {
-    store::session_store_revision().map(Some)
+fn current_revision() -> anyhow::Result<i64> {
+    store::session_store_revision()
 }
 
 struct RevisionStreamState {
@@ -423,7 +421,7 @@ mod tests {
     #[tokio::test]
     async fn sends_the_server_instance_before_session_revisions() {
         let (_event_sender, event_receiver) = broadcast::channel(1);
-        let revisions = RevisionMonitor::new(|| Ok(Some(12)), event_receiver);
+        let revisions = RevisionMonitor::new(|| Ok(12), event_receiver);
         let (_enrichment_tx, enrichment_rx) = watch::channel(());
         let (_restart_tx, restart_rx) = watch::channel(false);
         let body = Sse::new(event_stream(
@@ -476,7 +474,7 @@ mod tests {
                 let read_count = Arc::clone(&read_count);
                 move || {
                     read_count.fetch_add(1, Ordering::SeqCst);
-                    Ok(Some(revision.load(Ordering::SeqCst)))
+                    Ok(revision.load(Ordering::SeqCst))
                 }
             },
             event_receiver,
@@ -573,7 +571,11 @@ mod tests {
                 let read_count = Arc::clone(&read_count);
                 move || {
                     let attempt = read_count.fetch_add(1, Ordering::SeqCst);
-                    Ok((attempt > 0).then_some(21))
+                    if attempt == 0 {
+                        Err(anyhow::anyhow!("temporary revision read failure"))
+                    } else {
+                        Ok(21)
+                    }
                 }
             },
             event_receiver,
@@ -608,7 +610,7 @@ mod tests {
                 let read_count = Arc::clone(&read_count);
                 move || {
                     read_count.fetch_add(1, Ordering::SeqCst);
-                    Ok(Some(revision.load(Ordering::SeqCst)))
+                    Ok(revision.load(Ordering::SeqCst))
                 }
             },
             event_receiver,
@@ -655,7 +657,7 @@ mod tests {
                         snapshot_started_sender.send(()).unwrap();
                         snapshot_continue_receiver.lock().unwrap().recv().unwrap();
                     }
-                    Ok(Some(snapshot))
+                    Ok(snapshot)
                 }
             },
             event_receiver,
@@ -701,7 +703,7 @@ mod tests {
     #[tokio::test]
     async fn emits_restart_and_closes_the_event_stream() {
         let (_event_sender, event_receiver) = broadcast::channel(1);
-        let revisions = RevisionMonitor::new(|| Ok(Some(12)), event_receiver);
+        let revisions = RevisionMonitor::new(|| Ok(12), event_receiver);
         let (_enrichment_tx, enrichment_rx) = watch::channel(());
         let (restart_tx, restart_rx) = watch::channel(false);
         let stream = revision_stream(revisions.subscribe(), enrichment_rx, restart_rx);
