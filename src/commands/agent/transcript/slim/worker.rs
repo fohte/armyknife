@@ -43,8 +43,8 @@ pub(super) fn run(command: &TranscriptCommands) -> Result<()> {
 
 fn slim_session_transcript(args: &SlimArgs) -> Result<SlimResult> {
     validate_session_id(&args.session_id)?;
-    let _lock = lock_transcript_session(&args.session_id)?;
     let path = resolve_transcript_path(args)?;
+    let _locks = lock_transcript(&args.session_id, &path)?;
     slim_transcript(&path)
 }
 
@@ -59,13 +59,34 @@ fn resolve_transcript_path(args: &SlimArgs) -> Result<PathBuf> {
         .context("resolve Claude Code home directory")
 }
 
-fn lock_transcript_session(session_id: &str) -> Result<File> {
+fn lock_transcript(session_id: &str, transcript_path: &Path) -> Result<(File, File)> {
     let cache_dir =
         crate::shared::cache::base_dir().context("resolve armyknife cache directory")?;
-    lock_transcript_session_in(&cache_dir, session_id)
+    let canonical_path = fs::canonicalize(transcript_path).with_context(|| {
+        format!(
+            "resolve transcript path for locking {}",
+            transcript_path.display()
+        )
+    })?;
+    let session_lock = lock_transcript_session_in(&cache_dir, session_id)?;
+    let transcript_lock = lock_transcript_path_in(&cache_dir, &canonical_path)?;
+    Ok((session_lock, transcript_lock))
 }
 
 fn lock_transcript_session_in(cache_dir: &Path, session_id: &str) -> Result<File> {
+    let digest = crate::shared::hex::encode(&Sha256::digest(session_id.as_bytes()));
+    lock_transcript_in(cache_dir, &digest)
+}
+
+fn lock_transcript_path_in(cache_dir: &Path, transcript_path: &Path) -> Result<File> {
+    let mut hasher = Sha256::new();
+    hasher.update(b"transcript-path\0");
+    hasher.update(transcript_path.as_os_str().as_encoded_bytes());
+    let digest = crate::shared::hex::encode(&hasher.finalize());
+    lock_transcript_in(cache_dir, &digest)
+}
+
+fn lock_transcript_in(cache_dir: &Path, digest: &str) -> Result<File> {
     let lock_dir = cache_dir.join(LOCK_DIRECTORY);
     fs::create_dir_all(&lock_dir).with_context(|| {
         format!(
@@ -73,7 +94,6 @@ fn lock_transcript_session_in(cache_dir: &Path, session_id: &str) -> Result<File
             lock_dir.display()
         )
     })?;
-    let digest = crate::shared::hex::encode(&Sha256::digest(session_id.as_bytes()));
     let lock_path = lock_dir.join(format!("{digest}.lock"));
     let lock_file = OpenOptions::new()
         .create(true)
@@ -83,7 +103,7 @@ fn lock_transcript_session_in(cache_dir: &Path, session_id: &str) -> Result<File
         .with_context(|| format!("open transcript slim lock {}", lock_path.display()))?;
     lock_file
         .lock()
-        .with_context(|| format!("lock transcript slim session {session_id}"))?;
+        .with_context(|| format!("lock transcript slim resource {}", lock_path.display()))?;
     Ok(lock_file)
 }
 
@@ -107,8 +127,8 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        PostReplacementFailure, SlimArgs, lock_transcript_session_in, resolve_transcript_path,
-        slim_failure_event,
+        LOCK_DIRECTORY, PostReplacementFailure, SlimArgs, lock_transcript_path_in,
+        lock_transcript_session_in, resolve_transcript_path, slim_failure_event,
     };
 
     #[test]
@@ -126,6 +146,31 @@ mod tests {
             .write(true)
             .open(lock_path)
             .expect("second lock handle should open");
+
+        assert!(
+            second_lock
+                .try_lock()
+                .is_err_and(|error| matches!(error, std::fs::TryLockError::WouldBlock))
+        );
+        drop(first_lock);
+    }
+
+    #[test]
+    fn transcript_path_lock_prevents_a_second_worker_for_the_same_file() {
+        let directory = tempdir().expect("lock root should be created");
+        let transcript_path = directory.path().join("fixture-transcript.jsonl");
+        let first_lock = lock_transcript_path_in(directory.path(), &transcript_path)
+            .expect("first transcript lock should be acquired");
+        let lock_path = fs::read_dir(directory.path().join(LOCK_DIRECTORY))
+            .expect("lock directory should be readable")
+            .next()
+            .expect("transcript lock should exist")
+            .expect("transcript lock entry should be readable")
+            .path();
+        let second_lock = OpenOptions::new()
+            .write(true)
+            .open(lock_path)
+            .expect("second transcript lock handle should open");
 
         assert!(
             second_lock

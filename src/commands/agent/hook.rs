@@ -1965,7 +1965,18 @@ mod tests {
                 .expect("transcript slim calls should lock")
                 .clone(),
             if expected_scheduled {
-                vec![("test-123".to_string(), expected_transcript_path)]
+                vec![(
+                    "test-123".to_string(),
+                    expected_transcript_path.clone(),
+                    vec![
+                        "agent".to_string(),
+                        "transcript".to_string(),
+                        "slim".to_string(),
+                        "test-123".to_string(),
+                        "--transcript-path".to_string(),
+                        expected_transcript_path.to_string_lossy().into_owned(),
+                    ],
+                )]
             } else {
                 Vec::new()
             },

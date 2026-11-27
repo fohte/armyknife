@@ -93,7 +93,7 @@ fn slim_transcript(path: &Path) -> Result<SlimResult> {
     )
 }
 
-// The CLI holds a per-session lock through this rewrite because competing replacements can lose appends.
+// The worker holds session and transcript locks through this rewrite because competing replacements can lose appends.
 fn slim_transcript_with<F, G, H, P>(
     path: &Path,
     during_rewrite: F,

@@ -20,7 +20,7 @@ type TitleGenerationCall = (String, String, Option<String>, bool);
 type TitleGenerationCallSink = std::sync::Arc<std::sync::Mutex<Vec<TitleGenerationCall>>>;
 
 #[cfg(test)]
-type TranscriptSlimCall = (String, std::path::PathBuf);
+type TranscriptSlimCall = (String, std::path::PathBuf, Vec<String>);
 #[cfg(test)]
 type TranscriptSlimCallSink = std::sync::Arc<std::sync::Mutex<Vec<TranscriptSlimCall>>>;
 
@@ -212,28 +212,26 @@ impl SideEffects {
         if !self.transcript_slim {
             return;
         }
+        let args = transcript_slim_worker_args(session_id, transcript_path);
         #[cfg(test)]
         if let Some(calls) = &self.transcript_slim_calls {
             calls
                 .lock()
                 .expect("transcript_slim_calls mutex poisoned")
-                .push((session_id.to_string(), transcript_path.to_path_buf()));
+                .push((
+                    session_id.to_string(),
+                    transcript_path.to_path_buf(),
+                    args.to_vec(),
+                ));
         }
         #[cfg(not(test))]
         {
-            let transcript_path = transcript_path.to_string_lossy().into_owned();
+            let args = args.iter().map(String::as_str).collect::<Vec<_>>();
             crate::infra::process::spawn_self_detached(
                 "agent.transcript.slim.spawn",
                 "agent.transcript.slim.spawn_failed",
                 session_id,
-                &[
-                    "agent",
-                    "transcript",
-                    "slim",
-                    session_id,
-                    "--transcript-path",
-                    &transcript_path,
-                ],
+                &args,
             );
         }
     }
@@ -351,5 +349,65 @@ impl SideEffects {
         }
         #[cfg(not(test))]
         archive_tq_session_detached::spawn_in_background(session_id);
+    }
+}
+
+fn transcript_slim_worker_args(session_id: &str, transcript_path: &Path) -> [String; 6] {
+    [
+        "agent".to_string(),
+        "transcript".to_string(),
+        "slim".to_string(),
+        session_id.to_string(),
+        "--transcript-path".to_string(),
+        transcript_path.to_string_lossy().into_owned(),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+    use std::sync::{Arc, Mutex};
+
+    use clap::Parser;
+
+    use super::SideEffects;
+    use crate::cli::{Cli, Commands};
+    use crate::commands::agent::{AgentCommands, SlimArgs, TranscriptCommands};
+
+    #[test]
+    fn transcript_slim_worker_arguments_parse_as_the_hook_target() {
+        let transcript_path = Path::new("/fixture/transcripts/fixture-session.jsonl");
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let side_effects = SideEffects {
+            transcript_slim: true,
+            transcript_slim_calls: Some(calls.clone()),
+            ..SideEffects::none()
+        };
+        side_effects.schedule_transcript_slim("fixture-session", transcript_path);
+        let calls = calls
+            .lock()
+            .expect("transcript slim calls should lock")
+            .clone();
+        let parsed_commands = calls
+            .into_iter()
+            .map(|(_, _, worker_args)| {
+                let parsed = Cli::try_parse_from(
+                    std::iter::once("a").chain(worker_args.iter().map(String::as_str)),
+                )
+                .expect("hook worker arguments should parse");
+                parsed.command
+            })
+            .collect::<Vec<_>>();
+
+        assert!(
+            parsed_commands
+                == vec![Commands::Agent(AgentCommands::Transcript(
+                    TranscriptCommands::Slim(SlimArgs {
+                        session_id: "fixture-session".to_string(),
+                        cwd: PathBuf::from("."),
+                        transcript_path: Some(transcript_path.to_path_buf()),
+                    })
+                ))]
+        );
     }
 }
