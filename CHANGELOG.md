@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.985](https://github.com/fohte/armyknife/compare/v0.1.984...v0.1.985) (2026-11-27)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** truncate long session labels ([#2371](https://github.com/fohte/armyknife/issues/2371)) ([4ac9182](https://github.com/fohte/armyknife/commit/4ac918288350e857f502a6a83c05102a07de3b54))
+
 ## [0.1.984](https://github.com/fohte/armyknife/compare/v0.1.983...v0.1.984) (2026-11-27)
 
 
