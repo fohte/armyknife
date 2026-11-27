@@ -1380,13 +1380,14 @@ mod tests {
     }
 
     #[rstest]
-    #[case::success_deletes_cache(true, true, true)]
-    #[case::failure_keeps_cache(false, true, true)]
-    #[case::no_prompt_skips_save(true, false, false)]
+    #[case::success_deletes_cache(true, true, true, true)]
+    #[case::failure_keeps_cache(false, true, true, false)]
+    #[case::no_prompt_skips_save(true, false, false, false)]
     fn with_prompt_cache_recovery_saves_and_cleans_up(
         #[case] succeed: bool,
         #[case] has_prompt: bool,
         #[case] expect_save: bool,
+        #[case] expect_delete: bool,
     ) {
         use std::cell::Cell;
 
@@ -1412,7 +1413,7 @@ mod tests {
 
         assert_eq!(
             (result.is_ok(), saved.get(), deleted.get()),
-            (succeed, expect_save, succeed),
+            (succeed, expect_save, expect_delete),
         );
     }
 
