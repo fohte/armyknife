@@ -70,9 +70,9 @@
   line-height: 1.55;
 }
 
-.agent-watch-shell[data-layout='mobile'] .sort-description,
-.story-mobile-layout .sort-description {
-  display: none;
+.agent-watch-shell[data-layout='mobile'] .inbox-sort-control,
+.story-mobile-layout .inbox-sort-control {
+  margin-top: 4px;
 }
 
 .agent-watch-shell[data-layout='mobile'] .mobile-today-strip,
@@ -119,6 +119,13 @@
   height: 44px;
   padding: 0 16px;
   font-size: 13px;
+}
+
+.agent-watch-shell[data-layout='mobile'] .inbox-project-heading,
+.story-mobile-layout .inbox-project-heading {
+  height: auto;
+  padding: 8px 16px 2px;
+  font-size: 12.5px;
 }
 
 .agent-watch-shell[data-layout='mobile'] .needs-action-section .section-heading,

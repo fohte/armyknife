@@ -624,13 +624,88 @@ it('disables Resume when the session has no tmux location', () => {
     label: resumeButton.textContent,
     disabled: resumeButton.disabled,
     title: resumeButton.title,
+    hint: container.querySelector('.conversation-ended-hint')?.textContent,
   })
   expect(actual()).toEqual({
     label: 'Resume',
     disabled: true,
     title: 'This session has no tmux location',
+    hint: ' · Resume is unavailable because this session has no tmux location',
   })
 })
+
+it('explains why Resume is disabled when the working directory is missing', () => {
+  renderView(
+    () => Promise.resolve(true),
+    endedSession,
+    () => undefined,
+    [],
+    {
+      ...endedActions,
+      resume: false,
+      resumeDisabledReason: 'workingDirectoryMissing',
+    },
+  )
+
+  const resumeButton = requireElement(
+    container.querySelector<HTMLButtonElement>('.conversation-ended-resume'),
+  )
+  const actual = () => ({
+    label: resumeButton.textContent,
+    disabled: resumeButton.disabled,
+    title: resumeButton.title,
+    hint: container.querySelector('.conversation-ended-hint')?.textContent,
+  })
+  expect(actual()).toEqual({
+    label: 'Resume',
+    disabled: true,
+    title: 'This session’s working directory does not exist',
+    hint: ' · Resume is unavailable because this session’s working directory does not exist',
+  })
+})
+
+it.each([
+  [
+    'no tmux location',
+    'noTmux',
+    'Resume is unavailable because this session has no tmux location',
+  ],
+  [
+    'a missing working directory',
+    'workingDirectoryMissing',
+    'Resume is unavailable because this session’s working directory does not exist',
+  ],
+] as const)(
+  'shows the disabled reason on mobile with %s',
+  (_condition, reason, hint) => {
+    renderView(
+      () => Promise.resolve(true),
+      endedSession,
+      () => undefined,
+      [],
+      { ...endedActions, resume: false, resumeDisabledReason: reason },
+      true,
+    )
+
+    const resumeButton = requireElement(
+      container.querySelector<HTMLButtonElement>('.conversation-ended-resume'),
+    )
+    const actual = () => ({
+      mobile: container
+        .querySelector('.conversation-pane')
+        ?.getAttribute('data-mobile'),
+      label: resumeButton.textContent,
+      disabled: resumeButton.disabled,
+      hint: container.querySelector('.conversation-ended-hint')?.textContent,
+    })
+    expect(actual()).toEqual({
+      mobile: 'true',
+      label: 'Resume session',
+      disabled: true,
+      hint: ` · ${hint}`,
+    })
+  },
+)
 
 type SettleResumeRequest = (
   resolve: (success: boolean) => void,
@@ -8294,7 +8369,7 @@ it('attaches dropped files through the composer and sends their data', async () 
     actionCalls: onAction.mock.calls,
   })
   expect(snapshot()).toEqual({
-    targetVisibleDuringDrag: 'Drop files to attach',
+    targetVisibleDuringDrag: 'Drop images to attach',
     targetAfterDrop: null,
     dropPrevented: true,
     attachmentNames: [],
@@ -8425,7 +8500,7 @@ it('hides the drop target when a file drag leaves the conversation', () => {
       container.querySelector('.conversation-drop-target')?.textContent ?? null,
   })
   expect(snapshot()).toEqual({
-    targetAfterEnter: 'Drop files to attach',
+    targetAfterEnter: 'Drop images to attach',
     targetAfterLeave: null,
   })
 })

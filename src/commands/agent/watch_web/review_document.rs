@@ -1158,6 +1158,8 @@ mod tests {
             .path()
             .join("queued-document.md");
         std::fs::write(&queued_path, "Queued body.").expect("queued document should be written");
+        let _queued_lock =
+            LockGuard::acquire(&queued_path).expect("queued review lock should be acquired");
         let mut session = active_review_document.session;
         session.pending_human_review_ids.insert(review_marker(
             "queued-review",
@@ -1337,6 +1339,20 @@ mod tests {
                 .expect("fixture directory should be created");
             std::fs::write(path, contents).expect("fixture document should be written");
         }
+        let _review_locks = [
+            &pr_draft_path,
+            &issue_path,
+            &comment_path,
+            &existing_comment_path,
+            &legacy_issue_path,
+            &legacy_comment_path,
+            &new_issue_path,
+            &replies_path,
+            &generic_path,
+        ]
+        .into_iter()
+        .map(|path| LockGuard::acquire(path).expect("review lock should be acquired"))
+        .collect::<Vec<_>>();
 
         let mut session = session_with_review(&generic_path);
         session.cwd = temp_dir.path().to_path_buf();
@@ -1405,7 +1421,7 @@ mod tests {
                             "pullRequestNumber": 73,
                             "title": "Sample pull request",
                         },
-                        "isEditor": false,
+                        "isEditor": true,
                         "canSave": false,
                         "canFinish": false,
                     },
@@ -1514,6 +1530,8 @@ mod tests {
             .path()
             .join("queued-document.md");
         std::fs::write(&queued_path, "Queued body.").expect("queued document should be written");
+        let _queued_lock =
+            LockGuard::acquire(&queued_path).expect("queued review lock should be acquired");
         let mut session = active_review_document.session;
         session.pending_human_review_ids.insert(review_marker(
             "queued-review",
@@ -1566,6 +1584,8 @@ mod tests {
             .path()
             .join("queued-document.md");
         std::fs::write(&queued_path, "Queued body.").expect("queued document should be written");
+        let _queued_lock =
+            LockGuard::acquire(&queued_path).expect("queued review lock should be acquired");
         let mut session = active_review_document.session;
         session.pending_human_review_ids.insert(review_marker(
             "queued-review",
@@ -1612,6 +1632,8 @@ mod tests {
             .path()
             .join("queued-document.md");
         std::fs::write(&queued_path, "Queued body.").expect("queued document should be written");
+        let _queued_lock =
+            LockGuard::acquire(&queued_path).expect("queued review lock should be acquired");
         let mut session = active_review_document.session;
         session.pending_human_review_ids.insert(review_marker(
             "queued-review",

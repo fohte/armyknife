@@ -160,6 +160,10 @@ pub async fn run(args: &WatchWebArgs) -> Result<()> {
 
     let executable = std::env::current_exe()?;
     let mut executable_identity = restart::ExecutableIdentity::read(&executable)?;
+    let mut executable_watcher =
+        restart::create_watcher_or_warn(|| restart::ExecutableWatcher::new(&executable));
+    let mut startup_replacement_pending = executable_watcher.is_some()
+        && restart::ExecutableIdentity::read(&executable)? != executable_identity;
     let (listener, address) = bind_listener(args.port).await?;
     ensure_port_allowed(address.port(), own_session_id.as_deref())?;
     let restart_args = restart_args_with_port(std::env::args_os().skip(1), address.port());
@@ -173,7 +177,6 @@ pub async fn run(args: &WatchWebArgs) -> Result<()> {
     );
 
     let mut listener = listener;
-    let mut restart_retry_interval = restart::POLL_INTERVAL;
     let sessions_dir = store::sessions_dir()?;
     loop {
         let (restart_sender, restart_receiver) = watch::channel(false);
@@ -212,7 +215,14 @@ pub async fn run(args: &WatchWebArgs) -> Result<()> {
         let server = watch_web_server;
         match restart::wait_for_server_or_restart(
             server,
-            restart::wait_for_replacement(&executable, executable_identity, restart_retry_interval),
+            restart::wait_for_replacement(
+                &executable,
+                executable_identity,
+                &mut startup_replacement_pending,
+                executable_watcher
+                    .as_mut()
+                    .map(|watcher| &mut watcher.events),
+            ),
             restart_sender,
             restart::SERVER_SHUTDOWN_TIMEOUT,
         )
@@ -221,13 +231,12 @@ pub async fn run(args: &WatchWebArgs) -> Result<()> {
             restart::ServerOutcome::Exited => return Ok(()),
             restart::ServerOutcome::Restart => {
                 match restart::exec_replacement(&executable, executable_identity, &restart_args) {
-                    Ok(_) => restart_retry_interval = restart::POLL_INTERVAL,
+                    Ok(_) => {}
                     Err(error) => {
                         eprintln!("Could not restart the Agent Watch Web UI: {error}");
                         if let Ok(identity) = restart::ExecutableIdentity::read(&executable) {
                             executable_identity = identity;
                         }
-                        restart_retry_interval = restart::EXEC_RETRY_INTERVAL;
                     }
                 }
                 listener = bind_listener(address.port()).await?.0;

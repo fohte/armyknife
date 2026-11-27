@@ -551,6 +551,14 @@ async function clickButtonAndFlush(selector: string) {
   })
 }
 
+async function startNewSessionFromForm() {
+  clickButton('[aria-label="New session"]')
+  await waitForDirectoryResults()
+  clickButton('.new-session-directory-button')
+  clickButton('[aria-label="Select directory /Users/example/work/service"]')
+  await clickButtonAndFlush('.new-session-start')
+}
+
 function requestPath(input: RequestInfo | URL) {
   return new URL(requestUrl(input), 'http://localhost').pathname
 }
@@ -1069,6 +1077,51 @@ it('replaces the session URL while moving with j and k', async () => {
   })
 })
 
+it('persists the selected Inbox sort and moves with the visible project order', async () => {
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-alpha', 'Alpha session', 'needs_action', 8, 'alpha'),
+      session('session-zeta', 'Zeta session', 'needs_action', 8, 'zeta'),
+      session('session-beta', 'Beta session', 'needs_action', 8, 'beta'),
+    ],
+  })
+  const trigger = container.querySelector<HTMLButtonElement>(
+    '.inbox-sort-trigger',
+  )
+  if (trigger === null) throw new Error('Expected Inbox sort trigger')
+
+  await act(async () => userEvent.click(trigger))
+  const projectOption = Array.from(
+    container.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]'),
+  ).find((option) => option.innerText.includes('Project'))
+  if (projectOption === undefined) {
+    throw new Error('Expected Project sort option')
+  }
+  await act(async () => userEvent.click(projectOption))
+
+  const alphaRow = Array.from(
+    container.querySelectorAll<HTMLButtonElement>('[data-session-row]'),
+  ).find((row) => row.innerText.includes('Alpha session'))
+  if (alphaRow === undefined) throw new Error('Expected Alpha session row')
+  await act(async () => userEvent.click(alphaRow))
+  act(() => {
+    dispatchKey(window, 'j')
+  })
+
+  const snapshot = () => ({
+    storedSort: window.localStorage.getItem('agent-watch-web:inbox-sort'),
+    visibleTitles: readSessionTitles(),
+    selectedTitle: readSelectedTitle(),
+  })
+  expect(snapshot()).toEqual({
+    storedSort: 'project',
+    visibleTitles: ['Alpha session', 'Beta session', 'Zeta session'],
+    selectedTitle: 'Beta session',
+  })
+})
+
 it('restores the Board from its URL and browser history', async () => {
   window.history.replaceState(null, '', '/?view=board')
   renderApp()
@@ -1229,6 +1282,7 @@ beforeEach(() => {
   setPlatform('Linux x86_64')
   mobileViewportMatches = false
   window.history.replaceState(null, '', '/')
+  window.localStorage.removeItem('agent-watch-web:inbox-sort')
   window.localStorage.removeItem('agent-watch-web:saved-inbox-views')
   mediaQueries.clear()
   container = document.createElement('div')
@@ -1246,6 +1300,7 @@ afterEach(() => {
   }
   root = null
   window.localStorage.removeItem('agent-watch:navigation-width')
+  window.localStorage.removeItem('agent-watch-web:inbox-sort')
   container.remove()
   window.localStorage.removeItem('agent-watch-web:saved-inbox-views')
   vi.useRealTimers()
@@ -2414,6 +2469,77 @@ it('returns to the Inbox after submitting Later for a mobile conversation', asyn
   })
 })
 
+it('selects the next mobile Inbox session in the active project order after Later', async () => {
+  const fetchMock = vi
+    .fn<typeof fetch>()
+    .mockImplementation(mockSessionActionFetch)
+  vi.stubGlobal('fetch', fetchMock)
+  window.localStorage.setItem('agent-watch-web:inbox-sort', 'project')
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-alpha', 'Alpha session', 'needs_action', 8, 'alpha'),
+      session('session-zeta', 'Zeta session', 'needs_action', 8, 'zeta'),
+      session('session-beta', 'Beta session', 'needs_action', 8, 'beta'),
+    ],
+  })
+  act(() => {
+    setMobileViewport(true)
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
+  })
+  await clickMobileSessionAction('Later')
+  await act(async () => {
+    await flushAsyncState()
+  })
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>(
+        '.later-menu-option:not(.later-menu-reset)',
+      )
+      ?.click()
+  })
+  await act(async () => {
+    await flushAsyncState()
+  })
+  publishSessions({
+    revision: 2,
+    sessions: [
+      {
+        ...session('session-alpha', 'Alpha session', 'later', 8, 'alpha'),
+        categoryWhenNotLater: 'needs_action',
+        laterUntil: '2030-03-04T16:00:00Z',
+      },
+      session('session-zeta', 'Zeta session', 'needs_action', 8, 'zeta'),
+      session('session-beta', 'Beta session', 'needs_action', 8, 'beta'),
+    ],
+  })
+
+  const snapshot = () => ({
+    selectedTitle: readSelectedTitle(),
+    laterRequest: fetchMock.mock.calls
+      .filter(
+        ([input]) => requestUrl(input) === '/api/sessions/session-alpha/later',
+      )
+      .map(([input, init]) => [requestUrl(input), init]),
+  })
+  expect(snapshot()).toEqual({
+    selectedTitle: 'Beta session',
+    laterRequest: [
+      [
+        '/api/sessions/session-alpha/later',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{"preset":"one_hour","expectedDeadline":"2030-03-04T16:00:00Z"}',
+        },
+      ],
+    ],
+  })
+})
+
 it('returns to the Inbox when the mobile conversation disappears from the feed', () => {
   renderApp()
   publishSessions({
@@ -3404,11 +3530,7 @@ it('opens the session when its launch ID appears in the feed', async () => {
     revision: 1,
     sessions: [session('session-before', 'Previous session')],
   })
-  clickButton('[aria-label="New session"]')
-  await waitForDirectoryResults()
-  clickButton('.new-session-directory-button')
-  clickButton('[aria-label="Select directory /Users/example/work/service"]')
-  await clickButtonAndFlush('.new-session-start')
+  await startNewSessionFromForm()
   publishSessions({
     revision: 2,
     sessions: [
@@ -3450,6 +3572,133 @@ it('opens the session when its launch ID appears in the feed', async () => {
   })
 })
 
+it('opens a launched session from a new-session palette on the Board', async () => {
+  vi.stubGlobal(
+    'fetch',
+    createSessionLaunchFetcher(jsonResponse({ launchId: 'launch-fixture' })),
+  )
+  window.history.replaceState(null, '', '/?view=board&newSession=palette')
+  renderApp()
+  publishSessions({ revision: 1, sessions: [] })
+  await waitForDirectoryResults()
+  clickButton('[aria-label="Select directory /Users/example/work/service"]')
+  await clickButtonAndFlush('.new-session-picker-start-desktop')
+  publishSessions({
+    revision: 2,
+    sessions: [
+      {
+        ...session('session-launched', 'Created session'),
+        launchId: 'launch-fixture',
+      },
+    ],
+  })
+
+  const snapshot = () => ({
+    view: readActiveView(),
+    pickerOpen: container.querySelector('.new-session-picker') !== null,
+    selectedTitle: readSelectedTitle(),
+    selectedId: new URLSearchParams(window.location.search).get('session'),
+  })
+  expect(snapshot()).toEqual({
+    view: 'Inbox',
+    pickerOpen: false,
+    selectedTitle: 'Created session',
+    selectedId: 'session-launched',
+  })
+})
+
+it('keeps the selected session when a launched session appears after returning from the new-session form', async () => {
+  const fetcher = createSessionLaunchFetcher(
+    jsonResponse({ launchId: 'launch-fixture' }),
+  )
+  vi.stubGlobal('fetch', fetcher)
+  window.history.replaceState(null, '', '/?session=session-before')
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-before', 'Previous session')],
+  })
+  await startNewSessionFromForm()
+  await act(async () => {
+    await changeHistory('back')
+  })
+
+  publishSessions({
+    revision: 2,
+    sessions: [
+      session('session-before', 'Previous session'),
+      {
+        ...session('session-launched', 'Created session'),
+        launchId: 'launch-fixture',
+      },
+    ],
+  })
+
+  const snapshot = () => ({
+    newSessionFormOpen: container.querySelector('.new-session-view') !== null,
+    selectedTitle: readSelectedTitle(),
+    selectedId: new URLSearchParams(window.location.search).get('session'),
+  })
+  expect(snapshot()).toEqual({
+    newSessionFormOpen: false,
+    selectedTitle: 'Previous session',
+    selectedId: 'session-before',
+  })
+})
+
+it('keeps the Board active and closes a completed form launch', async () => {
+  vi.stubGlobal(
+    'fetch',
+    createSessionLaunchFetcher(jsonResponse({ launchId: 'launch-fixture' })),
+  )
+  renderMobileApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-before', 'Previous session')],
+  })
+  await startNewSessionFromForm()
+  clickButton('[aria-label="Open navigation"]')
+  clickButton('.mobile-nav-drawer .view-switch-button[aria-pressed="false"]')
+
+  publishSessions({
+    revision: 2,
+    sessions: [
+      session('session-before', 'Previous session'),
+      {
+        ...session('session-launched', 'Created session'),
+        launchId: 'launch-fixture',
+      },
+    ],
+  })
+
+  const boardAfterLaunch = {
+    view: readActiveView(),
+    newSessionFormOpen: container.querySelector('.new-session-view') !== null,
+    selectedId: new URLSearchParams(window.location.search).get('session'),
+  }
+  clickButton('[aria-label="Open navigation"]')
+  clickButton('.mobile-nav-drawer .view-switch-button[aria-pressed="false"]')
+  const inboxAfterReturn = {
+    view: readActiveView(),
+    newSessionFormOpen: container.querySelector('.new-session-view') !== null,
+    selectedId: new URLSearchParams(window.location.search).get('session'),
+  }
+
+  const snapshot = () => ({ boardAfterLaunch, inboxAfterReturn })
+  expect(snapshot()).toEqual({
+    boardAfterLaunch: {
+      view: 'Board',
+      newSessionFormOpen: false,
+      selectedId: 'session-before',
+    },
+    inboxAfterReturn: {
+      view: 'Inbox',
+      newSessionFormOpen: false,
+      selectedId: 'session-before',
+    },
+  })
+})
+
 it('shows a launch failure and allows another attempt', async () => {
   const fetcher = createSessionLaunchFetcher(
     jsonResponse({ error: 'The session could not be started.' }, 400),
@@ -3457,11 +3706,7 @@ it('shows a launch failure and allows another attempt', async () => {
   vi.stubGlobal('fetch', fetcher)
   renderApp()
   publishSessions({ revision: 1, sessions: [] })
-  clickButton('[aria-label="New session"]')
-  await waitForDirectoryResults()
-  clickButton('.new-session-directory-button')
-  clickButton('[aria-label="Select directory /Users/example/work/service"]')
-  await clickButtonAndFlush('.new-session-start')
+  await startNewSessionFromForm()
 
   const snapshot = () => ({
     error: container.querySelector('.new-session-launch-status')?.textContent,
