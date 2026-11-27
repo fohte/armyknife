@@ -343,7 +343,9 @@ export function SessionRow({
           <span
             className="session-task"
             title={
-              task === null ? undefined : `${taskReference(task)} ${task.title}`
+              task === null
+                ? undefined
+                : `${taskReference(task)} ${task.title}${linkedTaskCount}`
             }
           >
             {task === null ? (
