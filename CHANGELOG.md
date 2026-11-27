@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.979](https://github.com/fohte/armyknife/compare/v0.1.978...v0.1.979) (2026-11-27)
+
+
+### Features
+
+* **agent/watch-web:** push session updates ([#2379](https://github.com/fohte/armyknife/issues/2379)) ([24c18ed](https://github.com/fohte/armyknife/commit/24c18edb99c62d7eb0d57a240828a8c380482b20))
+
 ## [0.1.978](https://github.com/fohte/armyknife/compare/v0.1.977...v0.1.978) (2026-11-27)
 
 
