@@ -171,7 +171,7 @@ function RepositoryLabel({ repository }: { repository: string }) {
   return (
     <span
       ref={repositoryRef}
-      className={`session-repo${isPlaceholder ? ' is-placeholder' : ''}`}
+      className={`session-repo${isPlaceholder ? ' is-placeholder' : ''}${shortenOwner ? ' is-owner-shortened' : ''}`}
       title={repository}
     >
       <span className="session-repo-label">

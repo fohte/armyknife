@@ -216,6 +216,10 @@
   margin-left: auto;
 }
 
+.session-row-content .session-repo.is-owner-shortened {
+  min-width: 12ch;
+}
+
 .session-row-content .session-repo-label {
   display: flex;
   min-width: 10ch;
@@ -228,6 +232,13 @@
 .session-row-content .session-repo-owner-separator {
   min-width: 0;
   overflow: hidden;
+}
+
+.session-row-content .session-repo.is-owner-shortened .session-repo-owner,
+.session-row-content
+  .session-repo.is-owner-shortened
+  .session-repo-owner-separator {
+  flex: 0 0 auto;
 }
 
 .session-row-content .session-repo-name {
