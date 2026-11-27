@@ -17,8 +17,9 @@ pub(super) async fn get_pane_snapshot(
 ) -> Result<Json<PaneSnapshotResponse>, ApiError> {
     let session = load_session(state.clone(), id).await?;
     let tmux_info = require_tmux(&session)?.clone();
+    let session_id = session.session_id.clone();
     let runtime = state.runtime;
-    let content = run_blocking(move || runtime.capture_pane(&tmux_info)).await?;
+    let content = run_blocking(move || runtime.capture_pane(&session_id, &tmux_info)).await?;
     let captured_at = chrono::Utc::now().to_rfc3339();
 
     Ok(Json(PaneSnapshotResponse {

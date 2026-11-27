@@ -216,16 +216,6 @@ pub fn capture_pane_with_escapes_for_socket(
     run_tmux_output_for_socket(socket_path, &["capture-pane", "-p", "-e", "-t", pane_id]).ok()
 }
 
-/// Captures plain pane text from its recorded server while preserving output whitespace.
-pub(crate) fn capture_pane_for_socket_result(
-    socket_path: Option<&str>,
-    pane_id: &str,
-) -> super::Result<String> {
-    capture_pane_for_socket_result_with(socket_path, pane_id, |args| {
-        super::run_tmux_output_untrimmed(args)
-    })
-}
-
 fn capture_pane_for_socket_result_with(
     socket_path: Option<&str>,
     pane_id: &str,
@@ -235,6 +225,80 @@ fn capture_pane_for_socket_result_with(
         socket_path,
         &["capture-pane", "-p", "-t", pane_id],
     ))
+}
+
+/// Captures the pane currently bound to a session, falling back to its stored pane ID.
+pub(crate) fn capture_pane_for_session_for_socket_result(
+    socket_path: Option<&str>,
+    session_name: &str,
+    session_id: &str,
+    stored_pane_id: &str,
+    option: &str,
+    legacy_option: &str,
+) -> super::Result<String> {
+    capture_pane_for_session_for_socket_result_with(
+        socket_path,
+        session_name,
+        session_id,
+        stored_pane_id,
+        option,
+        legacy_option,
+        super::run_tmux_output_untrimmed,
+    )
+}
+
+fn capture_pane_for_session_for_socket_result_with(
+    socket_path: Option<&str>,
+    session_name: &str,
+    session_id: &str,
+    stored_pane_id: &str,
+    option: &str,
+    legacy_option: &str,
+    mut run_tmux_output: impl FnMut(&[OsString]) -> super::Result<String>,
+) -> super::Result<String> {
+    let format = format!("#{{pane_id}}\t#{{session_name}}\t#{{{option}}}\t#{{{legacy_option}}}");
+    let args = socket_command_args(socket_path, &["list-panes", "-a", "-F", format.as_str()]);
+    let output = run_tmux_output(&args)?;
+    let pane_id = find_session_pane_id(&output, session_name, session_id, stored_pane_id)
+        .unwrap_or(stored_pane_id);
+
+    capture_pane_for_socket_result_with(socket_path, pane_id, |args| run_tmux_output(args))
+}
+
+fn find_session_pane_id<'a>(
+    output: &'a str,
+    session_name: &str,
+    session_id: &str,
+    stored_pane_id: &'a str,
+) -> Option<&'a str> {
+    let mut stored_pane = None;
+    for line in output.lines() {
+        let mut fields = line.split('\t');
+        let (Some(pane_id), Some(listed_session_name), Some(option_value)) =
+            (fields.next(), fields.next(), fields.next())
+        else {
+            continue;
+        };
+        let legacy_option_value = fields.next().unwrap_or("");
+        let option_value = [option_value, legacy_option_value]
+            .into_iter()
+            .find(|value| !value.is_empty());
+
+        if listed_session_name != session_name
+            || !is_safe_pane_id(pane_id)
+            || option_value != Some(session_id)
+        {
+            continue;
+        }
+
+        // Resume marks its replacement pane before sending the startup command.
+        if pane_id != stored_pane_id {
+            return Some(pane_id);
+        }
+        stored_pane = Some(pane_id);
+    }
+
+    stored_pane
 }
 
 /// Sends keys to a pane on its recorded server.
@@ -451,6 +515,68 @@ mod tests {
                     "-t".to_owned(),
                     "%47".to_owned(),
                 ]),
+            ),
+        );
+    }
+
+    #[test]
+    fn session_pane_capture_prefers_a_replacement_pane_bound_to_the_session() {
+        let pane_listing = indoc! {"
+            %17\tfixture-tmux\tfixture-session\t
+            %29\tfixture-tmux\tfixture-session\t
+            %31\tother-tmux\tfixture-session\t
+            %33\tfixture-tmux\tother-session\t
+        "}
+        .to_string();
+        let expected_output = ["", "fixture startup error", ""].join("\n");
+        let mut actual_calls = Vec::new();
+        let actual_output = capture_pane_for_session_for_socket_result_with(
+            Some("/fixture/tmux.sock"),
+            "fixture-tmux",
+            "fixture-session",
+            "%17",
+            "@fixture-session-id",
+            "@fixture-session-id-legacy",
+            |args| {
+                let args = args
+                    .iter()
+                    .map(|arg| arg.to_string_lossy().into_owned())
+                    .collect::<Vec<_>>();
+                actual_calls.push(args.clone());
+                if args.get(2).map(String::as_str) == Some("list-panes") {
+                    Ok(pane_listing.clone())
+                } else {
+                    Ok(expected_output.clone())
+                }
+            },
+        )
+        .map_err(|error| error.to_string());
+
+        assert_eq!(
+            (actual_output, actual_calls),
+            (
+                Ok(expected_output),
+                vec![
+                    vec![
+                        "-S",
+                        "/fixture/tmux.sock",
+                        "list-panes",
+                        "-a",
+                        "-F",
+                        "#{pane_id}\t#{session_name}\t#{@fixture-session-id}\t#{@fixture-session-id-legacy}",
+                    ],
+                    vec![
+                        "-S",
+                        "/fixture/tmux.sock",
+                        "capture-pane",
+                        "-p",
+                        "-t",
+                        "%29",
+                    ],
+                ]
+                .into_iter()
+                .map(|args| args.into_iter().map(str::to_owned).collect::<Vec<_>>())
+                .collect::<Vec<_>>(),
             ),
         );
     }
