@@ -70,7 +70,9 @@ async function resizeFrame(width: string) {
     frame.style.width = width
     await new Promise<void>((resolve) => {
       requestAnimationFrame(() => {
-        requestAnimationFrame(resolve)
+        requestAnimationFrame(() => {
+          resolve()
+        })
       })
     })
   })
@@ -243,7 +245,7 @@ const fullRowSnapshots = [
     repository: '…/notification-delivery-service',
     repositoryTitle:
       'sample-contributor-automation-team/notification-delivery-service',
-    repositoryNameOverflowing: true,
+    repositoryNameOverflowing: false,
     repositoryNameTextOverflow: 'ellipsis',
     branch: undefined,
     branchTitle: undefined,

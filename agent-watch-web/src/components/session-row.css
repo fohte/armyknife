@@ -238,7 +238,9 @@
 }
 
 .session-row-content .session-repo-measure {
-  position: absolute;
+  position: fixed;
+  top: 0;
+  left: 0;
   width: max-content;
   visibility: hidden;
   pointer-events: none;

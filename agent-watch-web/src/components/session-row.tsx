@@ -101,13 +101,49 @@ function RepositoryLabel({ repository }: { repository: string }) {
           ? 0
           : (Number.parseFloat(parentStyle.paddingLeft) || 0) +
             (Number.parseFloat(parentStyle.paddingRight) || 0)
-      const availableWidth =
+      const isRepositoryLine =
         parentElement?.classList.contains('session-repo-line') === true
+      const isMetaLine =
+        parentElement?.classList.contains('session-meta-line') === true
+      const metaSiblings = isMetaLine
+        ? Array.from(parentElement.children).filter(
+            (child): child is HTMLElement =>
+              child instanceof HTMLElement && child !== repositoryElement,
+          )
+        : []
+      const metaSiblingWidth = metaSiblings.reduce((width, sibling) => {
+        if (sibling.classList.contains('session-task')) {
+          const taskTitle = sibling.querySelector<HTMLElement>(
+            '.session-task-title',
+          )
+          const taskReference = sibling.querySelector<HTMLElement>(
+            '.session-task-reference',
+          )
+          if (taskTitle !== null && taskReference !== null) {
+            const taskGap =
+              Number.parseFloat(getComputedStyle(sibling).columnGap) || 0
+            return (
+              width +
+              taskTitle.scrollWidth +
+              taskReference.getBoundingClientRect().width +
+              taskGap
+            )
+          }
+        }
+        return width + Math.max(sibling.clientWidth, sibling.scrollWidth)
+      }, 0)
+      const metaGapCount = metaSiblings.length
+      const availableWidth = isRepositoryLine
+        ? parentElement.clientWidth -
+          parentPadding -
+          branchMinimumWidth -
+          (separatorElement?.getBoundingClientRect().width ?? 0) -
+          (branchElement === null ? 0 : columnGap * 2)
+        : isMetaLine
           ? parentElement.clientWidth -
             parentPadding -
-            branchMinimumWidth -
-            (separatorElement?.getBoundingClientRect().width ?? 0) -
-            (branchElement === null ? 0 : columnGap * 2)
+            metaSiblingWidth -
+            columnGap * metaGapCount
           : repositoryElement.clientWidth
       const shouldShorten =
         measureElement.getBoundingClientRect().width > availableWidth + 1
@@ -119,6 +155,10 @@ function RepositoryLabel({ repository }: { repository: string }) {
     observer.observe(repositoryElement)
     if (repositoryElement.parentElement !== null) {
       observer.observe(repositoryElement.parentElement)
+    }
+    const rowElement = repositoryElement.closest('.session-row-content')
+    if (rowElement !== null) {
+      observer.observe(rowElement)
     }
     document.fonts.addEventListener('loadingdone', update)
     return () => {
