@@ -1,0 +1,5 @@
+allowBuilds:
+  electron-winstaller: true
+  esbuild: true
+
+minimumReleaseAge: 10080
