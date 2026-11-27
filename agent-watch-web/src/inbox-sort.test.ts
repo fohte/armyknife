@@ -1,6 +1,13 @@
 import { expect, it } from 'vitest'
 
-import { readInboxSort, sortInboxSessions, writeInboxSort } from '#inbox-sort'
+import {
+  isSelectedSessionBeyondVisibleInProgress,
+  readInboxSort,
+  sortInboxSessions,
+  sortInboxSessionsByCategory,
+  writeInboxSort,
+} from '#inbox-sort'
+import { moveSelection } from '#session-navigation'
 import type { Session } from '#types'
 
 const storageKey = 'agent-watch-web:inbox-sort'
@@ -192,6 +199,135 @@ it('places sessions without update timestamps after timestamped sessions', () =>
     'sample-missing-updated-at-second',
   ])
 })
+
+it.each([
+  {
+    sort: 'updated' as const,
+    expected: [
+      'sample-needs-action-new',
+      'sample-needs-action-old',
+      'sample-progress-new',
+      'sample-progress-old',
+    ],
+  },
+  {
+    sort: 'project' as const,
+    expected: [
+      'sample-needs-action-old',
+      'sample-needs-action-new',
+      'sample-progress-new',
+      'sample-progress-old',
+    ],
+  },
+])(
+  'moves j and k in the visible category order for $sort',
+  ({ sort, expected }) => {
+    const sessions: Session[] = [
+      {
+        ...session(
+          'sample-needs-action-new',
+          'zeta',
+          null,
+          '2030-01-01T12:00:00.000Z',
+        ),
+        category: 'needs_action',
+      },
+      {
+        ...session(
+          'sample-needs-action-old',
+          'alpha',
+          null,
+          '2030-01-01T10:00:00.000Z',
+        ),
+        category: 'needs_action',
+      },
+      {
+        ...session(
+          'sample-progress-new',
+          'alpha',
+          null,
+          '2030-01-01T12:00:00.000Z',
+        ),
+        category: 'in_progress',
+      },
+      {
+        ...session(
+          'sample-progress-old',
+          'zeta',
+          null,
+          '2030-01-01T10:00:00.000Z',
+        ),
+        category: 'in_progress',
+      },
+    ]
+    const sorted = sortInboxSessionsByCategory(sessions, sort)
+
+    const navigationSnapshot = () => ({
+      ids: sorted.map(({ id }) => id),
+      nextAfterFirst: moveSelection(sorted, expected[0] ?? null, 'j'),
+      previousBeforeThird: moveSelection(sorted, expected[2] ?? null, 'k'),
+    })
+    expect(navigationSnapshot()).toEqual({
+      ids: expected,
+      nextAfterFirst: expected[1],
+      previousBeforeThird: expected[1],
+    })
+  },
+)
+
+it.each([
+  {
+    sort: 'updated' as const,
+    selectedId: 'sample-progress-zeta',
+    expected: true,
+  },
+  {
+    sort: 'project' as const,
+    selectedId: 'sample-progress-zeta',
+    expected: true,
+  },
+])(
+  'detects a selected In progress row below the visible first two for $sort',
+  ({ sort, selectedId, expected }) => {
+    const inProgressSessions: Session[] = [
+      {
+        ...session(
+          'sample-progress-zeta',
+          'zeta',
+          null,
+          '2030-01-01T10:00:00.000Z',
+        ),
+        category: 'in_progress',
+      },
+      {
+        ...session(
+          'sample-progress-beta',
+          'beta',
+          null,
+          '2030-01-01T12:00:00.000Z',
+        ),
+        category: 'in_progress',
+      },
+      {
+        ...session(
+          'sample-progress-alpha',
+          'alpha',
+          null,
+          '2030-01-01T11:00:00.000Z',
+        ),
+        category: 'in_progress',
+      },
+    ]
+
+    expect(
+      isSelectedSessionBeyondVisibleInProgress(
+        inProgressSessions,
+        selectedId,
+        sort,
+      ),
+    ).toEqual(expected)
+  },
+)
 
 it('reads and writes a browser-specific sort selection', () => {
   const storage = new MemoryStorage()

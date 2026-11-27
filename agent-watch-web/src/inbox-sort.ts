@@ -4,6 +4,13 @@ import type { Session } from '#types'
 
 export type InboxSort = 'priority' | 'updated' | 'project'
 
+const INBOX_CATEGORY_ORDER: readonly Session['category'][] = [
+  'needs_action',
+  'later',
+  'in_progress',
+  'done',
+]
+
 const DEFAULT_INBOX_SORT: InboxSort = 'priority'
 const INBOX_SORT_STORAGE_KEY = 'agent-watch-web:inbox-sort'
 
@@ -71,4 +78,31 @@ export function sortInboxSessions(
         left.index - right.index,
     )
     .map(({ session }) => session)
+}
+
+export function sortInboxSessionsByCategory(
+  sessions: readonly Session[],
+  sort: InboxSort,
+): Session[] {
+  return INBOX_CATEGORY_ORDER.flatMap((category) =>
+    sortInboxSessions(
+      sessions.filter((session) => session.category === category),
+      sort,
+    ),
+  )
+}
+
+export function isSelectedSessionBeyondVisibleInProgress(
+  sessions: readonly Session[],
+  selectedId: string | null,
+  sort: InboxSort,
+): boolean {
+  if (selectedId === null) return false
+
+  return sortInboxSessions(
+    sessions.filter((session) => session.category === 'in_progress'),
+    sort,
+  )
+    .slice(2)
+    .some((session) => session.id === selectedId)
 }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { AppWorkspace } from '#app-workspace'
 import {
@@ -11,6 +11,13 @@ import { AgentUsageProvider } from '#components/agent-usage-context'
 import { SessionConversationCacheProvider } from '#components/session-conversation-cache'
 import { SessionElapsedStartedAtProvider } from '#components/session-elapsed-context'
 import { startFreezeProfiler } from '#freeze-profiler'
+import {
+  type InboxSort,
+  isSelectedSessionBeyondVisibleInProgress,
+  readInboxSort,
+  sortInboxSessionsByCategory,
+  writeInboxSort,
+} from '#inbox-sort'
 import { useMobileLayout, useSessionMobileNavigation } from '#mobile-layout'
 import { findLaunchedSession } from '#new-session-navigation'
 import { startSessionFeed } from '#session-feed'
@@ -105,6 +112,7 @@ function AppContent() {
     null,
   )
   const [inboxFilterQuery, setInboxFilterQuery] = useState('')
+  const [inboxSortState, setInboxSortState] = useState(() => readInboxSort())
   const [statusPanelOpen, setStatusPanelOpen] = useState(false)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [pendingLaunchId, setPendingLaunchId] = useState<string | null>(null)
@@ -147,6 +155,14 @@ function AppContent() {
     view,
     setError,
   })
+  const sortedNavigableSessions = useMemo(
+    () => sortInboxSessionsByCategory(navigableSessions, inboxSortState.sort),
+    [inboxSortState.sort, navigableSessions],
+  )
+  const setInboxSort = useCallback((sort: InboxSort) => {
+    const storageAvailable = writeInboxSort(undefined, sort)
+    setInboxSortState({ sort, storageAvailable })
+  }, [])
   const {
     laterSessionId,
     laterTimes,
@@ -252,13 +268,16 @@ function AppContent() {
   )
 
   useEffect(() => {
-    const hiddenProgress = orderedSessions.filter(
-      (session) => session.category === 'in_progress',
-    )
-    if (hiddenProgress.slice(2).some((session) => session.id === selectedId)) {
+    if (
+      isSelectedSessionBeyondVisibleInProgress(
+        orderedSessions,
+        selectedId,
+        inboxSortState.sort,
+      )
+    ) {
       setShowAllInProgress(true)
     }
-  }, [orderedSessions, selectedId])
+  }, [inboxSortState.sort, orderedSessions, selectedId])
 
   useEffect(() => {
     if (view !== 'inbox') {
@@ -279,7 +298,7 @@ function AppContent() {
     closeLater,
     closeSession: requestCloseSession,
     submitLater,
-    navigableSessions,
+    navigableSessions: sortedNavigableSessions,
     openLater,
     selectedId,
     view,
@@ -320,7 +339,7 @@ function AppContent() {
     useSessionMobileNavigation({
       isMobile,
       conversationOpen: mobileConversationOpen,
-      navigableSessions,
+      navigableSessions: sortedNavigableSessions,
       selectedId,
       selectedSessionExists: selectedSession !== undefined,
       sessionsLoaded: loaded,
@@ -405,6 +424,8 @@ function AppContent() {
           loaded,
           error,
           inboxFilterQuery,
+          inboxSort: inboxSortState.sort,
+          inboxSortStorageAvailable: inboxSortState.storageAvailable,
           showAllInProgress,
           laterExpanded,
           inProgressExpanded,
@@ -432,6 +453,7 @@ function AppContent() {
         }
         actions={{
           setInboxFilterQuery,
+          setInboxSort,
           setShowAllInProgress,
           setLaterExpanded,
           setInProgressExpanded,

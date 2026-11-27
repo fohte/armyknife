@@ -12,12 +12,7 @@ import { MobileNavigationActions } from '#components/mobile-navigation-actions'
 import { MobileTodoLaterCount } from '#components/mobile-todo-later-count'
 import { filterInboxSessions, parseInboxFilterQuery } from '#inbox-filter'
 import { renderInboxSessionSection } from '#inbox-session-section'
-import {
-  type InboxSort,
-  readInboxSort,
-  sortInboxSessions,
-  writeInboxSort,
-} from '#inbox-sort'
+import { type InboxSort, sortInboxSessions } from '#inbox-sort'
 import { sumTodoLaterCount } from '#inbox-todo-later-count'
 import { formatMobileConnectionTime, nextReturnLabel } from '#inbox-view-utils'
 import type { SavedInboxView } from '#saved-inbox-views'
@@ -25,6 +20,9 @@ import type { Session } from '#types'
 import { useInboxFilterShortcut } from '#use-inbox-filter-shortcut'
 
 type InboxViewProps = {
+  sort?: InboxSort
+  sortStorageAvailable?: boolean
+  onSortChange?: (sort: InboxSort) => void
   sessions: readonly Session[]
   selectedId: string | null
   loaded: boolean
@@ -70,6 +68,9 @@ type InboxViewProps = {
 }
 
 export function InboxView({
+  sort: inboxSort = 'priority',
+  sortStorageAvailable = true,
+  onSortChange = () => undefined,
   sessions,
   selectedId,
   loaded,
@@ -109,8 +110,6 @@ export function InboxView({
   onNewSession = () => undefined,
   mobileUpdateNotice,
 }: InboxViewProps) {
-  const [inboxSortState, setInboxSortState] = useState(() => readInboxSort())
-  const inboxSort = inboxSortState.sort
   const [sortMenuOpen, setSortMenuOpen] = useState(false)
   const [localFilterQuery, setLocalFilterQuery] = useState('')
   const [localDialogOpen, setLocalDialogOpen] = useState(false)
@@ -154,10 +153,6 @@ export function InboxView({
   )
   const laterTodoLaterCount = sumTodoLaterCount(later)
   const doneTodoLaterCount = sumTodoLaterCount(done)
-  const setInboxSort = (sort: InboxSort) => {
-    const storageAvailable = writeInboxSort(undefined, sort)
-    setInboxSortState({ sort, storageAvailable })
-  }
   const setFilterQuery = useCallback(
     (query: string) => {
       if (onFilterQueryChange !== undefined) {
@@ -223,11 +218,11 @@ export function InboxView({
         <h1 id="inbox-title">Inbox</h1>
         <InboxSortControl
           sort={inboxSort}
-          storageAvailable={inboxSortState.storageAvailable}
+          storageAvailable={sortStorageAvailable}
           isMobile={isMobile}
           open={sortMenuOpen}
           onOpenChange={setSortMenuOpen}
-          onSortChange={setInboxSort}
+          onSortChange={onSortChange}
         />
       </header>
       <InboxFilterBar

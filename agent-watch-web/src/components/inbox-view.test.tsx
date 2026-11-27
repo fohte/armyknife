@@ -1,10 +1,11 @@
 import '#components/mobile-layout.css'
 
-import { act, type ComponentProps } from 'react'
+import { act, type ComponentProps, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 import { InboxView } from '#components/inbox-view'
+import { type InboxSort, readInboxSort, writeInboxSort } from '#inbox-sort'
 import type { Session } from '#types'
 
 let container: HTMLDivElement
@@ -96,32 +97,52 @@ const sessions: Session[] = [
 function renderInbox(props: Partial<ComponentProps<typeof InboxView>> = {}) {
   root = createRoot(container)
   act(() => {
-    root?.render(
-      <InboxView
-        sessions={sessions}
-        selectedId={null}
-        loaded
-        error={null}
-        connectionError={null}
-        lastUpdatedAt={new Date(2026, 0, 1, 22, 0).getTime()}
-        showAllInProgress
-        onShowMore={() => undefined}
-        onSelect={() => undefined}
-        laterExpanded
-        onToggleLater={() => undefined}
-        onToggleToday={() => undefined}
-        todaySessions={[]}
-        onSelectToday={() => undefined}
-        isMobile={false}
-        inProgressExpanded
-        onToggleInProgress={() => undefined}
-        doneExpanded
-        onToggleDone={() => undefined}
-        onCloseDone={() => undefined}
-        {...props}
-      />,
-    )
+    root?.render(<InboxViewHarness props={props} />)
   })
+}
+
+function InboxViewHarness({
+  props,
+}: {
+  props: Partial<ComponentProps<typeof InboxView>>
+}) {
+  const [sortState, setSortState] = useState(() => readInboxSort())
+  const handleSortChange = (sort: InboxSort) => {
+    const storageAvailable = writeInboxSort(undefined, sort)
+    setSortState({ sort, storageAvailable })
+    props.onSortChange?.(sort)
+  }
+
+  return (
+    <InboxView
+      sessions={sessions}
+      selectedId={null}
+      loaded
+      error={null}
+      connectionError={null}
+      lastUpdatedAt={new Date(2026, 0, 1, 22, 0).getTime()}
+      showAllInProgress
+      onShowMore={() => undefined}
+      onSelect={() => undefined}
+      laterExpanded
+      onToggleLater={() => undefined}
+      onToggleToday={() => undefined}
+      todaySessions={[]}
+      onSelectToday={() => undefined}
+      isMobile={false}
+      inProgressExpanded
+      onToggleInProgress={() => undefined}
+      doneExpanded
+      onToggleDone={() => undefined}
+      onCloseDone={() => undefined}
+      {...props}
+      sort={props.sort ?? sortState.sort}
+      sortStorageAvailable={
+        props.sortStorageAvailable ?? sortState.storageAvailable
+      }
+      onSortChange={handleSortChange}
+    />
+  )
 }
 
 function sectionSnapshot() {
