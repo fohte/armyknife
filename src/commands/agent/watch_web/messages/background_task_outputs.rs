@@ -150,20 +150,36 @@ fn output_unavailable_response(status: StatusCode) -> Response {
         .into_response()
 }
 
+type OutputEventCallback = Box<dyn FnMut(notify::Result<notify::Event>) + Send + 'static>;
+
 pub(super) fn watch_output_events(
     path: PathBuf,
 ) -> Result<impl Stream<Item = notify::Result<notify::Event>> + Send> {
     let watched_path = canonical_output_path(&path)?;
-    let (sender, receiver) = mpsc::channel(1);
-    let callback_path = watched_path.clone();
-    let mut watcher: RecommendedWatcher =
-        notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-            forward_matching_output_event(&sender, &callback_path, event);
-        })?;
     let parent = watched_path
         .parent()
-        .ok_or_else(|| anyhow::anyhow!("background task output path has no parent"))?;
-    watcher.watch(parent, RecursiveMode::NonRecursive)?;
+        .ok_or_else(|| anyhow::anyhow!("background task output path has no parent"))?
+        .to_path_buf();
+
+    watch_output_events_with(watched_path, move |callback| {
+        let mut watcher: RecommendedWatcher = notify::recommended_watcher(callback)?;
+        watcher.watch(&parent, RecursiveMode::NonRecursive)?;
+        Ok(watcher)
+    })
+}
+
+fn watch_output_events_with<W>(
+    watched_path: PathBuf,
+    register: impl FnOnce(OutputEventCallback) -> Result<W> + Send + 'static,
+) -> Result<impl Stream<Item = notify::Result<notify::Event>> + Send>
+where
+    W: Send + 'static,
+{
+    let (sender, receiver) = mpsc::channel(1);
+    let callback: OutputEventCallback = Box::new(move |event| {
+        forward_matching_output_event(&sender, &watched_path, event);
+    });
+    let watcher = register(callback)?;
 
     Ok(stream::unfold(
         (receiver, watcher),
@@ -372,27 +388,43 @@ fn read_output_tail(path: &Path) -> std::io::Result<Option<String>> {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
 
+    use futures_util::StreamExt;
     use notify::{Event, EventKind};
-    use tokio::sync::mpsc;
 
     use super::{
-        MAX_OUTPUT_BYTES, canonical_output_path, forward_matching_output_event, read_output_tail,
+        MAX_OUTPUT_BYTES, canonical_output_path, output_updates, read_output_tail,
+        watch_output_events_with,
     };
 
-    #[test]
-    fn background_task_output_unrelated_events_do_not_fill_the_notification_channel() {
-        let (sender, mut receiver) = mpsc::channel(1);
-        let watched_path = PathBuf::from("/fixture/tasks/current.output");
-        let unrelated_event =
-            Event::new(EventKind::Any).add_path(watched_path.with_file_name("other.output"));
-        let expected_event = Event::new(EventKind::Any).add_path(watched_path.clone());
+    #[tokio::test]
+    async fn background_task_output_unrelated_events_do_not_suppress_matching_updates() {
+        let directory = tempfile::tempdir().unwrap();
+        let output_path = directory.path().join("current.output");
+        fs::write(&output_path, "initial output").unwrap();
+        let callback = Arc::new(Mutex::new(None));
+        let registered_callback = Arc::clone(&callback);
+        let events = watch_output_events_with(output_path.clone(), move |handler| {
+            *registered_callback.lock().unwrap() = Some(handler);
+            Ok(())
+        })
+        .unwrap();
+        let mut outputs = Box::pin(output_updates(output_path.clone(), events.map(|_| ())));
+        let initial_output = outputs.next().await.unwrap();
 
-        forward_matching_output_event(&sender, &watched_path, Ok(unrelated_event));
-        forward_matching_output_event(&sender, &watched_path, Ok(expected_event.clone()));
+        fs::write(&output_path, "updated output").unwrap();
+        let mut callback = callback.lock().unwrap().take().unwrap();
+        callback(Ok(
+            Event::new(EventKind::Any).add_path(output_path.with_file_name("other.output"))
+        ));
+        callback(Ok(Event::new(EventKind::Any).add_path(output_path)));
+        let updated_output = outputs.next().await.unwrap();
 
-        assert_eq!(receiver.try_recv().unwrap().unwrap(), expected_event);
+        assert_eq!(
+            (initial_output, updated_output),
+            ("initial output".to_owned(), "updated output".to_owned()),
+        );
     }
 
     #[cfg(unix)]

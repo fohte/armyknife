@@ -5470,14 +5470,7 @@ mod tests {
         let mut session = stored_session();
         session.engine = Engine::Codex;
         session.transcript_path = None;
-        let loaders = RouteLoaders::new(
-            |_| Ok(Vec::new()),
-            |_| Ok(Vec::new()),
-            |_| Ok(Vec::new()),
-            |_, _| Ok(()),
-            |_| Ok(Vec::new()),
-        )
-        .with_background_task_loader(|session_id| {
+        let loaders = empty_route_loaders().with_background_task_loader(|session_id| {
             Ok((session_id == "fixture-session")
                 .then(|| super::BackgroundTask {
                     id: "fixture-background-task-id".to_owned(),
@@ -5524,9 +5517,23 @@ mod tests {
             .map(str::to_owned);
         let mut body = response.into_body().into_data_stream();
         let event = body.next().await.unwrap().unwrap().to_vec();
+        let stream_state =
+            match tokio::time::timeout(std::time::Duration::from_millis(100), body.next()).await {
+                Err(_) => "pending",
+                Ok(None) => "closed",
+                Ok(Some(Err(_))) => "error",
+                Ok(Some(Ok(_))) => "extra event",
+            };
 
         assert_eq!(
-            (status, content_type, cache_control, content_options, event,),
+            (
+                status,
+                content_type,
+                cache_control,
+                content_options,
+                event,
+                stream_state,
+            ),
             (
                 StatusCode::OK,
                 Some("text/event-stream".to_owned()),
@@ -5538,6 +5545,7 @@ mod tests {
                 "}
                 .as_bytes()
                 .to_vec(),
+                "pending",
             ),
         );
     }
