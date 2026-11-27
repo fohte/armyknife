@@ -548,6 +548,7 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | ----------------------------------------------------------------------------------------------------- | ------- | ------------------------------------------------------------------------------------------- |
 | `new [--worktree[=<branch>]] [options]`                                                               |         | Start a Claude Code session, optionally in a new or existing linked worktree                |
 | `codex [<args>...]`                                                                                   |         | Start Codex and bind its thread ID to the current tmux pane                                 |
+| `current`                                                                                             |         | Print the current engine as JSON, or exit 1 when no supported agent is detected             |
 | `close [target] [--child] [--force] [--skip-hooks] [--keep-worktree]`                                 | `c`     | Close an agent session and optionally keep its linked worktree                              |
 | `clean [--dry-run] [--all] [--force]`                                                                 |         | Delete merged or closed worktrees                                                           |
 | `hook <event>`                                                                                        |         | Record coding agent hook events                                                             |
@@ -592,6 +593,15 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | `auto-compact schedule --session <id>`                                                                |         | Detached worker spawned by the Stop hook (not for direct use)                               |
 | `window-status <window_id>`                                                                           |         | Print status symbols for the sessions in a tmux window                                      |
 | `pane-has-paused <pane_id>`                                                                           |         | Print `1` when the pane holds a Paused Claude Code session, else empty                      |
+
+`a agent current` prints JSON with an `engine` value of `claude-code` or `codex` when it detects a supported agent. If process ancestry is unavailable, it uses `CLAUDECODE` or `CODEX_SESSION_ID` as a fallback. For example:
+
+```console
+$ a agent current
+{"engine":"claude-code"}
+```
+
+Otherwise, it prints nothing and exits with status 1.
 
 ### `a agent transcript slim`
 
