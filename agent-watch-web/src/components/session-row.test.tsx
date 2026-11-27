@@ -319,48 +319,25 @@ it('keeps the full layout for mobile Inbox rows', () => {
   })
 })
 
-it('shows folded to-dos alongside unreviewed decisions in the Done preview', () => {
+it('shows folded to-dos in the Done preview', () => {
   renderRow('full', {
     ...session,
     category: 'done',
-    decisionCount: 3,
-    unreviewedDecisionCount: 2,
     todoLaterCount: 1,
     todoLaterTitle: 'Review the alert sound',
   })
 
-  const decisionPreviewSnapshot = () => ({
+  const previewSnapshot = () => ({
     preview: container.querySelector('.session-preview')?.textContent,
     previewClassName: container.querySelector('.session-preview')?.className,
-    decisionCount:
-      container.querySelector('.session-decision-count')?.textContent ?? null,
   })
 
-  expect(decisionPreviewSnapshot()).toEqual({
-    preview: '◇ 2 decisions to review · To-do · later · Review the alert sound',
-    previewClassName: 'session-preview is-decision-preview',
-    decisionCount: null,
+  expect(previewSnapshot()).toEqual({
+    preview:
+      'Should retries stop after three attempts? · To-do · later · Review the alert sound',
+    previewClassName: 'session-preview',
   })
 })
-
-it.each([
-  ['single unreviewed decision', 'done', 0, 1, '◇ 1 decision to review'],
-  ['multiple decisions', 'needs_action', 2, 0, '◇ 2 decisions'],
-] as const)(
-  'shows the %s count with the shared label',
-  (_label, category, decisionCount, unreviewedDecisionCount, expectedLabel) => {
-    renderRow('compact', {
-      ...session,
-      category,
-      decisionCount,
-      unreviewedDecisionCount,
-    })
-
-    expect(
-      container.querySelector('.session-decision-count')?.textContent,
-    ).toEqual(expectedLabel)
-  },
-)
 
 it.each([
   [

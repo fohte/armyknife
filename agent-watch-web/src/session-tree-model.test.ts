@@ -20,7 +20,6 @@ const sessions: SessionTreeNode[] = [
     task: null,
     repo: 'sample/repo',
     vibeMode: { mode: 'disabled' },
-    decisionCount: 0,
     pullRequest: null,
   },
   {
@@ -35,7 +34,6 @@ const sessions: SessionTreeNode[] = [
     task: null,
     repo: 'sample/repo',
     vibeMode: { mode: 'disabled' },
-    decisionCount: 0,
     pullRequest: null,
   },
   {
@@ -50,7 +48,6 @@ const sessions: SessionTreeNode[] = [
     task: null,
     repo: 'sample/repo',
     vibeMode: { mode: 'disabled' },
-    decisionCount: 0,
     pullRequest: null,
   },
   {
@@ -65,7 +62,6 @@ const sessions: SessionTreeNode[] = [
     task: null,
     repo: 'sample/repo',
     vibeMode: { mode: 'disabled' },
-    decisionCount: 0,
     pullRequest: null,
   },
   {
@@ -80,7 +76,6 @@ const sessions: SessionTreeNode[] = [
     task: null,
     repo: 'sample/repo',
     vibeMode: { mode: 'disabled' },
-    decisionCount: 0,
     pullRequest: null,
   },
 ]

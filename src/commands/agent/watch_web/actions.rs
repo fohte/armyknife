@@ -23,7 +23,6 @@ mod api_error;
 mod bang_commands;
 mod close;
 mod close_checks;
-mod decisions;
 mod interrupt_locks;
 mod keyed_mutex_registry;
 mod launch_sessions;
@@ -93,14 +92,6 @@ fn router_with_state(state: ActionState) -> Router {
         .route(
             "/sessions/{id}/commands/execute",
             post(bang_commands::execute),
-        )
-        .route(
-            "/sessions/{id}/decisions/{seq}/ok",
-            post(decisions::mark_ok),
-        )
-        .route(
-            "/sessions/{id}/decisions/{seq}/change",
-            post(decisions::request_change),
         )
         .route(
             "/sessions/{id}/proposals/{seq}/answer",
@@ -502,9 +493,6 @@ mod tests {
 
     #[path = "bang_commands.rs"]
     mod bang_commands;
-
-    #[path = "decisions.rs"]
-    mod decisions;
 
     #[path = "proposals.rs"]
     mod proposals;
@@ -1023,7 +1011,6 @@ mod tests {
 
     fn empty_message_loaders() -> super::super::messages::RouteLoaders {
         super::super::messages::RouteLoaders::new(
-            |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_, _| Ok(()),

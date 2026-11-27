@@ -12,7 +12,6 @@ import {
 
 import { useSessionElapsedStartedAt } from '#components/session-elapsed-context'
 import { VibeIndicator } from '#components/vibe-indicator'
-import { formatSessionDecisionCount } from '#session-decision-count'
 import { sessionKindIcon } from '#session-kind-label'
 import { formatLinkedTaskCount } from '#session-task-count'
 import type { Session, SessionTask } from '#types'
@@ -29,8 +28,6 @@ type SessionRowData = Pick<
       | 'workType'
       | 'unread'
       | 'tasks'
-      | 'decisionCount'
-      | 'unreviewedDecisionCount'
       | 'pullRequest'
       | 'vibeMode'
       | 'isWaitingForCritReview'
@@ -140,11 +137,6 @@ export function SessionRow({
   const trimmedBranch = branch?.trim() ?? ''
   const isCompact = density !== 'full'
   const linkedTaskCount = isCompact ? formatLinkedTaskCount(session.tasks) : ''
-  const decisionLabel = formatSessionDecisionCount(session)
-  const decisionPreview =
-    session.category === 'done' && (session.unreviewedDecisionCount ?? 0) > 0
-      ? decisionLabel
-      : null
   const critReviewReason =
     session.isWaitingForCritReview === true &&
     session.kind === 'Review' &&
@@ -159,10 +151,7 @@ export function SessionRow({
           )
           .join(' · ')
       : null
-  const rowPreview = [
-    critReviewReason ?? decisionPreview ?? session.preview,
-    todoLaterPreview,
-  ]
+  const rowPreview = [critReviewReason ?? session.preview, todoLaterPreview]
     .filter((part) => part !== null && part.length > 0)
     .join(' · ')
 
@@ -198,11 +187,7 @@ export function SessionRow({
           <SessionAge elapsedSeconds={session.elapsedSeconds} />
         </span>
         {density === 'full' && rowPreview.length > 0 ? (
-          <span
-            className={`session-preview${decisionPreview === null ? '' : ' is-decision-preview'}`}
-          >
-            {rowPreview}
-          </span>
+          <span className="session-preview">{rowPreview}</span>
         ) : null}
         <span className="session-meta-line">
           <span
@@ -243,9 +228,6 @@ export function SessionRow({
               </span>
               <span className="session-repo">{repo}</span>
             </>
-          ) : null}
-          {isCompact && decisionLabel !== null ? (
-            <span className="session-decision-count">{decisionLabel}</span>
           ) : null}
         </span>
         {isCompact ? (

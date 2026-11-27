@@ -174,8 +174,6 @@ const sessions: Session[] = [
     ancestorSessionIds: [],
     parent: null,
     pullRequest: { number: 2049, state: 'Merged' },
-    decisionCount: 2,
-    unreviewedDecisionCount: 2,
   },
   ...Array.from({ length: 3 }, (_, index) =>
     sampleSession(

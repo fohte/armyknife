@@ -114,7 +114,6 @@ fn output_path_for_task(
     let Some(reader) = super::open_seekable_transcript(transcript_path)? else {
         return Ok(None);
     };
-    let decisions = Vec::new();
     let queued_prompts = Vec::new();
     let peer_out_messages = Vec::new();
     let proposals = Vec::new();
@@ -127,7 +126,6 @@ fn output_path_for_task(
                 parent: None,
                 pending_tool: None,
                 user_marker: None,
-                decisions: &decisions,
                 queued_prompts: &queued_prompts,
                 peer_out_messages: &peer_out_messages,
                 proposals: &proposals,

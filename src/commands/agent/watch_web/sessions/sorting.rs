@@ -59,7 +59,6 @@ mod tests {
                 task: task.clone(),
                 repo: String::new(),
                 vibe_mode: crate::commands::agent::vibe::VibeState::RepoDisabled,
-                decision_count: 0,
             },
             is_paused: false,
             activity_status: if category == SessionCategory::InProgress {
@@ -89,7 +88,6 @@ mod tests {
             later_until: None,
             is_today: false,
             is_compacting: false,
-            unreviewed_decision_count: 0,
             todo_later_count: 0,
             todo_later_title: None,
             review_document_id: None,

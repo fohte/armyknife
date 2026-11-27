@@ -20,7 +20,6 @@ const sessions: SessionTreeNode[] = [
     task: null,
     repo: 'sample/repo',
     vibeMode: { mode: 'enabled' },
-    decisionCount: 0,
     pullRequest: null,
   },
   {
@@ -42,7 +41,6 @@ const sessions: SessionTreeNode[] = [
     },
     repo: 'sample/other-repo',
     vibeMode: { mode: 'inherited', ancestorSessionId: 'root' },
-    decisionCount: 0,
     pullRequest: null,
   },
   {
@@ -59,7 +57,6 @@ const sessions: SessionTreeNode[] = [
     task: null,
     repo: 'sample/other-repo',
     vibeMode: { mode: 'disabled' },
-    decisionCount: 0,
     pullRequest: null,
   },
 ]

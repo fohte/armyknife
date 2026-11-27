@@ -285,7 +285,6 @@ it('shows the cached conversation after switching to the Board and back', async 
     backgroundTasks: [],
     start: 0,
     total: messages.length,
-    decisions: [],
     hasUnansweredProposal: false,
     activeQuestionIndex: null,
     stableStart: 0,
@@ -6110,7 +6109,6 @@ it('reloads only the selected conversation when its session changes', async () =
           backgroundTasks: [],
           start: 0,
           total: 1,
-          decisions: [],
           hasUnansweredProposal: false,
           activeQuestionIndex: null,
         }
@@ -6206,7 +6204,6 @@ it('opens a known session ID from a conversation message', async () => {
         backgroundTasks: [],
         start: 0,
         total: 1,
-        decisions: [],
         hasUnansweredProposal: false,
         activeQuestionIndex: null,
       }
@@ -6312,7 +6309,6 @@ it('answers an Inbox question with its request ID and selected answer', async ()
           backgroundTasks: [],
           start: 0,
           total: 1,
-          decisions: [],
           hasUnansweredProposal: false,
           activeQuestionIndex: 0,
         }

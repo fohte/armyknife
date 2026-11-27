@@ -258,10 +258,6 @@ pub(super) async fn session_tree<S: SessionSource>(
                 .get(&session.session_id)
                 .cloned()
                 .unwrap_or_default();
-            let decision_count = snapshot
-                .decision_counts
-                .get(&session.session_id)
-                .map_or(0, |counts| counts.total);
             TreeSessionView {
                 row: SessionRowView::new(
                     session,
@@ -274,7 +270,6 @@ pub(super) async fn session_tree<S: SessionSource>(
                         task,
                         repo,
                         vibe_mode,
-                        decision_count,
                     },
                 ),
                 parent_id: parent_ids.get(&session.session_id).cloned().flatten(),

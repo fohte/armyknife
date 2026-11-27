@@ -28,9 +28,6 @@ it('omits an empty standalone thinking summary', () => {
         actions={null}
         actionsReady={false}
         isMobile
-        selected={false}
-        decisionPosition={undefined}
-        onSelectDecision={() => undefined}
         message={{ type: 'thinking', text: '  ' }}
         pendingAction={null}
         openInTerminalStatus={null}
@@ -53,9 +50,6 @@ it('shows unavailable for an unmapped local image in an assistant reply', () => 
         actions={null}
         actionsReady={false}
         isMobile={false}
-        selected={false}
-        decisionPosition={undefined}
-        onSelectDecision={() => undefined}
         message={{
           type: 'assistant',
           text: '![fixture][sample-image]\n\n[sample-image]: </tmp/fixture.png>',

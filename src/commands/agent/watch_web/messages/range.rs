@@ -202,12 +202,6 @@ impl MessageEpochCursor {
 impl ConversationResponse {
     pub(super) fn update_metadata(&mut self) {
         self.total = self.messages.len();
-        self.decisions = self
-            .messages
-            .iter()
-            .filter(|message| matches!(message, ChatItem::Decision { .. }))
-            .cloned()
-            .collect();
         self.has_unanswered_proposal = self.messages.iter().any(|message| {
             matches!(
                 message,
@@ -292,12 +286,10 @@ impl ConversationResponse {
 
     fn apply_epoch_range(&mut self, epoch_start: usize, range: MessageRange) {
         self.rebase_image_sources(epoch_start, self.messages.len());
-        let decisions = std::mem::take(&mut self.decisions);
         let has_unanswered_proposal = self.has_unanswered_proposal;
         self.messages.drain(..epoch_start);
         self.total = self.messages.len();
         self.active_question_index = active_question_index(&self.messages);
-        self.decisions = decisions;
         self.has_unanswered_proposal = has_unanswered_proposal;
         self.epoch = range.epoch.clone();
         self.older_cursor = (epoch_start > 0 || self.tail_window_start.is_some())
@@ -335,7 +327,6 @@ impl ConversationResponse {
     fn apply_empty_older_epoch_page_from_start(&mut self, epoch_start: usize, epoch: &str) {
         let epoch_messages = self.messages[epoch_start..].to_vec();
         self.message_image_sources.clear();
-        let decisions = std::mem::take(&mut self.decisions);
         let has_unanswered_proposal = self.has_unanswered_proposal;
         self.messages.clear();
         self.start = 0;
@@ -345,7 +336,6 @@ impl ConversationResponse {
         self.stable_start = stable_start;
         self.stable_end = stable_end;
         self.stable_digest = stable_digest;
-        self.decisions = decisions;
         self.has_unanswered_proposal = has_unanswered_proposal;
         self.epoch = Some(epoch.to_owned());
         self.older_cursor = None;

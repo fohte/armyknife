@@ -10,7 +10,7 @@ use super::super::{
     ChatItem, ConversationResponse, Engine, TranscriptInput, open_seekable_transcript,
 };
 use super::{TranscriptRangeContext, cached_tail_window_message_limit, render_claude_parser};
-use crate::commands::agent::store::{AgentDecision, AgentTodo};
+use crate::commands::agent::store::AgentTodo;
 
 pub(in crate::commands::agent::watch_web::messages) fn parse_initial_or_full<'a>(
     session_id: &str,
@@ -288,7 +288,6 @@ pub(super) fn render_tail_window_parser(
     state: &TailWindowParserState,
     input: &TranscriptInput<'_>,
 ) -> Result<(ConversationResponse, Vec<i64>)> {
-    let decisions = filter_decisions_after_tail_window(input.additions.decisions, state.cutoff);
     let proposals = filter_proposals_after_tail_window(input.additions.proposals, state.cutoff);
     let todos = filter_todos_after_tail_window(input.additions.todos, state.cutoff);
     let peer_out_messages = input
@@ -316,7 +315,6 @@ pub(super) fn render_tail_window_parser(
         path: input.path,
         engine: input.engine,
         additions: parser::claude::ParserAdditions {
-            decisions: &decisions,
             proposals: &proposals,
             todos: &todos,
             peer_out_messages: &peer_out_messages,
@@ -331,20 +329,6 @@ pub(super) fn render_tail_window_parser(
     result.1.dedup();
     result.0.tail_window_start = Some(state.cutoff);
     Ok(result)
-}
-
-fn filter_decisions_after_tail_window(
-    decisions: &[AgentDecision],
-    cutoff: chrono::DateTime<chrono::Utc>,
-) -> Vec<AgentDecision> {
-    decisions
-        .iter()
-        .filter(|decision| {
-            chrono::DateTime::parse_from_rfc3339(&decision.created_at)
-                .is_ok_and(|created_at| created_at.with_timezone(&chrono::Utc) >= cutoff)
-        })
-        .cloned()
-        .collect()
 }
 
 fn filter_proposals_after_tail_window(
@@ -559,7 +543,6 @@ mod tests {
             parent: None,
             pending_tool: None,
             user_marker: None,
-            decisions: &[],
             queued_prompts: &[],
             peer_out_messages: &[],
             proposals: &proposals,

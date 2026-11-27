@@ -17,24 +17,23 @@ use super::super::parser::{
 };
 use crate::commands::agent::store::PermissionRequestData;
 #[cfg(test)]
-use crate::commands::agent::store::{AgentDecision, AgentTodo, WatchWebPeerOutMessage};
+use crate::commands::agent::store::{AgentTodo, WatchWebPeerOutMessage};
 use crate::commands::agent::watch_web::messages::EventKind;
 
 #[cfg(test)]
 fn parse(reader: impl BufRead, parent: Option<&ParentSession>) -> std::io::Result<Vec<ChatItem>> {
-    parse_with_skills(reader, parent, &[], &[]).map(|(messages, _)| messages)
+    parse_with_skills(reader, parent, &[]).map(|(messages, _)| messages)
 }
 
 #[cfg(test)]
 fn parse_with_skills(
     reader: impl BufRead,
     parent: Option<&ParentSession>,
-    decisions: &[AgentDecision],
     todos: &[AgentTodo],
 ) -> std::io::Result<(Vec<ChatItem>, Vec<SkillSuggestion>)> {
     let mut parser = CodexParserState::new();
     parser.append(reader)?;
-    parser.render_with_decisions_and_todos(parent, decisions, todos)
+    parser.render_with_todos(parent, todos)
 }
 
 #[derive(Clone, Default)]
@@ -129,33 +128,30 @@ impl CodexParserState {
     }
 
     #[cfg(test)]
-    fn render_with_decisions(
+    fn render(
         &self,
         parent: Option<&ParentSession>,
-        decisions: &[AgentDecision],
     ) -> io::Result<(Vec<ChatItem>, Vec<SkillSuggestion>)> {
-        self.render_with_decisions_and_todos(parent, decisions, &[])
+        self.render_with_todos(parent, &[])
     }
 
     #[cfg(test)]
-    fn render_with_decisions_and_todos(
+    fn render_with_todos(
         &self,
         parent: Option<&ParentSession>,
-        decisions: &[AgentDecision],
         todos: &[AgentTodo],
     ) -> io::Result<(Vec<ChatItem>, Vec<SkillSuggestion>)> {
-        self.render_with_decisions_todos_and_peer_out_messages(parent, decisions, todos, &[])
+        self.render_with_todos_and_peer_out_messages(parent, todos, &[])
     }
 
     #[cfg(test)]
-    pub(in crate::commands::agent::watch_web::messages) fn render_with_decisions_todos_and_peer_out_messages(
+    pub(in crate::commands::agent::watch_web::messages) fn render_with_todos_and_peer_out_messages(
         &self,
         parent: Option<&ParentSession>,
-        decisions: &[AgentDecision],
         todos: &[AgentTodo],
         peer_out_messages: &[WatchWebPeerOutMessage],
     ) -> io::Result<(Vec<ChatItem>, Vec<SkillSuggestion>)> {
-        let cards = cards_from_sources(decisions, &[], todos, peer_out_messages, &[]);
+        let cards = cards_from_sources(&[], todos, peer_out_messages, &[]);
         self.render_with_placement_cards(parent, &cards, None)
     }
 
@@ -669,7 +665,7 @@ mod tests {
             tool_input: json!({"command": "run fixture"}),
             pending: true,
         };
-        let cards = cards_from_sources(&[], &[], &[], &[], &[]);
+        let cards = cards_from_sources(&[], &[], &[], &[]);
 
         assert_eq!(
             parser
@@ -753,8 +749,8 @@ mod tests {
         parser.append(Cursor::new(suffix)).unwrap();
 
         assert_eq!(
-            parser.render_with_decisions(None, &[]).unwrap(),
-            parse_with_skills(Cursor::new(full_transcript), None, &[], &[]).unwrap(),
+            parser.render(None).unwrap(),
+            parse_with_skills(Cursor::new(full_transcript), None, &[]).unwrap(),
         );
     }
 
@@ -774,7 +770,7 @@ mod tests {
         let mut parser = CodexParserState::new();
         parser.append(Cursor::new(transcript.as_bytes())).unwrap();
 
-        let output = parser.render_with_decisions(None, &[]).unwrap();
+        let output = parser.render(None).unwrap();
         assert_eq!(output, (vec![ChatItem::Assistant { text }], Vec::new()));
     }
 
@@ -797,69 +793,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn codex_parser_state_renders_updated_decisions_without_new_transcript_bytes() {
-        let transcript = indoc! {r#"
-            {"type":"response_item","timestamp":"2026-11-12T10:00:00Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Before the decision."}]}}
-            {"type":"response_item","timestamp":"2026-11-12T10:00:04Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"After the decision."}]}}
-        "#};
-        let decision = crate::commands::agent::store::AgentDecision {
-            session_id: "fixture-session".to_string(),
-            seq: 1,
-            title: "Choose the fixture path".to_string(),
-            why: "The fixture remains isolated.".to_string(),
-            considered: Vec::new(),
-            easy_to_change: "Change the fixture value.".to_string(),
-            created_at: "2026-11-12T10:00:03Z".to_string(),
-            review: Some("ok".to_string()),
-            reviewed_at: Some("2026-11-12T10:00:03Z".to_string()),
-        };
-        let mut parser = CodexParserState::new();
-        parser.append(Cursor::new(transcript)).unwrap();
-
-        assert_eq!(
-            (
-                parser.render_with_decisions(None, &[]).unwrap(),
-                parser
-                    .render_with_decisions(None, std::slice::from_ref(&decision))
-                    .unwrap(),
-            ),
-            (
-                (
-                    vec![
-                        ChatItem::Assistant {
-                            text: "Before the decision.".to_string(),
-                        },
-                        ChatItem::Assistant {
-                            text: "After the decision.".to_string(),
-                        },
-                    ],
-                    Vec::new(),
-                ),
-                (
-                    vec![
-                        ChatItem::Assistant {
-                            text: "Before the decision.".to_string(),
-                        },
-                        ChatItem::Decision {
-                            seq: 1,
-                            title: "Choose the fixture path".to_string(),
-                            why: "The fixture remains isolated.".to_string(),
-                            considered: Vec::new(),
-                            easy_to_change: "Change the fixture value.".to_string(),
-                            review: Some("ok".to_string()),
-                            created_at: "2026-11-12T10:00:03Z".to_string(),
-                        },
-                        ChatItem::Assistant {
-                            text: "After the decision.".to_string(),
-                        },
-                    ],
-                    Vec::new(),
-                ),
-            ),
-        );
-    }
-
     #[rstest]
     fn codex_parser_state_renders_updated_todos_without_new_transcript_bytes(todo: AgentTodo) {
         let transcript = indoc! {r#"
@@ -872,12 +805,8 @@ mod tests {
 
         assert_eq!(
             (
-                parser
-                    .render_with_decisions_and_todos(None, &[], &[])
-                    .unwrap(),
-                parser
-                    .render_with_decisions_and_todos(None, &[], &todos)
-                    .unwrap(),
+                parser.render_with_todos(None, &[]).unwrap(),
+                parser.render_with_todos(None, &todos).unwrap(),
             ),
             (
                 (
@@ -942,12 +871,8 @@ mod tests {
 
         assert_eq!(
             (
-                parser
-                    .render_with_decisions(Some(&first_parent), &[])
-                    .unwrap(),
-                parser
-                    .render_with_decisions(Some(&updated_parent), &[])
-                    .unwrap(),
+                parser.render(Some(&first_parent)).unwrap(),
+                parser.render(Some(&updated_parent)).unwrap(),
             ),
             (
                 (
@@ -1135,7 +1060,7 @@ mod tests {
         "###};
 
         assert_eq!(
-            parse_with_skills(Cursor::new(transcript), None, &[], &[]).unwrap(),
+            parse_with_skills(Cursor::new(transcript), None, &[]).unwrap(),
             (
                 Vec::new(),
                 vec![
@@ -1159,7 +1084,7 @@ mod tests {
             {"type":"event_msg","timestamp":"2026-06-01T12:05:00Z","payload":{"type":"item_completed","item":{"type":"UserMessage","content":"after"}}}
         "#};
         assert_eq!(
-            parse_with_skills(Cursor::new(transcript), None, &[], &[todo]).unwrap(),
+            parse_with_skills(Cursor::new(transcript), None, &[todo]).unwrap(),
             (
                 vec![
                     ChatItem::Assistant {
@@ -1205,7 +1130,7 @@ mod tests {
             .with_timezone(&Utc);
 
         assert_eq!(
-            parse_with_skills(Cursor::new(transcript), None, &[], &[todo, earlier_todo]).unwrap(),
+            parse_with_skills(Cursor::new(transcript), None, &[todo, earlier_todo]).unwrap(),
             (
                 vec![
                     ChatItem::Assistant {

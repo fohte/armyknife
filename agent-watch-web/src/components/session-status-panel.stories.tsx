@@ -1,8 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
 import type { ComponentType } from 'react'
 
-import type { Decision } from '#components/decision-card'
-import { DecisionsPanel } from '#components/decisions-panel'
 import { ReviewDocumentPanel } from '#components/review-document-panel'
 import type { ReviewDocumentSummary } from '#components/review-document-summary'
 import { BackgroundTaskRowView } from '#components/running-task-row-view'
@@ -11,14 +9,7 @@ import { SessionStatusPanel } from '#components/session-status-panel'
 import { SessionTasksPanel } from '#components/session-tasks-panel'
 import { SessionTreePanel } from '#components/session-tree-panel'
 import { WebUiPane } from '#components/web-ui-pane'
-import type {
-  BackgroundTask,
-  Session,
-  SessionTask,
-  SessionTreeNode,
-} from '#types'
-
-const phoneStatusTimeReference = Date.now()
+import type { BackgroundTask, SessionTask, SessionTreeNode } from '#types'
 
 const statusPrDraft: ReviewDocumentSummary = {
   id: 'fixture-pr-draft',
@@ -282,29 +273,6 @@ export const OneRunningItemIsAvailable: Story = {
   },
 }
 
-export const DecisionsShowUnreviewedCount: Story = {
-  name: 'The Decisions tab shows how many decisions need review',
-  decorators: [defaultStatusViewport],
-  args: {
-    tabs: [
-      {
-        id: 'decisions',
-        label: 'Decisions',
-        count: 2,
-        visible: true,
-        showCount: true,
-        countTone: 'warning',
-        content: (
-          <div className="session-status-preview">
-            Decisions waiting for review
-          </div>
-        ),
-      },
-    ],
-    activeTabId: 'decisions',
-  },
-}
-
 export const ManyTabsKeepCloseActionVisible: Story = {
   name: 'The panel scrolls many tabs while keeping the close action visible',
   decorators: [defaultStatusViewport],
@@ -482,7 +450,6 @@ const statusTabs = ({
               },
               repo: 'example/service',
               vibeMode: { mode: 'disabled' },
-              decisionCount: 0,
               pullRequest: null,
             },
             {
@@ -504,7 +471,6 @@ const statusTabs = ({
               },
               repo: 'example/service',
               vibeMode: { mode: 'disabled' },
-              decisionCount: 0,
               pullRequest: null,
             },
             {
@@ -526,7 +492,6 @@ const statusTabs = ({
               },
               repo: 'example/service',
               vibeMode: { mode: 'disabled' },
-              decisionCount: 0,
               pullRequest: null,
             },
             {
@@ -548,7 +513,6 @@ const statusTabs = ({
               },
               repo: 'example/service',
               vibeMode: { mode: 'disabled' },
-              decisionCount: 0,
               pullRequest: null,
             },
             {
@@ -570,7 +534,6 @@ const statusTabs = ({
               },
               repo: 'example/service',
               vibeMode: { mode: 'disabled' },
-              decisionCount: 0,
               pullRequest: null,
             },
           ] satisfies SessionTreeNode[]
@@ -592,69 +555,6 @@ const statusTabs = ({
         }
         unsavedChanges
         view={reviewView}
-      />
-    ),
-  },
-  {
-    id: 'decisions',
-    label: 'Decisions',
-    count: 1,
-    showCount: true,
-    countTone: 'warning' as const,
-    content: (
-      <DecisionsPanel
-        decisions={
-          [
-            {
-              type: 'decision',
-              seq: 1,
-              title: '待ち時間を指数的に伸ばす',
-              why: '相手のサーバーが落ちているときに負荷をかけないため。',
-              considered: ['一定間隔で再試行する'],
-              easyToChange: '間隔の計算は 1 か所にまとまっている。',
-              review: null,
-              createdAt: new Date(
-                phoneStatusTimeReference - 34 * 60 * 1_000,
-              ).toISOString(),
-            },
-            {
-              type: 'decision',
-              seq: 2,
-              title: '再送の記録を既存のテーブルに足す',
-              why: '最初のリリースでは短い履歴だけが必要です。',
-              considered: ['配信経路ごとに記録を分ける'],
-              easyToChange: '保存先のテーブルは adapter で切り替えられます。',
-              review: 'ok',
-              createdAt: new Date(
-                phoneStatusTimeReference - 60 * 60 * 1_000,
-              ).toISOString(),
-            },
-          ] satisfies Decision[]
-        }
-        session={
-          {
-            id: 'fixture-session',
-            category: 'in_progress',
-            isPaused: false,
-            kind: null,
-            title: '通知の再送処理を見直す',
-            preview: '通知の再送処理について相談しています。',
-            elapsedSeconds: 120,
-            unread: false,
-            task: null,
-            repo: 'example/service',
-            project: 'service reliability',
-            parent: null,
-            ancestorSessionIds: [],
-            pullRequest: null,
-          } satisfies Session
-        }
-        relativeTimeReference={phoneStatusTimeReference}
-        showReviewed
-        selectedSeq={1}
-        onSelect={() => undefined}
-        onOk={() => Promise.resolve(true)}
-        onChange={() => Promise.resolve(true)}
       />
     ),
   },
@@ -759,11 +659,6 @@ export const StatusReviewPreview: Story = {
   name: 'The desktop status panel shows the Review preview.',
 }
 
-export const StatusDecisions: Story = {
-  ...desktopStatusStory('decisions'),
-  name: 'The desktop status panel shows pending decisions.',
-}
-
 export const StatusWebUi: Story = {
   ...desktopStatusStory('web-ui-crit'),
   name: 'The desktop status panel shows a Web UI tab.',
@@ -848,18 +743,6 @@ export const PhoneStatusReviewPreview: Story = {
     sessionTitle: '通知の信頼性を上げる',
     tabs: statusTabs({ size: 'phone', reviewView: 'preview' }),
     activeTabId: 'review-document',
-  },
-  decorators: [phoneStatusViewport],
-  parameters: phoneStatusStoryParameters,
-}
-
-export const PhoneStatusDecisions: Story = {
-  name: 'The phone status page shows pending decisions',
-  args: {
-    size: 'phone',
-    sessionTitle: '通知の信頼性を上げる',
-    tabs: phoneStatusTabs,
-    activeTabId: 'decisions',
   },
   decorators: [phoneStatusViewport],
   parameters: phoneStatusStoryParameters,

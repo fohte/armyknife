@@ -51,13 +51,6 @@ function areConversationMessagePropsEqual(
         previous.openInTerminalStatus === next.openInTerminalStatus &&
         previous.sessionEngine === next.sessionEngine
       )
-    case 'decision':
-      return (
-        previous.selected === next.selected &&
-        previous.decisionPosition === next.decisionPosition &&
-        previous.onSelectDecision === next.onSelectDecision &&
-        previous.onAction === next.onAction
-      )
     case 'proposal':
       return previous.onAction === next.onAction
     case 'todo':

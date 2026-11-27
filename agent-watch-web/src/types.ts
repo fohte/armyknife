@@ -79,8 +79,6 @@ export type Session = {
   reviewDocumentCount?: number
   laterUntil?: string | null
   isToday?: boolean
-  decisionCount?: number
-  unreviewedDecisionCount?: number
   todoLaterCount?: number
   todoLaterTitle?: string | null
 }
@@ -99,7 +97,6 @@ export type SessionTreeNode = {
   task: SessionTask | null
   repo: string
   vibeMode: VibeMode
-  decisionCount: number
   pullRequest: PullRequest | null
   pullRequests?: PullRequest[]
 }
@@ -250,16 +247,6 @@ export type ChatItem =
       resolved: boolean
       resolution: 'approved' | 'dismissed' | null
     }
-  | {
-      type: 'decision'
-      seq: number
-      title: string
-      why: string
-      considered: string[]
-      easyToChange: string
-      review: 'ok' | 'change' | null
-      createdAt: string
-    }
 
 type QuestionChoice = {
   label: string
@@ -335,7 +322,6 @@ export type ConversationResponse = {
   stableStart?: number | undefined
   stableEnd?: number | undefined
   stableDigest?: string | undefined
-  decisions: Extract<ChatItem, { type: 'decision' }>[]
   hasUnansweredProposal: boolean
   activeQuestionIndex: number | null
 }

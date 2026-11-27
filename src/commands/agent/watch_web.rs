@@ -262,7 +262,6 @@ fn app(restart_signal: watch::Receiver<bool>) -> Router {
         store::load_session,
         store::watch_web_user_marker,
         messages::RouteLoaders::new(
-            |session_id| store::agent_decisions_from(&store::sessions_dir()?, session_id),
             |session_id| store::watch_web_queued_prompts_from(&store::sessions_dir()?, session_id),
             |session_id| {
                 store::watch_web_peer_out_messages_from(&store::sessions_dir()?, session_id)
@@ -320,7 +319,6 @@ fn app_with_assets_and_loader_and_restart_signal(
         load_session,
         load_user_marker,
         messages::RouteLoaders::new(
-            |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_, _| Ok(()),
@@ -683,7 +681,7 @@ mod tests {
         "/api/sessions/fixture-session/messages",
         StatusCode::OK,
         Some("application/json"),
-        r#"{"messages":[],"backgroundTasks":[],"start":0,"total":0,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null}"#
+        r#"{"messages":[],"backgroundTasks":[],"start":0,"total":0,"hasUnansweredProposal":false,"activeQuestionIndex":null}"#
     )]
     #[case::unknown_session(
         "/api/sessions/unregistered-session/messages",
@@ -747,7 +745,7 @@ mod tests {
             ),
             (
                 Some("gzip".to_owned()),
-                br#"{"messages":[],"backgroundTasks":[],"start":0,"total":0,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null}"#.to_vec(),
+                br#"{"messages":[],"backgroundTasks":[],"start":0,"total":0,"hasUnansweredProposal":false,"activeQuestionIndex":null}"#.to_vec(),
             ),
         );
     }

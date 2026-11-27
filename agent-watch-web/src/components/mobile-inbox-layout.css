@@ -224,13 +224,6 @@
   font-size: 13.5px;
 }
 
-.agent-watch-shell[data-layout='mobile']
-  .session-row-content.is-mobile
-  .session-decision-count,
-.story-mobile-layout .session-row-content.is-mobile .session-decision-count {
-  display: none;
-}
-
 .agent-watch-shell[data-layout='mobile'] .session-list-item,
 .story-mobile-layout .session-list-item {
   border-top: 1px solid var(--aw-border-row-mobile);

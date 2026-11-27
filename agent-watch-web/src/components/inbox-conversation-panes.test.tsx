@@ -71,7 +71,6 @@ function treeNode(
     task: null,
     repo: 'sample/repo',
     vibeMode: { mode: 'disabled' },
-    decisionCount: 0,
     pullRequest: null,
   }
 }
@@ -143,7 +142,6 @@ function inboxFetch(respondToTreeRequest: (url: string) => Promise<Response>) {
           backgroundTasks: [],
           start: 0,
           total: 0,
-          decisions: [],
           hasUnansweredProposal: false,
           activeQuestionIndex: null,
         }),

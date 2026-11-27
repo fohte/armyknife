@@ -16,8 +16,8 @@ use axum::routing::get;
 use serde::{Deserialize, Serialize};
 
 use crate::commands::agent::store::{
-    AgentDecision, AgentFile, AgentProposal, AgentTodo, PermissionDeniedOperation,
-    PermissionRequestData, WatchWebPeerOutMessage, WatchWebQueuedPrompt,
+    AgentFile, AgentProposal, AgentTodo, PermissionDeniedOperation, PermissionRequestData,
+    WatchWebPeerOutMessage, WatchWebQueuedPrompt,
 };
 use crate::commands::agent::types::{Engine, Session};
 
@@ -33,7 +33,6 @@ pub(super) type SessionLoader = Arc<dyn Fn(&str) -> Result<Option<Session>> + Se
 pub(super) type SessionListLoader = Arc<dyn Fn() -> Result<Vec<Session>> + Send + Sync>;
 pub(super) type UserMarkerLoader = Arc<dyn Fn(&str) -> Result<Option<String>> + Send + Sync>;
 pub(super) type MessagesRouteState = (SessionLoader, UserMarkerLoader, RouteLoaders);
-pub(super) type DecisionLoader = Arc<dyn Fn(&str) -> Result<Vec<AgentDecision>> + Send + Sync>;
 pub(super) type QueuedPromptLoader =
     Arc<dyn Fn(&str) -> Result<Vec<WatchWebQueuedPrompt>> + Send + Sync>;
 pub(super) type PeerOutMessageLoader =
@@ -85,7 +84,6 @@ struct MessagesQuery {
 
 #[derive(Clone)]
 pub(in crate::commands::agent::watch_web) struct RouteLoaders {
-    pub(super) decisions: DecisionLoader,
     pub(super) queued_prompts: QueuedPromptLoader,
     pub(super) peer_out_messages: PeerOutMessageLoader,
     pub(super) mark_queued_prompts_resolved: QueuedPromptUpdater,
@@ -106,7 +104,6 @@ pub(in crate::commands::agent::watch_web) struct RouteLoaders {
 
 impl RouteLoaders {
     pub(in crate::commands::agent::watch_web) fn new(
-        load_decisions: impl Fn(&str) -> Result<Vec<AgentDecision>> + Send + Sync + 'static,
         load_queued_prompts: impl Fn(&str) -> Result<Vec<WatchWebQueuedPrompt>> + Send + Sync + 'static,
         load_peer_out_messages: impl Fn(&str) -> Result<Vec<WatchWebPeerOutMessage>>
         + Send
@@ -116,7 +113,6 @@ impl RouteLoaders {
         load_proposals: impl Fn(&str) -> Result<Vec<AgentProposal>> + Send + Sync + 'static,
     ) -> Self {
         Self {
-            decisions: Arc::new(load_decisions),
             queued_prompts: Arc::new(load_queued_prompts),
             peer_out_messages: Arc::new(load_peer_out_messages),
             mark_queued_prompts_resolved: Arc::new(mark_queued_prompts_resolved),

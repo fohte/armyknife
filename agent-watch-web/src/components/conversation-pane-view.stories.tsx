@@ -373,12 +373,6 @@ export const IPhoneConversationShowsTheStatusPanel: Story = {
             content: <div className="session-tree-feedback">Crit review</div>,
           },
           {
-            id: 'decisions',
-            label: 'Decisions',
-            count: 1,
-            content: <div className="session-tree-feedback">Decisions</div>,
-          },
-          {
             id: 'running',
             label: 'Running',
             count: 1,
@@ -415,16 +409,6 @@ export const IPhoneConversationShowsAQuestion: Story = {
       {
         type: 'tool_summary',
         summary: 'Edit client.ts · Read ×3 · Shell ×1',
-      },
-      {
-        type: 'decision',
-        seq: 1,
-        title: 'Retry with exponential delay',
-        why: 'A short delay avoids repeating temporary failures immediately.',
-        considered: ['Retry without a delay'],
-        easyToChange: 'Update the retry delay constant.',
-        review: null,
-        createdAt: '2026-11-01T03:25:59Z',
       },
       {
         type: 'question',
@@ -756,55 +740,6 @@ export const TheConversationShowsOperationSummaries: Story = {
       },
     ],
     actions: null,
-  },
-}
-
-export const TheConversationShowsDecisionRows: Story = {
-  name: 'The conversation shows a provisional decision in its transcript',
-  args: {
-    session: { ...session, decisionCount: 1, unreviewedDecisionCount: 1 },
-    messages: [
-      {
-        type: 'assistant',
-        text: 'I will use a fixed retry limit while continuing the work.',
-      },
-      {
-        type: 'decision',
-        seq: 1,
-        title: 'Use a fixed retry limit',
-        why: 'The current service has no reliable timing data.',
-        considered: ['Retry using the latest duration'],
-        easyToChange: 'One configuration value in the CI workflow.',
-        review: null,
-        createdAt: '2026-11-11T03:25:59Z',
-      },
-    ],
-  },
-}
-
-export const DoneSessionNeedsDecisionReview: Story = {
-  name: 'A completed session highlights decisions that need review',
-  args: {
-    session: {
-      ...session,
-      category: 'done',
-      kind: null,
-      decisionCount: 2,
-      unreviewedDecisionCount: 1,
-    },
-    selectedDecisionSeq: 1,
-    messages: [
-      {
-        type: 'decision',
-        seq: 1,
-        title: 'Use a fixed retry limit',
-        why: 'The current service has no reliable timing data.',
-        considered: ['Retry using the latest duration'],
-        easyToChange: 'One configuration value in the CI workflow.',
-        review: null,
-        createdAt: '2026-11-11T03:25:59Z',
-      },
-    ],
   },
 }
 

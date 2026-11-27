@@ -135,10 +135,6 @@
   white-space: nowrap;
 }
 
-.session-row-content .session-preview.is-decision-preview {
-  color: var(--aw-text-body);
-}
-
 .session-row-content .session-meta-line,
 .session-row-content .session-repo-line {
   display: flex;
@@ -220,11 +216,6 @@
 
 .session-row-content.density-compact .session-repo-line {
   padding-left: 19px;
-}
-
-.session-row-content .session-decision-count {
-  flex: none;
-  color: var(--aw-color-warning);
 }
 
 .session-row-content.is-mobile.density-full {

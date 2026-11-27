@@ -551,7 +551,7 @@ it('keeps a connected status when saved view storage fails', () => {
   })
 })
 
-it('shows the combined review count in the collapsed iPhone Done row', () => {
+it('shows the session count and chevron in the collapsed iPhone Done row', () => {
   const secondDoneSession: Session = {
     id: 'sample-done-secondary',
     category: 'done',
@@ -568,41 +568,29 @@ it('shows the combined review count in the collapsed iPhone Done row', () => {
     parent: null,
     ancestorSessionIds: [],
     pullRequest: null,
-    unreviewedDecisionCount: 1,
   }
   renderInbox({
     isMobile: true,
     doneExpanded: false,
-    sessions: [
-      ...sessions.map((session) =>
-        session.id === 'sample-done'
-          ? { ...session, unreviewedDecisionCount: 1 }
-          : session,
-      ),
-      secondDoneSession,
-    ],
+    sessions: [...sessions, secondDoneSession],
   })
 
   expect(doneRowSnapshot()).toEqual({
-    text: 'Done2◇ 2 to review›',
+    text: 'Done2›',
     expanded: 'false',
     chevronHidden: 'true',
   })
 })
 
-it('shows the downward chevron for expanded iPhone Done rows with pending reviews', () => {
+it('shows the downward chevron for expanded iPhone Done rows', () => {
   renderInbox({
     isMobile: true,
     doneExpanded: true,
-    sessions: sessions.map((session) =>
-      session.id === 'sample-done'
-        ? { ...session, unreviewedDecisionCount: 1 }
-        : session,
-    ),
+    sessions,
   })
 
   expect(doneRowSnapshot()).toEqual({
-    text: 'Done1◇ 1 to review⌄',
+    text: 'Done1⌄',
     expanded: 'true',
     chevronHidden: 'true',
   })
