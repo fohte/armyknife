@@ -307,6 +307,7 @@ export function SessionRow({
         <span className="session-title-line">
           <span
             className={`session-title${session.unread === true ? ' is-unread' : ''}`}
+            title={session.title}
           >
             {session.title}
           </span>
@@ -339,7 +340,12 @@ export function SessionRow({
               </span>
             </>
           ) : null}
-          <span className="session-task">
+          <span
+            className="session-task"
+            title={
+              task === null ? undefined : `${taskReference(task)} ${task.title}`
+            }
+          >
             {task === null ? (
               '— No task'
             ) : (

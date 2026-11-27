@@ -210,8 +210,10 @@
 }
 
 .session-row-content.density-full .session-repo {
-  flex: 1 1 auto;
-  justify-content: flex-end;
+  flex: 1 1 0;
+  max-width: max-content;
+  min-width: 10ch;
+  margin-left: auto;
 }
 
 .session-row-content .session-repo-label {
@@ -254,10 +256,6 @@
   font-family: var(--font-mono);
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.session-row-content.density-full .session-repo {
-  min-width: 10ch;
 }
 
 .session-row-content.density-compact .session-repo-line {

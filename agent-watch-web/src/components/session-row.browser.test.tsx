@@ -37,10 +37,17 @@ const session: Session = {
 function renderRow(
   density: 'full' | 'compact',
   viewSession: Session = session,
+  isMobile = false,
 ) {
   root = createRoot(frame)
   act(() => {
-    root?.render(<SessionRow session={viewSession} density={density} />)
+    root?.render(
+      <SessionRow
+        session={viewSession}
+        density={density}
+        isMobile={isMobile}
+      />,
+    )
   })
 }
 
@@ -64,8 +71,16 @@ function snapshot() {
 
   return {
     title: container.querySelector('.session-title')?.textContent,
+    sessionTitleTooltip: container
+      .querySelector('.session-title')
+      ?.getAttribute('title'),
     task: taskTitle?.textContent,
     taskHasVisibleWidth: (taskTitle?.clientWidth ?? 0) > 0,
+    taskTitleOverflowing:
+      taskTitle !== null && taskTitle.scrollWidth > taskTitle.clientWidth,
+    taskTooltip: container
+      .querySelector('.session-task')
+      ?.getAttribute('title'),
     repository: repository?.querySelector('.session-repo-label')?.textContent,
     repositoryTitle: repository?.title,
     repositoryNameOverflowing:
@@ -89,11 +104,13 @@ function snapshot() {
 async function resizeRowSnapshots(
   density: 'full' | 'compact',
   viewSession: Session = session,
+  narrowWidth = '300px',
+  isMobile = false,
 ) {
-  renderRow(density, viewSession)
+  renderRow(density, viewSession, isMobile)
   await resizeFrame('1100px')
   const wideSnapshot = snapshot()
-  await resizeFrame('300px')
+  await resizeFrame(narrowWidth)
   const narrowSnapshot = snapshot()
   await resizeFrame('1100px')
   return [wideSnapshot, narrowSnapshot, snapshot()]
@@ -119,8 +136,11 @@ it('shortens the repository owner before its name as the row narrows', async () 
   expect(await resizeRowSnapshots('compact')).toEqual([
     {
       title: 'Keep the session title visible',
+      sessionTitleTooltip: 'Keep the session title visible',
       task: 'Keep the task readable beside long names',
       taskHasVisibleWidth: true,
+      taskTitleOverflowing: false,
+      taskTooltip: 'P1 #27 Keep the task readable beside long names',
       repository: 'example-platform/notification-delivery-service',
       repositoryTitle: 'example-platform/notification-delivery-service',
       repositoryNameOverflowing: false,
@@ -133,8 +153,11 @@ it('shortens the repository owner before its name as the row narrows', async () 
     },
     {
       title: 'Keep the session title visible',
+      sessionTitleTooltip: 'Keep the session title visible',
       task: 'Keep the task readable beside long names',
       taskHasVisibleWidth: true,
+      taskTitleOverflowing: true,
+      taskTooltip: 'P1 #27 Keep the task readable beside long names',
       repository: '…/notification-delivery-service',
       repositoryTitle: 'example-platform/notification-delivery-service',
       repositoryNameOverflowing: false,
@@ -147,8 +170,11 @@ it('shortens the repository owner before its name as the row narrows', async () 
     },
     {
       title: 'Keep the session title visible',
+      sessionTitleTooltip: 'Keep the session title visible',
       task: 'Keep the task readable beside long names',
       taskHasVisibleWidth: true,
+      taskTitleOverflowing: false,
+      taskTooltip: 'P1 #27 Keep the task readable beside long names',
       repository: 'example-platform/notification-delivery-service',
       repositoryTitle: 'example-platform/notification-delivery-service',
       repositoryNameOverflowing: false,
@@ -162,52 +188,87 @@ it('shortens the repository owner before its name as the row narrows', async () 
   ])
 })
 
-it('preserves the task and repository name in a narrow full row', async () => {
-  expect(await resizeRowSnapshots('full')).toEqual([
-    {
-      title: 'Keep the session title visible',
-      task: 'Keep the task readable beside long names',
-      taskHasVisibleWidth: true,
-      repository: 'example-platform/notification-delivery-service',
-      repositoryTitle: 'example-platform/notification-delivery-service',
-      repositoryNameOverflowing: false,
-      repositoryNameTextOverflow: 'ellipsis',
-      branch: undefined,
-      branchTitle: undefined,
-      branchSeparator: null,
-      branchOverflowing: false,
-      branchTextOverflow: null,
-    },
-    {
-      title: 'Keep the session title visible',
-      task: 'Keep the task readable beside long names',
-      taskHasVisibleWidth: true,
-      repository: '…/notification-delivery-service',
-      repositoryTitle: 'example-platform/notification-delivery-service',
-      repositoryNameOverflowing: true,
-      repositoryNameTextOverflow: 'ellipsis',
-      branch: undefined,
-      branchTitle: undefined,
-      branchSeparator: null,
-      branchOverflowing: false,
-      branchTextOverflow: null,
-    },
-    {
-      title: 'Keep the session title visible',
-      task: 'Keep the task readable beside long names',
-      taskHasVisibleWidth: true,
-      repository: 'example-platform/notification-delivery-service',
-      repositoryTitle: 'example-platform/notification-delivery-service',
-      repositoryNameOverflowing: false,
-      repositoryNameTextOverflow: 'ellipsis',
-      branch: undefined,
-      branchTitle: undefined,
-      branchSeparator: null,
-      branchOverflowing: false,
-      branchTextOverflow: null,
-    },
-  ])
-})
+const fullRowSession: Session = {
+  ...session,
+  task: {
+    id: 'sample-task',
+    number: 27,
+    title: 'Review retries',
+    priority: 1,
+  },
+  repo: 'sample-contributor-automation-team/notification-delivery-service',
+}
+
+const fullRowSnapshots = [
+  {
+    title: 'Keep the session title visible',
+    sessionTitleTooltip: 'Keep the session title visible',
+    task: 'Review retries',
+    taskHasVisibleWidth: true,
+    taskTitleOverflowing: false,
+    taskTooltip: 'P1 #27 Review retries',
+    repository:
+      'sample-contributor-automation-team/notification-delivery-service',
+    repositoryTitle:
+      'sample-contributor-automation-team/notification-delivery-service',
+    repositoryNameOverflowing: false,
+    repositoryNameTextOverflow: 'ellipsis',
+    branch: undefined,
+    branchTitle: undefined,
+    branchSeparator: null,
+    branchOverflowing: false,
+    branchTextOverflow: null,
+  },
+  {
+    title: 'Keep the session title visible',
+    sessionTitleTooltip: 'Keep the session title visible',
+    task: 'Review retries',
+    taskHasVisibleWidth: true,
+    taskTitleOverflowing: false,
+    taskTooltip: 'P1 #27 Review retries',
+    repository: '…/notification-delivery-service',
+    repositoryTitle:
+      'sample-contributor-automation-team/notification-delivery-service',
+    repositoryNameOverflowing: true,
+    repositoryNameTextOverflow: 'ellipsis',
+    branch: undefined,
+    branchTitle: undefined,
+    branchSeparator: null,
+    branchOverflowing: false,
+    branchTextOverflow: null,
+  },
+  {
+    title: 'Keep the session title visible',
+    sessionTitleTooltip: 'Keep the session title visible',
+    task: 'Review retries',
+    taskHasVisibleWidth: true,
+    taskTitleOverflowing: false,
+    taskTooltip: 'P1 #27 Review retries',
+    repository:
+      'sample-contributor-automation-team/notification-delivery-service',
+    repositoryTitle:
+      'sample-contributor-automation-team/notification-delivery-service',
+    repositoryNameOverflowing: false,
+    repositoryNameTextOverflow: 'ellipsis',
+    branch: undefined,
+    branchTitle: undefined,
+    branchSeparator: null,
+    branchOverflowing: false,
+    branchTextOverflow: null,
+  },
+]
+
+it.each([
+  { rowType: 'inbox', isMobile: false, width: '460px' },
+  { rowType: 'iPhone inbox', isMobile: true, width: '390px' },
+])(
+  'keeps the task title readable in a narrow full $rowType row',
+  async ({ isMobile, width }) => {
+    expect(
+      await resizeRowSnapshots('full', fullRowSession, width, isMobile),
+    ).toEqual(fullRowSnapshots)
+  },
+)
 
 it('shortens the owner before a repository name ellipsizes near the compact-row threshold', async () => {
   renderRow('compact')
