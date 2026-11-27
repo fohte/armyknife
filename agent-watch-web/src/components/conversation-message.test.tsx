@@ -18,9 +18,6 @@ function renderConversationCardMarkup(
       actions={null}
       actionsReady={true}
       isMobile={false}
-      selected={false}
-      decisionPosition={undefined}
-      onSelectDecision={() => undefined}
       message={message}
       {...(includeImageSources
         ? { imageSources: { [localImagePath]: servedImageSource } }
