@@ -468,6 +468,17 @@ function renderView(
   })
 }
 
+function getCompactingStatusSnapshot() {
+  return {
+    workingStatus: container.querySelector('.conversation-status-band-label')
+      ?.textContent,
+    detail:
+      container.querySelector('.conversation-status-band-inline-detail')
+        ?.textContent ?? null,
+    inProgressItems: container.querySelectorAll('.tool-in-progress').length,
+  }
+}
+
 it('keeps the phone composer reachable when several merge rows fill the viewport', () => {
   container.style.cssText =
     'position: fixed; inset: 0 auto auto 0; width: 390px; height: 260px'
@@ -606,13 +617,88 @@ it('disables Resume when the session has no tmux location', () => {
     label: resumeButton.textContent,
     disabled: resumeButton.disabled,
     title: resumeButton.title,
+    hint: container.querySelector('.conversation-ended-hint')?.textContent,
   })
   expect(actual()).toEqual({
     label: 'Resume',
     disabled: true,
     title: 'This session has no tmux location',
+    hint: ' · Resume is unavailable because this session has no tmux location',
   })
 })
+
+it('explains why Resume is disabled when the working directory is missing', () => {
+  renderView(
+    () => Promise.resolve(true),
+    endedSession,
+    () => undefined,
+    [],
+    {
+      ...endedActions,
+      resume: false,
+      resumeDisabledReason: 'workingDirectoryMissing',
+    },
+  )
+
+  const resumeButton = requireElement(
+    container.querySelector<HTMLButtonElement>('.conversation-ended-resume'),
+  )
+  const actual = () => ({
+    label: resumeButton.textContent,
+    disabled: resumeButton.disabled,
+    title: resumeButton.title,
+    hint: container.querySelector('.conversation-ended-hint')?.textContent,
+  })
+  expect(actual()).toEqual({
+    label: 'Resume',
+    disabled: true,
+    title: 'This session’s working directory does not exist',
+    hint: ' · Resume is unavailable because this session’s working directory does not exist',
+  })
+})
+
+it.each([
+  [
+    'no tmux location',
+    'noTmux',
+    'Resume is unavailable because this session has no tmux location',
+  ],
+  [
+    'a missing working directory',
+    'workingDirectoryMissing',
+    'Resume is unavailable because this session’s working directory does not exist',
+  ],
+] as const)(
+  'shows the disabled reason on mobile with %s',
+  (_condition, reason, hint) => {
+    renderView(
+      () => Promise.resolve(true),
+      endedSession,
+      () => undefined,
+      [],
+      { ...endedActions, resume: false, resumeDisabledReason: reason },
+      true,
+    )
+
+    const resumeButton = requireElement(
+      container.querySelector<HTMLButtonElement>('.conversation-ended-resume'),
+    )
+    const actual = () => ({
+      mobile: container
+        .querySelector('.conversation-pane')
+        ?.getAttribute('data-mobile'),
+      label: resumeButton.textContent,
+      disabled: resumeButton.disabled,
+      hint: container.querySelector('.conversation-ended-hint')?.textContent,
+    })
+    expect(actual()).toEqual({
+      mobile: 'true',
+      label: 'Resume session',
+      disabled: true,
+      hint: ` · ${hint}`,
+    })
+  },
+)
 
 type SettleResumeRequest = (
   resolve: (success: boolean) => void,
@@ -3616,16 +3702,14 @@ it('ignores Alt-arrow shortcuts on mobile', () => {
 it('shows desktop newline shortcuts with the applicable interrupt hint', () => {
   const onAction = () => Promise.resolve(true)
   renderView(onAction)
-  const interruptibleHint = container.querySelector(
-    '.composer-footer > span',
+  const interruptibleHint =
+    container.querySelector('.composer-key-hint')?.textContent
+  const ownMessageHint = container.querySelector(
+    '.composer-key-hint2',
   )?.textContent
   renderView(onAction, session, undefined, [], { ...actions, interrupt: false })
-  const nonInterruptibleHint = container.querySelector(
-    '.composer-footer > span',
-  )?.textContent
-  const ownMessageHint = container.querySelectorAll(
-    '.composer-footer > span',
-  )[1]?.textContent
+  const nonInterruptibleHint =
+    container.querySelector('.composer-key-hint')?.textContent
 
   const snapshot = () => ({
     interruptibleHint,
@@ -3662,8 +3746,9 @@ it('keeps Enter for newlines and exposes mobile conversation actions', async () 
       enterEvent.defaultPrevented,
       shiftEnterEvent.defaultPrevented,
     ],
-    keyboardHint: container.querySelector('.composer-footer > span')
-      ?.textContent,
+    keyboardHint: container.querySelector('.composer-key-hint')?.textContent,
+    keyboardHint2:
+      container.querySelector('.composer-key-hint2')?.textContent ?? null,
     choiceShortcutBadges: container.querySelectorAll(
       '.chat-question-choices kbd',
     ).length,
@@ -3681,7 +3766,8 @@ it('keeps Enter for newlines and exposes mobile conversation actions', async () 
   expect(duringInterrupt).toEqual({
     actions: [['interrupt']],
     defaultPrevented: [false, false],
-    keyboardHint: undefined,
+    keyboardHint: '',
+    keyboardHint2: null,
     choiceShortcutBadges: 0,
     interruptLabel: 'Interrupting…',
     interruptBusy: 'true',
@@ -4788,17 +4874,36 @@ it('shows the compacting status and summary instead of stale tool details', () =
     ],
   )
 
-  const getSnapshot = () => ({
-    workingStatus: container.querySelector('.conversation-status-band-label')
-      ?.textContent,
-    detail:
-      container.querySelector('.conversation-status-band-inline-detail')
-        ?.textContent ?? null,
-    inProgressItems: container.querySelectorAll('.tool-in-progress').length,
-  })
-  expect(getSnapshot()).toEqual({
+  expect(getCompactingStatusSnapshot()).toEqual({
     workingStatus: 'Compacting…',
     detail: '古い会話を要約しています',
+    inProgressItems: 0,
+  })
+})
+
+it('shows an active tool while a working session is marked as compacting', () => {
+  renderView(
+    vi.fn().mockResolvedValue(true),
+    {
+      ...session,
+      category: 'in_progress',
+      activityStatus: 'working',
+      isCompacting: true,
+      elapsedSeconds: 92,
+    },
+    undefined,
+    [
+      {
+        type: 'tool_in_progress',
+        tool: 'exec',
+        target: 'cargo check --package fixture',
+      },
+    ],
+  )
+
+  expect(getCompactingStatusSnapshot()).toEqual({
+    workingStatus: 'Working · 1m 32s',
+    detail: 'Bash  cargo check --package fixture',
     inProgressItems: 0,
   })
 })
@@ -7156,8 +7261,8 @@ it('sends pasted file data with the message and keeps it when sending fails', as
   expect(
     await waitForState(
       () =>
-        container.querySelector('.attachment-preview-item span')
-          ?.textContent === file.name,
+        container.querySelector('.composer-attachment-name')?.textContent ===
+        file.name,
     ),
   ).toBe(true)
   act(() => {
@@ -7168,7 +7273,7 @@ it('sends pasted file data with the message and keeps it when sending fails', as
   const snapshot = () => ({
     actionCalls: onAction.mock.calls,
     attachmentNames: Array.from(
-      container.querySelectorAll('.attachment-preview-item span'),
+      container.querySelectorAll('.composer-attachment-name'),
       (element) => element.textContent,
     ),
   })
@@ -7220,7 +7325,7 @@ it('warns before leaving after its conversation pane unmounts', async () => {
   })
   expect(
     await waitForState(
-      () => container.querySelector('.attachment-preview-item') !== null,
+      () => container.querySelector('.composer-attachment') !== null,
     ),
   ).toBe(true)
   const event = new Event('beforeunload', { cancelable: true })
@@ -7276,7 +7381,7 @@ it('warns before leaving while an attachment is being processed', async () => {
     await Promise.resolve()
   })
   await waitForState(
-    () => container.querySelector('.attachment-preview-item') !== null,
+    () => container.querySelector('.composer-attachment') !== null,
   )
   const whileQueued = new Event('beforeunload', { cancelable: true })
   act(() => {
@@ -7312,8 +7417,9 @@ it('attaches dropped files through the composer and sends their data', async () 
   expect(
     await waitForState(
       () =>
-        container.querySelector('.attachment-preview-item span')
-          ?.textContent === file.name,
+        container
+          .querySelector('.composer-attachment-image')
+          ?.getAttribute('alt') === file.name,
     ),
   ).toBe(true)
   const textarea = requireElement(
@@ -7326,7 +7432,7 @@ it('attaches dropped files through the composer and sends their data', async () 
     await waitForState(
       () =>
         onAction.mock.calls.length === 1 &&
-        container.querySelector('.attachment-preview-item') === null,
+        container.querySelector('.composer-attachment') === null,
     ),
   ).toBe(true)
 
@@ -7336,13 +7442,13 @@ it('attaches dropped files through the composer and sends their data', async () 
       container.querySelector('.conversation-drop-target')?.textContent ?? null,
     dropPrevented: drop.defaultPrevented,
     attachmentNames: Array.from(
-      container.querySelectorAll('.attachment-preview-item span'),
+      container.querySelectorAll('.composer-attachment-name'),
       (element) => element.textContent,
     ),
     actionCalls: onAction.mock.calls,
   })
   expect(snapshot()).toEqual({
-    targetVisibleDuringDrag: 'Drop files to attach',
+    targetVisibleDuringDrag: 'Drop images to attach',
     targetAfterDrop: null,
     dropPrevented: true,
     attachmentNames: [],
@@ -7425,12 +7531,9 @@ it('attaches files dropped on a proposal comment without activating the conversa
       ),
       (element) => element.textContent,
     ),
-    composerAttachmentNames: Array.from(
-      container.querySelectorAll(
-        '.conversation-composer .attachment-preview-item span',
-      ),
-      (element) => element.textContent,
-    ),
+    composerAttachmentCount: container.querySelectorAll(
+      '.conversation-composer .composer-attachment',
+    ).length,
     actionCalls: onAction.mock.calls,
   })
   expect(snapshot()).toEqual({
@@ -7443,7 +7546,7 @@ it('attaches files dropped on a proposal comment without activating the conversa
     targetAfterDragOver: 'Drop files to attach',
     targetAfterDrop: null,
     commentAttachmentNames: ['dropped.png'],
-    composerAttachmentNames: [],
+    composerAttachmentCount: 0,
     actionCalls: [],
   })
 })
@@ -7473,7 +7576,7 @@ it('hides the drop target when a file drag leaves the conversation', () => {
       container.querySelector('.conversation-drop-target')?.textContent ?? null,
   })
   expect(snapshot()).toEqual({
-    targetAfterEnter: 'Drop files to attach',
+    targetAfterEnter: 'Drop images to attach',
     targetAfterLeave: null,
   })
 })
@@ -7497,8 +7600,8 @@ it('clears pasted attachments after a successful send', async () => {
   expect(
     await waitForState(
       () =>
-        container.querySelector('.attachment-preview-item span')
-          ?.textContent === file.name,
+        container.querySelector('.composer-attachment-name')?.textContent ===
+        file.name,
     ),
   ).toBe(true)
   act(() => {
@@ -7508,14 +7611,14 @@ it('clears pasted attachments after a successful send', async () => {
     await waitForState(
       () =>
         onAction.mock.calls.length === 1 &&
-        container.querySelector('.attachment-preview-item') === null,
+        container.querySelector('.composer-attachment') === null,
     ),
   ).toBe(true)
 
   const snapshot = () => ({
     actionCalls: onAction.mock.calls,
     attachmentNames: Array.from(
-      container.querySelectorAll('.attachment-preview-item span'),
+      container.querySelectorAll('.composer-attachment-name'),
       (element) => element.textContent,
     ),
   })
@@ -7567,7 +7670,7 @@ it('names the attachment that crosses the message size limit before sending', as
   })
   expect(
     await waitForState(
-      () => container.querySelectorAll('.attachment-preview-item').length === 2,
+      () => container.querySelectorAll('.composer-attachment').length === 2,
     ),
   ).toBe(true)
   act(() => {
@@ -7584,7 +7687,7 @@ it('names the attachment that crosses the message size limit before sending', as
   const snapshot = () => ({
     error: container.querySelector('[role="alert"]')?.textContent ?? null,
     attachmentNames: Array.from(
-      container.querySelectorAll('.attachment-preview-item span'),
+      container.querySelectorAll('.composer-attachment-name'),
       (element) => element.textContent,
     ),
     actionCalls: onAction.mock.calls,
@@ -7616,7 +7719,7 @@ it('names and blocks the attachment that crosses the attachment count limit', as
   expect(
     await waitForState(
       () =>
-        container.querySelectorAll('.attachment-preview-item').length ===
+        container.querySelectorAll('.composer-attachment').length ===
         files.length,
     ),
   ).toBe(true)
@@ -7634,7 +7737,7 @@ it('names and blocks the attachment that crosses the attachment count limit', as
   const snapshot = () => ({
     error: container.querySelector('[role="alert"]')?.textContent ?? null,
     attachmentNames: Array.from(
-      container.querySelectorAll('.attachment-preview-item span'),
+      container.querySelectorAll('.composer-attachment-name'),
       (element) => element.textContent,
     ),
     actionCalls: onAction.mock.calls,
@@ -7722,8 +7825,8 @@ it('shows a server attachment validation error and retains the rejected attachme
   expect(
     await waitForState(
       () =>
-        container.querySelector('.attachment-preview-item span')
-          ?.textContent === file.name,
+        container.querySelector('.composer-attachment-name')?.textContent ===
+        file.name,
     ),
   ).toBe(true)
   act(() => {
@@ -7735,14 +7838,14 @@ it('shows a server attachment validation error and retains the rejected attachme
         container.querySelector('[role="alert"]')?.textContent ===
           'file attachment data is invalid' &&
         fetcher.mock.calls.length === 3 &&
-        container.querySelector('.attachment-preview-item span')
-          ?.textContent === file.name,
+        container.querySelector('.composer-attachment-name')?.textContent ===
+          file.name,
     ),
   ).toBe(true)
 
   const snapshot = () => ({
     error: container.querySelector('[role="alert"]')?.textContent ?? null,
-    attachmentName: container.querySelector('.attachment-preview-item span')
+    attachmentName: container.querySelector('.composer-attachment-name')
       ?.textContent,
     postBody: normalizeQueuedMessagePostBody(fetcher.mock.calls[2]?.[1]?.body),
   })
@@ -7846,8 +7949,9 @@ it('waits for pasted image optimization and sends the optimized attachment', asy
   expect(
     await waitForState(
       () =>
-        container.querySelector('.attachment-preview-item span')
-          ?.textContent === 'photo.jpg' && !sendButton.disabled,
+        container
+          .querySelector('.composer-attachment-image')
+          ?.getAttribute('alt') === 'photo.jpg' && !sendButton.disabled,
     ),
   ).toBe(true)
   act(() => {
@@ -8130,9 +8234,7 @@ it('blocks duplicate sends and shows their pending status', async () => {
     buttonDisabled: sendButton.disabled,
     defaultPrevented: events.map((event) => event.defaultPrevented),
     draft: textarea.value,
-    status:
-      container.querySelector('.composer-footer [role="status"]')
-        ?.textContent ?? null,
+    status: container.querySelector('.composer-status')?.textContent ?? null,
   })
   const pendingSnapshot = duringSend()
 
@@ -8146,9 +8248,7 @@ it('blocks duplicate sends and shows their pending status', async () => {
     afterSend: {
       buttonDisabled: sendButton.disabled,
       draft: textarea.value,
-      status:
-        container.querySelector('.composer-footer [role="status"]')
-          ?.textContent ?? null,
+      status: container.querySelector('.composer-status')?.textContent ?? null,
     },
   })
   const expected = {
@@ -9390,7 +9490,7 @@ it('shows an attachment size warning over a retained message send error', async 
     'limit-crossing.bin would exceed the 50 MiB attachment limit'
   const warningDisplayed = await waitForState(
     () =>
-      container.querySelectorAll('.attachment-preview-item').length === 2 &&
+      container.querySelectorAll('.composer-attachment').length === 2 &&
       container.querySelector('[role="alert"]')?.textContent === limitWarning,
   )
 
@@ -9405,7 +9505,7 @@ it('shows an attachment size warning over a retained message send error', async 
   })
   const retainedErrorRestored = await waitForState(
     () =>
-      container.querySelectorAll('.attachment-preview-item').length === 1 &&
+      container.querySelectorAll('.composer-attachment').length === 1 &&
       container.querySelector('[role="alert"]')?.textContent ===
         'The message could not be sent.',
   )
@@ -9499,7 +9599,7 @@ it('keeps a retained message error visible after an empty attachment error', asy
     void textarea.dispatchEvent(pasteEvent)
   })
   await waitForState(
-    () => container.querySelector('.attachment-preview-item') !== null,
+    () => container.querySelector('.composer-attachment') !== null,
   )
   await waitForState(
     () =>

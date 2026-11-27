@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::Result;
+use anyhow::{Result, ensure};
 use axum::Json;
 use axum::extract::{Path as RoutePath, State};
 use tokio::sync::Mutex;
@@ -31,6 +31,11 @@ pub(super) fn resume_ended_session(
     layout: &LayoutNode,
     host: &impl EndedSessionHost,
 ) -> anyhow::Result<()> {
+    ensure!(
+        session.cwd.is_dir(),
+        "session working directory does not exist: {}",
+        session.cwd.display()
+    );
     let tmux_info = session
         .tmux_info
         .as_ref()
@@ -109,10 +114,17 @@ pub(super) async fn resume_session(
     }
 
     let runtime = state.runtime;
-    tokio::task::spawn_blocking(move || runtime.resume_session(&session))
-        .await
-        .map_err(ApiError::internal)?
-        .map_err(ApiError::operation)?;
+    tokio::task::spawn_blocking(move || {
+        ensure!(
+            session.cwd.is_dir(),
+            "session working directory does not exist: {}",
+            session.cwd.display()
+        );
+        runtime.resume_session(&session)
+    })
+    .await
+    .map_err(ApiError::internal)?
+    .map_err(ApiError::operation)?;
     state.resume_pending.mark_pending(current_id).await;
 
     Ok(Json(Success::new()))
@@ -120,7 +132,6 @@ pub(super) async fn resume_session(
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
     use std::sync::Mutex as StdMutex;
 
     use anyhow::Result;
@@ -155,6 +166,7 @@ mod tests {
 
     #[test]
     fn resume_ended_session_passes_the_saved_context_to_the_layout() {
+        let temp_dir = tempfile::tempdir().unwrap();
         let mut session: Session = serde_json::from_value(json!({
             "session_id": "fixture-session",
             "cwd": "/fixture/worktree",
@@ -169,7 +181,7 @@ mod tests {
         session.engine = Engine::Codex;
         session.ancestor_session_ids = vec!["fixture-parent".to_string()];
         session.launched_with_vibe = true;
-        session.cwd = PathBuf::from("/fixture/worktree");
+        session.cwd = temp_dir.path().to_path_buf();
         session.tmux_info = Some(TmuxInfo {
             session_name: "fixture-session-window".to_string(),
             window_name: "fixture-agent".to_string(),
@@ -189,7 +201,7 @@ mod tests {
                 "socketPath": "/fixture/tmux.sock",
                 "sessionName": "fixture-session-window",
                 "agentSessionId": "fixture-session",
-                "cwd": "/fixture/worktree",
+                "cwd": temp_dir.path().display().to_string(),
                 "windowName": "fixture-agent",
                 "engine": "codex",
                 "agentCommand": "a agent resume fixture-session --engine codex --ancestor-session-ids fixture-parent --launched-with-vibe",
@@ -199,6 +211,47 @@ mod tests {
                     "second": { "command": "claude", "focus": false },
                 },
             }),],
+        );
+    }
+
+    #[test]
+    fn resume_ended_session_rejects_a_missing_working_directory_before_opening_a_layout() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut session: Session = serde_json::from_value(json!({
+            "session_id": "fixture-session",
+            "cwd": temp_dir.path().join("missing-worktree"),
+            "transcript_path": null,
+            "tmux_info": null,
+            "status": "ended",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "last_message": null,
+        }))
+        .unwrap();
+        session.tmux_info = Some(TmuxInfo {
+            session_name: "fixture-session-window".to_string(),
+            window_name: "fixture-agent".to_string(),
+            window_index: 0,
+            pane_id: "%17".to_string(),
+            socket_path: Some("/fixture/tmux.sock".to_string()),
+        });
+        let host = FakeEndedSessionHost::default();
+        let layout = LayoutNode::default();
+
+        let result = resume_ended_session(&session, &layout, &host);
+
+        assert_eq!(
+            json!({
+                "error": result.unwrap_err().to_string(),
+                "calls": host.calls.lock().unwrap().clone(),
+            }),
+            json!({
+                "error": format!(
+                    "session working directory does not exist: {}",
+                    session.cwd.display(),
+                ),
+                "calls": [],
+            }),
         );
     }
 }

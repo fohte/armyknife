@@ -157,6 +157,7 @@ mod tests {
     use indoc::indoc;
     use rstest::{fixture, rstest};
     use serde_json::json;
+    use tempfile::TempDir;
 
     use super::pending_work_error;
     use crate::commands::agent::bg_tasks::PendingTask;
@@ -229,6 +230,36 @@ mod tests {
                     Finish it in the editor, or run `a agent watch-web` and finish it there if it is the active review document.
                 Finish the pending work, then retry this command.
             "}.trim_end(),
+        );
+    }
+
+    #[rstest]
+    #[case::v2("v2")]
+    #[case::legacy("legacy")]
+    fn pending_work_error_omits_unlocked_older_review_markers(
+        mut session: Session,
+        #[case] format: &str,
+    ) {
+        session.pending_bg_task_ids.clear();
+        session.pending_agent_task_ids.clear();
+        session.pending_human_review_ids.clear();
+        let temp_dir = TempDir::new().expect("review fixture directory should be created");
+        let review_path = temp_dir.path().join("fixture-review.md");
+        let review_path = review_path.display().to_string();
+        let review_id = match format {
+            "v2" => ["review-id", "v2", "12345", review_path.as_str(), "queue"].join("\0"),
+            "legacy" => format!("review-id\0{review_path}"),
+            _ => unreachable!("test case uses a known marker format"),
+        };
+        session.pending_human_review_ids.insert(review_id);
+
+        assert_eq!(
+            pending_work_error(&session, &[]),
+            indoc! {"
+                Agent session `fixture-session` has pending background or agent tasks:
+                Finish the pending work, then retry this command.
+            "}
+            .trim_end(),
         );
     }
 

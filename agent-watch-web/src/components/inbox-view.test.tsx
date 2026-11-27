@@ -1,10 +1,11 @@
 import '#components/mobile-layout.css'
 
-import { act, type ComponentProps } from 'react'
+import { act, type ComponentProps, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 import { InboxView } from '#components/inbox-view'
+import { type InboxSort, readInboxSort, writeInboxSort } from '#inbox-sort'
 import type { Session } from '#types'
 
 let container: HTMLDivElement
@@ -96,32 +97,52 @@ const sessions: Session[] = [
 function renderInbox(props: Partial<ComponentProps<typeof InboxView>> = {}) {
   root = createRoot(container)
   act(() => {
-    root?.render(
-      <InboxView
-        sessions={sessions}
-        selectedId={null}
-        loaded
-        error={null}
-        connectionError={null}
-        lastUpdatedAt={new Date(2026, 0, 1, 22, 0).getTime()}
-        showAllInProgress
-        onShowMore={() => undefined}
-        onSelect={() => undefined}
-        laterExpanded
-        onToggleLater={() => undefined}
-        onToggleToday={() => undefined}
-        todaySessions={[]}
-        onSelectToday={() => undefined}
-        isMobile={false}
-        inProgressExpanded
-        onToggleInProgress={() => undefined}
-        doneExpanded
-        onToggleDone={() => undefined}
-        onCloseDone={() => undefined}
-        {...props}
-      />,
-    )
+    root?.render(<InboxViewHarness props={props} />)
   })
+}
+
+function InboxViewHarness({
+  props,
+}: {
+  props: Partial<ComponentProps<typeof InboxView>>
+}) {
+  const [sortState, setSortState] = useState(() => readInboxSort())
+  const handleSortChange = (sort: InboxSort) => {
+    const storageAvailable = writeInboxSort(undefined, sort)
+    setSortState({ sort, storageAvailable })
+    props.onSortChange?.(sort)
+  }
+
+  return (
+    <InboxView
+      sessions={sessions}
+      selectedId={null}
+      loaded
+      error={null}
+      connectionError={null}
+      lastUpdatedAt={new Date(2026, 0, 1, 22, 0).getTime()}
+      showAllInProgress
+      onShowMore={() => undefined}
+      onSelect={() => undefined}
+      laterExpanded
+      onToggleLater={() => undefined}
+      onToggleToday={() => undefined}
+      todaySessions={[]}
+      onSelectToday={() => undefined}
+      isMobile={false}
+      inProgressExpanded
+      onToggleInProgress={() => undefined}
+      doneExpanded
+      onToggleDone={() => undefined}
+      onCloseDone={() => undefined}
+      {...props}
+      sort={props.sort ?? sortState.sort}
+      sortStorageAvailable={
+        props.sortStorageAvailable ?? sortState.storageAvailable
+      }
+      onSortChange={handleSortChange}
+    />
+  )
 }
 
 function sectionSnapshot() {
@@ -278,6 +299,7 @@ function checkboxSnapshot() {
 
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  localStorage.removeItem('agent-watch-web:inbox-sort')
   container = document.createElement('div')
   document.body.append(container)
 })
@@ -303,6 +325,129 @@ it('filters each inbox section and updates the visible counts', () => {
       'Document request limits',
     ],
     resultCount: '1 of 2',
+  })
+})
+
+it('keeps Inbox categories and groups their sessions by project when selected', () => {
+  renderInbox()
+
+  const trigger = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Sort Priority"]',
+  )
+  if (trigger === null) throw new Error('Expected sort trigger')
+  act(() => {
+    trigger.click()
+  })
+  const projectOption = Array.from(
+    container.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]'),
+  ).find((option) => option.textContent.includes('Project'))
+  if (projectOption === undefined) throw new Error('Expected Project option')
+  act(() => {
+    projectOption.click()
+  })
+
+  const projectSortSnapshot = () => ({
+    headings: Array.from(container.querySelectorAll('.section-heading')).map(
+      (heading) =>
+        Array.from(heading.children)
+          .filter((child) => !child.matches('button'))
+          .map((child) => child.textContent)
+          .join(''),
+    ),
+    projectHeadings: Array.from(
+      container.querySelectorAll('.inbox-project-heading'),
+      (heading) => heading.textContent,
+    ),
+    categorySessionCounts: [
+      container.querySelectorAll('.needs-action-section .session-row').length,
+      container.querySelectorAll('.in-progress-section .session-row').length,
+      container.querySelectorAll('.done-section .session-row').length,
+      container.querySelectorAll('.later-session-list .session-row').length,
+    ],
+    savedSort: localStorage.getItem('agent-watch-web:inbox-sort'),
+  })
+  expect(projectSortSnapshot()).toEqual({
+    headings: ['Needs action2', 'In progress1', 'Done1'],
+    projectHeadings: ['web-app', 'worker', 'web-app', 'web-app', 'web-app'],
+    categorySessionCounts: [2, 1, 1, 1],
+    savedSort: 'project',
+  })
+})
+
+it('saves and restores the selected sort from the iPhone sheet', () => {
+  renderInbox({ isMobile: true })
+
+  const initialTrigger = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Sort Priority"]',
+  )
+  if (initialTrigger === null) throw new Error('Expected sort trigger')
+  act(() => {
+    initialTrigger.click()
+  })
+
+  const updatedOption = Array.from(
+    container.querySelectorAll<HTMLButtonElement>(
+      '.inbox-sort-sheet [role="menuitemradio"]',
+    ),
+  ).find((option) => option.textContent.includes('Updated'))
+  if (updatedOption === undefined) throw new Error('Expected Updated option')
+  const openedDialog = container.querySelector(
+    '[role="dialog"][aria-label="Sort"]',
+  )
+  act(() => {
+    updatedOption.click()
+  })
+
+  const afterSelection = {
+    dialogOpen:
+      container.querySelector('[role="dialog"][aria-label="Sort"]') !== null,
+    triggerLabel: container
+      .querySelector<HTMLButtonElement>('[aria-label="Sort Updated"]')
+      ?.getAttribute('aria-label'),
+    savedSort: localStorage.getItem('agent-watch-web:inbox-sort'),
+  }
+
+  act(() => root?.unmount())
+  root = null
+  renderInbox({ isMobile: true })
+
+  const restoredTrigger = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Sort Updated"]',
+  )
+  if (restoredTrigger === null)
+    throw new Error('Expected restored sort trigger')
+  act(() => {
+    restoredTrigger.click()
+  })
+  const selectedOption = container.querySelector<HTMLButtonElement>(
+    '.inbox-sort-sheet [role="menuitemradio"][aria-checked="true"]',
+  )
+  if (selectedOption === null) throw new Error('Expected selected sort option')
+  const cancelButton =
+    container.querySelector<HTMLButtonElement>('.inbox-sort-cancel')
+  if (cancelButton === null) throw new Error('Expected Cancel button')
+  act(() => {
+    cancelButton.click()
+  })
+
+  const snapshot = () => ({
+    openedDialog: openedDialog !== null,
+    afterSelection,
+    restoredSort: restoredTrigger.getAttribute('aria-label'),
+    restoredSelectedOption: selectedOption.textContent.trim(),
+    closedByCancel:
+      container.querySelector('[role="dialog"][aria-label="Sort"]') === null,
+  })
+  expect(snapshot()).toEqual({
+    openedDialog: true,
+    afterSelection: {
+      dialogOpen: false,
+      triggerLabel: 'Sort Updated',
+      savedSort: 'updated',
+    },
+    restoredSort: 'Sort Updated',
+    restoredSelectedOption: 'UpdatedNewest first',
+    closedByCancel: true,
   })
 })
 

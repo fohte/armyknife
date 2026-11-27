@@ -6,6 +6,16 @@ import type { CloseWorktreeChecks } from '#session-operation-types'
 const exampleChecks: CloseWorktreeChecks = {
   path: '/worktrees/example-project',
   files: ['src/example.ts', 'src/example.test.ts'],
+  changes: [
+    { status: 'M', path: 'src/example.ts' },
+    { status: '??', path: 'src/example.test.ts' },
+  ],
+  commits: [
+    {
+      sha: '1111111111111111111111111111111111111111',
+      subject: 'add example implementation',
+    },
+  ],
   branch: 'feature/example-work',
   merged: false,
   reason: 'The example pull request is still open.',
@@ -13,6 +23,7 @@ const exampleChecks: CloseWorktreeChecks = {
     { pid: 12345, name: 'example-server' },
     { pid: 23456, name: 'example-watcher' },
   ],
+  commitInspectionUnavailable: false,
   processInspectionUnavailable: false,
 }
 

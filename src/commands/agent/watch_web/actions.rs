@@ -28,6 +28,7 @@ mod keyed_mutex_registry;
 mod launch_sessions;
 mod merge_pull_request;
 mod messages;
+mod pane;
 mod permission_denied;
 mod permission_denied_locks;
 mod proposal_answer_locks;
@@ -77,6 +78,7 @@ pub(super) fn router(message_loaders: RouteLoaders) -> Router {
 fn router_with_state(state: ActionState) -> Router {
     Router::new()
         .route("/sessions/{id}/actions", get(actions))
+        .route("/sessions/{id}/pane", get(pane::get_pane_snapshot))
         .route("/sessions/{id}/resume", post(resume::resume_session))
         .route("/sessions/{id}/vibe", post(vibe::set_vibe))
         .route(
@@ -181,6 +183,7 @@ trait ActionRuntime: Send + Sync {
         mode: super::rewind::RewindMode,
     ) -> Result<String>;
     fn pane_current_command(&self, tmux_info: &TmuxInfo) -> Option<String>;
+    fn capture_pane(&self, tmux_info: &TmuxInfo) -> Result<String>;
     fn send_claude_escape_if_agent_is_running(
         &self,
         tmux_info: &TmuxInfo,
@@ -210,10 +213,19 @@ struct ActionCapabilities {
     answer_question: bool,
     resume: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    resume_disabled_reason: Option<ResumeDisabledReason>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     permission: Option<PermissionCapabilities>,
     interrupt: bool,
     open_in_terminal: bool,
     rewind: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+enum ResumeDisabledReason {
+    NoTmux,
+    WorkingDirectoryMissing,
 }
 
 #[derive(Serialize)]
@@ -233,13 +245,35 @@ async fn actions(
         .clear_if_not_resumable(&current_id, session.status)
         .await;
     let has_tmux = session.tmux_info.is_some();
+    let can_resume_by_status =
+        matches!(session.status, SessionStatus::Ended | SessionStatus::Paused);
+    let has_working_directory = if can_resume_by_status && has_tmux {
+        let cwd = session.cwd.clone();
+        tokio::task::spawn_blocking(move || cwd.is_dir())
+            .await
+            .map_err(ApiError::internal)?
+    } else {
+        false
+    };
+    let resume_disabled_reason = if can_resume_by_status {
+        if !has_tmux {
+            Some(ResumeDisabledReason::NoTmux)
+        } else if !has_working_directory {
+            Some(ResumeDisabledReason::WorkingDirectoryMissing)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
     let has_live_session = session.status != SessionStatus::Ended;
     Ok(Json(ActionCapabilities {
         message: has_live_session,
         answer_question: has_live_session
             && session.engine == Engine::Claude
             && session.has_pending_permission_requests(),
-        resume: matches!(session.status, SessionStatus::Ended | SessionStatus::Paused) && has_tmux,
+        resume: can_resume_by_status && resume_disabled_reason.is_none(),
+        resume_disabled_reason,
         permission: (has_live_session
             && matches!(session.engine, Engine::Claude | Engine::Codex)
             && session.has_pending_permission_requests())
@@ -471,7 +505,12 @@ mod tests {
                 );
                 CloseChecks::from_observations(
                     worktree_path,
-                    vec!["src/fictional.rs".to_string()],
+                    vec![crate::shared::worktree::UncommittedChange {
+                        status: "M".to_string(),
+                        path: "src/fictional.rs".to_string(),
+                    }],
+                    Vec::new(),
+                    false,
                     Some("feature/fictional".to_string()),
                     Some(crate::shared::worktree_delete::classify_merge_guard_status(
                         "feature/fictional".to_string(),
@@ -509,6 +548,9 @@ mod tests {
     #[path = "title.rs"]
     mod title;
 
+    #[path = "pane.rs"]
+    mod pane;
+
     #[path = "merge_pull_request.rs"]
     mod merge_pull_request;
 
@@ -538,6 +580,8 @@ mod tests {
             )>,
         >,
         pane_command: Mutex<Option<String>>,
+        pane_snapshot: Mutex<Option<String>>,
+        pane_snapshot_error: Mutex<Option<String>>,
         pane_has_agent_process: Mutex<bool>,
         pane_command_matches: Mutex<bool>,
         close_error: Mutex<Option<FakeCloseFailure>>,
@@ -563,6 +607,8 @@ mod tests {
                 message_gate: Mutex::new(None),
                 command_gate: Mutex::new(None),
                 pane_command: Mutex::new(Some("claude".to_string())),
+                pane_snapshot: Mutex::new(None),
+                pane_snapshot_error: Mutex::new(None),
                 pane_has_agent_process: Mutex::new(true),
                 pane_command_matches: Mutex::new(true),
                 close_error: Mutex::new(None),
@@ -652,6 +698,22 @@ mod tests {
                 "socketPath": tmux_info.socket_path,
             }));
             self.pane_command.lock().unwrap().clone()
+        }
+
+        fn capture_pane(&self, tmux_info: &TmuxInfo) -> Result<String> {
+            self.calls.lock().unwrap().push(json!({
+                "kind": "pane-snapshot",
+                "paneId": tmux_info.pane_id,
+                "socketPath": tmux_info.socket_path,
+            }));
+            if let Some(error) = self.pane_snapshot_error.lock().unwrap().clone() {
+                return Err(anyhow::anyhow!(error));
+            }
+            self.pane_snapshot
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("pane snapshot is not configured"))
         }
 
         fn send_claude_escape_if_agent_is_running(
@@ -924,6 +986,14 @@ mod tests {
             *self.runtime.pane_command.lock().unwrap() = command.map(str::to_string);
         }
 
+        fn set_pane_snapshot(&self, snapshot: &str) {
+            *self.runtime.pane_snapshot.lock().unwrap() = Some(snapshot.to_string());
+        }
+
+        fn set_pane_snapshot_error(&self, error: &str) {
+            *self.runtime.pane_snapshot_error.lock().unwrap() = Some(error.to_string());
+        }
+
         fn set_pane_has_agent_process(&self, has_agent_process: bool) {
             *self.runtime.pane_has_agent_process.lock().unwrap() = has_agent_process;
         }
@@ -1029,7 +1099,7 @@ mod tests {
             crit_not_waiting_urls: Default::default(),
             web_uis: Vec::new(),
             pending_human_review_ids: BTreeSet::new(),
-            cwd: PathBuf::from("/tmp/example"),
+            cwd: PathBuf::from("."),
             transcript_path: None,
             tty: None,
             tmux_info: Some(TmuxInfo {
@@ -2130,22 +2200,80 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(
-            response_snapshot(response, &action_context).await,
-            json!({
-                "status": StatusCode::OK.as_u16(),
-                "body": {
-                    "message": status != SessionStatus::Ended,
-                    "answerQuestion": false,
-                    "resume": matches!(status, SessionStatus::Ended | SessionStatus::Paused)
-                        && has_pane,
-                    "interrupt": status == SessionStatus::Running,
-                    "openInTerminal": has_pane,
-                    "rewind": rewind_available,
-                },
-                "calls": [],
-            }),
-        );
+        let mut expected = json!({
+            "status": StatusCode::OK.as_u16(),
+            "body": {
+                "message": status != SessionStatus::Ended,
+                "answerQuestion": false,
+                "resume": matches!(status, SessionStatus::Ended | SessionStatus::Paused)
+                    && has_pane,
+                "interrupt": status == SessionStatus::Running,
+                "openInTerminal": has_pane,
+                "rewind": rewind_available,
+            },
+            "calls": [],
+        });
+        if status == SessionStatus::Paused && !has_pane {
+            expected["body"]["resumeDisabledReason"] = json!("noTmux");
+        }
+        assert_eq!(response_snapshot(response, &action_context).await, expected);
+    }
+
+    #[rstest]
+    #[case::working_directory_is_available(true, true, true, None)]
+    #[case::working_directory_is_missing(true, false, false, Some("workingDirectoryMissing"))]
+    #[case::tmux_is_missing(false, true, false, Some("noTmux"))]
+    #[case::tmux_and_working_directory_are_missing(false, false, false, Some("noTmux"))]
+    #[tokio::test]
+    async fn resume_capability_requires_tmux_and_an_existing_working_directory(
+        #[case] has_tmux: bool,
+        #[case] has_working_directory: bool,
+        #[case] expected_resume: bool,
+        #[case] expected_disabled_reason: Option<&str>,
+        action_context: ActionContext,
+    ) {
+        let mut session = session("sample-session");
+        session.status = SessionStatus::Ended;
+        session.cwd = if has_working_directory {
+            action_context.temp_dir.path().to_path_buf()
+        } else {
+            action_context
+                .temp_dir
+                .path()
+                .join("missing-working-directory")
+        };
+        if !has_tmux {
+            session.tmux_info = None;
+        }
+        action_context.save_session(&session);
+
+        let response = action_context
+            .router()
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/sample-session/actions")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let mut expected = json!({
+            "status": StatusCode::OK.as_u16(),
+            "body": {
+                "message": false,
+                "answerQuestion": false,
+                "resume": expected_resume,
+                "interrupt": false,
+                "openInTerminal": has_tmux,
+                "rewind": false,
+            },
+            "calls": [],
+        });
+        if let Some(reason) = expected_disabled_reason {
+            expected["body"]["resumeDisabledReason"] = json!(reason);
+        }
+        assert_eq!(response_snapshot(response, &action_context).await, expected);
     }
 
     #[rstest]
@@ -2708,6 +2836,9 @@ mod tests {
                     "checks": {
                         "path": "/fictional/worktree",
                         "files": ["src/fictional.rs"],
+                        "changes": [{ "status": "M", "path": "src/fictional.rs" }],
+                        "commits": [],
+                        "commitInspectionUnavailable": false,
                         "branch": "feature/fictional",
                         "merged": false,
                         "reason": "pull request is open",
@@ -2795,6 +2926,9 @@ mod tests {
                     "checks": {
                         "path": "/fictional/worktree",
                         "files": ["src/fictional.rs"],
+                        "changes": [{ "status": "M", "path": "src/fictional.rs" }],
+                        "commits": [],
+                        "commitInspectionUnavailable": false,
                         "branch": "feature/fictional",
                         "merged": false,
                         "reason": "pull request is open",

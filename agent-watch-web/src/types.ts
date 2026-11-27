@@ -336,6 +336,7 @@ export type SessionActions = {
   message: boolean
   answerQuestion: boolean
   resume?: boolean
+  resumeDisabledReason?: 'noTmux' | 'workingDirectoryMissing'
   permission?: { approve: boolean; reject: boolean }
   interrupt: boolean
   openInTerminal: boolean

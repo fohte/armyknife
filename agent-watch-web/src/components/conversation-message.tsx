@@ -244,6 +244,7 @@ export function renderConversationMessage({
         resolved={message.resolved}
         resolution={message.resolution}
         withdrawalComment={message.comment}
+        {...(imageSources === undefined ? {} : { imageSources })}
         isMobile={isMobile}
         onAnswer={(answer, attachments) =>
           onAction(`proposals/${String(message.seq)}/answer`, {
@@ -267,6 +268,7 @@ export function renderConversationMessage({
         {...(sessionId === undefined ? {} : { sessionId })}
         title={message.title}
         detail={message.detail}
+        {...(imageSources === undefined ? {} : { imageSources })}
         folded={message.folded ?? false}
         addedFolded={message.addedFolded ?? false}
         resolution={message.resolution}
