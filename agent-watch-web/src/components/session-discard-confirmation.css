@@ -39,7 +39,6 @@
   width: 7px;
   height: 7px;
   margin-right: 6px;
-  border-radius: 50%;
   background: currentColor;
   content: '';
 }
@@ -243,10 +242,13 @@
     li
     code,
   .session-discard-confirmation--mobile
-    .session-discard-confirmation__worktree-path,
-  .session-discard-confirmation--mobile
     .session-discard-confirmation__new-badge {
     font-size: 12.5px;
+  }
+
+  .session-discard-confirmation--mobile
+    .session-discard-confirmation__worktree-path {
+    font-size: 11.5px;
   }
 
   .session-discard-confirmation--mobile

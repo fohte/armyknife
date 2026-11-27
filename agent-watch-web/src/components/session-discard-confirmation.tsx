@@ -4,13 +4,13 @@ import { useId, useState } from 'react'
 
 import { ConfirmDialog } from '#components/confirm-dialog'
 
-export type DiscardFileChange = {
+type DiscardFileChange = {
   status: 'M' | 'A' | 'D' | 'R' | '??'
   path: string
   isNew?: boolean
 }
 
-export type DiscardCommit = {
+type DiscardCommit = {
   sha: string
   subject: string
   isNew?: boolean

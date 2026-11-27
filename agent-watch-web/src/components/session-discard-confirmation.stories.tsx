@@ -59,8 +59,33 @@ export const ReviewAgainWithNewItems: Story = {
   },
 }
 
+export const CommitsWithoutFileChanges: Story = {
+  name: 'The dialog lists commits when no files changed',
+  args: {
+    changes: [],
+    commits: [
+      { sha: 'b2c3d4e', subject: 'Adjust the retry interval' },
+      { sha: 'f5a6b7c', subject: 'Document the retry behavior' },
+    ],
+  },
+}
+
 export const IPhoneBottomSheet: Story = {
   name: 'The iPhone dialog appears as a bottom sheet',
   args: { mobile: true },
+  parameters: { viewport: { defaultViewport: 'mobile1' } },
+}
+
+export const IPhoneReviewAgainWithNewItems: Story = {
+  name: 'The iPhone sheet asks for another review of new items',
+  args: {
+    mobile: true,
+    reviewAgain: true,
+    changes: [{ status: '??', path: 'tmp/retry-output.log', isNew: true }],
+    commits: [
+      { sha: 'd4e5f6a', subject: 'Add a retry timeout', isNew: true },
+      { sha: 'b2c3d4e', subject: 'Adjust the retry interval' },
+    ],
+  },
   parameters: { viewport: { defaultViewport: 'mobile1' } },
 }
