@@ -1,6 +1,7 @@
+import { isAllowedWatchUrl } from './navigation.js'
+
 export type ConnectionActions = {
   loadWatchPage: () => void
-  showWaitingPage: () => void
 }
 
 export const applyConnectionProbe = (
@@ -9,5 +10,11 @@ export const applyConnectionProbe = (
   actions: ConnectionActions,
 ): void => {
   if (serverResponded && isWaiting) actions.loadWatchPage()
-  if (!serverResponded && !isWaiting) actions.showWaitingPage()
 }
+
+export const resolveRetryUrl = (
+  failedUrl: string,
+  watchOrigin: string,
+  defaultUrl: string,
+): string =>
+  isAllowedWatchUrl(failedUrl, watchOrigin) ? failedUrl : defaultUrl

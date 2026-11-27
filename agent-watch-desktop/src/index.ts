@@ -3,7 +3,7 @@ import { ResultAsync } from 'neverthrow'
 
 import { resolveWatchTarget } from './config.js'
 import type { WatchTarget } from './config.js'
-import { applyConnectionProbe } from './connection.js'
+import { applyConnectionProbe, resolveRetryUrl } from './connection.js'
 import { installApplicationMenu } from './menu.js'
 import { classifyNavigation, isAllowedWatchUrl } from './navigation.js'
 
@@ -31,6 +31,7 @@ const waitingPage = `data:text/html;charset=utf-8,${encodeURIComponent(`<!doctyp
 
 let mainWindow: BrowserWindow | undefined
 let watchTarget: WatchTarget | undefined
+let retryUrl: string | undefined
 let isQuitting = false
 let isWaiting = false
 let retryTimer: NodeJS.Timeout | undefined
@@ -46,9 +47,17 @@ const openExternal = (url: string) => {
   reportPromise(shell.openExternal(url), `failed to open external URL: ${url}`)
 }
 
-const showWaitingPage = () => {
-  if (mainWindow === undefined || mainWindow.isDestroyed() || isWaiting) return
+const showWaitingPage = (failedUrl: string) => {
+  if (
+    mainWindow === undefined ||
+    mainWindow.isDestroyed() ||
+    isWaiting ||
+    watchTarget === undefined
+  ) {
+    return
+  }
 
+  retryUrl = resolveRetryUrl(failedUrl, watchTarget.origin, watchTarget.url)
   isWaiting = true
   reportPromise(mainWindow.loadURL(waitingPage), 'failed to show waiting page')
 }
@@ -62,8 +71,10 @@ const loadWatchPage = () => {
     return
   }
 
+  const url = retryUrl ?? watchTarget.url
+  retryUrl = undefined
   isWaiting = false
-  reportPromise(mainWindow.loadURL(watchTarget.url), 'failed to load watch-web')
+  reportPromise(mainWindow.loadURL(url), 'failed to load watch-web')
 }
 
 const refreshConnection = async () => {
@@ -83,10 +94,7 @@ const refreshConnection = async () => {
     () => false,
   )
 
-  applyConnectionProbe(isWaiting, serverResponded, {
-    loadWatchPage,
-    showWaitingPage,
-  })
+  applyConnectionProbe(isWaiting, serverResponded, { loadWatchPage })
 }
 
 const createMainWindow = () => {
@@ -183,13 +191,13 @@ const configureWebContents = (contents: Electron.WebContents) => {
 
   contents.on(
     'did-fail-load',
-    (_event, errorCode, _description, _validatedUrl, isMainFrame) => {
+    (_event, errorCode, _description, validatedUrl, isMainFrame) => {
       if (
         isMainFrame &&
         errorCode !== -3 &&
         contents === mainWindow?.webContents
       ) {
-        showWaitingPage()
+        showWaitingPage(validatedUrl)
       }
     },
   )

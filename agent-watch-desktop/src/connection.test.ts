@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { applyConnectionProbe } from './connection.js'
+import { applyConnectionProbe, resolveRetryUrl } from './connection.js'
 
 describe('applyConnectionProbe', () => {
   it.each([
@@ -17,10 +17,10 @@ describe('applyConnectionProbe', () => {
       expected: [],
     },
     {
-      name: 'shows the waiting page after a loaded page loses its server',
+      name: 'keeps a loaded page when its server probe fails',
       isWaiting: false,
       serverResponded: false,
-      expected: ['show-waiting'],
+      expected: [],
     },
     {
       name: 'keeps the waiting page while the server is unreachable',
@@ -32,9 +32,36 @@ describe('applyConnectionProbe', () => {
     const calls: string[] = []
     applyConnectionProbe(isWaiting, serverResponded, {
       loadWatchPage: () => calls.push('load-watch'),
-      showWaitingPage: () => calls.push('show-waiting'),
     })
 
     expect(calls).toEqual(expected)
+  })
+})
+
+describe('resolveRetryUrl', () => {
+  it.each([
+    {
+      name: 'preserves the failed same-origin session URL',
+      failedUrl: 'http://127.0.0.1:4317/?session=session-example',
+      expected: 'http://127.0.0.1:4317/?session=session-example',
+    },
+    {
+      name: 'falls back for an external URL',
+      failedUrl: 'https://example.test/',
+      expected: 'http://127.0.0.1:4317/',
+    },
+    {
+      name: 'falls back for an invalid URL',
+      failedUrl: 'not a URL',
+      expected: 'http://127.0.0.1:4317/',
+    },
+  ])('$name', ({ failedUrl, expected }) => {
+    expect(
+      resolveRetryUrl(
+        failedUrl,
+        'http://127.0.0.1:4317',
+        'http://127.0.0.1:4317/',
+      ),
+    ).toEqual(expected)
   })
 })
