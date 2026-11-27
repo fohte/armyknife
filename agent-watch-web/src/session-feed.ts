@@ -10,15 +10,18 @@ import type { Session, SessionsResponse } from '#types'
 import { isVibeMode } from '#vibe-mode'
 
 type SessionEventSource = {
+  readyState: number
   addEventListener: (type: string, listener: EventListener) => void
   removeEventListener: (type: string, listener: EventListener) => void
   close: () => void
 }
 
+const EVENT_SOURCE_CLOSED = 2
+
 type SessionFeedDependencies = {
   fetcher?: typeof fetch
   createEventSource?: (url: string) => SessionEventSource
-  requestRetryDelayMs?: number
+  reconnectRetryDelayMs?: number
   initialServerVersion?: string | null
   onUpdateAvailable?: (version: string | null) => void
   visibilityTarget?: PageVisibilityTarget
@@ -285,7 +288,7 @@ export function startSessionFeed(
   {
     fetcher = fetch,
     createEventSource = (url) => new EventSource(url),
-    requestRetryDelayMs = 2_000,
+    reconnectRetryDelayMs = 2_000,
     initialServerVersion = readInitialServerVersion(),
     onUpdateAvailable,
     visibilityTarget = typeof document === 'undefined' ? undefined : document,
@@ -298,8 +301,7 @@ export function startSessionFeed(
   let requestError = false
   let streamError = false
   let currentSessions: CurrentSessions | null = null
-  let requestRetryTimer: ReturnType<typeof setTimeout> | null = null
-  let reconnectPollTimer: ReturnType<typeof setInterval> | null = null
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null
   let eventSource: SessionEventSource | null = null
 
   const reportStatus = () => {
@@ -312,19 +314,19 @@ export function startSessionFeed(
     }
   }
 
-  const clearRequestRetry = () => {
-    if (requestRetryTimer !== null) {
-      clearTimeout(requestRetryTimer)
-      requestRetryTimer = null
+  const clearReconnectTimer = () => {
+    if (reconnectTimer !== null) {
+      clearTimeout(reconnectTimer)
+      reconnectTimer = null
     }
   }
 
-  const scheduleRequestRetry = () => {
-    if (requestRetryTimer === null) {
-      requestRetryTimer = setTimeout(() => {
-        requestRetryTimer = null
-        refresh()
-      }, requestRetryDelayMs)
+  const scheduleEventSourceReconnect = () => {
+    if (reconnectTimer === null) {
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null
+        startEventSource()
+      }, reconnectRetryDelayMs)
     }
   }
 
@@ -332,7 +334,6 @@ export function startSessionFeed(
     if (active && visible) {
       requestError = true
       reportStatus()
-      scheduleRequestRetry()
     }
   }
 
@@ -373,7 +374,6 @@ export function startSessionFeed(
                   ]
             onSessions(currentSessions.response, changedSessionIds)
             requestError = false
-            clearRequestRetry()
             reportStatus()
           }
         },
@@ -412,8 +412,9 @@ export function startSessionFeed(
     }
     streamError = true
     reportStatus()
-    if (reconnectPollTimer === null) {
-      reconnectPollTimer = setInterval(refresh, requestRetryDelayMs)
+    if (eventSource?.readyState === EVENT_SOURCE_CLOSED) {
+      stopEventSource()
+      scheduleEventSourceReconnect()
     }
   }
   const onServerVersion: EventListener = (event) => {
@@ -435,10 +436,7 @@ export function startSessionFeed(
       return
     }
     streamError = false
-    if (reconnectPollTimer !== null) {
-      clearInterval(reconnectPollTimer)
-      reconnectPollTimer = null
-    }
+    clearReconnectTimer()
     reportStatus()
     refresh()
   }
@@ -474,11 +472,7 @@ export function startSessionFeed(
     visible = nextVisible
     if (!visible) {
       refreshQueued = false
-      clearRequestRetry()
-      if (reconnectPollTimer !== null) {
-        clearInterval(reconnectPollTimer)
-        reconnectPollTimer = null
-      }
+      clearReconnectTimer()
       requestError = false
       streamError = false
       reportStatus()
@@ -500,11 +494,7 @@ export function startSessionFeed(
 
   return () => {
     active = false
-    clearRequestRetry()
-    if (reconnectPollTimer !== null) {
-      clearInterval(reconnectPollTimer)
-      reconnectPollTimer = null
-    }
+    clearReconnectTimer()
     unsubscribeVisibility()
     stopEventSource()
   }
