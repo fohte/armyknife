@@ -160,7 +160,6 @@ pub async fn run(args: &WatchWebArgs) -> Result<()> {
     ensure_port_allowed(args.port, own_session_id.as_deref())?;
     let is_agent_session = own_session_id.is_some();
     let sessions_dir = store::sessions_dir()?;
-    std::fs::create_dir_all(&sessions_dir)?;
     let session_store_watcher = SessionStoreWatcher::start_or_warn(&sessions_dir);
     let session_store_watcher_available = session_store_watcher.is_some();
 

@@ -113,11 +113,23 @@ mod tests {
     }
 
     #[test]
-    fn keeps_watcher_unavailable_when_start_fails() {
-        let watcher = SessionStoreWatcher::start_or_warn_with(Path::new("/fixture-store"), |_| {
+    fn keeps_watcher_unavailable_when_a_missing_sessions_dir_cannot_be_watched() {
+        let temp_dir = tempfile::tempdir().expect("temporary directory should be created");
+        let sessions_dir = temp_dir.path().join("sessions");
+        let started_before_directory_existed = std::cell::Cell::new(false);
+
+        let watcher = SessionStoreWatcher::start_or_warn_with(&sessions_dir, |path| {
+            started_before_directory_existed.set(!path.exists());
             Err(notify::Error::generic("fixture watcher error"))
         });
 
-        assert!(watcher.is_none());
+        assert_eq!(
+            (
+                watcher.is_none(),
+                started_before_directory_existed.get(),
+                sessions_dir.exists(),
+            ),
+            (true, true, false),
+        );
     }
 }
