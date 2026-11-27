@@ -331,6 +331,7 @@ export function ConversationPaneView({
     session,
     messages,
     backgroundTasks,
+    ...(activeTool === undefined ? {} : { activeTool }),
     editorReviewDocument: editorReviewDocument ?? null,
   })
   const returnToRequestCard = () => {
