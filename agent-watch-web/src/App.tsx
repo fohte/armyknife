@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 
 import { AppWorkspace } from '#app-workspace'
 import {
@@ -11,13 +11,6 @@ import { AgentUsageProvider } from '#components/agent-usage-context'
 import { SessionConversationCacheProvider } from '#components/session-conversation-cache'
 import { SessionElapsedStartedAtProvider } from '#components/session-elapsed-context'
 import { startFreezeProfiler } from '#freeze-profiler'
-import {
-  type InboxSort,
-  isSelectedSessionBeyondVisibleInProgress,
-  readInboxSort,
-  sortInboxSessionsByCategory,
-  writeInboxSort,
-} from '#inbox-sort'
 import { useMobileLayout, useSessionMobileNavigation } from '#mobile-layout'
 import { findLaunchedSession } from '#new-session-navigation'
 import { startSessionFeed } from '#session-feed'
@@ -28,6 +21,7 @@ import type { Session } from '#types'
 import { useAppSessionOperations } from '#use-app-session-operations'
 import { useAppSessionProjection } from '#use-app-session-projection'
 import { useComposerFocus } from '#use-composer-focus'
+import { useInboxSort } from '#use-inbox-sort'
 import { useLaterDeadlineClock } from '#use-later-deadline-clock'
 import { useLaterSessionActions } from '#use-later-session-actions'
 import { useNewSession } from '#use-new-session'
@@ -112,7 +106,6 @@ function AppContent() {
     null,
   )
   const [inboxFilterQuery, setInboxFilterQuery] = useState('')
-  const [inboxSortState, setInboxSortState] = useState(() => readInboxSort())
   const [statusPanelOpen, setStatusPanelOpen] = useState(false)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [pendingLaunchId, setPendingLaunchId] = useState<string | null>(null)
@@ -155,14 +148,12 @@ function AppContent() {
     view,
     setError,
   })
-  const sortedNavigableSessions = useMemo(
-    () => sortInboxSessionsByCategory(navigableSessions, inboxSortState.sort),
-    [inboxSortState.sort, navigableSessions],
-  )
-  const setInboxSort = useCallback((sort: InboxSort) => {
-    const storageAvailable = writeInboxSort(undefined, sort)
-    setInboxSortState({ sort, storageAvailable })
-  }, [])
+  const inboxSort = useInboxSort({
+    orderedSessions,
+    navigableSessions,
+    selectedId,
+    setShowAllInProgress,
+  })
   const {
     laterSessionId,
     laterTimes,
@@ -176,7 +167,7 @@ function AppContent() {
   } = useLaterSessionActions({
     isMobile,
     sessions,
-    navigableSessions,
+    navigableSessions: inboxSort.navigableSessions,
     pendingOperations,
     navigate,
     runSessionOperation,
@@ -268,18 +259,6 @@ function AppContent() {
   )
 
   useEffect(() => {
-    if (
-      isSelectedSessionBeyondVisibleInProgress(
-        orderedSessions,
-        selectedId,
-        inboxSortState.sort,
-      )
-    ) {
-      setShowAllInProgress(true)
-    }
-  }, [inboxSortState.sort, orderedSessions, selectedId])
-
-  useEffect(() => {
     if (view !== 'inbox') {
       return
     }
@@ -298,7 +277,7 @@ function AppContent() {
     closeLater,
     closeSession: requestCloseSession,
     submitLater,
-    navigableSessions: sortedNavigableSessions,
+    navigableSessions: inboxSort.navigableSessions,
     openLater,
     selectedId,
     view,
@@ -339,7 +318,7 @@ function AppContent() {
     useSessionMobileNavigation({
       isMobile,
       conversationOpen: mobileConversationOpen,
-      navigableSessions: sortedNavigableSessions,
+      navigableSessions: inboxSort.navigableSessions,
       selectedId,
       selectedSessionExists: selectedSession !== undefined,
       sessionsLoaded: loaded,
@@ -424,8 +403,8 @@ function AppContent() {
           loaded,
           error,
           inboxFilterQuery,
-          inboxSort: inboxSortState.sort,
-          inboxSortStorageAvailable: inboxSortState.storageAvailable,
+          inboxSort: inboxSort.sort,
+          inboxSortStorageAvailable: inboxSort.storageAvailable,
           showAllInProgress,
           laterExpanded,
           inProgressExpanded,
@@ -453,7 +432,7 @@ function AppContent() {
         }
         actions={{
           setInboxFilterQuery,
-          setInboxSort,
+          setInboxSort: inboxSort.setSort,
           setShowAllInProgress,
           setLaterExpanded,
           setInProgressExpanded,

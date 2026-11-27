@@ -1069,6 +1069,51 @@ it('replaces the session URL while moving with j and k', async () => {
   })
 })
 
+it('persists the selected Inbox sort and moves with the visible project order', async () => {
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-alpha', 'Alpha session', 'needs_action', 8, 'alpha'),
+      session('session-zeta', 'Zeta session', 'needs_action', 8, 'zeta'),
+      session('session-beta', 'Beta session', 'needs_action', 8, 'beta'),
+    ],
+  })
+  const trigger = container.querySelector<HTMLButtonElement>(
+    '.inbox-sort-trigger',
+  )
+  if (trigger === null) throw new Error('Expected Inbox sort trigger')
+
+  await act(async () => userEvent.click(trigger))
+  const projectOption = Array.from(
+    container.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]'),
+  ).find((option) => option.innerText.includes('Project'))
+  if (projectOption === undefined) {
+    throw new Error('Expected Project sort option')
+  }
+  await act(async () => userEvent.click(projectOption))
+
+  const alphaRow = Array.from(
+    container.querySelectorAll<HTMLButtonElement>('[data-session-row]'),
+  ).find((row) => row.innerText.includes('Alpha session'))
+  if (alphaRow === undefined) throw new Error('Expected Alpha session row')
+  await act(async () => userEvent.click(alphaRow))
+  act(() => {
+    dispatchKey(window, 'j')
+  })
+
+  const snapshot = () => ({
+    storedSort: window.localStorage.getItem('agent-watch-web:inbox-sort'),
+    visibleTitles: readSessionTitles(),
+    selectedTitle: readSelectedTitle(),
+  })
+  expect(snapshot()).toEqual({
+    storedSort: 'project',
+    visibleTitles: ['Alpha session', 'Beta session', 'Zeta session'],
+    selectedTitle: 'Beta session',
+  })
+})
+
 it('restores the Board from its URL and browser history', async () => {
   window.history.replaceState(null, '', '/?view=board')
   renderApp()
@@ -1229,6 +1274,7 @@ beforeEach(() => {
   setPlatform('Linux x86_64')
   mobileViewportMatches = false
   window.history.replaceState(null, '', '/')
+  window.localStorage.removeItem('agent-watch-web:inbox-sort')
   window.localStorage.removeItem('agent-watch-web:saved-inbox-views')
   mediaQueries.clear()
   container = document.createElement('div')
@@ -1246,6 +1292,7 @@ afterEach(() => {
   }
   root = null
   window.localStorage.removeItem('agent-watch:navigation-width')
+  window.localStorage.removeItem('agent-watch-web:inbox-sort')
   container.remove()
   window.localStorage.removeItem('agent-watch-web:saved-inbox-views')
   vi.useRealTimers()
@@ -2404,6 +2451,77 @@ it('returns to the Inbox after submitting Later for a mobile conversation', asyn
     laterRequest: [
       [
         '/api/sessions/session-a/later',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{"preset":"one_hour","expectedDeadline":"2030-03-04T16:00:00Z"}',
+        },
+      ],
+    ],
+  })
+})
+
+it('selects the next mobile Inbox session in the active project order after Later', async () => {
+  const fetchMock = vi
+    .fn<typeof fetch>()
+    .mockImplementation(mockSessionActionFetch)
+  vi.stubGlobal('fetch', fetchMock)
+  window.localStorage.setItem('agent-watch-web:inbox-sort', 'project')
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-alpha', 'Alpha session', 'needs_action', 8, 'alpha'),
+      session('session-zeta', 'Zeta session', 'needs_action', 8, 'zeta'),
+      session('session-beta', 'Beta session', 'needs_action', 8, 'beta'),
+    ],
+  })
+  act(() => {
+    setMobileViewport(true)
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
+  })
+  await clickMobileSessionAction('Later')
+  await act(async () => {
+    await flushAsyncState()
+  })
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>(
+        '.later-menu-option:not(.later-menu-reset)',
+      )
+      ?.click()
+  })
+  await act(async () => {
+    await flushAsyncState()
+  })
+  publishSessions({
+    revision: 2,
+    sessions: [
+      {
+        ...session('session-alpha', 'Alpha session', 'later', 8, 'alpha'),
+        categoryWhenNotLater: 'needs_action',
+        laterUntil: '2030-03-04T16:00:00Z',
+      },
+      session('session-zeta', 'Zeta session', 'needs_action', 8, 'zeta'),
+      session('session-beta', 'Beta session', 'needs_action', 8, 'beta'),
+    ],
+  })
+
+  const snapshot = () => ({
+    selectedTitle: readSelectedTitle(),
+    laterRequest: fetchMock.mock.calls
+      .filter(
+        ([input]) => requestUrl(input) === '/api/sessions/session-alpha/later',
+      )
+      .map(([input, init]) => [requestUrl(input), init]),
+  })
+  expect(snapshot()).toEqual({
+    selectedTitle: 'Beta session',
+    laterRequest: [
+      [
+        '/api/sessions/session-alpha/later',
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },

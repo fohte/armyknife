@@ -123,3 +123,28 @@ it('returns focus to the trigger after Escape closes the menu', async () => {
     focusReturned: true,
   })
 })
+
+it('opens the closed menu from the trigger with ArrowDown', async () => {
+  renderSortControl()
+  const trigger = sortTrigger()
+  trigger.focus()
+
+  await act(async () => userEvent.keyboard('{ArrowDown}'))
+
+  const snapshot = () => ({
+    expanded: trigger.getAttribute('aria-expanded'),
+    menuOpen: container.querySelector('.inbox-sort-menu') !== null,
+    focusedOption:
+      container
+        .querySelector<HTMLButtonElement>('[role="menuitemradio"]:focus')
+        ?.innerText.replace(/\s+/g, ' ')
+        .trim() ?? null,
+    selectedOption: menuOption('Priority').getAttribute('aria-checked'),
+  })
+  expect(snapshot()).toEqual({
+    expanded: 'true',
+    menuOpen: true,
+    focusedOption: 'Priority tq priority, then newest',
+    selectedOption: 'true',
+  })
+})
