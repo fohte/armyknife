@@ -8,7 +8,7 @@ use tower::ServiceExt;
 
 use super::{ActionContext, action_context, post_empty, response_snapshot, session};
 use crate::commands::agent::store;
-use crate::commands::agent::types::SessionStatus;
+use crate::commands::agent::types::{Engine, SessionStatus};
 
 #[fixture]
 fn rewind_action_context(
@@ -373,6 +373,120 @@ async fn actions_report_stuck_resume_after_twenty_seconds_and_clear_it_when_star
                     "interrupt": true,
                     "openInTerminal": true,
                     "rewind": false,
+                },
+                "calls": [{
+                    "kind": "resume",
+                    "sessionId": "fixture-session",
+                    "status": SessionStatus::Ended,
+                }],
+            }),
+        ),
+    );
+}
+
+#[rstest]
+#[tokio::test(start_paused = true)]
+async fn codex_resume_keeps_startup_status_while_marked_stopped(action_context: ActionContext) {
+    let mut session = session("fixture-session");
+    session.engine = Engine::Codex;
+    session.status = SessionStatus::Ended;
+    action_context.save_session(&session);
+    let app = action_context.router();
+    let mut updates = action_context.resume_updates.subscribe();
+
+    let resume = app
+        .clone()
+        .oneshot(post_empty("/sessions/fixture-session/resume"))
+        .await
+        .unwrap();
+    updates.changed().await.unwrap();
+
+    session.status = SessionStatus::Stopped;
+    session.updated_at += chrono::Duration::seconds(1);
+    action_context.save_session(&session);
+
+    let pending = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/sessions/fixture-session/actions")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    advance(Duration::from_secs(20)).await;
+    updates.changed().await.unwrap();
+
+    let retry = app
+        .clone()
+        .oneshot(post_empty("/sessions/fixture-session/resume"))
+        .await
+        .unwrap();
+    let stuck = app
+        .oneshot(
+            Request::builder()
+                .uri("/sessions/fixture-session/actions")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        (
+            response_snapshot(resume, &action_context).await,
+            response_snapshot(pending, &action_context).await,
+            response_snapshot(retry, &action_context).await,
+            response_snapshot(stuck, &action_context).await,
+        ),
+        (
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": { "ok": true },
+                "calls": [{
+                    "kind": "resume",
+                    "sessionId": "fixture-session",
+                    "status": SessionStatus::Ended,
+                }],
+            }),
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": {
+                    "message": true,
+                    "answerQuestion": false,
+                    "resume": false,
+                    "startup": "pending",
+                    "interrupt": false,
+                    "openInTerminal": true,
+                    "rewind": true,
+                },
+                "calls": [{
+                    "kind": "resume",
+                    "sessionId": "fixture-session",
+                    "status": SessionStatus::Ended,
+                }],
+            }),
+            json!({
+                "status": StatusCode::CONFLICT.as_u16(),
+                "body": { "error": "session is not ended or paused" },
+                "calls": [{
+                    "kind": "resume",
+                    "sessionId": "fixture-session",
+                    "status": SessionStatus::Ended,
+                }],
+            }),
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": {
+                    "message": true,
+                    "answerQuestion": false,
+                    "resume": false,
+                    "startup": "stuck",
+                    "interrupt": false,
+                    "openInTerminal": true,
+                    "rewind": true,
                 },
                 "calls": [{
                     "kind": "resume",

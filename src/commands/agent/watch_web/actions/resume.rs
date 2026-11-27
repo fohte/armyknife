@@ -100,6 +100,14 @@ pub(super) enum ResumeStartupStatus {
     Stuck,
 }
 
+fn is_awaiting_session_start(status: SessionStatus) -> bool {
+    // Codex marks a resumed session Stopped before its SessionStart hook advances the generation.
+    matches!(
+        status,
+        SessionStatus::Ended | SessionStatus::Paused | SessionStatus::Stopped
+    )
+}
+
 impl PendingSessionResumes {
     pub(super) fn new(updates: EnrichmentUpdates) -> Self {
         Self {
@@ -120,7 +128,7 @@ impl PendingSessionResumes {
             return false;
         };
         if session_start_generation > state.session_start_generation()
-            || !matches!(status, SessionStatus::Ended | SessionStatus::Paused)
+            || !is_awaiting_session_start(status)
         {
             states.remove(session_id);
             return false;
@@ -186,7 +194,7 @@ impl PendingSessionResumes {
         let mut states = self.states.lock().await;
         let state = states.get(session_id).cloned()?;
         if session_start_generation > state.session_start_generation()
-            || !matches!(status, SessionStatus::Ended | SessionStatus::Paused)
+            || !is_awaiting_session_start(status)
         {
             states.remove(session_id);
             return None;
