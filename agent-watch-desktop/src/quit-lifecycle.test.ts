@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
-import { createQuitLifecycle } from './quit-lifecycle.js'
+import {
+  createQuitLifecycle,
+  handleRendererPreventedUnload,
+} from './quit-lifecycle.js'
 
 describe('createQuitLifecycle', () => {
   it('keeps retrying when the user keeps editing', () => {
@@ -38,5 +41,32 @@ describe('createQuitLifecycle', () => {
       shouldAllowUnload: true,
       actions: ['stop-retrying'],
     })
+  })
+})
+
+describe('handleRendererPreventedUnload', () => {
+  it.each([
+    {
+      name: 'keeps editing after the user declines to discard',
+      discardChanges: false,
+      expected: { isQuitting: false, actions: [] },
+    },
+    {
+      name: 'allows unload after the user chooses to discard',
+      discardChanges: true,
+      expected: { isQuitting: true, actions: ['allow-unload'] },
+    },
+  ])('$name', ({ discardChanges, expected }) => {
+    const actions: string[] = []
+    const lifecycle = createQuitLifecycle(() => actions.push('stop-retrying'))
+    lifecycle.beforeQuit()
+
+    handleRendererPreventedUnload(
+      lifecycle,
+      { preventDefault: () => actions.push('allow-unload') },
+      () => discardChanges,
+    )
+
+    expect({ isQuitting: lifecycle.isQuitting(), actions }).toEqual(expected)
   })
 })

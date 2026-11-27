@@ -5,6 +5,10 @@ type QuitLifecycle = {
   isQuitting: () => boolean
 }
 
+type PreventUnloadEvent = {
+  preventDefault: () => void
+}
+
 export const createQuitLifecycle = (
   stopRetrying: () => void,
 ): QuitLifecycle => {
@@ -22,5 +26,16 @@ export const createQuitLifecycle = (
     },
     willQuit: stopRetrying,
     isQuitting: () => isQuitting,
+  }
+}
+
+export const handleRendererPreventedUnload = (
+  lifecycle: QuitLifecycle,
+  event: PreventUnloadEvent,
+  confirmDiscard: (isQuitting: boolean) => boolean,
+) => {
+  const discardChanges = confirmDiscard(lifecycle.isQuitting())
+  if (lifecycle.rendererPreventedUnload(discardChanges)) {
+    event.preventDefault()
   }
 }

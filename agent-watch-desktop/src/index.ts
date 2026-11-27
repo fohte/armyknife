@@ -6,7 +6,10 @@ import type { WatchTarget } from './config.js'
 import { createConnectionController } from './connection.js'
 import { installApplicationMenu } from './menu.js'
 import { classifyNavigation, isAllowedWatchUrl } from './navigation.js'
-import { createQuitLifecycle } from './quit-lifecycle.js'
+import {
+  createQuitLifecycle,
+  handleRendererPreventedUnload,
+} from './quit-lifecycle.js'
 
 const targetResult = resolveWatchTarget(process.env.AGENT_WATCH_URL)
 const appName = 'Agent Watch'
@@ -203,26 +206,23 @@ const configureWebContents = (contents: Electron.WebContents) => {
   })
 
   contents.on('will-prevent-unload', (event) => {
-    const options = {
-      type: 'warning' as const,
-      title: appName,
-      message: '送信していないメッセージがあります',
-      detail: '破棄して続行しますか',
-      buttons: [
-        '編集を続ける',
-        quitLifecycle.isQuitting() ? '破棄して終了' : '破棄して続行',
-      ],
-      defaultId: 0,
-      cancelId: 0,
-    }
-    const window = BrowserWindow.fromWebContents(contents)
-    const choice =
-      window === null
-        ? dialog.showMessageBoxSync(options)
-        : dialog.showMessageBoxSync(window, options)
-    if (quitLifecycle.rendererPreventedUnload(choice === 1)) {
-      event.preventDefault()
-    }
+    handleRendererPreventedUnload(quitLifecycle, event, (isQuitting) => {
+      const options = {
+        type: 'warning' as const,
+        title: appName,
+        message: '送信していないメッセージがあります',
+        detail: '破棄して続行しますか',
+        buttons: ['編集を続ける', isQuitting ? '破棄して終了' : '破棄して続行'],
+        defaultId: 0,
+        cancelId: 0,
+      }
+      const window = BrowserWindow.fromWebContents(contents)
+      const choice =
+        window === null
+          ? dialog.showMessageBoxSync(options)
+          : dialog.showMessageBoxSync(window, options)
+      return choice === 1
+    })
   })
 }
 
