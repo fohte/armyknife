@@ -789,25 +789,23 @@ it('coalesces session events and refreshes when the stream reconnects', async ()
   ])
 })
 
-it('recreates a permanently closed event source after a backoff', async () => {
+it('increases reconnect backoff to its cap and resets after open', async () => {
   vi.useFakeTimers()
   const sources: FakeEventSource[] = []
-  const firstResponseReceived = deferred<undefined>()
-  const reconnectResponseReceived = deferred<undefined>()
+  const responseReceived = Array.from({ length: 3 }, () =>
+    deferred<undefined>(),
+  )
   const revisions: number[] = []
   const errors: (string | null)[] = []
   const fetcher = vi
     .fn()
     .mockResolvedValueOnce(jsonResponse({ revision: 1, sessions: [] }))
     .mockResolvedValueOnce(jsonResponse({ revision: 2, sessions: [] }))
+    .mockResolvedValueOnce(jsonResponse({ revision: 3, sessions: [] }))
   const stop = startSessionFeed(
     (response) => {
       revisions.push(response.revision)
-      if (response.revision === 1) {
-        firstResponseReceived.resolve(undefined)
-      } else {
-        reconnectResponseReceived.resolve(undefined)
-      }
+      responseReceived[revisions.length - 1]?.resolve(undefined)
     },
     (message) => errors.push(message),
     {
@@ -821,36 +819,77 @@ it('recreates a permanently closed event source after a backoff', async () => {
     },
   )
 
-  await firstResponseReceived.promise
-  const closedSource = sources[0]
-  if (closedSource === undefined) {
-    throw new Error('Initial event source was not created')
+  await responseReceived[0]?.promise
+  const retryDelays = [2_000, 4_000, 8_000, 16_000, 32_000, 60_000, 60_000]
+  const sourceCountsBeforeReconnect: number[] = []
+  const sourceCountsAfterReconnect: number[] = []
+  for (const [sourceIndex, retryDelay] of retryDelays.entries()) {
+    const closedSource = sources[sourceIndex]
+    if (closedSource === undefined) {
+      throw new Error('Expected event source was not created')
+    }
+    closedSource.readyState = 2
+    closedSource.emit('error')
+    await vi.advanceTimersByTimeAsync(retryDelay - 1)
+    sourceCountsBeforeReconnect.push(sources.length)
+    await vi.advanceTimersByTimeAsync(1)
+    sourceCountsAfterReconnect.push(sources.length)
   }
-  closedSource.readyState = 2
-  closedSource.emit('error')
+
+  const sourceAfterBackoff = sources[retryDelays.length]
+  if (sourceAfterBackoff === undefined) {
+    throw new Error('Event source was not recreated after backoff')
+  }
+  sourceAfterBackoff.emit('open')
+  await responseReceived[1]?.promise
+
+  sourceAfterBackoff.readyState = 2
+  sourceAfterBackoff.emit('error')
   await vi.advanceTimersByTimeAsync(1_999)
-  const beforeBackoffExpires = [sources.length, fetcher.mock.calls.length]
+  const sourceCountBeforeResetReconnect = sources.length
   await vi.advanceTimersByTimeAsync(1)
-  const afterBackoffExpires = [sources.length, fetcher.mock.calls.length]
-  sources[1]?.emit('open')
-  await reconnectResponseReceived.promise
+  const sourceCountAfterResetReconnect = sources.length
+  const sourceAfterReset = sources[retryDelays.length + 1]
+  if (sourceAfterReset === undefined) {
+    throw new Error('Event source was not recreated after reset')
+  }
+  sourceAfterReset.emit('open')
+  await responseReceived[2]?.promise
   stop()
 
   const snapshot = () => ({
     revisions,
     errors,
-    beforeBackoffExpires,
-    afterBackoffExpires,
+    sourceCountsBeforeReconnect,
+    sourceCountsAfterReconnect,
+    sourceCountBeforeResetReconnect,
+    sourceCountAfterResetReconnect,
     closed: sources.map((source) => source.closed),
     requests: fetcher.mock.calls.length,
   })
   expect(snapshot()).toEqual({
-    revisions: [1, 2],
-    errors: [null, 'Connection lost. Reconnecting…', null, null],
-    beforeBackoffExpires: [1, 1],
-    afterBackoffExpires: [2, 1],
-    closed: [true, true],
-    requests: 2,
+    revisions: [1, 2, 3],
+    errors: [
+      null,
+      'Connection lost. Reconnecting…',
+      'Connection lost. Reconnecting…',
+      'Connection lost. Reconnecting…',
+      'Connection lost. Reconnecting…',
+      'Connection lost. Reconnecting…',
+      'Connection lost. Reconnecting…',
+      'Connection lost. Reconnecting…',
+      null,
+      null,
+      'Connection lost. Reconnecting…',
+      null,
+      null,
+    ],
+    sourceCountsBeforeReconnect: [1, 2, 3, 4, 5, 6, 7],
+    sourceCountsAfterReconnect: [2, 3, 4, 5, 6, 7, 8],
+    sourceCountBeforeResetReconnect: 8,
+    sourceCountAfterResetReconnect: 9,
+    closed: [true, true, true, true, true, true, true, true, true],
+    requests: 3,
   })
 })
 

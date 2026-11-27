@@ -17,6 +17,7 @@ type SessionEventSource = {
 }
 
 const EVENT_SOURCE_CLOSED = 2
+const MAX_RECONNECT_DELAY_MS = 60_000
 
 type SessionFeedDependencies = {
   fetcher?: typeof fetch
@@ -302,6 +303,7 @@ export function startSessionFeed(
   let streamError = false
   let currentSessions: CurrentSessions | null = null
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  let reconnectDelayMs = Math.min(reconnectRetryDelayMs, MAX_RECONNECT_DELAY_MS)
   let eventSource: SessionEventSource | null = null
 
   const reportStatus = () => {
@@ -325,8 +327,12 @@ export function startSessionFeed(
     if (reconnectTimer === null) {
       reconnectTimer = setTimeout(() => {
         reconnectTimer = null
+        reconnectDelayMs = Math.min(
+          reconnectDelayMs * 2,
+          MAX_RECONNECT_DELAY_MS,
+        )
         startEventSource()
-      }, reconnectRetryDelayMs)
+      }, reconnectDelayMs)
     }
   }
 
@@ -436,6 +442,7 @@ export function startSessionFeed(
       return
     }
     streamError = false
+    reconnectDelayMs = Math.min(reconnectRetryDelayMs, MAX_RECONNECT_DELAY_MS)
     clearReconnectTimer()
     reportStatus()
     refresh()
