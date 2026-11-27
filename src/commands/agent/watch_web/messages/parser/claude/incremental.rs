@@ -58,11 +58,13 @@ impl IncrementalClaudeParser {
                 if let Some(uuid) = record.get("uuid").and_then(Value::as_str) {
                     graph_latest_uuid = Some(uuid.to_owned());
                     root_count += usize::from(parent_uuid.is_none());
+                    let had_transcript_forks = state.has_transcript_forks;
                     let is_self_parent = parent_uuid.as_deref() == Some(uuid);
-                    let mut parent_order = parent_uuid
+                    let parent_node = parent_uuid
                         .as_deref()
-                        .and_then(|parent_uuid| state.transcript_nodes.get(parent_uuid))
-                        .map(|parent| parent.record_order as usize);
+                        .and_then(|parent_uuid| state.transcript_nodes.get(parent_uuid));
+                    let mut parent_order = parent_node.map(|parent| parent.record_order as usize);
+                    let parent_has_tool_use = parent_node.is_some_and(|parent| parent.has_tool_use);
                     if parent_uuid.is_some()
                         && parent_order.is_none()
                         && let Some(parent_uuid) = parent_uuid.as_deref()
@@ -77,17 +79,18 @@ impl IncrementalClaudeParser {
                         },
                         |node: &TranscriptNode| node.uuid_id,
                     );
+                    let node = TranscriptNode::from_record(
+                        &record,
+                        parent_uuid.clone(),
+                        uuid_id,
+                        record_order,
+                    );
+                    let is_relevant_child = parent_uuid.is_some()
+                        && parent_has_tool_use
+                        && (node.has_tool_use || node.is_tool_result_only);
                     let duplicate = state
                         .transcript_nodes
-                        .insert(
-                            uuid.to_owned(),
-                            TranscriptNode::from_record(
-                                &record,
-                                parent_uuid,
-                                uuid_id,
-                                record_order,
-                            ),
-                        )
+                        .insert(uuid.to_owned(), node)
                         .is_some();
                     state.has_duplicate_uuids |= duplicate;
                     state.transcript_parent_child_counts.push(0);
@@ -107,6 +110,19 @@ impl IncrementalClaudeParser {
                             state.has_transcript_forks |= *child_count > 0;
                             *child_count = child_count.saturating_add(1).min(2);
                         }
+                    }
+                    if !had_transcript_forks && state.has_transcript_forks {
+                        state.rebuild_transcript_children();
+                    } else if had_transcript_forks
+                        && is_relevant_child
+                        && !duplicate
+                        && let Some(parent_uuid) = parent_uuid.as_deref()
+                    {
+                        state
+                            .transcript_children
+                            .entry(parent_uuid.to_owned())
+                            .or_default()
+                            .push(uuid.to_owned());
                     }
                     record_order += 1;
                 }
@@ -130,7 +146,10 @@ impl IncrementalClaudeParser {
             && state.forward_parent_uuids.is_empty()
             && !state.has_compact_boundary_record
             && root_count <= 1;
-        if !simple_graph {
+        if state.has_duplicate_uuids
+            || !state.forward_parent_uuids.is_empty()
+            || pending_record_creates_fork
+        {
             state.rebuild_transcript_children();
         }
         reader.seek(SeekFrom::Start(0))?;

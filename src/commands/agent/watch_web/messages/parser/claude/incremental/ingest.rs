@@ -3,7 +3,7 @@ use serde_json::Value;
 
 use super::super::state::{ClaudeParserState, is_attachment_record, record_parent_uuid};
 use super::super::transcript_branch::{BranchMembership, TranscriptNode, mark_active_branch};
-use super::continuation::{AppendDecision, AppendHistory, classify_append};
+use super::continuation::{AppendDecision, AppendHistory, ClassifiedAppend, classify_append};
 use super::prepare_pending_render_state;
 
 #[derive(Clone, Copy)]
@@ -21,7 +21,7 @@ pub(super) fn ingest_record(
     origin: RecordOrigin,
     active_cache_updates: Option<&mut Vec<usize>>,
 ) -> bool {
-    let classified_append = if matches!(
+    let mut classified_append = if matches!(
         origin,
         RecordOrigin::Appended | RecordOrigin::Pending { is_initial: false }
     ) {
@@ -73,6 +73,8 @@ pub(super) fn ingest_record(
         }
         let mut node = if let Some(flags) = simple_node_flags {
             TranscriptNode::from_simple_append(parent_uuid.clone(), uuid_id, record_order, flags)
+        } else if let Some(classified) = classified_append.as_mut() {
+            classified.transcript_node(uuid_id, record_order)
         } else {
             TranscriptNode::from_record(&record, parent_uuid.clone(), uuid_id, record_order)
         };
@@ -102,7 +104,13 @@ pub(super) fn ingest_record(
             }
         }
     }
-    state.process_record(&record, now);
+    state.process_record_with_pending_tool_result(
+        &record,
+        now,
+        classified_append
+            .as_ref()
+            .map(ClassifiedAppend::pending_tool_result),
+    );
     match origin {
         RecordOrigin::Initial => append_history.observe_initial(record),
         RecordOrigin::Appended => {

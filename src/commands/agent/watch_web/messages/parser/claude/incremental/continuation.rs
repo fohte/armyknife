@@ -2,7 +2,9 @@ use serde_json::Value;
 
 use super::super::background_tasks::task_notification_text;
 use super::super::state::{ClaudeParserState, is_attachment_record, record_parent_uuid};
-use super::super::transcript_branch::BranchMembership;
+use super::super::transcript_branch::{
+    BranchMembership, TranscriptNode, TranscriptNodeAppendMetadata,
+};
 use super::super::user_input::user_content;
 
 #[derive(Clone, Default)]
@@ -52,6 +54,9 @@ struct AppendRecord {
     is_tool_result_only: bool,
     is_transparent_attachment: bool,
     is_task_notification: bool,
+    has_tool_use: bool,
+    tool_use_ids: Vec<String>,
+    tool_result_ids: Vec<String>,
     tool_use_count: usize,
 }
 
@@ -59,8 +64,11 @@ impl AppendRecord {
     fn from_record(record: &Value) -> Self {
         let record_type = record.get("type").and_then(Value::as_str);
         let is_user = record_type == Some("user");
+        let is_assistant_record = record_type == Some("assistant");
         let mut has_user_content = false;
         let mut has_non_result_user_content = false;
+        let mut tool_use_ids = Vec::new();
+        let mut tool_result_ids = Vec::new();
         let mut tool_use_count = 0;
         if let Some(blocks) = record
             .get("message")
@@ -71,10 +79,25 @@ impl AppendRecord {
                 match block.get("type").and_then(Value::as_str) {
                     Some("tool_use") => {
                         tool_use_count += 1;
+                        if is_assistant_record
+                            && let Some(id) = block
+                                .get("id")
+                                .or_else(|| block.get("tool_use_id"))
+                                .and_then(Value::as_str)
+                        {
+                            tool_use_ids.push(id.to_owned());
+                        }
                     }
                     Some("tool_result") => {
                         if is_user {
                             has_user_content = true;
+                            if let Some(id) = block
+                                .get("id")
+                                .or_else(|| block.get("tool_use_id"))
+                                .and_then(Value::as_str)
+                            {
+                                tool_result_ids.push(id.to_owned());
+                            }
                         }
                     }
                     _ if is_user => {
@@ -108,6 +131,9 @@ impl AppendRecord {
             is_tool_result_only,
             is_transparent_attachment,
             is_task_notification,
+            has_tool_use: is_assistant_record && tool_use_count > 0,
+            tool_use_ids,
+            tool_result_ids,
             tool_use_count,
         }
     }
@@ -121,6 +147,7 @@ pub(super) enum AppendDecision {
 
 pub(super) struct ClassifiedAppend {
     pub(super) decision: AppendDecision,
+    pending_tool_result: bool,
     record: AppendRecord,
 }
 
@@ -135,6 +162,25 @@ impl ClassifiedAppend {
 
     pub(super) fn extends_active_record_cache(&self) -> bool {
         self.record.is_tool_result_only || self.record.is_task_notification
+    }
+
+    pub(super) fn pending_tool_result(&self) -> bool {
+        self.pending_tool_result
+    }
+
+    pub(super) fn transcript_node(&mut self, uuid_id: usize, record_order: u64) -> TranscriptNode {
+        TranscriptNode::from_append_metadata(
+            self.record.parent_uuid.clone(),
+            uuid_id,
+            record_order,
+            TranscriptNodeAppendMetadata {
+                has_tool_use: self.record.has_tool_use,
+                tool_use_ids: std::mem::take(&mut self.record.tool_use_ids),
+                tool_result_ids: std::mem::take(&mut self.record.tool_result_ids),
+                is_tool_result_only: self.record.is_tool_result_only,
+                is_task_notification: self.record.is_task_notification,
+            },
+        )
     }
 }
 
@@ -158,12 +204,15 @@ pub(super) fn classify_append(
     {
         return Some(ClassifiedAppend {
             decision: AppendDecision::ParallelResult,
+            pending_tool_result: true,
             record: candidate,
         });
     }
 
-    is_simple_tail_append(state, history, record, &candidate).then_some(ClassifiedAppend {
+    let pending_tool_result = is_simple_tail_append(state, history, record, &candidate)?;
+    Some(ClassifiedAppend {
         decision: AppendDecision::SimpleTail,
+        pending_tool_result,
         record: candidate,
     })
 }
@@ -173,43 +222,42 @@ fn is_simple_tail_append(
     history: &AppendHistory,
     record: &Value,
     candidate: &AppendRecord,
-) -> bool {
+) -> Option<bool> {
     let Some(parent_uuid) = candidate.parent_uuid.as_ref() else {
-        return history.last().is_none()
+        return (history.last().is_none()
             && state.latest_uuid.is_none()
             && state.latest_record_uuid.is_none()
             && state.transcript_nodes.is_empty()
             && candidate.is_simple
-            && !candidate.is_tool_result_only;
+            && !candidate.is_tool_result_only)
+            .then_some(false);
     };
-    let Some(previous_record) = history.last() else {
-        return false;
-    };
-    let Some(previous_uuid) = previous_record.uuid.as_deref() else {
-        return false;
-    };
+    let previous_record = history.last()?;
+    let previous_uuid = previous_record.uuid.as_deref()?;
     if previous_uuid != parent_uuid
         || state.latest_record_uuid.as_deref() != Some(parent_uuid.as_str())
         || !previous_record.is_simple
         || !candidate.is_simple
     {
-        return false;
+        return None;
     }
     if state.latest_uuid.as_deref() != Some(parent_uuid.as_str())
         && !previous_record.is_transparent_attachment
     {
-        return false;
+        return None;
     }
-    let Some(parent) = state.transcript_nodes.get(parent_uuid) else {
-        return false;
-    };
-    parent.membership == BranchMembership::Active
-        && state
+    let parent = state.transcript_nodes.get(parent_uuid)?;
+    if parent.membership != BranchMembership::Active
+        || state
             .transcript_parent_child_counts
             .get(parent.record_order as usize)
-            .is_none_or(|child_count| *child_count == 0)
-        && (!candidate.is_tool_result_only
-            || state.has_pending_tool_result_for_parent(record, Some(parent_uuid.as_str())))
+            .is_some_and(|child_count| *child_count > 0)
+    {
+        return None;
+    }
+    let pending_tool_result = candidate.is_tool_result_only
+        && state.has_pending_tool_result_for_parent(record, Some(parent_uuid.as_str()));
+    (!candidate.is_tool_result_only || pending_tool_result).then_some(pending_tool_result)
 }
 
 fn is_first_parallel_result(

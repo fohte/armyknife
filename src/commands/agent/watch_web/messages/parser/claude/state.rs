@@ -76,6 +76,15 @@ impl ClaudeParserState {
     }
 
     pub(super) fn process_record(&mut self, record: &Value, now: DateTime<Utc>) {
+        self.process_record_with_pending_tool_result(record, now, None);
+    }
+
+    pub(super) fn process_record_with_pending_tool_result(
+        &mut self,
+        record: &Value,
+        now: DateTime<Utc>,
+        pending_tool_result_override: Option<bool>,
+    ) {
         if let Some(attachment) = record.get("attachment")
             && attachment.get("type").and_then(Value::as_str) == Some("skill_listing")
         {
@@ -106,7 +115,7 @@ impl ClaudeParserState {
                     node.uuid_id,
                 )
             });
-            simple_history::process(self, record, metadata, now);
+            simple_history::process(self, record, metadata, now, pending_tool_result_override);
             return;
         }
         let task_notification = if metadata.is_none_or(|node| node.is_task_notification) {
@@ -129,8 +138,9 @@ impl ClaudeParserState {
         let parent_uuid = needs_parent_uuid
             .then(|| record_parent_uuid_ref(record))
             .flatten();
-        let pending_tool_result =
-            is_tool_result_only && self.has_pending_tool_result_for_parent(record, parent_uuid);
+        let pending_tool_result = pending_tool_result_override.unwrap_or_else(|| {
+            is_tool_result_only && self.has_pending_tool_result_for_parent(record, parent_uuid)
+        });
         let is_tool_use_assistant = is_assistant
             && uuid.is_some()
             && metadata.map_or_else(

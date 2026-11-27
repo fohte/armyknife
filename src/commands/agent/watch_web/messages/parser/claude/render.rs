@@ -45,7 +45,7 @@ pub(super) fn render(
             }
             render_timed_event(
                 event,
-                event_context,
+                &event_context,
                 &mut card_timeline,
                 &mut tools,
                 &mut items,
@@ -56,7 +56,7 @@ pub(super) fn render(
         for event in &state.events {
             render_timed_event(
                 event,
-                event_context,
+                &event_context,
                 &mut card_timeline,
                 &mut tools,
                 &mut items,
@@ -175,7 +175,6 @@ fn active_tool_with_thinking(
     }
 }
 
-#[derive(Clone, Copy)]
 struct EventRenderContext<'a> {
     image_directory: Option<&'a Path>,
     additions: ParserAdditions<'a>,
@@ -184,7 +183,7 @@ struct EventRenderContext<'a> {
 
 fn render_timed_event(
     event: &TimedClaudeEvent,
-    context: EventRenderContext<'_>,
+    context: &EventRenderContext<'_>,
     card_timeline: &mut CardTimeline,
     tools: &mut ToolSummary,
     items: &mut Vec<ChatItem>,

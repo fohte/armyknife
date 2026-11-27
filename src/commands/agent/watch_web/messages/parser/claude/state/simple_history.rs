@@ -14,6 +14,7 @@ pub(super) fn process(
     record: &Value,
     metadata: Option<(bool, bool, usize)>,
     now: DateTime<Utc>,
+    pending_tool_result_override: Option<bool>,
 ) {
     let uuid = record.get("uuid").and_then(Value::as_str);
     let task_notification = metadata
@@ -30,8 +31,9 @@ pub(super) fn process(
     let parent_uuid = is_tool_result_only
         .then(|| record_parent_uuid_ref(record))
         .flatten();
-    let pending_tool_result =
-        is_tool_result_only && state.has_pending_tool_result_for_parent(record, parent_uuid);
+    let pending_tool_result = pending_tool_result_override.unwrap_or_else(|| {
+        is_tool_result_only && state.has_pending_tool_result_for_parent(record, parent_uuid)
+    });
     if pending_tool_result || task_notification.is_some() {
         let uuid_id = metadata.map(|(_, _, uuid_id)| uuid_id).or_else(|| {
             uuid.and_then(|uuid| state.transcript_nodes.get(uuid).map(|node| node.uuid_id))
