@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.961](https://github.com/fohte/armyknife/compare/v0.1.960...v0.1.961) (2026-11-27)
+
+
+### Features
+
+* **agent:** allow transcript slimming on compact ([#2349](https://github.com/fohte/armyknife/issues/2349)) ([92f0408](https://github.com/fohte/armyknife/commit/92f0408dd8cc4f4b8fc3bf53728f3a800a837f74))
+
 ## [0.1.960](https://github.com/fohte/armyknife/compare/v0.1.959...v0.1.960) (2026-11-26)
 
 
