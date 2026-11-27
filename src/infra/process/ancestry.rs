@@ -137,27 +137,33 @@ pub fn get_parent_pid(pid: u32) -> Option<u32> {
 
 #[cfg(target_os = "linux")]
 fn read_process_identity(pid: u32) -> Option<ProcessIdentity<u64>> {
-    let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let stat = fs::read(format!("/proc/{pid}/stat")).ok()?;
     parse_linux_process_stat(pid, &stat)
 }
 
 #[cfg(any(target_os = "linux", test))]
-fn parse_linux_process_stat(pid: u32, stat: &str) -> Option<ProcessIdentity<u64>> {
+fn parse_linux_process_stat(pid: u32, stat: &[u8]) -> Option<ProcessIdentity<u64>> {
     const PARENT_PID_INDEX_AFTER_COMMAND: usize = 1;
     const START_TIME_INDEX_AFTER_COMMAND: usize = 19;
 
-    let command_start = stat.find('(')?;
-    let command_end = stat.rfind(')')?;
+    let command_start = stat.iter().position(|&byte| byte == b'(')?;
+    let command_end = stat.iter().rposition(|&byte| byte == b')')?;
     if command_end <= command_start {
         return None;
     }
 
-    let stat_pid = stat[..command_start].trim().parse::<u32>().ok()?;
+    let stat_pid = std::str::from_utf8(stat.get(..command_start)?)
+        .ok()?
+        .trim()
+        .parse::<u32>()
+        .ok()?;
     if stat_pid != pid {
         return None;
     }
 
-    let mut fields = stat.get(command_end + 1..)?.split_whitespace();
+    let mut fields = std::str::from_utf8(stat.get(command_end + 1..)?)
+        .ok()?
+        .split_whitespace();
     Some(ProcessIdentity {
         parent_pid: fields
             .clone()
@@ -273,20 +279,25 @@ mod linux_tests {
 
     #[rstest]
     #[case::simple_command(
-        "42 (claude) S 7 8 9 0 -1 0 0 0 0 0 0 0 0 0 0 0 0 0 12345",
+        b"42 (claude) S 7 8 9 0 -1 0 0 0 0 0 0 0 0 0 0 0 0 0 12345",
         42,
         Some(ProcessIdentity { parent_pid: 7, start_time: 12345 }),
     )]
     #[case::command_with_spaces_and_parentheses(
-        "42 (worker (nested) name) S 7 8 9 0 -1 0 0 0 0 0 0 0 0 0 0 0 0 0 12345",
+        b"42 (worker (nested) name) S 7 8 9 0 -1 0 0 0 0 0 0 0 0 0 0 0 0 0 12345",
         42,
         Some(ProcessIdentity { parent_pid: 7, start_time: 12345 }),
     )]
-    #[case::different_pid("42 (claude) S 7 8 9 0 -1 0 0 0 0 0 0 0 0 0 0 0 0 0 12345", 43, None)]
-    #[case::missing_parent("42 (claude)", 42, None)]
-    #[case::missing_start_time("42 (claude) S 7", 42, None)]
+    #[case::different_pid(b"42 (claude) S 7 8 9 0 -1 0 0 0 0 0 0 0 0 0 0 0 0 0 12345", 43, None)]
+    #[case::missing_parent(b"42 (claude)", 42, None)]
+    #[case::missing_start_time(b"42 (claude) S 7", 42, None)]
+    #[case::truncated_unicode_command_name(
+        b"42 (worker-\xe2\x82) S 7 8 9 0 -1 0 0 0 0 0 0 0 0 0 0 0 0 0 12345",
+        42,
+        Some(ProcessIdentity { parent_pid: 7, start_time: 12345 }),
+    )]
     fn parse_linux_process_stat_cases(
-        #[case] stat: &str,
+        #[case] stat: &[u8],
         #[case] pid: u32,
         #[case] expected: Option<ProcessIdentity<u64>>,
     ) {
