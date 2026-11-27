@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.977](https://github.com/fohte/armyknife/compare/v0.1.976...v0.1.977) (2026-11-27)
+
+
+### Bug Fixes
+
+* **watch-web:** block Resume for missing worktrees ([#2386](https://github.com/fohte/armyknife/issues/2386)) ([151c863](https://github.com/fohte/armyknife/commit/151c8638aaa925b811d66f47bcf2eb8f77c1de01))
+
 ## [0.1.976](https://github.com/fohte/armyknife/compare/v0.1.975...v0.1.976) (2026-11-27)
 
 
