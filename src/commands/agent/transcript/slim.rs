@@ -9,11 +9,14 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 use tempfile::{Builder, NamedTempFile, TempPath};
 
-use super::super::claude_sessions::session_jsonl_path;
-
 mod reconcile;
 mod transform;
+mod worker;
 mod writer;
+
+pub(in crate::commands::agent) fn run(command: &TranscriptCommands) -> Result<()> {
+    worker::run(command)
+}
 
 #[cfg(not(test))]
 use self::writer::has_writable_open_handle;
@@ -34,26 +37,10 @@ pub struct SlimArgs {
     /// Project directory used to resolve the session transcript
     #[arg(long, default_value = ".")]
     pub cwd: PathBuf,
-}
 
-pub fn run(command: &TranscriptCommands) -> Result<()> {
-    match command {
-        TranscriptCommands::Slim(args) => {
-            let cwd = fs::canonicalize(&args.cwd)
-                .with_context(|| format!("resolve project directory {}", args.cwd.display()))?;
-            validate_session_id(&args.session_id)?;
-            let path = session_jsonl_path(&cwd, &args.session_id)
-                .context("resolve Claude Code home directory")?;
-            let result = slim_transcript(&path)?;
-            println!(
-                "Slimmed transcript: {} -> {} bytes ({} bytes removed)",
-                result.original_bytes,
-                result.final_bytes,
-                result.original_bytes.saturating_sub(result.final_bytes)
-            );
-        }
-    }
-    Ok(())
+    /// Transcript path provided by the Claude Code hook
+    #[arg(long, hide = true)]
+    pub transcript_path: Option<PathBuf>,
 }
 
 fn validate_session_id(session_id: &str) -> Result<()> {
@@ -70,6 +57,14 @@ fn validate_session_id(session_id: &str) -> Result<()> {
 struct SlimResult {
     original_bytes: u64,
     final_bytes: u64,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("{message}")]
+struct PostReplacementFailure {
+    message: String,
+    #[source]
+    source: anyhow::Error,
 }
 
 struct TranscriptAnalysis {
@@ -102,7 +97,7 @@ fn slim_transcript(path: &Path) -> Result<SlimResult> {
     )
 }
 
-// The compact hook must serialize same-session invocations to prevent competing replacements.
+// The worker holds session and transcript locks through this rewrite because competing replacements can lose appends.
 fn slim_transcript_with<F, G, H, P>(
     path: &Path,
     during_rewrite: F,
@@ -209,18 +204,20 @@ where
         &mut has_writable_open_handle,
         max_reconcile_wait,
     )
-    .with_context(|| {
-        format!(
+    .map_err(|source| PostReplacementFailure {
+        message: format!(
             "transcript replacement completed, but post-replacement reconciliation failed for {}",
             path.display()
-        )
+        ),
+        source,
     })?;
     let final_bytes = fs::metadata(path)
-        .with_context(|| {
-            format!(
+        .map_err(|source| PostReplacementFailure {
+            message: format!(
                 "transcript replacement completed, but could not inspect the replaced transcript {}",
                 path.display()
-            )
+            ),
+            source: source.into(),
         })?
         .len();
     Ok(SlimResult {

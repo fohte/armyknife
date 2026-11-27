@@ -14,6 +14,9 @@ use lazy_regex::regex_replace_all;
 
 use self::side_effects::SideEffects;
 use super::claude_sessions;
+use super::compact_transcript_slim::{
+    maybe_schedule_transcript_slim, process_skipped_hook_compact_slim,
+};
 use super::error::CcError;
 use super::session_init;
 use super::session_status;
@@ -79,7 +82,26 @@ pub fn run(args: &HookArgs) -> Result<()> {
 
     // Skip hooks when called from armyknife's own claude -p invocations
     // to prevent infinite recursion (hook → claude -p → hook → ...).
-    if EnvVars::load().skip_hooks {
+    let env_vars = EnvVars::load();
+    if env_vars.skip_hooks {
+        if env_vars.slim_transcript_on_compact
+            && event == HookEvent::SessionStart
+            && args.engine == Engine::Claude
+        {
+            let side_effects = SideEffects::all();
+            if let Err(error) = process_skipped_hook_compact_slim(
+                event,
+                args.engine,
+                &env_vars,
+                || parse_stdin_json(&read_raw_stdin()?),
+                |session_id, path| side_effects.schedule_transcript_slim(session_id, path),
+            ) {
+                tracing::warn!(
+                    event = "agent.transcript.slim.compact_hook_input_failed",
+                    error = %error,
+                );
+            }
+        }
         return write_stop_response(args.engine, event, None, &mut io::stdout().lock());
     }
 
@@ -1244,6 +1266,12 @@ fn process_hook_event_impl_with_env_and_unreported_stop(
         }
     }
 
+    if side_effects.transcript_slim {
+        maybe_schedule_transcript_slim(event, &input, |session_id, path| {
+            side_effects.schedule_transcript_slim(session_id, path);
+        });
+    }
+
     if let Some(reason) = stop_block_reason {
         return Ok(ProcessResult::StopBlocked(reason.to_string()));
     }
@@ -1733,6 +1761,7 @@ fn build_subtitle(session: &Session) -> Option<String> {
 mod tests {
     use super::side_effects::PaneBindingOperations;
     use super::*;
+    use crate::commands::agent::compact_transcript_slim::TRANSCRIPT_SLIM_MIN_BYTES;
     use crate::commands::agent::session_pr_context::fixed_context_capture;
     use crate::commands::agent::types::{AgentStatus, TMUX_SESSION_OPTION, WebUiRegistration};
     use chrono::TimeZone;
@@ -1848,6 +1877,223 @@ mod tests {
         side_effects: &SideEffects,
     ) -> Result<ProcessResult> {
         process_hook_event_impl_with_instruction(event, input, sessions_dir, side_effects, None)
+    }
+
+    #[rstest]
+    #[case::large_compact_starts_worker(HookEvent::SessionStart, Engine::Claude, "compact", TRANSCRIPT_SLIM_MIN_BYTES + 1, true)]
+    #[case::at_limit_skips_worker(
+        HookEvent::SessionStart,
+        Engine::Claude,
+        "compact",
+        TRANSCRIPT_SLIM_MIN_BYTES,
+        false
+    )]
+    #[case::resume_skips_worker(HookEvent::SessionStart, Engine::Claude, "resume", TRANSCRIPT_SLIM_MIN_BYTES + 1, false)]
+    #[case::startup_skips_worker(HookEvent::SessionStart, Engine::Claude, "startup", TRANSCRIPT_SLIM_MIN_BYTES + 1, false)]
+    #[case::codex_skips_worker(HookEvent::SessionStart, Engine::Codex, "compact", TRANSCRIPT_SLIM_MIN_BYTES + 1, false)]
+    #[case::other_hook_skips_worker(HookEvent::PostModelSwitch, Engine::Claude, "compact", TRANSCRIPT_SLIM_MIN_BYTES + 1, false)]
+    fn compact_session_start_schedules_transcript_slim_only_for_large_claude_transcripts(
+        #[case] event: HookEvent,
+        #[case] engine: Engine,
+        #[case] source: &str,
+        #[case] transcript_size: u64,
+        #[case] expected_scheduled: bool,
+    ) {
+        use std::fs::File;
+        use std::io::{Seek, SeekFrom, Write};
+
+        let temp_dir = tempfile::TempDir::new().expect("hook fixture directory should be created");
+        let project_dir = temp_dir.path().join("fixture-project");
+        let transcript_dir = temp_dir.path().join("fixture-transcripts");
+        std::fs::create_dir(&project_dir).expect("project directory should be created");
+        std::fs::create_dir(&transcript_dir).expect("transcript directory should be created");
+        let transcript_path = transcript_dir.join("fixture-session.jsonl");
+        let expected_transcript_path = transcript_path.clone();
+        let assistant_row = br#"{"type":"assistant","message":{"model":"fixture-model"}}"#;
+        let mut transcript =
+            File::create(&transcript_path).expect("transcript fixture should be created");
+        transcript
+            .set_len(transcript_size - assistant_row.len() as u64 - 2)
+            .expect("transcript fixture size should be set");
+        transcript
+            .seek(SeekFrom::End(0))
+            .expect("transcript fixture should seek to the end");
+        transcript
+            .write_all(b"\n")
+            .and_then(|()| transcript.write_all(assistant_row))
+            .and_then(|()| transcript.write_all(b"\n"))
+            .expect("assistant fixture row should be written");
+
+        let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let side_effects = SideEffects {
+            transcript_slim: true,
+            transcript_slim_calls: Some(calls.clone()),
+            ..SideEffects::none()
+        };
+        let mut input = create_test_input_with_source(None, Some(source));
+        input.cwd = project_dir.clone();
+        input.transcript_path = Some(transcript_path);
+        input.engine = engine;
+
+        let home = temp_dir
+            .path()
+            .to_str()
+            .expect("fixture home should be UTF-8");
+        temp_env::with_vars(
+            [
+                ("HOME", Some(home)),
+                ("CLAUDE_CONFIG_DIR", None::<&str>),
+                ("CLAUDE_ENV_FILE", None::<&str>),
+            ],
+            || {
+                process_hook_event_impl_with_instruction(
+                    event,
+                    input,
+                    temp_dir.path(),
+                    &side_effects,
+                    None,
+                )
+            },
+        )
+        .expect("hook event should succeed");
+
+        assert_eq!(
+            calls
+                .lock()
+                .expect("transcript slim calls should lock")
+                .clone(),
+            if expected_scheduled {
+                vec![(
+                    "test-123".to_string(),
+                    expected_transcript_path.clone(),
+                    vec![
+                        "agent".to_string(),
+                        "transcript".to_string(),
+                        "slim".to_string(),
+                        "test-123".to_string(),
+                        "--transcript-path".to_string(),
+                        expected_transcript_path.to_string_lossy().into_owned(),
+                    ],
+                )]
+            } else {
+                Vec::new()
+            },
+        );
+    }
+
+    #[rstest]
+    #[case::armed_compact_session_start(
+        true,
+        HookEvent::SessionStart,
+        Engine::Claude,
+        "compact",
+        true,
+        true
+    )]
+    #[case::unarmed_skipped_hook(
+        false,
+        HookEvent::SessionStart,
+        Engine::Claude,
+        "compact",
+        false,
+        false
+    )]
+    #[case::resume_skipped_hook(
+        true,
+        HookEvent::SessionStart,
+        Engine::Claude,
+        "resume",
+        true,
+        false
+    )]
+    #[case::codex_skipped_hook(
+        true,
+        HookEvent::SessionStart,
+        Engine::Codex,
+        "compact",
+        false,
+        false
+    )]
+    #[case::other_skipped_hook(
+        true,
+        HookEvent::PostModelSwitch,
+        Engine::Claude,
+        "compact",
+        false,
+        false
+    )]
+    fn skipped_hooks_slim_only_armed_large_claude_compact_transcripts(
+        #[case] allow_compact_slim: bool,
+        #[case] event: HookEvent,
+        #[case] engine: Engine,
+        #[case] source: &str,
+        #[case] expected_input_read: bool,
+        #[case] expected_scheduled: bool,
+    ) {
+        use std::cell::Cell;
+
+        let temp_dir = tempfile::TempDir::new().expect("hook fixture directory should be created");
+        let transcript_path = temp_dir.path().join("fixture-transcript.jsonl");
+        let transcript =
+            fs::File::create(&transcript_path).expect("transcript fixture should be created");
+        transcript
+            .set_len(TRANSCRIPT_SLIM_MIN_BYTES + 1)
+            .expect("transcript fixture size should be set");
+        let expected_transcript_path = transcript_path.clone();
+        let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let side_effects = SideEffects {
+            transcript_slim: true,
+            transcript_slim_calls: Some(calls.clone()),
+            ..SideEffects::none()
+        };
+        let env_vars = EnvVars {
+            skip_hooks: true,
+            slim_transcript_on_compact: allow_compact_slim,
+            ..EnvVars::default()
+        };
+        let read_count = Cell::new(0);
+        let mut input = create_test_input_with_source(None, Some(source));
+        input.engine = engine;
+        input.transcript_path = Some(transcript_path);
+
+        process_skipped_hook_compact_slim(
+            event,
+            engine,
+            &env_vars,
+            || {
+                read_count.set(read_count.get() + 1);
+                Ok(input)
+            },
+            |session_id, path| side_effects.schedule_transcript_slim(session_id, path),
+        )
+        .expect("skipped hook processing should succeed");
+
+        let expected_calls = if expected_scheduled {
+            vec![(
+                "test-123".to_string(),
+                expected_transcript_path.clone(),
+                vec![
+                    "agent".to_string(),
+                    "transcript".to_string(),
+                    "slim".to_string(),
+                    "test-123".to_string(),
+                    "--transcript-path".to_string(),
+                    expected_transcript_path.to_string_lossy().into_owned(),
+                ],
+            )]
+        } else {
+            Vec::new()
+        };
+        assert_eq!(
+            (
+                read_count.get(),
+                calls
+                    .lock()
+                    .expect("transcript slim calls should lock")
+                    .clone(),
+            ),
+            (usize::from(expected_input_read), expected_calls),
+        );
     }
 
     #[test]
@@ -4262,6 +4508,7 @@ mod tests {
             tmux: false,
             notifications: false,
             auto_compact: false,
+            transcript_slim: false,
             title_generation: false,
             capture_pr_context: None,
             tq_archive: false,
@@ -4273,6 +4520,7 @@ mod tests {
             tq_archive_calls: None,
             notification_calls: None,
             auto_compact_calls: None,
+            transcript_slim_calls: None,
             title_generation_calls: None,
             redelivery_calls: None,
         };
@@ -4861,6 +5109,7 @@ mod tests {
             tmux: false,
             notifications: false,
             auto_compact: false,
+            transcript_slim: false,
             title_generation: false,
             capture_pr_context: None,
             tq_archive: false,
@@ -4872,6 +5121,7 @@ mod tests {
             tq_archive_calls: None,
             notification_calls: None,
             auto_compact_calls: None,
+            transcript_slim_calls: None,
             title_generation_calls: None,
             redelivery_calls: None,
         };
@@ -5593,6 +5843,7 @@ mod tests {
             tmux: false,
             notifications: true,
             auto_compact: true,
+            transcript_slim: false,
             title_generation: false,
             capture_pr_context: None,
             tq_archive: false,
@@ -5604,6 +5855,7 @@ mod tests {
             tq_archive_calls: None,
             notification_calls: Some(notification_calls.clone()),
             auto_compact_calls: Some(auto_compact_calls.clone()),
+            transcript_slim_calls: None,
             title_generation_calls: None,
             redelivery_calls: None,
         };

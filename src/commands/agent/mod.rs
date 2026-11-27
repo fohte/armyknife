@@ -16,6 +16,7 @@ mod close;
 mod codex;
 pub(crate) mod codex_steer;
 mod codex_subagent_stop;
+mod compact_transcript_slim;
 mod crit;
 mod decision;
 mod display;

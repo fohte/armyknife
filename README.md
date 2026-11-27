@@ -600,6 +600,8 @@ Slim the Claude Code transcript for a session ID in the selected project directo
 a agent transcript slim <session_id> --cwd /path/to/project
 ```
 
+After a Claude Code `SessionStart(compact)` hook, armyknife starts this command in a detached worker when the transcript exceeds 20 MiB. The hook returns without waiting, and per-session locking prevents concurrent slim operations.
+
 #### AI commit attribution
 
 `a agent attribution pre-tool-use <claude-code|codex>` reads a JSON envelope from stdin and returns its `hook_output` unchanged. It emits no output when `hook_output` is `null` or unavailable. The command remains as a compatibility entrypoint for existing provider proxy registrations and does not inspect or modify commands or permission decisions.
