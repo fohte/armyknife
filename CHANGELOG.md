@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.978](https://github.com/fohte/armyknife/compare/v0.1.977...v0.1.978) (2026-11-27)
+
+
+### Features
+
+* **agent:** add the `a agent current` command ([#2387](https://github.com/fohte/armyknife/issues/2387)) ([3b76d4f](https://github.com/fohte/armyknife/commit/3b76d4f5a8e46d4c6ece7947860fe1535c194a05))
+
 ## [0.1.977](https://github.com/fohte/armyknife/compare/v0.1.976...v0.1.977) (2026-11-27)
 
 
