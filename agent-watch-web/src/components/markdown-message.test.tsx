@@ -63,6 +63,12 @@ it('renders markdown images with the shared conversation image treatment', () =>
   )
 })
 
+it('shows unavailable for a local image without an image mapping', () => {
+  expect(renderMessage('![](/Users/guest/screenshot.png)')).toBe(
+    '<div class="markdown-message"><p><span class="markdown-image-unavailable">表示できません: /Users/guest/screenshot.png</span></p></div>',
+  )
+})
+
 it('uses the server source for a copied assistant image', () => {
   expect(
     renderMessage('![](/tmp/fixture.png)', undefined, {

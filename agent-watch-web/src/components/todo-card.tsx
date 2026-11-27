@@ -21,6 +21,7 @@ type TodoCardProps = {
   sessionId?: string
   title: string
   detail: string | null
+  imageSources?: Readonly<Record<string, string | null>>
   folded?: boolean
   addedFolded?: boolean
   resolution: 'completed' | 'rejected' | 'withdrawn' | null
@@ -38,6 +39,7 @@ export function TodoCard({
   sessionId,
   title,
   detail,
+  imageSources,
   folded = false,
   addedFolded = false,
   resolution,
@@ -57,8 +59,14 @@ export function TodoCard({
   const { draft: comment, updateDraft, clearDraftIfUnchanged } = commentDraft
   const detailContent = useMemo(
     () =>
-      detail === null ? null : <MarkdownMessage>{detail}</MarkdownMessage>,
-    [detail],
+      detail === null ? null : (
+        <MarkdownMessage
+          {...(imageSources === undefined ? {} : { imageSources })}
+        >
+          {detail}
+        </MarkdownMessage>
+      ),
+    [detail, imageSources],
   )
   const [detailExpanded, setDetailExpanded] = useState(false)
   const [resolutionLocally, setResolutionLocally] = useState<
@@ -145,7 +153,10 @@ export function TodoCard({
         <h2>To-do · {status}</h2>
         <h3>{title}</h3>
         {completionComment !== '' ? (
-          <MarkdownMessage className="chat-todo-completed-comment">
+          <MarkdownMessage
+            className="chat-todo-completed-comment"
+            {...(imageSources === undefined ? {} : { imageSources })}
+          >
             {completionComment}
           </MarkdownMessage>
         ) : null}

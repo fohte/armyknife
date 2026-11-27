@@ -243,7 +243,9 @@ export function useConversationMessageElements({
               : undefined,
           onSelectDecision,
           message,
-          ...(message.type === 'assistant' &&
+          ...((message.type === 'assistant' ||
+            message.type === 'todo' ||
+            message.type === 'proposal') &&
           messageImageSources?.[String(start + index)] !== undefined
             ? {
                 imageSources: messageImageSources[String(start + index)],

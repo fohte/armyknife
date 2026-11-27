@@ -10,8 +10,8 @@ use crate::commands::agent::file_attachment_support::{
     MAX_AGENT_FILE_BYTES, inspect_bounded_image, read_bounded_image,
 };
 
-const MAX_IMAGES_PER_ANSWER: usize = 16;
-const MAX_ANSWER_IMAGE_BYTES: u64 = 50 * 1024 * 1024;
+const MAX_IMAGES_PER_MESSAGE: usize = 16;
+const MAX_MESSAGE_IMAGE_BYTES: u64 = 50 * 1024 * 1024;
 
 pub(super) fn attach(session_id: &str, conversation: &mut super::ConversationResponse) {
     attach_with_storage_root_result(session_id, conversation, storage_root());
@@ -26,7 +26,7 @@ fn attach_with_storage_root_result(
         Ok(storage_root) => attach_with_storage_root(session_id, conversation, &storage_root),
         Err(error) => {
             conversation.message_image_sources.clear();
-            tracing::warn!(%error, "failed to locate assistant answer image storage");
+            tracing::warn!(%error, "failed to locate conversation image storage");
             attach_unavailable_images(conversation);
         }
     }
@@ -39,17 +39,22 @@ fn attach_with_storage_root(
 ) {
     conversation.message_image_sources.clear();
     for (message_index, message) in conversation.messages.iter().enumerate() {
-        let super::ChatItem::Assistant { text } = message else {
-            continue;
-        };
-        let paths = markdown_image_paths(text);
+        let mut seen_paths = HashSet::new();
+        let mut paths = Vec::new();
+        for text in markdown_image_texts(message) {
+            for path in markdown_image_paths(text) {
+                if seen_paths.insert(path.clone()) {
+                    paths.push((text, path));
+                }
+            }
+        }
         if paths.is_empty() {
             continue;
         }
         let mut sources = BTreeMap::new();
         let mut total_size = 0_u64;
-        for (path_index, path) in paths.iter().enumerate() {
-            if path_index >= MAX_IMAGES_PER_ANSWER || has_markdown_destination_escape(path) {
+        for (path_index, (text, path)) in paths.iter().enumerate() {
+            if path_index >= MAX_IMAGES_PER_MESSAGE || has_markdown_destination_escape(path) {
                 sources.insert(path.clone(), None);
                 continue;
             }
@@ -59,17 +64,17 @@ fn attach_with_storage_root(
                 session_id,
                 &key,
                 Path::new(path),
-                MAX_ANSWER_IMAGE_BYTES - total_size,
+                MAX_MESSAGE_IMAGE_BYTES - total_size,
             ) {
                 Ok(copied) => copied,
                 Err(error) => {
-                    tracing::warn!(%error, path, "failed to snapshot assistant answer image");
+                    tracing::warn!(%error, path, "failed to snapshot conversation message image");
                     None
                 }
             };
             let source = copied.and_then(|(size, _mime_type)| {
                 let next_total = total_size.checked_add(size as u64)?;
-                if next_total > MAX_ANSWER_IMAGE_BYTES {
+                if next_total > MAX_MESSAGE_IMAGE_BYTES {
                     return None;
                 }
                 total_size = next_total;
@@ -85,11 +90,11 @@ fn attach_with_storage_root(
 
 fn attach_unavailable_images(conversation: &mut super::ConversationResponse) {
     for (message_index, message) in conversation.messages.iter().enumerate() {
-        let super::ChatItem::Assistant { text } = message else {
-            continue;
-        };
-        let sources: BTreeMap<String, Option<String>> = markdown_image_paths(text)
+        let mut seen_paths = HashSet::new();
+        let sources: BTreeMap<String, Option<String>> = markdown_image_texts(message)
             .into_iter()
+            .flat_map(markdown_image_paths)
+            .filter(|path| seen_paths.insert(path.clone()))
             .map(|path| (path, None))
             .collect();
         if sources.is_empty() {
@@ -101,11 +106,42 @@ fn attach_unavailable_images(conversation: &mut super::ConversationResponse) {
     }
 }
 
-fn image_key(session_id: &str, answer: &str, path: &str) -> String {
+fn markdown_image_texts(message: &super::ChatItem) -> Vec<&str> {
+    match message {
+        super::ChatItem::Assistant { text } => vec![text],
+        super::ChatItem::Todo {
+            detail, comment, ..
+        } => detail
+            .iter()
+            .chain(comment.iter())
+            .map(String::as_str)
+            .collect(),
+        super::ChatItem::Proposal {
+            summary,
+            options,
+            answer,
+            comment,
+            ..
+        } => summary
+            .iter()
+            .chain(
+                options
+                    .iter()
+                    .filter_map(|option| option.description.as_ref()),
+            )
+            .chain(answer.iter().filter_map(|answer| answer.comment.as_ref()))
+            .chain(comment.iter())
+            .map(String::as_str)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn image_key(session_id: &str, text: &str, path: &str) -> String {
     let mut digest = Sha256::new();
     digest.update(session_id.as_bytes());
     digest.update([0]);
-    digest.update(answer.as_bytes());
+    digest.update(text.as_bytes());
     digest.update([0]);
     digest.update(path.as_bytes());
     crate::shared::hex::encode(&digest.finalize())
@@ -138,7 +174,7 @@ fn snapshot_image(
         Ok(Some(image)) => image,
         Ok(None) => return Ok(None),
         Err(error) => {
-            tracing::warn!(%error, "failed to read assistant answer image source");
+            tracing::warn!(%error, "failed to read message image source");
             return Ok(None);
         }
     };
@@ -151,7 +187,7 @@ fn snapshot_image(
             Ok(inspect_bounded_image(&stored_path, MAX_AGENT_FILE_BYTES)?
                 .map(|saved| (saved.size as usize, saved.mime_type)))
         }
-        Err(error) => Err(error).with_context(|| "saving answer image snapshot"),
+        Err(error) => Err(error).with_context(|| "saving message image snapshot"),
     }
 }
 
@@ -395,8 +431,10 @@ mod tests {
 
     use tempfile::TempDir;
 
+    use crate::commands::agent::proposal::{ProposalAnswer, ProposalOption};
+
     use super::{
-        MAX_AGENT_FILE_BYTES, MAX_IMAGES_PER_ANSWER, attach_with_storage_root,
+        MAX_AGENT_FILE_BYTES, MAX_IMAGES_PER_MESSAGE, attach_with_storage_root,
         attach_with_storage_root_result, image_key, markdown_image_paths,
     };
     use crate::commands::agent::file::{self, remove_session_storage};
@@ -531,6 +569,148 @@ mod tests {
     }
 
     #[test]
+    fn snapshots_images_from_todo_and_proposal_card_text() {
+        let sources = tempfile::tempdir().unwrap();
+        let storage = tempfile::tempdir().unwrap();
+        let texts = [
+            "todo detail",
+            "todo comment",
+            "proposal summary",
+            "proposal option",
+            "proposal answer",
+            "proposal comment",
+        ];
+        let paths = texts
+            .iter()
+            .enumerate()
+            .map(|(index, _)| image_file(&sources, &format!("image-{index}.png"), 8))
+            .collect::<Vec<_>>();
+        let markdown =
+            |text: &str, path: &std::path::Path| format!("{text} ![](<{}>)", path.display());
+        let todo_detail = markdown(texts[0], &paths[0]);
+        let todo_comment = markdown(texts[1], &paths[1]);
+        let proposal_summary = markdown(texts[2], &paths[2]);
+        let proposal_option = markdown(texts[3], &paths[3]);
+        let proposal_answer = markdown(texts[4], &paths[4]);
+        let proposal_comment = markdown(texts[5], &paths[5]);
+        let mut conversation = ConversationResponse {
+            messages: vec![
+                ChatItem::Todo {
+                    seq: 1,
+                    title: "A task".to_owned(),
+                    detail: Some(todo_detail.clone()),
+                    folded: false,
+                    added_folded: false,
+                    completed: false,
+                    resolution: None,
+                    comment: Some(todo_comment.clone()),
+                },
+                ChatItem::Proposal {
+                    seq: 2,
+                    title: "A choice".to_owned(),
+                    summary: Some(proposal_summary.clone()),
+                    options: vec![ProposalOption {
+                        label: "Option".to_owned(),
+                        description: Some(proposal_option.clone()),
+                        pros: Vec::new(),
+                        cons: Vec::new(),
+                        recommended: false,
+                    }],
+                    answer: Some(ProposalAnswer {
+                        choice: Some(0),
+                        comment: Some(proposal_answer.clone()),
+                    }),
+                    resolved: false,
+                    resolution: None,
+                    comment: Some(proposal_comment.clone()),
+                },
+            ],
+            start: 7,
+            ..ConversationResponse::default()
+        };
+
+        attach_with_storage_root("fixture-session", &mut conversation, storage.path());
+
+        let expected_sources = [
+            (7, &todo_detail, &paths[0]),
+            (7, &todo_comment, &paths[1]),
+            (8, &proposal_summary, &paths[2]),
+            (8, &proposal_option, &paths[3]),
+            (8, &proposal_answer, &paths[4]),
+            (8, &proposal_comment, &paths[5]),
+        ]
+        .into_iter()
+        .fold(
+            BTreeMap::new(),
+            |mut sources, (message_index, text, path)| {
+                sources
+                    .entry(message_index)
+                    .or_insert_with(BTreeMap::new)
+                    .insert(
+                        path.display().to_string(),
+                        Some(format!(
+                            "/api/sessions/fixture-session/answer-images/{}",
+                            image_key("fixture-session", text, &path.display().to_string())
+                        )),
+                    );
+                sources
+            },
+        );
+
+        assert_eq!(conversation.message_image_sources, expected_sources);
+    }
+
+    #[test]
+    fn marks_todo_and_proposal_images_unavailable_when_storage_is_unavailable() {
+        let sources = tempfile::tempdir().unwrap();
+        let storage = tempfile::tempdir().unwrap();
+        let invalid_storage_root = storage.path().join("not-a-directory");
+        fs::write(&invalid_storage_root, b"fixture").unwrap();
+        let todo_path = image_file(&sources, "todo.png", 8);
+        let proposal_path = image_file(&sources, "proposal.png", 8);
+        let todo_detail = format!("![](<{}>)", todo_path.display());
+        let proposal_summary = format!("![](<{}>)", proposal_path.display());
+        let mut conversation = ConversationResponse {
+            messages: vec![
+                ChatItem::Todo {
+                    seq: 1,
+                    title: "A task".to_owned(),
+                    detail: Some(todo_detail),
+                    folded: false,
+                    added_folded: false,
+                    completed: false,
+                    resolution: None,
+                    comment: None,
+                },
+                ChatItem::Proposal {
+                    seq: 2,
+                    title: "A choice".to_owned(),
+                    summary: Some(proposal_summary),
+                    options: Vec::new(),
+                    answer: None,
+                    resolved: false,
+                    resolution: None,
+                    comment: None,
+                },
+            ],
+            ..ConversationResponse::default()
+        };
+
+        attach_with_storage_root("fixture-session", &mut conversation, &invalid_storage_root);
+
+        assert_eq!(
+            conversation.message_image_sources,
+            BTreeMap::from([
+                (0, BTreeMap::from([(todo_path.display().to_string(), None)]),),
+                (
+                    1,
+                    BTreeMap::from([(proposal_path.display().to_string(), None)]),
+                ),
+            ]),
+        );
+    }
+
+    #[test]
     fn does_not_snapshot_markdown_escaped_destinations() {
         let sources = tempfile::tempdir().unwrap();
         let storage = tempfile::tempdir().unwrap();
@@ -660,7 +840,7 @@ mod tests {
     fn enforces_per_answer_image_count() {
         let sources = tempfile::tempdir().unwrap();
         let storage = tempfile::tempdir().unwrap();
-        let count_paths = (0..=MAX_IMAGES_PER_ANSWER)
+        let count_paths = (0..=MAX_IMAGES_PER_MESSAGE)
             .map(|index| image_file(&sources, &format!("count-{index}.png"), 8))
             .collect::<Vec<_>>();
         let count_answer = count_paths
@@ -675,7 +855,7 @@ mod tests {
             .enumerate()
             .map(|(index, path)| {
                 let path = path.display().to_string();
-                let source = (index < MAX_IMAGES_PER_ANSWER).then(|| {
+                let source = (index < MAX_IMAGES_PER_MESSAGE).then(|| {
                     let key = image_key("count-session", &count_answer, &path);
                     format!("/api/sessions/count-session/answer-images/{key}")
                 });
@@ -690,7 +870,7 @@ mod tests {
                 actual_count_sources,
                 count_session_storage.read_dir().unwrap().count(),
             ),
-            (&expected_count_sources, MAX_IMAGES_PER_ANSWER),
+            (&expected_count_sources, MAX_IMAGES_PER_MESSAGE),
         );
     }
 

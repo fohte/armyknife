@@ -377,9 +377,7 @@ const MarkdownImage: NonNullable<Components['img']> = ({ src, alt, title }) => {
   const mappedImage = getMappedImageSource(src, imageSources)
   if (
     mappedImage?.source === null ||
-    (mappedImage === undefined &&
-      imageSources !== undefined &&
-      isUnmappedLocalImagePath(src))
+    (mappedImage === undefined && isUnmappedLocalImagePath(src))
   ) {
     return (
       <span className="markdown-image-unavailable">
