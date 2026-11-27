@@ -50,11 +50,14 @@ use permission_denied_locks::PermissionDeniedLocks;
 use proposal_answer_locks::ProposalAnswerLocks;
 use runtime::LiveActionRuntime;
 use support::{
-    Success, load_session, require_tmux, resolve_current_session_id, resolve_sessions_dir,
-    run_blocking, send_claude_escape,
+    Success, load_session, load_session_start_generation, require_tmux, resolve_current_session_id,
+    resolve_sessions_dir, run_blocking, send_claude_escape,
 };
 
-pub(super) fn router(message_loaders: RouteLoaders) -> Router {
+pub(super) fn router(
+    message_loaders: RouteLoaders,
+    resume_updates: super::EnrichmentUpdates,
+) -> Router {
     router_with_state(ActionState {
         sessions_dir: None,
         attachment_dir: None,
@@ -66,7 +69,7 @@ pub(super) fn router(message_loaders: RouteLoaders) -> Router {
         bang_command_locks: KeyedMutexRegistry::default(),
         interrupt_locks: InterruptLocks::default(),
         resume_locks: KeyedMutexRegistry::default(),
-        resume_pending: resume::PendingSessionResumes::default(),
+        resume_pending: resume::PendingSessionResumes::new(resume_updates),
         message_loaders,
         close_checks_inspector: Arc::new(|session, stop_and_close| {
             Box::pin(
@@ -222,6 +225,8 @@ struct ActionCapabilities {
     answer_question: bool,
     resume: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    startup: Option<resume::ResumeStartupStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     resume_disabled_reason: Option<ResumeDisabledReason>,
     #[serde(skip_serializing_if = "Option::is_none")]
     permission: Option<PermissionCapabilities>,
@@ -249,9 +254,10 @@ async fn actions(
 ) -> Result<Json<ActionCapabilities>, ApiError> {
     let current_id = resolve_current_session_id(&state, &id).await?;
     let session = load_session(state.clone(), current_id.clone()).await?;
-    state
+    let session_start_generation = load_session_start_generation(&state, &current_id).await?;
+    let startup = state
         .resume_pending
-        .clear_if_not_resumable(&current_id, session.status)
+        .startup_status(&current_id, session.status, session_start_generation)
         .await;
     let has_tmux = session.tmux_info.is_some();
     let can_resume_by_status =
@@ -282,6 +288,7 @@ async fn actions(
             && session.engine == Engine::Claude
             && session.has_pending_permission_requests(),
         resume: can_resume_by_status && resume_disabled_reason.is_none(),
+        startup,
         resume_disabled_reason,
         permission: (has_live_session
             && matches!(session.engine, Engine::Claude | Engine::Codex)
@@ -862,6 +869,7 @@ mod tests {
     struct ActionContext {
         temp_dir: TempDir,
         runtime: Arc<FakeRuntime>,
+        resume_updates: super::super::EnrichmentUpdates,
     }
 
     impl ActionContext {
@@ -899,7 +907,9 @@ mod tests {
                 bang_command_locks: KeyedMutexRegistry::default(),
                 interrupt_locks: InterruptLocks::default(),
                 resume_locks: KeyedMutexRegistry::default(),
-                resume_pending: super::resume::PendingSessionResumes::default(),
+                resume_pending: super::resume::PendingSessionResumes::new(
+                    self.resume_updates.clone(),
+                ),
                 message_loaders: empty_message_loaders(),
             })
         }
@@ -918,7 +928,9 @@ mod tests {
                 bang_command_locks: KeyedMutexRegistry::default(),
                 interrupt_locks: InterruptLocks::default(),
                 resume_locks: KeyedMutexRegistry::default(),
-                resume_pending: super::resume::PendingSessionResumes::default(),
+                resume_pending: super::resume::PendingSessionResumes::new(
+                    self.resume_updates.clone(),
+                ),
                 message_loaders: empty_message_loaders(),
             });
             (router, permission_denied_locks)
@@ -941,7 +953,9 @@ mod tests {
                 bang_command_locks: KeyedMutexRegistry::default(),
                 interrupt_locks: InterruptLocks::default(),
                 resume_locks: KeyedMutexRegistry::default(),
-                resume_pending: super::resume::PendingSessionResumes::default(),
+                resume_pending: super::resume::PendingSessionResumes::new(
+                    self.resume_updates.clone(),
+                ),
                 message_loaders,
             });
             (router, proposal_answer_locks)
@@ -949,6 +963,13 @@ mod tests {
 
         fn save_session(&self, session: &Session) {
             store::save_session_to(&self.temp_dir.path().join("sessions"), session).unwrap();
+        }
+
+        fn record_session_start(&self, session: &Session) {
+            let sessions_dir = self.temp_dir.path().join("sessions");
+            let lock = store::lock_session_for_update(&sessions_dir, &session.session_id).unwrap();
+            lock.record_watch_web_session_start().unwrap();
+            lock.save(session).unwrap();
         }
 
         fn save_pending_permission_request(
@@ -1088,7 +1109,11 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let runtime = Arc::new(FakeRuntime::default());
         *runtime.sessions_dir.lock().unwrap() = Some(temp_dir.path().join("sessions"));
-        ActionContext { temp_dir, runtime }
+        ActionContext {
+            temp_dir,
+            runtime,
+            resume_updates: super::super::EnrichmentUpdates::new(),
+        }
     }
 
     fn empty_message_loaders() -> super::super::messages::RouteLoaders {

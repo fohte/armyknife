@@ -26,8 +26,8 @@ pub(super) fn resolve(input: &HookInput) -> Option<PaneInfo> {
         input.engine,
         &input.session_id,
         std::process::id(),
-        tmux::get_pane_info_by_pid,
-        |pid| ProcessSnapshot::capture().map(|snapshot| has_parent_agent_process(pid, &snapshot)),
+        tmux::get_pane_info_and_pid_by_pid,
+        has_parent_agent_process,
         find_by_session_option,
     )
 }
@@ -36,12 +36,12 @@ fn resolve_with(
     engine: Engine,
     session_id: &str,
     pid: u32,
-    get_pane_info: impl FnOnce(u32) -> Option<PaneInfo>,
-    has_parent_agent: impl FnOnce(u32) -> Option<bool>,
+    get_pane_info: impl FnOnce(u32) -> Option<(PaneInfo, u32)>,
+    has_parent_agent: impl FnOnce(u32, u32) -> Option<bool>,
     find_by_session: impl FnOnce(&str) -> Option<PaneInfo>,
 ) -> Option<PaneInfo> {
-    if let Some(pane) = get_pane_info(pid) {
-        return match has_parent_agent(pid) {
+    if let Some((pane, pane_pid)) = get_pane_info(pid) {
+        return match has_parent_agent(pid, pane_pid) {
             Some(false) => Some(pane),
             Some(true) | None => None,
         };
@@ -156,17 +156,20 @@ mod tests {
         #[case] has_parent_agent: bool,
         #[case] expected: Option<PaneInfo>,
     ) {
-        assert_eq!(
-            resolve_with(
-                Engine::Claude,
-                "session-example",
-                123,
-                |_| Some(pane_info()),
-                |_| Some(has_parent_agent),
-                |_| None,
-            ),
-            expected,
+        let mut ancestry_arguments = None;
+        let result = resolve_with(
+            Engine::Claude,
+            "session-example",
+            123,
+            |_| Some((pane_info(), 100)),
+            |hook_pid, pane_pid| {
+                ancestry_arguments = Some((hook_pid, pane_pid));
+                Some(has_parent_agent)
+            },
+            |_| None,
         );
+
+        assert_eq!((result, ancestry_arguments), (expected, Some((123, 100))),);
     }
 
     #[rstest]
@@ -178,8 +181,8 @@ mod tests {
                 Engine::Claude,
                 "session-example",
                 123,
-                |_| Some(pane_info()),
-                |_| has_parent_agent,
+                |_| Some((pane_info(), 100)),
+                |_, _| has_parent_agent,
                 |_| None,
             ),
             None,
@@ -195,7 +198,7 @@ mod tests {
                 "session-example",
                 123,
                 |_| None,
-                |_| Some(false),
+                |_, _| Some(false),
                 |session_id| (session_id == "session-example").then(|| expected.clone()),
             ),
             Some(expected),

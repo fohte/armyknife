@@ -3,11 +3,12 @@ use axum::http::Request;
 use axum::http::StatusCode;
 use rstest::{fixture, rstest};
 use serde_json::json;
+use tokio::time::{Duration, advance};
 use tower::ServiceExt;
 
 use super::{ActionContext, action_context, post_empty, response_snapshot, session};
 use crate::commands::agent::store;
-use crate::commands::agent::types::SessionStatus;
+use crate::commands::agent::types::{Engine, SessionStatus};
 
 #[fixture]
 fn rewind_action_context(
@@ -254,6 +255,425 @@ async fn resume_endpoint_rejects_a_second_request_until_the_session_starts(
                 "calls": calls,
             }),
         ),
+    );
+}
+
+#[rstest]
+#[tokio::test(start_paused = true)]
+async fn actions_report_stuck_resume_after_twenty_seconds_and_clear_it_when_started(
+    action_context: ActionContext,
+) {
+    let mut session = session("fixture-session");
+    session.status = SessionStatus::Ended;
+    action_context.save_session(&session);
+    let app = action_context.router();
+    let mut updates = action_context.resume_updates.subscribe();
+
+    let resume = app
+        .clone()
+        .oneshot(post_empty("/sessions/fixture-session/resume"))
+        .await
+        .unwrap();
+    updates.changed().await.unwrap();
+
+    let pending = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/sessions/fixture-session/actions")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    advance(Duration::from_secs(20)).await;
+    updates.changed().await.unwrap();
+
+    let stuck = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/sessions/fixture-session/actions")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    session.status = SessionStatus::Running;
+    action_context.save_session(&session);
+    let started = app
+        .oneshot(
+            Request::builder()
+                .uri("/sessions/fixture-session/actions")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        (
+            response_snapshot(resume, &action_context).await,
+            response_snapshot(pending, &action_context).await,
+            response_snapshot(stuck, &action_context).await,
+            response_snapshot(started, &action_context).await,
+        ),
+        (
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": { "ok": true },
+                "calls": [{
+                    "kind": "resume",
+                    "sessionId": "fixture-session",
+                    "status": SessionStatus::Ended,
+                }],
+            }),
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": {
+                    "message": false,
+                    "answerQuestion": false,
+                    "resume": true,
+                    "startup": "pending",
+                    "interrupt": false,
+                    "openInTerminal": true,
+                    "rewind": false,
+                },
+                "calls": [{
+                    "kind": "resume",
+                    "sessionId": "fixture-session",
+                    "status": SessionStatus::Ended,
+                }],
+            }),
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": {
+                    "message": false,
+                    "answerQuestion": false,
+                    "resume": true,
+                    "startup": "stuck",
+                    "interrupt": false,
+                    "openInTerminal": true,
+                    "rewind": false,
+                },
+                "calls": [{
+                    "kind": "resume",
+                    "sessionId": "fixture-session",
+                    "status": SessionStatus::Ended,
+                }],
+            }),
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": {
+                    "message": true,
+                    "answerQuestion": false,
+                    "resume": false,
+                    "interrupt": true,
+                    "openInTerminal": true,
+                    "rewind": false,
+                },
+                "calls": [{
+                    "kind": "resume",
+                    "sessionId": "fixture-session",
+                    "status": SessionStatus::Ended,
+                }],
+            }),
+        ),
+    );
+}
+
+#[rstest]
+#[tokio::test(start_paused = true)]
+async fn codex_resume_keeps_startup_status_while_marked_stopped(action_context: ActionContext) {
+    let mut session = session("fixture-session");
+    session.engine = Engine::Codex;
+    session.status = SessionStatus::Ended;
+    action_context.save_session(&session);
+    let app = action_context.router();
+    let mut updates = action_context.resume_updates.subscribe();
+
+    let resume = app
+        .clone()
+        .oneshot(post_empty("/sessions/fixture-session/resume"))
+        .await
+        .unwrap();
+    updates.changed().await.unwrap();
+
+    session.status = SessionStatus::Stopped;
+    session.updated_at += chrono::Duration::seconds(1);
+    action_context.save_session(&session);
+
+    let pending = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/sessions/fixture-session/actions")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let duplicate_resume = app
+        .clone()
+        .oneshot(post_empty("/sessions/fixture-session/resume"))
+        .await
+        .unwrap();
+
+    advance(Duration::from_secs(20)).await;
+    updates.changed().await.unwrap();
+
+    let retry_after_stuck = app
+        .clone()
+        .oneshot(post_empty("/sessions/fixture-session/resume"))
+        .await
+        .unwrap();
+    let stuck = app
+        .oneshot(
+            Request::builder()
+                .uri("/sessions/fixture-session/actions")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        (
+            response_snapshot(resume, &action_context).await,
+            response_snapshot(pending, &action_context).await,
+            response_snapshot(duplicate_resume, &action_context).await,
+            response_snapshot(retry_after_stuck, &action_context).await,
+            response_snapshot(stuck, &action_context).await,
+        ),
+        (
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": { "ok": true },
+                "calls": [{
+                    "kind": "resume",
+                    "sessionId": "fixture-session",
+                    "status": SessionStatus::Ended,
+                }],
+            }),
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": {
+                    "message": true,
+                    "answerQuestion": false,
+                    "resume": false,
+                    "startup": "pending",
+                    "interrupt": false,
+                    "openInTerminal": true,
+                    "rewind": true,
+                },
+                "calls": [{
+                    "kind": "resume",
+                    "sessionId": "fixture-session",
+                    "status": SessionStatus::Ended,
+                }],
+            }),
+            json!({
+                "status": StatusCode::CONFLICT.as_u16(),
+                "body": { "error": "session resume is already in progress" },
+                "calls": [{
+                    "kind": "resume",
+                    "sessionId": "fixture-session",
+                    "status": SessionStatus::Ended,
+                }],
+            }),
+            json!({
+                "status": StatusCode::CONFLICT.as_u16(),
+                "body": { "error": "session is not ended or paused" },
+                "calls": [{
+                    "kind": "resume",
+                    "sessionId": "fixture-session",
+                    "status": SessionStatus::Ended,
+                }],
+            }),
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": {
+                    "message": true,
+                    "answerQuestion": false,
+                    "resume": false,
+                    "startup": "stuck",
+                    "interrupt": false,
+                    "openInTerminal": true,
+                    "rewind": true,
+                },
+                "calls": [{
+                    "kind": "resume",
+                    "sessionId": "fixture-session",
+                    "status": SessionStatus::Ended,
+                }],
+            }),
+        ),
+    );
+}
+
+#[rstest]
+#[case::started_before_deadline(SessionStatus::Ended, true, None)]
+#[case::unrelated_update_while_paused(SessionStatus::Paused, false, Some("stuck"))]
+#[tokio::test(start_paused = true)]
+async fn startup_status_uses_the_session_start_marker(
+    #[case] initial_status: SessionStatus,
+    #[case] started_before_deadline: bool,
+    #[case] expected_startup: Option<&str>,
+    action_context: ActionContext,
+) {
+    let mut session = session("fixture-session");
+    session.status = initial_status;
+    action_context.save_session(&session);
+    let app = action_context.router();
+    let mut updates = action_context.resume_updates.subscribe();
+
+    app.clone()
+        .oneshot(post_empty("/sessions/fixture-session/resume"))
+        .await
+        .unwrap();
+    updates.changed().await.unwrap();
+
+    advance(Duration::from_secs(10)).await;
+    if started_before_deadline {
+        session.status = SessionStatus::Running;
+        session.updated_at += chrono::Duration::seconds(1);
+        action_context.record_session_start(&session);
+    } else {
+        session.updated_at += chrono::Duration::seconds(1);
+        action_context.save_session(&session);
+    }
+
+    advance(Duration::from_secs(10)).await;
+    updates.changed().await.unwrap();
+
+    if started_before_deadline {
+        session.status = SessionStatus::Paused;
+        session.updated_at += chrono::Duration::seconds(1);
+        action_context.save_session(&session);
+    }
+
+    let actions = app
+        .oneshot(
+            Request::builder()
+                .uri("/sessions/fixture-session/actions")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let expected_body = match expected_startup {
+        Some(startup) => json!({
+            "message": true,
+            "answerQuestion": false,
+            "resume": true,
+            "startup": startup,
+            "interrupt": false,
+            "openInTerminal": true,
+            "rewind": true,
+        }),
+        None => json!({
+            "message": true,
+            "answerQuestion": false,
+            "resume": true,
+            "interrupt": false,
+            "openInTerminal": true,
+            "rewind": true,
+        }),
+    };
+
+    assert_eq!(
+        response_snapshot(actions, &action_context).await,
+        json!({
+            "status": StatusCode::OK.as_u16(),
+            "body": expected_body,
+            "calls": [{
+                "kind": "resume",
+                "sessionId": "fixture-session",
+                "status": initial_status,
+            }],
+        }),
+    );
+}
+
+#[rstest]
+#[tokio::test(start_paused = true)]
+async fn stale_resume_timeout_does_not_mark_a_new_attempt_stuck(action_context: ActionContext) {
+    let mut session = session("fixture-session");
+    session.status = SessionStatus::Ended;
+    action_context.save_session(&session);
+    let app = action_context.router();
+    let mut updates = action_context.resume_updates.subscribe();
+
+    app.clone()
+        .oneshot(post_empty("/sessions/fixture-session/resume"))
+        .await
+        .unwrap();
+    updates.changed().await.unwrap();
+    advance(Duration::from_secs(10)).await;
+
+    session.status = SessionStatus::Running;
+    action_context.save_session(&session);
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .uri("/sessions/fixture-session/actions")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    session.status = SessionStatus::Ended;
+    action_context.save_session(&session);
+    app.clone()
+        .oneshot(post_empty("/sessions/fixture-session/resume"))
+        .await
+        .unwrap();
+    updates.changed().await.unwrap();
+
+    advance(Duration::from_secs(10)).await;
+    tokio::task::yield_now().await;
+
+    let actions = app
+        .oneshot(
+            Request::builder()
+                .uri("/sessions/fixture-session/actions")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response_snapshot(actions, &action_context).await,
+        json!({
+            "status": StatusCode::OK.as_u16(),
+            "body": {
+                "message": false,
+                "answerQuestion": false,
+                "resume": true,
+                "startup": "pending",
+                "interrupt": false,
+                "openInTerminal": true,
+                "rewind": false,
+            },
+            "calls": [
+                {
+                    "kind": "resume",
+                    "sessionId": "fixture-session",
+                    "status": SessionStatus::Ended,
+                },
+                {
+                    "kind": "resume",
+                    "sessionId": "fixture-session",
+                    "status": SessionStatus::Ended,
+                },
+            ],
+        }),
     );
 }
 

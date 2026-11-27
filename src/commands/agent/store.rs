@@ -789,6 +789,13 @@ pub(crate) fn watch_web_session_states_from(
     database::watch_web_session_states(sessions_dir)
 }
 
+pub(crate) fn watch_web_session_start_generation_from(
+    sessions_dir: &Path,
+    session_id: &str,
+) -> Result<i64> {
+    database::watch_web_session_start_generation(sessions_dir, session_id)
+}
+
 pub(crate) fn set_watch_web_later(
     session_id: &str,
     later_until: Option<DateTime<Utc>>,

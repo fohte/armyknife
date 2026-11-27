@@ -95,6 +95,40 @@ pub(crate) fn set_watch_web_compacting(
     Ok(true)
 }
 
+pub(in crate::commands::agent::store) fn watch_web_session_start_generation(
+    sessions_dir: &Path,
+    session_id: &str,
+) -> Result<i64> {
+    super::validate_session_id(session_id)?;
+    if !sessions_dir.exists() {
+        return Ok(0);
+    }
+
+    let connection = open_connection(sessions_dir)?;
+    connection
+        .query_row(
+            "SELECT generation FROM watch_web_session_start WHERE session_id = ?1",
+            [session_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map(|generation| generation.unwrap_or_default())
+        .map_err(Into::into)
+}
+
+pub(super) fn record_watch_web_session_start_in_transaction(
+    connection: &Connection,
+    session_id: &str,
+) -> Result<()> {
+    connection.execute(
+        "INSERT INTO watch_web_session_start (session_id, generation)
+         VALUES (?1, 1)
+         ON CONFLICT(session_id) DO UPDATE SET generation = generation + 1",
+        [session_id],
+    )?;
+    Ok(())
+}
+
 pub(super) fn set_watch_web_compacting_in_transaction(
     connection: &Connection,
     session_id: &str,

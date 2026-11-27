@@ -140,6 +140,11 @@ pub(super) struct EnrichmentUpdates {
     sender: watch::Sender<()>,
 }
 
+struct SessionStoreWatch {
+    events: tokio::sync::broadcast::Receiver<()>,
+    available: bool,
+}
+
 impl EnrichmentUpdates {
     fn new() -> Self {
         let (sender, _) = watch::channel(());
@@ -196,14 +201,18 @@ pub async fn run(args: &WatchWebArgs) -> Result<()> {
                     .start(relay_shutdown_receiver.clone())
             })
             .await;
+            let output_shutdown_receiver = relay_shutdown_receiver.clone();
             let cleanup_task = stale_session_cleanup::start(relay_shutdown_receiver);
             let shutdown_signal_sender = relay_shutdown_sender.clone();
             let result = axum::serve(
                 listener,
                 app(
                     restart_receiver,
-                    session_store_events,
-                    session_store_watcher_available,
+                    SessionStoreWatch {
+                        events: session_store_events,
+                        available: session_store_watcher_available,
+                    },
+                    output_shutdown_receiver,
                 ),
             )
             .with_graceful_shutdown(async move {
@@ -280,8 +289,8 @@ async fn process_shutdown_signal() {
 
 fn app(
     restart_signal: watch::Receiver<bool>,
-    session_store_events: tokio::sync::broadcast::Receiver<()>,
-    session_store_watcher_available: bool,
+    session_store_watch: SessionStoreWatch,
+    output_shutdown_signal: watch::Receiver<bool>,
 ) -> Router {
     app_with_assets_and_queued_prompt_loaders_and_restart_signal(
         &assets::DIST,
@@ -312,8 +321,8 @@ fn app(
             crate::commands::agent::vibe::repo_identity_for_path,
         ),
         restart_signal,
-        session_store_events,
-        session_store_watcher_available,
+        session_store_watch,
+        output_shutdown_signal,
     )
 }
 
@@ -355,8 +364,11 @@ fn app_with_assets_and_loader_and_restart_signal(
             |_| Ok(Vec::new()),
         ),
         restart_signal,
-        tokio::sync::broadcast::channel(1).1,
-        true,
+        SessionStoreWatch {
+            events: tokio::sync::broadcast::channel(1).1,
+            available: true,
+        },
+        watch::channel(false).1,
     )
 }
 
@@ -366,12 +378,16 @@ fn app_with_assets_and_queued_prompt_loaders_and_restart_signal(
     load_user_marker: impl Fn(&str) -> anyhow::Result<Option<String>> + Send + Sync + 'static,
     loaders: messages::RouteLoaders,
     restart_signal: watch::Receiver<bool>,
-    session_store_events: tokio::sync::broadcast::Receiver<()>,
-    session_store_watcher_available: bool,
+    session_store_watch: SessionStoreWatch,
+    output_shutdown_signal: watch::Receiver<bool>,
 ) -> Router {
+    let SessionStoreWatch {
+        events: session_store_events,
+        available: session_store_watcher_available,
+    } = session_store_watch;
     let enrichment_updates = EnrichmentUpdates::new();
     let api = Router::new()
-        .merge(actions::router(loaders.clone()))
+        .merge(actions::router(loaders.clone(), enrichment_updates.clone()))
         .merge(session_state::router())
         .merge(sessions::router(
             enrichment_updates.clone(),
@@ -390,7 +406,7 @@ fn app_with_assets_and_queued_prompt_loaders_and_restart_signal(
         .merge(messages::routes_with_proposals_and_peer_out_messages(
             load_session,
             load_user_marker,
-            loaders,
+            loaders.with_shutdown_signal(output_shutdown_signal),
         ))
         .merge(review_document::router())
         .merge(file_attachments::routes())
@@ -433,14 +449,16 @@ mod tests {
     use tokio::sync::watch;
     use tower::ServiceExt;
 
+    use super::messages::{BackgroundTask, BackgroundTaskKind, RouteLoaders};
     use super::{
-        LISTEN_PORT, app, app_with_assets, app_with_assets_and_loader, bind_listener,
+        LISTEN_PORT, SessionStoreWatch, app, app_with_assets, app_with_assets_and_loader,
+        app_with_assets_and_queued_prompt_loaders_and_restart_signal, bind_listener,
         compression_layer, ensure_port_allowed, open_browser_on_startup, restart_args_with_port,
         start_web_ui_relay_manager_if_allowed, watch_web_url,
     };
     use crate::cli::{Cli, Commands};
     use crate::commands::agent::AgentCommands;
-    use crate::commands::agent::types::Session;
+    use crate::commands::agent::types::{Engine, Session};
 
     static TEST_DIST: Dir<'static> =
         include_dir!("$CARGO_MANIFEST_DIR/src/commands/agent/watch_web/test_assets");
@@ -702,8 +720,11 @@ mod tests {
     ) {
         let response = app(
             watch::channel(false).1,
-            tokio::sync::broadcast::channel(1).1,
-            true,
+            SessionStoreWatch {
+                events: tokio::sync::broadcast::channel(1).1,
+                available: true,
+            },
+            watch::channel(false).1,
         )
         .oneshot(request(method, uri, host, origin))
         .await
@@ -757,6 +778,93 @@ mod tests {
                 expected_content_type.map(str::to_owned),
                 expected_body.to_owned(),
             )
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn background_task_output_stream_closes_on_graceful_shutdown_signal(
+        fixture_session: Session,
+    ) {
+        let mut fixture_session = fixture_session;
+        fixture_session.engine = Engine::Codex;
+        fixture_session.transcript_path = None;
+        let directory = tempfile::tempdir().unwrap();
+        let output_path = directory.path().join("output.log");
+        std::fs::write(&output_path, "initial output").unwrap();
+        let (_restart_sender, restart_signal) = watch::channel(false);
+        let (shutdown_sender, shutdown_signal) = watch::channel(false);
+        let loaders = RouteLoaders::new_with_background_task_output_event_stream(
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+            |_| Ok(Vec::new()),
+            |_| Ok(Box::pin(stream::pending())),
+        )
+        .with_background_task_loader({
+            let output_path = output_path.clone();
+            move |session_id| {
+                Ok((session_id == "fixture-session")
+                    .then(|| BackgroundTask {
+                        id: "fixture-background-task-id".to_owned(),
+                        description: "Background command".to_owned(),
+                        elapsed_seconds: 1,
+                        kind: BackgroundTaskKind::BackgroundTask,
+                        output_path: Some(output_path.clone()),
+                        agent_type: None,
+                    })
+                    .into_iter()
+                    .collect())
+            }
+        });
+        let router = app_with_assets_and_queued_prompt_loaders_and_restart_signal(
+            &TEST_DIST,
+            move |session_id| Ok((session_id == "fixture-session").then(|| fixture_session.clone())),
+            |_| Ok(None),
+            loaders,
+            restart_signal,
+            SessionStoreWatch {
+                events: tokio::sync::broadcast::channel(1).1,
+                available: false,
+            },
+            shutdown_signal,
+        );
+        let response = router
+            .oneshot(request(
+                "GET",
+                "/api/sessions/fixture-session/background-tasks/fixture-background-task-id/output/events",
+                "localhost",
+                None,
+            ))
+            .await
+            .unwrap();
+        let mut body = response.into_body().into_data_stream();
+        let initial_event = body.next().await.unwrap().unwrap().to_vec();
+
+        shutdown_sender.send_replace(true);
+        let after_shutdown = tokio::time::timeout(std::time::Duration::from_secs(1), body.next())
+            .await
+            .map(|chunk| {
+                chunk.map(|chunk| {
+                    chunk
+                        .map(|bytes| bytes.to_vec())
+                        .map_err(|error| error.to_string())
+                })
+            })
+            .map_err(|_| "shutdown timed out");
+
+        assert_eq!(
+            (initial_event, after_shutdown),
+            (
+                indoc! {"
+                    data: {\"output\":\"initial output\"}
+
+                "}
+                .as_bytes()
+                .to_vec(),
+                Ok(None),
+            ),
         );
     }
 
@@ -912,8 +1020,11 @@ mod tests {
     async fn matching_origin_reaches_the_action_route() {
         let response = app(
             watch::channel(false).1,
-            tokio::sync::broadcast::channel(1).1,
-            true,
+            SessionStoreWatch {
+                events: tokio::sync::broadcast::channel(1).1,
+                available: true,
+            },
+            watch::channel(false).1,
         )
         .oneshot(
             Request::builder()
