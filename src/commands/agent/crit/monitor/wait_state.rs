@@ -34,7 +34,18 @@ pub(super) fn crit_client_waiting_on_port(
 
 fn crit_client_lsof_command(port: u16) -> std::process::Command {
     let mut command = ExternalTool::Lsof.command();
-    command.args(["-nP", &format!("-iTCP:{port}"), "-sTCP:ESTABLISHED", "-Fpc"]);
+    // `-a -c crit` limits the kernel's fd scan to crit processes. Without it lsof walks
+    // every process's fds, which burns CPU on each poll. `has_crit_client` only accepts
+    // `crit` commands, so the result is unchanged.
+    command.args([
+        "-nP",
+        "-a",
+        "-c",
+        "crit",
+        &format!("-iTCP:{port}"),
+        "-sTCP:ESTABLISHED",
+        "-Fpc",
+    ]);
     command
 }
 
@@ -229,6 +240,9 @@ mod tests {
             (
                 vec![
                     "-nP".to_owned(),
+                    "-a".to_owned(),
+                    "-c".to_owned(),
+                    "crit".to_owned(),
                     "-iTCP:43127".to_owned(),
                     "-sTCP:ESTABLISHED".to_owned(),
                     "-Fpc".to_owned(),
