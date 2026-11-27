@@ -4815,6 +4815,41 @@ it('shows the compacting status and summary instead of stale tool details', () =
   })
 })
 
+it('shows an active tool while a working session is marked as compacting', () => {
+  renderView(
+    vi.fn().mockResolvedValue(true),
+    {
+      ...session,
+      category: 'in_progress',
+      activityStatus: 'working',
+      isCompacting: true,
+      elapsedSeconds: 92,
+    },
+    undefined,
+    [
+      {
+        type: 'tool_in_progress',
+        tool: 'exec',
+        target: 'cargo check --package fixture',
+      },
+    ],
+  )
+
+  const getSnapshot = () => ({
+    workingStatus: container.querySelector('.conversation-status-band-label')
+      ?.textContent,
+    detail:
+      container.querySelector('.conversation-status-band-inline-detail')
+        ?.textContent ?? null,
+    inProgressItems: container.querySelectorAll('.tool-in-progress').length,
+  })
+  expect(getSnapshot()).toEqual({
+    workingStatus: 'Working · 1m 32s',
+    detail: 'Bash  cargo check --package fixture',
+    inProgressItems: 0,
+  })
+})
+
 it('shows an active tool and hides it from the completed conversation', () => {
   renderView(
     vi.fn().mockResolvedValue(true),

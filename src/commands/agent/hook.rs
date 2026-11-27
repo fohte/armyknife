@@ -1032,6 +1032,26 @@ fn process_hook_event_impl_with_env_and_unreported_stop(
             )?;
         }
     }
+    if session.engine == Engine::Claude && input.agent_id.is_none() {
+        let compacting = match event {
+            HookEvent::PreCompact => Some(true),
+            HookEvent::PreToolUse
+            | HookEvent::PostToolUse
+            | HookEvent::PermissionRequest
+            | HookEvent::Stop
+            | HookEvent::StopFailure => Some(false),
+            HookEvent::SessionStart
+                if matches!(input.source.as_deref(), Some("compact" | "resume")) =>
+            {
+                Some(false)
+            }
+            _ => None,
+        };
+        if let Some(compacting) = compacting {
+            session_lock.queue_watch_web_compacting(compacting);
+        }
+    }
+
     if vibe_setting_requested {
         session_lock.save_vibe_setting(&session)?;
     } else {
@@ -1080,26 +1100,6 @@ fn process_hook_event_impl_with_env_and_unreported_stop(
             tool_input,
             store::PermissionDeniedResolution::Approved,
         )?;
-    }
-
-    if session.engine == Engine::Claude && input.agent_id.is_none() {
-        let compacting = match event {
-            HookEvent::PreCompact => Some(true),
-            HookEvent::PreToolUse
-            | HookEvent::PostToolUse
-            | HookEvent::PermissionRequest
-            | HookEvent::Stop
-            | HookEvent::StopFailure => Some(false),
-            HookEvent::SessionStart
-                if matches!(input.source.as_deref(), Some("compact" | "resume")) =>
-            {
-                Some(false)
-            }
-            _ => None,
-        };
-        if let Some(compacting) = compacting {
-            store::set_watch_web_compacting(sessions_dir, &session.session_id, compacting)?;
-        }
     }
 
     if let Some(startup_metadata) = startup_metadata
@@ -2681,6 +2681,19 @@ mod tests {
         tempfile::TempDir::new().expect("temp dir")
     }
 
+    #[fixture]
+    fn compacting_hook_sessions_dir() -> tempfile::TempDir {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir creation should succeed");
+        process_hook_event_without_instruction(
+            HookEvent::PreCompact,
+            create_test_input(None),
+            temp_dir.path(),
+            &SideEffects::none(),
+        )
+        .expect("pre-compact hook should succeed");
+        temp_dir
+    }
+
     #[rstest]
     #[case::pre_tool_use_after_stop(HookEvent::PreToolUse, SessionStatus::Stopped)]
     #[case::pre_tool_use_while_running(HookEvent::PreToolUse, SessionStatus::Running)]
@@ -3259,16 +3272,9 @@ mod tests {
         #[case] event: HookEvent,
         #[case] source: Option<&str>,
         #[case] expected: bool,
+        compacting_hook_sessions_dir: tempfile::TempDir,
     ) {
-        let temp_dir = tempfile::TempDir::new().expect("temp dir creation should succeed");
-        let sessions_dir = temp_dir.path();
-        process_hook_event_without_instruction(
-            HookEvent::PreCompact,
-            create_test_input(None),
-            sessions_dir,
-            &SideEffects::none(),
-        )
-        .expect("pre-compact hook should succeed");
+        let sessions_dir = compacting_hook_sessions_dir.path();
 
         process_hook_event_without_instruction(
             event,
@@ -3287,18 +3293,11 @@ mod tests {
         );
     }
 
-    #[test]
-    fn subagent_tool_event_does_not_clear_main_thread_compaction_state() {
-        let temp_dir = tempfile::TempDir::new().expect("temp dir creation should succeed");
-        let sessions_dir = temp_dir.path();
-        process_hook_event_without_instruction(
-            HookEvent::PreCompact,
-            create_test_input(None),
-            sessions_dir,
-            &SideEffects::none(),
-        )
-        .expect("pre-compact hook should succeed");
-
+    #[rstest]
+    fn subagent_tool_event_does_not_clear_main_thread_compaction_state(
+        compacting_hook_sessions_dir: tempfile::TempDir,
+    ) {
+        let sessions_dir = compacting_hook_sessions_dir.path();
         let mut input = create_test_input(None);
         input.agent_id = Some("fixture-agent".to_string());
         process_hook_event_without_instruction(
