@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.981](https://github.com/fohte/armyknife/compare/v0.1.980...v0.1.981) (2026-11-27)
+
+
+### Features
+
+* **agent-watch-web:** add pane snapshot API ([#2385](https://github.com/fohte/armyknife/issues/2385)) ([6ba36d2](https://github.com/fohte/armyknife/commit/6ba36d2a91c03caa3363dca6f5e65a7ab240b099))
+
 ## [0.1.980](https://github.com/fohte/armyknife/compare/v0.1.979...v0.1.980) (2026-11-27)
 
 
