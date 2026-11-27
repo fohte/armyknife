@@ -445,6 +445,7 @@ export function ConversationPaneView({
           isMobile={isMobile}
           isResuming={isResumePending}
           canResume={actions.resume !== false}
+          resumeDisabledReason={actions.resumeDisabledReason}
           onResume={resume}
         />
       ) : (

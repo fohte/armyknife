@@ -219,10 +219,19 @@ struct ActionCapabilities {
     answer_question: bool,
     resume: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    resume_disabled_reason: Option<ResumeDisabledReason>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     permission: Option<PermissionCapabilities>,
     interrupt: bool,
     open_in_terminal: bool,
     rewind: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+enum ResumeDisabledReason {
+    NoTmux,
+    WorkingDirectoryMissing,
 }
 
 #[derive(Serialize)]
@@ -242,13 +251,27 @@ async fn actions(
         .clear_if_not_resumable(&current_id, session.status)
         .await;
     let has_tmux = session.tmux_info.is_some();
+    let can_resume_by_status =
+        matches!(session.status, SessionStatus::Ended | SessionStatus::Paused);
+    let resume_disabled_reason = if can_resume_by_status {
+        if !has_tmux {
+            Some(ResumeDisabledReason::NoTmux)
+        } else if !session.cwd.is_dir() {
+            Some(ResumeDisabledReason::WorkingDirectoryMissing)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
     let has_live_session = session.status != SessionStatus::Ended;
     Ok(Json(ActionCapabilities {
         message: has_live_session,
         answer_question: has_live_session
             && session.engine == Engine::Claude
             && session.has_pending_permission_requests(),
-        resume: matches!(session.status, SessionStatus::Ended | SessionStatus::Paused) && has_tmux,
+        resume: can_resume_by_status && resume_disabled_reason.is_none(),
+        resume_disabled_reason,
         permission: (has_live_session
             && matches!(session.engine, Engine::Claude | Engine::Codex)
             && session.has_pending_permission_requests())
@@ -1042,7 +1065,7 @@ mod tests {
             crit_not_waiting_urls: Default::default(),
             web_uis: Vec::new(),
             pending_human_review_ids: BTreeSet::new(),
-            cwd: PathBuf::from("/tmp/example"),
+            cwd: PathBuf::from("."),
             transcript_path: None,
             tty: None,
             tmux_info: Some(TmuxInfo {
@@ -2143,22 +2166,80 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(
-            response_snapshot(response, &action_context).await,
-            json!({
-                "status": StatusCode::OK.as_u16(),
-                "body": {
-                    "message": status != SessionStatus::Ended,
-                    "answerQuestion": false,
-                    "resume": matches!(status, SessionStatus::Ended | SessionStatus::Paused)
-                        && has_pane,
-                    "interrupt": status == SessionStatus::Running,
-                    "openInTerminal": has_pane,
-                    "rewind": rewind_available,
-                },
-                "calls": [],
-            }),
-        );
+        let mut expected = json!({
+            "status": StatusCode::OK.as_u16(),
+            "body": {
+                "message": status != SessionStatus::Ended,
+                "answerQuestion": false,
+                "resume": matches!(status, SessionStatus::Ended | SessionStatus::Paused)
+                    && has_pane,
+                "interrupt": status == SessionStatus::Running,
+                "openInTerminal": has_pane,
+                "rewind": rewind_available,
+            },
+            "calls": [],
+        });
+        if status == SessionStatus::Paused && !has_pane {
+            expected["body"]["resumeDisabledReason"] = json!("noTmux");
+        }
+        assert_eq!(response_snapshot(response, &action_context).await, expected);
+    }
+
+    #[rstest]
+    #[case::working_directory_is_available(true, true, true, None)]
+    #[case::working_directory_is_missing(true, false, false, Some("workingDirectoryMissing"))]
+    #[case::tmux_is_missing(false, true, false, Some("noTmux"))]
+    #[case::tmux_and_working_directory_are_missing(false, false, false, Some("noTmux"))]
+    #[tokio::test]
+    async fn resume_capability_requires_tmux_and_an_existing_working_directory(
+        #[case] has_tmux: bool,
+        #[case] has_working_directory: bool,
+        #[case] expected_resume: bool,
+        #[case] expected_disabled_reason: Option<&str>,
+        action_context: ActionContext,
+    ) {
+        let mut session = session("sample-session");
+        session.status = SessionStatus::Ended;
+        session.cwd = if has_working_directory {
+            action_context.temp_dir.path().to_path_buf()
+        } else {
+            action_context
+                .temp_dir
+                .path()
+                .join("missing-working-directory")
+        };
+        if !has_tmux {
+            session.tmux_info = None;
+        }
+        action_context.save_session(&session);
+
+        let response = action_context
+            .router()
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/sample-session/actions")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let mut expected = json!({
+            "status": StatusCode::OK.as_u16(),
+            "body": {
+                "message": false,
+                "answerQuestion": false,
+                "resume": expected_resume,
+                "interrupt": false,
+                "openInTerminal": has_tmux,
+                "rewind": false,
+            },
+            "calls": [],
+        });
+        if let Some(reason) = expected_disabled_reason {
+            expected["body"]["resumeDisabledReason"] = json!(reason);
+        }
+        assert_eq!(response_snapshot(response, &action_context).await, expected);
     }
 
     #[rstest]

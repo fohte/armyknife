@@ -33,6 +33,21 @@ export const EndedSessionCanBeResumed: Story = {
   decorators: [desktopDecorator],
 }
 
+export const EndedSessionHasNoTmuxLocation: Story = {
+  name: 'An ended session explains that it has no tmux location',
+  args: { canResume: false, resumeDisabledReason: 'noTmux' },
+  decorators: [desktopDecorator],
+}
+
+export const EndedSessionHasNoWorkingDirectory: Story = {
+  name: 'An ended session explains that its working directory is missing',
+  args: {
+    canResume: false,
+    resumeDisabledReason: 'workingDirectoryMissing',
+  },
+  decorators: [desktopDecorator],
+}
+
 export const EndedSessionIsResuming: Story = {
   name: 'An ended session shows that it is resuming',
   args: { isResuming: true },
