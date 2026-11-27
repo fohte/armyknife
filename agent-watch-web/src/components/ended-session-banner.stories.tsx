@@ -48,6 +48,22 @@ export const EndedSessionHasNoWorkingDirectory: Story = {
   decorators: [desktopDecorator],
 }
 
+export const EndedPhoneSessionHasNoTmuxLocation: Story = {
+  name: 'The phone layout explains that the session has no tmux location',
+  args: { isMobile: true, canResume: false, resumeDisabledReason: 'noTmux' },
+  decorators: [phoneDecorator],
+}
+
+export const EndedPhoneSessionHasNoWorkingDirectory: Story = {
+  name: 'The phone layout explains that the working directory is missing',
+  args: {
+    isMobile: true,
+    canResume: false,
+    resumeDisabledReason: 'workingDirectoryMissing',
+  },
+  decorators: [phoneDecorator],
+}
+
 export const EndedSessionIsResuming: Story = {
   name: 'An ended session shows that it is resuming',
   args: { isResuming: true },

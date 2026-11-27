@@ -253,10 +253,18 @@ async fn actions(
     let has_tmux = session.tmux_info.is_some();
     let can_resume_by_status =
         matches!(session.status, SessionStatus::Ended | SessionStatus::Paused);
+    let has_working_directory = if can_resume_by_status && has_tmux {
+        let cwd = session.cwd.clone();
+        tokio::task::spawn_blocking(move || cwd.is_dir())
+            .await
+            .map_err(ApiError::internal)?
+    } else {
+        false
+    };
     let resume_disabled_reason = if can_resume_by_status {
         if !has_tmux {
             Some(ResumeDisabledReason::NoTmux)
-        } else if !session.cwd.is_dir() {
+        } else if !has_working_directory {
             Some(ResumeDisabledReason::WorkingDirectoryMissing)
         } else {
             None

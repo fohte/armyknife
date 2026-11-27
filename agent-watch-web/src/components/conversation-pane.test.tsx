@@ -624,11 +624,13 @@ it('disables Resume when the session has no tmux location', () => {
     label: resumeButton.textContent,
     disabled: resumeButton.disabled,
     title: resumeButton.title,
+    hint: container.querySelector('.conversation-ended-hint')?.textContent,
   })
   expect(actual()).toEqual({
     label: 'Resume',
     disabled: true,
     title: 'This session has no tmux location',
+    hint: ' · Resume is unavailable because this session has no tmux location',
   })
 })
 
@@ -652,11 +654,13 @@ it('explains why Resume is disabled when the working directory is missing', () =
     label: resumeButton.textContent,
     disabled: resumeButton.disabled,
     title: resumeButton.title,
+    hint: container.querySelector('.conversation-ended-hint')?.textContent,
   })
   expect(actual()).toEqual({
     label: 'Resume',
     disabled: true,
     title: 'This session’s working directory does not exist',
+    hint: ' · Resume is unavailable because this session’s working directory does not exist',
   })
 })
 

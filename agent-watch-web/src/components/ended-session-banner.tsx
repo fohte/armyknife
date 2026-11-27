@@ -24,6 +24,11 @@ export function EndedSessionBanner({
   onResume,
 }: EndedSessionBannerProps) {
   const endedTime = formatEndedTime(endedAt)
+  const resumeHint = canResume
+    ? 'Resume it to keep talking'
+    : resumeDisabledReason === 'workingDirectoryMissing'
+      ? 'Resume is unavailable because this session’s working directory does not exist'
+      : 'Resume is unavailable because this session has no tmux location'
 
   return (
     <div className="conversation-ended" role="status">
@@ -36,9 +41,10 @@ export function EndedSessionBanner({
             <time dateTime={endedAt}>{endedTime}</time>
           </span>
         )}
-        {isMobile ? null : (
+        {canResume && isMobile ? null : (
           <span className="conversation-ended-hint">
-            {' · Resume it to keep talking'}
+            {' · '}
+            {resumeHint}
           </span>
         )}
       </span>

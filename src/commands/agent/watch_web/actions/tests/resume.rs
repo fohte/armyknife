@@ -84,6 +84,40 @@ async fn resume_endpoint_rejects_sessions_that_are_not_ended_or_paused(
 
 #[rstest]
 #[tokio::test]
+async fn resume_endpoint_rejects_a_session_with_a_missing_working_directory(
+    action_context: ActionContext,
+) {
+    let mut session = session("fixture-session");
+    session.status = SessionStatus::Ended;
+    session.cwd = action_context
+        .temp_dir
+        .path()
+        .join("missing-working-directory");
+    let working_directory = session.cwd.display().to_string();
+    action_context.save_session(&session);
+
+    let response = action_context
+        .router()
+        .oneshot(post_empty("/sessions/fixture-session/resume"))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response_snapshot(response, &action_context).await,
+        json!({
+            "status": StatusCode::BAD_GATEWAY.as_u16(),
+            "body": {
+                "error": format!(
+                    "session working directory does not exist: {working_directory}"
+                ),
+            },
+            "calls": [],
+        }),
+    );
+}
+
+#[rstest]
+#[tokio::test]
 async fn resume_endpoint_rejects_a_replaced_id_when_its_successor_is_active(
     #[with(SessionStatus::Running)] rewind_action_context: ActionContext,
 ) {
