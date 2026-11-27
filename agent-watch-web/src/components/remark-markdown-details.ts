@@ -17,6 +17,7 @@ const detailsStartPattern =
 const detailsClosePattern = /^<\/details\s*>$/i
 const summaryOpenPattern = /^<summary\s*>$/i
 const summaryClosePattern = /^<\/summary\s*>$/i
+const maxDetailsNesting = 32
 const htmlLexemePattern =
   /<!--[\s\S]*?(?:-->|$)|<(script|style|pre|textarea)\b[\s\S]*?(?:<\/\1\s*>|$)|<\/?(?:details|summary)\b(?:[^>"']|"[^"]*"|'[^']*')*>/gi
 
@@ -28,7 +29,6 @@ type Token = {
   value: string
   offset: number
   group: HtmlGroup
-  pair?: Token
   summaryOpen?: Token
   summaryClose?: Token
   matched?: boolean
@@ -66,7 +66,8 @@ function tokenizeHtml(node: MarkdownNode): HtmlGroup | null {
     firstTag === undefined ||
     (!detailsStartPattern.test(value) &&
       !detailsClosePattern.test(firstTag) &&
-      !summaryOpenPattern.test(firstTag))
+      !summaryOpenPattern.test(firstTag) &&
+      !summaryClosePattern.test(firstTag))
   ) {
     return null
   }
@@ -115,11 +116,12 @@ function toUnits(
   nodes: MarkdownNode[],
   parse: MarkdownParser,
   references: readonly ReferenceDefinitionSource[],
+  depth: number,
 ): Unit[] {
   const units: Unit[] = []
   for (const node of nodes) {
     if (node.children !== undefined) {
-      node.children = transformNodes(node.children, parse, references)
+      node.children = transformNodes(node.children, parse, references, depth)
     }
     const group = tokenizeHtml(node)
     if (group === null) units.push({ node })
@@ -162,16 +164,12 @@ function pairDetails(units: Unit[]) {
         frame.summaryClose.index !== undefined &&
         frame.open.index !== undefined
       ) {
-        frame.open.pair = token
         frame.open.pairIndex = index
         frame.open.summaryOpen = frame.summaryOpen
         frame.open.summaryClose = frame.summaryClose
         frame.open.summaryOpenIndex = frame.summaryOpen.index
         frame.open.summaryCloseIndex = frame.summaryClose.index
-        token.pair = frame.open
-        token.pairIndex = frame.open.index
         token.matched = true
-        frame.open.matched = true
       }
     }
   }
@@ -191,11 +189,12 @@ function markdownNodes(
   offset: number,
   parse: MarkdownParser,
   references: readonly ReferenceDefinitionSource[],
+  depth: number,
 ) {
   if (source.trim() === '') return []
   const parsed = parseMarkdownSection(source, parse, references, offset)
   shiftMarkdownNodeOffsets(parsed.tree.children, offset)
-  return transformNodes(parsed.tree.children, parse, references)
+  return transformNodes(parsed.tree.children, parse, references, depth)
 }
 
 function parseSummary(
@@ -205,6 +204,7 @@ function parseSummary(
   source: string,
   parse: MarkdownParser,
   references: readonly ReferenceDefinitionSource[],
+  depth: number,
 ) {
   const children: MarkdownNode[] = []
   const appendParagraphs = (nodes: MarkdownNode[]) => {
@@ -225,6 +225,7 @@ function parseSummary(
             unit.token.offset,
           parse,
           references,
+          depth,
         ),
       )
     } else if (!('token' in unit) && unit.node.type === 'paragraph') {
@@ -247,9 +248,18 @@ function renderUnits(
   parse: MarkdownParser,
   references: readonly ReferenceDefinitionSource[],
   markdownContext: boolean,
+  depth: number,
 ): MarkdownNode[] {
   pairDetails(units)
-  return renderRange(units, 0, units.length, parse, references, markdownContext)
+  return renderRange(
+    units,
+    0,
+    units.length,
+    parse,
+    references,
+    markdownContext,
+    depth,
+  )
 }
 
 function renderRange(
@@ -259,6 +269,7 @@ function renderRange(
   parse: MarkdownParser,
   references: readonly ReferenceDefinitionSource[],
   markdownContext: boolean,
+  depth: number,
 ): MarkdownNode[] {
   const result: MarkdownNode[] = []
   for (let index = start; index < end; index += 1) {
@@ -266,15 +277,24 @@ function renderRange(
     if (unit === undefined) continue
     if ('token' in unit) {
       const token = unit.token
-      if (token.kind === 'details-open' && token.pair !== undefined) {
+      if (token.kind === 'details-open' && token.pairIndex !== undefined) {
         const closeIndex = token.pairIndex ?? -1
         const summaryStart = token.summaryOpen
         const summaryEnd = token.summaryClose
-        if (
-          closeIndex < 0 ||
-          summaryStart === undefined ||
-          summaryEnd === undefined
-        ) {
+        if (summaryStart === undefined || summaryEnd === undefined) {
+          continue
+        }
+        if (depth >= maxDetailsNesting) {
+          for (let rawIndex = index; rawIndex <= closeIndex; rawIndex += 1) {
+            const rawUnit = units[rawIndex]
+            if (rawUnit === undefined) continue
+            result.push(
+              'token' in rawUnit
+                ? { ...rawUnit.token.group.node, value: rawUnit.token.value }
+                : rawUnit.node,
+            )
+          }
+          index = closeIndex
           continue
         }
         const summaryStartIndex = token.summaryOpenIndex ?? -1
@@ -293,6 +313,7 @@ function renderRange(
           parse,
           references,
           true,
+          depth + 1,
         )
         result.push({
           type: 'details',
@@ -304,6 +325,7 @@ function renderRange(
               summaryText,
               parse,
               references,
+              depth,
             ),
             ...children,
           ],
@@ -324,6 +346,7 @@ function renderRange(
               base + token.offset,
               parse,
               references,
+              depth,
             ),
           )
         } else {
@@ -343,12 +366,14 @@ function transformNodes(
   nodes: MarkdownNode[],
   parse: MarkdownParser,
   references: readonly ReferenceDefinitionSource[],
+  depth: number,
 ): MarkdownNode[] {
   return renderUnits(
-    toUnits(nodes, parse, references),
+    toUnits(nodes, parse, references, depth),
     parse,
     references,
     false,
+    depth,
   )
 }
 
@@ -363,6 +388,6 @@ export function remarkMarkdownDetails(this: MarkdownProcessor) {
         ? file.value
         : new TextDecoder().decode(file.value)
     const references = getReferenceDefinitionSources(tree.children, source)
-    tree.children = transformNodes(tree.children, parse, references)
+    tree.children = transformNodes(tree.children, parse, references, 0)
   }
 }
