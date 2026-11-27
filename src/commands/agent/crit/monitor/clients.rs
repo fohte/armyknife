@@ -4,7 +4,6 @@
 //! client's: a live pid file means a review is being waited on.
 
 use std::fs;
-use std::io;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -37,7 +36,8 @@ fn record_if_monitored(marker: &Path, record: impl FnOnce() -> Result<()>) -> Re
 
 /// Removes pid files of exited processes while looking for a live one.
 pub(super) fn has_live_client(port: u16) -> Result<bool> {
-    has_live_client_in(&clients_dir(port)?, process::is_process_alive)
+    let (_, live) = scan_in(&clients_dir(port)?, process::is_process_alive)?;
+    Ok(!live.is_empty())
 }
 
 pub(super) fn remove_clients(port: u16) {
@@ -46,39 +46,66 @@ pub(super) fn remove_clients(port: u16) {
     }
 }
 
-/// Reports announced clients that came or went since the previous call.
+/// What the monitor blocks on between events: the daemon, the live announced clients, and the
+/// clients directory itself.
 ///
-/// `client-started` writes the session wait state itself, so the monitor's record of what it last
-/// wrote can be stale. A client that exits before the next poll leaves the computed state
-/// unchanged, which only this watch can reveal. Call it before `has_live_client`, which prunes.
+/// `client-started` writes the session wait state itself, so the monitor has to look again when
+/// a client is announced, not only when one exits.
 pub(super) struct ClientsWatch {
     dir: PathBuf,
-    seen: Vec<String>,
+    names: Vec<String>,
+    live: Vec<u32>,
 }
 
 impl ClientsWatch {
     pub(super) fn new(port: u16) -> Result<Self> {
         Ok(Self {
             dir: clients_dir(port)?,
-            seen: Vec::new(),
+            names: Vec::new(),
+            live: Vec::new(),
         })
     }
 
-    pub(super) fn changed(&mut self) -> bool {
-        let current = client_names(&self.dir);
-        std::mem::replace(&mut self.seen, current) != self.seen
+    /// Looks at the clients directory again and reports whether a live client remains.
+    ///
+    /// `exited` are pids whose exit event already arrived: `kill(pid, 0)` still reports such a
+    /// process alive until its parent reaps it, and no further event would correct that.
+    pub(super) fn scan(&mut self, exited: &[u32]) -> Result<bool> {
+        // A kqueue directory watch needs the directory to exist, and it is absent until the first
+        // client is announced and again after a stale one is discarded.
+        let scanned = fs::create_dir_all(&self.dir)
+            .with_context(|| {
+                format!(
+                    "failed to create crit clients directory {}",
+                    self.dir.display()
+                )
+            })
+            .and_then(|()| {
+                scan_in(&self.dir, |pid| {
+                    !exited.contains(&pid) && process::is_process_alive(pid)
+                })
+            });
+        match scanned {
+            Ok((names, live)) => {
+                self.names = names;
+                self.live = live;
+                Ok(!self.live.is_empty())
+            }
+            Err(error) => {
+                self.names.clear();
+                self.live.clear();
+                Err(error)
+            }
+        }
     }
-}
 
-fn client_names(dir: &Path) -> Vec<String> {
-    let mut names = fs::read_dir(dir)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|entry| entry.file_name().to_string_lossy().into_owned())
-        .collect::<Vec<_>>();
-    names.sort();
-    names
+    /// Blocks until the daemon or a live client exits or the directory's entries change.
+    pub(super) fn wait(&self, daemon_pid: u32) -> process::Wake {
+        let pids = std::iter::once(daemon_pid)
+            .chain(self.live.iter().copied())
+            .collect::<Vec<_>>();
+        process::wait_for_exit_or_dir_change(&pids, &self.dir, &self.names, None)
+    }
 }
 
 fn record_client_in(dir: &Path, pid: u32) -> Result<()> {
@@ -88,34 +115,27 @@ fn record_client_in(dir: &Path, pid: u32) -> Result<()> {
     fs::write(&path, "").with_context(|| format!("failed to record crit client {}", path.display()))
 }
 
-fn has_live_client_in(dir: &Path, is_process_alive: impl Fn(u32) -> bool) -> Result<bool> {
-    let entries = match fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
-        Err(error) => {
-            return Err(error).with_context(|| {
-                format!("failed to read crit clients directory {}", dir.display())
-            });
-        }
-    };
-
-    let mut live = false;
-    for entry in entries {
-        let entry = entry?;
-        let Some(pid) = entry
-            .file_name()
-            .to_str()
-            .and_then(|name| name.parse::<u32>().ok())
-        else {
-            continue;
+/// Prunes the pid files of exited processes and returns what is left: the sorted entry names
+/// (pid files and anything else) and the pids that are alive.
+///
+/// The names are derived from one listing instead of read again after pruning, so an entry added
+/// in between differs from them when they are compared with the directory later.
+fn scan_in(dir: &Path, is_process_alive: impl Fn(u32) -> bool) -> Result<(Vec<String>, Vec<u32>)> {
+    let mut names = process::dir_entry_names(dir)
+        .with_context(|| format!("failed to read crit clients directory {}", dir.display()))?;
+    let mut live = Vec::new();
+    names.retain(|name| {
+        let Ok(pid) = name.parse::<u32>() else {
+            return true;
         };
         if is_process_alive(pid) {
-            live = true;
-        } else {
-            let _ = fs::remove_file(entry.path());
+            live.push(pid);
+            return true;
         }
-    }
-    Ok(live)
+        let _ = fs::remove_file(dir.join(name));
+        false
+    });
+    Ok((names, live))
 }
 
 #[cfg(test)]
@@ -146,58 +166,86 @@ mod tests {
     }
 
     #[rstest]
-    #[case::live_client_survives_pruning(&["101", "202"], true, &["101"])]
-    #[case::only_exited_clients(&["202", "303"], false, &[])]
-    #[case::non_pid_files_are_left_alone(&["101", "notes"], true, &["101", "notes"])]
-    #[case::no_clients(&[], false, &[])]
-    fn prunes_exited_clients_and_reports_live_ones(
+    #[case::live_client_survives_pruning(&["101", "202"], &["101"], &[101])]
+    #[case::only_exited_clients(&["202", "303"], &[], &[])]
+    #[case::non_pid_files_are_left_alone(&["101", "notes"], &["101", "notes"], &[101])]
+    #[case::no_clients(&[], &[], &[])]
+    fn prunes_exited_clients_and_reports_what_is_left(
         dir: TempDir,
         #[case] files: &[&str],
-        #[case] expected_live: bool,
-        #[case] expected_files: &[&str],
+        #[case] expected_names: &[&str],
+        #[case] expected_live: &[u32],
     ) -> Result<()> {
         for file in files {
             fs::write(dir.path().join(file), "")?;
         }
 
-        let live = has_live_client_in(dir.path(), |pid| pid == 101)?;
+        let (names, live) = scan_in(dir.path(), |pid| pid == 101)?;
 
         assert_eq!(
-            (live, file_names(dir.path())),
+            (names, live, file_names(dir.path())),
             (
-                expected_live,
-                expected_files.iter().map(|name| name.to_string()).collect()
+                expected_names.iter().map(|name| name.to_string()).collect(),
+                expected_live.to_vec(),
+                expected_names.iter().map(|name| name.to_string()).collect(),
             ),
         );
         Ok(())
     }
 
     #[rstest]
-    fn watch_reports_clients_that_appeared_or_were_pruned(dir: TempDir) -> Result<()> {
-        let clients = dir.path().join("43210.clients");
+    fn scan_treats_a_pid_with_an_exit_event_as_gone_even_if_it_still_answers(
+        dir: TempDir,
+    ) -> Result<()> {
+        // The test runner's own pid stands for an exited process that is not yet reaped.
+        let unreaped = std::process::id();
         let mut watch = ClientsWatch {
-            dir: clients.clone(),
-            seen: Vec::new(),
+            dir: dir.path().join("43210.clients"),
+            names: Vec::new(),
+            live: Vec::new(),
         };
+        record_client_in(&watch.dir, unreaped)?;
 
-        let before_any_client = watch.changed();
-        record_client_in(&clients, 4242)?;
-        // The client may already have exited by the poll that first sees its file.
-        let client_appeared = watch.changed();
-        has_live_client_in(&clients, |_| false)?;
-        let client_pruned = watch.changed();
-        let nothing_new = watch.changed();
+        let before_event = watch.scan(&[])?;
+        let after_event = watch.scan(&[unreaped])?;
 
         assert_eq!(
             (
-                before_any_client,
-                client_appeared,
-                client_pruned,
-                nothing_new
+                before_event,
+                after_event,
+                watch.names,
+                watch.live,
+                file_names(&watch.dir)
             ),
-            (false, true, true, false),
+            (true, false, Vec::new(), Vec::new(), Vec::new()),
         );
         Ok(())
+    }
+
+    #[rstest]
+    fn scan_creates_the_directory_the_watch_needs(dir: TempDir) -> Result<()> {
+        let mut watch = ClientsWatch {
+            dir: dir.path().join("43210.clients"),
+            names: Vec::new(),
+            live: Vec::new(),
+        };
+
+        let live = watch.scan(&[])?;
+
+        assert_eq!((live, watch.dir.is_dir()), (false, true));
+        Ok(())
+    }
+
+    #[rstest]
+    fn wait_covers_the_daemon_and_every_live_client(dir: TempDir) {
+        // Pids that cannot be processes report as exited at once, in the order they were watched.
+        let watch = ClientsWatch {
+            dir: dir.path().to_path_buf(),
+            names: Vec::new(),
+            live: vec![u32::MAX],
+        };
+
+        assert_eq!(watch.wait(0), process::Wake::Exited(vec![0, u32::MAX]),);
     }
 
     #[rstest]
@@ -239,7 +287,10 @@ mod tests {
 
     #[rstest]
     fn missing_directory_has_no_live_client(dir: TempDir) -> Result<()> {
-        assert!(!has_live_client_in(&dir.path().join("absent"), |_| true)?);
+        assert_eq!(
+            scan_in(&dir.path().join("absent"), |_| true)?,
+            (Vec::new(), Vec::new()),
+        );
         Ok(())
     }
 

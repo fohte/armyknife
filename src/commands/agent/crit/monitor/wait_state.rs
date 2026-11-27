@@ -15,12 +15,13 @@ const CRIT_CLIENT_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 pub(super) fn crit_client_waiting(
     port: u16,
     daemon_pid: u32,
+    announced: Result<bool>,
     run_with_timeout: impl FnOnce(
         std::process::Command,
         Duration,
     ) -> std::io::Result<std::process::Output>,
 ) -> Result<bool> {
-    client_waiting_from(super::clients::has_live_client(port), || {
+    client_waiting_from(announced, || {
         crit_client_waiting_on_port(port, daemon_pid, run_with_timeout)
     })
 }
@@ -136,7 +137,14 @@ pub(super) fn reconcile_registered_session(
         port,
         status,
         super::status::crit_status,
-        |port, daemon_pid| crit_client_waiting(port, daemon_pid, process::run_with_timeout),
+        |port, daemon_pid| {
+            crit_client_waiting(
+                port,
+                daemon_pid,
+                super::clients::has_live_client(port),
+                process::run_with_timeout,
+            )
+        },
     )
 }
 
@@ -170,20 +178,6 @@ fn reconcile_registered_session_with(
     };
 
     set_crit_wait_state_for_session(sessions_dir, session_id, port, waiting)
-}
-
-pub(super) fn set_crit_wait_state_if_changed(
-    previous_waiting: &mut Option<Option<bool>>,
-    waiting: Option<bool>,
-    update: impl FnOnce(Option<bool>) -> Result<()>,
-) -> Result<()> {
-    if *previous_waiting == Some(waiting) {
-        return Ok(());
-    }
-
-    update(waiting)?;
-    *previous_waiting = Some(waiting);
-    Ok(())
 }
 
 fn set_crit_wait_state_in(sessions_dir: &Path, port: u16, waiting: Option<bool>) -> Result<()> {
@@ -369,50 +363,6 @@ mod tests {
             .map_err(|_| "lsof error");
 
         assert_eq!(actual, Err("lsof error"));
-    }
-
-    #[test]
-    fn crit_wait_state_updates_only_on_first_observation_or_change() -> Result<()> {
-        let mut previous_waiting = None;
-        let mut updates = Vec::new();
-        for waiting in [None, None, Some(false), Some(false), Some(true), Some(true)] {
-            set_crit_wait_state_if_changed(&mut previous_waiting, waiting, |waiting| {
-                updates.push(waiting);
-                Ok(())
-            })?;
-        }
-
-        assert_eq!(
-            (updates, previous_waiting),
-            (vec![None, Some(false), Some(true)], Some(Some(true))),
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn failed_crit_wait_state_update_retries_the_same_observation() {
-        let mut previous_waiting = None;
-        let mut calls = 0;
-        let first = set_crit_wait_state_if_changed(&mut previous_waiting, Some(false), |_| {
-            calls += 1;
-            bail!("temporary storage failure")
-        });
-        let failed_state = previous_waiting;
-        let second = set_crit_wait_state_if_changed(&mut previous_waiting, Some(false), |_| {
-            calls += 1;
-            Ok(())
-        });
-
-        assert_eq!(
-            (
-                first.is_err(),
-                failed_state,
-                second.is_ok(),
-                calls,
-                previous_waiting,
-            ),
-            (true, None, true, 2, Some(Some(false))),
-        );
     }
 
     #[test]
