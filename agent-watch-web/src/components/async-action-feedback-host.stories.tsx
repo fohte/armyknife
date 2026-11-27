@@ -74,7 +74,8 @@ function withDesktopLayout(
     (action) =>
       action.status === 'merging' ||
       action.status === 'closing' ||
-      action.status === 'rewinding',
+      action.status === 'rewinding' ||
+      action.status === 'launching',
   ).length
   const count = failed
     ? failedCount

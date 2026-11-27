@@ -160,6 +160,42 @@ export const MergeSucceededInActivity: Story = {
   },
 }
 
+const launchAction: AsyncAction = {
+  id: 6,
+  kind: 'launch',
+  sessionId: 'example-launch-session',
+  sessionTitle: 'Review the example rollout',
+  initialMessage: 'Review the rollout plan.\nCompare the fallback options.',
+  repo: 'example-org/example-service',
+  status: 'launching',
+  createdAt: 1_800_000_000_000,
+}
+
+export const SessionIsStarting: Story = {
+  name: 'The toast shows the first message and repository while starting.',
+  args: { form: 'toast', action: launchAction },
+}
+
+export const SessionStartedInActivity: Story = {
+  name: 'Activity keeps a started session with an Open action.',
+  args: {
+    form: 'row',
+    action: { ...launchAction, status: 'launched' },
+  },
+}
+
+export const SessionStartFailed: Story = {
+  name: 'The failed launch toast shows its reason, Retry, and Details.',
+  args: {
+    form: 'toast',
+    action: {
+      ...launchAction,
+      status: 'launchFailed',
+      error: 'The example session could not be started.',
+    },
+  },
+}
+
 export const PullRequestWasAlreadyMerged: Story = {
   name: 'The toast reports that the pull request was already merged.',
   args: { action: { ...meta.args.action, status: 'alreadyMerged' } },

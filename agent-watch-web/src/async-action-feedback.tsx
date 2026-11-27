@@ -66,6 +66,7 @@ type AsyncActionFeedbackValue = {
   closeActivity: () => void
   closeWithWorktree: (id: number) => void
   openInTerminal: (id: number) => void
+  openSession: (id: number) => void
 }
 
 const AsyncActionFeedbackContext =
@@ -106,6 +107,7 @@ export function AsyncActionFeedbackProvider({
   )
   const closeWithWorktreeHandlers = useRef(new Map<number, () => void>())
   const openInTerminalHandlers = useRef(new Map<number, () => void>())
+  const openSessionHandlers = useRef(new Map<number, () => void>())
   const timers = useRef(new Map<number, ReturnType<typeof setTimeout>>())
 
   const dismissToast = useCallback((id: number) => {
@@ -181,7 +183,8 @@ export function AsyncActionFeedbackProvider({
         outcome.status === 'closed' ||
         outcome.status === 'rewound' ||
         outcome.status === 'ranCommand' ||
-        outcome.status === 'reviewDocumentActionSucceeded'
+        outcome.status === 'reviewDocumentActionSucceeded' ||
+        outcome.status === 'launched'
       ) {
         const timer = setTimeout(() => {
           dismissToast(id)
@@ -205,6 +208,9 @@ export function AsyncActionFeedbackProvider({
       if (options.onOpenInTerminal !== undefined) {
         openInTerminalHandlers.current.set(id, options.onOpenInTerminal)
       }
+      if (options.onOpenSession !== undefined) {
+        openSessionHandlers.current.set(id, options.onOpenSession)
+      }
       setActions((current) => [
         {
           id,
@@ -215,6 +221,10 @@ export function AsyncActionFeedbackProvider({
           ...(options.command === undefined
             ? {}
             : { command: options.command }),
+          ...(options.initialMessage === undefined
+            ? {}
+            : { initialMessage: options.initialMessage }),
+          ...(options.repo === undefined ? {} : { repo: options.repo }),
           ...(options.reviewDocumentAction === undefined
             ? {}
             : { reviewDocumentAction: options.reviewDocumentAction }),
@@ -342,6 +352,7 @@ export function AsyncActionFeedbackProvider({
       retryHandlers.current.delete(id)
       closeWithWorktreeHandlers.current.delete(id)
       openInTerminalHandlers.current.delete(id)
+      openSessionHandlers.current.delete(id)
     }
   }, [actions])
 
@@ -374,6 +385,10 @@ export function AsyncActionFeedbackProvider({
 
   const openInTerminal = useCallback((id: number) => {
     openInTerminalHandlers.current.get(id)?.()
+  }, [])
+
+  const openSession = useCallback((id: number) => {
+    openSessionHandlers.current.get(id)?.()
   }, [])
 
   useEffect(
@@ -412,6 +427,7 @@ export function AsyncActionFeedbackProvider({
         closeActivity,
         closeWithWorktree,
         openInTerminal,
+        openSession,
       }}
     >
       {children}
@@ -430,6 +446,7 @@ export function AsyncActionFeedbackProvider({
         closeActivity={closeActivity}
         closeWithWorktree={closeWithWorktree}
         openInTerminal={openInTerminal}
+        openSession={openSession}
         showCommandOutput={requestCommandOutput}
       />
     </AsyncActionFeedbackContext.Provider>

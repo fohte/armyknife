@@ -20,6 +20,7 @@ type AsyncActionFeedbackHostProps = {
   closeActivity: () => void
   closeWithWorktree: (id: number) => void
   openInTerminal: (id: number) => void
+  openSession?: (id: number) => void
   showCommandOutput: (id: number) => void
 }
 
@@ -38,6 +39,7 @@ export function AsyncActionFeedbackHost({
   closeActivity,
   closeWithWorktree,
   openInTerminal,
+  openSession = () => undefined,
   showCommandOutput,
 }: AsyncActionFeedbackHostProps) {
   const ordered = [...actions].sort(
@@ -97,6 +99,9 @@ export function AsyncActionFeedbackHost({
               }}
               onCloseKeepWorktree={() => {
                 closeWithWorktree(id)
+              }}
+              onOpenSession={() => {
+                openSession(id)
               }}
               onShowOutput={() => {
                 showCommandOutput(id)
@@ -166,6 +171,10 @@ export function AsyncActionFeedbackHost({
                     onOpenInTerminal={() => {
                       closeActivity()
                       openInTerminal(action.id)
+                    }}
+                    onOpenSession={() => {
+                      closeActivity()
+                      openSession(action.id)
                     }}
                     onShowOutput={() => {
                       closeActivity()

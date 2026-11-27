@@ -19,14 +19,19 @@ export type AsyncActionStatus =
   | 'rewinding'
   | 'rewound'
   | 'rewindFailed'
+  | 'launching'
+  | 'launched'
+  | 'launchFailed'
 
 export type AsyncAction = {
   id: number
   sessionId: string
   sessionTitle: string
-  kind: 'merge' | 'close' | 'command' | 'rewind' | 'review_document'
+  kind: 'merge' | 'close' | 'command' | 'rewind' | 'review_document' | 'launch'
   status: AsyncActionStatus
   command?: string
+  initialMessage?: string
+  repo?: string
   reviewDocumentAction?: string
   commandOutputIndex?: number
   exitCode?: number
@@ -62,6 +67,8 @@ export type AsyncActionOutcome =
     }
   | { status: 'merged' | 'alreadyMerged' | 'queued'; message?: string }
   | { status: 'closed' | 'rewound' }
+  | { status: 'launched' }
+  | { status: 'launchFailed'; error: string }
   | {
       status: 'mergeFailed' | 'closeFailed' | 'rewindFailed'
       error: string
@@ -69,10 +76,12 @@ export type AsyncActionOutcome =
     }
 
 export type StartAsyncActionOptions = {
-  kind: 'merge' | 'close' | 'command' | 'rewind' | 'review_document'
+  kind: 'merge' | 'close' | 'command' | 'rewind' | 'review_document' | 'launch'
   sessionId: string
   sessionTitle: string
   command?: string
+  initialMessage?: string
+  repo?: string
   reviewDocumentAction?: AsyncAction['reviewDocumentAction']
   pullRequestNumber?: number
   pullRequestOwner?: string
@@ -83,6 +92,7 @@ export type StartAsyncActionOptions = {
   onRetry?: (retry: () => void, actionId: number) => void
   onCloseKeepWorktree?: () => void
   onOpenInTerminal?: () => void
+  onOpenSession?: () => void
 }
 
 export function isAsyncActionFailureStatus(status: AsyncActionStatus) {
@@ -92,7 +102,8 @@ export function isAsyncActionFailureStatus(status: AsyncActionStatus) {
     status === 'rewindFailed' ||
     status === 'commandFailed' ||
     status === 'commandTimedOut' ||
-    status === 'reviewDocumentActionFailed'
+    status === 'reviewDocumentActionFailed' ||
+    status === 'launchFailed'
   )
 }
 
@@ -102,7 +113,8 @@ export function isAsyncActionRunningStatus(status: AsyncActionStatus) {
     status === 'closing' ||
     status === 'rewinding' ||
     status === 'runningCommand' ||
-    status === 'reviewDocumentActionRunning'
+    status === 'reviewDocumentActionRunning' ||
+    status === 'launching'
   )
 }
 
@@ -123,5 +135,7 @@ export function runningStatusFor(kind: AsyncAction['kind']): AsyncActionStatus {
       return 'rewinding'
     case 'review_document':
       return 'reviewDocumentActionRunning'
+    case 'launch':
+      return 'launching'
   }
 }

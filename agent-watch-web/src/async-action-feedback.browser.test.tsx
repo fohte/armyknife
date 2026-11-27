@@ -50,6 +50,52 @@ function FeedbackHarness({ run }: { run: () => Promise<AsyncActionOutcome> }) {
   )
 }
 
+function LaunchFeedbackHarness({
+  run,
+  onOpenSession,
+}: {
+  run: () => Promise<AsyncActionOutcome>
+  onOpenSession: () => void
+}) {
+  const feedback = useOptionalAsyncActionFeedback()
+  const startAsyncAction = useAsyncActionStarter(() => {})
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => {
+          startAsyncAction({
+            kind: 'launch',
+            sessionId: 'example-session',
+            sessionTitle: 'Review the example rollout',
+            initialMessage:
+              'Review the rollout plan.\nCompare the fallback options.',
+            repo: 'example-org/example-service',
+            run,
+            onOpenSession,
+          })
+        }}
+      >
+        Start session
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          feedback?.openActivity()
+        }}
+      >
+        Show activity
+      </button>
+      <output>
+        {JSON.stringify({
+          actions: feedback?.actions.map(({ status }) => status),
+          toastIds: feedback?.toastIds,
+        })}
+      </output>
+    </>
+  )
+}
+
 function MissingProviderHarness({
   run,
 }: {
@@ -252,6 +298,111 @@ it('keeps a command in the toast while it runs and reports its success', async (
     },
     completedStatus: '["ranCommand"]',
     completedToast: "Ran commandprintf 'sample output'",
+  })
+})
+
+it('dismisses a successful launch toast after five seconds and keeps its Activity row', async () => {
+  vi.useFakeTimers()
+  let finishLaunch: (outcome: AsyncActionOutcome) => void = () => undefined
+  const run = vi.fn(
+    () =>
+      new Promise<AsyncActionOutcome>((resolve) => {
+        finishLaunch = resolve
+      }),
+  )
+  act(() => {
+    root?.render(
+      <AsyncActionFeedbackProvider>
+        <LaunchFeedbackHarness run={run} onOpenSession={() => undefined} />
+      </AsyncActionFeedbackProvider>,
+    )
+  })
+
+  act(() => {
+    container.querySelector<HTMLButtonElement>('button')?.click()
+  })
+  await act(async () => {
+    finishLaunch({ status: 'launched' })
+    await Promise.resolve()
+  })
+  const beforeDismiss = textContent('.async-action-toast-stack')
+
+  act(() => {
+    vi.advanceTimersByTime(4_999)
+  })
+  const beforeDeadline = {
+    toastIds: textContent('output'),
+    toast: textContent('.async-action-toast-stack'),
+  }
+  act(() => {
+    vi.advanceTimersByTime(1)
+  })
+  act(() => {
+    Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent === 'Show activity')
+      ?.click()
+  })
+  const afterDismiss = {
+    toast: textContent('.async-action-toast-stack'),
+    activity: textContent('.async-action-activity-list'),
+  }
+  act(() => {
+    Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent === 'Clear finished')
+      ?.click()
+  })
+
+  const snapshot = () => ({
+    beforeDismiss,
+    beforeDeadline,
+    afterDismiss,
+    afterClear: textContent('output'),
+  })
+  expect(snapshot()).toEqual({
+    beforeDismiss:
+      'Session startedReview the rollout plan.example-org/example-serviceOpen',
+    beforeDeadline: {
+      toastIds: '{"actions":["launched"],"toastIds":[0]}',
+      toast:
+        'Session startedReview the rollout plan.example-org/example-serviceOpen',
+    },
+    afterDismiss: {
+      toast: '',
+      activity:
+        'Session startedReview the rollout plan.example-org/example-serviceOpen14:13',
+    },
+    afterClear: '{"actions":[],"toastIds":[]}',
+  })
+})
+
+it('opens a launched session through its registered handler', async () => {
+  const run = vi.fn(() => Promise.resolve({ status: 'launched' as const }))
+  const onOpenSession = vi.fn()
+  act(() => {
+    root?.render(
+      <AsyncActionFeedbackProvider>
+        <LaunchFeedbackHarness run={run} onOpenSession={onOpenSession} />
+      </AsyncActionFeedbackProvider>,
+    )
+  })
+
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>('button')?.click()
+    await Promise.resolve()
+  })
+  act(() => {
+    Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent === 'Open')
+      ?.click()
+  })
+
+  const snapshot = () => ({
+    openCalls: onOpenSession.mock.calls.length,
+    status: textContent('output'),
+  })
+  expect(snapshot()).toEqual({
+    openCalls: 1,
+    status: '{"actions":["launched"],"toastIds":[0]}',
   })
 })
 
