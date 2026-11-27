@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.970](https://github.com/fohte/armyknife/compare/v0.1.969...v0.1.970) (2026-11-27)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** avoid launch auto-navigation ([#2370](https://github.com/fohte/armyknife/issues/2370)) ([e4bca2e](https://github.com/fohte/armyknife/commit/e4bca2eee1a07fd70bd3842114ec91b61d24fbb8))
+
 ## [0.1.969](https://github.com/fohte/armyknife/compare/v0.1.968...v0.1.969) (2026-11-27)
 
 
