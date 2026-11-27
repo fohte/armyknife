@@ -31,6 +31,13 @@ pub(crate) fn session_is_alive(name: &str) -> Result<bool> {
         .any(|session| session.name == name && session.is_alive()))
 }
 
+pub(crate) fn session_shell_pid(name: &str) -> Result<Option<u32>> {
+    Ok(list_sessions()?
+        .into_iter()
+        .find(|session| session.name == name)
+        .map(|session| session.shell_pid))
+}
+
 fn list_sessions() -> Result<Vec<Session>> {
     let output = ExternalTool::Shpool
         .command()

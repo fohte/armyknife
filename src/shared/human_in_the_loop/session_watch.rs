@@ -12,6 +12,13 @@ pub(super) struct SessionWatch {
     startup_deadline: Instant,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum SessionResolution {
+    Found(u32),
+    Starting,
+    Closed,
+}
+
 impl SessionWatch {
     pub(super) fn new() -> Self {
         Self {
@@ -22,14 +29,20 @@ impl SessionWatch {
 
     /// A session that has never been listed counts as running until the startup
     /// deadline. Once seen, its absence means the editor ended.
-    pub(super) fn is_running(
+    pub(super) fn resolve(
         &mut self,
         now: Instant,
-        query: impl FnOnce() -> Result<bool>,
-    ) -> Result<bool> {
-        let running = query()?;
-        self.seen |= running;
-        Ok(running || (!self.seen && now < self.startup_deadline))
+        query: impl FnOnce() -> Result<Option<u32>>,
+    ) -> Result<SessionResolution> {
+        if let Some(pid) = query()? {
+            self.seen = true;
+            return Ok(SessionResolution::Found(pid));
+        }
+        Ok(if self.seen || now >= self.startup_deadline {
+            SessionResolution::Closed
+        } else {
+            SessionResolution::Starting
+        })
     }
 }
 
@@ -41,15 +54,15 @@ mod tests {
     use super::*;
 
     #[rstest]
-    #[case::starting_up(false, false, false, true)]
-    #[case::never_started(false, false, true, false)]
-    #[case::running_after_startup(false, true, true, true)]
-    #[case::ended_after_running(true, false, false, false)]
-    fn is_running_waits_for_startup_only_until_first_seen(
+    #[case::starting_up(false, None, false, SessionResolutionKind::Starting)]
+    #[case::never_started(false, None, true, SessionResolutionKind::Closed)]
+    #[case::session_found(false, Some(42), true, SessionResolutionKind::Found(42))]
+    #[case::ended_after_running(true, None, false, SessionResolutionKind::Closed)]
+    fn resolve_distinguishes_startup_found_and_closed_sessions(
         #[case] seen: bool,
-        #[case] listed: bool,
+        #[case] pid: Option<u32>,
         #[case] after_deadline: bool,
-        #[case] expected: bool,
+        #[case] expected: SessionResolutionKind,
     ) {
         let base = Instant::now();
         let mut watch = SessionWatch {
@@ -62,25 +75,35 @@ mod tests {
             base
         };
 
-        assert_eq!(
-            watch
-                .is_running(now, || Ok(listed))
-                .map_err(|error| error.to_string()),
-            Ok(expected),
-        );
+        let result = watch
+            .resolve(now, || Ok(pid))
+            .map(|resolution| match resolution {
+                SessionResolution::Found(pid) => SessionResolutionKind::Found(pid),
+                SessionResolution::Starting => SessionResolutionKind::Starting,
+                SessionResolution::Closed => SessionResolutionKind::Closed,
+            })
+            .map_err(|error| error.to_string());
+        assert_eq!(result, Ok(expected));
     }
 
     #[test]
-    fn is_running_propagates_query_failure() {
+    fn resolve_propagates_query_failure() {
         let mut watch = SessionWatch::new();
 
         assert_eq!(
             watch
-                .is_running(Instant::now(), || Err(HumanInTheLoopError::CommandFailed(
+                .resolve(Instant::now(), || Err(HumanInTheLoopError::CommandFailed(
                     "shpool is unavailable".into()
                 )))
                 .map_err(|error| error.to_string()),
             Err("Command failed: shpool is unavailable".to_string()),
         );
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    enum SessionResolutionKind {
+        Found(u32),
+        Starting,
+        Closed,
     }
 }

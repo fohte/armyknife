@@ -23,6 +23,13 @@ pub(crate) enum Wake {
     TimedOut,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum FdWake {
+    Exited,
+    Readable,
+    TimedOut,
+}
+
 /// Sorted entry names of `dir`; a missing directory has none.
 pub(crate) fn dir_entry_names(dir: &Path) -> io::Result<Vec<String>> {
     let entries = match fs::read_dir(dir) {
@@ -57,6 +64,24 @@ pub(crate) fn wait_for_exit_or_dir_change(
         }
     }
     poll_for_exit_or_dir_change(pids, dir, known_entries, timeout)
+}
+
+/// Blocks until one of `pids` exits or `fd` becomes readable.
+///
+/// macOS uses kqueue. Other platforms and kqueue setup failures poll the process and descriptor
+/// at the fallback interval. `fd` must remain open for the duration of this call.
+pub(crate) fn wait_for_exit_or_readable_fd(
+    pids: &[u32],
+    fd: std::os::fd::RawFd,
+    timeout: Option<Duration>,
+) -> FdWake {
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(wake) = wait_for_exit_or_readable_fd_with_kqueue(pids, fd, timeout) {
+            return wake;
+        }
+    }
+    poll_for_exit_or_readable_fd(pids, fd, timeout)
 }
 
 /// An unreadable directory never counts as changed, so it cannot wake the caller in a loop.
@@ -94,6 +119,49 @@ fn poll_for_exit_or_dir_change(
             None => FALLBACK_POLL_INTERVAL,
         };
         thread::sleep(sleep);
+    }
+}
+
+fn poll_for_exit_or_readable_fd(
+    pids: &[u32],
+    fd: std::os::fd::RawFd,
+    timeout: Option<Duration>,
+) -> FdWake {
+    let deadline = timeout.map(|timeout| Instant::now() + timeout);
+    loop {
+        let exited = pids
+            .iter()
+            .copied()
+            .filter(|&pid| !is_process_alive(pid))
+            .collect::<Vec<_>>();
+        if !exited.is_empty() {
+            return FdWake::Exited;
+        }
+
+        let wait = match deadline {
+            Some(deadline) => {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return FdWake::TimedOut;
+                }
+                remaining.min(FALLBACK_POLL_INTERVAL)
+            }
+            None => FALLBACK_POLL_INTERVAL,
+        };
+        let timeout_ms = i32::try_from(wait.as_millis()).unwrap_or(i32::MAX).max(1);
+        let mut descriptor = libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: `descriptor` is a valid one-element poll array for the open fd.
+        let result = unsafe { libc::poll(&mut descriptor, 1, timeout_ms) };
+        if result > 0 && descriptor.revents & libc::POLLIN != 0 {
+            return FdWake::Readable;
+        }
+        if result == -1 && io::Error::last_os_error().kind() != io::ErrorKind::Interrupted {
+            thread::sleep(wait);
+        }
     }
 }
 
@@ -222,6 +290,96 @@ fn wait_with_kqueue(
                     Wake::DirChanged
                 } else {
                     Wake::Exited(exited)
+                });
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn wait_for_exit_or_readable_fd_with_kqueue(
+    pids: &[u32],
+    fd: std::os::fd::RawFd,
+    timeout: Option<Duration>,
+) -> io::Result<FdWake> {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    use std::ptr;
+
+    // SAFETY: `kqueue` takes no arguments and returns a new descriptor or -1.
+    let raw = unsafe { libc::kqueue() };
+    if raw == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: `raw` was just created and nothing else owns it; `OwnedFd` closes it.
+    let kq = unsafe { OwnedFd::from_raw_fd(raw) };
+    register_kevent(
+        kq.as_raw_fd(),
+        &new_kevent(fd as libc::uintptr_t, libc::EVFILT_READ, libc::EV_ADD, 0),
+    )?;
+
+    let mut exited = Vec::new();
+    for &pid in pids {
+        if pid == 0 || libc::pid_t::try_from(pid).is_err() {
+            exited.push(pid);
+            continue;
+        }
+        let change = new_kevent(
+            pid as libc::uintptr_t,
+            libc::EVFILT_PROC,
+            libc::EV_ADD | libc::EV_ONESHOT,
+            libc::NOTE_EXIT,
+        );
+        match register_kevent(kq.as_raw_fd(), &change) {
+            Ok(()) => {}
+            Err(error) if error.raw_os_error() == Some(libc::ESRCH) => exited.push(pid),
+            Err(error) => return Err(error),
+        }
+    }
+    if !exited.is_empty() {
+        return Ok(FdWake::Exited);
+    }
+
+    let mut events = vec![new_kevent(0, 0, 0, 0); pids.len() + 1];
+    let capacity = libc::c_int::try_from(events.len()).unwrap_or(libc::c_int::MAX);
+    let deadline = timeout.map(|timeout| Instant::now() + timeout);
+    loop {
+        let timespec = deadline.map(|deadline| {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            libc::timespec {
+                tv_sec: libc::time_t::try_from(remaining.as_secs()).unwrap_or(libc::time_t::MAX),
+                tv_nsec: libc::c_long::from(remaining.subsec_nanos()),
+            }
+        });
+        // SAFETY: `events` has room for `capacity` events, and `timespec` outlives the call.
+        let ready = unsafe {
+            libc::kevent(
+                kq.as_raw_fd(),
+                ptr::null(),
+                0,
+                events.as_mut_ptr(),
+                capacity,
+                timespec.as_ref().map_or(ptr::null(), ptr::from_ref),
+            )
+        };
+        match ready {
+            -1 => {
+                let error = io::Error::last_os_error();
+                if error.kind() != io::ErrorKind::Interrupted {
+                    return Err(error);
+                }
+            }
+            0 => return Ok(FdWake::TimedOut),
+            ready => {
+                let events = &events[..ready as usize];
+                let exited = events
+                    .iter()
+                    .filter(|event| event.filter == libc::EVFILT_PROC)
+                    .map(|event| event.ident as u32)
+                    .collect::<Vec<_>>();
+                return Ok(if !exited.is_empty() {
+                    FdWake::Exited
+                } else {
+                    FdWake::Readable
                 });
             }
         }

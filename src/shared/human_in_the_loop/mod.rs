@@ -19,6 +19,7 @@ mod pending_review;
 mod queue_entry;
 mod review_completion;
 mod review_finish;
+mod review_wait;
 mod session_watch;
 mod tmux;
 pub(crate) use action_result::{
@@ -68,8 +69,6 @@ pub(crate) const PR_DRAFT_REVIEW_MARKER: &str = "pr-draft-review:";
 /// call succeeds but the terminal window never initializes.
 const TERMINAL_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 const FIFO_POLL_INTERVAL: Duration = Duration::from_millis(100);
-const REVIEW_SESSION_CHECK_INTERVAL: Duration = Duration::from_secs(2);
-const MAX_CONSECUTIVE_SESSION_CHECK_FAILURES: usize = 3;
 
 #[cfg(test)]
 struct TestWorkerDeadline {
@@ -211,7 +210,6 @@ where
         document_path.to_path_buf()
     };
 
-    let mut session_watch = session_watch::SessionWatch::new();
     // Held until the review ends, then shows the next queued review.
     let mut queue_entry = None;
     start_review_with_marker::<S, _, _>(
@@ -240,10 +238,8 @@ where
             })
         },
         |session| {
-            session_watch.is_running(std::time::Instant::now(), || {
-                crate::infra::shpool::session_is_alive(session)
-                    .map_err(|error| HumanInTheLoopError::CommandFailed(format!("{error:#}")))
-            })
+            crate::infra::shpool::session_shell_pid(session)
+                .map_err(|error| HumanInTheLoopError::CommandFailed(format!("{error:#}")))
         },
     )
 }
@@ -258,12 +254,12 @@ pub(crate) struct ReviewResult<S> {
 fn start_review_with_launcher<S, L, P>(
     document_path: &Path,
     launch_review: L,
-    is_session_alive: P,
+    resolve_shell_pid: P,
 ) -> Result<Option<Document<S>>>
 where
     S: DocumentSchema,
     L: FnOnce(&Path, &Path, &str) -> Result<Option<String>>,
-    P: FnMut(&str) -> Result<bool>,
+    P: FnMut(&str) -> Result<Option<u32>>,
 {
     start_review_with_marker(
         document_path,
@@ -271,7 +267,7 @@ where
         |document_path, done_fifo_path, _finish_fifo_path, lock_id| {
             launch_review(document_path, done_fifo_path, lock_id).map(ReviewLaunch::without_queue)
         },
-        is_session_alive,
+        resolve_shell_pid,
     )
     .map(|review| review.map(|review| review.document))
 }
@@ -295,13 +291,14 @@ fn start_review_with_marker<S, L, P>(
     document_path: &Path,
     pending_review_marker: Option<&str>,
     launch_review: L,
-    is_session_alive: P,
+    resolve_shell_pid: P,
 ) -> Result<Option<ReviewResult<S>>>
 where
     S: DocumentSchema,
     L: FnOnce(&Path, &Path, &Path, &str) -> Result<ReviewLaunch>,
-    P: FnMut(&str) -> Result<bool>,
+    P: FnMut(&str) -> Result<Option<u32>>,
 {
+    let mut session_watch = session_watch::SessionWatch::new();
     let lock_path = LockGuard::lock_path(document_path);
     let lock_guard = match LockGuard::acquire(document_path) {
         Ok(guard) => guard,
@@ -350,7 +347,13 @@ where
             review.queue_key.as_deref(),
         );
         if let Some(session) = review.session.as_deref() {
-            wait_for_fifo_signal_or_session_exit(done_fifo_reader, session, is_session_alive)?
+            review_wait::wait_for_fifo_signal_or_session_exit(
+                done_fifo_reader,
+                &done_fifo_path,
+                session,
+                &mut session_watch,
+                resolve_shell_pid,
+            )?
         } else {
             // GUI terminal launches have no tmux pane to monitor.
             wait_for_fifo_signal(done_fifo_reader, &done_fifo_path)?
@@ -480,88 +483,6 @@ fn wait_for_fifo_signal(file: std::fs::File, fifo_path: &Path) -> Result<u8> {
     }
 }
 
-/// Wait for the completion signal while periodically checking the editor session.
-#[cfg(unix)]
-fn wait_for_fifo_signal_or_session_exit(
-    file: std::fs::File,
-    session: &str,
-    is_session_alive: impl FnMut(&str) -> Result<bool>,
-) -> Result<u8> {
-    wait_for_fifo_signal_or_session_exit_with_interval(
-        file,
-        session,
-        REVIEW_SESSION_CHECK_INTERVAL,
-        is_session_alive,
-    )
-}
-
-fn wait_for_fifo_signal_or_session_exit_with_interval(
-    file: std::fs::File,
-    session: &str,
-    check_interval: Duration,
-    mut is_session_alive: impl FnMut(&str) -> Result<bool>,
-) -> Result<u8> {
-    use std::time::Instant;
-
-    let mut next_session_check = Instant::now();
-    let mut consecutive_check_failures = 0;
-    poll_fifo_signal(file, |file| {
-        if Instant::now() >= next_session_check {
-            match is_session_alive(session) {
-                Ok(true) => consecutive_check_failures = 0,
-                Ok(false) => {
-                    consecutive_check_failures = 0;
-                    return Ok(if let Some(signal) = try_read_fifo_byte(file)? {
-                        FifoPollAction::Signaled(signal)
-                    } else {
-                        FifoPollAction::Abort(HumanInTheLoopError::ReviewSessionClosed)
-                    });
-                }
-                Err(error) => {
-                    consecutive_check_failures += 1;
-                    tracing::warn!(
-                        session,
-                        consecutive_check_failures,
-                        max_consecutive_failures = MAX_CONSECUTIVE_SESSION_CHECK_FAILURES,
-                        error = %error,
-                        "Review session liveness check failed"
-                    );
-                    if consecutive_check_failures >= MAX_CONSECUTIVE_SESSION_CHECK_FAILURES {
-                        return Err(error);
-                    }
-                }
-            }
-            next_session_check = Instant::now() + check_interval;
-        }
-        Ok(FifoPollAction::Continue)
-    })
-}
-
-enum FifoPollAction {
-    Continue,
-    Signaled(u8),
-    Abort(HumanInTheLoopError),
-}
-
-fn poll_fifo_signal(
-    mut file: std::fs::File,
-    mut check: impl FnMut(&mut std::fs::File) -> Result<FifoPollAction>,
-) -> Result<u8> {
-    use std::thread::sleep;
-
-    loop {
-        if let Some(signal) = try_read_fifo_byte(&mut file)? {
-            return Ok(signal);
-        }
-
-        match check(&mut file)? {
-            FifoPollAction::Continue => sleep(FIFO_POLL_INTERVAL),
-            FifoPollAction::Signaled(signal) => return Ok(signal),
-            FifoPollAction::Abort(error) => return Err(error),
-        }
-    }
-}
-
 /// Like `wait_for_fifo_signal` but gives up after `timeout`, returning a
 /// `TerminalLaunchFailed` error. Used for the started-FIFO so a dead terminal
 /// emulator doesn't cause the parent process to hang.
@@ -571,25 +492,25 @@ fn poll_fifo_signal(
 /// and poll with short sleeps until either data arrives or the deadline passes.
 #[cfg(unix)]
 fn wait_for_fifo_signal_with_timeout(
-    file: std::fs::File,
+    mut file: std::fs::File,
     _fifo_path: &Path,
     timeout: Duration,
 ) -> Result<()> {
     use std::time::Instant;
 
     let deadline = Instant::now() + timeout;
-    poll_fifo_signal(file, |_| {
-        if Instant::now() >= deadline {
-            Ok(FifoPollAction::Abort(
-                HumanInTheLoopError::TerminalLaunchFailed {
-                    timeout_secs: timeout.as_secs(),
-                },
-            ))
-        } else {
-            Ok(FifoPollAction::Continue)
+    loop {
+        if try_read_fifo_byte(&mut file)?.is_some() {
+            return Ok(());
         }
-    })
-    .map(|_| ())
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(HumanInTheLoopError::TerminalLaunchFailed {
+                timeout_secs: timeout.as_secs(),
+            });
+        }
+        std::thread::sleep(FIFO_POLL_INTERVAL.min(remaining));
+    }
 }
 
 /// RAII guard that removes the FIFO file on drop.
@@ -693,8 +614,6 @@ pub(crate) fn try_signal_fifo_with_byte(fifo_path: &Path, byte: u8) -> std::io::
 #[cfg(test)]
 #[cfg(unix)]
 mod tests {
-    use std::cell::Cell;
-
     use super::*;
     use indoc::indoc;
     use rstest::{fixture, rstest};
@@ -819,7 +738,7 @@ mod tests {
                 review_child = Some(ChildGuard(child));
                 Ok(ReviewLaunch::without_queue(None))
             },
-            |_| Ok(true),
+            |_| Ok(Some(std::process::id())),
         );
         std::io::stdout()
             .flush()
@@ -909,141 +828,6 @@ mod tests {
     }
 
     #[rstest]
-    fn wait_for_fifo_signal_or_session_exit_prefers_a_completion_signal(
-        fifo_reader: FifoReaderFixture,
-    ) {
-        signal_fifo_with_byte(&fifo_reader.fifo_path, b'0');
-
-        let result =
-            wait_for_fifo_signal_or_session_exit(fifo_reader.reader, "review-session", |_| {
-                Ok(false)
-            })
-            .map_err(|error| error.to_string());
-
-        assert_eq!(result, Ok(b'0'));
-    }
-
-    #[rstest]
-    fn wait_for_fifo_signal_or_session_exit_reads_signal_written_before_session_ends(
-        fifo_reader: FifoReaderFixture,
-    ) {
-        let writer_path = fifo_reader.fifo_path.clone();
-        let result =
-            wait_for_fifo_signal_or_session_exit(fifo_reader.reader, "review-session", move |_| {
-                signal_fifo_with_byte(&writer_path, b'0');
-                Ok(false)
-            })
-            .map_err(|error| error.to_string());
-
-        assert_eq!(result, Ok(b'0'));
-    }
-
-    #[rstest]
-    fn wait_for_fifo_signal_or_session_exit_completes_while_session_is_alive(
-        fifo_reader: FifoReaderFixture,
-    ) {
-        let writer_path = fifo_reader.fifo_path.clone();
-        let writer = std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(50));
-            signal_fifo_with_byte(&writer_path, b'0');
-        });
-
-        let result =
-            wait_for_fifo_signal_or_session_exit(fifo_reader.reader, "review-session", |_| {
-                Ok(true)
-            })
-            .map_err(|error| error.to_string());
-        writer.join().expect("writer thread");
-
-        assert_eq!(result, Ok(b'0'));
-    }
-
-    #[rstest]
-    fn wait_for_fifo_signal_or_session_exit_retries_a_transient_session_query_failure(
-        fifo_reader: FifoReaderFixture,
-    ) {
-        let checks = Cell::new(0);
-        let writer_path = fifo_reader.fifo_path.clone();
-        let result = wait_for_fifo_signal_or_session_exit_with_interval(
-            fifo_reader.reader,
-            "review-session",
-            Duration::ZERO,
-            |_| {
-                let check_count = checks.get() + 1;
-                checks.set(check_count);
-                if check_count == 1 {
-                    return Err(HumanInTheLoopError::CommandFailed(
-                        "tmux is unavailable".into(),
-                    ));
-                }
-
-                signal_fifo_with_byte(&writer_path, b'0');
-                Ok(true)
-            },
-        )
-        .map_err(|error| error.to_string());
-
-        assert_eq!((result, checks.get()), (Ok(b'0'), 2));
-    }
-
-    #[rstest]
-    fn wait_for_fifo_signal_or_session_exit_resets_failures_after_a_successful_check(
-        fifo_reader: FifoReaderFixture,
-    ) {
-        let checks = Cell::new(0);
-        let writer_path = fifo_reader.fifo_path.clone();
-        let result = wait_for_fifo_signal_or_session_exit_with_interval(
-            fifo_reader.reader,
-            "review-session",
-            Duration::ZERO,
-            |_| {
-                let check_count = checks.get() + 1;
-                checks.set(check_count);
-                match check_count {
-                    1 | 3 | 4 => Err(HumanInTheLoopError::CommandFailed(
-                        "tmux is unavailable".into(),
-                    )),
-                    5 => {
-                        signal_fifo_with_byte(&writer_path, b'0');
-                        Ok(true)
-                    }
-                    _ => Ok(true),
-                }
-            },
-        )
-        .map_err(|error| error.to_string());
-
-        assert_eq!((result, checks.get()), (Ok(b'0'), 5));
-    }
-
-    #[rstest]
-    fn wait_for_fifo_signal_or_session_exit_stops_after_consecutive_session_query_failures(
-        fifo_reader: FifoReaderFixture,
-    ) {
-        let checks = Cell::new(0);
-        let result = wait_for_fifo_signal_or_session_exit_with_interval(
-            fifo_reader.reader,
-            "review-session",
-            Duration::ZERO,
-            |_| {
-                checks.set(checks.get() + 1);
-                Err(HumanInTheLoopError::CommandFailed(
-                    "tmux is unavailable".into(),
-                ))
-            },
-        )
-        .map_err(|error| error.to_string());
-
-        assert_eq!(
-            (result, checks.get()),
-            (
-                Err("Command failed: tmux is unavailable".into()),
-                MAX_CONSECUTIVE_SESSION_CHECK_FAILURES,
-            ),
-        );
-    }
-
-    #[rstest]
     fn create_fifo_with_suffix_appends_suffix() {
         let temp = TempDir::new().expect("tempdir");
         let doc = temp.path().join("foo.md");
@@ -1095,7 +879,7 @@ mod tests {
                 signal_fifo_with_byte(done_fifo_path, b'0');
                 Ok(None)
             },
-            |_| Ok(true),
+            |_| Ok(Some(std::process::id())),
         )
         .expect("start review")
         .map(|document| (document.path, document.frontmatter));
@@ -1129,7 +913,7 @@ mod tests {
                 signal_fifo_with_byte(done_fifo_path, b'1');
                 Ok(ReviewLaunch::without_queue(None))
             },
-            |_| Ok(true),
+            |_| Ok(Some(std::process::id())),
         )
         .expect("start review")
         .map(|review| (review.action_result, review.finish_reason));
@@ -1159,7 +943,7 @@ mod tests {
                 signal_fifo_with_byte(done_fifo_path, b'0');
                 Ok(None)
             },
-            |_| Ok(true),
+            |_| Ok(Some(std::process::id())),
         )
         .expect("start review")
         .map(|document| (document.path, document.frontmatter));
@@ -1180,7 +964,7 @@ mod tests {
         let result = start_review_with_launcher::<ReviewTestSchema, _, _>(
             &document_path,
             |_, _, _| Err(HumanInTheLoopError::CommandFailed("launch failed".into())),
-            |_| Ok(true),
+            |_| Ok(Some(std::process::id())),
         )
         .map(|document| document.map(|document| document.path))
         .map_err(|error| error.to_string());
@@ -1206,7 +990,7 @@ mod tests {
                 signal_fifo_with_byte(done_fifo_path, b'0');
                 Ok(None)
             },
-            |_| Ok(true),
+            |_| Ok(Some(std::process::id())),
         )
         .expect("start review")
         .map(|document| (document.path, document.frontmatter));
@@ -1239,7 +1023,7 @@ mod tests {
                 launch_called = true;
                 Ok(None)
             },
-            |_| Ok(true),
+            |_| Ok(Some(std::process::id())),
         )
         .expect("skip existing review")
         .map(|document| document.path);
@@ -1282,7 +1066,7 @@ mod tests {
                     "review-session".to_string(),
                 )))
             },
-            |_| Ok(false),
+            |_| Ok(Some(u32::MAX)),
         )
         .map(|document| document.is_some())
         .map_err(|error| error.to_string());
