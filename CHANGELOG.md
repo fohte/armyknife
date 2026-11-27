@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.973](https://github.com/fohte/armyknife/compare/v0.1.972...v0.1.973) (2026-11-27)
+
+
+### Performance Improvements
+
+* **agent:** remove periodic executable checks ([#2377](https://github.com/fohte/armyknife/issues/2377)) ([38291cc](https://github.com/fohte/armyknife/commit/38291cc67e9e0e0ee6ea8111cb704e2b9323cec8))
+
 ## [0.1.972](https://github.com/fohte/armyknife/compare/v0.1.971...v0.1.972) (2026-11-27)
 
 
