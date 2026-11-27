@@ -229,6 +229,12 @@
   text-overflow: ellipsis;
 }
 
+.session-row-content .session-repo.is-placeholder,
+.session-row-content .session-repo.is-placeholder .session-repo-label,
+.session-row-content .session-repo.is-placeholder .session-repo-name {
+  min-width: 0;
+}
+
 .session-row-content .session-repo-measure {
   position: absolute;
   width: max-content;

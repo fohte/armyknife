@@ -59,6 +59,7 @@ function RepositoryLabel({ repository }: { repository: string }) {
   const measureRef = useRef<HTMLSpanElement>(null)
   const [shortenOwner, setShortenOwner] = useState(false)
   const separator = repository.lastIndexOf('/')
+  const isPlaceholder = repository === '—'
   const owner = separator < 0 ? '' : repository.slice(0, separator)
   const name = separator < 0 ? repository : repository.slice(separator + 1)
 
@@ -76,9 +77,32 @@ function RepositoryLabel({ repository }: { repository: string }) {
     let active = true
     const update = () => {
       if (!active) return
+      const parentElement = repositoryElement.parentElement
+      const branchElement =
+        parentElement?.classList.contains('session-repo-line') === true
+          ? parentElement.querySelector<HTMLElement>('.session-branch')
+          : null
+      const separatorElement =
+        branchElement?.previousElementSibling instanceof HTMLElement
+          ? branchElement.previousElementSibling
+          : null
+      const columnGap =
+        parentElement === null
+          ? 0
+          : Number.parseFloat(getComputedStyle(parentElement).columnGap) || 0
+      const branchMinimumWidth =
+        branchElement === null
+          ? 0
+          : Number.parseFloat(getComputedStyle(branchElement).minWidth) || 0
+      const availableWidth =
+        parentElement?.classList.contains('session-repo-line') === true
+          ? parentElement.clientWidth -
+            branchMinimumWidth -
+            (separatorElement?.getBoundingClientRect().width ?? 0) -
+            (branchElement === null ? 0 : columnGap * 2)
+          : repositoryElement.clientWidth
       const shouldShorten =
-        measureElement.getBoundingClientRect().width >
-        repositoryElement.clientWidth + 1
+        measureElement.getBoundingClientRect().width > availableWidth + 1
       setShortenOwner(shouldShorten)
     }
 
@@ -97,7 +121,11 @@ function RepositoryLabel({ repository }: { repository: string }) {
   }, [owner, repository])
 
   return (
-    <span ref={repositoryRef} className="session-repo" title={repository}>
+    <span
+      ref={repositoryRef}
+      className={`session-repo${isPlaceholder ? ' is-placeholder' : ''}`}
+      title={repository}
+    >
       <span className="session-repo-label">
         {owner.length > 0 ? (
           <>

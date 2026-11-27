@@ -34,10 +34,13 @@ const session: Session = {
   pullRequest: null,
 }
 
-function renderRow(density: 'full' | 'compact') {
+function renderRow(
+  density: 'full' | 'compact',
+  viewSession: Session = session,
+) {
   root = createRoot(frame)
   act(() => {
-    root?.render(<SessionRow session={session} density={density} />)
+    root?.render(<SessionRow session={viewSession} density={density} />)
   })
 }
 
@@ -106,7 +109,10 @@ it('shortens the repository owner before its name as the row narrows', async () 
   await resizeFrame('300px')
   const narrowSnapshot = snapshot()
 
-  expect(rowStates(wideSnapshot, narrowSnapshot)).toEqual([
+  await resizeFrame('1100px')
+  const restoredSnapshot = snapshot()
+
+  expect(rowStates(wideSnapshot, narrowSnapshot, restoredSnapshot)).toEqual([
     {
       title: 'Keep the session title visible',
       task: 'Keep the task readable beside long names',
@@ -131,6 +137,18 @@ it('shortens the repository owner before its name as the row narrows', async () 
       branchSeparator: '⑂',
       branchOverflowing: true,
     },
+    {
+      title: 'Keep the session title visible',
+      task: 'Keep the task readable beside long names',
+      taskHasVisibleWidth: true,
+      repository: 'example-platform/notification-delivery-service',
+      repositoryTitle: 'example-platform/notification-delivery-service',
+      repositoryNameOverflowing: false,
+      branch: 'feature/preserve-task-details-with-long-identifiers',
+      branchTitle: 'feature/preserve-task-details-with-long-identifiers',
+      branchSeparator: '⑂',
+      branchOverflowing: false,
+    },
   ])
 })
 
@@ -143,7 +161,10 @@ it('preserves the task and repository name in a narrow full row', async () => {
   await resizeFrame('300px')
   const narrowSnapshot = snapshot()
 
-  expect(rowStates(wideSnapshot, narrowSnapshot)).toEqual([
+  await resizeFrame('1100px')
+  const restoredSnapshot = snapshot()
+
+  expect(rowStates(wideSnapshot, narrowSnapshot, restoredSnapshot)).toEqual([
     {
       title: 'Keep the session title visible',
       task: 'Keep the task readable beside long names',
@@ -168,5 +189,60 @@ it('preserves the task and repository name in a narrow full row', async () => {
       branchSeparator: null,
       branchOverflowing: false,
     },
+    {
+      title: 'Keep the session title visible',
+      task: 'Keep the task readable beside long names',
+      taskHasVisibleWidth: true,
+      repository: 'example-platform/notification-delivery-service',
+      repositoryTitle: 'example-platform/notification-delivery-service',
+      repositoryNameOverflowing: false,
+      branch: undefined,
+      branchTitle: undefined,
+      branchSeparator: null,
+      branchOverflowing: false,
+    },
   ])
+})
+
+it('does not reserve repository width for the blank-repository placeholder', async () => {
+  renderRow('compact', {
+    ...session,
+    repo: ' ',
+    branch: 'feature/repo-placeholder-space',
+  })
+  await resizeFrame('330px')
+
+  const repository = container.querySelector<HTMLElement>('.session-repo')
+  const repositoryLabel = container.querySelector<HTMLElement>(
+    '.session-repo-label',
+  )
+  const repositoryName =
+    container.querySelector<HTMLElement>('.session-repo-name')
+  const branch = container.querySelector<HTMLElement>('.session-branch')
+  const rowSnapshot = () => ({
+    repository: repositoryLabel?.textContent,
+    repositoryTitle: repository?.title,
+    repositoryMinimumWidth:
+      repository === null ? null : getComputedStyle(repository).minWidth,
+    labelMinimumWidth:
+      repositoryLabel === null
+        ? null
+        : getComputedStyle(repositoryLabel).minWidth,
+    nameMinimumWidth:
+      repositoryName === null
+        ? null
+        : getComputedStyle(repositoryName).minWidth,
+    branch: branch?.textContent,
+    branchTitle: branch?.title,
+  })
+
+  expect(rowSnapshot()).toEqual({
+    repository: '—',
+    repositoryTitle: '—',
+    repositoryMinimumWidth: '0px',
+    labelMinimumWidth: '0px',
+    nameMinimumWidth: '0px',
+    branch: 'feature/repo-placeholder-space',
+    branchTitle: 'feature/repo-placeholder-space',
+  })
 })
