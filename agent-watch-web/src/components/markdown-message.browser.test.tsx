@@ -776,7 +776,7 @@ it('shows an unavailable message for an unmapped reference image', () => {
   root = createRoot(container)
   act(() => {
     root?.render(
-      <MarkdownMessage imageSources={{}}>
+      <MarkdownMessage imageSources={{}} unmappedImagePathsAreLocal>
         {'![fixture][sample-image]\n\n[sample-image]: </tmp/fixture.png>'}
       </MarkdownMessage>,
     )
