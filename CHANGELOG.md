@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.966](https://github.com/fohte/armyknife/compare/v0.1.965...v0.1.966) (2026-11-27)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** remove reconnect polling ([#2360](https://github.com/fohte/armyknife/issues/2360)) ([14461e2](https://github.com/fohte/armyknife/commit/14461e20ed349769ed5a8498a05ccff51cafb378))
+
 ## [0.1.965](https://github.com/fohte/armyknife/compare/v0.1.964...v0.1.965) (2026-11-27)
 
 
