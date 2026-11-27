@@ -257,3 +257,43 @@ it('shows a failure when the event stream is permanently closed', () => {
     container.querySelector('.running-task-output')?.textContent ?? null,
   ).toBe('Unable to load task output.')
 })
+
+it('shows a failure when an output event has an invalid payload', () => {
+  act(() => {
+    root?.render(
+      <RunningTasksPanel sessionId="fixture-session" tasks={tasks} />,
+    )
+  })
+  const outputButton = container.querySelector<HTMLButtonElement>(
+    '.running-task-output-button',
+  )
+  act(() => outputButton?.click())
+  const source = eventSources[0]
+  act(() => {
+    source?.emit('message', 'invalid payload')
+  })
+
+  expect(
+    container.querySelector('.running-task-output')?.textContent ?? null,
+  ).toBe('Unable to load task output.')
+})
+
+it('shows a reconnecting message while the event stream is reconnecting', () => {
+  act(() => {
+    root?.render(
+      <RunningTasksPanel sessionId="fixture-session" tasks={tasks} />,
+    )
+  })
+  const outputButton = container.querySelector<HTMLButtonElement>(
+    '.running-task-output-button',
+  )
+  act(() => outputButton?.click())
+  const source = eventSources[0]
+  act(() => {
+    source?.emit('error')
+  })
+
+  expect(
+    container.querySelector('.running-task-output')?.textContent ?? null,
+  ).toBe('Connection interrupted. Reconnecting…')
+})

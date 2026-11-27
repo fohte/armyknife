@@ -70,7 +70,10 @@ function BackgroundTaskRowContainer({
         () => JSON.parse(data) as unknown,
         (error: unknown) => error,
       )()
-      if (parsed.isErr() || !isOutputMessage(parsed.value)) return
+      if (parsed.isErr() || !isOutputMessage(parsed.value)) {
+        setError('Unable to load task output.')
+        return
+      }
       setOutput(parsed.value.output)
       setError(null)
     }

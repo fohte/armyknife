@@ -120,13 +120,7 @@ type OutputEventCallback = Box<dyn FnMut(notify::Result<notify::Event>) + Send +
 pub(super) fn watch_output_events(
     path: PathBuf,
 ) -> Result<impl Stream<Item = notify::Result<notify::Event>> + Send> {
-    let watched_path = canonical_output_path(&path)?;
-    let parent = watched_path
-        .parent()
-        .ok_or_else(|| anyhow::anyhow!("background task output path has no parent"))?
-        .to_path_buf();
-
-    watch_output_events_with(watched_path, move |callback| {
+    watch_output_events_with(path, move |parent, callback| {
         let mut watcher: RecommendedWatcher = notify::recommended_watcher(callback)?;
         watcher.watch(&parent, RecursiveMode::NonRecursive)?;
         Ok(watcher)
@@ -134,17 +128,22 @@ pub(super) fn watch_output_events(
 }
 
 fn watch_output_events_with<W>(
-    watched_path: PathBuf,
-    register: impl FnOnce(OutputEventCallback) -> Result<W> + Send + 'static,
+    path: PathBuf,
+    register: impl FnOnce(PathBuf, OutputEventCallback) -> Result<W> + Send + 'static,
 ) -> Result<impl Stream<Item = notify::Result<notify::Event>> + Send>
 where
     W: Send + 'static,
 {
+    let watched_path = canonical_output_path(&path)?;
+    let parent = watched_path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("background task output path has no parent"))?
+        .to_path_buf();
     let (sender, receiver) = mpsc::channel(1);
     let callback: OutputEventCallback = Box::new(move |event| {
         forward_matching_output_event(&sender, &watched_path, event);
     });
-    let watcher = register(callback)?;
+    let watcher = register(parent, callback)?;
 
     Ok(stream::unfold(
         (receiver, watcher),
@@ -370,7 +369,7 @@ mod tests {
         fs::write(&output_path, "initial output").unwrap();
         let callback = Arc::new(Mutex::new(None));
         let registered_callback = Arc::clone(&callback);
-        let events = watch_output_events_with(output_path.clone(), move |handler| {
+        let events = watch_output_events_with(output_path.clone(), move |_, handler| {
             *registered_callback.lock().unwrap() = Some(handler);
             Ok(())
         })
@@ -389,6 +388,25 @@ mod tests {
         assert_eq!(
             (initial_output, updated_output),
             ("initial output".to_owned(), "updated output".to_owned()),
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn output_event_watcher_rejects_symlink_targets_before_registration() {
+        let directory = tempfile::tempdir().unwrap();
+        let target_path = directory.path().join("target.output");
+        let output_path = directory.path().join("current.output");
+        fs::write(&target_path, "fixture output").unwrap();
+        std::os::unix::fs::symlink(&target_path, &output_path).unwrap();
+
+        let error = watch_output_events_with(output_path, |_, _| Ok(()))
+            .err()
+            .map(|error| error.to_string());
+
+        assert_eq!(
+            error,
+            Some("background task output path is a symlink".to_owned()),
         );
     }
 
