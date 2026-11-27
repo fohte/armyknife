@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.967](https://github.com/fohte/armyknife/compare/v0.1.966...v0.1.967) (2026-11-27)
+
+
+### Bug Fixes
+
+* **agent:** avoid false compacting during tool use ([#2362](https://github.com/fohte/armyknife/issues/2362)) ([4b9eb0b](https://github.com/fohte/armyknife/commit/4b9eb0b0f2362eb3a58c99132e6fb12118f80f6d))
+
 ## [0.1.966](https://github.com/fohte/armyknife/compare/v0.1.965...v0.1.966) (2026-11-27)
 
 
