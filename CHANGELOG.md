@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.980](https://github.com/fohte/armyknife/compare/v0.1.979...v0.1.980) (2026-11-27)
+
+
+### Features
+
+* **agent-watch-web:** apply Composer to replies ([#2383](https://github.com/fohte/armyknife/issues/2383)) ([15a6f45](https://github.com/fohte/armyknife/commit/15a6f45ab5fa1991c7d9654c5b8154049da5058d))
+
 ## [0.1.979](https://github.com/fohte/armyknife/compare/v0.1.978...v0.1.979) (2026-11-27)
 
 
