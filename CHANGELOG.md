@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.1.988](https://github.com/fohte/armyknife/compare/v0.1.987...v0.1.988) (2026-11-27)
+
+
+### Features
+
+* **agent/watch-web:** stream task output live ([#2398](https://github.com/fohte/armyknife/issues/2398)) ([ac010cb](https://github.com/fohte/armyknife/commit/ac010cb12cc290280664fa14b76903bbe2cec8b3))
+
+## [0.1.987](https://github.com/fohte/armyknife/compare/v0.1.986...v0.1.987) (2026-11-27)
+
+
+### Bug Fixes
+
+* **agent/hook:** avoid ps forks in ancestry checks ([#2399](https://github.com/fohte/armyknife/issues/2399)) ([f5e0ea0](https://github.com/fohte/armyknife/commit/f5e0ea0bdd1c02ca6155ad298e07fb9e6fee43b0))
+
+## [0.1.986](https://github.com/fohte/armyknife/compare/v0.1.985...v0.1.986) (2026-11-27)
+
+
+### Features
+
+* **agent/watch-web:** expose resume startup state ([#2396](https://github.com/fohte/armyknife/issues/2396)) ([9165007](https://github.com/fohte/armyknife/commit/916500792eb593f07d807407fa11db7f23f1533d))
+
 ## [0.1.985](https://github.com/fohte/armyknife/compare/v0.1.984...v0.1.985) (2026-11-27)
 
 

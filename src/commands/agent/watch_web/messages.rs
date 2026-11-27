@@ -224,6 +224,7 @@ mod tests {
     use axum::body::{Body, to_bytes};
     use axum::http::header::CONTENT_TYPE;
     use axum::http::{Request, Response, StatusCode};
+    use futures_util::{StreamExt, stream};
     use rstest::{fixture, rstest};
     use serde_json::json;
     use tower::ServiceExt;
@@ -392,56 +393,6 @@ mod tests {
                 text: "Recovered conversation.".to_string(),
             }],
         );
-    }
-
-    fn background_task_output_router(transcript_path: &Path, output_path: &Path) -> Router {
-        let records = [
-            json!({
-                "uuid": "fixture-bash-call-row",
-                "parentUuid": null,
-                "type": "assistant",
-                "timestamp": "2026-01-01T00:00:00Z",
-                "message": {"content": [{
-                    "type": "tool_use",
-                    "id": "fixture-bash-tool-use-id",
-                    "name": "Bash",
-                    "input": {"command": "watch fixture build", "run_in_background": true},
-                }]},
-            }),
-            json!({
-                "uuid": "fixture-bash-result-row",
-                "parentUuid": "fixture-bash-call-row",
-                "type": "user",
-                "sourceToolAssistantUUID": "fixture-bash-call-row",
-                "message": {"content": [{
-                    "type": "tool_result",
-                    "tool_use_id": "fixture-bash-tool-use-id",
-                    "content": format!(
-                        "Command running in background with ID: fixture-task-id. Output is being written to: {}",
-                        output_path.display(),
-                    ),
-                }]},
-            }),
-        ];
-        std::fs::write(
-            transcript_path,
-            records
-                .iter()
-                .map(serde_json::to_string)
-                .collect::<Result<Vec<_>, _>>()
-                .unwrap()
-                .join("\n"),
-        )
-        .unwrap();
-        let mut session = stored_session();
-        session.transcript_path = Some(transcript_path.to_path_buf());
-        routes_with_queued_prompts_and_peer_out_messages(
-            move |id| Ok((id == "fixture-session").then(|| session.clone())),
-            |_| Ok(None),
-            |_| Ok(Vec::new()),
-            |_| Ok(Vec::new()),
-            |_, _| Ok(()),
-        )
     }
 
     #[tokio::test]
@@ -4463,96 +4414,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn background_task_output_route_reads_only_the_task_output_in_its_transcript() {
-        let directory = tempfile::tempdir().unwrap();
-        let transcript_path = directory.path().join("transcript.jsonl");
-        let output_path = directory.path().join("task-output.log");
-        std::fs::write(&output_path, "fixture output\n").unwrap();
-        let router = background_task_output_router(&transcript_path, &output_path);
-        let output_response = router
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/sessions/fixture-session/background-tasks/fixture-task-id/output")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let output_status = output_response.status();
-        let output_cache_policy = output_response
-            .headers()
-            .get(axum::http::header::CACHE_CONTROL)
-            .and_then(|value| value.to_str().ok())
-            .map(str::to_owned);
-        let output = to_bytes(output_response.into_body(), usize::MAX)
-            .await
-            .unwrap()
-            .to_vec();
-        std::fs::write(&output_path, "updated fixture output\n").unwrap();
-        let updated_output_response = router
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/sessions/fixture-session/background-tasks/fixture-task-id/output")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let updated_output = to_bytes(updated_output_response.into_body(), usize::MAX)
-            .await
-            .unwrap()
-            .to_vec();
-        let unknown_task_response = router
-            .oneshot(
-                Request::builder()
-                    .uri("/sessions/fixture-session/background-tasks/other-task/output")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let unknown_task_status = unknown_task_response.status();
-        let unknown_task = to_bytes(unknown_task_response.into_body(), usize::MAX)
-            .await
-            .unwrap()
-            .to_vec();
-
-        assert_eq!(
-            (
-                output_status,
-                output_cache_policy,
-                output,
-                updated_output,
-                unknown_task_status,
-                unknown_task,
-            ),
-            (
-                StatusCode::OK,
-                Some("no-store".to_string()),
-                b"fixture output\n".to_vec(),
-                b"updated fixture output\n".to_vec(),
-                StatusCode::OK,
-                b"Output is unavailable for this task.".to_vec(),
-            ),
-        );
-    }
-
-    #[tokio::test]
-    async fn codex_background_task_output_route_uses_registered_output_path() {
+    async fn background_task_output_events_include_empty_tails() {
         let directory = tempfile::tempdir().unwrap();
         let output_path = directory.path().join("registered-output.log");
-        std::fs::write(&output_path, "registered fixture output\n").unwrap();
+        std::fs::write(&output_path, "").unwrap();
 
         let mut session = stored_session();
         session.engine = Engine::Codex;
         session.transcript_path = None;
-        let loaders = RouteLoaders::new(
+        let loaders = RouteLoaders::new_with_background_task_output_event_stream(
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_, _| Ok(()),
             |_| Ok(Vec::new()),
+            |path| {
+                let first_path = path.clone();
+                Ok(Box::pin(stream::iter([
+                    Ok(notify::Event::new(notify::EventKind::Any).add_path(first_path)),
+                    Ok(notify::Event::new(notify::EventKind::Any).add_path(path)),
+                ])))
+            },
         )
         .with_background_task_loader({
             let output_path = output_path.clone();
@@ -4579,7 +4460,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .uri(
-                        "/sessions/fixture-session/background-tasks/fixture-background-task-id/output",
+                        "/sessions/fixture-session/background-tasks/fixture-background-task-id/output/events",
                     )
                     .body(Body::empty())
                     .unwrap(),
@@ -4587,47 +4468,146 @@ mod tests {
             .await
             .unwrap();
         let status = response.status();
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap()
-            .to_vec();
+        let content_type = response
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        let cache_control = response
+            .headers()
+            .get(axum::http::header::CACHE_CONTROL)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        let content_options = response
+            .headers()
+            .get(axum::http::header::X_CONTENT_TYPE_OPTIONS)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        let mut body = response.into_body().into_data_stream();
+        let first_event = body.next().await.unwrap().unwrap().to_vec();
+        std::fs::write(&output_path, "first output").unwrap();
+        let second_event = body.next().await.unwrap().unwrap().to_vec();
+        std::fs::write(&output_path, "").unwrap();
+        let third_event = body.next().await.unwrap().unwrap().to_vec();
 
         assert_eq!(
-            (status, body),
-            (StatusCode::OK, b"registered fixture output\n".to_vec(),),
+            (
+                status,
+                content_type,
+                cache_control,
+                content_options,
+                first_event,
+                second_event,
+                third_event,
+            ),
+            (
+                StatusCode::OK,
+                Some("text/event-stream".to_owned()),
+                Some("no-store".to_owned()),
+                Some("nosniff".to_owned()),
+                indoc::indoc! {"
+                    data: {\"output\":\"\"}
+
+                "}
+                .as_bytes()
+                .to_vec(),
+                indoc::indoc! {"
+                    data: {\"output\":\"first output\"}
+
+                "}
+                .as_bytes()
+                .to_vec(),
+                indoc::indoc! {"
+                    data: {\"output\":\"\"}
+
+                "}
+                .as_bytes()
+                .to_vec(),
+            ),
         );
     }
 
-    #[cfg(unix)]
     #[tokio::test]
-    async fn background_task_output_route_rejects_symlink_targets() {
-        let directory = tempfile::tempdir().unwrap();
-        let transcript_path = directory.path().join("transcript.jsonl");
-        let output_path = directory.path().join("task-output.log");
-        let target_path = directory.path().join("unrelated.log");
-        std::fs::write(&target_path, "synthetic secret\n").unwrap();
-        std::os::unix::fs::symlink(&target_path, &output_path).unwrap();
-        let router = background_task_output_router(&transcript_path, &output_path);
+    async fn background_task_output_events_route_reports_unavailable_output() {
+        let mut session = stored_session();
+        session.engine = Engine::Codex;
+        session.transcript_path = None;
+        let loaders = empty_route_loaders().with_background_task_loader(|session_id| {
+            Ok((session_id == "fixture-session")
+                .then(|| super::BackgroundTask {
+                    id: "fixture-background-task-id".to_owned(),
+                    description: "Background command".to_owned(),
+                    elapsed_seconds: 1,
+                    kind: super::BackgroundTaskKind::BackgroundTask,
+                    output_path: None,
+                    agent_type: None,
+                })
+                .into_iter()
+                .collect())
+        });
+        let router = routes_with_proposals_and_peer_out_messages(
+            move |id| Ok((id == "fixture-session").then(|| session.clone())),
+            |_| Ok(None),
+            loaders,
+        );
         let response = router
             .oneshot(
                 Request::builder()
-                    .uri("/sessions/fixture-session/background-tasks/fixture-task-id/output")
+                    .uri(
+                        "/sessions/fixture-session/background-tasks/fixture-background-task-id/output/events",
+                    )
                     .body(Body::empty())
                     .unwrap(),
             )
             .await
             .unwrap();
         let status = response.status();
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap()
-            .to_vec();
+        let content_type = response
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        let cache_control = response
+            .headers()
+            .get(axum::http::header::CACHE_CONTROL)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        let content_options = response
+            .headers()
+            .get(axum::http::header::X_CONTENT_TYPE_OPTIONS)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        let mut body = response.into_body().into_data_stream();
+        let event = body.next().await.unwrap().unwrap().to_vec();
+        let stream_state =
+            match tokio::time::timeout(std::time::Duration::from_millis(100), body.next()).await {
+                Err(_) => "pending",
+                Ok(None) => "closed",
+                Ok(Some(Err(_))) => "error",
+                Ok(Some(Ok(_))) => "extra event",
+            };
 
         assert_eq!(
-            (status, body),
+            (
+                status,
+                content_type,
+                cache_control,
+                content_options,
+                event,
+                stream_state,
+            ),
             (
                 StatusCode::OK,
-                b"Output is unavailable for this task.".to_vec(),
+                Some("text/event-stream".to_owned()),
+                Some("no-store".to_owned()),
+                Some("nosniff".to_owned()),
+                indoc::indoc! {"
+                    data: {\"output\":\"Output is unavailable for this task.\"}
+
+                "}
+                .as_bytes()
+                .to_vec(),
+                "pending",
             ),
         );
     }

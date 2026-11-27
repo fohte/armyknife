@@ -1052,6 +1052,10 @@ fn process_hook_event_impl_with_env_and_unreported_stop(
         }
     }
 
+    if event == HookEvent::SessionStart && input.agent_id.is_none() {
+        session_lock.record_watch_web_session_start()?;
+    }
+
     if vibe_setting_requested {
         session_lock.save_vibe_setting(&session)?;
     } else {
@@ -6219,6 +6223,41 @@ mod tests {
                 result, expected_result,
                 "source={:?} should return {:?}",
                 source, expected_result
+            );
+        }
+
+        #[test]
+        fn resume_session_start_advances_watch_web_generation() {
+            let temp_dir = create_temp_sessions_dir();
+            let first_input = create_test_input_with_source(None, Some("resume"));
+
+            process_hook_event_impl(
+                HookEvent::SessionStart,
+                first_input,
+                temp_dir.path(),
+                &SideEffects::none(),
+            )
+            .expect("resume SessionStart should save the session");
+            let first_generation =
+                store::watch_web_session_start_generation_from(temp_dir.path(), "test-123")
+                    .expect("first session start generation should load");
+
+            let second_input = create_test_input_with_source(None, Some("resume"));
+            process_hook_event_impl(
+                HookEvent::SessionStart,
+                second_input,
+                temp_dir.path(),
+                &SideEffects::none(),
+            )
+            .expect("second resume SessionStart should save the session");
+
+            assert_eq!(
+                (
+                    first_generation,
+                    store::watch_web_session_start_generation_from(temp_dir.path(), "test-123",)
+                        .expect("second session start generation should load"),
+                ),
+                (1, 2),
             );
         }
 

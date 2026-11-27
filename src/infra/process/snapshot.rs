@@ -17,22 +17,6 @@ pub use caller::find_caller_pids_in_path;
 pub use worktree::{ProcessInPath, SHELL_COMMANDS, find_non_shell_processes_in_path};
 pub(crate) use worktree::{WorktreeProcessInspection, inspect_worktree_processes};
 
-/// Looks up the parent PID of `pid` using `ps -o ppid= -p <pid>`.
-/// Returns `None` if the process is gone or `ps` fails.
-pub fn get_parent_pid(pid: u32) -> Option<u32> {
-    let output = command::new("ps")
-        .args(["-o", "ppid=", "-p", &pid.to_string()])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .parse::<u32>()
-        .ok()
-}
-
 /// Process topology and command names captured from the process table.
 ///
 /// Stores a parent → children mapping so callers can search for descendants
@@ -577,56 +561,5 @@ mod tests {
             .map(|&(pid, path)| (pid, PathBuf::from(path)))
             .collect();
         assert_eq!(got, expected);
-    }
-
-    #[rstest]
-    #[case::nested_under_claude(
-        indoc! {"
-            100 1 init
-            200 100 claude
-            300 200 claude
-            400 300 hook
-        "},
-        400,
-        true,
-    )]
-    #[case::nested_under_codex(
-        indoc! {"
-            100 1 init
-            200 100 claude
-            300 200 /agent/bin/codex
-            400 300 hook
-        "},
-        400,
-        true,
-    )]
-    #[case::direct_agent_process(
-        indoc! {"
-            100 1 init
-            200 100 claude
-            300 200 hook
-        "},
-        300,
-        false,
-    )]
-    #[case::ordinary_shell_ancestor(
-        indoc! {"
-            100 1 init
-            200 100 zsh
-            300 200 hook
-        "},
-        300,
-        false,
-    )]
-    fn has_parent_agent_process_cases(
-        #[case] ps_output: &str,
-        #[case] pid: u32,
-        #[case] expected: bool,
-    ) {
-        let snapshot = ProcessSnapshot::from_ps_output(ps_output);
-        assert_eq!(
-            crate::commands::agent::pane::process::has_parent_agent_process(pid, &snapshot),
-            expected,
-        );
     }
 }
