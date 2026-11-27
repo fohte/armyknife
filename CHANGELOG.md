@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.969](https://github.com/fohte/armyknife/compare/v0.1.968...v0.1.969) (2026-11-27)
+
+
+### Features
+
+* **agent:** remove SessionStart decision guidance ([#2366](https://github.com/fohte/armyknife/issues/2366)) ([28b8a45](https://github.com/fohte/armyknife/commit/28b8a45a2655b5cdb4ee5003193c9c118f82ac51))
+
 ## [0.1.968](https://github.com/fohte/armyknife/compare/v0.1.967...v0.1.968) (2026-11-27)
 
 
