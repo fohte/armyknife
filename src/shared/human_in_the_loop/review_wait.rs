@@ -207,6 +207,22 @@ mod tests {
         SessionWatch::new()
     }
 
+    fn thread_cpu_time() -> Duration {
+        let mut time = libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
+        // SAFETY: `time` points to a valid writable timespec.
+        assert_eq!(
+            unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut time) },
+            0
+        );
+        Duration::new(
+            u64::try_from(time.tv_sec).expect("thread cpu time should be non-negative"),
+            u32::try_from(time.tv_nsec).expect("nanoseconds should fit in u32"),
+        )
+    }
+
     #[rstest]
     fn returns_a_fifo_signal_while_the_session_is_alive(fifo_reader: FifoReader) {
         let path = fifo_reader.path.clone();
@@ -333,13 +349,22 @@ mod tests {
     }
 
     #[rstest]
-    fn waits_for_fifo_signal_without_reresolving_the_session(fifo_reader: FifoReader) {
+    fn waits_for_fifo_signal_after_an_empty_writer_closes_without_spinning(
+        fifo_reader: FifoReader,
+    ) {
         let checks = Cell::new(0);
         let path = fifo_reader.path.clone();
         let writer = thread::spawn(move || {
-            thread::sleep(Duration::from_millis(70));
+            thread::sleep(Duration::from_millis(20));
+            let empty_writer = OpenOptions::new()
+                .write(true)
+                .open(&path)
+                .expect("empty FIFO writer should open");
+            drop(empty_writer);
+            thread::sleep(Duration::from_millis(50));
             signal_fifo(&path, b'0');
         });
+        let cpu_time_before = thread_cpu_time();
 
         let result = wait_for_fifo_signal_or_session_exit_with_interval(
             fifo_reader.reader,
@@ -353,9 +378,13 @@ mod tests {
             },
         )
         .map_err(|error| error.to_string());
+        let cpu_did_not_spin = thread_cpu_time() - cpu_time_before < Duration::from_millis(50);
         writer.join().expect("writer should finish");
 
-        assert_eq!((result, checks.get()), (Ok(b'0'), 1));
+        assert_eq!(
+            (result, checks.get(), cpu_did_not_spin),
+            (Ok(b'0'), 1, true)
+        );
     }
 
     #[rstest]
