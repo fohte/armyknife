@@ -3990,6 +3990,16 @@ it('shows every close check in Activity and opens the failed worktree in a termi
   const checks = {
     path: '/worktrees/example-project',
     files: ['src/example.ts', 'src/example.test.ts'],
+    changes: [
+      { status: 'M', path: 'src/example.ts' },
+      { status: 'A', path: 'src/example.test.ts' },
+    ],
+    commits: [
+      {
+        sha: '1111111111111111111111111111111111111111',
+        subject: 'add fictional example coverage',
+      },
+    ],
     branch: 'feature/example-work',
     merged: false,
     reason: 'The example pull request is still open.',

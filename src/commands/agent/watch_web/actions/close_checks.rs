@@ -202,7 +202,13 @@ impl CloseChecks {
             None => None,
         };
         let commit_inspection = match (merge_status.as_ref(), branch.as_ref()) {
-            (Some(status), _) if !status.should_cleanup => {
+            (Some(status), _)
+                if matches!(
+                    &status.status,
+                    crate::infra::git::MergeStatus::NotMerged { .. }
+                        | crate::infra::git::MergeStatus::Closed { .. }
+                ) =>
+            {
                 let branch = status.branch.clone();
                 tokio::task::spawn_blocking(move || inspect_commits(branch))
                     .await
@@ -247,8 +253,13 @@ impl CloseChecks {
     ) -> Self {
         let (branch, merged, reason) = match merge_status {
             Some(status) => {
-                let reason = (!status.should_cleanup).then(|| status.status.reason().to_string());
-                (Some(status.branch), Some(status.should_cleanup), reason)
+                let merged = matches!(
+                    &status.status,
+                    crate::infra::git::MergeStatus::Merged { .. }
+                        | crate::infra::git::MergeStatus::NoUniqueCommits { .. }
+                );
+                let reason = (!merged).then(|| status.status.reason().to_string());
+                (Some(status.branch), Some(merged), reason)
             }
             None => (branch, None, None),
         };
@@ -403,9 +414,15 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case::merged(crate::infra::git::MergeStatus::Merged { reason: "fictional change merged".to_string() })]
-    #[case::closed(crate::infra::git::MergeStatus::Closed { reason: "fictional change closed".to_string() })]
-    fn merged_uses_the_worktree_cleanup_decision(#[case] status: MergeStatus) {
+    #[case::merged(MergeStatus::Merged { reason: "fictional change merged".to_string() }, true, None)]
+    #[case::closed(MergeStatus::Closed { reason: "fictional change closed".to_string() }, false, Some("fictional change closed"))]
+    #[case::no_unique_commits(MergeStatus::NoUniqueCommits { reason: "fictional commits are already included".to_string() }, true, None)]
+    #[case::not_merged(MergeStatus::NotMerged { reason: "fictional change is open".to_string() }, false, Some("fictional change is open"))]
+    fn merged_reflects_whether_the_branch_has_unique_commits(
+        #[case] status: MergeStatus,
+        #[case] expected_merged: bool,
+        #[case] expected_reason: Option<&str>,
+    ) {
         let checks = CloseChecks::from_observations(
             PathBuf::from("/fictional/worktree"),
             Vec::new(),
@@ -428,8 +445,8 @@ mod tests {
                 "commits": [],
                 "commitInspectionUnavailable": false,
                 "branch": "feature/fictional",
-                "merged": true,
-                "reason": null,
+                "merged": expected_merged,
+                "reason": expected_reason,
                 "processes": [],
                 "processInspectionUnavailable": false,
             }),
@@ -472,6 +489,51 @@ mod tests {
                 "branch": "feature/fictional",
                 "merged": true,
                 "reason": null,
+                "processes": [],
+                "processInspectionUnavailable": false,
+            }),
+        );
+    }
+
+    #[tokio::test]
+    async fn closed_unmerged_branch_commits_are_included_in_close_checks() {
+        let checks = CloseChecks::inspect_with(
+            PathBuf::from("/fictional/worktree"),
+            Some("feature/fictional".to_string()),
+            |_| Vec::new(),
+            |branch| async move {
+                inspect_close_merge_status(branch, async {
+                    MergeStatus::Closed {
+                        reason: "pull request is closed without merging".to_string(),
+                    }
+                })
+                .await
+            },
+            |_| CommitInspection {
+                commits: vec![commit(
+                    "1111111111111111111111111111111111111111",
+                    "preserve fictional work",
+                )],
+                unavailable: false,
+            },
+            |_| Ok(Vec::new()),
+        )
+        .await;
+
+        assert_eq!(
+            serde_json::to_value(checks).unwrap(),
+            json!({
+                "path": "/fictional/worktree",
+                "files": [],
+                "changes": [],
+                "commits": [{
+                    "sha": "1111111111111111111111111111111111111111",
+                    "subject": "preserve fictional work",
+                }],
+                "commitInspectionUnavailable": false,
+                "branch": "feature/fictional",
+                "merged": false,
+                "reason": "pull request is closed without merging",
                 "processes": [],
                 "processInspectionUnavailable": false,
             }),
@@ -774,12 +836,12 @@ mod tests {
     }
 
     #[test]
-    fn reads_branch_commits_from_the_expected_range_without_running_git() {
+    fn reads_branch_commits_from_the_expected_default_branch_range_without_running_git() {
         let mut observed_git_call = None;
         let inspection = read_branch_commits_with(
             Path::new("/fictional/worktree"),
             "feature/fictional",
-            || Some("main".to_string()),
+            || Some("master".to_string()),
             |path, args| {
                 observed_git_call = Some((path.to_path_buf(), args.map(str::to_string)));
                 Some(
@@ -815,7 +877,7 @@ mod tests {
                     [
                         "log".to_string(),
                         "--format=%H%x00%s".to_string(),
-                        "origin/main..refs/heads/feature/fictional".to_string(),
+                        "origin/master..refs/heads/feature/fictional".to_string(),
                     ],
                 )),
             ),

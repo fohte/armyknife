@@ -232,9 +232,21 @@ pub fn current_branch(repo: &GitRepo) -> Result<String> {
     repo.current_branch()
 }
 
-/// Get the main branch name for a specific repository.
-/// Agent worktree creation only uses `origin/main` and `origin/master` as default bases.
+/// Get the default branch name for a specific repository.
 pub fn get_main_branch_for_repo(repo: &GitRepo) -> Result<String> {
+    if let Some(branch) = run_git_optional(
+        &repo.workdir,
+        [
+            "symbolic-ref",
+            "--quiet",
+            "--short",
+            "refs/remotes/origin/HEAD",
+        ],
+    )
+    .and_then(|remote_head| default_branch_from_remote_head(&remote_head).map(str::to_string))
+    {
+        return Ok(branch);
+    }
     if repo.remote_branch_exists("origin/main") {
         return Ok("main".to_string());
     }
@@ -242,6 +254,12 @@ pub fn get_main_branch_for_repo(repo: &GitRepo) -> Result<String> {
         return Ok("master".to_string());
     }
     Err(GitError::NotFound("Neither origin/main nor origin/master found".to_string()).into())
+}
+
+fn default_branch_from_remote_head(remote_head: &str) -> Option<&str> {
+    remote_head
+        .strip_prefix("origin/")
+        .filter(|branch| !branch.is_empty() && *branch != "HEAD")
 }
 
 /// Fetch from origin with prune to remove stale remote-tracking references.
@@ -358,6 +376,19 @@ mod tests {
             Some(branch) => assert_eq!(result.unwrap(), branch),
             None => assert!(result.is_err()),
         }
+    }
+
+    #[rstest::rstest]
+    #[case::main("origin/main", Some("main"))]
+    #[case::master("origin/master", Some("master"))]
+    #[case::nested_branch("origin/release/fictional", Some("release/fictional"))]
+    #[case::other_remote("upstream/main", None)]
+    #[case::empty_branch("origin/", None)]
+    fn parses_default_branch_from_remote_head(
+        #[case] remote_head: &str,
+        #[case] expected: Option<&str>,
+    ) {
+        assert_eq!(default_branch_from_remote_head(remote_head), expected);
     }
 
     #[test]
