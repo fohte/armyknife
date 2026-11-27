@@ -241,15 +241,21 @@ fn run_worktree_mode(
     let resolved = resolve_args(worktree_value, args.common.prompt.as_deref())?;
     let name = resolved.branch_name;
     let prompt = resolved.prompt;
-    let prompt_for_cache = args
-        .watch_web_prompt_cache
-        .as_ref()
-        .unwrap_or(&args.common.prompt)
-        .as_deref();
+    let prompt_for_cache = prompt_cache_source(
+        args.watch_web_prompt_cache.as_ref().map(Option::as_deref),
+        prompt.as_deref(),
+    );
 
     with_prompt_cache_recovery(repo_root, prompt_for_cache, || {
         run_worktree_creation(args, &name, prompt.as_deref(), repo_root, config)
     })
+}
+
+fn prompt_cache_source<'a>(
+    prompt_override: Option<Option<&'a str>>,
+    resolved_prompt: Option<&'a str>,
+) -> Option<&'a str> {
+    prompt_override.unwrap_or(resolved_prompt)
 }
 
 /// Save `prompt` to the cache before running `f`, then clean it up on
@@ -329,11 +335,10 @@ fn run_session_only(
     repo_root: &str,
     config: &Config,
 ) -> Result<()> {
-    let prompt_for_cache = args
-        .watch_web_prompt_cache
-        .as_ref()
-        .unwrap_or(&args.common.prompt)
-        .as_deref();
+    let prompt_for_cache = prompt_cache_source(
+        args.watch_web_prompt_cache.as_ref().map(Option::as_deref),
+        args.common.prompt.as_deref(),
+    );
 
     with_prompt_cache_recovery(repo_root, prompt_for_cache, || {
         run_session_only_inner(args, repo, repo_root, config)
@@ -569,6 +574,25 @@ mod tests {
         let cli = TestCli::try_parse_from(argv).unwrap();
         let actual = cli.args.worktree.as_ref().map(|inner| inner.as_deref());
         assert_eq!(actual, expected);
+    }
+
+    #[rstest]
+    #[case::editor_prompt(None, Some("editor draft"), Some("editor draft"))]
+    #[case::explicit_prompt(
+        Some(Some("user prompt")),
+        Some("prompt with paths"),
+        Some("user prompt")
+    )]
+    #[case::no_prompt_override(Some(None), Some("prompt with paths"), None)]
+    fn prompt_cache_source_prefers_override_and_falls_back_to_resolved_prompt(
+        #[case] prompt_override: Option<Option<&str>>,
+        #[case] resolved_prompt: Option<&str>,
+        #[case] expected: Option<&str>,
+    ) {
+        assert_eq!(
+            prompt_cache_source(prompt_override, resolved_prompt),
+            expected
+        );
     }
 
     #[test]

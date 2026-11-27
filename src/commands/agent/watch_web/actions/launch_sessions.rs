@@ -128,6 +128,7 @@ async fn launch_session(
         .map(|attachment| attachment.path.clone())
         .collect::<Vec<_>>();
     let has_attachments = !attachment_paths.is_empty();
+    // The prompt gives the agent access to saved files; conversation thumbnails are presentation data.
     let prompt = attachments::append_paths_to_message(
         initial_message.clone().unwrap_or_default(),
         &attachment_paths,
