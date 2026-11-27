@@ -219,23 +219,12 @@ pub(super) fn save(
     Ok(saved)
 }
 
-pub(super) fn remove(paths: &[PathBuf]) -> anyhow::Result<()> {
+pub(super) fn remove(paths: &[PathBuf]) {
     let _guard = STORAGE_LOCK
         .get_or_init(|| Mutex::new(()))
         .lock()
-        .map_err(|_| anyhow::anyhow!("file attachment storage lock is poisoned"))?;
-    for path in paths {
-        match fs::remove_file(path) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(error).with_context(|| {
-                    format!("failed to remove file attachment {}", path.display())
-                });
-            }
-        }
-    }
-    Ok(())
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    remove_files_unlocked(paths);
 }
 
 fn remove_files_unlocked(paths: &[PathBuf]) {
@@ -425,24 +414,12 @@ mod tests {
 
     use super::{
         Attachment, AttachmentKind, LegacyImageRequest, MAX_ATTACHMENT_BYTES, Request,
-        SavedAttachment, ValidationError, append_image_previews_to_comment, remove, validate,
+        SavedAttachment, ValidationError, append_image_previews_to_comment, validate,
     };
 
     const PNG_SIGNATURE: &[u8] = &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
     const GIF_SIGNATURE: &[u8] = b"GIF89a";
     const WEBP_SIGNATURE: &[u8] = b"RIFF0000WEBP";
-
-    #[test]
-    fn reports_when_an_attachment_path_cannot_be_removed() {
-        let directory = tempfile::tempdir().unwrap();
-
-        assert_eq!(
-            remove(&[directory.path().to_path_buf()])
-                .map(|()| "removed")
-                .map_err(|_| "failed"),
-            Err("failed"),
-        );
-    }
 
     #[rstest]
     #[case::opening_bracket("map[copy].png", r"![map\[copy\].png](/api/images/fixture.png)")]

@@ -178,26 +178,16 @@ async fn launch_session(
     match launch_result {
         Ok(Ok(())) => {}
         Ok(Err(error)) => {
-            remove_saved_attachments(&launch_id, &attachment_paths);
+            super::messages::remove_attachments(attachment_paths).await;
             return Err(ApiError::operation(error));
         }
         Err(error) => {
-            remove_saved_attachments(&launch_id, &attachment_paths);
+            super::messages::remove_attachments(attachment_paths).await;
             return Err(ApiError::internal(error));
         }
     }
 
     Ok(Json(LaunchResponse { launch_id }))
-}
-
-fn remove_saved_attachments(launch_id: &str, paths: &[PathBuf]) {
-    if let Err(error) = attachments::remove(paths) {
-        tracing::warn!(
-            launch_id,
-            %error,
-            "failed to remove initial message attachments after launch failure"
-        );
-    }
 }
 
 fn resolve_worktree(
