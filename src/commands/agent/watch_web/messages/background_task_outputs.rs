@@ -90,7 +90,7 @@ pub(super) async fn get_background_task_output_events(
     .await
     {
         Ok(Ok(Some(path))) => path,
-        Ok(Ok(None)) => return output_unavailable_response(StatusCode::NOT_FOUND),
+        Ok(Ok(None)) => return output_unavailable_event_response(),
         Ok(Err(error)) => {
             tracing::warn!(%error, "failed to resolve background task output path");
             return output_unavailable_response(StatusCode::INTERNAL_SERVER_ERROR);
@@ -108,9 +108,23 @@ pub(super) async fn get_background_task_output_events(
             return output_unavailable_response(StatusCode::INTERNAL_SERVER_ERROR);
         }
     };
-    let changes = output_change_signals(output_path.clone(), output_events);
+    let changes = output_events.map(|_| ());
     let events = output_updates(output_path, changes)
         .map(|output| Ok::<Event, std::convert::Infallible>(Event::default().data(output)));
+    output_event_stream_response(events)
+}
+
+fn output_unavailable_event_response() -> Response {
+    let events = stream::once(future::ready(Ok::<_, std::convert::Infallible>(
+        Event::default().data(OUTPUT_UNAVAILABLE),
+    )))
+    .chain(stream::pending());
+    output_event_stream_response(events)
+}
+
+fn output_event_stream_response(
+    events: impl Stream<Item = Result<Event, std::convert::Infallible>> + Send + 'static,
+) -> Response {
     let mut response = Sse::new(events)
         .keep_alive(KeepAlive::default())
         .into_response();
@@ -139,18 +153,14 @@ fn output_unavailable_response(status: StatusCode) -> Response {
 pub(super) fn watch_output_events(
     path: PathBuf,
 ) -> Result<impl Stream<Item = notify::Result<notify::Event>> + Send> {
+    let watched_path = canonical_output_path(&path)?;
     let (sender, receiver) = mpsc::channel(1);
-    let watched_path = path.clone();
-    let mut watcher: RecommendedWatcher = notify::recommended_watcher(
-        move |event: notify::Result<notify::Event>| {
-            if let Err(error) = &event {
-                tracing::warn!(%error, path = %watched_path.display(), "background task output watcher failed");
-            }
-            // Each event rereads the full tail, so a pending notification covers newer writes.
-            let _ = sender.try_send(event);
-        },
-    )?;
-    let parent = path
+    let callback_path = watched_path.clone();
+    let mut watcher: RecommendedWatcher =
+        notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+            forward_matching_output_event(&sender, &callback_path, event);
+        })?;
+    let parent = watched_path
         .parent()
         .ok_or_else(|| anyhow::anyhow!("background task output path has no parent"))?;
     watcher.watch(parent, RecursiveMode::NonRecursive)?;
@@ -164,17 +174,49 @@ pub(super) fn watch_output_events(
     ))
 }
 
-fn output_change_signals(
-    path: PathBuf,
-    events: impl Stream<Item = notify::Result<notify::Event>> + Send + 'static,
-) -> impl Stream<Item = ()> + Send {
-    events.filter_map(move |event| {
-        let changed = match event {
-            Ok(event) => event.paths.iter().any(|event_path| event_path == &path),
-            Err(_) => true,
-        };
-        future::ready(changed.then_some(()))
-    })
+fn forward_matching_output_event(
+    sender: &mpsc::Sender<notify::Result<notify::Event>>,
+    watched_path: &Path,
+    event: notify::Result<notify::Event>,
+) {
+    match &event {
+        Ok(event)
+            if !event
+                .paths
+                .iter()
+                .any(|event_path| event_path == watched_path) =>
+        {
+            return;
+        }
+        Err(error) => {
+            tracing::warn!(%error, path = %watched_path.display(), "background task output watcher failed");
+        }
+        _ => {}
+    }
+
+    // Matching events can coalesce because each signal rereads the full output tail.
+    let _ = sender.try_send(event);
+}
+
+fn canonical_output_path(path: &Path) -> Result<PathBuf> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("background task output path has no parent"))?;
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| anyhow::anyhow!("background task output path has no file name"))?;
+    let canonical_parent = fs::canonicalize(parent)?;
+    let canonical_path = canonical_parent.join(file_name);
+
+    match fs::symlink_metadata(&canonical_path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            Err(anyhow::anyhow!("background task output path is a symlink"))
+        }
+        Ok(metadata) if metadata.is_file() => Ok(fs::canonicalize(canonical_path)?),
+        Ok(_) => Err(anyhow::anyhow!("background task output path is not a file")),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(canonical_path),
+        Err(error) => Err(error.into()),
+    }
 }
 
 fn output_updates(
@@ -182,16 +224,21 @@ fn output_updates(
     changes: impl Stream<Item = ()> + Send + 'static,
 ) -> impl Stream<Item = String> + Send {
     let initial_path = path.clone();
-    stream::once(async move { output_for_event(&initial_path) })
-        .chain(changes.map(move |_| output_for_event(&path)))
+    stream::once(output_for_event(initial_path))
+        .chain(changes.then(move |_| output_for_event(path.clone())))
 }
 
-fn output_for_event(path: &Path) -> String {
-    match read_output_tail(path) {
-        Ok(Some(output)) => output,
-        Ok(None) => OUTPUT_UNAVAILABLE.to_owned(),
+async fn output_for_event(path: PathBuf) -> String {
+    let log_path = path.clone();
+    match tokio::task::spawn_blocking(move || read_output_tail(&path)).await {
+        Ok(Ok(Some(output))) => output,
+        Ok(Ok(None)) => OUTPUT_UNAVAILABLE.to_owned(),
+        Ok(Err(error)) => {
+            tracing::warn!(%error, path = %log_path.display(), "failed to read background task output update");
+            OUTPUT_UNAVAILABLE.to_owned()
+        }
         Err(error) => {
-            tracing::warn!(%error, path = %path.display(), "failed to read background task output update");
+            tracing::error!(%error, path = %log_path.display(), "background task output reader failed");
             OUTPUT_UNAVAILABLE.to_owned()
         }
     }
@@ -325,8 +372,46 @@ fn read_output_tail(path: &Path) -> std::io::Result<Option<String>> {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::path::PathBuf;
 
-    use super::{MAX_OUTPUT_BYTES, read_output_tail};
+    use notify::{Event, EventKind};
+    use tokio::sync::mpsc;
+
+    use super::{
+        MAX_OUTPUT_BYTES, canonical_output_path, forward_matching_output_event, read_output_tail,
+    };
+
+    #[test]
+    fn background_task_output_unrelated_events_do_not_fill_the_notification_channel() {
+        let (sender, mut receiver) = mpsc::channel(1);
+        let watched_path = PathBuf::from("/fixture/tasks/current.output");
+        let unrelated_event =
+            Event::new(EventKind::Any).add_path(watched_path.with_file_name("other.output"));
+        let expected_event = Event::new(EventKind::Any).add_path(watched_path.clone());
+
+        forward_matching_output_event(&sender, &watched_path, Ok(unrelated_event));
+        forward_matching_output_event(&sender, &watched_path, Ok(expected_event.clone()));
+
+        assert_eq!(receiver.try_recv().unwrap().unwrap(), expected_event);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn background_task_output_path_is_canonicalized_through_symlinked_parent_directories() {
+        let directory = tempfile::tempdir().unwrap();
+        let actual_directory = directory.path().join("actual");
+        let alias_directory = directory.path().join("alias");
+        fs::create_dir(&actual_directory).unwrap();
+        std::os::unix::fs::symlink(&actual_directory, &alias_directory).unwrap();
+        let actual_path = actual_directory.join("output.log");
+        let aliased_path = alias_directory.join("output.log");
+        fs::write(&actual_path, "fixture output").unwrap();
+
+        assert_eq!(
+            canonical_output_path(&aliased_path).unwrap(),
+            fs::canonicalize(&actual_path).unwrap(),
+        );
+    }
 
     #[test]
     fn reads_only_the_last_twenty_lines() {

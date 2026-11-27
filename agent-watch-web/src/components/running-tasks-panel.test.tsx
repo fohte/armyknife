@@ -34,12 +34,33 @@ class FakeEventSource {
 
 const tasks: BackgroundTask[] = [
   {
+    id: 'fixture-subagent',
+    description: 'Inspect a sample module',
+    elapsedSeconds: 2,
+    kind: 'subagent',
+    agentType: 'FixtureAgent',
+  },
+  {
     id: 'fixture-background-task',
     description: 'Run a fixture command',
     elapsedSeconds: 1,
     kind: 'background_task',
   },
 ]
+
+function getOutputButtonCounts(container: HTMLElement) {
+  return {
+    subagentRows: container.querySelectorAll(
+      'section[aria-label="Subagents"] .running-task',
+    ).length,
+    subagentOutputButtons: container.querySelectorAll(
+      'section[aria-label="Subagents"] .running-task-output-button',
+    ).length,
+    backgroundTaskOutputButtons: container.querySelectorAll(
+      'section[aria-label="Background tasks"] .running-task-output-button',
+    ).length,
+  }
+}
 
 let container: HTMLDivElement
 let root: Root | null = null
@@ -68,6 +89,20 @@ afterEach(() => {
   container.remove()
   vi.unstubAllGlobals()
   vi.useRealTimers()
+})
+
+it('shows an output button only on background task rows', () => {
+  act(() => {
+    root?.render(
+      <RunningTasksPanel sessionId="fixture-session" tasks={tasks} />,
+    )
+  })
+
+  expect(getOutputButtonCounts(container)).toEqual({
+    subagentRows: 1,
+    subagentOutputButtons: 0,
+    backgroundTaskOutputButtons: 1,
+  })
 })
 
 it('opens one event stream without polling and closes it with the row', () => {
@@ -119,6 +154,22 @@ it('opens one event stream without polling and closes it with the row', () => {
     sourceClosed: true,
     outputRemoved: true,
   })
+})
+
+it('renders the pre output pane without a border', () => {
+  act(() => {
+    root?.render(
+      <RunningTasksPanel sessionId="fixture-session" tasks={tasks} />,
+    )
+  })
+  const outputButton = container.querySelector<HTMLButtonElement>(
+    '.running-task-output-button',
+  )
+  act(() => outputButton?.click())
+  const output = container.querySelector<HTMLElement>('pre')
+  expect(output === null ? null : getComputedStyle(output).borderTopWidth).toBe(
+    '0px',
+  )
 })
 
 it('renders each output update received from the event stream', () => {

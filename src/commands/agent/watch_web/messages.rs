@@ -5376,11 +5376,10 @@ mod tests {
             |_, _| Ok(()),
             |_| Ok(Vec::new()),
             |path| {
-                Ok(Box::pin(stream::iter([
-                    Ok(notify::Event::new(notify::EventKind::Any)
-                        .add_path(path.with_file_name("unrelated-output.log"))),
-                    Ok(notify::Event::new(notify::EventKind::Any).add_path(path)),
-                ])))
+                Ok(Box::pin(stream::iter([Ok(notify::Event::new(
+                    notify::EventKind::Any,
+                )
+                .add_path(path))])))
             },
         )
         .with_background_task_loader({
@@ -5458,6 +5457,83 @@ mod tests {
                 .to_vec(),
                 indoc::indoc! {"
                     data: second output
+
+                "}
+                .as_bytes()
+                .to_vec(),
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn background_task_output_events_route_reports_unavailable_output() {
+        let mut session = stored_session();
+        session.engine = Engine::Codex;
+        session.transcript_path = None;
+        let loaders = RouteLoaders::new(
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+            |_| Ok(Vec::new()),
+        )
+        .with_background_task_loader(|session_id| {
+            Ok((session_id == "fixture-session")
+                .then(|| super::BackgroundTask {
+                    id: "fixture-background-task-id".to_owned(),
+                    description: "Background command".to_owned(),
+                    elapsed_seconds: 1,
+                    kind: super::BackgroundTaskKind::BackgroundTask,
+                    output_path: None,
+                    agent_type: None,
+                })
+                .into_iter()
+                .collect())
+        });
+        let router = routes_with_proposals_and_peer_out_messages(
+            move |id| Ok((id == "fixture-session").then(|| session.clone())),
+            |_| Ok(None),
+            loaders,
+        );
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri(
+                        "/sessions/fixture-session/background-tasks/fixture-background-task-id/output/events",
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let content_type = response
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        let cache_control = response
+            .headers()
+            .get(axum::http::header::CACHE_CONTROL)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        let content_options = response
+            .headers()
+            .get(axum::http::header::X_CONTENT_TYPE_OPTIONS)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        let mut body = response.into_body().into_data_stream();
+        let event = body.next().await.unwrap().unwrap().to_vec();
+
+        assert_eq!(
+            (status, content_type, cache_control, content_options, event,),
+            (
+                StatusCode::OK,
+                Some("text/event-stream".to_owned()),
+                Some("no-store".to_owned()),
+                Some("nosniff".to_owned()),
+                indoc::indoc! {"
+                    data: Output is unavailable for this task.
 
                 "}
                 .as_bytes()
