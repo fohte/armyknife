@@ -92,15 +92,40 @@ fn parse_pane_ids(output: &str) -> std::result::Result<HashSet<String>, PaneIdsP
     Ok(pane_ids)
 }
 
-/// Lists pane IDs from the recorded server. An error means liveness is unknown.
-///
-/// Empty output is ambiguous because a successful command may omit pane IDs entirely.
+/// Lists pane IDs from the recorded server. Empty output and a stopped server
+/// both mean that no panes remain; other errors mean liveness is unknown.
 pub fn list_all_pane_ids_for_socket(socket_path: Option<&str>) -> Result<HashSet<String>> {
-    let output = super::run_tmux_output_untrimmed(&socket_command_args(
+    pane_ids_from_query(
+        super::run_tmux_output_untrimmed(&socket_command_args(
+            socket_path,
+            &["list-panes", "-a", "-F", "#{pane_id}"],
+        )),
         socket_path,
-        &["list-panes", "-a", "-F", "#{pane_id}"],
-    ))?;
-    parse_pane_ids(&output).map_err(|error| {
+    )
+}
+
+fn pane_ids_from_query(
+    output: Result<String>,
+    socket_path: Option<&str>,
+) -> Result<HashSet<String>> {
+    let output = match output {
+        Ok(output) => output,
+        Err(TmuxError::CommandFailed(error))
+            if error
+                .stderr
+                .as_deref()
+                .is_some_and(|stderr| stderr.trim_start().starts_with("no server running on ")) =>
+        {
+            return Ok(HashSet::new());
+        }
+        Err(error) => return Err(error),
+    };
+    match parse_pane_ids(&output) {
+        Ok(pane_ids) => Ok(pane_ids),
+        Err(PaneIdsParseError::Empty) => Ok(HashSet::new()),
+        Err(error) => Err(error),
+    }
+    .map_err(|error| {
         let (reason, message) = match error {
             PaneIdsParseError::Empty => ("empty output", "tmux returned no pane IDs"),
             PaneIdsParseError::InvalidPaneId => {
@@ -386,6 +411,31 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+
+    #[test]
+    fn missing_tmux_server_is_an_empty_pane_list() {
+        let error = TmuxError::CommandFailed(super::super::CommandFailedError {
+            command: "tmux".to_string(),
+            args: vec!["list-panes".to_string()],
+            message: "command exited with non-zero status".to_string(),
+            stderr: Some("no server running on /fixture/tmux.sock".to_string()),
+        });
+
+        assert_eq!(
+            pane_ids_from_query(Err(error), Some("/fixture/tmux.sock"))
+                .expect("a stopped server has no panes"),
+            HashSet::new(),
+        );
+    }
+
+    #[test]
+    fn empty_tmux_pane_listing_is_an_empty_pane_list() {
+        assert_eq!(
+            pane_ids_from_query(Ok(String::new()), Some("/fixture/tmux.sock"))
+                .expect("a successful empty listing has no panes"),
+            HashSet::new(),
+        );
+    }
 
     #[rstest]
     #[case::legacy_targets_default_server(None, vec!["-L", "default"])]

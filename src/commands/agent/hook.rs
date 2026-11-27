@@ -139,17 +139,6 @@ pub fn run(args: &HookArgs) -> Result<()> {
     };
 
     input.engine = args.engine;
-    if event == HookEvent::SessionStart
-        && tmux::in_tmux()
-        && let Err(error) = tmux_cleanup_hooks::configure(tmux::run_tmux)
-    {
-        tracing::warn!(
-            event = "agent.hook.tmux_cleanup_hooks.failed",
-            error = %error,
-            "failed to configure tmux cleanup hooks"
-        );
-    }
-
     let session_id = input.session_id.clone();
     let agent_id = input.agent_id.clone();
     let tool_name = input.tool_name.clone();
@@ -158,6 +147,9 @@ pub fn run(args: &HookArgs) -> Result<()> {
         .as_ref()
         .map(|tool_input| tool_input.raw.clone());
     let result = process_hook_event(event, input)?;
+    if event == HookEvent::SessionStart {
+        configure_tmux_cleanup_hooks(&session_id);
+    }
     if event == HookEvent::PermissionRequest {
         let sessions_dir = store::sessions_dir()?;
         permission_request::wait_for_request(
@@ -196,6 +188,33 @@ pub fn run(args: &HookArgs) -> Result<()> {
         marker.as_deref(),
         &mut io::stdout().lock(),
     )
+}
+
+fn configure_tmux_cleanup_hooks(session_id: &str) {
+    let inside_tmux = tmux::in_tmux();
+    let tmux_info = store::load_session(session_id)
+        .ok()
+        .flatten()
+        .and_then(|session| session.tmux_info);
+    if !tmux_cleanup_hooks::should_configure(
+        HookEvent::SessionStart,
+        inside_tmux,
+        tmux_info.is_some(),
+    ) {
+        return;
+    }
+
+    let result = match tmux_info.as_ref() {
+        Some(info) => tmux_cleanup_hooks::configure_for_socket(info.socket_path.as_deref()),
+        None => tmux_cleanup_hooks::configure_current(),
+    };
+    if let Err(error) = result {
+        tracing::warn!(
+            event = "agent.hook.tmux_cleanup_hooks.failed",
+            error = %error,
+            "failed to configure tmux cleanup hooks"
+        );
+    }
 }
 
 fn write_stop_response(
