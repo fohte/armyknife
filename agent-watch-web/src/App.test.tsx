@@ -3836,6 +3836,8 @@ it.each([
     checks: {
       path: '/worktrees/example-unmerged',
       files: [],
+      changes: [],
+      commits: [{ sha: 'abc1234', subject: 'add example implementation' }],
       branch: 'feature/example-unmerged',
       merged: false,
       reason: 'The example pull request is still open.',
@@ -3853,6 +3855,8 @@ it.each([
     checks: {
       path: '/worktrees/example-dirty',
       files: ['src/example.ts'],
+      changes: [{ status: 'M', path: 'src/example.ts' }],
+      commits: [],
       branch: 'feature/example-dirty',
       merged: true,
       reason: null,
@@ -3870,6 +3874,8 @@ it.each([
     checks: {
       path: '/worktrees/example-busy',
       files: [],
+      changes: [],
+      commits: [],
       branch: 'feature/example-busy',
       merged: true,
       reason: null,
@@ -3887,6 +3893,8 @@ it.each([
     checks: {
       path: '/worktrees/example-unknown',
       files: [],
+      changes: [],
+      commits: [],
       branch: null,
       merged: null,
       reason: null,
@@ -4118,6 +4126,10 @@ it('offers a keep-worktree retry after a non-Done session close fails', async ()
               checks: {
                 path: '/worktrees/example-session',
                 files: [],
+                changes: [],
+                commits: [
+                  { sha: 'abc1234', subject: 'add example implementation' },
+                ],
                 branch: 'feature/example-session',
                 merged: false,
                 reason: 'The example pull request is still open.',

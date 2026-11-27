@@ -480,7 +480,11 @@ mod tests {
                 );
                 CloseChecks::from_observations(
                     worktree_path,
-                    vec!["src/fictional.rs".to_string()],
+                    vec![crate::shared::worktree::UncommittedChange {
+                        status: "M".to_string(),
+                        path: "src/fictional.rs".to_string(),
+                    }],
+                    Vec::new(),
                     Some("feature/fictional".to_string()),
                     Some(crate::shared::worktree_delete::classify_merge_guard_status(
                         "feature/fictional".to_string(),

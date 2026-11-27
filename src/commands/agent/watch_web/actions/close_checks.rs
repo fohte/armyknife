@@ -5,6 +5,8 @@ use std::time::Duration;
 use serde::Serialize;
 
 use crate::commands::agent::types::Session;
+use crate::infra::git::cmd::run_git;
+use crate::infra::git::get_main_branch_for_repo;
 use crate::infra::process::ProcessInPath;
 use crate::infra::process::find_non_shell_processes_in_path;
 use crate::shared::cleanup::{self, WorktreeProcessGuardError};
@@ -16,11 +18,25 @@ use crate::shared::worktree_delete::{self, MergeGuardStatus, WorktreeDeleteTarge
 pub(super) struct CloseChecks {
     path: String,
     files: Vec<String>,
+    changes: Vec<CloseChange>,
+    commits: Vec<CloseCommit>,
     branch: Option<String>,
     merged: Option<bool>,
     reason: Option<String>,
     processes: Vec<CloseProcess>,
     process_inspection_unavailable: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct CloseChange {
+    status: String,
+    path: String,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize)]
+pub(super) struct CloseCommit {
+    sha: String,
+    subject: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -76,23 +92,37 @@ impl CloseChecks {
     ) -> Self {
         let worktree_path = target.worktree_path.clone();
         let repo = target.main_repo;
+        let merge_repo = repo.clone();
+        let commits_repo = repo.clone();
         let process_session = session;
         Self::inspect_with(
             worktree_path,
             branch,
-            |path| worktree::uncommitted_files(path).unwrap_or_default(),
+            |path| worktree::uncommitted_changes(path).unwrap_or_default(),
             move |branch| async move {
                 // The preview checks local refs; close fetches and revalidates before deletion.
                 let status_branch = branch.clone();
-                let status_repo = repo.clone();
                 inspect_close_merge_status(branch, async move {
                     worktree_delete::get_merge_status_for_branch_from_local_refs(
-                        &status_repo,
+                        &merge_repo,
                         &status_branch,
                     )
                     .await
                 })
                 .await
+            },
+            move |branch| {
+                let Ok(default_branch) = get_main_branch_for_repo(&commits_repo) else {
+                    return Vec::new();
+                };
+                let range = format!("origin/{default_branch}..refs/heads/{branch}");
+                run_git(
+                    commits_repo.workdir(),
+                    ["log", "--format=%h%x00%s", range.as_str()],
+                )
+                .ok()
+                .map(|log| parse_commits(&log))
+                .unwrap_or_default()
             },
             move |path| {
                 check_process_guard_for_close(
@@ -120,8 +150,9 @@ impl CloseChecks {
         Self::inspect_with(
             worktree_path,
             None,
-            |path| worktree::uncommitted_files(path).unwrap_or_default(),
+            |path| worktree::uncommitted_changes(path).unwrap_or_default(),
             |_| async { None },
+            |_| Vec::new(),
             move |path| {
                 check_process_guard_for_close(
                     path,
@@ -139,41 +170,60 @@ impl CloseChecks {
         .await
     }
 
-    async fn inspect_with<Files, Merge, MergeFuture, Processes>(
+    async fn inspect_with<Changes, Merge, MergeFuture, Commits, Processes>(
         worktree_path: PathBuf,
         branch: Option<String>,
-        inspect_files: Files,
+        inspect_changes: Changes,
         inspect_merge_status: Merge,
+        inspect_commits: Commits,
         inspect_process_guard: Processes,
     ) -> Self
     where
-        Files: FnOnce(&Path) -> Vec<String> + Send + 'static,
+        Changes: FnOnce(&Path) -> Vec<worktree::UncommittedChange> + Send + 'static,
         Merge: FnOnce(String) -> MergeFuture,
         MergeFuture: Future<Output = Option<MergeGuardStatus>>,
+        Commits: FnOnce(String) -> Vec<CloseCommit> + Send + 'static,
         Processes:
             FnOnce(&Path) -> Result<Vec<ProcessInPath>, WorktreeProcessGuardError> + Send + 'static,
     {
         let inspection_path = worktree_path.clone();
         let files_and_processes = tokio::task::spawn_blocking(move || {
-            let files = inspect_files(&inspection_path);
+            let changes = inspect_changes(&inspection_path);
             let processes = inspect_process_guard(&inspection_path);
-            (files, processes)
+            (changes, processes)
         });
         let merge_status = match branch.clone() {
             Some(branch) => inspect_merge_status(branch).await,
             None => None,
         };
-        let (files, processes) = files_and_processes
+        let commits = match merge_status.as_ref() {
+            Some(status) if !status.should_cleanup => {
+                let branch = status.branch.clone();
+                tokio::task::spawn_blocking(move || inspect_commits(branch))
+                    .await
+                    .unwrap_or_default()
+            }
+            _ => Vec::new(),
+        };
+        let (changes, processes) = files_and_processes
             .await
-            .map(|(files, processes)| (files, Some(processes)))
+            .map(|(changes, processes)| (changes, Some(processes)))
             .unwrap_or_default();
 
-        Self::from_observations(worktree_path, files, branch, merge_status, processes)
+        Self::from_observations(
+            worktree_path,
+            changes,
+            commits,
+            branch,
+            merge_status,
+            processes,
+        )
     }
 
     pub(super) fn from_observations(
         worktree_path: PathBuf,
-        files: Vec<String>,
+        changes: Vec<worktree::UncommittedChange>,
+        commits: Vec<CloseCommit>,
         branch: Option<String>,
         merge_status: Option<MergeGuardStatus>,
         process_inspection: Option<Result<Vec<ProcessInPath>, WorktreeProcessGuardError>>,
@@ -201,10 +251,20 @@ impl CloseChecks {
                 name: process.comm,
             })
             .collect();
+        let files = changes.iter().map(|change| change.path.clone()).collect();
+        let changes = changes
+            .into_iter()
+            .map(|change| CloseChange {
+                status: change.status,
+                path: change.path,
+            })
+            .collect();
 
         Self {
             path: worktree_path.display().to_string(),
             files,
+            changes,
+            commits,
             branch,
             merged,
             reason,
@@ -212,6 +272,18 @@ impl CloseChecks {
             process_inspection_unavailable,
         }
     }
+}
+
+fn parse_commits(log: &str) -> Vec<CloseCommit> {
+    log.lines()
+        .filter_map(|line| {
+            let (sha, subject) = line.split_once('\0')?;
+            Some(CloseCommit {
+                sha: sha.to_string(),
+                subject: subject.to_string(),
+            })
+        })
+        .collect()
 }
 
 pub(super) fn check_process_guard_for_close(
@@ -244,7 +316,8 @@ mod tests {
     fn serializes_all_close_guard_observations() {
         let checks = CloseChecks::from_observations(
             PathBuf::from("/fictional/worktree"),
-            vec!["src/fictional.rs".to_string()],
+            vec![change("M", "src/fictional.rs")],
+            vec![commit("abc1234", "preserve fictional work")],
             Some("feature/fictional".to_string()),
             Some(worktree_delete::classify_merge_guard_status(
                 "feature/fictional".to_string(),
@@ -267,6 +340,8 @@ mod tests {
             json!({
                 "path": "/fictional/worktree",
                 "files": ["src/fictional.rs"],
+                "changes": [{ "status": "M", "path": "src/fictional.rs" }],
+                "commits": [{ "sha": "abc1234", "subject": "preserve fictional work" }],
                 "branch": "feature/fictional",
                 "merged": false,
                 "reason": "pull request is open",
@@ -283,6 +358,7 @@ mod tests {
         let checks = CloseChecks::from_observations(
             PathBuf::from("/fictional/worktree"),
             Vec::new(),
+            Vec::new(),
             Some("feature/fictional".to_string()),
             Some(worktree_delete::classify_merge_guard_status(
                 "feature/fictional".to_string(),
@@ -296,6 +372,8 @@ mod tests {
             json!({
                 "path": "/fictional/worktree",
                 "files": [],
+                "changes": [],
+                "commits": [],
                 "branch": "feature/fictional",
                 "merged": true,
                 "reason": null,
@@ -319,6 +397,7 @@ mod tests {
                 })
                 .await
             },
+            |_| vec![commit("abc1234", "must not be listed")],
             |_| Ok(Vec::new()),
         )
         .await;
@@ -328,6 +407,8 @@ mod tests {
             json!({
                 "path": "/fictional/worktree",
                 "files": [],
+                "changes": [],
+                "commits": [],
                 "branch": "feature/fictional",
                 "merged": true,
                 "reason": null,
@@ -342,6 +423,7 @@ mod tests {
         let checks = CloseChecks::from_observations(
             PathBuf::from("/fictional/detached-worktree"),
             Vec::new(),
+            Vec::new(),
             None,
             None,
             Some(Err(WorktreeProcessGuardError::InspectionUnavailable {
@@ -354,6 +436,8 @@ mod tests {
             json!({
                 "path": "/fictional/detached-worktree",
                 "files": [],
+                "changes": [],
+                "commits": [],
                 "branch": null,
                 "merged": null,
                 "reason": null,
@@ -368,6 +452,7 @@ mod tests {
         let checks = CloseChecks::from_observations(
             PathBuf::from("/fictional/worktree"),
             Vec::new(),
+            Vec::new(),
             Some("feature/fictional".to_string()),
             None,
             Some(Ok(Vec::new())),
@@ -378,6 +463,8 @@ mod tests {
             json!({
                 "path": "/fictional/worktree",
                 "files": [],
+                "changes": [],
+                "commits": [],
                 "branch": "feature/fictional",
                 "merged": null,
                 "reason": null,
@@ -487,7 +574,7 @@ mod tests {
             Some("feature/fictional".to_string()),
             move |_| {
                 files_flag.store(true, Ordering::SeqCst);
-                vec!["src/fictional.rs".to_string()]
+                vec![change("M", "src/fictional.rs")]
             },
             move |branch| {
                 branch_flag.store(true, Ordering::SeqCst);
@@ -500,6 +587,7 @@ mod tests {
                     ))
                 }
             },
+            |_| vec![commit("abc1234", "preserve fictional work")],
             move |path| {
                 processes_flag.store(true, Ordering::SeqCst);
                 Err(WorktreeProcessGuardError::ActiveProcesses {
@@ -528,6 +616,8 @@ mod tests {
                 json!({
                     "path": "/fictional/worktree",
                     "files": ["src/fictional.rs"],
+                    "changes": [{ "status": "M", "path": "src/fictional.rs" }],
+                    "commits": [{ "sha": "abc1234", "subject": "preserve fictional work" }],
                     "branch": "feature/fictional",
                     "merged": false,
                     "reason": "pull request is open",
@@ -536,5 +626,30 @@ mod tests {
                 }),
             ),
         );
+    }
+
+    #[test]
+    fn parses_commit_log_records_without_running_git() {
+        assert_eq!(
+            parse_commits("abc1234\0preserve fictional work\ndef5678\0add fictional detail"),
+            vec![
+                commit("abc1234", "preserve fictional work"),
+                commit("def5678", "add fictional detail"),
+            ],
+        );
+    }
+
+    fn change(status: &str, path: &str) -> worktree::UncommittedChange {
+        worktree::UncommittedChange {
+            status: status.to_string(),
+            path: path.to_string(),
+        }
+    }
+
+    fn commit(sha: &str, subject: &str) -> CloseCommit {
+        CloseCommit {
+            sha: sha.to_string(),
+            subject: subject.to_string(),
+        }
     }
 }

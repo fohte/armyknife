@@ -18,6 +18,20 @@ function isCloseWorktreeChecks(value: unknown): value is CloseWorktreeChecks {
     typeof value['path'] === 'string' &&
     Array.isArray(value['files']) &&
     value['files'].every((file) => typeof file === 'string') &&
+    Array.isArray(value['changes']) &&
+    value['changes'].every(
+      (change) =>
+        isRecord(change) &&
+        typeof change['status'] === 'string' &&
+        typeof change['path'] === 'string',
+    ) &&
+    Array.isArray(value['commits']) &&
+    value['commits'].every(
+      (commit) =>
+        isRecord(commit) &&
+        typeof commit['sha'] === 'string' &&
+        typeof commit['subject'] === 'string',
+    ) &&
     (typeof value['branch'] === 'string' || value['branch'] === null) &&
     (typeof value['merged'] === 'boolean' || value['merged'] === null) &&
     (typeof value['reason'] === 'string' || value['reason'] === null) &&

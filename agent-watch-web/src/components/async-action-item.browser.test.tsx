@@ -21,6 +21,8 @@ const failedCloseAction: AsyncAction = {
   checks: {
     path: '~/work/example-service',
     files: [],
+    changes: [],
+    commits: [],
     branch: 'feature/example-route',
     merged: true,
     reason: null,

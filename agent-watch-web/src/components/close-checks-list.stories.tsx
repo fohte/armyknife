@@ -6,6 +6,11 @@ import type { CloseWorktreeChecks } from '#session-operation-types'
 const exampleChecks: CloseWorktreeChecks = {
   path: '/worktrees/example-project',
   files: ['src/example.ts', 'src/example.test.ts'],
+  changes: [
+    { status: 'M', path: 'src/example.ts' },
+    { status: '??', path: 'src/example.test.ts' },
+  ],
+  commits: [{ sha: 'abc1234', subject: 'add example implementation' }],
   branch: 'feature/example-work',
   merged: false,
   reason: 'The example pull request is still open.',

@@ -367,6 +367,11 @@ export const UncommittedFilesAreListed: Story = {
       checks: {
         path: '/worktrees/example-project',
         files: ['src/example.ts', 'src/example.test.ts'],
+        changes: [
+          { status: 'M', path: 'src/example.ts' },
+          { status: '??', path: 'src/example.test.ts' },
+        ],
+        commits: [],
         branch: 'feature/example-work',
         merged: true,
         reason: null,
@@ -386,6 +391,8 @@ export const UnmergedBranchShowsItsReason: Story = {
       checks: {
         path: '/worktrees/example-project',
         files: [],
+        changes: [],
+        commits: [{ sha: 'abc1234', subject: 'add example implementation' }],
         branch: 'feature/example-work',
         merged: false,
         reason: 'The example pull request is still open.',
@@ -405,6 +412,8 @@ export const RunningProcessesAreListed: Story = {
       checks: {
         path: '/worktrees/example-project',
         files: [],
+        changes: [],
+        commits: [],
         branch: 'feature/example-work',
         merged: true,
         reason: null,
@@ -427,6 +436,8 @@ export const AllThreeChecksAreVisible: Story = {
       checks: {
         path: '/worktrees/example-project',
         files: ['src/example.ts'],
+        changes: [{ status: 'M', path: 'src/example.ts' }],
+        commits: [{ sha: 'abc1234', subject: 'add example implementation' }],
         branch: 'feature/example-work',
         merged: false,
         reason: 'The example pull request is still open.',
@@ -446,6 +457,8 @@ export const ProcessCheckIsUnavailable: Story = {
       checks: {
         path: '/worktrees/example-project',
         files: [],
+        changes: [],
+        commits: [],
         branch: null,
         merged: null,
         reason: null,

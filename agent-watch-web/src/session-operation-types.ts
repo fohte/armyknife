@@ -143,6 +143,8 @@ export type SessionOperation =
 export type CloseWorktreeChecks = {
   path: string
   files: string[]
+  changes: { status: string; path: string }[]
+  commits: { sha: string; subject: string }[]
   branch: string | null
   merged: boolean | null
   reason: string | null
