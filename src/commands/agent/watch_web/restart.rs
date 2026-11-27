@@ -117,24 +117,33 @@ pub(super) async fn wait_for_replacement(
             Some(Ok(event))
                 if event.need_rescan() || event.paths.iter().any(|path| path == executable) =>
             {
-                match identity.matches(executable) {
-                    Ok(true) => {}
-                    Ok(false) => return,
-                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-                    Err(error) => {
-                        tracing::warn!(
-                            executable = %executable.display(),
-                            error = %error,
-                            "failed to inspect watch-web executable"
-                        );
-                    }
+                if executable_was_replaced(executable, identity) {
+                    return;
                 }
             }
             Some(Ok(_)) => {}
             Some(Err(error)) => {
                 tracing::warn!(%error, "failed to watch watch-web executable");
+                if executable_was_replaced(executable, identity) {
+                    return;
+                }
             }
             None => std::future::pending::<()>().await,
+        }
+    }
+}
+
+fn executable_was_replaced(executable: &Path, identity: ExecutableIdentity) -> bool {
+    match identity.matches(executable) {
+        Ok(matches) => !matches,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+        Err(error) => {
+            tracing::warn!(
+                executable = %executable.display(),
+                error = %error,
+                "failed to inspect watch-web executable"
+            );
+            false
         }
     }
 }
@@ -174,13 +183,38 @@ mod tests {
     use std::ffi::OsString;
     use std::fs;
     use std::io;
+    use std::path::PathBuf;
     use std::time::Duration;
 
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
     use tokio::sync::mpsc;
     use tokio::sync::watch;
 
     use super::{ExecutableIdentity, ServerOutcome};
+
+    struct ExecutableReplacement {
+        _directory: tempfile::TempDir,
+        executable: PathBuf,
+        replacement: PathBuf,
+        identity: ExecutableIdentity,
+    }
+
+    #[fixture]
+    fn executable_replacement() -> ExecutableReplacement {
+        let directory = tempfile::tempdir().expect("temporary directory should be created");
+        let executable = directory.path().join("a");
+        let replacement = directory.path().join("a.new");
+        fs::write(&executable, "old binary").expect("initial executable should be written");
+        fs::write(&replacement, "new binary").expect("replacement should be written");
+        let identity = ExecutableIdentity::read(&executable)
+            .expect("initial executable identity should be readable");
+        ExecutableReplacement {
+            _directory: directory,
+            executable,
+            replacement,
+            identity,
+        }
+    }
 
     #[rstest]
     #[case::graceful_shutdown(true)]
@@ -218,16 +252,18 @@ mod tests {
         );
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn waits_for_a_matching_event_after_the_executable_identity_changes() {
-        let directory = tempfile::tempdir().expect("temporary directory should be created");
-        let executable = directory.path().join("a");
-        let replacement = directory.path().join("a.new");
-        let unrelated = directory.path().join("unrelated");
-        fs::write(&executable, "old binary").expect("initial executable should be written");
-        fs::write(&replacement, "new binary").expect("replacement should be written");
-        let identity = ExecutableIdentity::read(&executable)
-            .expect("initial executable identity should be readable");
+    async fn waits_for_a_matching_event_after_the_executable_identity_changes(
+        executable_replacement: ExecutableReplacement,
+    ) {
+        let ExecutableReplacement {
+            _directory,
+            executable,
+            replacement,
+            identity,
+        } = executable_replacement;
+        let unrelated = executable.with_file_name("unrelated");
         let (sender, mut events) = mpsc::unbounded_channel();
         let mut startup_replacement_pending = false;
         let waiting = super::wait_for_replacement(
@@ -243,11 +279,9 @@ mod tests {
                 notify::Event::new(notify::EventKind::Any).add_path(executable.clone())
             ))
             .expect("watch event should be delivered");
-        assert!(
-            tokio::time::timeout(Duration::from_millis(1), &mut waiting)
-                .await
-                .is_err()
-        );
+        let unchanged_identity = tokio::time::timeout(Duration::from_millis(1), &mut waiting)
+            .await
+            .is_err();
 
         fs::rename(&replacement, &executable).expect("replacement should be atomic");
         sender
@@ -255,33 +289,35 @@ mod tests {
                 notify::Event::new(notify::EventKind::Any).add_path(unrelated)
             ))
             .expect("unrelated watch event should be delivered");
-        assert!(
-            tokio::time::timeout(Duration::from_millis(1), &mut waiting)
-                .await
-                .is_err()
-        );
+        let unrelated_event = tokio::time::timeout(Duration::from_millis(1), &mut waiting)
+            .await
+            .is_err();
 
         sender
             .send(Ok(
                 notify::Event::new(notify::EventKind::Any).add_path(executable.clone())
             ))
             .expect("matching watch event should be delivered");
-        assert!(
-            tokio::time::timeout(Duration::from_secs(1), &mut waiting)
-                .await
-                .is_ok()
+        let matching_event = tokio::time::timeout(Duration::from_secs(1), &mut waiting)
+            .await
+            .is_ok();
+        assert_eq!(
+            (unchanged_identity, unrelated_event, matching_event),
+            (true, true, true),
         );
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn rescans_recheck_the_executable_identity() {
-        let directory = tempfile::tempdir().expect("temporary directory should be created");
-        let executable = directory.path().join("a");
-        let replacement = directory.path().join("a.new");
-        fs::write(&executable, "old binary").expect("initial executable should be written");
-        fs::write(&replacement, "new binary").expect("replacement should be written");
-        let identity = ExecutableIdentity::read(&executable)
-            .expect("initial executable identity should be readable");
+    async fn rescans_recheck_the_executable_identity(
+        executable_replacement: ExecutableReplacement,
+    ) {
+        let ExecutableReplacement {
+            _directory,
+            executable,
+            replacement,
+            identity,
+        } = executable_replacement;
         let (sender, mut events) = mpsc::unbounded_channel();
         let mut startup_replacement_pending = false;
         let waiting = super::wait_for_replacement(
@@ -303,6 +339,64 @@ mod tests {
                 .await
                 .is_ok()
         );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn restarts_immediately_after_replacement_during_watcher_setup(
+        executable_replacement: ExecutableReplacement,
+    ) {
+        let ExecutableReplacement {
+            _directory,
+            executable,
+            identity,
+            ..
+        } = executable_replacement;
+        let (_sender, mut events) = mpsc::unbounded_channel();
+        let mut startup_replacement_pending = true;
+        let mut waiting = Box::pin(super::wait_for_replacement(
+            &executable,
+            identity,
+            &mut startup_replacement_pending,
+            &mut events,
+        ));
+
+        let completed = tokio::time::timeout(Duration::from_secs(1), &mut waiting)
+            .await
+            .is_ok();
+        drop(waiting);
+        assert_eq!((completed, startup_replacement_pending), (true, false));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn watcher_errors_recheck_the_executable_identity(
+        executable_replacement: ExecutableReplacement,
+    ) {
+        let ExecutableReplacement {
+            _directory,
+            executable,
+            replacement,
+            identity,
+        } = executable_replacement;
+        let (sender, mut events) = mpsc::unbounded_channel();
+        let mut startup_replacement_pending = false;
+        let waiting = super::wait_for_replacement(
+            &executable,
+            identity,
+            &mut startup_replacement_pending,
+            &mut events,
+        );
+        tokio::pin!(waiting);
+
+        fs::rename(&replacement, &executable).expect("replacement should be atomic");
+        sender
+            .send(Err(notify::Error::generic("synthetic watcher error")))
+            .expect("watcher error should be delivered");
+        let completed = tokio::time::timeout(Duration::from_secs(1), &mut waiting)
+            .await
+            .is_ok();
+        assert!(completed);
     }
 
     #[test]
