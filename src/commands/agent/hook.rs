@@ -570,10 +570,24 @@ fn process_hook_event_impl_with_env_and_unreported_stop(
 
     let startup_metadata = startup_metadata_for_resume(sessions_dir, &input)?;
 
-    // Resolved once and shared by the pane option, the pane takeover check and
-    // `Session::tmux_info` below: all three want the same pane, and the lookup
-    // shells out to tmux.
-    let pane_info = side_effects.resolve_pane(&input);
+    // The pane lookup remains per event because `Session::tmux_info` tracks
+    // pane changes. Process ancestry is only inspected at SessionStart.
+    let is_session_start = event == HookEvent::SessionStart;
+    let (mut stored_session, cached_has_parent_agent) = if is_session_start {
+        (None, None)
+    } else {
+        store::load_hook_session_state_from(sessions_dir, &input.session_id)?
+    };
+    let pane_resolution =
+        side_effects.resolve_pane(&input, is_session_start, cached_has_parent_agent);
+    let pane_info = pane_resolution.pane_info;
+    if is_session_start {
+        store::set_has_parent_agent_process_from(
+            sessions_dir,
+            &input.session_id,
+            pane_resolution.has_parent_agent,
+        )?;
+    }
 
     // A `claude -c` resume can emit startup for a temporary ID; watch-web's
     // launch ID identifies a new session that can be bound before its first prompt.
@@ -716,7 +730,9 @@ fn process_hook_event_impl_with_env_and_unreported_stop(
     // saved separately, after this lock is released -- see the comment at
     // its update below.
     let now = Utc::now();
-    let stored_session = store::load_session_from(sessions_dir, &input.session_id)?;
+    if is_session_start {
+        stored_session = store::load_session_from(sessions_dir, &input.session_id)?;
+    }
     let current_model = stored_session
         .as_ref()
         .and_then(|session| session.model.as_deref());
@@ -2233,14 +2249,33 @@ mod tests {
         side_effects: SideEffects,
     }
 
+    type PaneBindingResolveCallSink = std::sync::Arc<std::sync::Mutex<Vec<(bool, Option<bool>)>>>;
+
     struct RecordingPaneBinding {
         pane_info: tmux::PaneInfo,
         option_writes: std::sync::Arc<std::sync::Mutex<Vec<(String, String, String)>>>,
+        resolve_calls: PaneBindingResolveCallSink,
     }
 
     impl PaneBindingOperations for RecordingPaneBinding {
-        fn resolve(&self, _input: &HookInput) -> Option<tmux::PaneInfo> {
-            Some(self.pane_info.clone())
+        fn resolve(
+            &self,
+            _input: &HookInput,
+            is_session_start: bool,
+            cached_has_parent_agent: Option<bool>,
+        ) -> pane_binding::Resolution {
+            self.resolve_calls
+                .lock()
+                .expect("pane binding resolve calls lock should not be poisoned")
+                .push((is_session_start, cached_has_parent_agent));
+            pane_binding::Resolution {
+                pane_info: Some(self.pane_info.clone()),
+                has_parent_agent: if is_session_start {
+                    Some(false)
+                } else {
+                    cached_has_parent_agent
+                },
+            }
         }
 
         fn set_session_id(&self, pane_id: &str, session_id: &str) {
@@ -2552,6 +2587,7 @@ mod tests {
             ..EnvVars::default()
         };
         let option_writes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let resolve_calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let pane_info = tmux::PaneInfo {
             session_name: "main".to_string(),
             window_name: "claude".to_string(),
@@ -2562,6 +2598,7 @@ mod tests {
             pane_binding: Some(std::sync::Arc::new(RecordingPaneBinding {
                 pane_info,
                 option_writes: option_writes.clone(),
+                resolve_calls: resolve_calls.clone(),
             })),
             ..SideEffects::none()
         };
@@ -2611,6 +2648,61 @@ mod tests {
                     TMUX_SESSION_OPTION.to_string(),
                     "test-123".to_string(),
                 )],
+            ),
+        );
+
+        process_hook_event_impl_with_env(
+            HookEvent::PostToolUse,
+            create_test_input_with_source(None, None),
+            temp_dir.path(),
+            &side_effects,
+            None,
+            EnvVars::default(),
+        )
+        .expect("tool event should use the saved pane classification");
+        let session = store::load_session_from(temp_dir.path(), "test-123")
+            .expect("session should load")
+            .expect("session should exist");
+        assert_eq!(
+            (
+                store::load_hook_session_state_from(temp_dir.path(), "test-123")
+                    .expect("hook state should load")
+                    .1,
+                resolve_calls
+                    .lock()
+                    .expect("pane binding resolve calls lock should not be poisoned")
+                    .clone(),
+                session.tmux_info.map(|info| info.pane_id),
+            ),
+            (
+                Some(false),
+                vec![(true, None), (false, Some(false))],
+                Some("%42".to_string()),
+            ),
+        );
+
+        process_hook_event_impl_with_env(
+            HookEvent::SessionStart,
+            create_test_input_with_source(None, None),
+            temp_dir.path(),
+            &side_effects,
+            None,
+            EnvVars::default(),
+        )
+        .expect("a later SessionStart should refresh the saved classification");
+        assert_eq!(
+            (
+                store::load_hook_session_state_from(temp_dir.path(), "test-123")
+                    .expect("hook state should load")
+                    .1,
+                resolve_calls
+                    .lock()
+                    .expect("pane binding resolve calls lock should not be poisoned")
+                    .clone(),
+            ),
+            (
+                Some(false),
+                vec![(true, None), (false, Some(false)), (true, None)],
             ),
         );
     }

@@ -13,6 +13,7 @@ use crate::commands::agent::types::Session;
 
 mod activity;
 mod agent_files;
+mod agent_session_pane_binding;
 mod decisions;
 mod deferred_stops;
 mod initial_prompt;
@@ -37,6 +38,7 @@ mod web_state;
 pub(crate) use activity::agent_response_timestamps;
 pub(crate) use agent_files::AgentFile;
 pub(crate) use agent_files::{agent_file, agent_files};
+pub(crate) use agent_session_pane_binding::set_has_parent_agent_process;
 pub(crate) use decisions::{
     AgentDecision, AgentDecisionCounts, agent_decision_counts_by_session, agent_decisions,
     insert_agent_decision, set_agent_decision_review,
@@ -160,6 +162,25 @@ pub(crate) fn load_session(sessions_dir: &Path, session_id: &str) -> Result<Opti
     }
     let connection = open_connection(sessions_dir)?;
     read_session_skipping_undecodable(&connection, session_id)
+}
+
+pub(crate) fn load_hook_session_state(
+    sessions_dir: &Path,
+    session_id: &str,
+) -> Result<(Option<Session>, Option<bool>)> {
+    validate_session_id(session_id)?;
+    if !sessions_dir.exists() {
+        return Ok((None, None));
+    }
+
+    let connection = open_connection(sessions_dir)?;
+    Ok((
+        read_session_skipping_undecodable(&connection, session_id)?,
+        agent_session_pane_binding::has_parent_agent_process_from_connection(
+            &connection,
+            session_id,
+        )?,
+    ))
 }
 
 pub(crate) fn save_session(sessions_dir: &Path, session: &Session) -> Result<()> {
