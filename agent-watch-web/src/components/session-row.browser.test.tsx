@@ -294,9 +294,24 @@ it('truncates a long task title only after the repository reaches its minimum wi
   await resizeFrame('320px')
 
   const repository = container.querySelector<HTMLElement>('.session-repo')
+  const repositoryName =
+    container.querySelector<HTMLElement>('.session-repo-name')
+  const repositoryOwner = container.querySelector<HTMLElement>(
+    '.session-repo-owner',
+  )
+  const repositoryOwnerSeparator = container.querySelector<HTMLElement>(
+    '.session-repo-owner-separator',
+  )
   const taskTitle = container.querySelector<HTMLElement>('.session-task-title')
   const task = container.querySelector<HTMLElement>('.session-task')
-  if (repository === null || taskTitle === null || task === null) {
+  if (
+    repository === null ||
+    repositoryName === null ||
+    repositoryOwner === null ||
+    repositoryOwnerSeparator === null ||
+    taskTitle === null ||
+    task === null
+  ) {
     throw new Error('The full row details were not rendered')
   }
 
@@ -308,19 +323,39 @@ it('truncates a long task title only after the repository reaches its minimum wi
   const repositoryMinimumWidth = repositoryMinimum.getBoundingClientRect().width
   repositoryMinimum.remove()
 
+  const shortenedRepositoryMinimum = document.createElement('span')
+  shortenedRepositoryMinimum.style.position = 'fixed'
+  shortenedRepositoryMinimum.style.width = '12ch'
+  shortenedRepositoryMinimum.style.font = getComputedStyle(repository).font
+  document.body.append(shortenedRepositoryMinimum)
+  const shortenedRepositoryMinimumWidth =
+    shortenedRepositoryMinimum.getBoundingClientRect().width
+  shortenedRepositoryMinimum.remove()
+
   const rowState = () => ({
     taskTitleOverflowing: taskTitle.scrollWidth > taskTitle.clientWidth,
     taskTooltip: task.title,
-    repositoryAtMinimumWidth:
+    repositoryNameAtMinimumWidth:
       Math.abs(
-        repository.getBoundingClientRect().width - repositoryMinimumWidth,
+        repositoryName.getBoundingClientRect().width - repositoryMinimumWidth,
+      ) <= 1,
+    ownerMarkerVisible: repositoryOwner.getBoundingClientRect().width > 0,
+    ownerSeparatorVisible:
+      repositoryOwnerSeparator.getBoundingClientRect().width > 0,
+    repositoryAtShortenedMinimumWidth:
+      Math.abs(
+        repository.getBoundingClientRect().width -
+          shortenedRepositoryMinimumWidth,
       ) <= 1,
   })
 
   expect(rowState()).toEqual({
     taskTitleOverflowing: true,
     taskTooltip: `P1 #27 ${longFullRowTaskTitle}`,
-    repositoryAtMinimumWidth: true,
+    repositoryNameAtMinimumWidth: true,
+    ownerMarkerVisible: true,
+    ownerSeparatorVisible: true,
+    repositoryAtShortenedMinimumWidth: true,
   })
 })
 

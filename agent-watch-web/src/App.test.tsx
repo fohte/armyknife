@@ -6028,7 +6028,7 @@ it('advances elapsed time for all rows with one shared timer', async () => {
   )
 
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(1_032)
+    await vi.advanceTimersByTimeAsync(1_968)
   })
 
   const snapshot = () => ({
