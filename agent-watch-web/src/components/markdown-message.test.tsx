@@ -195,6 +195,74 @@ it('renders an inline summary on the details opening line', () => {
   )
 })
 
+it('preserves a heading immediately after a details block', () => {
+  expect(
+    renderMessage(`<details>
+<summary>Context</summary>
+
+Hidden context
+</details>
+## Next heading`),
+  ).toBe(
+    '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="false" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Context</span></button></div><h2>Next heading</h2></div>',
+  )
+})
+
+it('preserves a second details block immediately after the first', () => {
+  expect(
+    renderMessage(`<details>
+<summary>First section</summary>
+First body
+</details>
+<details>
+<summary>Second section</summary>
+Second body
+</details>`),
+  ).toBe(
+    '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="false" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">First section</span></button></div><div class="markdown-details"><button aria-expanded="false" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Second section</span></button></div></div>',
+  )
+})
+
+it('resolves reference links defined outside a details block', () => {
+  expect(
+    renderMessage(`<details open>
+<summary>References</summary>
+
+See the [guide][shared-guide].
+</details>
+
+[shared-guide]: https://example.com/guide`),
+  ).toBe(
+    '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">References</span></button><div class="markdown-details-body"><p>See the <a href="https://example.com/guide" target="_blank" rel="noopener noreferrer">guide</a>.</p></div></div></div>',
+  )
+})
+
+it('preserves indentation in a leading code block inside details', () => {
+  expect(
+    renderMessage(`<details open>
+<summary>Command</summary>
+
+    cargo build --locked
+</details>`),
+  ).toBe(
+    '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Command</span></button><div class="markdown-details-body"><div class="syntax-code-block-container"><div class="syntax-code-block-toolbar"><span class="syntax-code-block-language">text</span><button class="syntax-code-block-copy-button" type="button" aria-label="Copy code" title="Copy code">Copy</button></div><pre class="syntax-code-block" data-language="text"><code class="language-text">cargo build --locked\n</code></pre></div></div></div></div>',
+  )
+})
+
+it('preserves all paragraphs in a details summary', () => {
+  expect(
+    renderMessage(`<details>
+<summary>
+First sentence.
+
+Second sentence.
+</summary>
+</details>`),
+  ).toBe(
+    '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="false" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">First sentence.<br/>Second sentence.</span></button></div></div>',
+  )
+})
+
 it.each([
   {
     name: 'the details tag is unclosed',
