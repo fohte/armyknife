@@ -12,7 +12,7 @@ mod continuation;
 mod tail_window;
 mod window;
 
-use self::continuation::is_active_branch_continuation;
+use self::continuation::{AppendDecision, AppendHistory, classify_append};
 
 #[derive(Clone)]
 pub(in crate::commands::agent::watch_web::messages) struct IncrementalClaudeParser {
@@ -20,6 +20,7 @@ pub(in crate::commands::agent::watch_web::messages) struct IncrementalClaudePars
     lines: JsonlLineBuffer,
     image_directory: Option<PathBuf>,
     pending_is_initial: bool,
+    append_history: AppendHistory,
     tail_window_start: Option<DateTime<Utc>>,
     tail_window_start_offset: Option<u64>,
 }
@@ -72,9 +73,16 @@ impl IncrementalClaudeParser {
             latest_complete_uuid,
         );
         let mut complete_lines = JsonlLineBuffer::default();
+        let mut append_history = AppendHistory::default();
         complete_lines.read_from(&mut reader, |line| {
             if let Some(record) = parse_record(line) {
-                ingest_record(&mut state, record, Utc::now(), RecordOrigin::Initial);
+                ingest_record(
+                    &mut state,
+                    &mut append_history,
+                    record,
+                    Utc::now(),
+                    RecordOrigin::Initial,
+                );
             }
         })?;
 
@@ -83,6 +91,7 @@ impl IncrementalClaudeParser {
             lines: graph_lines,
             image_directory: image_directory.map(Path::to_path_buf),
             pending_is_initial: true,
+            append_history,
             tail_window_start: None,
             tail_window_start_offset: None,
         })
@@ -151,8 +160,15 @@ impl IncrementalClaudeParser {
             graph_latest_uuid,
             latest_complete_uuid,
         );
+        let mut append_history = AppendHistory::default();
         for record in records {
-            ingest_record(&mut state, record, Utc::now(), RecordOrigin::Initial);
+            ingest_record(
+                &mut state,
+                &mut append_history,
+                record,
+                Utc::now(),
+                RecordOrigin::Initial,
+            );
         }
 
         Self {
@@ -160,6 +176,7 @@ impl IncrementalClaudeParser {
             lines: JsonlLineBuffer::with_pending(pending_line),
             image_directory: image_directory.map(Path::to_path_buf),
             pending_is_initial: true,
+            append_history,
             tail_window_start: None,
             tail_window_start_offset: None,
         }
@@ -204,6 +221,7 @@ impl IncrementalClaudeParser {
         }
         let mut restart_required = false;
         let state = &mut self.state;
+        let append_history = &mut self.append_history;
         let lines = &mut self.lines;
         lines.feed(suffix, |line| {
             if restart_required {
@@ -212,13 +230,13 @@ impl IncrementalClaudeParser {
             let Some(record) = parse_record(line) else {
                 return;
             };
-            if !ingest_record(state, record, now, RecordOrigin::Appended) {
+            if !ingest_record(state, append_history, record, now, RecordOrigin::Appended) {
                 restart_required = true;
             }
         });
         if !restart_required
             && let Some(record) = parse_record(lines.pending())
-            && !is_active_branch_continuation(state, &record)
+            && classify_append(state, append_history, &record).is_none()
         {
             restart_required = true;
         }
@@ -239,6 +257,7 @@ impl IncrementalClaudeParser {
             let mut state = self.state.clone();
             if !ingest_record(
                 &mut state,
+                &mut self.append_history.clone(),
                 record,
                 now,
                 RecordOrigin::Pending {
@@ -298,9 +317,7 @@ fn activate_pending_record(
             .or_insert(TranscriptNode {
                 parent_uuid: None,
                 membership: BranchMembership::Active,
-                is_assistant: false,
                 has_tool_use: false,
-                is_inert_attachment: false,
                 was_valid_tool_result: false,
                 processed: false,
             });
@@ -337,26 +354,26 @@ enum RecordOrigin {
 
 fn ingest_record(
     state: &mut ClaudeParserState,
+    append_history: &mut AppendHistory,
     record: Value,
     now: DateTime<Utc>,
     origin: RecordOrigin,
 ) -> bool {
-    if matches!(
+    let append_decision = if matches!(
         origin,
         RecordOrigin::Appended | RecordOrigin::Pending { is_initial: false }
-    ) && !is_active_branch_continuation(state, &record)
-    {
-        return false;
-    }
+    ) {
+        let Some(decision) = classify_append(state, append_history, &record) else {
+            return false;
+        };
+        Some(decision)
+    } else {
+        None
+    };
     if !matches!(origin, RecordOrigin::Initial)
         && let Some(uuid) = record.get("uuid").and_then(Value::as_str)
     {
         let parent_uuid = record_parent_uuid(&record);
-        let parallel_tool_result = matches!(origin, RecordOrigin::Appended)
-            && parent_uuid.as_deref().is_some_and(|parent_uuid| {
-                state.has_pending_tool_result_for_parent(&record, Some(parent_uuid))
-                    && parent_uuid != state.latest_uuid.as_deref().unwrap_or_default()
-            });
         state.transcript_nodes.insert(
             uuid.to_owned(),
             TranscriptNode::from_record(&record, parent_uuid.clone()),
@@ -365,15 +382,19 @@ fn ingest_record(
         mark_active_branch(&mut state.transcript_nodes, Some(uuid));
         if matches!(origin, RecordOrigin::Appended) {
             state.latest_record_uuid = Some(uuid.to_owned());
-        }
-        if matches!(origin, RecordOrigin::Appended)
-            && !parallel_tool_result
-            && !is_attachment_record(&record)
-        {
             state.latest_uuid = Some(uuid.to_owned());
         }
     }
+    if !matches!(origin, RecordOrigin::Pending { .. }) {
+        append_history.observe(&record);
+    }
     state.process_record(record, now);
+    if matches!(origin, RecordOrigin::Appended) {
+        match append_decision {
+            Some(AppendDecision::SimpleTail | AppendDecision::ParallelResult) => {}
+            None => return false,
+        }
+    }
     true
 }
 

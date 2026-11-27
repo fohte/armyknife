@@ -15,9 +15,7 @@ pub(super) enum BranchMembership {
 pub(super) struct TranscriptNode {
     pub(super) parent_uuid: Option<String>,
     pub(super) membership: BranchMembership,
-    pub(super) is_assistant: bool,
     pub(super) has_tool_use: bool,
-    pub(super) is_inert_attachment: bool,
     pub(super) was_valid_tool_result: bool,
     pub(super) processed: bool,
 }
@@ -27,9 +25,7 @@ impl TranscriptNode {
         Self {
             parent_uuid,
             membership: BranchMembership::Unknown,
-            is_assistant: record.get("type").and_then(Value::as_str) == Some("assistant"),
             has_tool_use: is_tool_use_assistant(record),
-            is_inert_attachment: is_inert_attachment(record),
             was_valid_tool_result: false,
             processed: false,
         }
@@ -48,17 +44,6 @@ pub(super) fn is_tool_use_assistant(record: &Value) -> bool {
                         .any(|block| block.get("type").and_then(Value::as_str) == Some("tool_use"))
                 })
             })
-}
-
-fn is_inert_attachment(record: &Value) -> bool {
-    record.get("type").and_then(Value::as_str) == Some("attachment")
-        && !matches!(
-            record
-                .get("attachment")
-                .and_then(|attachment| attachment.get("type"))
-                .and_then(Value::as_str),
-            Some("skill_listing" | "queued_command")
-        )
 }
 
 pub(super) fn mark_active_branch(
