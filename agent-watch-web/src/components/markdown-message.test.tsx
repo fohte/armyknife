@@ -161,11 +161,27 @@ it('shows a copy toolbar for every fenced code block', () => {
 
 it('keeps raw HTML as text and blocks unsafe link protocols', () => {
   const html = renderMessage(
-    '<img src=x onerror=alert(1)> [unsafe](javascript:alert(1))',
+    '<img src=x onerror=alert(1)> <script>alert(1)</script> [unsafe](javascript:alert(1))',
   )
 
   expect(html).toBe(
-    '<div class="markdown-message"><p>&lt;img src=x onerror=alert(1)&gt; <a href="" target="_blank" rel="noopener noreferrer">unsafe</a></p></div>',
+    '<div class="markdown-message"><p>&lt;img src=x onerror=alert(1)&gt; &lt;script&gt;alert(1)&lt;/script&gt; <a href="" target="_blank" rel="noopener noreferrer">unsafe</a></p></div>',
+  )
+})
+
+it('renders details and summary while keeping other raw HTML as text', () => {
+  const html = renderMessage(`<details open>
+<summary>Additional information</summary>
+
+Body content is parsed as Markdown. http://example.com/日本語
+
+<img src=x onerror=alert(1)>
+
+<script>alert(1)</script>
+</details>`)
+
+  expect(html).toBe(
+    '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Additional information</span></button><div class="markdown-details-body"><p>Body content is parsed as Markdown. <a href="http://example.com/" target="_blank" rel="noopener noreferrer">http://example.com/</a>日本語</p>&lt;img src=x onerror=alert(1)&gt;&lt;script&gt;alert(1)&lt;/script&gt;</div></div></div>',
   )
 })
 

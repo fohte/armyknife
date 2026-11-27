@@ -19,6 +19,52 @@
   margin-top: 0.75rem;
 }
 
+.markdown-details-summary {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.markdown-details-chevron {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 10px;
+  margin-top: 0.35em;
+  transition: transform 120ms ease;
+}
+
+.markdown-details-chevron[data-expanded='true'] {
+  transform: rotate(90deg);
+}
+
+.markdown-details-summary-content {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.markdown-details-body > * {
+  margin: 0;
+}
+
+.markdown-details-body > * + * {
+  margin-top: 0.75rem;
+}
+
+@media (max-width: 700px) {
+  .markdown-details-summary {
+    min-height: 44px;
+    padding: 11px 0;
+  }
+}
+
 .markdown-message :is(h1, h2, h3, h4, h5, h6) {
   color: var(--aw-text-primary);
   font-weight: 700;
