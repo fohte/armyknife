@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.968](https://github.com/fohte/armyknife/compare/v0.1.967...v0.1.968) (2026-11-27)
+
+
+### Bug Fixes
+
+* **agent-watch-desktop:** update without sudo ([#2365](https://github.com/fohte/armyknife/issues/2365)) ([20431ce](https://github.com/fohte/armyknife/commit/20431ce38514156392778e9c537defe2cba539e8))
+
 ## [0.1.967](https://github.com/fohte/armyknife/compare/v0.1.966...v0.1.967) (2026-11-27)
 
 
