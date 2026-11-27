@@ -116,7 +116,6 @@ function AppContent() {
   >(null)
   const [showAllInProgress, setShowAllInProgress] = useState(false)
   const [showAllWaiting, setShowAllWaiting] = useState(false)
-  const lastScrolledSelectedId = useRef<string | null>(null)
   const [laterExpanded, setLaterExpanded] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [availableVersion, setAvailableVersion] = useState<string | null>(null)
@@ -158,6 +157,17 @@ function AppContent() {
     selectedId,
     setShowAllInProgress,
     setShowAllWaiting,
+  })
+  const lastScrollContext = useRef<{
+    selectedId: string | null
+    sort: typeof inboxSort.sort
+    filterQuery: string
+    rowVisible: boolean
+  }>({
+    selectedId: null,
+    sort: inboxSort.sort,
+    filterQuery: inboxFilterQuery,
+    rowVisible: false,
   })
   const {
     laterSessionId,
@@ -276,21 +286,41 @@ function AppContent() {
 
   useEffect(() => {
     if (view !== 'inbox' || selectedId === null) {
-      lastScrolledSelectedId.current = null
+      lastScrollContext.current = {
+        selectedId: null,
+        sort: inboxSort.sort,
+        filterQuery: inboxFilterQuery,
+        rowVisible: false,
+      }
       return
     }
-
-    if (lastScrolledSelectedId.current === selectedId) return
 
     const selectedRow = document.querySelector<HTMLButtonElement>(
       '[data-session-row][aria-current="true"]',
     )
-    if (selectedRow === null) return
+    const previousContext = lastScrollContext.current
+    const selectionChanged = previousContext.selectedId !== selectedId
+    const inboxQueryChanged =
+      previousContext.sort !== inboxSort.sort ||
+      previousContext.filterQuery !== inboxFilterQuery
+    const becameVisible = selectedRow !== null && !previousContext.rowVisible
 
-    selectedRow.scrollIntoView({ block: 'nearest' })
-    lastScrolledSelectedId.current = selectedId
+    if (
+      selectedRow !== null &&
+      (selectionChanged || inboxQueryChanged || becameVisible)
+    ) {
+      selectedRow.scrollIntoView({ block: 'nearest' })
+    }
+    lastScrollContext.current = {
+      selectedId,
+      sort: inboxSort.sort,
+      filterQuery: inboxFilterQuery,
+      rowVisible: selectedRow !== null,
+    }
   }, [
     inboxSort.navigableSessions,
+    inboxSort.sort,
+    inboxFilterQuery,
     inProgressExpanded,
     mobileConversationOpen,
     selectedId,

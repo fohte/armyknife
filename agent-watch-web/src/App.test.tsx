@@ -1342,6 +1342,83 @@ it('does not scroll the selected row when Waiting is expanded', () => {
   })
 })
 
+it('scrolls the selected row when the Inbox sort changes', () => {
+  const scrollIntoView = vi.spyOn(HTMLElement.prototype, 'scrollIntoView')
+  window.history.replaceState(null, '', '/?session=session-selected')
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-selected', 'Selected session', 'in_progress', 8, 'zeta'),
+      session('session-alpha', 'Alpha progress', 'in_progress', 8, 'alpha'),
+    ],
+  })
+
+  act(() => {
+    container.querySelector<HTMLButtonElement>('.inbox-sort-trigger')?.click()
+  })
+  scrollIntoView.mockClear()
+  const projectOption = Array.from(
+    container.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]'),
+  ).find((option) => option.textContent.includes('Project'))
+  if (projectOption === undefined) throw new Error('Expected the Project sort')
+  act(() => {
+    projectOption.click()
+  })
+
+  const snapshot = () => ({
+    selectedTitle: readSelectedTitle(),
+    sort: container.querySelector('.inbox-sort-trigger strong')?.textContent,
+    scrollOptions: scrollIntoView.mock.calls.map(([options]) => options),
+  })
+  expect(snapshot()).toEqual({
+    selectedTitle: 'Selected session',
+    sort: 'Project',
+    scrollOptions: [{ block: 'nearest' }],
+  })
+})
+
+it('scrolls the selected row when the Inbox filter changes', async () => {
+  const scrollIntoView = vi.spyOn(HTMLElement.prototype, 'scrollIntoView')
+  window.history.replaceState(null, '', '/?session=session-selected')
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session(
+        'session-selected',
+        'Selected session',
+        'needs_action',
+        8,
+        'zeta',
+      ),
+      session('session-alpha', 'Alpha session', 'needs_action', 8, 'alpha'),
+    ],
+  })
+  scrollIntoView.mockClear()
+
+  act(() => {
+    container.querySelector<HTMLButtonElement>('.inbox-filter-open')?.click()
+  })
+  const filterInput = container.querySelector<HTMLInputElement>(
+    '[aria-label="Inbox filter query"]',
+  )
+  if (filterInput === null) throw new Error('Expected the Inbox filter input')
+  await act(async () => {
+    await userEvent.fill(filterInput, 'project:zeta')
+    await userEvent.keyboard('{Enter}')
+  })
+
+  const snapshot = () => ({
+    selectedTitle: readSelectedTitle(),
+    scrollOptions: scrollIntoView.mock.calls.map(([options]) => options),
+  })
+  expect(snapshot()).toEqual({
+    selectedTitle: 'Selected session',
+    scrollOptions: [{ block: 'nearest' }],
+  })
+})
+
 it('does not scroll the selected row when mobile In progress is expanded', () => {
   const scrollIntoView = vi.spyOn(HTMLElement.prototype, 'scrollIntoView')
   setMobileViewport(true)
