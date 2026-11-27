@@ -177,6 +177,7 @@ Stop hook (parent process):
 | `agent.crit.monitor.start`                    | The detached monitor began watching a daemon                                 |
 | `agent.crit.client_started`                   | A Crit client announced that it started waiting for a review                 |
 | `agent.crit.monitor.client_check_failed`      | The monitor could not inspect Crit client connections                        |
+| `agent.crit.monitor.client_record_failed`     | A Crit client found by lsof could not be recorded for exit watching          |
 | `agent.crit.monitor.wait_state_update_failed` | The monitor could not update session review-wait state                       |
 | `agent.crit.monitor.replacement_found`        | A replacement daemon is using the same port                                  |
 | `agent.crit.monitor.replacement_check_failed` | The monitor could not check for a replacement daemon                         |

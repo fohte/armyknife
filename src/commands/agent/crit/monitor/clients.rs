@@ -1,4 +1,5 @@
-//! Pid files of crit clients that announced themselves with `crit client-started`.
+//! Pid files of crit clients: those that announced themselves with `crit client-started`, and
+//! those that never did but that lsof found connected.
 //!
 //! The daemon does not track its clients, so the caller's process lifetime stands in for the
 //! client's: a live pid file means a review is being waited on.
