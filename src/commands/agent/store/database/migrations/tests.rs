@@ -743,14 +743,19 @@ fn scopes_pane_binding_state_to_agents_in_version_thirty_five_database(
         .expect("version thirty-five schema should be created");
     connection
         .execute(
-            "INSERT INTO sessions (session_id, data, rev) VALUES ('fixture-session-cedar', '{}', 0)",
+            indoc! {"
+                INSERT INTO sessions (session_id, data, rev)
+                VALUES ('fixture-session-cedar', '{}', 0)
+            "},
             [],
         )
         .expect("session row should be inserted");
     connection
         .execute(
-            "INSERT INTO agent_session_pane_binding_state (session_id, has_parent_agent)
-             VALUES ('fixture-session-cedar', 0)",
+            indoc! {"
+                INSERT INTO agent_session_pane_binding_state (session_id, has_parent_agent)
+                VALUES ('fixture-session-cedar', 1)
+            "},
             [],
         )
         .expect("session pane state should be inserted");
@@ -760,23 +765,27 @@ fn scopes_pane_binding_state_to_agents_in_version_thirty_five_database(
         .expect("version thirty-five database should migrate");
     connection
         .execute(
-            "INSERT INTO agent_session_pane_binding_state (session_id, agent_id, has_parent_agent)
-             VALUES ('fixture-session-cedar', 'fixture-agent-cobalt', 1)",
+            indoc! {"
+                INSERT INTO agent_session_pane_binding_state (session_id, agent_id, has_parent_agent)
+                VALUES ('fixture-session-cedar', 'fixture-agent-cobalt', 1)
+            "},
             [],
         )
         .expect("subagent pane state should be inserted");
     let actual = connection
         .query_row(
-            "SELECT
+            indoc! {"
+                SELECT
                 (SELECT has_parent_agent FROM agent_session_pane_binding_state
                  WHERE session_id = 'fixture-session-cedar' AND agent_id = ''),
                 (SELECT has_parent_agent FROM agent_session_pane_binding_state
                  WHERE session_id = 'fixture-session-cedar' AND agent_id = 'fixture-agent-cobalt'),
-                (SELECT user_version FROM pragma_user_version)",
+                (SELECT user_version FROM pragma_user_version)
+            "},
             [],
             |row| {
                 Ok((
-                    row.get::<_, bool>(0)?,
+                    row.get::<_, Option<bool>>(0)?,
                     row.get::<_, bool>(1)?,
                     row.get::<_, i64>(2)?,
                 ))
@@ -784,17 +793,22 @@ fn scopes_pane_binding_state_to_agents_in_version_thirty_five_database(
         )
         .expect("agent-scoped pane binding state should be queryable");
 
-    assert_eq!(actual, (false, true, current_version()));
+    assert_eq!(actual, (None, true, current_version()));
     connection
         .execute(
-            "DELETE FROM sessions WHERE session_id = 'fixture-session-cedar'",
+            indoc! {"
+                DELETE FROM sessions
+                WHERE session_id = 'fixture-session-cedar'
+            "},
             [],
         )
         .expect("session row should be deleted");
     let remaining_states = connection
         .query_row(
-            "SELECT COUNT(*) FROM agent_session_pane_binding_state
-             WHERE session_id = 'fixture-session-cedar'",
+            indoc! {"
+                SELECT COUNT(*) FROM agent_session_pane_binding_state
+                WHERE session_id = 'fixture-session-cedar'
+            "},
             [],
             |row| row.get::<_, i64>(0),
         )

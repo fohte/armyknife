@@ -351,7 +351,7 @@ static MIGRATION_ENTRIES: [M<'static>; 36] = [
             PRIMARY KEY (session_id, agent_id)
         );
         INSERT INTO agent_session_pane_binding_state (session_id, agent_id, has_parent_agent)
-            SELECT session_id, '', has_parent_agent
+            SELECT session_id, '', NULL
             FROM agent_session_pane_binding_state_by_session;
         DROP TABLE agent_session_pane_binding_state_by_session;
         CREATE TRIGGER agent_session_pane_binding_state_delete_session
