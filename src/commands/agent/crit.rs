@@ -112,6 +112,10 @@ pub enum CritCommands {
     /// Wait for a crit daemon to stop, then clear its session link.
     #[command(name = "monitor", hide = true)]
     Monitor(monitor::MonitorArgs),
+
+    /// Record that a crit client started waiting for a review.
+    #[command(name = "client-started", hide = true)]
+    ClientStarted(monitor::ClientStartedArgs),
 }
 
 #[derive(Args, Clone, PartialEq, Eq)]
@@ -148,6 +152,7 @@ pub fn run(command: &CritCommands) -> Result<()> {
         CritCommands::Open(args) => open(args),
         CritCommands::Close(args) => close(args),
         CritCommands::Monitor(args) => monitor::run(args),
+        CritCommands::ClientStarted(args) => monitor::run_client_started(args),
     }
 }
 

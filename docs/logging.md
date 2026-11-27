@@ -175,6 +175,7 @@ Stop hook (parent process):
 | `agent.crit.monitor.start_failed`             | The lifecycle monitor could not be started                                   |
 | `agent.crit.monitor.started`                  | A detached lifecycle monitor was spawned                                     |
 | `agent.crit.monitor.start`                    | The detached monitor began watching a daemon                                 |
+| `agent.crit.client_started`                   | A Crit client announced that it started waiting for a review                 |
 | `agent.crit.monitor.client_check_failed`      | The monitor could not inspect Crit client connections                        |
 | `agent.crit.monitor.wait_state_update_failed` | The monitor could not update session review-wait state                       |
 | `agent.crit.monitor.replacement_found`        | A replacement daemon is using the same port                                  |

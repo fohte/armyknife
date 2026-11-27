@@ -3,7 +3,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 use super::wait_state::reconcile_registered_session;
-use super::{claim_marker, marker_path, remove_marker_if_equals};
+use super::{claim_marker, clients, marker_path, remove_marker_if_equals};
 use crate::commands::agent::types::Session;
 use crate::infra::process;
 
@@ -20,7 +20,7 @@ pub(in crate::commands::agent::crit) fn ensure_started_with_status(
     status: Option<&serde_json::Value>,
 ) -> Result<()> {
     let marker = marker_path(port)?;
-    let Some(reservation) = claim_marker(&marker)? else {
+    let Some(reservation) = claim_marker(&marker, || clients::remove_clients(port))? else {
         if let Some(session) = session
             && let Err(error) = reconcile_registered_session(port, &session.session_id, status)
         {

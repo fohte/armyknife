@@ -585,6 +585,7 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | `crit add <url>`                                                                                      |         | Associate a crit review with the calling session                                            |
 | `crit open [--session <id> \| --pane <pane_id>]`                                                      |         | Show or switch the review of an agent pane in a tmux floating pane                          |
 | `crit close [--pane <pane_id>]`                                                                       |         | Close the shown review of an agent pane (the review keeps running)                          |
+| `crit client-started --url <url> --pid <pid>`                                                         |         | Record that a crit client started waiting on a review; the wait ends when `<pid>` exits     |
 | `bg run -- <cmd> [args...]`                                                                           |         | Run a command detached and notify this session when it finishes                             |
 | `bg reminder-hook`                                                                                    |         | Internal PostToolUse hook for Claude Code background Bash reminders                         |
 | `sweep`                                                                                               |         | Reconcile failed or interrupted Codex turns, pause idle sessions, and close merged sessions |

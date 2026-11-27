@@ -11,7 +11,33 @@ use crate::infra::process;
 
 const CRIT_CLIENT_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 
-pub(super) fn crit_client_waiting_on_port(
+/// A review is waited on when a client announced by `client-started` is alive or lsof sees one.
+pub(super) fn crit_client_waiting(
+    port: u16,
+    daemon_pid: u32,
+    run_with_timeout: impl FnOnce(
+        std::process::Command,
+        Duration,
+    ) -> std::io::Result<std::process::Output>,
+) -> Result<bool> {
+    client_waiting_from(super::clients::has_live_client(port), || {
+        crit_client_waiting_on_port(port, daemon_pid, run_with_timeout)
+    })
+}
+
+fn client_waiting_from(
+    announced: Result<bool>,
+    lsof_waiting: impl FnOnce() -> Result<bool>,
+) -> Result<bool> {
+    // A live announced client settles the answer without paying for lsof.
+    if matches!(announced, Ok(true)) {
+        return Ok(true);
+    }
+    // An unreadable pid directory stays unknown unless lsof finds a client.
+    Ok(lsof_waiting()? || announced?)
+}
+
+fn crit_client_waiting_on_port(
     port: u16,
     daemon_pid: u32,
     run_with_timeout: impl FnOnce(
@@ -110,7 +136,7 @@ pub(super) fn reconcile_registered_session(
         port,
         status,
         super::status::crit_status,
-        |port, daemon_pid| crit_client_waiting_on_port(port, daemon_pid, process::run_with_timeout),
+        |port, daemon_pid| crit_client_waiting(port, daemon_pid, process::run_with_timeout),
     )
 }
 
@@ -247,6 +273,36 @@ mod tests {
                 ],
                 true,
             ),
+        );
+    }
+
+    #[rstest]
+    #[case::announced_client_skips_lsof(Ok(true), Ok(false), Ok(true), 0)]
+    #[case::lsof_client_without_announcement(Ok(false), Ok(true), Ok(true), 1)]
+    #[case::no_client_anywhere(Ok(false), Ok(false), Ok(false), 1)]
+    #[case::unreadable_directory_and_lsof_miss(Err("unreadable"), Ok(false), Err("unreadable"), 1)]
+    #[case::unreadable_directory_and_lsof_hit(Err("unreadable"), Ok(true), Ok(true), 1)]
+    #[case::lsof_failure(Ok(false), Err("lsof failed"), Err("lsof failed"), 1)]
+    fn client_waiting_combines_announced_clients_and_lsof(
+        #[case] announced: std::result::Result<bool, &str>,
+        #[case] lsof: std::result::Result<bool, &str>,
+        #[case] expected: std::result::Result<bool, &str>,
+        #[case] expected_lsof_calls: usize,
+    ) {
+        let lsof_calls = std::cell::Cell::new(0);
+
+        let actual = client_waiting_from(
+            announced.map_err(|error| anyhow::anyhow!("{error}")),
+            || {
+                lsof_calls.set(lsof_calls.get() + 1);
+                lsof.map_err(|error| anyhow::anyhow!("{error}"))
+            },
+        )
+        .map_err(|error| error.to_string());
+
+        assert_eq!(
+            (actual, lsof_calls.get()),
+            (expected.map_err(str::to_string), expected_lsof_calls),
         );
     }
 
