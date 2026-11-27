@@ -15,7 +15,7 @@ use crate::commands::agent::store;
 
 const WATCHER_DEBOUNCE: Duration = Duration::from_millis(150);
 const REVISION_RETRY_INITIAL_DELAY: Duration = Duration::from_millis(200);
-const REVISION_RETRY_MAX_DELAY: Duration = Duration::from_secs(5);
+const REVISION_RETRY_MAX_ATTEMPTS: usize = 4;
 const REVISION_RETRY_WARNING_INTERVAL: Duration = Duration::from_secs(30);
 const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(15);
 
@@ -151,6 +151,7 @@ async fn run_revision_monitor(
 ) {
     let mut event_channel_open = true;
     let mut last_warning_at = None;
+    let mut refresh_pending;
     loop {
         while *subscriber_receiver.borrow() == 0 {
             if event_channel_open {
@@ -171,7 +172,7 @@ async fn run_revision_monitor(
             }
         }
 
-        if !publish_revision_until_success(
+        match publish_revision_with_retries(
             &mut subscriber_receiver,
             &revision_sender,
             &read_revision,
@@ -179,7 +180,9 @@ async fn run_revision_monitor(
         )
         .await
         {
-            continue;
+            PublishRevisionOutcome::Published => refresh_pending = false,
+            PublishRevisionOutcome::NoSubscribers => continue,
+            PublishRevisionOutcome::RetriesExhausted => refresh_pending = true,
         }
 
         loop {
@@ -194,8 +197,8 @@ async fn run_revision_monitor(
                     if *subscriber_receiver.borrow() == 0 {
                         break;
                     }
-                    if revision_sender.borrow().is_none()
-                        && !publish_revision_until_success(
+                    if refresh_pending {
+                        match publish_revision_with_retries(
                             &mut subscriber_receiver,
                             &revision_sender,
                             &read_revision,
@@ -203,7 +206,10 @@ async fn run_revision_monitor(
                         )
                         .await
                     {
-                        break;
+                            PublishRevisionOutcome::Published => refresh_pending = false,
+                            PublishRevisionOutcome::NoSubscribers => break,
+                            PublishRevisionOutcome::RetriesExhausted => refresh_pending = true,
+                        }
                     }
                 }
                 signal = session_store_events.recv(), if event_channel_open => {
@@ -216,13 +222,18 @@ async fn run_revision_monitor(
                             Ok(()) | Err(broadcast::error::TryRecvError::Lagged(_))
                         ) {}
                         if *subscriber_receiver.borrow() > 0 {
-                            let _ = publish_revision_until_success(
+                            match publish_revision_with_retries(
                                 &mut subscriber_receiver,
                                 &revision_sender,
                                 &read_revision,
                                 &mut last_warning_at,
                             )
-                            .await;
+                            .await
+                            {
+                                PublishRevisionOutcome::Published => refresh_pending = false,
+                                PublishRevisionOutcome::NoSubscribers => break,
+                                PublishRevisionOutcome::RetriesExhausted => refresh_pending = true,
+                            }
                         }
                     }
                 }
@@ -243,27 +254,36 @@ async fn publish_revision(
     Ok(())
 }
 
-async fn publish_revision_until_success(
+enum PublishRevisionOutcome {
+    Published,
+    NoSubscribers,
+    RetriesExhausted,
+}
+
+async fn publish_revision_with_retries(
     subscriber_receiver: &mut watch::Receiver<usize>,
     revision_sender: &watch::Sender<Option<i64>>,
     read_revision: &RevisionReader,
     last_warning_at: &mut Option<time::Instant>,
-) -> bool {
+) -> PublishRevisionOutcome {
     let mut retry_delay = REVISION_RETRY_INITIAL_DELAY;
-    loop {
+    for attempt in 1..=REVISION_RETRY_MAX_ATTEMPTS {
         if *subscriber_receiver.borrow() == 0 {
-            return false;
+            return PublishRevisionOutcome::NoSubscribers;
         }
         match publish_revision(revision_sender, read_revision).await {
-            Ok(()) => return true,
+            Ok(()) => return PublishRevisionOutcome::Published,
             Err(error)
                 if last_warning_at
                     .is_none_or(|last| last.elapsed() >= REVISION_RETRY_WARNING_INTERVAL) =>
             {
-                tracing::warn!(%error, "failed to read session store revision; retrying");
+                tracing::warn!(%error, "failed to read session store revision");
                 *last_warning_at = Some(time::Instant::now());
             }
             Err(_) => {}
+        }
+        if attempt == REVISION_RETRY_MAX_ATTEMPTS {
+            return PublishRevisionOutcome::RetriesExhausted;
         }
 
         let sleep = time::sleep(retry_delay);
@@ -273,13 +293,14 @@ async fn publish_revision_until_success(
                 () = &mut sleep => break,
                 changed = subscriber_receiver.changed() => {
                     if changed.is_err() || *subscriber_receiver.borrow() == 0 {
-                        return false;
+                        return PublishRevisionOutcome::NoSubscribers;
                     }
                 }
             }
         }
-        retry_delay = retry_delay.saturating_mul(2).min(REVISION_RETRY_MAX_DELAY);
+        retry_delay = retry_delay.saturating_mul(2);
     }
+    PublishRevisionOutcome::RetriesExhausted
 }
 
 fn current_revision() -> anyhow::Result<i64> {
@@ -417,6 +438,9 @@ mod tests {
     use indoc::indoc;
     use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
     use std::sync::{Mutex, mpsc};
+    use tokio::sync::mpsc as tokio_mpsc;
+
+    use super::super::session_store_watcher::SessionStoreWatcher;
 
     #[tokio::test]
     async fn sends_the_server_instance_before_session_revisions() {
@@ -596,6 +620,128 @@ mod tests {
         assert_eq!(
             (published_event, reads_at_publish, reads_after_success),
             (sessions_event(21), 2, 2),
+        );
+    }
+
+    #[tokio::test]
+    async fn retries_stop_until_a_new_connection_after_repeated_read_failures() {
+        let read_count = Arc::new(AtomicUsize::new(0));
+        let (read_attempt_sender, mut read_attempt_receiver) = tokio_mpsc::unbounded_channel();
+        let event_receiver = SessionStoreWatcher::subscribe_or_closed(None);
+        let monitor = RevisionMonitor::new(
+            {
+                let read_count = Arc::clone(&read_count);
+                move || {
+                    let attempt = read_count.fetch_add(1, Ordering::SeqCst) + 1;
+                    read_attempt_sender.send(attempt).unwrap();
+                    if attempt <= REVISION_RETRY_MAX_ATTEMPTS {
+                        Err(anyhow::anyhow!("fixture revision read failure"))
+                    } else {
+                        Ok(23)
+                    }
+                }
+            },
+            event_receiver,
+        );
+        let mut first = Sse::new(test_revision_stream(
+            monitor.subscribe(),
+            watch::channel(()).1,
+        ))
+        .into_response()
+        .into_body()
+        .into_data_stream();
+
+        let mut failed_attempts = Vec::new();
+        for _ in 0..REVISION_RETRY_MAX_ATTEMPTS {
+            failed_attempts.push(read_attempt_receiver.recv().await.unwrap());
+        }
+        let retry_stopped =
+            tokio::time::timeout(Duration::from_secs(2), read_attempt_receiver.recv())
+                .await
+                .is_err();
+
+        let mut second = Sse::new(test_revision_stream(
+            monitor.subscribe(),
+            watch::channel(()).1,
+        ))
+        .into_response()
+        .into_body()
+        .into_data_stream();
+        let successful_attempt = read_attempt_receiver.recv().await.unwrap();
+        let (first_event, second_event) =
+            tokio::join!(next_chunk(&mut first), next_chunk(&mut second),);
+
+        assert_eq!(
+            (
+                failed_attempts,
+                retry_stopped,
+                successful_attempt,
+                first_event,
+                second_event,
+                read_count.load(Ordering::SeqCst),
+            ),
+            (
+                vec![1, 2, 3, 4],
+                true,
+                5,
+                sessions_event(23),
+                sessions_event(23),
+                5,
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn reads_once_per_connection_when_the_store_watcher_is_unavailable() {
+        let revision = Arc::new(AtomicI64::new(41));
+        let read_count = Arc::new(AtomicUsize::new(0));
+        let event_receiver = SessionStoreWatcher::subscribe_or_closed(None);
+        let monitor = RevisionMonitor::new(
+            {
+                let revision = Arc::clone(&revision);
+                let read_count = Arc::clone(&read_count);
+                move || {
+                    read_count.fetch_add(1, Ordering::SeqCst);
+                    Ok(revision.load(Ordering::SeqCst))
+                }
+            },
+            event_receiver,
+        );
+        let mut first = Sse::new(test_revision_stream(
+            monitor.subscribe(),
+            watch::channel(()).1,
+        ))
+        .into_response()
+        .into_body()
+        .into_data_stream();
+        let first_event = next_chunk(&mut first).await;
+
+        revision.store(42, Ordering::SeqCst);
+        let no_follow_up_event = tokio::time::timeout(Duration::from_millis(250), first.next())
+            .await
+            .is_err();
+        let reads_after_first_connection = read_count.load(Ordering::SeqCst);
+        drop(first);
+
+        let mut second = Sse::new(test_revision_stream(
+            monitor.subscribe(),
+            watch::channel(()).1,
+        ))
+        .into_response()
+        .into_body()
+        .into_data_stream();
+        let second_event = next_chunk(&mut second).await;
+        let reads_after_second_connection = read_count.load(Ordering::SeqCst);
+
+        assert_eq!(
+            (
+                first_event,
+                no_follow_up_event,
+                reads_after_first_connection,
+                second_event,
+                reads_after_second_connection,
+            ),
+            (sessions_event(41), true, 1, sessions_event(42), 2,),
         );
     }
 
