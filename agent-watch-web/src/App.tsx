@@ -378,7 +378,7 @@ function AppContent() {
     )
     if (launchedSession === undefined) return
     setPendingLaunchId(null)
-    if (newSessionMode === null) return
+    if (view !== 'inbox' || newSessionMode === null) return
     setCommandPaletteOpen(false)
     openSessionInInbox(launchedSession.id, 'replace')
   }, [
@@ -387,6 +387,7 @@ function AppContent() {
     pendingLaunchId,
     sessionsWithElapsedTime,
     setCommandPaletteOpen,
+    view,
   ])
   return (
     <SessionElapsedStartedAtProvider value={sessionsReceivedAt}>

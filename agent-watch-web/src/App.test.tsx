@@ -3450,7 +3450,7 @@ it('opens the session when its launch ID appears in the feed', async () => {
   })
 })
 
-it('keeps the selected session when a launched session appears after leaving the new-session form', async () => {
+it('keeps the selected session when a launched session appears after returning from the new-session form', async () => {
   const fetcher = createSessionLaunchFetcher(
     jsonResponse({ launchId: 'launch-fixture' }),
   )
@@ -3466,7 +3466,9 @@ it('keeps the selected session when a launched session appears after leaving the
   clickButton('.new-session-directory-button')
   clickButton('[aria-label="Select directory /Users/example/work/service"]')
   await clickButtonAndFlush('.new-session-start')
-  clickButton('[data-session-row]')
+  await act(async () => {
+    await changeHistory('back')
+  })
 
   publishSessions({
     revision: 2,
@@ -3487,6 +3489,47 @@ it('keeps the selected session when a launched session appears after leaving the
   expect(snapshot()).toEqual({
     newSessionFormOpen: false,
     selectedTitle: 'Previous session',
+    selectedId: 'session-before',
+  })
+})
+
+it('stays on the Board when a launch completes after leaving the new-session form', async () => {
+  vi.stubGlobal(
+    'fetch',
+    createSessionLaunchFetcher(jsonResponse({ launchId: 'launch-fixture' })),
+  )
+  renderMobileApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-before', 'Previous session')],
+  })
+  clickButton('[aria-label="New session"]')
+  await waitForDirectoryResults()
+  clickButton('.new-session-directory-button')
+  clickButton('[aria-label="Select directory /Users/example/work/service"]')
+  await clickButtonAndFlush('.new-session-start')
+  clickButton('[aria-label="Open navigation"]')
+  clickButton('.mobile-nav-drawer .view-switch-button[aria-pressed="false"]')
+
+  publishSessions({
+    revision: 2,
+    sessions: [
+      session('session-before', 'Previous session'),
+      {
+        ...session('session-launched', 'Created session'),
+        launchId: 'launch-fixture',
+      },
+    ],
+  })
+
+  const snapshot = () => ({
+    view: readActiveView(),
+    newSessionFormOpen: container.querySelector('.new-session-view') !== null,
+    selectedId: new URLSearchParams(window.location.search).get('session'),
+  })
+  expect(snapshot()).toEqual({
+    view: 'Board',
+    newSessionFormOpen: false,
     selectedId: 'session-before',
   })
 })
