@@ -551,6 +551,14 @@ async function clickButtonAndFlush(selector: string) {
   })
 }
 
+async function startNewSessionFromForm() {
+  clickButton('[aria-label="New session"]')
+  await waitForDirectoryResults()
+  clickButton('.new-session-directory-button')
+  clickButton('[aria-label="Select directory /Users/example/work/service"]')
+  await clickButtonAndFlush('.new-session-start')
+}
+
 function requestPath(input: RequestInfo | URL) {
   return new URL(requestUrl(input), 'http://localhost').pathname
 }
@@ -3404,11 +3412,7 @@ it('opens the session when its launch ID appears in the feed', async () => {
     revision: 1,
     sessions: [session('session-before', 'Previous session')],
   })
-  clickButton('[aria-label="New session"]')
-  await waitForDirectoryResults()
-  clickButton('.new-session-directory-button')
-  clickButton('[aria-label="Select directory /Users/example/work/service"]')
-  await clickButtonAndFlush('.new-session-start')
+  await startNewSessionFromForm()
   publishSessions({
     revision: 2,
     sessions: [
@@ -3461,11 +3465,7 @@ it('keeps the selected session when a launched session appears after returning f
     revision: 1,
     sessions: [session('session-before', 'Previous session')],
   })
-  clickButton('[aria-label="New session"]')
-  await waitForDirectoryResults()
-  clickButton('.new-session-directory-button')
-  clickButton('[aria-label="Select directory /Users/example/work/service"]')
-  await clickButtonAndFlush('.new-session-start')
+  await startNewSessionFromForm()
   await act(async () => {
     await changeHistory('back')
   })
@@ -3503,11 +3503,7 @@ it('stays on the Board when a launch completes after leaving the new-session for
     revision: 1,
     sessions: [session('session-before', 'Previous session')],
   })
-  clickButton('[aria-label="New session"]')
-  await waitForDirectoryResults()
-  clickButton('.new-session-directory-button')
-  clickButton('[aria-label="Select directory /Users/example/work/service"]')
-  await clickButtonAndFlush('.new-session-start')
+  await startNewSessionFromForm()
   clickButton('[aria-label="Open navigation"]')
   clickButton('.mobile-nav-drawer .view-switch-button[aria-pressed="false"]')
 
