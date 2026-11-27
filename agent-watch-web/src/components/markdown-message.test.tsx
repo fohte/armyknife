@@ -207,14 +207,14 @@ it.each([
     markdown:
       '<details onclick="runUnsafe()">\n<summary>Unsafe details</summary>\nBody\n</details>',
     expected:
-      '<div class="markdown-message">&lt;details onclick="runUnsafe()"&gt;\n&lt;summary&gt;Unsafe details&lt;/summary&gt;\nBody\n&lt;/details&gt;</div>',
+      '<div class="markdown-message">&lt;details onclick=&quot;runUnsafe()&quot;&gt;\n&lt;summary&gt;Unsafe details&lt;/summary&gt;\nBody\n&lt;/details&gt;</div>',
   },
   {
     name: 'the summary tag has a style attribute',
     markdown:
       '<details>\n<summary style="color: red">Styled summary</summary>\nBody\n</details>',
     expected:
-      '<div class="markdown-message">&lt;details&gt;\n&lt;summary style="color: red"&gt;Styled summary&lt;/summary&gt;\nBody\n&lt;/details&gt;</div>',
+      '<div class="markdown-message">&lt;details&gt;\n&lt;summary style=&quot;color: red&quot;&gt;Styled summary&lt;/summary&gt;\nBody\n&lt;/details&gt;</div>',
   },
 ])(
   'keeps unsupported or incomplete details HTML as text when $name',
