@@ -548,6 +548,7 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | ----------------------------------------------------------------------------------------------------- | ------- | ------------------------------------------------------------------------------------------- |
 | `new [--worktree[=<branch>]] [options]`                                                               |         | Start a Claude Code session, optionally in a new or existing linked worktree                |
 | `codex [<args>...]`                                                                                   |         | Start Codex and bind its thread ID to the current tmux pane                                 |
+| `current`                                                                                             |         | Print the current engine as JSON, or exit 1 when no supported agent is detected             |
 | `close [target] [--child] [--force] [--skip-hooks] [--keep-worktree]`                                 | `c`     | Close an agent session and optionally keep its linked worktree                              |
 | `clean [--dry-run] [--all] [--force]`                                                                 |         | Delete merged or closed worktrees                                                           |
 | `hook <event>`                                                                                        |         | Record coding agent hook events                                                             |
@@ -592,6 +593,15 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | `auto-compact schedule --session <id>`                                                                |         | Detached worker spawned by the Stop hook (not for direct use)                               |
 | `window-status <window_id>`                                                                           |         | Print status symbols for the sessions in a tmux window                                      |
 | `pane-has-paused <pane_id>`                                                                           |         | Print `1` when the pane holds a Paused Claude Code session, else empty                      |
+
+`a agent current` prints JSON with an `engine` value of `claude-code` or `codex` when it detects a supported agent. If process ancestry is unavailable, it uses `CLAUDECODE` or `CODEX_SESSION_ID` as a fallback. For example:
+
+```console
+$ a agent current
+{"engine":"claude-code"}
+```
+
+Otherwise, it prints nothing and exits with status 1.
 
 ### `a agent transcript slim`
 
@@ -729,8 +739,6 @@ Decision recorded for this session.
 Session-local sequence: 7
 To refer to it in another session or task, describe its contents; this sequence only works in this session.
 ```
-
-Tracked, hook-processed Claude Code and Codex sessions receive the instruction on `SessionStart` to record choices that are cheap to reverse and continue working. They should stop and ask about choices that are hard to reverse. Codex must have the `SessionStart` hook registered as described under [Hooks](#hooks). Internal and headless invocations do not receive this instruction.
 
 `a agent web-ui add <url> --name <name>` registers a named local HTTP interface with the calling session. The URL must use `localhost` or `127.0.0.1` and include an explicit port. Tracked, hook-processed Claude Code sessions and Codex sessions with a registered `SessionStart` hook receive an instruction to register local web UIs they start. Registered interfaces appear in the watch-web conversation's right panel. When watch-web is opened at `localhost` or `127.0.0.1`, it uses the local URL; other hostnames use the URL returned by the optional `web-ui-expose` hook. watch-web gives each local registration its own loopback relay, which forwards HTTP, streaming responses, and WebSocket connections to the registered interface. Run the command from the session that owns the interface:
 
@@ -1252,11 +1260,11 @@ By default, watch-web accepts loopback Host values. To access it through a proxy
 
 Files sent by an agent are served by `GET /api/sessions/{id}/files/{file_id}` only when recorded for that session, or by `GET /api/sessions/{id}/transcript-files/{tool_use_id}/{index}` only when the session transcript contains the matching file-send record and file index.
 
-- `GET /api/sessions/{id}/review-document` returns a `revision` with the active review document's frontmatter and Markdown body. The session list includes `reviewDocumentCount` for open review markers and `reviewDocumentId` when an editor lock is active. Legacy v2 and unversioned markers remain included because their format cannot distinguish an abandoned review from a queued review.
+- `GET /api/sessions/{id}/review-document` returns a `revision` with the active review document's frontmatter and Markdown body. The session list includes `reviewDocumentCount` for recognized review markers and `reviewDocumentId` when an editor lock is active. Legacy v2 and unversioned markers are recognized only while their document lock is active.
 - `POST /api/sessions/{id}/review-document/save` with `{"id":"review-id","revision":"revision-from-get","frontmatter":{"approved":true},"body":"Updated Markdown."}` saves edits to the active review document path recorded by the server. Both save and finish return `409` when the document changed since its revision was read.
 - `POST /api/sessions/{id}/review-document/finish` accepts the same payload, saves the edits, then asks the review process to close its editor and run the completion handler. It returns `504` if the review process does not acknowledge the request in time.
 - `POST /api/sessions/{id}/review-document/action` accepts the same payload with an `action` field set to `post_comment`, `create_pr`, `post_replies`, or `update_issue`. It saves the edits, marks the document approved, and runs the corresponding submission immediately. It returns `{"success":true,"revision":"..."}` when the action completes, or `{"success":false,"revision":"...","error":"..."}` when submission fails. Repeating a completed action for the same document returns success without submitting again.
-- `GET /api/sessions/{id}/review-documents` returns all open review documents, with the editor document first. This includes legacy v2 and unversioned markers without a live lock because they may still represent reviews waiting in the queue. Each entry has an `id`, a `kind` (`pr_draft`, `issue_comment`, `issue_body`, `review_replies`, or `draft`), a `target`, and `isEditor`, `canSave`, and `canFinish` flags. Target fields depend on the kind, such as `repository`, `branch`, `issueNumber`, `pullRequestNumber`, `title`, and `threadCount`. Entries may include `startedAt` as the Unix epoch timestamp in milliseconds. A generic `draft` target may include `path`, relative to the session working directory when possible and otherwise containing only the filename.
+- `GET /api/sessions/{id}/review-documents` returns all open review documents, with the editor document first. Legacy v2 and unversioned markers are included only while their document lock is active. Each entry has an `id`, a `kind` (`pr_draft`, `issue_comment`, `issue_body`, `review_replies`, or `draft`), a `target`, and `isEditor`, `canSave`, and `canFinish` flags. Target fields depend on the kind, such as `repository`, `branch`, `issueNumber`, `pullRequestNumber`, `title`, and `threadCount`. Entries may include `startedAt` as the Unix epoch timestamp in milliseconds. A generic `draft` target may include `path`, relative to the session working directory when possible and otherwise containing only the filename.
 - `GET /api/sessions/{id}/review-documents/{document_id}` returns that document's metadata, `revision`, `frontmatter`, and Markdown `body`, including for documents waiting in the review queue.
 - `POST /api/sessions/{id}/review-documents/{document_id}/save` and `/finish` accept the same edit payload as the singular routes. The URL and payload IDs must match, and only the current editor document can be saved or finished. A different current document or unavailable FIFO returns `409`; a missing marker returns `404`.
 - `POST /api/sessions` with `{"directory":"/workspace/example","engine":"claude","worktree":false,"initialMessage":"Inspect this project."}` starts a Claude Code or Codex session in an existing directory and returns `{"launchId":"..."}`. `engine` accepts `claude` or `codex`; `initialMessage`, `model`, and `reasoningEffort` are optional. When `model` or `reasoningEffort` is omitted, the agent profile and engine defaults apply.
@@ -1346,6 +1354,22 @@ pnpm run build
 cd ..
 cargo build
 ```
+
+### Agent Watch desktop app
+
+On macOS, build and install the unsigned `Agent Watch.app` from the repository:
+
+```sh
+cd agent-watch-desktop
+pnpm install --frozen-lockfile
+./scripts/install
+```
+
+Run the same install command after pulling updates to replace the app in `/Applications`; it does not invoke `sudo` and requires write access to `/Applications`. The installer stages the new app before replacing the existing one and restores the previous app if the replacement fails. If it cannot remove the previous app after a successful update, it leaves a backup and prints a warning. If Agent Watch is running during an update, macOS displays a notification asking you to reopen it.
+
+The app opens the watch-web server at `http://127.0.0.1:4317`; it does not start or stop the server. If the initial page load fails, the app shows the command to start the server and retries. If an already loaded page loses the connection, watch-web reports the reconnecting state in that page and keeps its current session. The app is unsigned, so macOS may ask you to confirm the first launch.
+
+For development, set `AGENT_WATCH_URL` to an `http://localhost` or `http://127.0.0.1` URL with the development server's port, then run `pnpm run start` from `agent-watch-desktop`.
 
 ### `a agent clean`
 

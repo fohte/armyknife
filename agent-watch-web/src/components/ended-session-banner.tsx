@@ -2,11 +2,30 @@ import '#components/ended-session-banner.css'
 
 import { Button } from '@fohte/ui/button'
 
+import type { SessionActions } from '#types'
+
+type ResumeDisabledReason = NonNullable<SessionActions['resumeDisabledReason']>
+
+const RESUME_DISABLED_COPY: Record<
+  ResumeDisabledReason,
+  { hint: string; title: string }
+> = {
+  noTmux: {
+    hint: 'Resume is unavailable because this session has no tmux location',
+    title: 'This session has no tmux location',
+  },
+  workingDirectoryMissing: {
+    hint: 'Resume is unavailable because this session’s working directory does not exist',
+    title: 'This session’s working directory does not exist',
+  },
+}
+
 type EndedSessionBannerProps = {
   endedAt: string | undefined
   isMobile: boolean
   isResuming: boolean
   canResume: boolean
+  resumeDisabledReason?: ResumeDisabledReason | undefined
   onResume: () => void
 }
 
@@ -15,9 +34,14 @@ export function EndedSessionBanner({
   isMobile,
   isResuming,
   canResume,
+  resumeDisabledReason,
   onResume,
 }: EndedSessionBannerProps) {
   const endedTime = formatEndedTime(endedAt)
+  const disabledCopy = canResume
+    ? undefined
+    : RESUME_DISABLED_COPY[resumeDisabledReason ?? 'noTmux']
+  const resumeHint = disabledCopy?.hint ?? 'Resume it to keep talking'
 
   return (
     <div className="conversation-ended" role="status">
@@ -30,9 +54,10 @@ export function EndedSessionBanner({
             <time dateTime={endedAt}>{endedTime}</time>
           </span>
         )}
-        {isMobile ? null : (
+        {canResume && isMobile ? null : (
           <span className="conversation-ended-hint">
-            {' · Resume it to keep talking'}
+            {' · '}
+            {resumeHint}
           </span>
         )}
       </span>
@@ -40,7 +65,7 @@ export function EndedSessionBanner({
         className="conversation-ended-resume"
         type="button"
         disabled={isResuming || !canResume}
-        title={canResume ? undefined : 'This session has no tmux location'}
+        title={disabledCopy?.title}
         onClick={onResume}
       >
         {isResuming ? 'Resuming…' : isMobile ? 'Resume session' : 'Resume'}

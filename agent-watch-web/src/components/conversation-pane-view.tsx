@@ -374,7 +374,11 @@ export function ConversationPaneView({
       onDrop={onDrop}
     >
       {fileDropActive || isFileDragActive ? (
-        <FileDropIndicator className="conversation-drop-target" />
+        <FileDropIndicator
+          className="conversation-drop-target"
+          label="Drop images to attach"
+          variant="conversation"
+        />
       ) : null}
       <ConversationPaneHeader
         key={session.id}
@@ -445,6 +449,7 @@ export function ConversationPaneView({
           isMobile={isMobile}
           isResuming={isResumePending}
           canResume={actions.resume !== false}
+          resumeDisabledReason={actions.resumeDisabledReason}
           onResume={resume}
         />
       ) : (
