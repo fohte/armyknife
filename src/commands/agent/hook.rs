@@ -3294,6 +3294,35 @@ mod tests {
     }
 
     #[rstest]
+    fn main_thread_tool_hook_updates_compaction_with_session_revision(
+        compacting_hook_sessions_dir: tempfile::TempDir,
+    ) {
+        let sessions_dir = compacting_hook_sessions_dir.path();
+        let revision_before = store::session_store_revision_from(sessions_dir)
+            .expect("session store revision should load");
+
+        process_hook_event_without_instruction(
+            HookEvent::PreToolUse,
+            create_test_input(None),
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("tool hook should succeed");
+
+        let revision_after = store::session_store_revision_from(sessions_dir)
+            .expect("session store revision should load");
+        let is_compacting = store::watch_web_session_states_from(sessions_dir)
+            .expect("watch-web state should load")
+            .first()
+            .map(|state| state.is_compacting);
+
+        assert_eq!(
+            (revision_after - revision_before, is_compacting),
+            (1, Some(false))
+        );
+    }
+
+    #[rstest]
     fn subagent_tool_event_does_not_clear_main_thread_compaction_state(
         compacting_hook_sessions_dir: tempfile::TempDir,
     ) {

@@ -475,6 +475,17 @@ function renderView(
   })
 }
 
+function getCompactingStatusSnapshot() {
+  return {
+    workingStatus: container.querySelector('.conversation-status-band-label')
+      ?.textContent,
+    detail:
+      container.querySelector('.conversation-status-band-inline-detail')
+        ?.textContent ?? null,
+    inProgressItems: container.querySelectorAll('.tool-in-progress').length,
+  }
+}
+
 it('keeps the phone composer reachable when several merge rows fill the viewport', () => {
   container.style.cssText =
     'position: fixed; inset: 0 auto auto 0; width: 390px; height: 260px'
@@ -4800,15 +4811,7 @@ it('shows the compacting status and summary instead of stale tool details', () =
     ],
   )
 
-  const getSnapshot = () => ({
-    workingStatus: container.querySelector('.conversation-status-band-label')
-      ?.textContent,
-    detail:
-      container.querySelector('.conversation-status-band-inline-detail')
-        ?.textContent ?? null,
-    inProgressItems: container.querySelectorAll('.tool-in-progress').length,
-  })
-  expect(getSnapshot()).toEqual({
+  expect(getCompactingStatusSnapshot()).toEqual({
     workingStatus: 'Compacting…',
     detail: '古い会話を要約しています',
     inProgressItems: 0,
@@ -4835,15 +4838,7 @@ it('shows an active tool while a working session is marked as compacting', () =>
     ],
   )
 
-  const getSnapshot = () => ({
-    workingStatus: container.querySelector('.conversation-status-band-label')
-      ?.textContent,
-    detail:
-      container.querySelector('.conversation-status-band-inline-detail')
-        ?.textContent ?? null,
-    inProgressItems: container.querySelectorAll('.tool-in-progress').length,
-  })
-  expect(getSnapshot()).toEqual({
+  expect(getCompactingStatusSnapshot()).toEqual({
     workingStatus: 'Working · 1m 32s',
     detail: 'Bash  cargo check --package fixture',
     inProgressItems: 0,
