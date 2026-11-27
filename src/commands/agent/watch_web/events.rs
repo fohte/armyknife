@@ -16,6 +16,7 @@ use crate::commands::agent::store;
 const WATCHER_DEBOUNCE: Duration = Duration::from_millis(150);
 const REVISION_RETRY_INITIAL_DELAY: Duration = Duration::from_millis(200);
 const REVISION_RETRY_MAX_DELAY: Duration = Duration::from_secs(5);
+const REVISION_RETRY_WARNING_INTERVAL: Duration = Duration::from_secs(30);
 const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(15);
 
 #[derive(Clone)]
@@ -75,7 +76,7 @@ fn event_stream(
         ))
 }
 
-type RevisionReader = Arc<dyn Fn() -> Option<i64> + Send + Sync>;
+type RevisionReader = Arc<dyn Fn() -> anyhow::Result<Option<i64>> + Send + Sync>;
 
 #[derive(Clone)]
 struct RevisionMonitor {
@@ -105,7 +106,7 @@ impl Drop for RevisionSubscriberGuard {
 
 impl RevisionMonitor {
     fn new(
-        read_revision: impl Fn() -> Option<i64> + Send + Sync + 'static,
+        read_revision: impl Fn() -> anyhow::Result<Option<i64>> + Send + Sync + 'static,
         session_store_events: broadcast::Receiver<()>,
     ) -> Self {
         let (revisions, _) = watch::channel(None);
@@ -149,6 +150,7 @@ async fn run_revision_monitor(
     mut session_store_events: broadcast::Receiver<()>,
 ) {
     let mut event_channel_open = true;
+    let mut last_warning_at = None;
     loop {
         while *subscriber_receiver.borrow() == 0 {
             if event_channel_open {
@@ -173,6 +175,7 @@ async fn run_revision_monitor(
             &mut subscriber_receiver,
             &revision_sender,
             &read_revision,
+            &mut last_warning_at,
         )
         .await
         {
@@ -196,6 +199,7 @@ async fn run_revision_monitor(
                             &mut subscriber_receiver,
                             &revision_sender,
                             &read_revision,
+                            &mut last_warning_at,
                         )
                         .await
                     {
@@ -216,6 +220,7 @@ async fn run_revision_monitor(
                                 &mut subscriber_receiver,
                                 &revision_sender,
                                 &read_revision,
+                                &mut last_warning_at,
                             )
                             .await;
                         }
@@ -229,29 +234,38 @@ async fn run_revision_monitor(
 async fn publish_revision(
     revision_sender: &watch::Sender<Option<i64>>,
     read_revision: &RevisionReader,
-) -> bool {
+) -> anyhow::Result<()> {
     let read_revision = Arc::clone(read_revision);
-    let Ok(Some(revision)) = tokio::task::spawn_blocking(move || read_revision()).await else {
-        return false;
+    let Some(revision) = tokio::task::spawn_blocking(move || read_revision()).await?? else {
+        anyhow::bail!("session store revision read returned no revision");
     };
     if *revision_sender.borrow() != Some(revision) {
         revision_sender.send_replace(Some(revision));
     }
-    true
+    Ok(())
 }
 
 async fn publish_revision_until_success(
     subscriber_receiver: &mut watch::Receiver<usize>,
     revision_sender: &watch::Sender<Option<i64>>,
     read_revision: &RevisionReader,
+    last_warning_at: &mut Option<time::Instant>,
 ) -> bool {
     let mut retry_delay = REVISION_RETRY_INITIAL_DELAY;
     loop {
         if *subscriber_receiver.borrow() == 0 {
             return false;
         }
-        if publish_revision(revision_sender, read_revision).await {
-            return true;
+        match publish_revision(revision_sender, read_revision).await {
+            Ok(()) => return true,
+            Err(error)
+                if last_warning_at
+                    .is_none_or(|last| last.elapsed() >= REVISION_RETRY_WARNING_INTERVAL) =>
+            {
+                tracing::warn!(%error, "failed to read session store revision; retrying");
+                *last_warning_at = Some(time::Instant::now());
+            }
+            Err(_) => {}
         }
 
         let sleep = time::sleep(retry_delay);
@@ -270,8 +284,8 @@ async fn publish_revision_until_success(
     }
 }
 
-fn current_revision() -> Option<i64> {
-    store::session_store_revision().ok()
+fn current_revision() -> anyhow::Result<Option<i64>> {
+    store::session_store_revision().map(Some)
 }
 
 struct RevisionStreamState {
@@ -409,7 +423,7 @@ mod tests {
     #[tokio::test]
     async fn sends_the_server_instance_before_session_revisions() {
         let (_event_sender, event_receiver) = broadcast::channel(1);
-        let revisions = RevisionMonitor::new(|| Some(12), event_receiver);
+        let revisions = RevisionMonitor::new(|| Ok(Some(12)), event_receiver);
         let (_enrichment_tx, enrichment_rx) = watch::channel(());
         let (_restart_tx, restart_rx) = watch::channel(false);
         let body = Sse::new(event_stream(
@@ -462,7 +476,7 @@ mod tests {
                 let read_count = Arc::clone(&read_count);
                 move || {
                     read_count.fetch_add(1, Ordering::SeqCst);
-                    Some(revision.load(Ordering::SeqCst))
+                    Ok(Some(revision.load(Ordering::SeqCst)))
                 }
             },
             event_receiver,
@@ -559,7 +573,7 @@ mod tests {
                 let read_count = Arc::clone(&read_count);
                 move || {
                     let attempt = read_count.fetch_add(1, Ordering::SeqCst);
-                    (attempt > 0).then_some(21)
+                    Ok((attempt > 0).then_some(21))
                 }
             },
             event_receiver,
@@ -594,7 +608,7 @@ mod tests {
                 let read_count = Arc::clone(&read_count);
                 move || {
                     read_count.fetch_add(1, Ordering::SeqCst);
-                    Some(revision.load(Ordering::SeqCst))
+                    Ok(Some(revision.load(Ordering::SeqCst)))
                 }
             },
             event_receiver,
@@ -641,7 +655,7 @@ mod tests {
                         snapshot_started_sender.send(()).unwrap();
                         snapshot_continue_receiver.lock().unwrap().recv().unwrap();
                     }
-                    Some(snapshot)
+                    Ok(Some(snapshot))
                 }
             },
             event_receiver,
@@ -687,7 +701,7 @@ mod tests {
     #[tokio::test]
     async fn emits_restart_and_closes_the_event_stream() {
         let (_event_sender, event_receiver) = broadcast::channel(1);
-        let revisions = RevisionMonitor::new(|| Some(12), event_receiver);
+        let revisions = RevisionMonitor::new(|| Ok(Some(12)), event_receiver);
         let (_enrichment_tx, enrichment_rx) = watch::channel(());
         let (restart_tx, restart_rx) = watch::channel(false);
         let stream = revision_stream(revisions.subscribe(), enrichment_rx, restart_rx);
