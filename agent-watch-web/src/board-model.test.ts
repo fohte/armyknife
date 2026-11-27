@@ -159,6 +159,36 @@ it('keeps a waiting-only project active and orders it after working projects', (
   ])
 })
 
+it('sorts a waiting-only project ahead of quiet projects', () => {
+  const sessions = [
+    session('waiting', 'zeta', 'waiting'),
+    session('quiet', 'alpha', 'done'),
+  ] as const
+
+  expect(buildBoardProjects(sessions)).toEqual([
+    {
+      name: 'zeta',
+      sessions: [sessions[0]],
+      repos: ['example/zeta'],
+      needsActionCount: 0,
+      waitingCount: 1,
+      inProgressCount: 0,
+      quiet: false,
+      status: 'Waiting',
+    },
+    {
+      name: 'alpha',
+      sessions: [sessions[1]],
+      repos: ['example/alpha'],
+      needsActionCount: 0,
+      waitingCount: 0,
+      inProgressCount: 0,
+      quiet: true,
+      status: 'Idle',
+    },
+  ])
+})
+
 it('groups work types by label and orders Waiting before In progress', () => {
   const sessions = [
     {

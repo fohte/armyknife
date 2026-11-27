@@ -667,6 +667,21 @@ function readSessionTitles() {
   )
 }
 
+it('keeps waiting sessions from the feed visible in the Inbox', () => {
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-waiting', 'Wait for the build', 'waiting')],
+  })
+
+  expect(
+    Array.from(
+      container.querySelectorAll('.waiting-section .session-title'),
+      (title) => title.textContent,
+    ),
+  ).toEqual(['Wait for the build'])
+})
+
 function readActiveView() {
   const active = container.querySelector<HTMLButtonElement>(
     '.view-switch-button[aria-pressed="true"]',

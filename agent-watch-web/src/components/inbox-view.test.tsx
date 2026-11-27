@@ -124,13 +124,16 @@ function renderInbox(props: Partial<ComponentProps<typeof InboxView>> = {}) {
   })
 }
 
-function waitingSession(id: string): Session {
+function waitingSession(
+  id: string,
+  title = 'Wait for the integration check',
+): Session {
   return {
     id,
     category: 'waiting',
     isPaused: false,
     kind: null,
-    title: 'Wait for the integration check',
+    title,
     preview: null,
     waitingReason: 'Waiting for CI to finish',
     elapsedSeconds: 30,
@@ -371,6 +374,121 @@ it('shows the Waiting count and sessions in the iPhone inbox', () => {
     expanded: 'true',
     title: 'Wait for the integration check',
     reason: 'Waiting for CI to finish',
+  })
+})
+
+it('shows more than two waiting sessions when a selected row is beyond the limit', () => {
+  renderInbox({
+    sessions: [
+      waitingSession('waiting-one', 'First waiting session'),
+      waitingSession('waiting-two', 'Second waiting session'),
+      waitingSession('waiting-three', 'Third waiting session'),
+    ],
+    selectedId: 'waiting-three',
+  })
+
+  const snapshot = () => ({
+    visibleTitles: Array.from(
+      container.querySelectorAll('.waiting-section .session-title'),
+      (title) => title.textContent,
+    ),
+    selectedTitle: container.querySelector(
+      '[data-session-row][aria-current="true"] .session-title',
+    )?.textContent,
+    showMore: container.querySelector('.show-more-button')?.textContent,
+  })
+
+  expect(snapshot()).toEqual({
+    visibleTitles: [
+      'First waiting session',
+      'Second waiting session',
+      'Third waiting session',
+    ],
+    selectedTitle: 'Third waiting session',
+    showMore: undefined,
+  })
+})
+
+it('expands and collapses waiting sessions from the iPhone inbox control', () => {
+  renderInbox({
+    sessions: [
+      waitingSession('waiting-one', 'First waiting session'),
+      waitingSession('waiting-two', 'Second waiting session'),
+    ],
+    isMobile: true,
+  })
+
+  const snapshot = () => ({
+    expanded: container
+      .querySelector('.mobile-waiting-row')
+      ?.getAttribute('aria-expanded'),
+    visibleTitles: Array.from(
+      container.querySelectorAll('.waiting-section .session-title'),
+      (title) => title.textContent,
+    ),
+  })
+
+  expect(snapshot()).toEqual({
+    expanded: 'true',
+    visibleTitles: ['First waiting session', 'Second waiting session'],
+  })
+
+  const toggle = container.querySelector<HTMLButtonElement>(
+    '.mobile-waiting-row',
+  )
+  if (toggle === null) throw new Error('Waiting toggle was not rendered')
+  act(() => {
+    toggle.click()
+  })
+
+  expect(snapshot()).toEqual({ expanded: 'false', visibleTitles: [] })
+
+  act(() => {
+    toggle.click()
+  })
+
+  expect(snapshot()).toEqual({
+    expanded: 'true',
+    visibleTitles: ['First waiting session', 'Second waiting session'],
+  })
+})
+
+it('shows more waiting sessions from the desktop show-more button', () => {
+  renderInbox({
+    sessions: [
+      waitingSession('waiting-one', 'First waiting session'),
+      waitingSession('waiting-two', 'Second waiting session'),
+      waitingSession('waiting-three', 'Third waiting session'),
+    ],
+  })
+
+  const snapshot = () => ({
+    visibleTitles: Array.from(
+      container.querySelectorAll('.waiting-section .session-title'),
+      (title) => title.textContent,
+    ),
+    showMore: container.querySelector('.show-more-button')?.textContent,
+  })
+
+  expect(snapshot()).toEqual({
+    visibleTitles: ['First waiting session', 'Second waiting session'],
+    showMore: '1 more ▸',
+  })
+
+  const showMore =
+    container.querySelector<HTMLButtonElement>('.show-more-button')
+  if (showMore === null) throw new Error('Show more button was not rendered')
+  act(() => {
+    showMore.click()
+  })
+
+  expect(snapshot()).toEqual({
+    visibleTitles: [
+      'First waiting session',
+      'Second waiting session',
+      'Third waiting session',
+    ],
+    showMore: undefined,
   })
 })
 

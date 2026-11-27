@@ -2,7 +2,7 @@ import '#components/later-today.css'
 
 import { Button } from '@fohte/ui/button'
 import { Filter, X } from 'lucide-react'
-import { type ReactNode, useCallback, useState } from 'react'
+import { type ReactNode, useCallback, useEffect, useState } from 'react'
 
 import { InboxFilterBar } from '#components/inbox-filter-bar'
 import { InboxViewDialogLayers } from '#components/inbox-view-dialog-layers'
@@ -126,6 +126,9 @@ export function InboxView({
   const waiting = filteredSessions.filter(
     (session) => session.category === 'waiting',
   )
+  const selectedWaitingIndex = waiting.findIndex(
+    (session) => session.id === selectedId,
+  )
   const todoLaterCount = sumTodoLaterCount(inProgress)
   const done = filteredSessions.filter((session) => session.category === 'done')
   const allDone = sessions.filter(
@@ -186,6 +189,37 @@ export function InboxView({
       ? waiting
       : waiting.slice(0, 2)
   const hiddenWaitingCount = waiting.length - visibleWaiting.length
+
+  useEffect(() => {
+    if (selectedWaitingIndex < 0) {
+      return
+    }
+
+    if (isMobile) {
+      setWaitingExpanded(true)
+    } else if (selectedWaitingIndex >= 2) {
+      setShowAllWaiting(true)
+    }
+  }, [isMobile, selectedId, selectedWaitingIndex])
+
+  useEffect(() => {
+    const waitingRowIsVisible = isMobile
+      ? waitingExpanded
+      : showAllWaiting || selectedWaitingIndex < 2
+    if (selectedWaitingIndex < 0 || !waitingRowIsVisible) {
+      return
+    }
+
+    document
+      .querySelector<HTMLElement>('[data-session-row][aria-current="true"]')
+      ?.scrollIntoView({ block: 'nearest' })
+  }, [
+    isMobile,
+    selectedId,
+    selectedWaitingIndex,
+    showAllWaiting,
+    waitingExpanded,
+  ])
 
   return (
     <section className="inbox-view" aria-labelledby="inbox-title">
