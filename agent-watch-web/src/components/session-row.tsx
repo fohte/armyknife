@@ -105,6 +105,18 @@ function RepositoryLabel({ repository }: { repository: string }) {
         parentElement?.classList.contains('session-repo-line') === true
       const isMetaLine =
         parentElement?.classList.contains('session-meta-line') === true
+      const ownerElement = repositoryElement.querySelector<HTMLElement>(
+        '.session-repo-owner',
+      )
+      const ownerSeparatorElement =
+        repositoryElement.querySelector<HTMLElement>(
+          '.session-repo-owner-separator',
+        )
+      const ownerPrefixIsClipped =
+        (ownerElement !== null &&
+          ownerElement.scrollWidth > ownerElement.clientWidth) ||
+        (ownerSeparatorElement !== null &&
+          ownerSeparatorElement.scrollWidth > ownerSeparatorElement.clientWidth)
       const metaSiblings = isMetaLine
         ? Array.from(parentElement.children).filter(
             (child): child is HTMLElement =>
@@ -146,6 +158,7 @@ function RepositoryLabel({ repository }: { repository: string }) {
             columnGap * metaGapCount
           : repositoryElement.clientWidth
       const shouldShorten =
+        ownerPrefixIsClipped ||
         measureElement.getBoundingClientRect().width > availableWidth + 1
       setShortenOwner(shouldShorten)
     }
