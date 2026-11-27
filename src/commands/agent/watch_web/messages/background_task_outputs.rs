@@ -9,8 +9,13 @@ use anyhow::Result;
 use axum::body::Body;
 use axum::extract::{Path as AxumPath, State};
 use axum::http::StatusCode;
-use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, X_CONTENT_TYPE_OPTIONS};
+use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, HeaderValue, X_CONTENT_TYPE_OPTIONS};
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
+use futures_util::StreamExt;
+use futures_util::stream::{self, Stream};
+use notify::{RecommendedWatcher, RecursiveMode, Watcher};
+use tokio::sync::mpsc;
 
 use super::{BackgroundTaskKind, MessagesRouteState};
 use crate::commands::agent::types::{Engine, Session};
@@ -68,6 +73,115 @@ pub(super) async fn get_background_task_output(
         Body::from(output),
     )
         .into_response()
+}
+
+pub(super) async fn get_background_task_output_events(
+    State((load_session, _, loaders)): State<MessagesRouteState>,
+    AxumPath((session_id, task_id)): AxumPath<(String, String)>,
+) -> Response {
+    let output_path = match tokio::task::spawn_blocking(move || -> Result<Option<PathBuf>> {
+        let Some(session) = load_session(&session_id)? else {
+            return Ok(None);
+        };
+        output_path_for_task(&session, &task_id, &loaders)
+    })
+    .await
+    {
+        Ok(Ok(Some(path))) => path,
+        Ok(Ok(None)) => return output_unavailable_response(StatusCode::NOT_FOUND),
+        Ok(Err(error)) => {
+            tracing::warn!(%error, "failed to resolve background task output path");
+            return output_unavailable_response(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+        Err(error) => {
+            tracing::error!(%error, "background task output path worker failed");
+            return output_unavailable_response(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    };
+
+    let changes = match watch_output_changes(output_path.clone()) {
+        Ok(changes) => changes,
+        Err(error) => {
+            tracing::warn!(%error, path = %output_path.display(), "failed to watch background task output");
+            return output_unavailable_response(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    };
+    let events = output_updates(output_path, changes)
+        .map(|output| Ok::<Event, std::convert::Infallible>(Event::default().data(output)));
+    let mut response = Sse::new(events)
+        .keep_alive(KeepAlive::default())
+        .into_response();
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+        .headers_mut()
+        .insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    response
+}
+
+fn output_unavailable_response(status: StatusCode) -> Response {
+    (
+        status,
+        [
+            (CONTENT_TYPE, "text/plain; charset=utf-8"),
+            (X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            (CACHE_CONTROL, "no-store"),
+        ],
+        Body::from(OUTPUT_UNAVAILABLE),
+    )
+        .into_response()
+}
+
+fn watch_output_changes(path: PathBuf) -> Result<impl Stream<Item = ()> + Send> {
+    let (sender, receiver) = mpsc::channel(1);
+    let watched_path = path.clone();
+    let mut watcher: RecommendedWatcher =
+        notify::recommended_watcher(move |result: notify::Result<notify::Event>| {
+            let changed = result.is_err()
+                || result.is_ok_and(|event| {
+                    event
+                        .paths
+                        .iter()
+                        .any(|event_path| event_path == &watched_path)
+                });
+            if changed {
+                // Each event rereads the full tail, so a pending notification covers newer writes.
+                let _ = sender.try_send(());
+            }
+        })?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("background task output path has no parent"))?;
+    watcher.watch(parent, RecursiveMode::NonRecursive)?;
+
+    Ok(stream::unfold(
+        (receiver, watcher),
+        |(mut receiver, _watcher)| async move {
+            receiver.recv().await?;
+            Some(((), (receiver, _watcher)))
+        },
+    ))
+}
+
+fn output_updates(
+    path: PathBuf,
+    changes: impl Stream<Item = ()> + Send + 'static,
+) -> impl Stream<Item = String> + Send {
+    let initial_path = path.clone();
+    stream::once(async move { output_for_event(&initial_path) })
+        .chain(changes.map(move |_| output_for_event(&path)))
+}
+
+fn output_for_event(path: &Path) -> String {
+    match read_output_tail(path) {
+        Ok(Some(output)) => output,
+        Ok(None) => OUTPUT_UNAVAILABLE.to_owned(),
+        Err(error) => {
+            tracing::warn!(%error, path = %path.display(), "failed to read background task output update");
+            OUTPUT_UNAVAILABLE.to_owned()
+        }
+    }
 }
 
 fn output_path_for_task(
@@ -199,7 +313,11 @@ fn read_output_tail(path: &Path) -> std::io::Result<Option<String>> {
 mod tests {
     use std::fs;
 
-    use super::{MAX_OUTPUT_BYTES, read_output_tail};
+    use futures_util::StreamExt;
+    use futures_util::stream;
+    use tokio::sync::mpsc;
+
+    use super::{MAX_OUTPUT_BYTES, output_updates, read_output_tail};
 
     #[test]
     fn reads_only_the_last_twenty_lines() {
@@ -226,5 +344,29 @@ mod tests {
         let expected =
             output[output.len() - usize::try_from(MAX_OUTPUT_BYTES).unwrap()..].to_owned();
         assert_eq!(read_output_tail(&path).unwrap(), Some(expected));
+    }
+
+    #[tokio::test]
+    async fn streams_the_initial_output_and_each_injected_change() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("output.log");
+        fs::write(&path, "initial output\n").unwrap();
+        let (sender, receiver) = mpsc::channel(1);
+        let changes = stream::unfold(receiver, |mut receiver| async move {
+            receiver.recv().await.map(|change| (change, receiver))
+        });
+        let mut updates = Box::pin(output_updates(path.clone(), changes));
+        let initial = updates.next().await;
+        fs::write(&path, "updated output\n").unwrap();
+        sender.send(()).await.unwrap();
+        let updated = updates.next().await;
+
+        assert_eq!(
+            vec![initial, updated],
+            vec![
+                Some("initial output\n".to_owned()),
+                Some("updated output\n".to_owned()),
+            ],
+        );
     }
 }

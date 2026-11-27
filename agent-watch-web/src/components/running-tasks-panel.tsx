@@ -2,7 +2,6 @@ import '#components/running-tasks-panel.css'
 
 import { useEffect, useState } from 'react'
 
-import { requestText } from '#components/conversation-requests'
 import { BackgroundTaskRowView } from '#components/running-task-row-view'
 import { RunningTasksPanelView } from '#components/running-tasks-panel-view'
 import type { BackgroundTask } from '#types'
@@ -48,34 +47,28 @@ function BackgroundTaskRowContainer({
 
   useEffect(() => {
     if (!isOpen) return
-    let active = true
-    let timeout: number | null = null
-    let requestPending = false
-    const poll = () => {
-      if (requestPending) return
-      requestPending = true
-      const url = `/api/sessions/${encodeURIComponent(sessionId)}/background-tasks/${encodeURIComponent(task.id)}/output`
-      void requestText(url)
-        .match(
-          (nextOutput) => {
-            if (!active) return
-            setOutput(nextOutput)
-            setError(null)
-          },
-          (requestError) => {
-            if (!active) return
-            setError(requestError.message)
-          },
-        )
-        .then(() => {
-          requestPending = false
-          if (active) timeout = window.setTimeout(poll, 1_000)
-        })
+    const url = `/api/sessions/${encodeURIComponent(sessionId)}/background-tasks/${encodeURIComponent(task.id)}/output/events`
+    const eventSource = new EventSource(url)
+    const onOpen = () => {
+      setError(null)
     }
-    poll()
+    const onMessage = (event: Event) => {
+      if (event instanceof MessageEvent && typeof event.data === 'string') {
+        setOutput(event.data)
+        setError(null)
+      }
+    }
+    const onError = () => {
+      setError('Connection interrupted. Reconnecting…')
+    }
+    eventSource.addEventListener('open', onOpen)
+    eventSource.addEventListener('message', onMessage)
+    eventSource.addEventListener('error', onError)
     return () => {
-      active = false
-      if (timeout !== null) window.clearTimeout(timeout)
+      eventSource.removeEventListener('open', onOpen)
+      eventSource.removeEventListener('message', onMessage)
+      eventSource.removeEventListener('error', onError)
+      eventSource.close()
     }
   }, [isOpen, sessionId, task.id])
 

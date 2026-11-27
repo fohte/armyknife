@@ -268,6 +268,10 @@ pub(in crate::commands::agent::watch_web) fn routes_with_proposals_and_peer_out_
             "/sessions/{id}/background-tasks/{task_id}/output",
             get(background_task_outputs::get_background_task_output),
         )
+        .route(
+            "/sessions/{id}/background-tasks/{task_id}/output/events",
+            get(background_task_outputs::get_background_task_output_events),
+        )
         .route("/sessions/{id}/messages", get(get_messages))
         .route("/skill-suggestions", get(get_skill_suggestions))
         .with_state((
