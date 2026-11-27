@@ -133,7 +133,7 @@ export const IPhoneComposer: Story = {
 }
 
 export const IPhoneComposerWithManyAttachments: Story = {
-  name: 'The iPhone composer keeps sending available with many attachments',
+  name: 'The iPhone composer keeps its send button available with many attachments',
   args: {
     attachments: Array.from({ length: 16 }, (_, index) => ({
       id: `attachment-${String(index + 1)}`,
