@@ -232,21 +232,9 @@ pub fn current_branch(repo: &GitRepo) -> Result<String> {
     repo.current_branch()
 }
 
-/// Get the default branch name for a specific repository.
+/// Get the main branch name for a specific repository.
+/// Agent worktree creation only uses `origin/main` and `origin/master` as default bases.
 pub fn get_main_branch_for_repo(repo: &GitRepo) -> Result<String> {
-    if let Some(branch) = run_git_optional(
-        &repo.workdir,
-        [
-            "symbolic-ref",
-            "--quiet",
-            "--short",
-            "refs/remotes/origin/HEAD",
-        ],
-    )
-    .and_then(|remote_head| default_branch_from_remote_head(&remote_head).map(str::to_string))
-    {
-        return Ok(branch);
-    }
     if repo.remote_branch_exists("origin/main") {
         return Ok("main".to_string());
     }
@@ -256,10 +244,42 @@ pub fn get_main_branch_for_repo(repo: &GitRepo) -> Result<String> {
     Err(GitError::NotFound("Neither origin/main nor origin/master found".to_string()).into())
 }
 
+/// Get the configured origin default branch, falling back to the supported main/master refs.
+pub fn get_default_branch_for_repo(repo: &GitRepo) -> Result<String> {
+    let origin_head = run_git_optional(
+        &repo.workdir,
+        [
+            "symbolic-ref",
+            "--quiet",
+            "--short",
+            "refs/remotes/origin/HEAD",
+        ],
+    );
+    select_default_branch(
+        origin_head.as_deref(),
+        |remote_ref| repo.remote_branch_exists(remote_ref),
+        || get_main_branch_for_repo(repo),
+    )
+}
+
 fn default_branch_from_remote_head(remote_head: &str) -> Option<&str> {
     remote_head
         .strip_prefix("origin/")
         .filter(|branch| !branch.is_empty() && *branch != "HEAD")
+}
+
+fn select_default_branch(
+    remote_head: Option<&str>,
+    remote_branch_exists: impl FnOnce(&str) -> bool,
+    fallback: impl FnOnce() -> Result<String>,
+) -> Result<String> {
+    if let Some(branch) = remote_head.and_then(default_branch_from_remote_head) {
+        let remote_ref = format!("origin/{branch}");
+        if remote_branch_exists(&remote_ref) {
+            return Ok(branch.to_string());
+        }
+    }
+    fallback()
 }
 
 /// Fetch from origin with prune to remove stale remote-tracking references.
@@ -379,16 +399,53 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case::main("origin/main", Some("main"))]
-    #[case::master("origin/master", Some("master"))]
-    #[case::nested_branch("origin/release/fictional", Some("release/fictional"))]
-    #[case::other_remote("upstream/main", None)]
-    #[case::empty_branch("origin/", None)]
-    fn parses_default_branch_from_remote_head(
-        #[case] remote_head: &str,
-        #[case] expected: Option<&str>,
+    #[case::configured_master_wins(
+        Some("origin/master"),
+        true,
+        "main",
+        Some("origin/master"),
+        "master"
+    )]
+    #[case::configured_custom_branch_wins(
+        Some("origin/develop"),
+        true,
+        "main",
+        Some("origin/develop"),
+        "develop"
+    )]
+    #[case::stale_target_uses_main_fallback(
+        Some("origin/old-default"),
+        false,
+        "main",
+        Some("origin/old-default"),
+        "main"
+    )]
+    #[case::no_symbolic_head_uses_master_fallback(None, false, "master", None, "master")]
+    #[case::other_remote_uses_main_fallback(Some("upstream/develop"), false, "main", None, "main")]
+    fn selects_an_existing_configured_default_branch_before_fallbacks(
+        #[case] remote_head: Option<&str>,
+        #[case] symbolic_target_exists: bool,
+        #[case] fallback_branch: &str,
+        #[case] expected_remote_ref: Option<&str>,
+        #[case] expected_branch: &str,
     ) {
-        assert_eq!(default_branch_from_remote_head(remote_head), expected);
+        let mut inspected_remote_ref = None;
+        let result = select_default_branch(
+            remote_head,
+            |remote_ref| {
+                inspected_remote_ref = Some(remote_ref.to_string());
+                symbolic_target_exists
+            },
+            || Ok(fallback_branch.to_string()),
+        );
+
+        assert_eq!(
+            (result.unwrap(), inspected_remote_ref),
+            (
+                expected_branch.to_string(),
+                expected_remote_ref.map(str::to_string),
+            ),
+        );
     }
 
     #[test]

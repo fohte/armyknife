@@ -6,7 +6,7 @@ use serde::Serialize;
 
 use crate::commands::agent::types::Session;
 use crate::infra::git::cmd::run_git;
-use crate::infra::git::get_main_branch_for_repo;
+use crate::infra::git::get_default_branch_for_repo;
 use crate::infra::process::ProcessInPath;
 use crate::infra::process::find_non_shell_processes_in_path;
 use crate::shared::cleanup::{self, WorktreeProcessGuardError};
@@ -122,7 +122,7 @@ impl CloseChecks {
                 read_branch_commits_with(
                     commits_repo.workdir(),
                     &branch,
-                    || get_main_branch_for_repo(&commits_repo).ok(),
+                    || get_default_branch_for_repo(&commits_repo).ok(),
                     |path, args| run_git(path, args).ok(),
                 )
             },
