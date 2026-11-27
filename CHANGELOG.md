@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.965](https://github.com/fohte/armyknife/compare/v0.1.964...v0.1.965) (2026-11-27)
+
+
+### Performance Improvements
+
+* **agent:** detect crit review waits via events ([#2357](https://github.com/fohte/armyknife/issues/2357)) ([494af92](https://github.com/fohte/armyknife/commit/494af92426bd9d60d00afcf5711cdd1e7154aa3f))
+
 ## [0.1.964](https://github.com/fohte/armyknife/compare/v0.1.963...v0.1.964) (2026-11-27)
 
 
