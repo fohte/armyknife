@@ -172,6 +172,7 @@ mod tests {
 
     #[test]
     fn ended_resume_uses_the_worktree_layout_from_config() {
+        let temp_dir = tempfile::tempdir().unwrap();
         let mut config = Config::default();
         config.agent.worktree.layout = LayoutNode::Pane(PaneConfig {
             command: "fixture-editor".to_string(),
@@ -188,6 +189,7 @@ mod tests {
             "last_message": null,
         }))
         .unwrap();
+        session.cwd = temp_dir.path().to_path_buf();
         session.engine = Engine::Codex;
         session.tmux_info = Some(TmuxInfo {
             session_name: "fixture-session-window".to_string(),
