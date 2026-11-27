@@ -54,7 +54,12 @@ function ProjectCard({
         onSelectSession(session.id)
       }}
     >
-      <SessionRow session={session} density="compact" isMobile={isMobile} />
+      <SessionRow
+        session={session}
+        density="compact"
+        isMobile={isMobile}
+        showWaitingReason
+      />
     </Button>
   )
 }

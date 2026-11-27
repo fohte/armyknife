@@ -1,6 +1,6 @@
 import '#components/mobile-layout.css'
 
-import { act, type ComponentProps } from 'react'
+import { act, type ComponentProps, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
@@ -93,34 +93,57 @@ const sessions: Session[] = [
   },
 ]
 
+function InboxHarness({
+  props,
+}: {
+  props: Partial<ComponentProps<typeof InboxView>>
+}) {
+  const [showAllWaiting, setShowAllWaiting] = useState(
+    props.showAllWaiting ?? false,
+  )
+  const [waitingExpanded, setWaitingExpanded] = useState(
+    props.waitingExpanded ?? true,
+  )
+
+  return (
+    <InboxView
+      sessions={sessions}
+      selectedId={null}
+      loaded
+      error={null}
+      connectionError={null}
+      lastUpdatedAt={new Date(2026, 0, 1, 22, 0).getTime()}
+      showAllInProgress
+      onShowMore={() => undefined}
+      onSelect={() => undefined}
+      laterExpanded
+      onToggleLater={() => undefined}
+      onToggleToday={() => undefined}
+      todaySessions={[]}
+      onSelectToday={() => undefined}
+      isMobile={false}
+      inProgressExpanded
+      onToggleInProgress={() => undefined}
+      doneExpanded
+      onToggleDone={() => undefined}
+      onCloseDone={() => undefined}
+      {...props}
+      showAllWaiting={showAllWaiting}
+      onShowMoreWaiting={() => {
+        setShowAllWaiting(true)
+      }}
+      waitingExpanded={waitingExpanded}
+      onToggleWaiting={() => {
+        setWaitingExpanded((expanded) => !expanded)
+      }}
+    />
+  )
+}
+
 function renderInbox(props: Partial<ComponentProps<typeof InboxView>> = {}) {
   root = createRoot(container)
   act(() => {
-    root?.render(
-      <InboxView
-        sessions={sessions}
-        selectedId={null}
-        loaded
-        error={null}
-        connectionError={null}
-        lastUpdatedAt={new Date(2026, 0, 1, 22, 0).getTime()}
-        showAllInProgress
-        onShowMore={() => undefined}
-        onSelect={() => undefined}
-        laterExpanded
-        onToggleLater={() => undefined}
-        onToggleToday={() => undefined}
-        todaySessions={[]}
-        onSelectToday={() => undefined}
-        isMobile={false}
-        inProgressExpanded
-        onToggleInProgress={() => undefined}
-        doneExpanded
-        onToggleDone={() => undefined}
-        onCloseDone={() => undefined}
-        {...props}
-      />,
-    )
+    root?.render(<InboxHarness props={props} />)
   })
 }
 
@@ -374,38 +397,6 @@ it('shows the Waiting count and sessions in the iPhone inbox', () => {
     expanded: 'true',
     title: 'Wait for the integration check',
     reason: 'Waiting for CI to finish',
-  })
-})
-
-it('shows more than two waiting sessions when a selected row is beyond the limit', () => {
-  renderInbox({
-    sessions: [
-      waitingSession('waiting-one', 'First waiting session'),
-      waitingSession('waiting-two', 'Second waiting session'),
-      waitingSession('waiting-three', 'Third waiting session'),
-    ],
-    selectedId: 'waiting-three',
-  })
-
-  const snapshot = () => ({
-    visibleTitles: Array.from(
-      container.querySelectorAll('.waiting-section .session-title'),
-      (title) => title.textContent,
-    ),
-    selectedTitle: container.querySelector(
-      '[data-session-row][aria-current="true"] .session-title',
-    )?.textContent,
-    showMore: container.querySelector('.show-more-button')?.textContent,
-  })
-
-  expect(snapshot()).toEqual({
-    visibleTitles: [
-      'First waiting session',
-      'Second waiting session',
-      'Third waiting session',
-    ],
-    selectedTitle: 'Third waiting session',
-    showMore: undefined,
   })
 })
 

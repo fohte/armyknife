@@ -66,6 +66,8 @@ function AppContent() {
     isMobile,
     inProgressExpanded,
     setInProgressExpanded,
+    waitingExpanded,
+    setWaitingExpanded,
     doneExpanded,
     setDoneExpanded,
   } = useMobileLayout()
@@ -112,6 +114,7 @@ function AppContent() {
     boolean | null
   >(null)
   const [showAllInProgress, setShowAllInProgress] = useState(false)
+  const [showAllWaiting, setShowAllWaiting] = useState(false)
   const [laterExpanded, setLaterExpanded] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [availableVersion, setAvailableVersion] = useState<string | null>(null)
@@ -259,7 +262,21 @@ function AppContent() {
     if (hiddenProgress.slice(2).some((session) => session.id === selectedId)) {
       setShowAllInProgress(true)
     }
-  }, [orderedSessions, selectedId])
+
+    const waiting = orderedSessions.filter(
+      (session) => session.category === 'waiting',
+    )
+    const selectedWaitingIndex = waiting.findIndex(
+      (session) => session.id === selectedId,
+    )
+    if (selectedWaitingIndex >= 0) {
+      if (isMobile) {
+        setWaitingExpanded(true)
+      } else if (selectedWaitingIndex >= 2) {
+        setShowAllWaiting(true)
+      }
+    }
+  }, [isMobile, orderedSessions, selectedId, setWaitingExpanded])
 
   useEffect(() => {
     if (view !== 'inbox') {
@@ -271,7 +288,14 @@ function AppContent() {
         '[data-session-row][aria-current="true"]',
       )
       ?.scrollIntoView({ block: 'nearest' })
-  }, [selectedId, showAllInProgress, view])
+  }, [
+    inProgressExpanded,
+    selectedId,
+    showAllInProgress,
+    showAllWaiting,
+    view,
+    waitingExpanded,
+  ])
 
   useSessionKeyboardNavigation({
     isMobile,
@@ -421,8 +445,10 @@ function AppContent() {
           error,
           inboxFilterQuery,
           showAllInProgress,
+          showAllWaiting,
           laterExpanded,
           inProgressExpanded,
+          waitingExpanded,
           doneExpanded,
           statusPanelOpen,
           pendingLaunchId,
@@ -448,8 +474,10 @@ function AppContent() {
         actions={{
           setInboxFilterQuery,
           setShowAllInProgress,
+          setShowAllWaiting,
           setLaterExpanded,
           setInProgressExpanded,
+          setWaitingExpanded,
           setDoneExpanded,
           setMobileNavOpen,
           setStatusPanelOpen,

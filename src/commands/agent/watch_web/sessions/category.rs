@@ -529,6 +529,34 @@ mod tests {
         );
     }
 
+    #[rstest]
+    #[case::unanswered_todo(true)]
+    #[case::unanswered_proposal(false)]
+    fn waiting_status_with_unanswered_items_needs_action(#[case] has_unanswered_todo: bool) {
+        let mut session = session(SessionStatus::Stopped);
+        session.agent_status = Some(AgentStatus {
+            kind: "fixture_waiting_status".to_string(),
+            note: "Waiting for external work.".to_string(),
+        });
+
+        assert_eq!(
+            categories_for_with_todo_later(
+                &session,
+                TodoLaterCategoryContext {
+                    turn: None,
+                    needs_action: true,
+                    has_unanswered_todo,
+                    has_folded_todo: false,
+                    has_running_background_task: false,
+                    agent_status_state: Some(AgentStatusState::Waiting),
+                    state: None,
+                    now: Utc.timestamp_opt(2_000, 0).unwrap(),
+                },
+            ),
+            (SessionCategory::NeedsAction, SessionCategory::NeedsAction),
+        );
+    }
+
     #[test]
     fn active_later_state_keeps_precedence_over_waiting_status() {
         let mut session = session(SessionStatus::Stopped);

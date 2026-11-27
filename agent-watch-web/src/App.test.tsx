@@ -682,6 +682,38 @@ it('keeps waiting sessions from the feed visible in the Inbox', () => {
   ).toEqual(['Wait for the build'])
 })
 
+it('reveals a selected Waiting session beyond the Inbox row limit', () => {
+  window.history.replaceState(null, '', '/?session=session-waiting-three')
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-waiting-one', 'First waiting session', 'waiting', 8),
+      session('session-waiting-two', 'Second waiting session', 'waiting', 16),
+      session('session-waiting-three', 'Third waiting session', 'waiting', 24),
+    ],
+  })
+
+  const snapshot = () => ({
+    visibleTitles: Array.from(
+      container.querySelectorAll('.waiting-section .session-title'),
+      (title) => title.textContent,
+    ),
+    selectedTitle: readSelectedTitle(),
+    showMore: container.querySelector('.show-more-button')?.textContent,
+  })
+
+  expect(snapshot()).toEqual({
+    visibleTitles: [
+      'First waiting session',
+      'Second waiting session',
+      'Third waiting session',
+    ],
+    selectedTitle: 'Third waiting session',
+    showMore: undefined,
+  })
+})
+
 function readActiveView() {
   const active = container.querySelector<HTMLButtonElement>(
     '.view-switch-button[aria-pressed="true"]',

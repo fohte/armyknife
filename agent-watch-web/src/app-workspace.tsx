@@ -38,8 +38,10 @@ type AppWorkspaceState = {
   error: string | null
   inboxFilterQuery: string
   showAllInProgress: boolean
+  showAllWaiting: boolean
   laterExpanded: boolean
   inProgressExpanded: boolean
+  waitingExpanded: boolean
   doneExpanded: boolean
   statusPanelOpen: boolean
   pendingLaunchId: string | null
@@ -63,8 +65,10 @@ type AppWorkspaceState = {
 type AppWorkspaceActions = {
   setInboxFilterQuery: Dispatch<SetStateAction<string>>
   setShowAllInProgress: Dispatch<SetStateAction<boolean>>
+  setShowAllWaiting: Dispatch<SetStateAction<boolean>>
   setLaterExpanded: Dispatch<SetStateAction<boolean>>
   setInProgressExpanded: Dispatch<SetStateAction<boolean>>
+  setWaitingExpanded: Dispatch<SetStateAction<boolean>>
   setDoneExpanded: Dispatch<SetStateAction<boolean>>
   setMobileNavOpen: Dispatch<SetStateAction<boolean>>
   setStatusPanelOpen: Dispatch<SetStateAction<boolean>>
@@ -163,6 +167,10 @@ export function AppWorkspace({
     onShowMore: () => {
       actions.setShowAllInProgress(true)
     },
+    showAllWaiting: state.showAllWaiting,
+    onShowMoreWaiting: () => {
+      actions.setShowAllWaiting(true)
+    },
     onSelect: (id: string) => {
       if (state.newSessionMode === 'form') {
         actions.switchFromNewSessionToSession(id, true)
@@ -182,6 +190,10 @@ export function AppWorkspace({
     inProgressExpanded: state.inProgressExpanded,
     onToggleInProgress: () => {
       actions.setInProgressExpanded((expanded) => !expanded)
+    },
+    waitingExpanded: state.waitingExpanded,
+    onToggleWaiting: () => {
+      actions.setWaitingExpanded((expanded) => !expanded)
     },
     doneExpanded: state.doneExpanded,
     onToggleDone: () => {

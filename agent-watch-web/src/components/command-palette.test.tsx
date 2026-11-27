@@ -365,6 +365,21 @@ it.each([
   },
 )
 
+it('uses a monochrome hourglass for Waiting sessions', () => {
+  renderPalette({
+    sessions: [{ ...session, category: 'waiting', kind: null }],
+    initialQuery: 'Review notification settings',
+  })
+
+  const snapshot = () => ({
+    icon: container.querySelector(
+      '.command-palette-item .command-palette-status',
+    )?.textContent,
+  })
+
+  expect(snapshot()).toEqual({ icon: '⌛︎' })
+})
+
 it('adds the task number to result rows but not action headings', async () => {
   renderPalette({ initialQuery: '#notification' })
 

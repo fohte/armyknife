@@ -107,15 +107,15 @@ export function buildWorkTypeNavGroups(
 function compareNavSessions(left: Session, right: Session) {
   const categoryOrder: Record<string, number> = {
     needs_action: 0,
-    later: 1,
-    waiting: 2,
-    in_progress: 3,
+    in_progress: 1,
+    later: 2,
+    waiting: 3,
     done: 4,
   }
 
   return (
-    (categoryOrder[left.category] ?? 4) -
-      (categoryOrder[right.category] ?? 4) ||
+    (categoryOrder[left.category] ?? 5) -
+      (categoryOrder[right.category] ?? 5) ||
     left.elapsedSeconds - right.elapsedSeconds ||
     left.id.localeCompare(right.id, 'en')
   )

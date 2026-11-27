@@ -53,6 +53,7 @@ function renderRow(
   viewSession: Session = session,
   isMobile = false,
   inTree = false,
+  showWaitingReason = false,
 ) {
   if (root !== null) act(() => root?.unmount())
   root = createRoot(container)
@@ -64,6 +65,7 @@ function renderRow(
             session={viewSession}
             density={density}
             isMobile={isMobile}
+            showWaitingReason={showWaitingReason}
           />
         </div>
       ) : (
@@ -71,6 +73,7 @@ function renderRow(
           session={viewSession}
           density={density}
           isMobile={isMobile}
+          showWaitingReason={showWaitingReason}
         />
       ),
     )
@@ -150,7 +153,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-it('shows the waiting reason on compact rows with a gray hourglass', () => {
+it('hides the waiting reason on compact rows with a gray hourglass', () => {
   renderRow('compact', {
     ...session,
     category: 'waiting',
@@ -171,8 +174,27 @@ it('shows the waiting reason on compact rows with a gray hourglass', () => {
     label: 'Waiting',
     title: 'Waiting',
     icon: true,
-    preview: 'Waiting for the checks to finish',
+    preview: null,
   })
+})
+
+it('shows the waiting reason on compact Board rows', () => {
+  renderRow(
+    'compact',
+    {
+      ...session,
+      category: 'waiting',
+      kind: null,
+      waitingReason: 'Waiting for the checks to finish',
+    },
+    false,
+    false,
+    true,
+  )
+
+  expect(
+    container.querySelector('.session-preview')?.textContent ?? null,
+  ).toEqual('Waiting for the checks to finish')
 })
 
 it('shows the full Inbox row with role, engine, task and repository', () => {

@@ -46,6 +46,7 @@ type SessionRowProps = {
   density?: 'full' | 'compact' | 'compact-phone'
   isMobile?: boolean
   branch?: string | null
+  showWaitingReason?: boolean
 }
 
 function formatElapsedTime(totalSeconds: number) {
@@ -136,6 +137,7 @@ export function SessionRow({
   density = 'full',
   isMobile = false,
   branch,
+  showWaitingReason = false,
 }: SessionRowProps) {
   const role = rolePresentation(session.workType)
   const RoleIcon = role.Icon
@@ -165,13 +167,18 @@ export function SessionRow({
       : null
   const rowPreview = [
     critReviewReason ??
-      (session.category === 'waiting' ? session.waitingReason : null) ??
+      (session.category === 'waiting' &&
+      (density === 'full' || showWaitingReason)
+        ? session.waitingReason
+        : null) ??
       decisionPreview ??
       session.preview,
     todoLaterPreview,
   ]
     .filter((part) => part !== null && part.length > 0)
     .join(' · ')
+  const showPreview =
+    density === 'full' || (session.category === 'waiting' && showWaitingReason)
 
   return (
     <div
@@ -212,8 +219,7 @@ export function SessionRow({
           )}
           <SessionAge elapsedSeconds={session.elapsedSeconds} />
         </span>
-        {(density === 'full' || session.category === 'waiting') &&
-        rowPreview.length > 0 ? (
+        {showPreview && rowPreview.length > 0 ? (
           <span
             className={`session-preview${decisionPreview === null ? '' : ' is-decision-preview'}`}
           >

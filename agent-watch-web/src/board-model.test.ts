@@ -189,10 +189,14 @@ it('sorts a waiting-only project ahead of quiet projects', () => {
   ])
 })
 
-it('groups work types by label and orders Waiting before In progress', () => {
+it('keeps Nav category order and sorts unknown categories after Done', () => {
   const sessions = [
     {
-      ...session('guide-active', 'sample project', 'in_progress'),
+      ...session('guide-in-progress', 'sample project', 'in_progress'),
+      workType: 'release-guide',
+    },
+    {
+      ...session('guide-later', 'sample project', 'later'),
       workType: 'release-guide',
     },
     {
@@ -200,29 +204,34 @@ it('groups work types by label and orders Waiting before In progress', () => {
       workType: 'release-guide',
     },
     {
-      ...session('guide-needs-action', 'sample project', 'needs_action'),
+      ...session('guide-done', 'sample project', 'done'),
       workType: 'release-guide',
     },
     {
-      ...session('other-work', 'sample project', 'needs_action'),
-      workType: 'test-review',
+      ...session('guide-unknown', 'sample project', 'future_category'),
+      workType: 'release-guide',
     },
     {
-      ...session('unconfigured', 'quiet playground', 'done'),
-      workType: 'private-flow',
+      ...session('guide-needs-action', 'sample project', 'needs_action'),
+      workType: 'release-guide',
     },
   ] as const
 
   expect(
     buildWorkTypeNavGroups(sessions, {
       'release-guide': 'Guides',
-      'test-review': 'Guides',
-      'private-flow': '   ',
     }),
   ).toEqual([
     {
       label: 'Guides',
-      sessions: [sessions[2], sessions[3], sessions[1], sessions[0]],
+      sessions: [
+        sessions[5],
+        sessions[0],
+        sessions[1],
+        sessions[2],
+        sessions[3],
+        sessions[4],
+      ],
     },
   ])
 })

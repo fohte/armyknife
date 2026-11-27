@@ -2,7 +2,7 @@ import '#components/later-today.css'
 
 import { Button } from '@fohte/ui/button'
 import { Filter, X } from 'lucide-react'
-import { type ReactNode, useCallback, useEffect, useState } from 'react'
+import { type ReactNode, useCallback, useState } from 'react'
 
 import { InboxFilterBar } from '#components/inbox-filter-bar'
 import { InboxViewDialogLayers } from '#components/inbox-view-dialog-layers'
@@ -26,6 +26,8 @@ type InboxViewProps = {
   lastUpdatedAt: number
   showAllInProgress: boolean
   onShowMore: () => void
+  showAllWaiting: boolean
+  onShowMoreWaiting: () => void
   onSelect: (id: string) => void
   onLater?: (id: string) => void
   onCloseSession?: (id: string) => void
@@ -37,6 +39,8 @@ type InboxViewProps = {
   isMobile: boolean
   inProgressExpanded: boolean
   onToggleInProgress: () => void
+  waitingExpanded: boolean
+  onToggleWaiting: () => void
   doneExpanded: boolean
   onToggleDone: () => void
   onCloseDone?: (sessions: readonly Session[]) => void
@@ -71,6 +75,8 @@ export function InboxView({
   lastUpdatedAt,
   showAllInProgress,
   onShowMore,
+  showAllWaiting,
+  onShowMoreWaiting,
   onSelect,
   onLater,
   onCloseSession,
@@ -81,6 +87,8 @@ export function InboxView({
   isMobile,
   inProgressExpanded,
   onToggleInProgress,
+  waitingExpanded,
+  onToggleWaiting,
   doneExpanded,
   onToggleDone,
   onCloseDone = () => undefined,
@@ -104,8 +112,6 @@ export function InboxView({
 }: InboxViewProps) {
   const [localFilterQuery, setLocalFilterQuery] = useState('')
   const [localDialogOpen, setLocalDialogOpen] = useState(false)
-  const [waitingExpanded, setWaitingExpanded] = useState(true)
-  const [showAllWaiting, setShowAllWaiting] = useState(false)
   const [draftQuery, setDraftQuery] = useState(controlledFilterQuery ?? '')
   const [actionSheetSession, setActionSheetSession] = useState<Session | null>(
     null,
@@ -125,9 +131,6 @@ export function InboxView({
   )
   const waiting = filteredSessions.filter(
     (session) => session.category === 'waiting',
-  )
-  const selectedWaitingIndex = waiting.findIndex(
-    (session) => session.id === selectedId,
   )
   const todoLaterCount = sumTodoLaterCount(inProgress)
   const done = filteredSessions.filter((session) => session.category === 'done')
@@ -189,37 +192,6 @@ export function InboxView({
       ? waiting
       : waiting.slice(0, 2)
   const hiddenWaitingCount = waiting.length - visibleWaiting.length
-
-  useEffect(() => {
-    if (selectedWaitingIndex < 0) {
-      return
-    }
-
-    if (isMobile) {
-      setWaitingExpanded(true)
-    } else if (selectedWaitingIndex >= 2) {
-      setShowAllWaiting(true)
-    }
-  }, [isMobile, selectedId, selectedWaitingIndex])
-
-  useEffect(() => {
-    const waitingRowIsVisible = isMobile
-      ? waitingExpanded
-      : showAllWaiting || selectedWaitingIndex < 2
-    if (selectedWaitingIndex < 0 || !waitingRowIsVisible) {
-      return
-    }
-
-    document
-      .querySelector<HTMLElement>('[data-session-row][aria-current="true"]')
-      ?.scrollIntoView({ block: 'nearest' })
-  }, [
-    isMobile,
-    selectedId,
-    selectedWaitingIndex,
-    showAllWaiting,
-    waitingExpanded,
-  ])
 
   return (
     <section className="inbox-view" aria-labelledby="inbox-title">
@@ -408,9 +380,7 @@ export function InboxView({
             variant="plain"
             className="mobile-collapse-row mobile-waiting-row cursor-pointer"
             aria-expanded={waitingExpanded}
-            onClick={() => {
-              setWaitingExpanded((expanded) => !expanded)
-            }}
+            onClick={onToggleWaiting}
           >
             <span>Waiting</span>
             <span className="mobile-collapse-count">{waiting.length}</span>
@@ -439,9 +409,7 @@ export function InboxView({
             type="button"
             variant="plain"
             aria-expanded={showAllWaiting}
-            onClick={() => {
-              setShowAllWaiting(true)
-            }}
+            onClick={onShowMoreWaiting}
           >
             {hiddenWaitingCount} more ▸
           </Button>
