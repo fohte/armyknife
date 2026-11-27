@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader, Cursor, Read, Seek, SeekFrom};
 
 use chrono::{DateTime, TimeZone, Utc};
@@ -381,134 +382,150 @@ impl TranscriptFixtureRng {
     }
 }
 
-fn append_fixture_record(transcript: &mut String, record: serde_json::Value) {
-    transcript.push_str(&record.to_string());
-    transcript.push('\n');
+#[derive(Clone)]
+struct FixtureToolUse {
+    id: String,
+    owner_uuid: String,
 }
 
-fn generated_short_transcript(seed: u64) -> String {
+fn generated_short_transcript(seed: u64) -> Vec<serde_json::Value> {
     let mut rng = TranscriptFixtureRng(seed);
-    let root_uuid = format!("fixture-{seed}-root");
-    let owner_uuid = format!("fixture-{seed}-owner");
-    let initial_tool_id = format!("fixture-{seed}-tool-initial");
-    let mut transcript = String::new();
-    append_fixture_record(
-        &mut transcript,
-        serde_json::json!({
-            "type": "user",
-            "uuid": root_uuid,
-            "parentUuid": null,
-            "message": {"content": "Run the fixture tools."},
-        }),
-    );
-    append_fixture_record(
-        &mut transcript,
-        serde_json::json!({
-            "type": "assistant",
-            "uuid": owner_uuid,
-            "parentUuid": format!("fixture-{seed}-root"),
-            "message": {"content": [{
-                "type": "tool_use",
-                "id": initial_tool_id,
-                "name": "Read",
-                "input": {"file_path": "/fixture/initial.md"},
-            }]},
-        }),
-    );
-
-    let mut known_uuids = vec![
-        format!("fixture-{seed}-root"),
-        format!("fixture-{seed}-owner"),
-    ];
-    let mut pending_tool_uses = vec![(
-        format!("fixture-{seed}-tool-initial"),
-        format!("fixture-{seed}-owner"),
-    )];
-    let mut record_kinds = [0, 1, 2, 3, 4];
-    for index in (1..record_kinds.len()).rev() {
-        record_kinds.swap(index, rng.index(index + 1));
-    }
-
-    for (index, kind) in record_kinds.into_iter().enumerate() {
+    let record_count = 3 + rng.index(6);
+    let mut records = Vec::with_capacity(record_count);
+    let mut known_uuids = Vec::<String>::new();
+    let mut tool_uses = Vec::<FixtureToolUse>::new();
+    let mut result_uuids_by_owner = HashMap::<String, Vec<String>>::new();
+    for index in 0..record_count {
         let uuid = format!("fixture-{seed}-record-{index}");
-        let rewinds_to_older_parent = index % 2 == 0 && known_uuids.len() > 1;
-        let parent_count = if rewinds_to_older_parent {
-            known_uuids.len() - 1
-        } else {
-            known_uuids.len()
+        let parent_uuid =
+            (!known_uuids.is_empty()).then(|| known_uuids[rng.index(known_uuids.len())].clone());
+        let choice = rng.index(100);
+        let kind = match (tool_uses.is_empty(), choice) {
+            (false, 0..=39) => 0,
+            (false, 40..=59) | (true, 45..=67) => 1,
+            (false, 60..=74) | (true, 68..=84) => 2,
+            (false, 75..=89) | (true, 0..=44 | 85..=94) => 3,
+            _ => 4,
         };
-        let parent_uuid = known_uuids[rng.index(parent_count)].clone();
         match kind {
-            0 => append_fixture_record(
-                &mut transcript,
-                serde_json::json!({
-                    "type": "assistant",
-                    "uuid": uuid,
+            0 => {
+                let tool_use_index = rng.index(tool_uses.len());
+                let tool_use = tool_uses.remove(tool_use_index);
+                let prior_results = result_uuids_by_owner
+                    .get(&tool_use.owner_uuid)
+                    .map(Vec::as_slice)
+                    .unwrap_or_default();
+                let parent_uuid = if !prior_results.is_empty() && rng.index(2) == 0 {
+                    Some(prior_results[rng.index(prior_results.len())].clone())
+                } else if rng.index(5) == 0 {
+                    parent_uuid
+                } else {
+                    Some(tool_use.owner_uuid.clone())
+                };
+                records.push(serde_json::json!({
+                    "type": "user",
+                    "uuid": uuid.clone(),
                     "parentUuid": parent_uuid,
-                    "message": {"content": [{"type": "text", "text": "A fixture response."}]},
-                }),
-            ),
+                    "message": {"content": [{
+                        "type": "tool_result",
+                        "tool_use_id": tool_use.id,
+                        "content": "Fixture output.",
+                    }]},
+                }));
+                result_uuids_by_owner
+                    .entry(tool_use.owner_uuid)
+                    .or_default()
+                    .push(uuid.clone());
+                known_uuids.push(uuid);
+            }
             1 => {
-                let tool_id = format!("fixture-{seed}-tool-{index}");
-                append_fixture_record(
-                    &mut transcript,
-                    serde_json::json!({
-                        "type": "assistant",
-                        "uuid": uuid.clone(),
-                        "parentUuid": parent_uuid,
-                        "message": {"content": [{
-                            "type": "tool_use",
-                            "id": tool_id,
-                            "name": "Read",
-                            "input": {"file_path": "/fixture/generated.md"},
-                        }]},
-                    }),
-                );
-                pending_tool_uses.push((format!("fixture-{seed}-tool-{index}"), uuid.clone()));
+                records.push(serde_json::json!({
+                    "type": "user",
+                    "uuid": uuid.clone(),
+                    "parentUuid": parent_uuid,
+                    "message": {"content": if index == 0 { "Run a fixture request." } else { "A later fixture request." }},
+                }));
+                known_uuids.push(uuid);
             }
             2 => {
-                let pending_index = rng.index(pending_tool_uses.len());
-                let (tool_id, owner_uuid) = pending_tool_uses.remove(pending_index);
-                append_fixture_record(
-                    &mut transcript,
-                    serde_json::json!({
-                        "type": "user",
-                        "uuid": uuid,
-                        "parentUuid": owner_uuid,
-                        "message": {"content": [{
-                            "type": "tool_result",
-                            "tool_use_id": tool_id,
-                            "content": "Fixture output.",
-                        }]},
-                    }),
-                );
+                records.push(serde_json::json!({
+                    "type": "assistant",
+                    "uuid": uuid.clone(),
+                    "parentUuid": parent_uuid,
+                    "message": {"content": [{"type": "text", "text": "A fixture response."}]},
+                }));
+                known_uuids.push(uuid);
             }
-            3 => append_fixture_record(
-                &mut transcript,
-                serde_json::json!({
-                    "type": "user",
-                    "uuid": uuid,
+            3 => {
+                let tool_count = 1 + rng.index(2);
+                let mut content = Vec::with_capacity(tool_count);
+                for tool_index in 0..tool_count {
+                    let id = format!("fixture-{seed}-tool-{index}-{tool_index}");
+                    content.push(serde_json::json!({
+                        "type": "tool_use",
+                        "id": id,
+                        "name": "Read",
+                        "input": {"file_path": format!("/fixture/generated-{index}-{tool_index}.md")},
+                    }));
+                    tool_uses.push(FixtureToolUse {
+                        id: format!("fixture-{seed}-tool-{index}-{tool_index}"),
+                        owner_uuid: uuid.clone(),
+                    });
+                }
+                records.push(serde_json::json!({
+                    "type": "assistant",
+                    "uuid": uuid.clone(),
                     "parentUuid": parent_uuid,
-                    "message": {"content": "A later fixture request."},
-                }),
-            ),
-            4 => append_fixture_record(
-                &mut transcript,
-                serde_json::json!({
-                    "type": "user",
-                    "parentUuid": parent_uuid,
-                    "origin": {"kind": "task-notification"},
-                    "message": {"content": "<task-notification><task-id>fixture-task</task-id><status>completed</status></task-notification>"},
-                }),
-            ),
-            _ => unreachable!(),
-        }
-        if kind != 4 {
-            known_uuids.push(uuid);
+                    "message": {"content": content},
+                }));
+                known_uuids.push(uuid);
+            }
+            _ => records.push(serde_json::json!({
+                "type": "user",
+                "parentUuid": parent_uuid,
+                "origin": {"kind": "task-notification"},
+                "message": {"content": "<task-notification><task-id>fixture-task</task-id><status>completed</status></task-notification>"},
+            })),
         }
     }
 
+    records
+}
+
+fn serialize_fixture_transcript(records: &[serde_json::Value]) -> String {
+    let mut transcript = records
+        .iter()
+        .map(serde_json::Value::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    if !records.is_empty() {
+        transcript.push('\n');
+    }
     transcript
+}
+
+fn assert_incremental_matches_full_parse_at_every_record_boundary(
+    records: &[serde_json::Value],
+    expected: &super::ParsedTranscript,
+    context: &str,
+) {
+    let transcript = serialize_fixture_transcript(records);
+    for split in 0..=records.len() {
+        let prefix = serialize_fixture_transcript(&records[..split]);
+        let suffix = serialize_fixture_transcript(&records[split..]);
+        let mut parser = incremental_parser(prefix.as_bytes());
+        if parser
+            .append_bytes(suffix.as_bytes(), fixed_time())
+            .unwrap()
+            == IncrementalAppend::Applied
+        {
+            assert_eq!(
+                parser.render_with(fixed_time(), empty_additions()).unwrap(),
+                expected.clone(),
+                "{context}: transcript split after record {split}\n{transcript}",
+            );
+        }
+    }
 }
 
 const PARALLEL_TOOLS_WITH_SYSTEM_AFTER_RESULT: &str = indoc! {r#"
@@ -1077,16 +1094,15 @@ fn assistant_after_a_task_notification_and_its_followup_restarts_an_old_side_bra
 
 #[test]
 fn generated_short_transcripts_match_full_parse_at_every_split_point() {
-    for seed in 0..32 {
-        let transcript = generated_short_transcript(seed + 4_107);
+    for seed in 0..20_000 {
+        let actual_seed = seed + 4_107;
+        let records = generated_short_transcript(actual_seed);
+        let transcript = serialize_fixture_transcript(&records);
         let expected = parse_all(transcript.as_bytes(), empty_additions());
-        let context = format!("generated transcript seed {seed}");
+        let context = format!("generated transcript seed {actual_seed}");
 
-        assert_incremental_matches_full_parse_at_every_split_point(
-            &transcript,
-            &expected,
-            None,
-            &context,
+        assert_incremental_matches_full_parse_at_every_record_boundary(
+            &records, &expected, &context,
         );
     }
 }

@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+use serde_json::Value;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum BranchMembership {
     Unknown,
@@ -13,6 +15,29 @@ pub(super) enum BranchMembership {
 pub(super) struct TranscriptNode {
     pub(super) parent_uuid: Option<String>,
     pub(super) membership: BranchMembership,
+    pub(super) is_assistant: bool,
+    pub(super) has_tool_use: bool,
+    pub(super) is_user: bool,
+    pub(super) is_tool_result_only: bool,
+    pub(super) is_task_notification: bool,
+    pub(super) is_inert_attachment: bool,
+    pub(super) is_queued_peer_delivery: bool,
+    pub(super) was_valid_tool_result: bool,
+    pub(super) processed: bool,
+}
+
+pub(super) fn is_tool_use_assistant(record: &Value) -> bool {
+    record.get("type").and_then(Value::as_str) == Some("assistant")
+        && record
+            .get("message")
+            .and_then(|message| message.get("content"))
+            .is_some_and(|content| {
+                content.as_array().is_some_and(|blocks| {
+                    blocks
+                        .iter()
+                        .any(|block| block.get("type").and_then(Value::as_str) == Some("tool_use"))
+                })
+            })
 }
 
 pub(super) fn mark_active_branch(

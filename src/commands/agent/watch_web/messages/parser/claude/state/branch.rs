@@ -1,8 +1,12 @@
+use std::collections::HashSet;
+
 use serde_json::Value;
 
 use super::super::transcript_branch::{BranchMembership, is_inactive_branch};
 use super::super::user_input::content_blocks;
 use super::ClaudeParserState;
+
+mod reparse;
 
 impl ClaudeParserState {
     pub(in crate::commands::agent::watch_web::messages::parser::claude) fn rebuild_transcript_children(
@@ -161,9 +165,222 @@ impl ClaudeParserState {
                     })
             })
     }
+
+    pub(in crate::commands::agent::watch_web::messages::parser::claude) fn is_supported_parallel_tool_result_append(
+        &self,
+        parent_uuid: &str,
+    ) -> bool {
+        let Some(parent) = self.transcript_nodes.get(parent_uuid) else {
+            return false;
+        };
+        if !parent.has_tool_use {
+            return false;
+        }
+        if !self
+            .branch_tracking
+            .is_side_branch_tool_use_assistant_uuid(parent_uuid)
+        {
+            return false;
+        }
+
+        if self.latest_uuid.as_deref() == Some(parent_uuid) {
+            return true;
+        }
+
+        if self.latest_uuid.as_deref().is_some_and(|latest_uuid| {
+            self.transcript_nodes
+                .get(latest_uuid)
+                .is_some_and(|latest| {
+                    latest.parent_uuid.as_deref() == Some(parent_uuid) && latest.has_tool_use
+                })
+        }) {
+            return true;
+        }
+
+        if self
+            .transcript_children
+            .get(parent_uuid)
+            .is_some_and(|children| {
+                children.iter().any(|child_uuid| {
+                    self.branch_tracking.is_valid_tool_result_uuid(child_uuid)
+                        && self.latest_uuid.as_deref().is_some_and(|latest_uuid| {
+                            self.is_retained_descendant_of(latest_uuid, child_uuid)
+                        })
+                })
+            })
+        {
+            return true;
+        }
+
+        let Some(owner_uuid) = parent.parent_uuid.as_deref() else {
+            return false;
+        };
+        let Some(latest_uuid) = self.latest_uuid.as_deref() else {
+            return false;
+        };
+        self.transcript_children
+            .get(owner_uuid)
+            .is_some_and(|siblings| {
+                siblings.iter().any(|sibling_uuid| {
+                    sibling_uuid != parent_uuid
+                        && self.branch_tracking.is_valid_tool_result_uuid(sibling_uuid)
+                        && self.is_retained_descendant_of(latest_uuid, sibling_uuid)
+                })
+            })
+    }
+
+    fn is_retained_descendant_of(&self, uuid: &str, ancestor_uuid: &str) -> bool {
+        let mut current_uuid = uuid;
+        let mut visited = HashSet::new();
+        while visited.insert(current_uuid.to_owned()) {
+            if current_uuid == ancestor_uuid {
+                return true;
+            }
+            if !self
+                .branch_tracking
+                .is_retained_side_branch_tip_uuid(current_uuid)
+            {
+                return false;
+            }
+            let Some(parent_uuid) = self
+                .transcript_nodes
+                .get(current_uuid)
+                .and_then(|node| node.parent_uuid.as_deref())
+            else {
+                return false;
+            };
+            current_uuid = parent_uuid;
+        }
+        false
+    }
+
+    pub(in crate::commands::agent::watch_web::messages::parser::claude) fn has_unstable_retained_descendant(
+        &self,
+        parent_uuid: &str,
+    ) -> bool {
+        let mut descendants = self
+            .transcript_children
+            .get(parent_uuid)
+            .cloned()
+            .unwrap_or_default();
+        while let Some(uuid) = descendants.pop() {
+            let Some(node) = self.transcript_nodes.get(&uuid) else {
+                continue;
+            };
+            if node.is_inert_attachment {
+                if let Some(children) = self.transcript_children.get(&uuid) {
+                    descendants.extend(children.iter().cloned());
+                }
+                continue;
+            }
+            if !matches!(
+                node.membership,
+                BranchMembership::Active | BranchMembership::ReachesActive
+            ) {
+                continue;
+            }
+            let is_tool_result = self.branch_tracking.is_valid_tool_result_uuid(&uuid);
+            let is_side_branch_assistant =
+                self.branch_tracking.is_side_branch_assistant_uuid(&uuid);
+            if node.membership == BranchMembership::Active
+                && !is_tool_result
+                && !is_side_branch_assistant
+                && !(node.has_tool_use && node.parent_uuid.as_deref() == Some(parent_uuid))
+            {
+                return true;
+            }
+            if is_side_branch_assistant
+                && node.parent_uuid.as_deref() != Some(parent_uuid)
+                && node.parent_uuid.as_deref().is_some_and(|parent_uuid| {
+                    !self.branch_tracking.is_valid_tool_result_uuid(parent_uuid)
+                })
+            {
+                return true;
+            }
+            if is_tool_result
+                && self.transcript_children.get(&uuid).is_some_and(|children| {
+                    children.iter().any(|child_uuid| {
+                        self.transcript_nodes
+                            .get(child_uuid)
+                            .is_some_and(|node| node.membership == BranchMembership::Active)
+                            && self.branch_tracking.is_valid_tool_result_uuid(child_uuid)
+                    })
+                })
+            {
+                return true;
+            }
+            if let Some(children) = self.transcript_children.get(&uuid) {
+                descendants.extend(children.iter().cloned());
+            }
+        }
+        false
+    }
+
+    pub(in crate::commands::agent::watch_web::messages::parser::claude) fn has_unprocessed_assistant_after_sibling_tool_result(
+        &self,
+        parent_uuid: &str,
+    ) -> bool {
+        let mut path_child_uuid = parent_uuid.to_owned();
+        let mut visited = HashSet::new();
+        while visited.insert(path_child_uuid.clone())
+            && let Some(ancestor_uuid) = self
+                .transcript_nodes
+                .get(&path_child_uuid)
+                .and_then(|node| node.parent_uuid.clone())
+        {
+            if let Some(siblings) = self.transcript_children.get(&ancestor_uuid) {
+                for sibling_uuid in siblings
+                    .iter()
+                    .filter(|sibling_uuid| *sibling_uuid != &path_child_uuid)
+                {
+                    if self.sibling_branch_has_unprocessed_assistant_result_child(sibling_uuid) {
+                        return true;
+                    }
+                }
+            }
+            path_child_uuid = ancestor_uuid;
+        }
+        false
+    }
+
+    fn sibling_branch_has_unprocessed_assistant_result_child(&self, branch_root: &str) -> bool {
+        let mut visited = HashSet::new();
+        let mut descendants = vec![branch_root.to_owned()];
+        while let Some(uuid) = descendants.pop() {
+            if !visited.insert(uuid.clone()) {
+                continue;
+            }
+            let Some(node) = self.transcript_nodes.get(&uuid) else {
+                continue;
+            };
+            if !matches!(
+                node.membership,
+                BranchMembership::Active | BranchMembership::ReachesActive
+            ) {
+                continue;
+            }
+            if self.branch_tracking.is_valid_tool_result_uuid(&uuid)
+                && self.transcript_children.get(&uuid).is_some_and(|children| {
+                    children.iter().any(|child_uuid| {
+                        self.transcript_nodes
+                            .get(child_uuid)
+                            .is_some_and(|child| child.is_assistant && !child.processed)
+                    })
+                })
+            {
+                return true;
+            }
+            if let Some(children) = self.transcript_children.get(&uuid) {
+                descendants.extend(children.iter().cloned());
+            }
+        }
+        false
+    }
 }
 
-fn is_queued_peer_delivery_record(record: &Value) -> bool {
+pub(in crate::commands::agent::watch_web::messages::parser::claude) fn is_queued_peer_delivery_record(
+    record: &Value,
+) -> bool {
     record.get("type").and_then(Value::as_str) == Some("user")
         && record.get("isMeta").and_then(Value::as_bool) == Some(true)
         && record

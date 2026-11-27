@@ -105,6 +105,10 @@ impl ClaudeBranchTracking {
         self.side_branch_assistant_uuids.contains(uuid)
     }
 
+    pub(super) fn is_side_branch_tool_use_assistant_uuid(&self, uuid: &str) -> bool {
+        self.side_branch_tool_use_assistant_uuids.contains(uuid)
+    }
+
     pub(super) fn is_retained_side_branch_tip_uuid(&self, uuid: &str) -> bool {
         self.side_branch_assistant_uuids.contains(uuid)
             || self.tool_result_lineage_uuids.contains(uuid)
@@ -120,10 +124,24 @@ impl ClaudeBranchTracking {
 }
 
 impl ClaudeParserState {
+    pub(in crate::commands::agent::watch_web::messages::parser::claude) fn is_side_branch_assistant_uuid(
+        &self,
+        uuid: &str,
+    ) -> bool {
+        self.branch_tracking.is_side_branch_assistant_uuid(uuid)
+    }
+
     pub(in crate::commands::agent::watch_web::messages::parser::claude) fn is_retained_side_branch_tip_uuid(
         &self,
         uuid: &str,
     ) -> bool {
         self.branch_tracking.is_retained_side_branch_tip_uuid(uuid)
+    }
+
+    pub(in crate::commands::agent::watch_web::messages::parser::claude) fn is_valid_tool_result_uuid(
+        &self,
+        uuid: &str,
+    ) -> bool {
+        self.branch_tracking.is_valid_tool_result_uuid(uuid)
     }
 }

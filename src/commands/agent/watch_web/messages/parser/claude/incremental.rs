@@ -2,15 +2,23 @@ use std::io::{self, BufRead, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use super::super::super::parser::jsonl::JsonlLineBuffer;
-use super::state::{ClaudeParserState, is_attachment_record, record_parent_uuid};
-use super::transcript_branch::{BranchMembership, TranscriptNode, mark_active_branch};
+use super::background_tasks::task_notification_text;
+use super::state::{
+    ClaudeParserState, is_attachment_record, is_queued_peer_delivery_record, record_parent_uuid,
+};
+use super::transcript_branch::{
+    BranchMembership, TranscriptNode, is_tool_use_assistant, mark_active_branch,
+};
 use super::user_input::is_tool_result_only_user_record;
 use super::{ParsedTranscript, ParserAdditions};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
+mod continuation;
 mod tail_window;
 mod window;
+
+use self::continuation::is_active_branch_continuation;
 
 #[derive(Clone)]
 pub(in crate::commands::agent::watch_web::messages) struct IncrementalClaudeParser {
@@ -54,6 +62,16 @@ impl IncrementalClaudeParser {
                         TranscriptNode {
                             parent_uuid,
                             membership: BranchMembership::Unknown,
+                            is_assistant: record.get("type").and_then(Value::as_str)
+                                == Some("assistant"),
+                            has_tool_use: is_tool_use_assistant(&record),
+                            is_user: record.get("type").and_then(Value::as_str) == Some("user"),
+                            is_tool_result_only: is_tool_result_only_user_record(&record),
+                            is_task_notification: task_notification_text(&record).is_some(),
+                            is_inert_attachment: is_inert_attachment(&record),
+                            is_queued_peer_delivery: is_queued_peer_delivery_record(&record),
+                            was_valid_tool_result: false,
+                            processed: false,
                         },
                     );
                 }
@@ -142,6 +160,16 @@ impl IncrementalClaudeParser {
                     TranscriptNode {
                         parent_uuid: record_parent_uuid(record),
                         membership: BranchMembership::Unknown,
+                        is_assistant: record.get("type").and_then(Value::as_str)
+                            == Some("assistant"),
+                        has_tool_use: is_tool_use_assistant(record),
+                        is_user: record.get("type").and_then(Value::as_str) == Some("user"),
+                        is_tool_result_only: is_tool_result_only_user_record(record),
+                        is_task_notification: task_notification_text(record).is_some(),
+                        is_inert_attachment: is_inert_attachment(record),
+                        is_queued_peer_delivery: is_queued_peer_delivery_record(record),
+                        was_valid_tool_result: false,
+                        processed: false,
                     },
                 );
             }
@@ -280,23 +308,33 @@ fn activate_pending_record(
     let pending_uuid = pending_record
         .and_then(|record| record.get("uuid").and_then(Value::as_str))
         .map(str::to_owned);
-    let pending_node_inserted =
-        if let (Some(record), Some(uuid)) = (pending_record, pending_uuid.as_deref()) {
-            if state.transcript_nodes.contains_key(uuid) {
-                false
-            } else {
-                state.transcript_nodes.insert(
-                    uuid.to_owned(),
-                    TranscriptNode {
-                        parent_uuid: record_parent_uuid(record),
-                        membership: BranchMembership::Unknown,
-                    },
-                );
-                true
-            }
-        } else {
+    let pending_node_inserted = if let (Some(record), Some(uuid)) =
+        (pending_record, pending_uuid.as_deref())
+    {
+        if state.transcript_nodes.contains_key(uuid) {
             false
-        };
+        } else {
+            state.transcript_nodes.insert(
+                uuid.to_owned(),
+                TranscriptNode {
+                    parent_uuid: record_parent_uuid(record),
+                    membership: BranchMembership::Unknown,
+                    is_assistant: record.get("type").and_then(Value::as_str) == Some("assistant"),
+                    has_tool_use: is_tool_use_assistant(record),
+                    is_user: record.get("type").and_then(Value::as_str) == Some("user"),
+                    is_tool_result_only: is_tool_result_only_user_record(record),
+                    is_task_notification: task_notification_text(record).is_some(),
+                    is_inert_attachment: is_inert_attachment(record),
+                    is_queued_peer_delivery: is_queued_peer_delivery_record(record),
+                    was_valid_tool_result: false,
+                    processed: false,
+                },
+            );
+            true
+        }
+    } else {
+        false
+    };
     for uuid in active_ancestor_uuids {
         state
             .transcript_nodes
@@ -305,6 +343,15 @@ fn activate_pending_record(
             .or_insert(TranscriptNode {
                 parent_uuid: None,
                 membership: BranchMembership::Active,
+                is_assistant: false,
+                has_tool_use: false,
+                is_user: false,
+                is_tool_result_only: false,
+                is_task_notification: false,
+                is_inert_attachment: false,
+                is_queued_peer_delivery: false,
+                was_valid_tool_result: false,
+                processed: false,
             });
     }
     // The unfinished row selects the render branch but is ingested after it is completed.
@@ -364,6 +411,15 @@ fn ingest_record(
             TranscriptNode {
                 parent_uuid: parent_uuid.clone(),
                 membership: BranchMembership::Unknown,
+                is_assistant: record.get("type").and_then(Value::as_str) == Some("assistant"),
+                has_tool_use: is_tool_use_assistant(&record),
+                is_user: record.get("type").and_then(Value::as_str) == Some("user"),
+                is_tool_result_only: is_tool_result_only_user_record(&record),
+                is_task_notification: task_notification_text(&record).is_some(),
+                is_inert_attachment: is_inert_attachment(&record),
+                is_queued_peer_delivery: is_queued_peer_delivery_record(&record),
+                was_valid_tool_result: false,
+                processed: false,
             },
         );
         state.index_transcript_child(parent_uuid.as_deref(), uuid);
@@ -382,66 +438,6 @@ fn ingest_record(
     true
 }
 
-fn is_active_branch_continuation(state: &ClaudeParserState, record: &Value) -> bool {
-    let Some(uuid) = record.get("uuid").and_then(Value::as_str) else {
-        return true;
-    };
-    if state.transcript_nodes.contains_key(uuid) {
-        return false;
-    }
-    let parent_uuid = record_parent_uuid(record);
-    let is_tool_result_only = is_tool_result_only_user_record(record);
-    let is_task_notification = super::background_tasks::task_notification_text(record).is_some();
-    if is_tool_result_only && parent_uuid.is_none() {
-        return false;
-    }
-    let Some(parent_uuid) = parent_uuid else {
-        return state.latest_uuid.is_none();
-    };
-    let parent_is_active = state
-        .transcript_nodes
-        .get(&parent_uuid)
-        .is_some_and(|node| {
-            matches!(
-                node.membership,
-                BranchMembership::Active | BranchMembership::ReachesActive
-            )
-        });
-    if !parent_is_active {
-        return false;
-    }
-
-    if is_tool_result_only {
-        let latest_record_is_compact_boundary_branch =
-            state.latest_record_is_compact_boundary_branch();
-        let parent_is_compact_boundary_branch = state.is_compact_boundary_branch(&parent_uuid);
-        let latest_tip_is_retained = state
-            .latest_uuid
-            .as_deref()
-            .is_some_and(|uuid| state.is_retained_side_branch_tip_uuid(uuid));
-        return (!latest_record_is_compact_boundary_branch || parent_is_compact_boundary_branch)
-            && (state.latest_uuid.as_deref() == Some(parent_uuid.as_str())
-                || latest_tip_is_retained)
-            && state.has_pending_tool_result_for_parent(record, Some(parent_uuid.as_str()));
-    }
-    let parent_is_latest = state.latest_record_uuid.as_deref() == Some(parent_uuid.as_str());
-    if is_task_notification {
-        return parent_is_latest;
-    }
-    if record.get("type").and_then(Value::as_str) == Some("assistant") {
-        let side_branch_parent_continues_latest = state.is_side_branch_assistant_uuid(&parent_uuid)
-            && state
-                .latest_uuid
-                .as_deref()
-                .is_some_and(|uuid| state.is_retained_side_branch_tip_uuid(uuid));
-        return parent_is_latest
-            || state.latest_uuid.as_deref() == Some(parent_uuid.as_str())
-            || state.tool_result_parent.as_deref() == Some(parent_uuid.as_str())
-            || side_branch_parent_continues_latest;
-    }
-    parent_is_latest
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::commands::agent::watch_web::messages) enum IncrementalAppend {
     Applied,
@@ -451,6 +447,17 @@ pub(in crate::commands::agent::watch_web::messages) enum IncrementalAppend {
 fn parse_record(line: &[u8]) -> Option<Value> {
     let line = std::str::from_utf8(line).ok()?;
     serde_json::from_str(line).ok()
+}
+
+fn is_inert_attachment(record: &Value) -> bool {
+    is_attachment_record(record)
+        && !matches!(
+            record
+                .get("attachment")
+                .and_then(|attachment| attachment.get("type"))
+                .and_then(Value::as_str),
+            Some("skill_listing" | "queued_command")
+        )
 }
 
 #[cfg(test)]
