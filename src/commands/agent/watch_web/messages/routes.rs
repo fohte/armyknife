@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
@@ -13,7 +14,9 @@ use axum::http::StatusCode;
 use axum::http::header::CONTENT_TYPE;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
+use futures_util::Stream;
 use serde::{Deserialize, Serialize};
+use tokio::sync::watch;
 
 use crate::commands::agent::store::{
     AgentDecision, AgentFile, AgentProposal, AgentTodo, PermissionDeniedOperation,
@@ -49,6 +52,10 @@ pub(super) type AgentFileLoader = Arc<dyn Fn(&str) -> Result<Vec<AgentFile>> + S
 pub(super) type AgentFileStorageRootLoader = Arc<dyn Fn() -> Option<PathBuf> + Send + Sync>;
 pub(super) type BackgroundTaskLoader =
     Arc<dyn Fn(&str) -> Result<Vec<BackgroundTask>> + Send + Sync>;
+pub(in crate::commands::agent::watch_web) type BackgroundTaskOutputEventStream =
+    Pin<Box<dyn Stream<Item = notify::Result<notify::Event>> + Send>>;
+type BackgroundTaskOutputEventStreamFactory =
+    Arc<dyn Fn(PathBuf) -> Result<BackgroundTaskOutputEventStream> + Send + Sync>;
 type RepoIdentityLoader = Arc<dyn Fn(&Path) -> Option<(String, String)> + Send + Sync>;
 type VibeConfigLoader = Arc<dyn Fn() -> crate::shared::config::Config + Send + Sync>;
 type SkillListingCache = Arc<Mutex<HashMap<String, CachedSkillListing>>>;
@@ -96,6 +103,8 @@ pub(in crate::commands::agent::watch_web) struct RouteLoaders {
     pub(super) agent_files: AgentFileLoader,
     pub(super) agent_file_storage_root: AgentFileStorageRootLoader,
     pub(super) background_tasks: BackgroundTaskLoader,
+    pub(super) background_task_output_event_stream: BackgroundTaskOutputEventStreamFactory,
+    pub(super) shutdown_signal: Option<watch::Receiver<bool>>,
     session_list: SessionListLoader,
     skill_listing_cache: SkillListingCache,
     vibe_config: Option<VibeConfigLoader>,
@@ -115,6 +124,34 @@ impl RouteLoaders {
         mark_queued_prompts_resolved: impl Fn(&str, &[i64]) -> Result<()> + Send + Sync + 'static,
         load_proposals: impl Fn(&str) -> Result<Vec<AgentProposal>> + Send + Sync + 'static,
     ) -> Self {
+        Self::new_with_background_task_output_event_stream(
+            load_decisions,
+            load_queued_prompts,
+            load_peer_out_messages,
+            mark_queued_prompts_resolved,
+            load_proposals,
+            |path| {
+                Ok(Box::pin(background_task_outputs::watch_output_events(
+                    path,
+                )?))
+            },
+        )
+    }
+
+    pub(in crate::commands::agent::watch_web) fn new_with_background_task_output_event_stream(
+        load_decisions: impl Fn(&str) -> Result<Vec<AgentDecision>> + Send + Sync + 'static,
+        load_queued_prompts: impl Fn(&str) -> Result<Vec<WatchWebQueuedPrompt>> + Send + Sync + 'static,
+        load_peer_out_messages: impl Fn(&str) -> Result<Vec<WatchWebPeerOutMessage>>
+        + Send
+        + Sync
+        + 'static,
+        mark_queued_prompts_resolved: impl Fn(&str, &[i64]) -> Result<()> + Send + Sync + 'static,
+        load_proposals: impl Fn(&str) -> Result<Vec<AgentProposal>> + Send + Sync + 'static,
+        create_event_stream: impl Fn(PathBuf) -> Result<BackgroundTaskOutputEventStream>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
         Self {
             decisions: Arc::new(load_decisions),
             queued_prompts: Arc::new(load_queued_prompts),
@@ -127,6 +164,8 @@ impl RouteLoaders {
             agent_files: Arc::new(|_| Ok(Vec::new())),
             agent_file_storage_root: Arc::new(|| None),
             background_tasks: Arc::new(|_| Ok(Vec::new())),
+            background_task_output_event_stream: Arc::new(create_event_stream),
+            shutdown_signal: None,
             session_list: Arc::new(|| Ok(Vec::new())),
             skill_listing_cache: Arc::new(Mutex::new(HashMap::new())),
             vibe_config: None,
@@ -134,6 +173,14 @@ impl RouteLoaders {
             message_cache: MessageCache::default(),
             question_preview_cache: question_preview::QuestionPreviewCache::default(),
         }
+    }
+
+    pub(in crate::commands::agent::watch_web) fn with_shutdown_signal(
+        mut self,
+        shutdown_signal: watch::Receiver<bool>,
+    ) -> Self {
+        self.shutdown_signal = Some(shutdown_signal);
+        self
     }
 
     pub(in crate::commands::agent::watch_web) fn with_todo_loader(
@@ -265,8 +312,8 @@ pub(in crate::commands::agent::watch_web) fn routes_with_proposals_and_peer_out_
     let load_session = Arc::new(load_session) as SessionLoader;
     Router::new()
         .route(
-            "/sessions/{id}/background-tasks/{task_id}/output",
-            get(background_task_outputs::get_background_task_output),
+            "/sessions/{id}/background-tasks/{task_id}/output/events",
+            get(background_task_outputs::get_background_task_output_events),
         )
         .route("/sessions/{id}/messages", get(get_messages))
         .route("/skill-suggestions", get(get_skill_suggestions))
