@@ -3450,6 +3450,47 @@ it('opens the session when its launch ID appears in the feed', async () => {
   })
 })
 
+it('keeps the selected session when a launched session appears after leaving the new-session form', async () => {
+  const fetcher = createSessionLaunchFetcher(
+    jsonResponse({ launchId: 'launch-fixture' }),
+  )
+  vi.stubGlobal('fetch', fetcher)
+  window.history.replaceState(null, '', '/?session=session-before')
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-before', 'Previous session')],
+  })
+  clickButton('[aria-label="New session"]')
+  await waitForDirectoryResults()
+  clickButton('.new-session-directory-button')
+  clickButton('[aria-label="Select directory /Users/example/work/service"]')
+  await clickButtonAndFlush('.new-session-start')
+  clickButton('[data-session-row]')
+
+  publishSessions({
+    revision: 2,
+    sessions: [
+      session('session-before', 'Previous session'),
+      {
+        ...session('session-launched', 'Created session'),
+        launchId: 'launch-fixture',
+      },
+    ],
+  })
+
+  const snapshot = () => ({
+    newSessionFormOpen: container.querySelector('.new-session-view') !== null,
+    selectedTitle: readSelectedTitle(),
+    selectedId: new URLSearchParams(window.location.search).get('session'),
+  })
+  expect(snapshot()).toEqual({
+    newSessionFormOpen: false,
+    selectedTitle: 'Previous session',
+    selectedId: 'session-before',
+  })
+})
+
 it('shows a launch failure and allows another attempt', async () => {
   const fetcher = createSessionLaunchFetcher(
     jsonResponse({ error: 'The session could not be started.' }, 400),

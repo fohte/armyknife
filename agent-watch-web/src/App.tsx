@@ -378,9 +378,11 @@ function AppContent() {
     )
     if (launchedSession === undefined) return
     setPendingLaunchId(null)
+    if (newSessionMode === null) return
     setCommandPaletteOpen(false)
     openSessionInInbox(launchedSession.id, 'replace')
   }, [
+    newSessionMode,
     openSessionInInbox,
     pendingLaunchId,
     sessionsWithElapsedTime,
