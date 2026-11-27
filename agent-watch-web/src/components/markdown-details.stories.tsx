@@ -13,7 +13,7 @@ type MarkdownDetailsStoryArgs = {
 const meta = {
   title: 'Components/MarkdownDetails',
   args: {
-    body: 'The body starts expanded and can be collapsed from its summary row.',
+    body: 'Additional information appears when the summary row is expanded.',
     open: false,
     summary: 'Additional information',
   },

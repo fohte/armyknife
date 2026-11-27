@@ -27,7 +27,7 @@
   padding: 2px 0;
   border: 0;
   background: transparent;
-  color: inherit;
+  color: var(--aw-text-primary);
   font: inherit;
   text-align: left;
   cursor: pointer;
@@ -38,6 +38,7 @@
   height: 10px;
   flex: 0 0 10px;
   margin-top: 0.35em;
+  color: var(--aw-text-body);
   transition: transform 120ms ease;
 }
 
@@ -48,6 +49,10 @@
 .markdown-details-summary-content {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.markdown-details-body {
+  margin-top: 0.5rem;
 }
 
 .markdown-details-body > * {

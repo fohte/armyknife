@@ -3,12 +3,13 @@ import type {
   MarkdownRoot,
 } from '#components/markdown-message-types'
 
-const detailsOpenPattern =
-  /^<details(?:\s+open(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?)?\s*>$/i
+const detailsOpenTagPattern =
+  /^<details(?:\s+open(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?)?\s*>/i
 const detailsClosePattern = /^<\/details\s*>$/i
 const summaryOpenPattern = /^<summary\s*>$/i
 const summaryClosePattern = /^<\/summary\s*>$/i
 const inlineSummaryPattern = /^<summary\s*>(.*?)<\/summary\s*>$/i
+const inlineSummaryPrefixPattern = /^<summary\s*>(.*?)<\/summary\s*>/i
 const codeFencePattern = /^ {0,3}(`{3,}|~{3,})/
 // The body parser reruns for each wrapper, so bound its work on nested input.
 const maxDetailsNesting = 32
@@ -143,7 +144,9 @@ function findDetailsClose(lines: readonly string[], start: number) {
     }
 
     if (!isIndentedCode) {
-      if (detailsOpenPattern.test(line)) depth += 1
+      if (detailsOpenTagPattern.test(line)) {
+        depth += 1
+      }
       if (detailsClosePattern.test(line)) {
         depth -= 1
         if (depth === 0) return index
@@ -176,8 +179,18 @@ function parseDetailsSource(
   const firstLine = lines.findIndex((line) => line.trim() !== '')
   if (firstLine < 0) return null
 
-  const openTag = lineAt(lines, firstLine).trim()
-  if (!detailsOpenPattern.test(openTag)) return null
+  const openLine = lineAt(lines, firstLine)
+  const openLineContent = openLine.trimStart()
+  const openTagMatch = detailsOpenTagPattern.exec(openLineContent)
+  if (openTagMatch === null) return null
+  const openTag = openTagMatch[0]
+  const openingRemainder = openLineContent.slice(openTag.length)
+  const openingRemainderContent = openingRemainder.trimStart()
+  const openingRemainderWhitespace =
+    openingRemainder.length - openingRemainderContent.length
+  const inlineOpeningSummary = inlineSummaryPrefixPattern.exec(
+    openingRemainderContent,
+  )
 
   const closeLine = findDetailsClose(lines, firstLine)
   if (closeLine === null) return null
@@ -192,35 +205,60 @@ function parseDetailsSource(
 
   let summaryEnd = summaryStart
   let summaryText = ''
-  let summaryOffset = lineOffset(lines, summaryStart)
-  const inlineSummary = inlineSummaryPattern.exec(
-    lineAt(lines, summaryStart).trim(),
-  )
-  if (inlineSummary !== null) {
-    summaryText = inlineSummary[1] ?? ''
-    const column = lineAt(lines, summaryStart).indexOf(summaryText)
-    summaryOffset += Math.max(column, 0)
-  } else if (summaryOpenPattern.test(lineAt(lines, summaryStart).trim())) {
-    const closeSummary = lines.findIndex(
-      (line, index) =>
-        index > summaryStart && summaryClosePattern.test(line.trim()),
-    )
-    if (closeSummary < 0 || closeSummary >= closeLine) return null
-    summaryEnd = closeSummary
-    summaryText = lines
-      .slice(summaryStart + 1, closeSummary)
-      .join('\n')
-      .trim()
-    const contentStart = lineOffset(lines, summaryStart + 1)
-    summaryOffset = summaryText.length
-      ? source.indexOf(summaryText, contentStart)
-      : contentStart
-    if (summaryOffset < 0) summaryOffset = contentStart
+  let summaryOffset: number
+  let bodyStart: number
+  if (inlineOpeningSummary !== null) {
+    const summaryTag = /^<summary\s*>/i.exec(inlineOpeningSummary[0])
+    if (summaryTag === null) return null
+    const openingLineOffset =
+      lineOffset(lines, firstLine) + (openLine.length - openLineContent.length)
+    summaryText = inlineOpeningSummary[1] ?? ''
+    summaryOffset =
+      openingLineOffset +
+      openTag.length +
+      openingRemainderWhitespace +
+      summaryTag[0].length
+    summaryEnd = firstLine
+    bodyStart =
+      openingLineOffset +
+      openTag.length +
+      openingRemainderWhitespace +
+      inlineOpeningSummary[0].length
   } else {
-    return null
+    if (openingRemainderContent !== '') return null
+    const summaryLine = lineAt(lines, summaryStart)
+    const summaryLineContent = summaryLine.trim()
+    const inlineSummary = inlineSummaryPattern.exec(summaryLineContent)
+    if (inlineSummary !== null) {
+      const summaryTag = /^<summary\s*>/i.exec(summaryLineContent)
+      if (summaryTag === null) return null
+      summaryText = inlineSummary[1] ?? ''
+      summaryOffset =
+        lineOffset(lines, summaryStart) +
+        (summaryLine.length - summaryLine.trimStart().length) +
+        summaryTag[0].length
+    } else if (summaryOpenPattern.test(summaryLine.trim())) {
+      const closeSummary = lines.findIndex(
+        (line, index) =>
+          index > summaryStart && summaryClosePattern.test(line.trim()),
+      )
+      if (closeSummary < 0 || closeSummary >= closeLine) return null
+      summaryEnd = closeSummary
+      summaryText = lines
+        .slice(summaryStart + 1, closeSummary)
+        .join('\n')
+        .trim()
+      const contentStart = lineOffset(lines, summaryStart + 1)
+      summaryOffset = summaryText.length
+        ? source.indexOf(summaryText, contentStart)
+        : contentStart
+      if (summaryOffset < 0) summaryOffset = contentStart
+    } else {
+      return null
+    }
+    bodyStart = lineOffset(lines, summaryEnd + 1)
   }
 
-  const bodyStart = lineOffset(lines, summaryEnd + 1)
   const rawBody = source.slice(bodyStart, lineOffset(lines, closeLine))
   const bodyLeadingWhitespace = rawBody.length - rawBody.trimStart().length
   const bodySource = rawBody.trim()
@@ -263,7 +301,7 @@ function transformNodes(
     ) {
       const openTag = (node.value.split('\n', 1)[0] ?? '').trim()
       const start = node.position?.start.offset
-      if (start === undefined || !detailsOpenPattern.test(openTag)) {
+      if (start === undefined || !detailsOpenTagPattern.test(openTag)) {
         result.push(node)
         continue
       }

@@ -185,6 +185,44 @@ Body content is parsed as Markdown. http://example.com/日本語
   )
 })
 
+it('renders an inline summary on the details opening line', () => {
+  const html = renderMessage(
+    '<details><summary>Inline summary</summary>\nBody content\n</details>',
+  )
+
+  expect(html).toBe(
+    '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="false" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Inline summary</span></button></div></div>',
+  )
+})
+
+it.each([
+  {
+    name: 'the details tag is unclosed',
+    markdown: '<details>\n<summary>Unclosed details</summary>\nBody',
+    expected:
+      '<div class="markdown-message">&lt;details&gt;\n&lt;summary&gt;Unclosed details&lt;/summary&gt;\nBody</div>',
+  },
+  {
+    name: 'the details tag has an onclick attribute',
+    markdown:
+      '<details onclick="runUnsafe()">\n<summary>Unsafe details</summary>\nBody\n</details>',
+    expected:
+      '<div class="markdown-message">&lt;details onclick="runUnsafe()"&gt;\n&lt;summary&gt;Unsafe details&lt;/summary&gt;\nBody\n&lt;/details&gt;</div>',
+  },
+  {
+    name: 'the summary tag has a style attribute',
+    markdown:
+      '<details>\n<summary style="color: red">Styled summary</summary>\nBody\n</details>',
+    expected:
+      '<div class="markdown-message">&lt;details&gt;\n&lt;summary style="color: red"&gt;Styled summary&lt;/summary&gt;\nBody\n&lt;/details&gt;</div>',
+  },
+])(
+  'keeps unsupported or incomplete details HTML as text when $name',
+  ({ markdown, expected }) => {
+    expect(renderMessage(markdown)).toBe(expected)
+  },
+)
+
 it('keeps closing details tags inside fenced and indented code blocks', () => {
   const html = renderMessage(`<details open>
 <summary>Code samples</summary>
