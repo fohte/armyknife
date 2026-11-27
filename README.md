@@ -730,8 +730,6 @@ Session-local sequence: 7
 To refer to it in another session or task, describe its contents; this sequence only works in this session.
 ```
 
-Tracked, hook-processed Claude Code and Codex sessions receive the instruction on `SessionStart` to record choices that are cheap to reverse and continue working. They should stop and ask about choices that are hard to reverse. Codex must have the `SessionStart` hook registered as described under [Hooks](#hooks). Internal and headless invocations do not receive this instruction.
-
 `a agent web-ui add <url> --name <name>` registers a named local HTTP interface with the calling session. The URL must use `localhost` or `127.0.0.1` and include an explicit port. Tracked, hook-processed Claude Code sessions and Codex sessions with a registered `SessionStart` hook receive an instruction to register local web UIs they start. Registered interfaces appear in the watch-web conversation's right panel. When watch-web is opened at `localhost` or `127.0.0.1`, it uses the local URL; other hostnames use the URL returned by the optional `web-ui-expose` hook. watch-web gives each local registration its own loopback relay, which forwards HTTP, streaming responses, and WebSocket connections to the registered interface. Run the command from the session that owns the interface:
 
 Within a session, registering an interface with an existing trimmed name replaces its previous URL. Registering an existing URL also replaces that entry.
