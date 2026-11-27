@@ -3,6 +3,7 @@ use axum::http::Request;
 use axum::http::StatusCode;
 use rstest::{fixture, rstest};
 use serde_json::json;
+use tokio::time::{Duration, advance};
 use tower::ServiceExt;
 
 use super::{ActionContext, action_context, post_empty, response_snapshot, session};
@@ -218,6 +219,132 @@ async fn resume_endpoint_rejects_a_second_request_until_the_session_starts(
                 "status": StatusCode::CONFLICT.as_u16(),
                 "body": { "error": "session resume is already in progress" },
                 "calls": calls,
+            }),
+        ),
+    );
+}
+
+#[rstest]
+#[tokio::test(start_paused = true)]
+async fn actions_report_stuck_resume_after_twenty_seconds_and_clear_it_when_started(
+    action_context: ActionContext,
+) {
+    let mut session = session("fixture-session");
+    session.status = SessionStatus::Ended;
+    action_context.save_session(&session);
+    let app = action_context.router();
+    let mut updates = action_context.resume_updates.subscribe();
+
+    let resume = app
+        .clone()
+        .oneshot(post_empty("/sessions/fixture-session/resume"))
+        .await
+        .unwrap();
+    updates.changed().await.unwrap();
+
+    let pending = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/sessions/fixture-session/actions")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    advance(Duration::from_secs(20)).await;
+    updates.changed().await.unwrap();
+
+    let stuck = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/sessions/fixture-session/actions")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    session.status = SessionStatus::Running;
+    action_context.save_session(&session);
+    let started = app
+        .oneshot(
+            Request::builder()
+                .uri("/sessions/fixture-session/actions")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        (
+            response_snapshot(resume, &action_context).await,
+            response_snapshot(pending, &action_context).await,
+            response_snapshot(stuck, &action_context).await,
+            response_snapshot(started, &action_context).await,
+        ),
+        (
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": { "ok": true },
+                "calls": [{
+                    "kind": "resume",
+                    "sessionId": "fixture-session",
+                    "status": SessionStatus::Ended,
+                }],
+            }),
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": {
+                    "message": false,
+                    "answerQuestion": false,
+                    "resume": true,
+                    "startup": "pending",
+                    "interrupt": false,
+                    "openInTerminal": true,
+                    "rewind": false,
+                },
+                "calls": [{
+                    "kind": "resume",
+                    "sessionId": "fixture-session",
+                    "status": SessionStatus::Ended,
+                }],
+            }),
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": {
+                    "message": false,
+                    "answerQuestion": false,
+                    "resume": true,
+                    "startup": "stuck",
+                    "interrupt": false,
+                    "openInTerminal": true,
+                    "rewind": false,
+                },
+                "calls": [{
+                    "kind": "resume",
+                    "sessionId": "fixture-session",
+                    "status": SessionStatus::Ended,
+                }],
+            }),
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": {
+                    "message": true,
+                    "answerQuestion": false,
+                    "resume": false,
+                    "interrupt": true,
+                    "openInTerminal": true,
+                    "rewind": false,
+                },
+                "calls": [{
+                    "kind": "resume",
+                    "sessionId": "fixture-session",
+                    "status": SessionStatus::Ended,
+                }],
             }),
         ),
     );
