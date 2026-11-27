@@ -84,15 +84,6 @@ export function requestJson<T>(
   )
 }
 
-export function requestText(url: string) {
-  return ResultAsync.fromPromise(fetch(url), toError).andThen((response) => {
-    if (!response.ok) {
-      return errorFromResponse(response).andThen((error) => err(error))
-    }
-    return ResultAsync.fromPromise(response.text(), toError)
-  })
-}
-
 export function requestUtf8Text(url: string) {
   return ResultAsync.fromPromise(fetch(url), toError).andThen((response) => {
     if (!response.ok) {
