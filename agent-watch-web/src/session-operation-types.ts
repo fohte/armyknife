@@ -145,6 +145,7 @@ export type CloseWorktreeChecks = {
   files: string[]
   changes: { status: string; path: string }[]
   commits: { sha: string; subject: string }[]
+  commitInspectionUnavailable: boolean
   branch: string | null
   merged: boolean | null
   reason: string | null

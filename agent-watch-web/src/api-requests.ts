@@ -32,6 +32,7 @@ function isCloseWorktreeChecks(value: unknown): value is CloseWorktreeChecks {
         typeof commit['sha'] === 'string' &&
         typeof commit['subject'] === 'string',
     ) &&
+    typeof value['commitInspectionUnavailable'] === 'boolean' &&
     (typeof value['branch'] === 'string' || value['branch'] === null) &&
     (typeof value['merged'] === 'boolean' || value['merged'] === null) &&
     (typeof value['reason'] === 'string' || value['reason'] === null) &&

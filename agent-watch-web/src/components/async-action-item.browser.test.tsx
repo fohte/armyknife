@@ -30,6 +30,7 @@ const failedCloseAction: AsyncAction = {
       { pid: 23451, name: 'example server' },
       { pid: 23452, name: 'example worker' },
     ],
+    commitInspectionUnavailable: false,
     processInspectionUnavailable: false,
   },
   createdAt: 1_799_000_000_000,

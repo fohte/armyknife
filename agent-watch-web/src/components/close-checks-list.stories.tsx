@@ -18,6 +18,7 @@ const exampleChecks: CloseWorktreeChecks = {
     { pid: 12345, name: 'example-server' },
     { pid: 23456, name: 'example-watcher' },
   ],
+  commitInspectionUnavailable: false,
   processInspectionUnavailable: false,
 }
 

@@ -13,6 +13,7 @@ it('accepts close checks with changes and commits', async () => {
           files: ['src/fictional.rs'],
           changes: [{ status: 'M', path: 'src/fictional.rs' }],
           commits: [{ sha: 'abc1234', subject: 'preserve fictional work' }],
+          commitInspectionUnavailable: false,
           branch: 'feature/fictional',
           merged: false,
           reason: 'pull request is open',
@@ -39,6 +40,7 @@ it('accepts close checks with changes and commits', async () => {
       files: ['src/fictional.rs'],
       changes: [{ status: 'M', path: 'src/fictional.rs' }],
       commits: [{ sha: 'abc1234', subject: 'preserve fictional work' }],
+      commitInspectionUnavailable: false,
       branch: 'feature/fictional',
       merged: false,
       reason: 'pull request is open',
@@ -53,15 +55,23 @@ it.each([
     kind: 'change',
     changes: [{ status: 'M' }],
     commits: [],
+    commitInspectionUnavailable: false,
   },
   {
     kind: 'commit',
     changes: [],
     commits: [{ sha: 'abc1234' }],
+    commitInspectionUnavailable: false,
+  },
+  {
+    kind: 'commit inspection status',
+    changes: [],
+    commits: [],
+    commitInspectionUnavailable: 'unknown',
   },
 ])(
   'rejects close checks with an incomplete $kind',
-  async ({ changes, commits }) => {
+  async ({ changes, commits, commitInspectionUnavailable }) => {
     const result = await errorFromResponse(
       new Response(
         JSON.stringify({
@@ -72,6 +82,7 @@ it.each([
             files: [],
             changes,
             commits,
+            commitInspectionUnavailable,
             branch: 'feature/fictional',
             merged: false,
             reason: 'pull request is open',

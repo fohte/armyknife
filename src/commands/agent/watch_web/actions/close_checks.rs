@@ -20,6 +20,7 @@ pub(super) struct CloseChecks {
     files: Vec<String>,
     changes: Vec<CloseChange>,
     commits: Vec<CloseCommit>,
+    commit_inspection_unavailable: bool,
     branch: Option<String>,
     merged: Option<bool>,
     reason: Option<String>,
@@ -43,6 +44,12 @@ pub(super) struct CloseCommit {
 struct CloseProcess {
     pid: u32,
     name: String,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct CommitInspection {
+    commits: Vec<CloseCommit>,
+    unavailable: bool,
 }
 
 async fn inspect_close_merge_status(
@@ -112,17 +119,12 @@ impl CloseChecks {
                 .await
             },
             move |branch| {
-                let Ok(default_branch) = get_main_branch_for_repo(&commits_repo) else {
-                    return Vec::new();
-                };
-                let range = format!("origin/{default_branch}..refs/heads/{branch}");
-                run_git(
+                read_branch_commits_with(
                     commits_repo.workdir(),
-                    ["log", "--format=%h%x00%s", range.as_str()],
+                    &branch,
+                    || get_main_branch_for_repo(&commits_repo).ok(),
+                    |path, args| run_git(path, args).ok(),
                 )
-                .ok()
-                .map(|log| parse_commits(&log))
-                .unwrap_or_default()
             },
             move |path| {
                 check_process_guard_for_close(
@@ -152,7 +154,10 @@ impl CloseChecks {
             None,
             |path| worktree::uncommitted_changes(path).unwrap_or_default(),
             |_| async { None },
-            |_| Vec::new(),
+            |_| CommitInspection {
+                commits: Vec::new(),
+                unavailable: false,
+            },
             move |path| {
                 check_process_guard_for_close(
                     path,
@@ -182,7 +187,7 @@ impl CloseChecks {
         Changes: FnOnce(&Path) -> Vec<worktree::UncommittedChange> + Send + 'static,
         Merge: FnOnce(String) -> MergeFuture,
         MergeFuture: Future<Output = Option<MergeGuardStatus>>,
-        Commits: FnOnce(String) -> Vec<CloseCommit> + Send + 'static,
+        Commits: FnOnce(String) -> CommitInspection + Send + 'static,
         Processes:
             FnOnce(&Path) -> Result<Vec<ProcessInPath>, WorktreeProcessGuardError> + Send + 'static,
     {
@@ -196,14 +201,20 @@ impl CloseChecks {
             Some(branch) => inspect_merge_status(branch).await,
             None => None,
         };
-        let commits = match merge_status.as_ref() {
+        let commit_inspection = match merge_status.as_ref() {
             Some(status) if !status.should_cleanup => {
                 let branch = status.branch.clone();
                 tokio::task::spawn_blocking(move || inspect_commits(branch))
                     .await
-                    .unwrap_or_default()
+                    .unwrap_or(CommitInspection {
+                        commits: Vec::new(),
+                        unavailable: true,
+                    })
             }
-            _ => Vec::new(),
+            _ => CommitInspection {
+                commits: Vec::new(),
+                unavailable: false,
+            },
         };
         let (changes, processes) = files_and_processes
             .await
@@ -213,7 +224,8 @@ impl CloseChecks {
         Self::from_observations(
             worktree_path,
             changes,
-            commits,
+            commit_inspection.commits,
+            commit_inspection.unavailable,
             branch,
             merge_status,
             processes,
@@ -224,6 +236,7 @@ impl CloseChecks {
         worktree_path: PathBuf,
         changes: Vec<worktree::UncommittedChange>,
         commits: Vec<CloseCommit>,
+        commit_inspection_unavailable: bool,
         branch: Option<String>,
         merge_status: Option<MergeGuardStatus>,
         process_inspection: Option<Result<Vec<ProcessInPath>, WorktreeProcessGuardError>>,
@@ -265,6 +278,7 @@ impl CloseChecks {
             files,
             changes,
             commits,
+            commit_inspection_unavailable,
             branch,
             merged,
             reason,
@@ -284,6 +298,31 @@ fn parse_commits(log: &str) -> Vec<CloseCommit> {
             })
         })
         .collect()
+}
+
+fn read_branch_commits_with(
+    worktree_path: &Path,
+    branch: &str,
+    get_default_branch: impl FnOnce() -> Option<String>,
+    run_git: impl FnOnce(&Path, [&str; 3]) -> Option<String>,
+) -> CommitInspection {
+    let Some(default_branch) = get_default_branch() else {
+        return CommitInspection {
+            commits: Vec::new(),
+            unavailable: true,
+        };
+    };
+    let range = format!("origin/{default_branch}..refs/heads/{branch}");
+    let Some(log) = run_git(worktree_path, ["log", "--format=%h%x00%s", range.as_str()]) else {
+        return CommitInspection {
+            commits: Vec::new(),
+            unavailable: true,
+        };
+    };
+    CommitInspection {
+        commits: parse_commits(&log),
+        unavailable: false,
+    }
 }
 
 pub(super) fn check_process_guard_for_close(
@@ -318,6 +357,7 @@ mod tests {
             PathBuf::from("/fictional/worktree"),
             vec![change("M", "src/fictional.rs")],
             vec![commit("abc1234", "preserve fictional work")],
+            false,
             Some("feature/fictional".to_string()),
             Some(worktree_delete::classify_merge_guard_status(
                 "feature/fictional".to_string(),
@@ -342,6 +382,7 @@ mod tests {
                 "files": ["src/fictional.rs"],
                 "changes": [{ "status": "M", "path": "src/fictional.rs" }],
                 "commits": [{ "sha": "abc1234", "subject": "preserve fictional work" }],
+                "commitInspectionUnavailable": false,
                 "branch": "feature/fictional",
                 "merged": false,
                 "reason": "pull request is open",
@@ -359,6 +400,7 @@ mod tests {
             PathBuf::from("/fictional/worktree"),
             Vec::new(),
             Vec::new(),
+            false,
             Some("feature/fictional".to_string()),
             Some(worktree_delete::classify_merge_guard_status(
                 "feature/fictional".to_string(),
@@ -374,6 +416,7 @@ mod tests {
                 "files": [],
                 "changes": [],
                 "commits": [],
+                "commitInspectionUnavailable": false,
                 "branch": "feature/fictional",
                 "merged": true,
                 "reason": null,
@@ -397,7 +440,10 @@ mod tests {
                 })
                 .await
             },
-            |_| vec![commit("abc1234", "must not be listed")],
+            |_| CommitInspection {
+                commits: vec![commit("abc1234", "must not be listed")],
+                unavailable: false,
+            },
             |_| Ok(Vec::new()),
         )
         .await;
@@ -409,6 +455,7 @@ mod tests {
                 "files": [],
                 "changes": [],
                 "commits": [],
+                "commitInspectionUnavailable": false,
                 "branch": "feature/fictional",
                 "merged": true,
                 "reason": null,
@@ -424,6 +471,7 @@ mod tests {
             PathBuf::from("/fictional/detached-worktree"),
             Vec::new(),
             Vec::new(),
+            false,
             None,
             None,
             Some(Err(WorktreeProcessGuardError::InspectionUnavailable {
@@ -438,6 +486,7 @@ mod tests {
                 "files": [],
                 "changes": [],
                 "commits": [],
+                "commitInspectionUnavailable": false,
                 "branch": null,
                 "merged": null,
                 "reason": null,
@@ -453,6 +502,7 @@ mod tests {
             PathBuf::from("/fictional/worktree"),
             Vec::new(),
             Vec::new(),
+            false,
             Some("feature/fictional".to_string()),
             None,
             Some(Ok(Vec::new())),
@@ -465,6 +515,7 @@ mod tests {
                 "files": [],
                 "changes": [],
                 "commits": [],
+                "commitInspectionUnavailable": false,
                 "branch": "feature/fictional",
                 "merged": null,
                 "reason": null,
@@ -587,7 +638,10 @@ mod tests {
                     ))
                 }
             },
-            |_| vec![commit("abc1234", "preserve fictional work")],
+            |_| CommitInspection {
+                commits: vec![commit("abc1234", "preserve fictional work")],
+                unavailable: false,
+            },
             move |path| {
                 processes_flag.store(true, Ordering::SeqCst);
                 Err(WorktreeProcessGuardError::ActiveProcesses {
@@ -618,6 +672,7 @@ mod tests {
                     "files": ["src/fictional.rs"],
                     "changes": [{ "status": "M", "path": "src/fictional.rs" }],
                     "commits": [{ "sha": "abc1234", "subject": "preserve fictional work" }],
+                    "commitInspectionUnavailable": false,
                     "branch": "feature/fictional",
                     "merged": false,
                     "reason": "pull request is open",
@@ -630,12 +685,94 @@ mod tests {
 
     #[test]
     fn parses_commit_log_records_without_running_git() {
+        let log = indoc::indoc! {
+            r#"
+            abc1234\0preserve fictional work
+            def5678\0add fictional detail
+            "#
+        }
+        .replace("\\0", "\0");
+
         assert_eq!(
-            parse_commits("abc1234\0preserve fictional work\ndef5678\0add fictional detail"),
+            parse_commits(&log),
             vec![
                 commit("abc1234", "preserve fictional work"),
                 commit("def5678", "add fictional detail"),
             ],
+        );
+    }
+
+    #[test]
+    fn reads_branch_commits_from_the_expected_range_without_running_git() {
+        let mut observed_git_call = None;
+        let inspection = read_branch_commits_with(
+            Path::new("/fictional/worktree"),
+            "feature/fictional",
+            || Some("main".to_string()),
+            |path, args| {
+                observed_git_call = Some((path.to_path_buf(), args.map(str::to_string)));
+                Some(
+                    indoc::indoc! {
+                        r#"
+                        abc1234\0preserve fictional work
+                        def5678\0add fictional detail
+                        "#
+                    }
+                    .replace("\\0", "\0"),
+                )
+            },
+        );
+
+        assert_eq!(
+            (inspection, observed_git_call),
+            (
+                CommitInspection {
+                    commits: vec![
+                        commit("abc1234", "preserve fictional work"),
+                        commit("def5678", "add fictional detail"),
+                    ],
+                    unavailable: false,
+                },
+                Some((
+                    PathBuf::from("/fictional/worktree"),
+                    [
+                        "log".to_string(),
+                        "--format=%h%x00%s".to_string(),
+                        "origin/main..refs/heads/feature/fictional".to_string(),
+                    ],
+                )),
+            ),
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::default_branch_unavailable(None, false, false)]
+    #[case::git_query_failed(Some("main"), false, true)]
+    fn reports_commit_inspection_failures(
+        #[case] default_branch: Option<&str>,
+        #[case] git_result: bool,
+        #[case] expected_git_call: bool,
+    ) {
+        let mut git_called = false;
+        let inspection = read_branch_commits_with(
+            Path::new("/fictional/worktree"),
+            "feature/fictional",
+            || default_branch.map(str::to_string),
+            |_, _| {
+                git_called = true;
+                git_result.then(String::new)
+            },
+        );
+
+        assert_eq!(
+            (inspection, git_called),
+            (
+                CommitInspection {
+                    commits: Vec::new(),
+                    unavailable: true,
+                },
+                expected_git_call,
+            ),
         );
     }
 
