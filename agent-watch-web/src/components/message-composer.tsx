@@ -233,7 +233,6 @@ export function MessageComposer({
         type="file"
         hidden
         multiple
-        accept="image/*"
         onChange={(event) => {
           const files = Array.from(event.currentTarget.files ?? [])
           if (files.length > 0) onPasteFiles(files)
