@@ -244,7 +244,7 @@ async fn actions(
     let session = load_session(state.clone(), current_id.clone()).await?;
     let startup = state
         .resume_pending
-        .startup_status(&current_id, session.status)
+        .startup_status(&current_id, session.status, &session.updated_at)
         .await;
     let has_tmux = session.tmux_info.is_some();
     let has_live_session = session.status != SessionStatus::Ended;

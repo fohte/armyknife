@@ -6,6 +6,7 @@ use std::time::Duration;
 use anyhow::Result;
 use axum::Json;
 use axum::extract::{Path as RoutePath, State};
+use chrono::{DateTime, Utc};
 use tokio::sync::Mutex;
 use tokio::time::Instant;
 
@@ -59,10 +60,24 @@ pub(super) struct PendingSessionResumes {
     updates: EnrichmentUpdates,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum ResumeStartupState {
-    Pending { attempt_id: u64, deadline: Instant },
-    Stuck,
+    Pending {
+        attempt_id: u64,
+        deadline: Instant,
+        resume_marker: DateTime<Utc>,
+    },
+    Stuck {
+        resume_marker: DateTime<Utc>,
+    },
+}
+
+impl ResumeStartupState {
+    fn resume_marker(&self) -> &DateTime<Utc> {
+        match self {
+            Self::Pending { resume_marker, .. } | Self::Stuck { resume_marker } => resume_marker,
+        }
+    }
 }
 
 #[derive(Clone, Copy, serde::Serialize)]
@@ -81,19 +96,30 @@ impl PendingSessionResumes {
         }
     }
 
-    async fn is_pending(&self, session_id: &str, status: SessionStatus) -> bool {
-        if !matches!(status, SessionStatus::Ended | SessionStatus::Paused) {
-            self.states.lock().await.remove(session_id);
+    async fn is_pending(
+        &self,
+        session_id: &str,
+        status: SessionStatus,
+        updated_at: &DateTime<Utc>,
+    ) -> bool {
+        let mut states = self.states.lock().await;
+        let Some(state) = states.get(session_id).cloned() else {
+            return false;
+        };
+        if updated_at > state.resume_marker()
+            || !matches!(status, SessionStatus::Ended | SessionStatus::Paused)
+        {
+            states.remove(session_id);
             return false;
         }
 
         matches!(
-            self.states.lock().await.get(session_id),
-            Some(ResumeStartupState::Pending { deadline, .. }) if *deadline > Instant::now()
+            state,
+            ResumeStartupState::Pending { deadline, .. } if deadline > Instant::now()
         )
     }
 
-    async fn mark_pending(&self, session_id: String) {
+    async fn mark_pending(&self, session_id: String, resume_marker: DateTime<Utc>) {
         let attempt_id = self.next_attempt_id.fetch_add(1, Ordering::Relaxed);
         let deadline = Instant::now() + RESUME_START_TIMEOUT;
         self.states.lock().await.insert(
@@ -101,6 +127,7 @@ impl PendingSessionResumes {
             ResumeStartupState::Pending {
                 attempt_id,
                 deadline,
+                resume_marker,
             },
         );
         self.updates.notify();
@@ -116,33 +143,43 @@ impl PendingSessionResumes {
 
     async fn mark_stuck(&self, session_id: &str, attempt_id: u64) -> bool {
         let mut states = self.states.lock().await;
-        if let Some(ResumeStartupState::Pending {
+        let Some(ResumeStartupState::Pending {
             attempt_id: current_attempt_id,
+            resume_marker,
             ..
-        }) = states.get(session_id)
-            && *current_attempt_id == attempt_id
-        {
-            states.insert(session_id.to_string(), ResumeStartupState::Stuck);
-            return true;
+        }) = states.get(session_id).cloned()
+        else {
+            return false;
+        };
+        if current_attempt_id != attempt_id {
+            return false;
         }
-        false
+
+        states.insert(
+            session_id.to_string(),
+            ResumeStartupState::Stuck { resume_marker },
+        );
+        true
     }
 
     pub(super) async fn startup_status(
         &self,
         session_id: &str,
         status: SessionStatus,
+        updated_at: &DateTime<Utc>,
     ) -> Option<ResumeStartupStatus> {
         let mut states = self.states.lock().await;
-        if !matches!(status, SessionStatus::Ended | SessionStatus::Paused) {
+        let state = states.get(session_id).cloned()?;
+        if updated_at > state.resume_marker()
+            || !matches!(status, SessionStatus::Ended | SessionStatus::Paused)
+        {
             states.remove(session_id);
             return None;
         }
 
-        match states.get(session_id) {
-            Some(ResumeStartupState::Pending { .. }) => Some(ResumeStartupStatus::Pending),
-            Some(ResumeStartupState::Stuck) => Some(ResumeStartupStatus::Stuck),
-            None => None,
+        match state {
+            ResumeStartupState::Pending { .. } => Some(ResumeStartupStatus::Pending),
+            ResumeStartupState::Stuck { .. } => Some(ResumeStartupStatus::Stuck),
         }
     }
 }
@@ -160,7 +197,7 @@ pub(super) async fn resume_session(
     let session = load_session(state.clone(), current_id.clone()).await?;
     if state
         .resume_pending
-        .is_pending(&current_id, session.status)
+        .is_pending(&current_id, session.status, &session.updated_at)
         .await
     {
         return Err(ApiError::conflict("session resume is already in progress"));
@@ -169,12 +206,17 @@ pub(super) async fn resume_session(
         return Err(ApiError::conflict("session is not ended or paused"));
     }
 
+    // SessionStart may update this timestamp before the blocking resume call returns.
+    let resume_marker = session.updated_at;
     let runtime = state.runtime;
     tokio::task::spawn_blocking(move || runtime.resume_session(&session))
         .await
         .map_err(ApiError::internal)?
         .map_err(ApiError::operation)?;
-    state.resume_pending.mark_pending(current_id).await;
+    state
+        .resume_pending
+        .mark_pending(current_id, resume_marker)
+        .await;
 
     Ok(Json(Success::new()))
 }

@@ -352,6 +352,66 @@ async fn actions_report_stuck_resume_after_twenty_seconds_and_clear_it_when_star
 
 #[rstest]
 #[tokio::test(start_paused = true)]
+async fn started_resume_does_not_remain_stuck_after_sweep_pauses_the_session(
+    action_context: ActionContext,
+) {
+    let mut session = session("fixture-session");
+    session.status = SessionStatus::Ended;
+    action_context.save_session(&session);
+    let app = action_context.router();
+    let mut updates = action_context.resume_updates.subscribe();
+
+    app.clone()
+        .oneshot(post_empty("/sessions/fixture-session/resume"))
+        .await
+        .unwrap();
+    updates.changed().await.unwrap();
+
+    advance(Duration::from_secs(10)).await;
+    session.status = SessionStatus::Running;
+    session.updated_at += chrono::Duration::seconds(1);
+    action_context.save_session(&session);
+
+    advance(Duration::from_secs(10)).await;
+    updates.changed().await.unwrap();
+
+    session.status = SessionStatus::Paused;
+    session.updated_at += chrono::Duration::seconds(1);
+    action_context.save_session(&session);
+
+    let actions = app
+        .oneshot(
+            Request::builder()
+                .uri("/sessions/fixture-session/actions")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response_snapshot(actions, &action_context).await,
+        json!({
+            "status": StatusCode::OK.as_u16(),
+            "body": {
+                "message": true,
+                "answerQuestion": false,
+                "resume": true,
+                "interrupt": false,
+                "openInTerminal": true,
+                "rewind": false,
+            },
+            "calls": [{
+                "kind": "resume",
+                "sessionId": "fixture-session",
+                "status": SessionStatus::Ended,
+            }],
+        }),
+    );
+}
+
+#[rstest]
+#[tokio::test(start_paused = true)]
 async fn stale_resume_timeout_does_not_mark_a_new_attempt_stuck(action_context: ActionContext) {
     let mut session = session("fixture-session");
     session.status = SessionStatus::Ended;
