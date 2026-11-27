@@ -3,7 +3,7 @@ import { ResultAsync } from 'neverthrow'
 
 import { resolveWatchTarget } from './config.js'
 import type { WatchTarget } from './config.js'
-import { applyConnectionProbe, resolveRetryUrl } from './connection.js'
+import { createConnectionController } from './connection.js'
 import { installApplicationMenu } from './menu.js'
 import { classifyNavigation, isAllowedWatchUrl } from './navigation.js'
 
@@ -31,9 +31,9 @@ const waitingPage = `data:text/html;charset=utf-8,${encodeURIComponent(`<!doctyp
 
 let mainWindow: BrowserWindow | undefined
 let watchTarget: WatchTarget | undefined
-let retryUrl: string | undefined
+let connectionController:
+  ReturnType<typeof createConnectionController> | undefined
 let isQuitting = false
-let isWaiting = false
 let retryTimer: NodeJS.Timeout | undefined
 
 const reportPromise = (promise: Promise<unknown>, message: string) => {
@@ -47,41 +47,12 @@ const openExternal = (url: string) => {
   reportPromise(shell.openExternal(url), `failed to open external URL: ${url}`)
 }
 
-const showWaitingPage = (failedUrl: string) => {
-  if (
-    mainWindow === undefined ||
-    mainWindow.isDestroyed() ||
-    isWaiting ||
-    watchTarget === undefined
-  ) {
-    return
-  }
-
-  retryUrl = resolveRetryUrl(failedUrl, watchTarget.origin, watchTarget.url)
-  isWaiting = true
-  reportPromise(mainWindow.loadURL(waitingPage), 'failed to show waiting page')
-}
-
-const loadWatchPage = () => {
-  if (
-    mainWindow === undefined ||
-    mainWindow.isDestroyed() ||
-    watchTarget === undefined
-  ) {
-    return
-  }
-
-  const url = retryUrl ?? watchTarget.url
-  retryUrl = undefined
-  isWaiting = false
-  reportPromise(mainWindow.loadURL(url), 'failed to load watch-web')
-}
-
 const refreshConnection = async () => {
   if (
     mainWindow === undefined ||
     mainWindow.isDestroyed() ||
-    watchTarget === undefined
+    watchTarget === undefined ||
+    connectionController === undefined
   ) {
     return
   }
@@ -94,11 +65,26 @@ const refreshConnection = async () => {
     () => false,
   )
 
-  applyConnectionProbe(isWaiting, serverResponded, { loadWatchPage })
+  connectionController.probe(serverResponded)
 }
 
 const createMainWindow = () => {
   if (watchTarget === undefined) return
+  const target = watchTarget
+
+  connectionController = createConnectionController(target.origin, target.url, {
+    showWaitingPage: () => {
+      if (mainWindow === undefined || mainWindow.isDestroyed()) return
+      reportPromise(
+        mainWindow.loadURL(waitingPage),
+        'failed to show waiting page',
+      )
+    },
+    loadWatchPage: (url) => {
+      if (mainWindow === undefined || mainWindow.isDestroyed()) return
+      reportPromise(mainWindow.loadURL(url), 'failed to load watch-web')
+    },
+  })
 
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -123,7 +109,7 @@ const createMainWindow = () => {
   })
 
   installApplicationMenu(() => mainWindow)
-  reportPromise(mainWindow.loadURL(watchTarget.url), 'failed to load watch-web')
+  reportPromise(mainWindow.loadURL(target.url), 'failed to load watch-web')
   retryTimer = setInterval(() => void refreshConnection(), retryIntervalMs)
   void refreshConnection()
 }
@@ -197,10 +183,16 @@ const configureWebContents = (contents: Electron.WebContents) => {
         errorCode !== -3 &&
         contents === mainWindow?.webContents
       ) {
-        showWaitingPage(validatedUrl)
+        connectionController?.mainFrameDidFail(validatedUrl)
       }
     },
   )
+
+  contents.on('did-finish-load', () => {
+    if (contents === mainWindow?.webContents) {
+      connectionController?.mainFrameDidLoad(contents.getURL())
+    }
+  })
 }
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock()

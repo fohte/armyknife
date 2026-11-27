@@ -1,67 +1,61 @@
 import { describe, expect, it } from 'vitest'
 
-import { applyConnectionProbe, resolveRetryUrl } from './connection.js'
+import { createConnectionController } from './connection.js'
 
-describe('applyConnectionProbe', () => {
+describe('createConnectionController', () => {
+  it('retries the failed session URL after the server responds', () => {
+    const actions: string[] = []
+    const controller = createConnectionController(
+      'http://127.0.0.1:4317',
+      'http://127.0.0.1:4317/',
+      {
+        showWaitingPage: () => actions.push('show-waiting'),
+        loadWatchPage: (url) => actions.push(`load:${url}`),
+      },
+    )
+
+    controller.mainFrameDidFail(
+      'http://127.0.0.1:4317/?session=session-example',
+    )
+    controller.probe(false)
+    controller.probe(true)
+
+    expect(actions).toEqual([
+      'show-waiting',
+      'load:http://127.0.0.1:4317/?session=session-example',
+    ])
+  })
+
   it.each([
-    {
-      name: 'loads watch-web after a waiting page receives an HTTP response',
-      isWaiting: true,
-      serverResponded: true,
-      expected: ['load-watch'],
-    },
-    {
-      name: 'keeps the server error page visible for an HTTP 503 response',
-      isWaiting: false,
-      serverResponded: true,
-      expected: [],
-    },
     {
       name: 'keeps a loaded page when its server probe fails',
-      isWaiting: false,
+      failedUrl: undefined,
+      loadedUrl: 'http://127.0.0.1:4317/?session=session-example',
       serverResponded: false,
       expected: [],
     },
     {
-      name: 'keeps the waiting page while the server is unreachable',
-      isWaiting: true,
-      serverResponded: false,
-      expected: [],
-    },
-  ])('$name', ({ isWaiting, serverResponded, expected }) => {
-    const calls: string[] = []
-    applyConnectionProbe(isWaiting, serverResponded, {
-      loadWatchPage: () => calls.push('load-watch'),
-    })
-
-    expect(calls).toEqual(expected)
-  })
-})
-
-describe('resolveRetryUrl', () => {
-  it.each([
-    {
-      name: 'preserves the failed same-origin session URL',
-      failedUrl: 'http://127.0.0.1:4317/?session=session-example',
-      expected: 'http://127.0.0.1:4317/?session=session-example',
-    },
-    {
-      name: 'falls back for an external URL',
+      name: 'uses the configured URL when a failed URL is external',
       failedUrl: 'https://example.test/',
-      expected: 'http://127.0.0.1:4317/',
+      loadedUrl: undefined,
+      serverResponded: true,
+      expected: ['show-waiting', 'load:http://127.0.0.1:4317/'],
     },
-    {
-      name: 'falls back for an invalid URL',
-      failedUrl: 'not a URL',
-      expected: 'http://127.0.0.1:4317/',
-    },
-  ])('$name', ({ failedUrl, expected }) => {
-    expect(
-      resolveRetryUrl(
-        failedUrl,
-        'http://127.0.0.1:4317',
-        'http://127.0.0.1:4317/',
-      ),
-    ).toEqual(expected)
+  ])('$name', ({ failedUrl, loadedUrl, serverResponded, expected }) => {
+    const actions: string[] = []
+    const controller = createConnectionController(
+      'http://127.0.0.1:4317',
+      'http://127.0.0.1:4317/',
+      {
+        showWaitingPage: () => actions.push('show-waiting'),
+        loadWatchPage: (url) => actions.push(`load:${url}`),
+      },
+    )
+
+    if (loadedUrl !== undefined) controller.mainFrameDidLoad(loadedUrl)
+    if (failedUrl !== undefined) controller.mainFrameDidFail(failedUrl)
+    controller.probe(serverResponded)
+
+    expect(actions).toEqual(expected)
   })
 })
