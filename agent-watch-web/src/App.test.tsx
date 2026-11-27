@@ -3528,7 +3528,7 @@ it('keeps the selected session when a launched session appears after returning f
   })
 })
 
-it('stays on the Board when a launch completes after leaving the new-session form', async () => {
+it('keeps the Board active and closes a completed form launch', async () => {
   vi.stubGlobal(
     'fetch',
     createSessionLaunchFetcher(jsonResponse({ launchId: 'launch-fixture' })),
@@ -3553,15 +3553,31 @@ it('stays on the Board when a launch completes after leaving the new-session for
     ],
   })
 
-  const snapshot = () => ({
+  const boardAfterLaunch = {
     view: readActiveView(),
     newSessionFormOpen: container.querySelector('.new-session-view') !== null,
     selectedId: new URLSearchParams(window.location.search).get('session'),
-  })
+  }
+  clickButton('[aria-label="Open navigation"]')
+  clickButton('.mobile-nav-drawer .view-switch-button[aria-pressed="false"]')
+  const inboxAfterReturn = {
+    view: readActiveView(),
+    newSessionFormOpen: container.querySelector('.new-session-view') !== null,
+    selectedId: new URLSearchParams(window.location.search).get('session'),
+  }
+
+  const snapshot = () => ({ boardAfterLaunch, inboxAfterReturn })
   expect(snapshot()).toEqual({
-    view: 'Board',
-    newSessionFormOpen: false,
-    selectedId: 'session-before',
+    boardAfterLaunch: {
+      view: 'Board',
+      newSessionFormOpen: false,
+      selectedId: 'session-before',
+    },
+    inboxAfterReturn: {
+      view: 'Inbox',
+      newSessionFormOpen: false,
+      selectedId: 'session-before',
+    },
   })
 })
 

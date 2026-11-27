@@ -378,16 +378,22 @@ function AppContent() {
     )
     if (launchedSession === undefined) return
     setPendingLaunchId(null)
-    if (
-      newSessionMode !== 'palette' &&
-      !(newSessionMode === 'form' && view === 'inbox')
-    ) {
+    const shouldOpenLaunchedSession =
+      newSessionMode === 'palette' ||
+      (newSessionMode === 'form' && view === 'inbox')
+    if (!shouldOpenLaunchedSession) {
+      if (newSessionMode === 'form') {
+        newSession.reset()
+        navigate((current) => ({ ...current, newSessionMode: null }), 'replace')
+      }
       return
     }
     setCommandPaletteOpen(false)
     openSessionInInbox(launchedSession.id, 'replace')
   }, [
+    navigate,
     newSessionMode,
+    newSession.reset,
     openSessionInInbox,
     pendingLaunchId,
     sessionsWithElapsedTime,
