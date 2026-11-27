@@ -34,9 +34,7 @@ pub(super) fn crit_client_waiting_on_port(
 
 fn crit_client_lsof_command(port: u16) -> std::process::Command {
     let mut command = ExternalTool::Lsof.command();
-    // `-a -c crit` limits the kernel's fd scan to crit processes. Without it lsof walks
-    // every process's fds, which burns CPU on each poll. `has_crit_client` only accepts
-    // `crit` commands, so the result is unchanged.
+    // `-a -c crit` keeps lsof from inspecting every process's fds on each poll.
     command.args([
         "-nP",
         "-a",
