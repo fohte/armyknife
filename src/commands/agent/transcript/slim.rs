@@ -60,8 +60,12 @@ struct SlimResult {
 }
 
 #[derive(Debug, thiserror::Error)]
-#[error("{0}")]
-struct PostReplacementFailure(#[source] anyhow::Error);
+#[error("{message}")]
+struct PostReplacementFailure {
+    message: String,
+    #[source]
+    source: anyhow::Error,
+}
 
 struct TranscriptAnalysis {
     boundary_offset: Option<u64>,
@@ -200,21 +204,21 @@ where
         &mut has_writable_open_handle,
         max_reconcile_wait,
     )
-    .with_context(|| {
-        format!(
+    .map_err(|source| PostReplacementFailure {
+        message: format!(
             "transcript replacement completed, but post-replacement reconciliation failed for {}",
             path.display()
-        )
-    })
-    .map_err(PostReplacementFailure)?;
+        ),
+        source,
+    })?;
     let final_bytes = fs::metadata(path)
-        .with_context(|| {
-            format!(
+        .map_err(|source| PostReplacementFailure {
+            message: format!(
                 "transcript replacement completed, but could not inspect the replaced transcript {}",
                 path.display()
-            )
-        })
-        .map_err(PostReplacementFailure)?
+            ),
+            source: source.into(),
+        })?
         .len();
     Ok(SlimResult {
         original_bytes,

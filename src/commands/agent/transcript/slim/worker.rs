@@ -214,7 +214,11 @@ mod tests {
     ) {
         let inner_error = anyhow::anyhow!("{message}");
         let error: anyhow::Error = if post_replacement {
-            PostReplacementFailure(inner_error).into()
+            PostReplacementFailure {
+                message: message.to_string(),
+                source: inner_error,
+            }
+            .into()
         } else {
             inner_error
         };
