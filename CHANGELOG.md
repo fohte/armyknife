@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.984](https://github.com/fohte/armyknife/compare/v0.1.983...v0.1.984) (2026-11-27)
+
+
+### Features
+
+* **agent-watch:** accept files on session launch ([#2390](https://github.com/fohte/armyknife/issues/2390)) ([8cf9ea1](https://github.com/fohte/armyknife/commit/8cf9ea19a598b5b3be25be2204eb0def09f9037c))
+
 ## [0.1.983](https://github.com/fohte/armyknife/compare/v0.1.982...v0.1.983) (2026-11-27)
 
 
