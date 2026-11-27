@@ -26,12 +26,62 @@ pub(super) struct TranscriptNode {
     pub(super) is_task_notification: bool,
 }
 
-pub(super) struct TranscriptNodeAppendMetadata {
+#[derive(Clone, Default)]
+pub(super) struct TranscriptContentMetadata {
     pub(super) has_tool_use: bool,
     pub(super) tool_use_ids: Vec<String>,
     pub(super) tool_result_ids: Vec<String>,
     pub(super) is_tool_result_only: bool,
-    pub(super) is_task_notification: bool,
+    pub(super) tool_use_count: usize,
+}
+
+impl TranscriptContentMetadata {
+    pub(super) fn from_record(record: &Value) -> Self {
+        let record_type = record.get("type").and_then(Value::as_str);
+        let mut metadata = Self::default();
+        if matches!(record_type, Some("assistant" | "user"))
+            && let Some(blocks) = record
+                .get("message")
+                .and_then(|message| message.get("content"))
+                .and_then(Value::as_array)
+        {
+            let mut has_user_content = false;
+            let mut has_non_result_user_content = false;
+            for block in blocks {
+                match block.get("type").and_then(Value::as_str) {
+                    Some("tool_use") if record_type == Some("assistant") => {
+                        metadata.has_tool_use = true;
+                        metadata.tool_use_count += 1;
+                        if let Some(id) = block
+                            .get("id")
+                            .or_else(|| block.get("tool_use_id"))
+                            .and_then(Value::as_str)
+                        {
+                            metadata.tool_use_ids.push(id.to_owned());
+                        }
+                    }
+                    Some("tool_result") if record_type == Some("user") => {
+                        has_user_content = true;
+                        if let Some(id) = block
+                            .get("id")
+                            .or_else(|| block.get("tool_use_id"))
+                            .and_then(Value::as_str)
+                        {
+                            metadata.tool_result_ids.push(id.to_owned());
+                        }
+                    }
+                    _ if record_type == Some("user") => {
+                        has_user_content = true;
+                        has_non_result_user_content = true;
+                    }
+                    _ => {}
+                }
+            }
+            metadata.is_tool_result_only =
+                record_type == Some("user") && has_user_content && !has_non_result_user_content;
+        }
+        metadata
+    }
 }
 
 impl TranscriptNode {
@@ -59,7 +109,8 @@ impl TranscriptNode {
         parent_uuid: Option<String>,
         uuid_id: usize,
         record_order: u64,
-        metadata: TranscriptNodeAppendMetadata,
+        metadata: TranscriptContentMetadata,
+        is_task_notification: bool,
     ) -> Self {
         Self {
             uuid_id,
@@ -72,7 +123,7 @@ impl TranscriptNode {
             tool_result_ids: (!metadata.tool_result_ids.is_empty())
                 .then(|| metadata.tool_result_ids.into_boxed_slice()),
             is_tool_result_only: metadata.is_tool_result_only,
-            is_task_notification: metadata.is_task_notification,
+            is_task_notification,
         }
     }
 
@@ -82,61 +133,21 @@ impl TranscriptNode {
         uuid_id: usize,
         record_order: u64,
     ) -> Self {
-        let record_type = record.get("type").and_then(Value::as_str);
-        let mut has_tool_use = false;
-        let mut tool_use_ids = Vec::new();
-        let mut tool_result_ids = Vec::new();
-        let mut has_content_block = false;
-        let mut has_non_result_content_block = false;
-        if matches!(record_type, Some("assistant" | "user"))
-            && let Some(blocks) = record
-                .get("message")
-                .and_then(|message| message.get("content"))
-                .and_then(Value::as_array)
-        {
-            for block in blocks {
-                match block.get("type").and_then(Value::as_str) {
-                    Some("tool_use") if record_type == Some("assistant") => {
-                        has_tool_use = true;
-                        if let Some(id) = block
-                            .get("id")
-                            .or_else(|| block.get("tool_use_id"))
-                            .and_then(Value::as_str)
-                        {
-                            tool_use_ids.push(id.to_owned());
-                        }
-                    }
-                    Some("tool_result") if record_type == Some("user") => {
-                        has_content_block = true;
-                        if let Some(id) = block
-                            .get("id")
-                            .or_else(|| block.get("tool_use_id"))
-                            .and_then(Value::as_str)
-                        {
-                            tool_result_ids.push(id.to_owned());
-                        }
-                    }
-                    _ if record_type == Some("user") => {
-                        has_content_block = true;
-                        has_non_result_content_block = true;
-                    }
-                    _ => {}
-                }
-            }
-        }
-        let is_tool_result_only =
-            record_type == Some("user") && has_content_block && !has_non_result_content_block;
+        let metadata = TranscriptContentMetadata::from_record(record);
+        let is_task_notification =
+            !metadata.is_tool_result_only && task_notification_text(record).is_some();
         Self {
             uuid_id,
             record_order,
             parent_uuid,
             membership: BranchMembership::Unknown,
-            has_tool_use: record_type == Some("assistant") && has_tool_use,
-            tool_use_ids: (!tool_use_ids.is_empty()).then(|| tool_use_ids.into_boxed_slice()),
-            tool_result_ids: (!tool_result_ids.is_empty())
-                .then(|| tool_result_ids.into_boxed_slice()),
-            is_tool_result_only,
-            is_task_notification: !is_tool_result_only && task_notification_text(record).is_some(),
+            has_tool_use: metadata.has_tool_use,
+            tool_use_ids: (!metadata.tool_use_ids.is_empty())
+                .then(|| metadata.tool_use_ids.into_boxed_slice()),
+            tool_result_ids: (!metadata.tool_result_ids.is_empty())
+                .then(|| metadata.tool_result_ids.into_boxed_slice()),
+            is_tool_result_only: metadata.is_tool_result_only,
+            is_task_notification,
         }
     }
 }

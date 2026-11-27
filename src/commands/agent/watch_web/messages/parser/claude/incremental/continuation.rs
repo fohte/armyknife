@@ -3,7 +3,7 @@ use serde_json::Value;
 use super::super::background_tasks::task_notification_text;
 use super::super::state::{ClaudeParserState, is_attachment_record, record_parent_uuid};
 use super::super::transcript_branch::{
-    BranchMembership, TranscriptNode, TranscriptNodeAppendMetadata,
+    BranchMembership, TranscriptContentMetadata, TranscriptNode,
 };
 use super::super::user_input::user_content;
 
@@ -51,65 +51,17 @@ struct AppendRecord {
     is_simple: bool,
     is_assistant: bool,
     is_tool_use_assistant: bool,
-    is_tool_result_only: bool,
     is_transparent_attachment: bool,
     is_task_notification: bool,
-    has_tool_use: bool,
-    tool_use_ids: Vec<String>,
-    tool_result_ids: Vec<String>,
-    tool_use_count: usize,
+    content_metadata: TranscriptContentMetadata,
 }
 
 impl AppendRecord {
     fn from_record(record: &Value) -> Self {
         let record_type = record.get("type").and_then(Value::as_str);
-        let is_user = record_type == Some("user");
-        let is_assistant_record = record_type == Some("assistant");
-        let mut has_user_content = false;
-        let mut has_non_result_user_content = false;
-        let mut tool_use_ids = Vec::new();
-        let mut tool_result_ids = Vec::new();
-        let mut tool_use_count = 0;
-        if let Some(blocks) = record
-            .get("message")
-            .and_then(|message| message.get("content"))
-            .and_then(Value::as_array)
-        {
-            for block in blocks {
-                match block.get("type").and_then(Value::as_str) {
-                    Some("tool_use") => {
-                        tool_use_count += 1;
-                        if is_assistant_record
-                            && let Some(id) = block
-                                .get("id")
-                                .or_else(|| block.get("tool_use_id"))
-                                .and_then(Value::as_str)
-                        {
-                            tool_use_ids.push(id.to_owned());
-                        }
-                    }
-                    Some("tool_result") => {
-                        if is_user {
-                            has_user_content = true;
-                            if let Some(id) = block
-                                .get("id")
-                                .or_else(|| block.get("tool_use_id"))
-                                .and_then(Value::as_str)
-                            {
-                                tool_result_ids.push(id.to_owned());
-                            }
-                        }
-                    }
-                    _ if is_user => {
-                        has_user_content = true;
-                        has_non_result_user_content = true;
-                    }
-                    _ => {}
-                }
-            }
-        }
-        let is_tool_result_only = is_user && has_user_content && !has_non_result_user_content;
-        let is_task_notification = task_notification_text(record).is_some();
+        let content_metadata = TranscriptContentMetadata::from_record(record);
+        let is_tool_result_only = content_metadata.is_tool_result_only;
+        let is_task_notification = !is_tool_result_only && task_notification_text(record).is_some();
         let is_attachment = is_attachment_record(record);
         let has_supported_branch_metadata = has_supported_branch_metadata(record);
         let is_transparent_attachment = is_transparent_attachment(record, is_task_notification);
@@ -127,14 +79,10 @@ impl AppendRecord {
             parent_uuid: record_parent_uuid(record),
             is_simple: is_simple || is_transparent_attachment,
             is_assistant,
-            is_tool_use_assistant: is_assistant && tool_use_count > 0,
-            is_tool_result_only,
+            is_tool_use_assistant: is_assistant && content_metadata.tool_use_count > 0,
             is_transparent_attachment,
             is_task_notification,
-            has_tool_use: is_assistant_record && tool_use_count > 0,
-            tool_use_ids,
-            tool_result_ids,
-            tool_use_count,
+            content_metadata,
         }
     }
 }
@@ -155,13 +103,13 @@ impl ClassifiedAppend {
     pub(super) fn simple_node_flags(&self) -> (bool, bool, bool) {
         (
             self.record.is_tool_use_assistant,
-            self.record.is_tool_result_only,
+            self.record.content_metadata.is_tool_result_only,
             self.record.is_task_notification,
         )
     }
 
     pub(super) fn extends_active_record_cache(&self) -> bool {
-        self.record.is_tool_result_only || self.record.is_task_notification
+        self.record.content_metadata.is_tool_result_only || self.record.is_task_notification
     }
 
     pub(super) fn pending_tool_result(&self) -> bool {
@@ -173,13 +121,14 @@ impl ClassifiedAppend {
             self.record.parent_uuid.clone(),
             uuid_id,
             record_order,
-            TranscriptNodeAppendMetadata {
-                has_tool_use: self.record.has_tool_use,
-                tool_use_ids: std::mem::take(&mut self.record.tool_use_ids),
-                tool_result_ids: std::mem::take(&mut self.record.tool_result_ids),
-                is_tool_result_only: self.record.is_tool_result_only,
-                is_task_notification: self.record.is_task_notification,
+            TranscriptContentMetadata {
+                has_tool_use: self.record.content_metadata.has_tool_use,
+                tool_use_ids: std::mem::take(&mut self.record.content_metadata.tool_use_ids),
+                tool_result_ids: std::mem::take(&mut self.record.content_metadata.tool_result_ids),
+                is_tool_result_only: self.record.content_metadata.is_tool_result_only,
+                tool_use_count: self.record.content_metadata.tool_use_count,
             },
+            self.record.is_task_notification,
         )
     }
 }
@@ -198,7 +147,7 @@ pub(super) fn classify_append(
         return None;
     }
 
-    if candidate.is_tool_result_only
+    if candidate.content_metadata.is_tool_result_only
         && (is_first_parallel_result(state, history, record, &candidate)
             || is_final_parallel_result(state, history, record, &candidate))
     {
@@ -229,7 +178,7 @@ fn is_simple_tail_append(
             && state.latest_record_uuid.is_none()
             && state.transcript_nodes.is_empty()
             && candidate.is_simple
-            && !candidate.is_tool_result_only)
+            && !candidate.content_metadata.is_tool_result_only)
             .then_some(false);
     };
     let previous_record = history.last()?;
@@ -255,9 +204,10 @@ fn is_simple_tail_append(
     {
         return None;
     }
-    let pending_tool_result = candidate.is_tool_result_only
+    let pending_tool_result = candidate.content_metadata.is_tool_result_only
         && state.has_pending_tool_result_for_parent(record, Some(parent_uuid.as_str()));
-    (!candidate.is_tool_result_only || pending_tool_result).then_some(pending_tool_result)
+    (!candidate.content_metadata.is_tool_result_only || pending_tool_result)
+        .then_some(pending_tool_result)
 }
 
 fn is_first_parallel_result(
@@ -280,8 +230,8 @@ fn is_first_parallel_result(
     };
     first_call.is_tool_use_assistant
         && second_call.is_tool_use_assistant
-        && first_call.tool_use_count == 1
-        && second_call.tool_use_count == 1
+        && first_call.content_metadata.tool_use_count == 1
+        && second_call.content_metadata.tool_use_count == 1
         && candidate.is_simple
         && second_call.parent_uuid.as_deref() == Some(first_uuid)
         && candidate.parent_uuid.as_deref() == Some(first_uuid)
@@ -327,9 +277,9 @@ fn is_final_parallel_result(
     };
     first_call.is_tool_use_assistant
         && second_call.is_tool_use_assistant
-        && first_call.tool_use_count == 1
-        && second_call.tool_use_count == 1
-        && first_result.is_tool_result_only
+        && first_call.content_metadata.tool_use_count == 1
+        && second_call.content_metadata.tool_use_count == 1
+        && first_result.content_metadata.is_tool_result_only
         && first_result.is_simple
         && candidate.is_simple
         && followup.is_assistant
