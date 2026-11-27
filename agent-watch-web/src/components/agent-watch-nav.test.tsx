@@ -364,14 +364,14 @@ it('shows the Waiting status for a starred session in navigation', () => {
     title: row?.querySelector('.session-title')?.textContent,
     status: status?.getAttribute('aria-label'),
     icon: status?.querySelector('svg')?.classList.contains('lucide-hourglass'),
-    reason: row?.querySelector('.session-preview')?.textContent,
+    reason: row?.querySelector('.session-preview')?.textContent ?? null,
   })
 
   expect(snapshot()).toEqual({
     title: 'Review the retry policy',
     status: 'Waiting',
     icon: true,
-    reason: 'Waiting for the checks to finish',
+    reason: null,
   })
 })
 

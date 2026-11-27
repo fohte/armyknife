@@ -396,6 +396,7 @@ it('sorts Waiting rows with the selected Inbox sort', () => {
       { ...waitingSession('waiting-alpha', 'Alpha waiting'), project: 'alpha' },
     ],
     sort: 'project',
+    showAllWaiting: true,
   })
 
   expect(

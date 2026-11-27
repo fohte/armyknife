@@ -1299,13 +1299,81 @@ it('keeps visible In progress rows collapsed under a non-priority Inbox sort', (
       container.querySelectorAll('.in-progress-section .session-title'),
       (title) => title.textContent,
     ),
-    showMore: container.querySelector('.in-progress-section .show-more-button')
-      ?.textContent,
+    showMore: container.querySelector('.show-more-button')?.textContent,
   })
   expect(snapshot()).toEqual({
     selectedTitle: 'Alpha progress',
     visibleTitles: ['Alpha progress', 'Beta progress'],
     showMore: '1 more ▸',
+  })
+})
+
+it('does not scroll the selected row when Waiting is expanded', () => {
+  const scrollIntoView = vi.spyOn(HTMLElement.prototype, 'scrollIntoView')
+  window.history.replaceState(null, '', '/?session=session-selected')
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-selected', 'Selected session'),
+      session('session-waiting-alpha', 'Alpha waiting', 'waiting', 8, 'alpha'),
+      session('session-waiting-beta', 'Beta waiting', 'waiting', 8, 'beta'),
+      session('session-waiting-gamma', 'Gamma waiting', 'waiting', 8, 'gamma'),
+    ],
+  })
+  scrollIntoView.mockClear()
+
+  act(() => {
+    container.querySelector<HTMLButtonElement>('.show-more-button')?.click()
+  })
+
+  const snapshot = () => ({
+    selectedTitle: readSelectedTitle(),
+    waitingTitles: Array.from(
+      container.querySelectorAll('.waiting-section .session-title'),
+      (title) => title.textContent,
+    ),
+    scrollOptions: scrollIntoView.mock.calls.map(([options]) => options),
+  })
+  expect(snapshot()).toEqual({
+    selectedTitle: 'Selected session',
+    waitingTitles: ['Alpha waiting', 'Beta waiting', 'Gamma waiting'],
+    scrollOptions: [],
+  })
+})
+
+it('does not scroll the selected row when mobile In progress is expanded', () => {
+  const scrollIntoView = vi.spyOn(HTMLElement.prototype, 'scrollIntoView')
+  setMobileViewport(true)
+  window.history.replaceState(null, '', '/?session=session-selected')
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-selected', 'Selected session'),
+      session('session-progress-alpha', 'Alpha progress', 'in_progress'),
+      session('session-progress-beta', 'Beta progress', 'in_progress'),
+    ],
+  })
+  scrollIntoView.mockClear()
+
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>('.mobile-in-progress-row')
+      ?.click()
+  })
+
+  const snapshot = () => ({
+    selectedTitle: readSelectedTitle(),
+    inProgressExpanded: container
+      .querySelector('.mobile-in-progress-row')
+      ?.getAttribute('aria-expanded'),
+    scrollOptions: scrollIntoView.mock.calls.map(([options]) => options),
+  })
+  expect(snapshot()).toEqual({
+    selectedTitle: 'Selected session',
+    inProgressExpanded: 'true',
+    scrollOptions: [],
   })
 })
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { AppWorkspace } from '#app-workspace'
 import {
@@ -116,6 +116,7 @@ function AppContent() {
   >(null)
   const [showAllInProgress, setShowAllInProgress] = useState(false)
   const [showAllWaiting, setShowAllWaiting] = useState(false)
+  const lastScrolledSelectedId = useRef<string | null>(null)
   const [laterExpanded, setLaterExpanded] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [availableVersion, setAvailableVersion] = useState<string | null>(null)
@@ -274,17 +275,24 @@ function AppContent() {
   }, [isMobile, selectedId, selectedWaitingIndex, setWaitingExpanded])
 
   useEffect(() => {
-    if (view !== 'inbox') {
+    if (view !== 'inbox' || selectedId === null) {
+      lastScrolledSelectedId.current = null
       return
     }
 
-    document
-      .querySelector<HTMLButtonElement>(
-        '[data-session-row][aria-current="true"]',
-      )
-      ?.scrollIntoView({ block: 'nearest' })
+    if (lastScrolledSelectedId.current === selectedId) return
+
+    const selectedRow = document.querySelector<HTMLButtonElement>(
+      '[data-session-row][aria-current="true"]',
+    )
+    if (selectedRow === null) return
+
+    selectedRow.scrollIntoView({ block: 'nearest' })
+    lastScrolledSelectedId.current = selectedId
   }, [
+    inboxSort.navigableSessions,
     inProgressExpanded,
+    mobileConversationOpen,
     selectedId,
     showAllInProgress,
     showAllWaiting,
