@@ -443,7 +443,7 @@ async fn startup_status_uses_the_session_start_marker(
             "startup": startup,
             "interrupt": false,
             "openInTerminal": true,
-            "rewind": false,
+            "rewind": true,
         }),
         None => json!({
             "message": true,
@@ -451,7 +451,7 @@ async fn startup_status_uses_the_session_start_marker(
             "resume": true,
             "interrupt": false,
             "openInTerminal": true,
-            "rewind": false,
+            "rewind": true,
         }),
     };
 
