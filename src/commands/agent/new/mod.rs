@@ -25,7 +25,7 @@ mod worktree_creation;
 use child_launch_guard::ensure_caller_may_launch_children;
 use launch_inputs::build_env_vars;
 use launch_options::{resolve_launch_options, validate_type_selection};
-use prompt::{delete_prompt_cache, resolve_args, save_prompt_cache};
+use prompt::{ResolvedArgs, delete_prompt_cache, resolve_args, save_prompt_cache};
 use session_context::resolve_prompt;
 use session_mode::{caller_repo_root, should_open_window};
 use session_start_hook::run_pre_session_start_hook;
@@ -238,17 +238,48 @@ fn run_worktree_mode(
     repo_root: &str,
     config: &Config,
 ) -> Result<()> {
-    let resolved = resolve_args(worktree_value, args.common.prompt.as_deref())?;
-    let name = resolved.branch_name;
-    let prompt = resolved.prompt;
+    run_worktree_mode_with_deps(
+        args,
+        worktree_value,
+        repo_root,
+        resolve_args,
+        save_prompt_cache,
+        delete_prompt_cache,
+        |args, name, prompt, repo_root| {
+            run_worktree_creation(args, name, prompt, repo_root, config)
+        },
+    )
+}
+
+fn run_worktree_mode_with_deps(
+    args: &NewArgs,
+    worktree_value: Option<&str>,
+    repo_root: &str,
+    resolve: impl FnOnce(Option<&str>, Option<&str>) -> Result<ResolvedArgs>,
+    save: impl FnOnce(&str, &str) -> Result<PathBuf>,
+    delete: impl FnOnce(&Path),
+    launch: impl FnOnce(&NewArgs, &str, Option<&str>, &str) -> Result<()>,
+) -> Result<()> {
+    let resolved = resolve(worktree_value, args.common.prompt.as_deref())?;
     let prompt_for_cache = prompt_cache_source(
         args.watch_web_prompt_cache.as_ref().map(Option::as_deref),
-        prompt.as_deref(),
+        resolved.prompt.as_deref(),
     );
 
-    with_prompt_cache_recovery(repo_root, prompt_for_cache, || {
-        run_worktree_creation(args, &name, prompt.as_deref(), repo_root, config)
-    })
+    with_prompt_cache_recovery_with_deps(
+        repo_root,
+        prompt_for_cache,
+        || {
+            launch(
+                args,
+                &resolved.branch_name,
+                resolved.prompt.as_deref(),
+                repo_root,
+            )
+        },
+        save,
+        delete,
+    )
 }
 
 fn prompt_cache_source<'a>(
@@ -283,14 +314,16 @@ fn with_prompt_cache_recovery_with_deps(
     prompt: Option<&str>,
     f: impl FnOnce() -> Result<()>,
     save: impl FnOnce(&str, &str) -> Result<PathBuf>,
-    delete: impl FnOnce(&str),
+    delete: impl FnOnce(&Path),
 ) -> Result<()> {
     let prompt_cache_path = prompt.map(|p| save(repo_root, p)).transpose()?;
 
     let result = f();
 
     if result.is_ok() {
-        delete(repo_root);
+        if let Some(path) = prompt_cache_path.as_deref() {
+            delete(path);
+        }
     } else if let Some(path) = prompt_cache_path {
         eprintln!("Prompt saved to: {}", path.display());
     }
@@ -1374,7 +1407,7 @@ mod tests {
                 saved.set(true);
                 Ok(PathBuf::from(format!("/cache/{prompt}")))
             },
-            |_repo| deleted.set(true),
+            |_path| deleted.set(true),
         );
 
         assert_eq!(
