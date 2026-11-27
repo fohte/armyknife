@@ -1,10 +1,11 @@
 import '#components/mobile-layout.css'
 
-import { act, type ComponentProps } from 'react'
+import { act, type ComponentProps, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 import { InboxView } from '#components/inbox-view'
+import { type InboxSort, readInboxSort, writeInboxSort } from '#inbox-sort'
 import type { Session } from '#types'
 
 let container: HTMLDivElement
@@ -93,35 +94,92 @@ const sessions: Session[] = [
   },
 ]
 
+function InboxHarness({
+  props,
+}: {
+  props: Partial<ComponentProps<typeof InboxView>>
+}) {
+  const [sortState, setSortState] = useState(() => readInboxSort())
+  const [showAllWaiting, setShowAllWaiting] = useState(
+    props.showAllWaiting ?? false,
+  )
+  const [waitingExpanded, setWaitingExpanded] = useState(
+    props.waitingExpanded ?? true,
+  )
+  const handleSortChange = (sort: InboxSort) => {
+    const storageAvailable = writeInboxSort(undefined, sort)
+    setSortState({ sort, storageAvailable })
+    props.onSortChange?.(sort)
+  }
+
+  return (
+    <InboxView
+      sessions={sessions}
+      selectedId={null}
+      loaded
+      error={null}
+      connectionError={null}
+      lastUpdatedAt={new Date(2026, 0, 1, 22, 0).getTime()}
+      showAllInProgress
+      onShowMore={() => undefined}
+      onSelect={() => undefined}
+      laterExpanded
+      onToggleLater={() => undefined}
+      onToggleToday={() => undefined}
+      todaySessions={[]}
+      onSelectToday={() => undefined}
+      isMobile={false}
+      inProgressExpanded
+      onToggleInProgress={() => undefined}
+      doneExpanded
+      onToggleDone={() => undefined}
+      onCloseDone={() => undefined}
+      {...props}
+      showAllWaiting={showAllWaiting}
+      onShowMoreWaiting={() => {
+        setShowAllWaiting(true)
+      }}
+      waitingExpanded={waitingExpanded}
+      onToggleWaiting={() => {
+        setWaitingExpanded((expanded) => !expanded)
+      }}
+      sort={props.sort ?? sortState.sort}
+      sortStorageAvailable={
+        props.sortStorageAvailable ?? sortState.storageAvailable
+      }
+      onSortChange={handleSortChange}
+    />
+  )
+}
+
 function renderInbox(props: Partial<ComponentProps<typeof InboxView>> = {}) {
   root = createRoot(container)
   act(() => {
-    root?.render(
-      <InboxView
-        sessions={sessions}
-        selectedId={null}
-        loaded
-        error={null}
-        connectionError={null}
-        lastUpdatedAt={new Date(2026, 0, 1, 22, 0).getTime()}
-        showAllInProgress
-        onShowMore={() => undefined}
-        onSelect={() => undefined}
-        laterExpanded
-        onToggleLater={() => undefined}
-        onToggleToday={() => undefined}
-        todaySessions={[]}
-        onSelectToday={() => undefined}
-        isMobile={false}
-        inProgressExpanded
-        onToggleInProgress={() => undefined}
-        doneExpanded
-        onToggleDone={() => undefined}
-        onCloseDone={() => undefined}
-        {...props}
-      />,
-    )
+    root?.render(<InboxHarness props={props} />)
   })
+}
+
+function waitingSession(
+  id: string,
+  title = 'Wait for the integration check',
+): Session {
+  return {
+    id,
+    category: 'waiting',
+    isPaused: false,
+    kind: null,
+    title,
+    preview: null,
+    waitingReason: 'Waiting for CI to finish',
+    elapsedSeconds: 30,
+    unread: false,
+    task: null,
+    repo: 'sample-org/service',
+    project: 'web-app',
+    parent: null,
+    ancestorSessionIds: [],
+    pullRequest: null,
+  }
 }
 
 function sectionSnapshot() {
@@ -278,6 +336,7 @@ function checkboxSnapshot() {
 
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  localStorage.removeItem('agent-watch-web:inbox-sort')
   container = document.createElement('div')
   document.body.append(container)
 })
@@ -303,6 +362,290 @@ it('filters each inbox section and updates the visible counts', () => {
       'Document request limits',
     ],
     resultCount: '1 of 2',
+  })
+})
+
+it('shows waiting sessions in their own inbox section with the status note', () => {
+  renderInbox({ sessions: [waitingSession('sample-waiting')] })
+
+  const snapshot = () => ({
+    heading: container.querySelector('.waiting-section .section-heading')
+      ?.textContent,
+    title: container.querySelector('.waiting-section .session-title')
+      ?.textContent,
+    reason: container.querySelector('.waiting-section .session-preview')
+      ?.textContent,
+    statusLabel: container
+      .querySelector('.waiting-section .session-row-status')
+      ?.getAttribute('aria-label'),
+  })
+
+  expect(snapshot()).toEqual({
+    heading: 'Waiting1',
+    title: 'Wait for the integration check',
+    reason: 'Waiting for CI to finish',
+    statusLabel: 'Waiting',
+  })
+})
+
+it('sorts Waiting rows with the selected Inbox sort', () => {
+  renderInbox({
+    sessions: [
+      { ...waitingSession('waiting-zeta', 'Zeta waiting'), project: 'zeta' },
+      { ...waitingSession('waiting-beta', 'Beta waiting'), project: 'beta' },
+      { ...waitingSession('waiting-alpha', 'Alpha waiting'), project: 'alpha' },
+    ],
+    sort: 'project',
+    showAllWaiting: true,
+  })
+
+  expect(
+    Array.from(
+      container.querySelectorAll('.waiting-section .session-title'),
+      (title) => title.textContent,
+    ),
+  ).toEqual(['Alpha waiting', 'Beta waiting', 'Zeta waiting'])
+})
+
+it('shows the Waiting count and sessions in the iPhone inbox', () => {
+  renderInbox({
+    sessions: [waitingSession('sample-waiting-phone')],
+    isMobile: true,
+  })
+
+  const snapshot = () => ({
+    toggle: container.querySelector('.mobile-waiting-row')?.textContent,
+    expanded: container
+      .querySelector('.mobile-waiting-row')
+      ?.getAttribute('aria-expanded'),
+    title: container.querySelector('.waiting-section .session-title')
+      ?.textContent,
+    reason: container.querySelector('.waiting-section .session-preview')
+      ?.textContent,
+  })
+
+  expect(snapshot()).toEqual({
+    toggle: 'Waiting1⌄',
+    expanded: 'true',
+    title: 'Wait for the integration check',
+    reason: 'Waiting for CI to finish',
+  })
+})
+
+it('expands and collapses waiting sessions from the iPhone inbox control', () => {
+  renderInbox({
+    sessions: [
+      waitingSession('waiting-one', 'First waiting session'),
+      waitingSession('waiting-two', 'Second waiting session'),
+    ],
+    isMobile: true,
+  })
+
+  const snapshot = () => ({
+    expanded: container
+      .querySelector('.mobile-waiting-row')
+      ?.getAttribute('aria-expanded'),
+    visibleTitles: Array.from(
+      container.querySelectorAll('.waiting-section .session-title'),
+      (title) => title.textContent,
+    ),
+  })
+
+  const states = [snapshot()]
+
+  const toggle = container.querySelector<HTMLButtonElement>(
+    '.mobile-waiting-row',
+  )
+  if (toggle === null) throw new Error('Waiting toggle was not rendered')
+  act(() => {
+    toggle.click()
+  })
+
+  states.push(snapshot())
+
+  act(() => {
+    toggle.click()
+  })
+
+  states.push(snapshot())
+
+  expect(states).toEqual([
+    {
+      expanded: 'true',
+      visibleTitles: ['First waiting session', 'Second waiting session'],
+    },
+    { expanded: 'false', visibleTitles: [] },
+    {
+      expanded: 'true',
+      visibleTitles: ['First waiting session', 'Second waiting session'],
+    },
+  ])
+})
+
+it('shows more waiting sessions from the desktop show-more button', () => {
+  renderInbox({
+    sessions: [
+      waitingSession('waiting-one', 'First waiting session'),
+      waitingSession('waiting-two', 'Second waiting session'),
+      waitingSession('waiting-three', 'Third waiting session'),
+    ],
+  })
+
+  const snapshot = () => ({
+    visibleTitles: Array.from(
+      container.querySelectorAll('.waiting-section .session-title'),
+      (title) => title.textContent,
+    ),
+    showMore: container.querySelector('.show-more-button')?.textContent,
+  })
+
+  const states = [snapshot()]
+
+  const showMore =
+    container.querySelector<HTMLButtonElement>('.show-more-button')
+  if (showMore === null) throw new Error('Show more button was not rendered')
+  act(() => {
+    showMore.click()
+  })
+
+  states.push(snapshot())
+
+  expect(states).toEqual([
+    {
+      visibleTitles: ['First waiting session', 'Second waiting session'],
+      showMore: '1 more ▸',
+    },
+    {
+      visibleTitles: [
+        'First waiting session',
+        'Second waiting session',
+        'Third waiting session',
+      ],
+      showMore: undefined,
+    },
+  ])
+})
+
+it('keeps Inbox categories and groups their sessions by project when selected', () => {
+  renderInbox()
+
+  const trigger = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Sort Priority"]',
+  )
+  if (trigger === null) throw new Error('Expected sort trigger')
+  act(() => {
+    trigger.click()
+  })
+  const projectOption = Array.from(
+    container.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]'),
+  ).find((option) => option.textContent.includes('Project'))
+  if (projectOption === undefined) throw new Error('Expected Project option')
+  act(() => {
+    projectOption.click()
+  })
+
+  const projectSortSnapshot = () => ({
+    headings: Array.from(container.querySelectorAll('.section-heading')).map(
+      (heading) =>
+        Array.from(heading.children)
+          .filter((child) => !child.matches('button'))
+          .map((child) => child.textContent)
+          .join(''),
+    ),
+    projectHeadings: Array.from(
+      container.querySelectorAll('.inbox-project-heading'),
+      (heading) => heading.textContent,
+    ),
+    categorySessionCounts: [
+      container.querySelectorAll('.needs-action-section .session-row').length,
+      container.querySelectorAll('.in-progress-section .session-row').length,
+      container.querySelectorAll('.done-section .session-row').length,
+      container.querySelectorAll('.later-session-list .session-row').length,
+    ],
+    savedSort: localStorage.getItem('agent-watch-web:inbox-sort'),
+  })
+  expect(projectSortSnapshot()).toEqual({
+    headings: ['Needs action2', 'In progress1', 'Done1'],
+    projectHeadings: ['web-app', 'worker', 'web-app', 'web-app', 'web-app'],
+    categorySessionCounts: [2, 1, 1, 1],
+    savedSort: 'project',
+  })
+})
+
+it('saves and restores the selected sort from the iPhone sheet', () => {
+  renderInbox({ isMobile: true })
+
+  const initialTrigger = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Sort Priority"]',
+  )
+  if (initialTrigger === null) throw new Error('Expected sort trigger')
+  act(() => {
+    initialTrigger.click()
+  })
+
+  const updatedOption = Array.from(
+    container.querySelectorAll<HTMLButtonElement>(
+      '.inbox-sort-sheet [role="menuitemradio"]',
+    ),
+  ).find((option) => option.textContent.includes('Updated'))
+  if (updatedOption === undefined) throw new Error('Expected Updated option')
+  const openedDialog = container.querySelector(
+    '[role="dialog"][aria-label="Sort"]',
+  )
+  act(() => {
+    updatedOption.click()
+  })
+
+  const afterSelection = {
+    dialogOpen:
+      container.querySelector('[role="dialog"][aria-label="Sort"]') !== null,
+    triggerLabel: container
+      .querySelector<HTMLButtonElement>('[aria-label="Sort Updated"]')
+      ?.getAttribute('aria-label'),
+    savedSort: localStorage.getItem('agent-watch-web:inbox-sort'),
+  }
+
+  act(() => root?.unmount())
+  root = null
+  renderInbox({ isMobile: true })
+
+  const restoredTrigger = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Sort Updated"]',
+  )
+  if (restoredTrigger === null)
+    throw new Error('Expected restored sort trigger')
+  act(() => {
+    restoredTrigger.click()
+  })
+  const selectedOption = container.querySelector<HTMLButtonElement>(
+    '.inbox-sort-sheet [role="menuitemradio"][aria-checked="true"]',
+  )
+  if (selectedOption === null) throw new Error('Expected selected sort option')
+  const cancelButton =
+    container.querySelector<HTMLButtonElement>('.inbox-sort-cancel')
+  if (cancelButton === null) throw new Error('Expected Cancel button')
+  act(() => {
+    cancelButton.click()
+  })
+
+  const snapshot = () => ({
+    openedDialog: openedDialog !== null,
+    afterSelection,
+    restoredSort: restoredTrigger.getAttribute('aria-label'),
+    restoredSelectedOption: selectedOption.textContent.trim(),
+    closedByCancel:
+      container.querySelector('[role="dialog"][aria-label="Sort"]') === null,
+  })
+  expect(snapshot()).toEqual({
+    openedDialog: true,
+    afterSelection: {
+      dialogOpen: false,
+      triggerLabel: 'Sort Updated',
+      savedSort: 'updated',
+    },
+    restoredSort: 'Sort Updated',
+    restoredSelectedOption: 'UpdatedNewest first',
+    closedByCancel: true,
   })
 })
 
@@ -551,7 +894,7 @@ it('keeps a connected status when saved view storage fails', () => {
   })
 })
 
-it('shows the combined review count in the collapsed iPhone Done row', () => {
+it('shows the session count and chevron in the collapsed iPhone Done row', () => {
   const secondDoneSession: Session = {
     id: 'sample-done-secondary',
     category: 'done',
@@ -568,41 +911,29 @@ it('shows the combined review count in the collapsed iPhone Done row', () => {
     parent: null,
     ancestorSessionIds: [],
     pullRequest: null,
-    unreviewedDecisionCount: 1,
   }
   renderInbox({
     isMobile: true,
     doneExpanded: false,
-    sessions: [
-      ...sessions.map((session) =>
-        session.id === 'sample-done'
-          ? { ...session, unreviewedDecisionCount: 1 }
-          : session,
-      ),
-      secondDoneSession,
-    ],
+    sessions: [...sessions, secondDoneSession],
   })
 
   expect(doneRowSnapshot()).toEqual({
-    text: 'Done2◇ 2 to review›',
+    text: 'Done2›',
     expanded: 'false',
     chevronHidden: 'true',
   })
 })
 
-it('shows the downward chevron for expanded iPhone Done rows with pending reviews', () => {
+it('shows the downward chevron for expanded iPhone Done rows', () => {
   renderInbox({
     isMobile: true,
     doneExpanded: true,
-    sessions: sessions.map((session) =>
-      session.id === 'sample-done'
-        ? { ...session, unreviewedDecisionCount: 1 }
-        : session,
-    ),
+    sessions,
   })
 
   expect(doneRowSnapshot()).toEqual({
-    text: 'Done1◇ 1 to review⌄',
+    text: 'Done1⌄',
     expanded: 'true',
     chevronHidden: 'true',
   })

@@ -77,7 +77,6 @@ fn chat_item_timestamp(message: &ChatItem) -> Option<DateTime<FixedOffset>> {
         | ChatItem::Peer { timestamp, .. }
         | ChatItem::Event { timestamp, .. }
         | ChatItem::FileAttachment { timestamp, .. } => timestamp.as_deref(),
-        ChatItem::Decision { created_at, .. } => Some(created_at.as_str()),
         _ => None,
     }?;
     DateTime::parse_from_rfc3339(timestamp).ok()

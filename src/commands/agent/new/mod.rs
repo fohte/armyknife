@@ -25,7 +25,7 @@ mod worktree_creation;
 use child_launch_guard::ensure_caller_may_launch_children;
 use launch_inputs::build_env_vars;
 use launch_options::{resolve_launch_options, validate_type_selection};
-use prompt::{delete_prompt_cache, resolve_args, save_prompt_cache};
+use prompt::{ResolvedArgs, delete_prompt_cache, resolve_args, save_prompt_cache};
 use session_context::resolve_prompt;
 use session_mode::{caller_repo_root, should_open_window};
 use session_start_hook::run_pre_session_start_hook;
@@ -136,6 +136,10 @@ pub struct NewArgs {
     #[arg(long)]
     pub vibe: bool,
 
+    /// Keeps prompt recovery independent of files removed after a failed watch-web launch.
+    #[arg(skip)]
+    pub(crate) watch_web_prompt_cache: Option<Option<String>>,
+
     #[command(flatten)]
     pub common: CommonNewArgs,
 
@@ -234,13 +238,55 @@ fn run_worktree_mode(
     repo_root: &str,
     config: &Config,
 ) -> Result<()> {
-    let resolved = resolve_args(worktree_value, args.common.prompt.as_deref())?;
-    let name = resolved.branch_name;
-    let prompt = resolved.prompt;
+    run_worktree_mode_with_deps(
+        args,
+        worktree_value,
+        repo_root,
+        resolve_args,
+        save_prompt_cache,
+        delete_prompt_cache,
+        |args, name, prompt, repo_root| {
+            run_worktree_creation(args, name, prompt, repo_root, config)
+        },
+    )
+}
 
-    with_prompt_cache_recovery(repo_root, prompt.as_deref(), || {
-        run_worktree_creation(args, &name, prompt.as_deref(), repo_root, config)
-    })
+fn run_worktree_mode_with_deps(
+    args: &NewArgs,
+    worktree_value: Option<&str>,
+    repo_root: &str,
+    resolve: impl FnOnce(Option<&str>, Option<&str>) -> Result<ResolvedArgs>,
+    save: impl FnOnce(&str, &str) -> Result<PathBuf>,
+    delete: impl FnOnce(&Path),
+    launch: impl FnOnce(&NewArgs, &str, Option<&str>, &str) -> Result<()>,
+) -> Result<()> {
+    let resolved = resolve(worktree_value, args.common.prompt.as_deref())?;
+    let prompt_for_cache = prompt_cache_source(
+        args.watch_web_prompt_cache.as_ref().map(Option::as_deref),
+        resolved.prompt.as_deref(),
+    );
+
+    with_prompt_cache_recovery_with_deps(
+        repo_root,
+        prompt_for_cache,
+        || {
+            launch(
+                args,
+                &resolved.branch_name,
+                resolved.prompt.as_deref(),
+                repo_root,
+            )
+        },
+        save,
+        delete,
+    )
+}
+
+fn prompt_cache_source<'a>(
+    prompt_override: Option<Option<&'a str>>,
+    resolved_prompt: Option<&'a str>,
+) -> Option<&'a str> {
+    prompt_override.unwrap_or(resolved_prompt)
 }
 
 /// Save `prompt` to the cache before running `f`, then clean it up on
@@ -268,14 +314,16 @@ fn with_prompt_cache_recovery_with_deps(
     prompt: Option<&str>,
     f: impl FnOnce() -> Result<()>,
     save: impl FnOnce(&str, &str) -> Result<PathBuf>,
-    delete: impl FnOnce(&str),
+    delete: impl FnOnce(&Path),
 ) -> Result<()> {
     let prompt_cache_path = prompt.map(|p| save(repo_root, p)).transpose()?;
 
     let result = f();
 
     if result.is_ok() {
-        delete(repo_root);
+        if let Some(path) = prompt_cache_path.as_deref() {
+            delete(path);
+        }
     } else if let Some(path) = prompt_cache_path {
         eprintln!("Prompt saved to: {}", path.display());
     }
@@ -320,9 +368,12 @@ fn run_session_only(
     repo_root: &str,
     config: &Config,
 ) -> Result<()> {
-    let raw_prompt = args.common.prompt.as_deref();
+    let prompt_for_cache = prompt_cache_source(
+        args.watch_web_prompt_cache.as_ref().map(Option::as_deref),
+        args.common.prompt.as_deref(),
+    );
 
-    with_prompt_cache_recovery(repo_root, raw_prompt, || {
+    with_prompt_cache_recovery(repo_root, prompt_for_cache, || {
         run_session_only_inner(args, repo, repo_root, config)
     })
 }
@@ -556,6 +607,25 @@ mod tests {
         let cli = TestCli::try_parse_from(argv).unwrap();
         let actual = cli.args.worktree.as_ref().map(|inner| inner.as_deref());
         assert_eq!(actual, expected);
+    }
+
+    #[rstest]
+    #[case::editor_prompt(None, Some("editor draft"), Some("editor draft"))]
+    #[case::explicit_prompt(
+        Some(Some("user prompt")),
+        Some("prompt with paths"),
+        Some("user prompt")
+    )]
+    #[case::no_prompt_override(Some(None), Some("prompt with paths"), None)]
+    fn prompt_cache_source_prefers_override_and_falls_back_to_resolved_prompt(
+        #[case] prompt_override: Option<Option<&str>>,
+        #[case] resolved_prompt: Option<&str>,
+        #[case] expected: Option<&str>,
+    ) {
+        assert_eq!(
+            prompt_cache_source(prompt_override, resolved_prompt),
+            expected
+        );
     }
 
     #[test]
@@ -1310,13 +1380,14 @@ mod tests {
     }
 
     #[rstest]
-    #[case::success_deletes_cache(true, true, true)]
-    #[case::failure_keeps_cache(false, true, true)]
-    #[case::no_prompt_skips_save(true, false, false)]
+    #[case::success_deletes_cache(true, true, true, true)]
+    #[case::failure_keeps_cache(false, true, true, false)]
+    #[case::no_prompt_skips_save(true, false, false, false)]
     fn with_prompt_cache_recovery_saves_and_cleans_up(
         #[case] succeed: bool,
         #[case] has_prompt: bool,
         #[case] expect_save: bool,
+        #[case] expect_delete: bool,
     ) {
         use std::cell::Cell;
 
@@ -1337,12 +1408,12 @@ mod tests {
                 saved.set(true);
                 Ok(PathBuf::from(format!("/cache/{prompt}")))
             },
-            |_repo| deleted.set(true),
+            |_path| deleted.set(true),
         );
 
         assert_eq!(
             (result.is_ok(), saved.get(), deleted.get()),
-            (succeed, expect_save, succeed),
+            (succeed, expect_save, expect_delete),
         );
     }
 

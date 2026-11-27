@@ -11,6 +11,7 @@ function areConversationMessagePropsEqual(
 ): boolean {
   if (
     previous.message !== next.message ||
+    previous.imageSources !== next.imageSources ||
     previous.isMobile !== next.isMobile ||
     previous.now !== next.now
   ) {
@@ -49,13 +50,6 @@ function areConversationMessagePropsEqual(
         previous.onOpenInTerminal === next.onOpenInTerminal &&
         previous.openInTerminalStatus === next.openInTerminalStatus &&
         previous.sessionEngine === next.sessionEngine
-      )
-    case 'decision':
-      return (
-        previous.selected === next.selected &&
-        previous.decisionPosition === next.decisionPosition &&
-        previous.onSelectDecision === next.onSelectDecision &&
-        previous.onAction === next.onAction
       )
     case 'proposal':
       return previous.onAction === next.onAction

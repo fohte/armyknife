@@ -324,7 +324,7 @@ it('uses the shared compact row without a starred marker', () => {
           ?.getAttribute('aria-label'),
         engine: row.querySelector('.session-engine')?.textContent,
         task: row.querySelector('.session-task')?.textContent,
-        repo: row.querySelector('.session-repo')?.textContent,
+        repo: row.querySelector('.session-repo-label')?.textContent,
       }),
     ),
     starMarkers: container.querySelectorAll('.today-star').length,
@@ -342,6 +342,36 @@ it('uses the shared compact row without a starred marker', () => {
       },
     ],
     starMarkers: 0,
+  })
+})
+
+it('shows the Waiting status for a starred session in navigation', () => {
+  renderNav([], {
+    todaySessions: [
+      {
+        ...baseTodaySession,
+        id: 'waiting-session',
+        category: 'waiting',
+        kind: null,
+        waitingReason: 'Waiting for the checks to finish',
+      },
+    ],
+  })
+
+  const row = container.querySelector('.today-nav .session-row-content')
+  const status = row?.querySelector('.session-row-status')
+  const snapshot = () => ({
+    title: row?.querySelector('.session-title')?.textContent,
+    status: status?.getAttribute('aria-label'),
+    icon: status?.querySelector('svg')?.classList.contains('lucide-hourglass'),
+    reason: row?.querySelector('.session-preview')?.textContent ?? null,
+  })
+
+  expect(snapshot()).toEqual({
+    title: 'Review the retry policy',
+    status: 'Waiting',
+    icon: true,
+    reason: null,
   })
 })
 

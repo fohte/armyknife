@@ -44,6 +44,20 @@ const session: Session = {
   pullRequest: null,
 }
 
+const longNameSession: Session = {
+  ...session,
+  title: 'Review the delivery retry proposal',
+  task: {
+    id: 'sample-task',
+    number: 2048,
+    title: 'Review retries',
+    priority: 1,
+    isClosed: false,
+  },
+  repo: 'sample-contributor-automation-team/notification-delivery-service',
+  branch: 'feature/retain-session-details-on-narrow-rows',
+}
+
 const meta = {
   component: SessionRow,
   args: {
@@ -119,6 +133,60 @@ export const CompactSessionRow: Story = {
 export const CompactPhoneSessionRow: Story = {
   name: 'A phone compact row keeps the task and repository on separate lines',
   args: { density: 'compact-phone' },
+}
+
+export const LongRepositoryAndBranchNames: Story = {
+  name: 'Long repository and branch names shorten while task details remain',
+  decorators: [
+    (Story) => (
+      <div style={{ width: 240 }}>
+        <Story />
+      </div>
+    ),
+  ],
+  args: {
+    density: 'compact',
+    session: longNameSession,
+  },
+}
+
+export const LongNamesInFullRow: Story = {
+  name: 'A full inbox row keeps its task beside a shortened repository',
+  args: {
+    density: 'full',
+    session: longNameSession,
+  },
+}
+
+export const LongNamesInPhoneInboxRow: Story = {
+  name: 'An iPhone inbox row keeps its task beside a shortened repository',
+  decorators: [
+    (Story) => (
+      <div className="story-mobile-layout" style={{ width: 390 }}>
+        <Story />
+      </div>
+    ),
+  ],
+  args: {
+    density: 'full',
+    isMobile: true,
+    session: longNameSession,
+  },
+}
+
+export const LongNamesInCompactPhoneRow: Story = {
+  name: 'A compact phone row shortens long repository and branch names',
+  decorators: [
+    (Story) => (
+      <div style={{ width: 390 }}>
+        <Story />
+      </div>
+    ),
+  ],
+  args: {
+    density: 'compact-phone',
+    session: longNameSession,
+  },
 }
 
 export const VibeEnabledSession: Story = {
@@ -255,6 +323,21 @@ export const WorkIsInProgress: Story = {
   },
 }
 
+export const WorkIsWaitingForExternalWork: Story = {
+  name: 'A Board compact waiting row shows why it is paused',
+  args: {
+    density: 'compact',
+    showWaitingReason: true,
+    session: {
+      ...session,
+      category: 'waiting',
+      kind: null,
+      waitingReason: 'Waiting for the checks to finish',
+      unread: false,
+    },
+  },
+}
+
 export const WorkIsDone: Story = {
   name: 'A completed session shows its merged pull request',
   args: {
@@ -265,48 +348,6 @@ export const WorkIsDone: Story = {
       unread: false,
       pullRequest: { number: 2049, state: 'Merged' },
       elapsedSeconds: 3600,
-    },
-  },
-}
-
-export const WorkIsDoneWithDecisionsToReview: Story = {
-  name: 'A completed session shows decisions that still need review',
-  args: {
-    session: {
-      ...session,
-      category: 'done',
-      kind: null,
-      unread: false,
-      decisionCount: 3,
-      unreviewedDecisionCount: 2,
-    },
-  },
-}
-
-export const WorkIsDoneWithOneDecisionToReview: Story = {
-  name: 'A completed session shows one decision that needs review',
-  args: {
-    session: {
-      ...session,
-      category: 'done',
-      kind: null,
-      unread: false,
-      decisionCount: 1,
-      unreviewedDecisionCount: 1,
-    },
-  },
-}
-
-export const WorkShowsDecisionCount: Story = {
-  name: 'An active session shows its decision count',
-  args: {
-    session: {
-      ...session,
-      category: 'in_progress',
-      kind: null,
-      unread: false,
-      decisionCount: 1,
-      unreviewedDecisionCount: 1,
     },
   },
 }

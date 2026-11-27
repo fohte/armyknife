@@ -140,17 +140,6 @@ export function applyConversationOperation(
         }
       })
       break
-    case 'decision_ok':
-    case 'decision_change':
-      messages = updateChatItems(messages, (message) =>
-        message.type === 'decision' && message.seq === operation.seq
-          ? {
-              ...message,
-              review: operation.type === 'decision_ok' ? 'ok' : 'change',
-            }
-          : message,
-      )
-      break
     case 'proposal_answer':
       messages = updateChatItems(messages, (message) =>
         message.type === 'proposal' && message.seq === operation.seq
@@ -198,15 +187,10 @@ export function applyConversationOperation(
     default:
       break
   }
-  const decisions = messages.filter(
-    (message): message is Extract<ChatItem, { type: 'decision' }> =>
-      message.type === 'decision',
-  )
   return {
     ...conversation,
     messages,
     total,
-    decisions,
     hasUnansweredProposal: messages.some(
       (message) =>
         message.type === 'proposal' &&
@@ -229,14 +213,20 @@ export function isConversationOperationConfirmed(
 ) {
   switch (operation.type) {
     case 'message':
-      return conversation.messages.some((message, index) =>
-        isServerMessageForOperation(
-          message,
-          index,
-          conversation,
-          operation,
-          operation.messageCountBefore,
-        ),
+      return (
+        (operation.queuedPromptId !== undefined &&
+          conversation.confirmedQueuedPromptIds?.includes(
+            operation.queuedPromptId,
+          ) === true) ||
+        conversation.messages.some((message, index) =>
+          isServerMessageForOperation(
+            message,
+            index,
+            conversation,
+            operation,
+            operation.messageCountBefore,
+          ),
+        )
       )
     case 'answer': {
       const question = conversation.messages.find(
@@ -253,20 +243,6 @@ export function isConversationOperationConfirmed(
           ))
       )
     }
-    case 'decision_ok':
-      return conversation.messages.some(
-        (message) =>
-          message.type === 'decision' &&
-          message.seq === operation.seq &&
-          message.review === 'ok',
-      )
-    case 'decision_change':
-      return conversation.messages.some(
-        (message) =>
-          message.type === 'decision' &&
-          message.seq === operation.seq &&
-          message.review === 'change',
-      )
     case 'proposal_answer':
       return conversation.messages.some(
         (message) =>
@@ -409,8 +385,6 @@ export function requiresStateConfirmation(operation: SessionOperation) {
     isSessionListOperation(operation) ||
     operation.type === 'message' ||
     operation.type === 'answer' ||
-    operation.type === 'decision_ok' ||
-    operation.type === 'decision_change' ||
     operation.type === 'proposal_answer' ||
     operation.type === 'todo_resolve' ||
     operation.type === 'todo_fold' ||

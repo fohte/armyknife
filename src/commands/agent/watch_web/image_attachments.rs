@@ -13,7 +13,9 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use std::sync::Arc;
 
-use super::super::file_attachment_support::{MAX_AGENT_FILE_BYTES, image_format_from_bytes};
+use super::super::file_attachment_support::{
+    MAX_AGENT_FILE_BYTES, image_format_from_bytes, read_bounded_image,
+};
 
 pub(super) const MAX_IMAGE_BYTES: usize = MAX_AGENT_FILE_BYTES as usize;
 pub(super) const MAX_IMAGES_PER_MESSAGE: usize = 16;
@@ -119,24 +121,10 @@ fn read_image(directory: &Path, filename: &str) -> anyhow::Result<Option<(&'stat
     {
         return Ok(None);
     }
-    let mut options = OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW);
-    }
-    let file = options.open(path)?;
-    let mut bytes = Vec::with_capacity(metadata.len() as usize);
-    file.take(MAX_SAVED_IMAGE_BYTES as u64 + 1)
-        .read_to_end(&mut bytes)?;
-    if bytes.len() > MAX_SAVED_IMAGE_BYTES {
-        return Ok(None);
-    }
-    let Some((mime_type, _)) = image_format_from_bytes(&bytes) else {
+    let Some(image) = read_bounded_image(&path, MAX_SAVED_IMAGE_BYTES as u64)? else {
         return Ok(None);
     };
-    Ok(Some((mime_type, bytes)))
+    Ok(Some((image.mime_type, image.bytes)))
 }
 
 fn image_file_is_safe(directory: &Path, filename: &str) -> bool {

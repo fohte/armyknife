@@ -1,5 +1,6 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
@@ -13,11 +14,13 @@ use axum::http::StatusCode;
 use axum::http::header::CONTENT_TYPE;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
+use futures_util::Stream;
 use serde::{Deserialize, Serialize};
+use tokio::sync::watch;
 
 use crate::commands::agent::store::{
-    AgentDecision, AgentFile, AgentProposal, AgentTodo, PermissionDeniedOperation,
-    PermissionRequestData, WatchWebPeerOutMessage, WatchWebQueuedPrompt,
+    AgentFile, AgentProposal, AgentTodo, PermissionDeniedOperation, PermissionRequestData,
+    WatchWebPeerOutMessage, WatchWebQueuedPrompt,
 };
 use crate::commands::agent::types::{Engine, Session};
 
@@ -33,7 +36,6 @@ pub(super) type SessionLoader = Arc<dyn Fn(&str) -> Result<Option<Session>> + Se
 pub(super) type SessionListLoader = Arc<dyn Fn() -> Result<Vec<Session>> + Send + Sync>;
 pub(super) type UserMarkerLoader = Arc<dyn Fn(&str) -> Result<Option<String>> + Send + Sync>;
 pub(super) type MessagesRouteState = (SessionLoader, UserMarkerLoader, RouteLoaders);
-pub(super) type DecisionLoader = Arc<dyn Fn(&str) -> Result<Vec<AgentDecision>> + Send + Sync>;
 pub(super) type QueuedPromptLoader =
     Arc<dyn Fn(&str) -> Result<Vec<WatchWebQueuedPrompt>> + Send + Sync>;
 pub(super) type PeerOutMessageLoader =
@@ -49,6 +51,10 @@ pub(super) type AgentFileLoader = Arc<dyn Fn(&str) -> Result<Vec<AgentFile>> + S
 pub(super) type AgentFileStorageRootLoader = Arc<dyn Fn() -> Option<PathBuf> + Send + Sync>;
 pub(super) type BackgroundTaskLoader =
     Arc<dyn Fn(&str) -> Result<Vec<BackgroundTask>> + Send + Sync>;
+pub(in crate::commands::agent::watch_web) type BackgroundTaskOutputEventStream =
+    Pin<Box<dyn Stream<Item = notify::Result<notify::Event>> + Send>>;
+type BackgroundTaskOutputEventStreamFactory =
+    Arc<dyn Fn(PathBuf) -> Result<BackgroundTaskOutputEventStream> + Send + Sync>;
 type RepoIdentityLoader = Arc<dyn Fn(&Path) -> Option<(String, String)> + Send + Sync>;
 type VibeConfigLoader = Arc<dyn Fn() -> crate::shared::config::Config + Send + Sync>;
 type SkillListingCache = Arc<Mutex<HashMap<String, CachedSkillListing>>>;
@@ -69,9 +75,22 @@ struct SkillSuggestionsResponse {
     skills: Vec<SkillSuggestion>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MessagesQuery {
+    limit: Option<usize>,
+    before: Option<usize>,
+    from: Option<usize>,
+    stable_start: Option<usize>,
+    stable_end: Option<usize>,
+    stable_digest: Option<String>,
+    epoch: Option<String>,
+    older_cursor: Option<String>,
+    pending_prompt_ids: Option<String>,
+}
+
 #[derive(Clone)]
 pub(in crate::commands::agent::watch_web) struct RouteLoaders {
-    pub(super) decisions: DecisionLoader,
     pub(super) queued_prompts: QueuedPromptLoader,
     pub(super) peer_out_messages: PeerOutMessageLoader,
     pub(super) mark_queued_prompts_resolved: QueuedPromptUpdater,
@@ -82,6 +101,8 @@ pub(in crate::commands::agent::watch_web) struct RouteLoaders {
     pub(super) agent_files: AgentFileLoader,
     pub(super) agent_file_storage_root: AgentFileStorageRootLoader,
     pub(super) background_tasks: BackgroundTaskLoader,
+    pub(super) background_task_output_event_stream: BackgroundTaskOutputEventStreamFactory,
+    pub(super) shutdown_signal: Option<watch::Receiver<bool>>,
     session_list: SessionListLoader,
     skill_listing_cache: SkillListingCache,
     vibe_config: Option<VibeConfigLoader>,
@@ -92,7 +113,6 @@ pub(in crate::commands::agent::watch_web) struct RouteLoaders {
 
 impl RouteLoaders {
     pub(in crate::commands::agent::watch_web) fn new(
-        load_decisions: impl Fn(&str) -> Result<Vec<AgentDecision>> + Send + Sync + 'static,
         load_queued_prompts: impl Fn(&str) -> Result<Vec<WatchWebQueuedPrompt>> + Send + Sync + 'static,
         load_peer_out_messages: impl Fn(&str) -> Result<Vec<WatchWebPeerOutMessage>>
         + Send
@@ -101,8 +121,33 @@ impl RouteLoaders {
         mark_queued_prompts_resolved: impl Fn(&str, &[i64]) -> Result<()> + Send + Sync + 'static,
         load_proposals: impl Fn(&str) -> Result<Vec<AgentProposal>> + Send + Sync + 'static,
     ) -> Self {
+        Self::new_with_background_task_output_event_stream(
+            load_queued_prompts,
+            load_peer_out_messages,
+            mark_queued_prompts_resolved,
+            load_proposals,
+            |path| {
+                Ok(Box::pin(background_task_outputs::watch_output_events(
+                    path,
+                )?))
+            },
+        )
+    }
+
+    pub(in crate::commands::agent::watch_web) fn new_with_background_task_output_event_stream(
+        load_queued_prompts: impl Fn(&str) -> Result<Vec<WatchWebQueuedPrompt>> + Send + Sync + 'static,
+        load_peer_out_messages: impl Fn(&str) -> Result<Vec<WatchWebPeerOutMessage>>
+        + Send
+        + Sync
+        + 'static,
+        mark_queued_prompts_resolved: impl Fn(&str, &[i64]) -> Result<()> + Send + Sync + 'static,
+        load_proposals: impl Fn(&str) -> Result<Vec<AgentProposal>> + Send + Sync + 'static,
+        create_event_stream: impl Fn(PathBuf) -> Result<BackgroundTaskOutputEventStream>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
         Self {
-            decisions: Arc::new(load_decisions),
             queued_prompts: Arc::new(load_queued_prompts),
             peer_out_messages: Arc::new(load_peer_out_messages),
             mark_queued_prompts_resolved: Arc::new(mark_queued_prompts_resolved),
@@ -113,6 +158,8 @@ impl RouteLoaders {
             agent_files: Arc::new(|_| Ok(Vec::new())),
             agent_file_storage_root: Arc::new(|| None),
             background_tasks: Arc::new(|_| Ok(Vec::new())),
+            background_task_output_event_stream: Arc::new(create_event_stream),
+            shutdown_signal: None,
             session_list: Arc::new(|| Ok(Vec::new())),
             skill_listing_cache: Arc::new(Mutex::new(HashMap::new())),
             vibe_config: None,
@@ -120,6 +167,14 @@ impl RouteLoaders {
             message_cache: MessageCache::default(),
             question_preview_cache: question_preview::QuestionPreviewCache::default(),
         }
+    }
+
+    pub(in crate::commands::agent::watch_web) fn with_shutdown_signal(
+        mut self,
+        shutdown_signal: watch::Receiver<bool>,
+    ) -> Self {
+        self.shutdown_signal = Some(shutdown_signal);
+        self
     }
 
     pub(in crate::commands::agent::watch_web) fn with_todo_loader(
@@ -251,8 +306,8 @@ pub(in crate::commands::agent::watch_web) fn routes_with_proposals_and_peer_out_
     let load_session = Arc::new(load_session) as SessionLoader;
     Router::new()
         .route(
-            "/sessions/{id}/background-tasks/{task_id}/output",
-            get(background_task_outputs::get_background_task_output),
+            "/sessions/{id}/background-tasks/{task_id}/output/events",
+            get(background_task_outputs::get_background_task_output_events),
         )
         .route("/sessions/{id}/messages", get(get_messages))
         .route("/skill-suggestions", get(get_skill_suggestions))
@@ -292,10 +347,34 @@ async fn get_skill_suggestions(
 async fn get_messages(
     State((load_session, load_user_marker, loaders)): State<MessagesRouteState>,
     AxumPath(session_id): AxumPath<String>,
-    Query(range): Query<MessageRange>,
+    Query(query): Query<MessagesQuery>,
 ) -> Response {
+    let range = MessageRange {
+        limit: query.limit,
+        before: query.before,
+        from: query.from,
+        stable_start: query.stable_start,
+        stable_end: query.stable_end,
+        stable_digest: query.stable_digest,
+        epoch: query.epoch,
+        older_cursor: query.older_cursor,
+    };
     if !range.is_valid() {
         return StatusCode::BAD_REQUEST.into_response();
+    }
+    let mut pending_prompt_ids = Vec::new();
+    let mut seen_prompt_ids = HashSet::new();
+    for message_id in query
+        .pending_prompt_ids
+        .as_deref()
+        .into_iter()
+        .flat_map(|ids| ids.split(','))
+        .filter(|id| !id.is_empty())
+    {
+        let message_id = message_id.to_owned();
+        if seen_prompt_ids.insert(message_id.clone()) {
+            pending_prompt_ids.push(message_id);
+        }
     }
     let tail_window_limit = range.initial_tail_window_limit();
     let requested_epoch = range.requested_epoch().map(str::to_owned);
@@ -368,7 +447,30 @@ async fn get_messages(
                 require_full_history,
             ),
         }?;
-        Ok(conversation.map(|conversation| (conversation, vibe_mode)))
+        let Some(mut conversation) = conversation else {
+            return Ok(None);
+        };
+        if pending_prompt_ids.is_empty() {
+            conversation.confirmed_queued_prompt_ids.clear();
+        } else {
+            let parser_confirmed_ids = conversation
+                .confirmed_queued_prompt_ids
+                .iter()
+                .map(String::as_str)
+                .collect::<HashSet<_>>();
+            let queued_prompts = (loaders.queued_prompts)(&session_id)?;
+            conversation.confirmed_queued_prompt_ids = pending_prompt_ids
+                .into_iter()
+                .filter(|message_id| {
+                    parser_confirmed_ids.contains(message_id.as_str())
+                        || queued_prompts.iter().any(|prompt| {
+                            prompt.resolved
+                                && prompt.message_id.as_deref() == Some(message_id.as_str())
+                        })
+                })
+                .collect();
+        }
+        Ok(Some((conversation, vibe_mode)))
     })
     .await
     {

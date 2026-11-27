@@ -179,6 +179,8 @@ it('shows desktop and mobile interrupt progress while the request is pending', (
   renderFreshComposer({ canInterrupt: true, isInterrupting: true, onInterrupt })
   const desktop = {
     hint: container.querySelector('[role="status"]')?.textContent,
+    keyHint: container.querySelector('.composer-key-hint')?.textContent,
+    keyHint2: container.querySelector('.composer-key-hint2')?.textContent,
     buttonCount: container.querySelectorAll('.mobile-interrupt-button').length,
   }
 
@@ -204,7 +206,12 @@ it('shows desktop and mobile interrupt progress while the request is pending', (
     repeatCalls: onInterrupt.mock.calls,
   })
   expect(snapshot()).toEqual({
-    desktop: { hint: 'Interrupting…', buttonCount: 0 },
+    desktop: {
+      hint: 'Interrupting…',
+      keyHint: '↵ Send · ⇧↵ / ⌥↵ New line',
+      keyHint2: '⌥↑ / ⌥↓ My messages',
+      buttonCount: 0,
+    },
     mobile: { label: 'Interrupting…', busy: 'true', disabled: true },
     repeatCalls: [],
   })
@@ -307,6 +314,71 @@ it('passes pasted files to the attachment handler and prevents text insertion', 
   })
 })
 
+it('opens a multi-file picker and sends selected files to the attachment handler', () => {
+  const onPasteFiles = vi.fn()
+  renderFreshComposer({ onPasteFiles })
+  const fileInput = requireElement(
+    container.querySelector<HTMLInputElement>('input[type="file"]'),
+  )
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  const pickerClick = vi.spyOn(fileInput, 'click').mockImplementation(() => {})
+  const files = [
+    new File(['first image'], 'first.png', { type: 'image/png' }),
+    new File(['second image'], 'second.png', { type: 'image/png' }),
+  ]
+  Object.defineProperty(fileInput, 'files', {
+    configurable: true,
+    value: files,
+  })
+  let inputValue = ''
+  Object.defineProperty(fileInput, 'value', {
+    configurable: true,
+    get: () => inputValue,
+    set: (value: string) => {
+      inputValue = value
+    },
+  })
+  let firstResetValue = 'unset'
+  let firstSelectionFocused = false
+
+  act(() => {
+    requireElement(
+      container.querySelector<HTMLButtonElement>(
+        '[aria-label="Add attachment"]',
+      ),
+    ).click()
+    inputValue = 'C:\\fakepath\\first.png'
+    fileInput.dispatchEvent(new Event('change', { bubbles: true }))
+    firstResetValue = fileInput.value
+    firstSelectionFocused = document.activeElement === textarea
+    inputValue = 'C:\\fakepath\\first.png'
+    fileInput.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+
+  const snapshot = () => ({
+    pickerClicks: pickerClick.mock.calls,
+    multiple: fileInput.multiple,
+    hidden: fileInput.hidden,
+    firstSelectionFocused,
+    focusAfterSelection: document.activeElement === textarea,
+    selectedFiles: onPasteFiles.mock.calls,
+    firstResetValue,
+    inputValue: fileInput.value,
+  })
+  expect(snapshot()).toEqual({
+    pickerClicks: [[]],
+    multiple: true,
+    hidden: true,
+    firstSelectionFocused: true,
+    focusAfterSelection: true,
+    selectedFiles: [[files], [files]],
+    firstResetValue: '',
+    inputValue: '',
+  })
+})
+
 it('removes an attachment when its remove button is clicked', () => {
   const onRemoveAttachment = vi.fn()
   act(() => {
@@ -377,9 +449,8 @@ it('shows the size of a non-image attachment', () => {
   })
 
   const snapshot = () => ({
-    name: container.querySelector('.attachment-preview-item span')?.textContent,
-    size: container.querySelector('.attachment-preview-item small')
-      ?.textContent,
+    name: container.querySelector('.composer-attachment-name')?.textContent,
+    size: container.querySelector('.composer-attachment-size')?.textContent,
   })
   expect(snapshot()).toEqual({
     name: 'design-mock.html',
@@ -417,7 +488,7 @@ it('shows the byte size of a small non-image attachment', () => {
   })
 
   const snapshot = () =>
-    container.querySelector('.attachment-preview-item small')?.textContent
+    container.querySelector('.composer-attachment-size')?.textContent
   expect(snapshot()).toEqual('512 B')
 })
 

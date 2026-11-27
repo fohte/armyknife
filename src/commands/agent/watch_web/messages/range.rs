@@ -10,17 +10,16 @@ pub(super) const INITIAL_EPOCH_MESSAGE_COUNT: usize = 100;
 const MAX_EPOCH_TOKEN_BYTES: usize = 4096;
 const EPOCH_CURSOR_VERSION: u8 = 3;
 
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Default)]
 pub(super) struct MessageRange {
-    limit: Option<usize>,
-    before: Option<usize>,
-    from: Option<usize>,
-    stable_start: Option<usize>,
-    stable_end: Option<usize>,
-    stable_digest: Option<String>,
-    epoch: Option<String>,
-    older_cursor: Option<String>,
+    pub(super) limit: Option<usize>,
+    pub(super) before: Option<usize>,
+    pub(super) from: Option<usize>,
+    pub(super) stable_start: Option<usize>,
+    pub(super) stable_end: Option<usize>,
+    pub(super) stable_digest: Option<String>,
+    pub(super) epoch: Option<String>,
+    pub(super) older_cursor: Option<String>,
 }
 
 impl MessageRange {
@@ -207,12 +206,6 @@ pub(super) fn epoch_token_is_decodable(epoch: &str) -> bool {
 impl ConversationResponse {
     pub(super) fn update_metadata(&mut self) {
         self.total = self.messages.len();
-        self.decisions = self
-            .messages
-            .iter()
-            .filter(|message| matches!(message, ChatItem::Decision { .. }))
-            .cloned()
-            .collect();
         self.has_unanswered_proposal = self.messages.iter().any(|message| {
             matches!(
                 message,
@@ -280,6 +273,8 @@ impl ConversationResponse {
     }
 
     fn set_initial_epoch_page(&mut self, page: Vec<ChatItem>, has_older: bool) {
+        let page_start = self.messages.len().saturating_sub(page.len());
+        self.rebase_image_sources(page_start, self.messages.len());
         let cursor = MessageEpochCursor::from_messages(&page).and_then(|cursor| cursor.encode());
         self.messages = page;
         self.start = 0;
@@ -294,12 +289,11 @@ impl ConversationResponse {
     }
 
     fn apply_epoch_range(&mut self, epoch_start: usize, range: MessageRange) {
-        let decisions = std::mem::take(&mut self.decisions);
+        self.rebase_image_sources(epoch_start, self.messages.len());
         let has_unanswered_proposal = self.has_unanswered_proposal;
         self.messages.drain(..epoch_start);
         self.total = self.messages.len();
         self.active_question_index = active_question_index(&self.messages);
-        self.decisions = decisions;
         self.has_unanswered_proposal = has_unanswered_proposal;
         self.epoch = range.epoch.clone();
         self.older_cursor = (epoch_start > 0 || self.tail_window_start.is_some())
@@ -317,6 +311,7 @@ impl ConversationResponse {
         }
 
         let epoch_messages = self.messages[page_start..].to_vec();
+        self.rebase_image_sources(page_start, epoch_start);
         let new_cursor =
             MessageEpochCursor::from_messages(&page).and_then(|cursor| cursor.encode());
         self.start = 0;
@@ -335,7 +330,7 @@ impl ConversationResponse {
 
     fn apply_empty_older_epoch_page_from_start(&mut self, epoch_start: usize, epoch: &str) {
         let epoch_messages = self.messages[epoch_start..].to_vec();
-        let decisions = std::mem::take(&mut self.decisions);
+        self.message_image_sources.clear();
         let has_unanswered_proposal = self.has_unanswered_proposal;
         self.messages.clear();
         self.start = 0;
@@ -345,10 +340,18 @@ impl ConversationResponse {
         self.stable_start = stable_start;
         self.stable_end = stable_end;
         self.stable_digest = stable_digest;
-        self.decisions = decisions;
         self.has_unanswered_proposal = has_unanswered_proposal;
         self.epoch = Some(epoch.to_owned());
         self.older_cursor = None;
+    }
+
+    fn rebase_image_sources(&mut self, start: usize, end: usize) {
+        self.message_image_sources = std::mem::take(&mut self.message_image_sources)
+            .into_iter()
+            .filter_map(|(index, sources)| {
+                (start <= index && index < end).then(|| (index - start, sources))
+            })
+            .collect();
     }
 
     fn apply_latest_epoch_reset(&mut self) {
@@ -409,6 +412,8 @@ impl ConversationResponse {
             .then(|| message_digest(&self.messages[stable_start..stable_end]))
             .flatten();
 
+        self.message_image_sources
+            .retain(|index, _| start <= *index && *index < end);
         self.messages = self.messages[start..end].to_vec();
         self.start = start;
         self.stable_start = stable_digest.as_ref().map(|_| stable_start);
@@ -571,6 +576,139 @@ mod tests {
         };
 
         assert_eq!(range.older_page_limit(), Some(100));
+    }
+
+    #[test]
+    fn numeric_range_keeps_image_sources_at_their_absolute_message_indices() {
+        let sources = |key: &str| {
+            std::collections::BTreeMap::from([(
+                "/tmp/fixture.png".to_owned(),
+                Some(format!("/api/answer-images/{key}")),
+            )])
+        };
+        let mut conversation = ConversationResponse {
+            messages: (0..4)
+                .map(|index| ChatItem::Assistant {
+                    text: format!("Fixture message {index}."),
+                })
+                .collect(),
+            message_image_sources: std::collections::BTreeMap::from([
+                (1, sources("first")),
+                (3, sources("last")),
+            ]),
+            ..ConversationResponse::default()
+        };
+        conversation.update_metadata();
+
+        conversation.apply_range(MessageRange {
+            before: Some(4),
+            limit: Some(2),
+            ..MessageRange::default()
+        });
+
+        assert_eq!(
+            (
+                conversation.start,
+                conversation.messages,
+                conversation.message_image_sources,
+            ),
+            (
+                2,
+                vec![
+                    ChatItem::Assistant {
+                        text: "Fixture message 2.".to_owned(),
+                    },
+                    ChatItem::Assistant {
+                        text: "Fixture message 3.".to_owned(),
+                    },
+                ],
+                std::collections::BTreeMap::from([(3, sources("last"))]),
+            ),
+        );
+    }
+
+    #[test]
+    fn initial_epoch_page_discards_image_sources_before_its_start() {
+        let sources = |key: &str| {
+            std::collections::BTreeMap::from([(
+                "/tmp/fixture.png".to_owned(),
+                Some(format!("/api/answer-images/{key}")),
+            )])
+        };
+        let mut conversation = ConversationResponse {
+            messages: (0..120)
+                .map(|index| ChatItem::Assistant {
+                    text: format!("Fixture message {index}."),
+                })
+                .collect(),
+            initial_epoch: true,
+            message_image_sources: std::collections::BTreeMap::from([
+                (0, sources("before-page")),
+                (25, sources("first-visible")),
+                (119, sources("last-visible")),
+            ]),
+            ..ConversationResponse::default()
+        };
+        conversation.update_metadata();
+
+        conversation.apply_range(MessageRange {
+            limit: Some(100),
+            ..MessageRange::default()
+        });
+
+        assert_eq!(
+            conversation.message_image_sources,
+            std::collections::BTreeMap::from([
+                (5, sources("first-visible")),
+                (99, sources("last-visible")),
+            ]),
+        );
+    }
+
+    #[test]
+    fn epoch_range_rebases_image_sources_after_earlier_messages_are_removed() {
+        let messages = (0..120)
+            .map(|index| ChatItem::Assistant {
+                text: format!("Fixture message {index}."),
+            })
+            .collect::<Vec<_>>();
+        let epoch_start = 80;
+        let epoch = MessageEpochCursor::from_messages(&messages[epoch_start..])
+            .and_then(|cursor| cursor.encode())
+            .unwrap();
+        let sources = std::collections::BTreeMap::from([(
+            "/tmp/fixture.png".to_owned(),
+            Some("/api/answer-images/fixture-key".to_owned()),
+        )]);
+        let mut conversation = ConversationResponse {
+            messages,
+            message_image_sources: std::collections::BTreeMap::from([(85, sources.clone())]),
+            ..ConversationResponse::default()
+        };
+        conversation.update_metadata();
+
+        conversation.apply_range(MessageRange {
+            from: Some(0),
+            epoch: Some(epoch),
+            ..MessageRange::default()
+        });
+
+        assert_eq!(
+            (
+                conversation.start,
+                conversation.messages,
+                conversation.message_image_sources,
+            ),
+            (
+                0,
+                (80..120)
+                    .map(|index| ChatItem::Assistant {
+                        text: format!("Fixture message {index}."),
+                    })
+                    .collect::<Vec<_>>(),
+                std::collections::BTreeMap::from([(5, sources)]),
+            ),
+        );
     }
 
     #[test]

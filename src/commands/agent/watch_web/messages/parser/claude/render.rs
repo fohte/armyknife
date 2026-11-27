@@ -24,7 +24,6 @@ pub(super) fn render(
     let mut items = Vec::new();
     let mut tools = ToolSummary::default();
     let source_cards = cards_from_sources(
-        additions.decisions,
         additions.proposals,
         additions.todos,
         additions.peer_out_messages,

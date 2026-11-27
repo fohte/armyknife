@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { AppWorkspace } from '#app-workspace'
 import {
@@ -10,6 +10,7 @@ import { getCommandPaletteShortcut } from '#command-palette-shortcut'
 import { AgentUsageProvider } from '#components/agent-usage-context'
 import { SessionConversationCacheProvider } from '#components/session-conversation-cache'
 import { SessionElapsedStartedAtProvider } from '#components/session-elapsed-context'
+import { startFreezeProfiler } from '#freeze-profiler'
 import { useMobileLayout, useSessionMobileNavigation } from '#mobile-layout'
 import { findLaunchedSession } from '#new-session-navigation'
 import { startSessionFeed } from '#session-feed'
@@ -20,6 +21,7 @@ import type { Session } from '#types'
 import { useAppSessionOperations } from '#use-app-session-operations'
 import { useAppSessionProjection } from '#use-app-session-projection'
 import { useComposerFocus } from '#use-composer-focus'
+import { useInboxSort } from '#use-inbox-sort'
 import { useLaterDeadlineClock } from '#use-later-deadline-clock'
 import { useLaterSessionActions } from '#use-later-session-actions'
 import { useNewSession } from '#use-new-session'
@@ -43,6 +45,8 @@ export function App() {
 }
 
 function AppContent() {
+  useEffect(() => startFreezeProfiler(), [])
+
   useEffect(() => {
     const preventFileNavigation = (event: DragEvent) => {
       if (!Array.from(event.dataTransfer?.types ?? []).includes('Files')) {
@@ -63,6 +67,8 @@ function AppContent() {
     isMobile,
     inProgressExpanded,
     setInProgressExpanded,
+    waitingExpanded,
+    setWaitingExpanded,
     doneExpanded,
     setDoneExpanded,
   } = useMobileLayout()
@@ -109,6 +115,7 @@ function AppContent() {
     boolean | null
   >(null)
   const [showAllInProgress, setShowAllInProgress] = useState(false)
+  const [showAllWaiting, setShowAllWaiting] = useState(false)
   const [laterExpanded, setLaterExpanded] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [availableVersion, setAvailableVersion] = useState<string | null>(null)
@@ -144,6 +151,24 @@ function AppContent() {
     view,
     setError,
   })
+  const inboxSort = useInboxSort({
+    orderedSessions,
+    navigableSessions,
+    selectedId,
+    setShowAllInProgress,
+    setShowAllWaiting,
+  })
+  const lastScrollContext = useRef<{
+    selectedId: string | null
+    sort: typeof inboxSort.sort
+    filterQuery: string
+    rowVisible: boolean
+  }>({
+    selectedId: null,
+    sort: inboxSort.sort,
+    filterQuery: inboxFilterQuery,
+    rowVisible: false,
+  })
   const {
     laterSessionId,
     laterTimes,
@@ -157,7 +182,7 @@ function AppContent() {
   } = useLaterSessionActions({
     isMobile,
     sessions,
-    navigableSessions,
+    navigableSessions: inboxSort.navigableSessions,
     pendingOperations,
     navigate,
     runSessionOperation,
@@ -233,6 +258,7 @@ function AppContent() {
               (session) =>
                 session.category === 'needs_action' ||
                 session.category === 'later' ||
+                session.category === 'waiting' ||
                 session.category === 'in_progress' ||
                 session.category === 'done',
             ),
@@ -248,26 +274,61 @@ function AppContent() {
     [recordSessionSnapshot],
   )
 
-  useEffect(() => {
-    const hiddenProgress = orderedSessions.filter(
-      (session) => session.category === 'in_progress',
-    )
-    if (hiddenProgress.slice(2).some((session) => session.id === selectedId)) {
-      setShowAllInProgress(true)
-    }
-  }, [orderedSessions, selectedId])
+  const selectedWaitingIndex = inboxSort.navigableSessions
+    .filter((session) => session.category === 'waiting')
+    .findIndex((session) => session.id === selectedId)
 
   useEffect(() => {
-    if (view !== 'inbox') {
+    if (isMobile && selectedWaitingIndex >= 0) {
+      setWaitingExpanded(true)
+    }
+  }, [isMobile, selectedId, selectedWaitingIndex, setWaitingExpanded])
+
+  useEffect(() => {
+    if (view !== 'inbox' || selectedId === null) {
+      lastScrollContext.current = {
+        selectedId: null,
+        sort: inboxSort.sort,
+        filterQuery: inboxFilterQuery,
+        rowVisible: false,
+      }
       return
     }
 
-    document
-      .querySelector<HTMLButtonElement>(
-        '[data-session-row][aria-current="true"]',
-      )
-      ?.scrollIntoView({ block: 'nearest' })
-  }, [selectedId, showAllInProgress, view])
+    const selectedRow = document.querySelector<HTMLButtonElement>(
+      '[data-session-row][aria-current="true"]',
+    )
+    const previousContext = lastScrollContext.current
+    const selectionChanged = previousContext.selectedId !== selectedId
+    const inboxQueryChanged =
+      previousContext.sort !== inboxSort.sort ||
+      previousContext.filterQuery !== inboxFilterQuery
+    const becameVisible = selectedRow !== null && !previousContext.rowVisible
+
+    if (
+      selectedRow !== null &&
+      (selectionChanged || inboxQueryChanged || becameVisible)
+    ) {
+      selectedRow.scrollIntoView({ block: 'nearest' })
+    }
+    lastScrollContext.current = {
+      selectedId,
+      sort: inboxSort.sort,
+      filterQuery: inboxFilterQuery,
+      rowVisible: selectedRow !== null,
+    }
+  }, [
+    inboxSort.navigableSessions,
+    inboxSort.sort,
+    inboxFilterQuery,
+    inProgressExpanded,
+    mobileConversationOpen,
+    selectedId,
+    showAllInProgress,
+    showAllWaiting,
+    view,
+    waitingExpanded,
+  ])
 
   useSessionKeyboardNavigation({
     isMobile,
@@ -276,7 +337,7 @@ function AppContent() {
     closeLater,
     closeSession: requestCloseSession,
     submitLater,
-    navigableSessions,
+    navigableSessions: inboxSort.navigableSessions,
     openLater,
     selectedId,
     view,
@@ -317,7 +378,7 @@ function AppContent() {
     useSessionMobileNavigation({
       isMobile,
       conversationOpen: mobileConversationOpen,
-      navigableSessions,
+      navigableSessions: inboxSort.navigableSessions,
       selectedId,
       selectedSessionExists: selectedSession !== undefined,
       sessionsLoaded: loaded,
@@ -375,13 +436,27 @@ function AppContent() {
     )
     if (launchedSession === undefined) return
     setPendingLaunchId(null)
+    const shouldOpenLaunchedSession =
+      newSessionMode === 'palette' ||
+      (newSessionMode === 'form' && view === 'inbox')
+    if (!shouldOpenLaunchedSession) {
+      if (newSessionMode === 'form') {
+        newSession.reset()
+        navigate((current) => ({ ...current, newSessionMode: null }), 'replace')
+      }
+      return
+    }
     setCommandPaletteOpen(false)
     openSessionInInbox(launchedSession.id, 'replace')
   }, [
+    navigate,
+    newSessionMode,
+    newSession.reset,
     openSessionInInbox,
     pendingLaunchId,
     sessionsWithElapsedTime,
     setCommandPaletteOpen,
+    view,
   ])
   return (
     <SessionElapsedStartedAtProvider value={sessionsReceivedAt}>
@@ -402,9 +477,13 @@ function AppContent() {
           loaded,
           error,
           inboxFilterQuery,
+          inboxSort: inboxSort.sort,
+          inboxSortStorageAvailable: inboxSort.storageAvailable,
           showAllInProgress,
+          showAllWaiting,
           laterExpanded,
           inProgressExpanded,
+          waitingExpanded,
           doneExpanded,
           statusPanelOpen,
           pendingLaunchId,
@@ -429,9 +508,12 @@ function AppContent() {
         }
         actions={{
           setInboxFilterQuery,
+          setInboxSort: inboxSort.setSort,
           setShowAllInProgress,
+          setShowAllWaiting,
           setLaterExpanded,
           setInProgressExpanded,
+          setWaitingExpanded,
           setDoneExpanded,
           setMobileNavOpen,
           setStatusPanelOpen,

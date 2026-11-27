@@ -35,6 +35,9 @@ pub(crate) use database::{
     resolve_permission_request, resolve_permission_request_with_answers, serialize_session,
 };
 pub(crate) use database::{AgentTodo, TodoResolution};
+pub(crate) use database::{
+    DeferredStop, clear_deferred_stop, record_deferred_stop, take_mature_deferred_stops,
+};
 pub(crate) use peer_out_messages::insert_watch_web_peer_out_message_from;
 pub(crate) use peer_out_messages::{
     insert_watch_web_peer_out_message, mark_watch_web_peer_out_message_delivered_from,
@@ -72,6 +75,10 @@ pub fn crit_dir() -> Result<PathBuf> {
     cache::base_dir()
         .map(|d| d.join("cc").join("crit"))
         .ok_or_else(|| CcError::CacheDirNotFound.into())
+}
+
+pub(crate) fn lock_crit_port_from(sessions_dir: &Path, port: u16) -> Result<fs::File> {
+    database::lock_crit_port(sessions_dir, port)
 }
 
 /// Returns the file path for storing the last selected session ID.
@@ -228,6 +235,10 @@ pub(crate) fn insert_agent_decision(
     )
 }
 
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "Part of the persisted agent decision API.")
+)]
 pub(crate) fn agent_decisions_from(
     sessions_dir: &Path,
     session_id: &str,
@@ -235,12 +246,20 @@ pub(crate) fn agent_decisions_from(
     database::agent_decisions(sessions_dir, session_id)
 }
 
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "Part of the persisted agent decision API.")
+)]
 pub(crate) fn agent_decision_counts_by_session_from(
     sessions_dir: &Path,
 ) -> Result<HashMap<String, AgentDecisionCounts>> {
     database::agent_decision_counts_by_session(sessions_dir)
 }
 
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "Part of the persisted agent decision API.")
+)]
 pub(crate) fn set_agent_decision_review_from(
     sessions_dir: &Path,
     session_id: &str,
@@ -498,6 +517,10 @@ pub(crate) fn list_all_sessions_from(sessions_dir: &Path) -> Result<Vec<Session>
     Ok(sessions)
 }
 
+pub(crate) fn all_session_rows_from(sessions_dir: &Path) -> Result<Vec<Session>> {
+    database::all_sessions(sessions_dir)
+}
+
 pub(crate) fn session_store_revision() -> Result<i64> {
     session_store_revision_from(&sessions_dir()?)
 }
@@ -516,6 +539,12 @@ pub(crate) fn closed_session_ids_from(sessions_dir: &Path) -> Result<HashSet<Str
 
 pub(crate) fn session_store_revision_from(sessions_dir: &Path) -> Result<i64> {
     database::session_store_revision(sessions_dir)
+}
+
+pub(crate) fn session_revisions_by_session_from(
+    sessions_dir: &Path,
+) -> Result<HashMap<String, i64>> {
+    database::session_revisions_by_session(sessions_dir)
 }
 
 pub(crate) fn add_permission_denied_from(
@@ -713,14 +742,6 @@ pub(crate) fn agent_todos(session_id: &str) -> Result<Vec<AgentTodo>> {
     agent_todos_from(&sessions_dir()?, session_id)
 }
 
-pub(crate) fn insert_agent_files_from(
-    sessions_dir: &Path,
-    session_id: &str,
-    files: &[AgentFile],
-) -> Result<()> {
-    database::insert_agent_files(sessions_dir, session_id, files)
-}
-
 pub(crate) fn agent_files_from(sessions_dir: &Path, session_id: &str) -> Result<Vec<AgentFile>> {
     database::agent_files(sessions_dir, session_id)
 }
@@ -778,6 +799,13 @@ pub(crate) fn watch_web_session_states_from(
     sessions_dir: &Path,
 ) -> Result<Vec<WatchWebSessionState>> {
     database::watch_web_session_states(sessions_dir)
+}
+
+pub(crate) fn watch_web_session_start_generation_from(
+    sessions_dir: &Path,
+    session_id: &str,
+) -> Result<i64> {
+    database::watch_web_session_start_generation(sessions_dir, session_id)
 }
 
 pub(crate) fn set_watch_web_later(
@@ -2376,9 +2404,26 @@ mod tests {
                 size: b"fixture bytes".len() as i64,
                 created_at: now,
             };
-            insert_agent_files_from(&temp_session_dir.sessions_path, session_id, &[file])
+            Connection::open(temp_session_dir.sessions_path.join("sessions.db"))
+                .expect("session database should open")
+                .execute(
+                    "INSERT INTO agent_file (session_id, id, position, name, caption, mime_type, size, created_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    rusqlite::params![
+                        session_id,
+                        file.id,
+                        file.position,
+                        file.name,
+                        file.caption,
+                        file.mime_type,
+                        file.size,
+                        file.created_at.to_rfc3339(),
+                    ],
+                )
                 .expect("attachment record should be inserted");
 
+            let stored_files = agent_files_from(&temp_session_dir.sessions_path, session_id)
+                .expect("file records should load");
             let removed = archive::cleanup_stale_sessions_in_with_archive_at_and_storage(
                 &temp_session_dir.sessions_path,
                 Some(&storage_root),
@@ -2398,9 +2443,10 @@ mod tests {
                         .expect("session record should resolve")
                         .is_stored(),
                     session_storage.exists(),
+                    stored_files,
                     remaining_files,
                 ),
-                (true, false, false, Vec::new()),
+                (true, false, false, vec![file], Vec::new()),
             );
         }
 

@@ -14,6 +14,9 @@ use lazy_regex::regex_replace_all;
 
 use self::side_effects::SideEffects;
 use super::claude_sessions;
+use super::compact_transcript_slim::{
+    maybe_schedule_transcript_slim, process_skipped_hook_compact_slim,
+};
 use super::error::CcError;
 use super::session_init;
 use super::session_status;
@@ -79,7 +82,26 @@ pub fn run(args: &HookArgs) -> Result<()> {
 
     // Skip hooks when called from armyknife's own claude -p invocations
     // to prevent infinite recursion (hook → claude -p → hook → ...).
-    if EnvVars::load().skip_hooks {
+    let env_vars = EnvVars::load();
+    if env_vars.skip_hooks {
+        if env_vars.slim_transcript_on_compact
+            && event == HookEvent::SessionStart
+            && args.engine == Engine::Claude
+        {
+            let side_effects = SideEffects::all();
+            if let Err(error) = process_skipped_hook_compact_slim(
+                event,
+                args.engine,
+                &env_vars,
+                || parse_stdin_json(&read_raw_stdin()?),
+                |session_id, path| side_effects.schedule_transcript_slim(session_id, path),
+            ) {
+                tracing::warn!(
+                    event = "agent.transcript.slim.compact_hook_input_failed",
+                    error = %error,
+                );
+            }
+        }
         return write_stop_response(args.engine, event, None, &mut io::stdout().lock());
     }
 
@@ -1010,6 +1032,30 @@ fn process_hook_event_impl_with_env_and_unreported_stop(
             )?;
         }
     }
+    if session.engine == Engine::Claude && input.agent_id.is_none() {
+        let compacting = match event {
+            HookEvent::PreCompact => Some(true),
+            HookEvent::PreToolUse
+            | HookEvent::PostToolUse
+            | HookEvent::PermissionRequest
+            | HookEvent::Stop
+            | HookEvent::StopFailure => Some(false),
+            HookEvent::SessionStart
+                if matches!(input.source.as_deref(), Some("compact" | "resume")) =>
+            {
+                Some(false)
+            }
+            _ => None,
+        };
+        if let Some(compacting) = compacting {
+            session_lock.queue_watch_web_compacting(compacting);
+        }
+    }
+
+    if event == HookEvent::SessionStart && input.agent_id.is_none() {
+        session_lock.record_watch_web_session_start()?;
+    }
+
     if vibe_setting_requested {
         session_lock.save_vibe_setting(&session)?;
     } else {
@@ -1058,22 +1104,6 @@ fn process_hook_event_impl_with_env_and_unreported_stop(
             tool_input,
             store::PermissionDeniedResolution::Approved,
         )?;
-    }
-
-    if session.engine == Engine::Claude && input.agent_id.is_none() {
-        let compacting = match event {
-            HookEvent::PreCompact => Some(true),
-            HookEvent::Stop | HookEvent::StopFailure => Some(false),
-            HookEvent::SessionStart
-                if matches!(input.source.as_deref(), Some("compact" | "resume")) =>
-            {
-                Some(false)
-            }
-            _ => None,
-        };
-        if let Some(compacting) = compacting {
-            store::set_watch_web_compacting(sessions_dir, &session.session_id, compacting)?;
-        }
     }
 
     if let Some(startup_metadata) = startup_metadata
@@ -1242,6 +1272,12 @@ fn process_hook_event_impl_with_env_and_unreported_stop(
                 );
             }
         }
+    }
+
+    if side_effects.transcript_slim {
+        maybe_schedule_transcript_slim(event, &input, |session_id, path| {
+            side_effects.schedule_transcript_slim(session_id, path);
+        });
     }
 
     if let Some(reason) = stop_block_reason {
@@ -1733,10 +1769,25 @@ fn build_subtitle(session: &Session) -> Option<String> {
 mod tests {
     use super::side_effects::PaneBindingOperations;
     use super::*;
+    use crate::commands::agent::compact_transcript_slim::TRANSCRIPT_SLIM_MIN_BYTES;
     use crate::commands::agent::session_pr_context::fixed_context_capture;
     use crate::commands::agent::types::{AgentStatus, TMUX_SESSION_OPTION, WebUiRegistration};
     use chrono::TimeZone;
+    use indoc::indoc;
     use rstest::{fixture, rstest};
+
+    #[fixture]
+    fn pending_deferred_stop() -> (tempfile::TempDir, Session, chrono::DateTime<chrono::Utc>) {
+        let sessions_dir = tempfile::TempDir::new().expect("temp dir");
+        let mut session = crate::commands::agent::test_support::deferred_stop_delegate();
+        session.pending_bg_task_ids.insert("bg-1".to_string());
+        let stopped_at = session.updated_at;
+        store::save_session_to(sessions_dir.path(), &session).expect("save");
+        store::record_deferred_stop(sessions_dir.path(), &session, "fixture-parent", stopped_at)
+            .expect("deferred stop should be recorded");
+
+        (sessions_dir, session, stopped_at)
+    }
 
     #[derive(Clone, Copy)]
     enum TestClaudeConfigDir {
@@ -1834,6 +1885,223 @@ mod tests {
         side_effects: &SideEffects,
     ) -> Result<ProcessResult> {
         process_hook_event_impl_with_instruction(event, input, sessions_dir, side_effects, None)
+    }
+
+    #[rstest]
+    #[case::large_compact_starts_worker(HookEvent::SessionStart, Engine::Claude, "compact", TRANSCRIPT_SLIM_MIN_BYTES + 1, true)]
+    #[case::at_limit_skips_worker(
+        HookEvent::SessionStart,
+        Engine::Claude,
+        "compact",
+        TRANSCRIPT_SLIM_MIN_BYTES,
+        false
+    )]
+    #[case::resume_skips_worker(HookEvent::SessionStart, Engine::Claude, "resume", TRANSCRIPT_SLIM_MIN_BYTES + 1, false)]
+    #[case::startup_skips_worker(HookEvent::SessionStart, Engine::Claude, "startup", TRANSCRIPT_SLIM_MIN_BYTES + 1, false)]
+    #[case::codex_skips_worker(HookEvent::SessionStart, Engine::Codex, "compact", TRANSCRIPT_SLIM_MIN_BYTES + 1, false)]
+    #[case::other_hook_skips_worker(HookEvent::PostModelSwitch, Engine::Claude, "compact", TRANSCRIPT_SLIM_MIN_BYTES + 1, false)]
+    fn compact_session_start_schedules_transcript_slim_only_for_large_claude_transcripts(
+        #[case] event: HookEvent,
+        #[case] engine: Engine,
+        #[case] source: &str,
+        #[case] transcript_size: u64,
+        #[case] expected_scheduled: bool,
+    ) {
+        use std::fs::File;
+        use std::io::{Seek, SeekFrom, Write};
+
+        let temp_dir = tempfile::TempDir::new().expect("hook fixture directory should be created");
+        let project_dir = temp_dir.path().join("fixture-project");
+        let transcript_dir = temp_dir.path().join("fixture-transcripts");
+        std::fs::create_dir(&project_dir).expect("project directory should be created");
+        std::fs::create_dir(&transcript_dir).expect("transcript directory should be created");
+        let transcript_path = transcript_dir.join("fixture-session.jsonl");
+        let expected_transcript_path = transcript_path.clone();
+        let assistant_row = br#"{"type":"assistant","message":{"model":"fixture-model"}}"#;
+        let mut transcript =
+            File::create(&transcript_path).expect("transcript fixture should be created");
+        transcript
+            .set_len(transcript_size - assistant_row.len() as u64 - 2)
+            .expect("transcript fixture size should be set");
+        transcript
+            .seek(SeekFrom::End(0))
+            .expect("transcript fixture should seek to the end");
+        transcript
+            .write_all(b"\n")
+            .and_then(|()| transcript.write_all(assistant_row))
+            .and_then(|()| transcript.write_all(b"\n"))
+            .expect("assistant fixture row should be written");
+
+        let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let side_effects = SideEffects {
+            transcript_slim: true,
+            transcript_slim_calls: Some(calls.clone()),
+            ..SideEffects::none()
+        };
+        let mut input = create_test_input_with_source(None, Some(source));
+        input.cwd = project_dir.clone();
+        input.transcript_path = Some(transcript_path);
+        input.engine = engine;
+
+        let home = temp_dir
+            .path()
+            .to_str()
+            .expect("fixture home should be UTF-8");
+        temp_env::with_vars(
+            [
+                ("HOME", Some(home)),
+                ("CLAUDE_CONFIG_DIR", None::<&str>),
+                ("CLAUDE_ENV_FILE", None::<&str>),
+            ],
+            || {
+                process_hook_event_impl_with_instruction(
+                    event,
+                    input,
+                    temp_dir.path(),
+                    &side_effects,
+                    None,
+                )
+            },
+        )
+        .expect("hook event should succeed");
+
+        assert_eq!(
+            calls
+                .lock()
+                .expect("transcript slim calls should lock")
+                .clone(),
+            if expected_scheduled {
+                vec![(
+                    "test-123".to_string(),
+                    expected_transcript_path.clone(),
+                    vec![
+                        "agent".to_string(),
+                        "transcript".to_string(),
+                        "slim".to_string(),
+                        "test-123".to_string(),
+                        "--transcript-path".to_string(),
+                        expected_transcript_path.to_string_lossy().into_owned(),
+                    ],
+                )]
+            } else {
+                Vec::new()
+            },
+        );
+    }
+
+    #[rstest]
+    #[case::armed_compact_session_start(
+        true,
+        HookEvent::SessionStart,
+        Engine::Claude,
+        "compact",
+        true,
+        true
+    )]
+    #[case::unarmed_skipped_hook(
+        false,
+        HookEvent::SessionStart,
+        Engine::Claude,
+        "compact",
+        false,
+        false
+    )]
+    #[case::resume_skipped_hook(
+        true,
+        HookEvent::SessionStart,
+        Engine::Claude,
+        "resume",
+        true,
+        false
+    )]
+    #[case::codex_skipped_hook(
+        true,
+        HookEvent::SessionStart,
+        Engine::Codex,
+        "compact",
+        false,
+        false
+    )]
+    #[case::other_skipped_hook(
+        true,
+        HookEvent::PostModelSwitch,
+        Engine::Claude,
+        "compact",
+        false,
+        false
+    )]
+    fn skipped_hooks_slim_only_armed_large_claude_compact_transcripts(
+        #[case] allow_compact_slim: bool,
+        #[case] event: HookEvent,
+        #[case] engine: Engine,
+        #[case] source: &str,
+        #[case] expected_input_read: bool,
+        #[case] expected_scheduled: bool,
+    ) {
+        use std::cell::Cell;
+
+        let temp_dir = tempfile::TempDir::new().expect("hook fixture directory should be created");
+        let transcript_path = temp_dir.path().join("fixture-transcript.jsonl");
+        let transcript =
+            fs::File::create(&transcript_path).expect("transcript fixture should be created");
+        transcript
+            .set_len(TRANSCRIPT_SLIM_MIN_BYTES + 1)
+            .expect("transcript fixture size should be set");
+        let expected_transcript_path = transcript_path.clone();
+        let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let side_effects = SideEffects {
+            transcript_slim: true,
+            transcript_slim_calls: Some(calls.clone()),
+            ..SideEffects::none()
+        };
+        let env_vars = EnvVars {
+            skip_hooks: true,
+            slim_transcript_on_compact: allow_compact_slim,
+            ..EnvVars::default()
+        };
+        let read_count = Cell::new(0);
+        let mut input = create_test_input_with_source(None, Some(source));
+        input.engine = engine;
+        input.transcript_path = Some(transcript_path);
+
+        process_skipped_hook_compact_slim(
+            event,
+            engine,
+            &env_vars,
+            || {
+                read_count.set(read_count.get() + 1);
+                Ok(input)
+            },
+            |session_id, path| side_effects.schedule_transcript_slim(session_id, path),
+        )
+        .expect("skipped hook processing should succeed");
+
+        let expected_calls = if expected_scheduled {
+            vec![(
+                "test-123".to_string(),
+                expected_transcript_path.clone(),
+                vec![
+                    "agent".to_string(),
+                    "transcript".to_string(),
+                    "slim".to_string(),
+                    "test-123".to_string(),
+                    "--transcript-path".to_string(),
+                    expected_transcript_path.to_string_lossy().into_owned(),
+                ],
+            )]
+        } else {
+            Vec::new()
+        };
+        assert_eq!(
+            (
+                read_count.get(),
+                calls
+                    .lock()
+                    .expect("transcript slim calls should lock")
+                    .clone(),
+            ),
+            (usize::from(expected_input_read), expected_calls),
+        );
     }
 
     #[test]
@@ -2417,6 +2685,19 @@ mod tests {
         tempfile::TempDir::new().expect("temp dir")
     }
 
+    #[fixture]
+    fn compacting_hook_sessions_dir() -> tempfile::TempDir {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir creation should succeed");
+        process_hook_event_without_instruction(
+            HookEvent::PreCompact,
+            create_test_input(None),
+            temp_dir.path(),
+            &SideEffects::none(),
+        )
+        .expect("pre-compact hook should succeed");
+        temp_dir
+    }
+
     #[rstest]
     #[case::pre_tool_use_after_stop(HookEvent::PreToolUse, SessionStatus::Stopped)]
     #[case::pre_tool_use_while_running(HookEvent::PreToolUse, SessionStatus::Running)]
@@ -2805,6 +3086,9 @@ mod tests {
     ) {
         let temp_dir = tempfile::TempDir::new().expect("temp dir");
         let sessions_dir = temp_dir.path();
+        let mut retry_session = create_test_session(None);
+        retry_session.session_id = "retry-session".to_string();
+        store::save_session_to(sessions_dir, &retry_session).expect("session should be saved");
         let default_denied_input = serde_json::json!({"command": "printf fixture"});
         let denied_input = scenario
             .denied_tool_input
@@ -2979,26 +3263,22 @@ mod tests {
     }
 
     #[rstest]
+    #[case::pre_tool_use(HookEvent::PreToolUse, None, false)]
+    #[case::post_tool_use(HookEvent::PostToolUse, None, false)]
+    #[case::permission_request(HookEvent::PermissionRequest, None, false)]
     #[case::stop(HookEvent::Stop, None, false)]
     #[case::stop_failure(HookEvent::StopFailure, None, false)]
     #[case::session_end(HookEvent::SessionEnd, None, false)]
     #[case::compaction_start(HookEvent::SessionStart, Some("compact"), false)]
     #[case::resume(HookEvent::SessionStart, Some("resume"), false)]
     #[case::startup_preserves_marker(HookEvent::SessionStart, Some("startup"), true)]
-    fn compaction_state_clears_only_for_expected_lifecycle_events(
+    fn compaction_state_clears_after_main_thread_tool_and_lifecycle_events(
         #[case] event: HookEvent,
         #[case] source: Option<&str>,
         #[case] expected: bool,
+        compacting_hook_sessions_dir: tempfile::TempDir,
     ) {
-        let temp_dir = tempfile::TempDir::new().expect("temp dir creation should succeed");
-        let sessions_dir = temp_dir.path();
-        process_hook_event_without_instruction(
-            HookEvent::PreCompact,
-            create_test_input(None),
-            sessions_dir,
-            &SideEffects::none(),
-        )
-        .expect("pre-compact hook should succeed");
+        let sessions_dir = compacting_hook_sessions_dir.path();
 
         process_hook_event_without_instruction(
             event,
@@ -3014,6 +3294,59 @@ mod tests {
                 .first()
                 .map(|state| state.is_compacting),
             Some(expected),
+        );
+    }
+
+    #[rstest]
+    fn main_thread_tool_hook_updates_compaction_with_session_revision(
+        compacting_hook_sessions_dir: tempfile::TempDir,
+    ) {
+        let sessions_dir = compacting_hook_sessions_dir.path();
+        let revision_before = store::session_store_revision_from(sessions_dir)
+            .expect("session store revision should load");
+
+        process_hook_event_without_instruction(
+            HookEvent::PreToolUse,
+            create_test_input(None),
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("tool hook should succeed");
+
+        let revision_after = store::session_store_revision_from(sessions_dir)
+            .expect("session store revision should load");
+        let is_compacting = store::watch_web_session_states_from(sessions_dir)
+            .expect("watch-web state should load")
+            .first()
+            .map(|state| state.is_compacting);
+
+        assert_eq!(
+            (revision_after - revision_before, is_compacting),
+            (1, Some(false))
+        );
+    }
+
+    #[rstest]
+    fn subagent_tool_event_does_not_clear_main_thread_compaction_state(
+        compacting_hook_sessions_dir: tempfile::TempDir,
+    ) {
+        let sessions_dir = compacting_hook_sessions_dir.path();
+        let mut input = create_test_input(None);
+        input.agent_id = Some("fixture-agent".to_string());
+        process_hook_event_without_instruction(
+            HookEvent::PreToolUse,
+            input,
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("subagent tool hook should succeed");
+
+        assert_eq!(
+            store::watch_web_session_states_from(sessions_dir)
+                .expect("watch-web state should load")
+                .first()
+                .map(|state| state.is_compacting),
+            Some(true),
         );
     }
 
@@ -4245,6 +4578,7 @@ mod tests {
             tmux: false,
             notifications: false,
             auto_compact: false,
+            transcript_slim: false,
             title_generation: false,
             capture_pr_context: None,
             tq_archive: false,
@@ -4256,6 +4590,7 @@ mod tests {
             tq_archive_calls: None,
             notification_calls: None,
             auto_compact_calls: None,
+            transcript_slim_calls: None,
             title_generation_calls: None,
             redelivery_calls: None,
         };
@@ -4359,41 +4694,116 @@ mod tests {
         );
     }
 
-    #[test]
-    fn notification_idle_prompt_does_not_touch_pending_bg_task_ids() {
-        // Claude Code fires `Notification(idle_prompt)` whenever the user
-        // goes idle, independent of whether a bg task launched on an
-        // earlier `Stop` has finished -- `background_tasks` is only ever
-        // attached to `Stop`/`SubagentStop` input, so this event can't
-        // refresh the pending sets and must leave what the last `Stop`
-        // already persisted untouched.
-        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+    #[rstest]
+    fn notification_idle_prompt_keeps_a_deferred_stop_eligible(
+        pending_deferred_stop: (tempfile::TempDir, Session, chrono::DateTime<chrono::Utc>),
+    ) {
+        let (temp_dir, mut existing, stopped_at) = pending_deferred_stop;
         let sessions_dir = temp_dir.path();
 
-        let mut existing = create_test_session(None);
-        existing.session_id = "idle-bg-sess".to_string();
-        existing.pending_bg_task_ids.insert("bg-1".to_string());
+        existing.engine = Engine::Claude;
         store::save_session_to(sessions_dir, &existing).expect("save");
 
-        let input: HookInput = serde_json::from_str(
-            r#"{"session_id":"idle-bg-sess","cwd":"/tmp/test","notification_type":"idle_prompt"}"#,
-        )
-        .expect("valid JSON");
+        let mut input = create_test_input_with_session_and_source(
+            &existing.session_id,
+            Some("idle_prompt"),
+            None,
+        );
+        input.engine = Engine::Claude;
+        let config_dir = tempfile::TempDir::new().expect("Claude config dir");
+        let config_dir = config_dir.path().to_string_lossy().into_owned();
+        temp_env::with_vars(
+            [
+                ("CLAUDE_CONFIG_DIR", Some(config_dir.as_str())),
+                ("TMUX_PANE", None::<&str>),
+            ],
+            || {
+                process_hook_event_impl(
+                    HookEvent::Notification,
+                    input,
+                    sessions_dir,
+                    &SideEffects::none(),
+                )
+                .expect("hook should succeed");
+            },
+        );
 
+        let reloaded = store::load_session_from(sessions_dir, &existing.session_id)
+            .expect("load")
+            .expect("session exists");
+        let mature = store::take_mature_deferred_stops(
+            sessions_dir,
+            reloaded.updated_at + chrono::Duration::minutes(30),
+            std::time::Duration::from_secs(30 * 60),
+        )
+        .expect("deferred stop should be available to sweep");
+
+        assert_eq!(
+            (
+                reloaded.status,
+                reloaded.pending_bg_task_ids,
+                reloaded.updated_at > stopped_at,
+                mature,
+            ),
+            (
+                SessionStatus::Stopped,
+                set_of(&["bg-1"]),
+                true,
+                vec![store::DeferredStop {
+                    session_id: "fixture-delegate".to_string(),
+                    parent_session_id: "fixture-parent".to_string(),
+                    stopped_at,
+                    last_message: None,
+                }],
+            ),
+        );
+    }
+
+    #[rstest]
+    fn codex_peer_prompt_marks_a_turn_running_without_a_prompt_timestamp(
+        pending_deferred_stop: (tempfile::TempDir, Session, chrono::DateTime<chrono::Utc>),
+    ) {
+        let (temp_dir, existing, stopped_at) = pending_deferred_stop;
+        let sessions_dir = temp_dir.path();
+
+        let mut input = create_test_input_with_session_and_source(&existing.session_id, None, None);
+        input.engine = Engine::Codex;
+        input.prompt = Some(
+            indoc! {"
+                <peer-message>
+                - From session_id: fixture-parent
+
+                A fictional instruction.
+                </peer-message>"
+            }
+            .to_string(),
+        );
         process_hook_event_impl(
-            HookEvent::Notification,
+            HookEvent::UserPromptSubmit,
             input,
             sessions_dir,
             &SideEffects::none(),
         )
-        .expect("hook should succeed");
+        .expect("peer prompt hook should succeed");
 
-        let reloaded = store::load_session_from(sessions_dir, "idle-bg-sess")
+        let reloaded = store::load_session_from(sessions_dir, &existing.session_id)
             .expect("load")
             .expect("session exists");
+        let mature = store::take_mature_deferred_stops(
+            sessions_dir,
+            reloaded.updated_at + chrono::Duration::minutes(30),
+            std::time::Duration::from_secs(30 * 60),
+        )
+        .expect("deferred stop should be consumed without notifying");
+
         assert_eq!(
-            (reloaded.status, reloaded.pending_bg_task_ids),
-            (SessionStatus::Stopped, set_of(&["bg-1"])),
+            (
+                reloaded.status,
+                reloaded.last_prompted_at,
+                reloaded.updated_at > stopped_at,
+                mature,
+            ),
+            (SessionStatus::Running, None, true, Vec::new()),
         );
     }
 
@@ -4769,6 +5179,7 @@ mod tests {
             tmux: false,
             notifications: false,
             auto_compact: false,
+            transcript_slim: false,
             title_generation: false,
             capture_pr_context: None,
             tq_archive: false,
@@ -4780,6 +5191,7 @@ mod tests {
             tq_archive_calls: None,
             notification_calls: None,
             auto_compact_calls: None,
+            transcript_slim_calls: None,
             title_generation_calls: None,
             redelivery_calls: None,
         };
@@ -5501,6 +5913,7 @@ mod tests {
             tmux: false,
             notifications: true,
             auto_compact: true,
+            transcript_slim: false,
             title_generation: false,
             capture_pr_context: None,
             tq_archive: false,
@@ -5512,6 +5925,7 @@ mod tests {
             tq_archive_calls: None,
             notification_calls: Some(notification_calls.clone()),
             auto_compact_calls: Some(auto_compact_calls.clone()),
+            transcript_slim_calls: None,
             title_generation_calls: None,
             redelivery_calls: None,
         };
@@ -5809,6 +6223,41 @@ mod tests {
                 result, expected_result,
                 "source={:?} should return {:?}",
                 source, expected_result
+            );
+        }
+
+        #[test]
+        fn resume_session_start_advances_watch_web_generation() {
+            let temp_dir = create_temp_sessions_dir();
+            let first_input = create_test_input_with_source(None, Some("resume"));
+
+            process_hook_event_impl(
+                HookEvent::SessionStart,
+                first_input,
+                temp_dir.path(),
+                &SideEffects::none(),
+            )
+            .expect("resume SessionStart should save the session");
+            let first_generation =
+                store::watch_web_session_start_generation_from(temp_dir.path(), "test-123")
+                    .expect("first session start generation should load");
+
+            let second_input = create_test_input_with_source(None, Some("resume"));
+            process_hook_event_impl(
+                HookEvent::SessionStart,
+                second_input,
+                temp_dir.path(),
+                &SideEffects::none(),
+            )
+            .expect("second resume SessionStart should save the session");
+
+            assert_eq!(
+                (
+                    first_generation,
+                    store::watch_web_session_start_generation_from(temp_dir.path(), "test-123",)
+                        .expect("second session start generation should load"),
+                ),
+                (1, 2),
             );
         }
 

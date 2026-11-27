@@ -154,7 +154,7 @@ fn project_dir(project_path: &Path) -> Option<PathBuf> {
 /// Returns the path to a session's .jsonl file.
 ///
 /// Path format: ~/.claude/projects/{encoded-path}/{session_id}.jsonl
-fn session_jsonl_path(project_path: &Path, session_id: &str) -> Option<PathBuf> {
+pub(super) fn session_jsonl_path(project_path: &Path, session_id: &str) -> Option<PathBuf> {
     Some(project_dir(project_path)?.join(format!("{session_id}.jsonl")))
 }
 
@@ -1139,6 +1139,20 @@ mod tests {
     fn test_encode_project_path(#[case] input: &str, #[case] expected: &str) {
         let path = Path::new(input);
         assert_eq!(encode_project_path(path), expected);
+    }
+
+    #[test]
+    fn session_jsonl_path_uses_home_directory() {
+        let result = temp_env::with_vars([("HOME", Some("/fixture/home"))], || {
+            session_jsonl_path(Path::new("/fixture/project"), "session-example")
+        });
+
+        assert_eq!(
+            result,
+            Some(PathBuf::from(
+                "/fixture/home/.claude/projects/-fixture-project/session-example.jsonl"
+            )),
+        );
     }
 
     #[test]

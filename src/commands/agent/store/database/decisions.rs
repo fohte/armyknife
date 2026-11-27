@@ -5,9 +5,13 @@ use anyhow::{Result, ensure};
 use chrono::Utc;
 use rusqlite::{TransactionBehavior, params};
 
-use super::{increment_revision, open_connection, validate_session_id};
+use super::{bump_session_revision, open_connection, validate_session_id};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "Part of the persisted agent decision API.")
+)]
 pub(crate) struct AgentDecision {
     pub(crate) session_id: String,
     pub(crate) seq: i64,
@@ -21,6 +25,10 @@ pub(crate) struct AgentDecision {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "Part of the persisted agent decision API.")
+)]
 pub(crate) struct AgentDecisionCounts {
     pub(crate) total: i64,
     pub(crate) unreviewed: i64,
@@ -69,6 +77,10 @@ pub(crate) fn insert_agent_decision(
     Ok(seq)
 }
 
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "Part of the persisted agent decision API.")
+)]
 pub(crate) fn agent_decisions(sessions_dir: &Path, session_id: &str) -> Result<Vec<AgentDecision>> {
     validate_session_id(session_id)?;
     if !sessions_dir.exists() {
@@ -121,6 +133,10 @@ pub(crate) fn agent_decisions(sessions_dir: &Path, session_id: &str) -> Result<V
     .collect()
 }
 
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "Part of the persisted agent decision API.")
+)]
 pub(crate) fn agent_decision_counts_by_session(
     sessions_dir: &Path,
 ) -> Result<HashMap<String, AgentDecisionCounts>> {
@@ -147,6 +163,10 @@ pub(crate) fn agent_decision_counts_by_session(
         .map_err(Into::into)
 }
 
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "Part of the persisted agent decision API.")
+)]
 pub(crate) fn set_agent_decision_review(
     sessions_dir: &Path,
     session_id: &str,
@@ -172,19 +192,6 @@ pub(crate) fn set_agent_decision_review(
     );
     bump_session_revision(&transaction, session_id)?;
     transaction.commit()?;
-    Ok(())
-}
-
-fn bump_session_revision(transaction: &rusqlite::Transaction<'_>, session_id: &str) -> Result<()> {
-    let revision = increment_revision(transaction)?;
-    let updated = transaction.execute(
-        "UPDATE sessions SET rev = ?1 WHERE session_id = ?2",
-        params![revision, session_id],
-    )?;
-    ensure!(
-        updated == 1,
-        "session {session_id} disappeared during decision update"
-    );
     Ok(())
 }
 

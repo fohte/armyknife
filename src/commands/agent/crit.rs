@@ -1,5 +1,7 @@
 //! Link crit reviews to agent sessions and open them in tmux floating panes.
 
+pub(in crate::commands::agent) mod daemon_registry;
+mod expiry;
 mod monitor;
 pub(super) mod toggle;
 pub(super) mod url;
@@ -21,6 +23,20 @@ use crate::shared::env_var::EnvVars;
 use crate::shared::log::short_run_id;
 
 use self::url::parse_port;
+
+pub(super) fn stop_expired_session_daemons(
+    session: &Session,
+    sessions_dir: &std::path::Path,
+) -> Result<()> {
+    expiry::stop_expired_session_daemons(session, sessions_dir)
+}
+
+pub(in crate::commands::agent) fn lock_port_for_registration(
+    sessions_dir: &std::path::Path,
+    url: &str,
+) -> Result<std::fs::File> {
+    store::lock_crit_port_from(sessions_dir, parse_port(url)?)
+}
 
 const CRIT_TITLE: &str = "■ crit - Review requested";
 
@@ -96,6 +112,10 @@ pub enum CritCommands {
     /// Wait for a crit daemon to stop, then clear its session link.
     #[command(name = "monitor", hide = true)]
     Monitor(monitor::MonitorArgs),
+
+    /// Record that a crit client started waiting for a review.
+    #[command(name = "client-started", hide = true)]
+    ClientStarted(monitor::ClientStartedArgs),
 }
 
 #[derive(Args, Clone, PartialEq, Eq)]
@@ -132,6 +152,7 @@ pub fn run(command: &CritCommands) -> Result<()> {
         CritCommands::Open(args) => open(args),
         CritCommands::Close(args) => close(args),
         CritCommands::Monitor(args) => monitor::run(args),
+        CritCommands::ClientStarted(args) => monitor::run_client_started(args),
     }
 }
 

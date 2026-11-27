@@ -158,7 +158,6 @@ function messagesResponse(
     stableStart?: number
     stableEnd?: number
     stableDigest?: string
-    decisions?: Extract<ChatItem, { type: 'decision' }>[]
     hasUnansweredProposal?: boolean
     activeQuestionIndex?: number | null
   } = { start: 0, total: messages.length },
@@ -187,12 +186,6 @@ function messagesResponse(
     ...(metadata.stableDigest === undefined
       ? {}
       : { stableDigest: metadata.stableDigest }),
-    decisions:
-      metadata.decisions ??
-      messages.filter(
-        (message): message is Extract<ChatItem, { type: 'decision' }> =>
-          message.type === 'decision',
-      ),
     hasUnansweredProposal:
       metadata.hasUnansweredProposal ??
       messages.some(
@@ -475,6 +468,17 @@ function renderView(
   })
 }
 
+function getCompactingStatusSnapshot() {
+  return {
+    workingStatus: container.querySelector('.conversation-status-band-label')
+      ?.textContent,
+    detail:
+      container.querySelector('.conversation-status-band-inline-detail')
+        ?.textContent ?? null,
+    inProgressItems: container.querySelectorAll('.tool-in-progress').length,
+  }
+}
+
 it('keeps the phone composer reachable when several merge rows fill the viewport', () => {
   container.style.cssText =
     'position: fixed; inset: 0 auto auto 0; width: 390px; height: 260px'
@@ -613,13 +617,88 @@ it('disables Resume when the session has no tmux location', () => {
     label: resumeButton.textContent,
     disabled: resumeButton.disabled,
     title: resumeButton.title,
+    hint: container.querySelector('.conversation-ended-hint')?.textContent,
   })
   expect(actual()).toEqual({
     label: 'Resume',
     disabled: true,
     title: 'This session has no tmux location',
+    hint: ' · Resume is unavailable because this session has no tmux location',
   })
 })
+
+it('explains why Resume is disabled when the working directory is missing', () => {
+  renderView(
+    () => Promise.resolve(true),
+    endedSession,
+    () => undefined,
+    [],
+    {
+      ...endedActions,
+      resume: false,
+      resumeDisabledReason: 'workingDirectoryMissing',
+    },
+  )
+
+  const resumeButton = requireElement(
+    container.querySelector<HTMLButtonElement>('.conversation-ended-resume'),
+  )
+  const actual = () => ({
+    label: resumeButton.textContent,
+    disabled: resumeButton.disabled,
+    title: resumeButton.title,
+    hint: container.querySelector('.conversation-ended-hint')?.textContent,
+  })
+  expect(actual()).toEqual({
+    label: 'Resume',
+    disabled: true,
+    title: 'This session’s working directory does not exist',
+    hint: ' · Resume is unavailable because this session’s working directory does not exist',
+  })
+})
+
+it.each([
+  [
+    'no tmux location',
+    'noTmux',
+    'Resume is unavailable because this session has no tmux location',
+  ],
+  [
+    'a missing working directory',
+    'workingDirectoryMissing',
+    'Resume is unavailable because this session’s working directory does not exist',
+  ],
+] as const)(
+  'shows the disabled reason on mobile with %s',
+  (_condition, reason, hint) => {
+    renderView(
+      () => Promise.resolve(true),
+      endedSession,
+      () => undefined,
+      [],
+      { ...endedActions, resume: false, resumeDisabledReason: reason },
+      true,
+    )
+
+    const resumeButton = requireElement(
+      container.querySelector<HTMLButtonElement>('.conversation-ended-resume'),
+    )
+    const actual = () => ({
+      mobile: container
+        .querySelector('.conversation-pane')
+        ?.getAttribute('data-mobile'),
+      label: resumeButton.textContent,
+      disabled: resumeButton.disabled,
+      hint: container.querySelector('.conversation-ended-hint')?.textContent,
+    })
+    expect(actual()).toEqual({
+      mobile: 'true',
+      label: 'Resume session',
+      disabled: true,
+      hint: ` · ${hint}`,
+    })
+  },
+)
 
 type SettleResumeRequest = (
   resolve: (success: boolean) => void,
@@ -796,7 +875,6 @@ function treeNode(
     task: null,
     repo: session.repo,
     vibeMode: { mode: 'disabled' },
-    decisionCount: 0,
     pullRequest: null,
   }
 }
@@ -828,6 +906,8 @@ function renderInboxPanes(
     lastUpdatedAt: 0,
     showAllInProgress: false,
     onShowMore: () => undefined,
+    showAllWaiting: false,
+    onShowMoreWaiting: () => undefined,
     onSelect: () => undefined,
     laterExpanded: false,
     onToggleLater: () => undefined,
@@ -837,6 +917,8 @@ function renderInboxPanes(
     onSelectToday: () => undefined,
     inProgressExpanded: false,
     onToggleInProgress: () => undefined,
+    waitingExpanded: true,
+    onToggleWaiting: () => undefined,
     doneExpanded: false,
     onToggleDone: () => undefined,
   }
@@ -1440,12 +1522,14 @@ it('provides session links to cards through the conversation pane context', asyn
 })
 
 it('posts a message when randomUUID is unavailable', async () => {
+  const messagesRequestPaths: string[] = []
   vi.stubGlobal('crypto', {
     getRandomValues: (bytes: Uint8Array) => bytes.fill(0),
   })
   const fetcher = vi.fn<typeof fetch>((input, init) => {
     const url = requestUrl(input)
     if (url.includes('/messages?')) {
+      messagesRequestPaths.push(url)
       return Promise.resolve(jsonResponse(messagesResponse([])))
     }
     if (url.endsWith('/messages?from=0')) {
@@ -1494,6 +1578,10 @@ it('posts a message when randomUUID is unavailable', async () => {
         requestUrl(input).endsWith('/messages') && init?.method === 'POST',
     ),
   )
+  const confirmationRequestWasSent = await waitForState(() =>
+    messagesRequestPaths.some((url) => url.includes('pendingPromptIds=')),
+  )
+  const getRequestPaths = messagesRequestPaths.slice()
   const postRequest = fetcher.mock.calls
     .filter(
       ([input, init]) =>
@@ -1506,12 +1594,19 @@ it('posts a message when randomUUID is unavailable', async () => {
   const snapshot = () => ({
     composerReady,
     requestWasSent,
+    confirmationRequestWasSent,
+    getRequestPaths,
     postRequest,
     alert: container.querySelector('[role="alert"]')?.textContent ?? null,
   })
   expect(snapshot()).toEqual({
     composerReady: true,
     requestWasSent: true,
+    confirmationRequestWasSent: true,
+    getRequestPaths: [
+      '/api/sessions/sample-session/messages?limit=100',
+      '/api/sessions/sample-session/messages?from=0&pendingPromptIds=00000000-0000-4000-8000-000000000000',
+    ],
     postRequest: [
       {
         url: '/api/sessions/sample-session/messages',
@@ -1923,7 +2018,6 @@ it('loads and shows the session tree from the tree endpoint', async () => {
       task: null,
       repo: session.repo,
       vibeMode: { mode: 'disabled' },
-      decisionCount: 0,
       pullRequest: null,
     },
     {
@@ -1938,7 +2032,6 @@ it('loads and shows the session tree from the tree endpoint', async () => {
       task: null,
       repo: session.repo,
       vibeMode: { mode: 'disabled' },
-      decisionCount: 0,
       pullRequest: null,
     },
   ]
@@ -2065,7 +2158,6 @@ it('shows an error when the returned tree omits the selected session', async () 
               task: null,
               repo: session.repo,
               vibeMode: { mode: 'disabled' },
-              decisionCount: 0,
               pullRequest: null,
             },
             {
@@ -2080,7 +2172,6 @@ it('shows an error when the returned tree omits the selected session', async () 
               task: null,
               repo: session.repo,
               vibeMode: { mode: 'disabled' },
-              decisionCount: 0,
               pullRequest: null,
             },
           ],
@@ -3615,16 +3706,14 @@ it('ignores Alt-arrow shortcuts on mobile', () => {
 it('shows desktop newline shortcuts with the applicable interrupt hint', () => {
   const onAction = () => Promise.resolve(true)
   renderView(onAction)
-  const interruptibleHint = container.querySelector(
-    '.composer-footer > span',
+  const interruptibleHint =
+    container.querySelector('.composer-key-hint')?.textContent
+  const ownMessageHint = container.querySelector(
+    '.composer-key-hint2',
   )?.textContent
   renderView(onAction, session, undefined, [], { ...actions, interrupt: false })
-  const nonInterruptibleHint = container.querySelector(
-    '.composer-footer > span',
-  )?.textContent
-  const ownMessageHint = container.querySelectorAll(
-    '.composer-footer > span',
-  )[1]?.textContent
+  const nonInterruptibleHint =
+    container.querySelector('.composer-key-hint')?.textContent
 
   const snapshot = () => ({
     interruptibleHint,
@@ -3661,8 +3750,9 @@ it('keeps Enter for newlines and exposes mobile conversation actions', async () 
       enterEvent.defaultPrevented,
       shiftEnterEvent.defaultPrevented,
     ],
-    keyboardHint: container.querySelector('.composer-footer > span')
-      ?.textContent,
+    keyboardHint: container.querySelector('.composer-key-hint')?.textContent,
+    keyboardHint2:
+      container.querySelector('.composer-key-hint2')?.textContent ?? null,
     choiceShortcutBadges: container.querySelectorAll(
       '.chat-question-choices kbd',
     ).length,
@@ -3680,7 +3770,8 @@ it('keeps Enter for newlines and exposes mobile conversation actions', async () 
   expect(duringInterrupt).toEqual({
     actions: [['interrupt']],
     defaultPrevented: [false, false],
-    keyboardHint: undefined,
+    keyboardHint: '',
+    keyboardHint2: null,
     choiceShortcutBadges: 0,
     interruptLabel: 'Interrupting…',
     interruptBusy: 'true',
@@ -4253,15 +4344,10 @@ it('refreshes peer session labels when the linked session title changes', () => 
 })
 
 it('renders file attachments returned by the messages endpoint', async () => {
-  const jsonResponse = (body: unknown) =>
-    new Response(JSON.stringify(body), {
-      headers: { 'Content-Type': 'application/json' },
-    })
-  const fetcher = vi
-    .fn<typeof fetch>()
-    .mockResolvedValueOnce(
-      jsonResponse(
-        messagesResponse([
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const response = requestUrl(input).endsWith('/actions')
+      ? actions
+      : messagesResponse([
           {
             type: 'user_with_content',
             content: [
@@ -4269,10 +4355,9 @@ it('renders file attachments returned by the messages endpoint', async () => {
               { type: 'file', name: 'sample-layout.html' },
             ],
           },
-        ]),
-      ),
-    )
-    .mockResolvedValueOnce(jsonResponse(actions))
+        ])
+    return Promise.resolve(jsonResponse(response))
+  })
   vi.stubGlobal('fetch', fetcher)
   root = createRoot(container)
   act(() => {
@@ -4596,16 +4681,16 @@ it('shows the agent status reason while the stopped session is waiting', () => {
       ?.textContent,
     detail: container.querySelector('.conversation-status-band-inline-detail')
       ?.textContent,
-    waitingDotVisible:
+    waitingHourglassVisible:
       container.querySelector(
-        '.conversation-status-band--waiting .conversation-status-band-dot',
+        '.conversation-status-band--waiting .conversation-status-band-hourglass',
       ) !== null,
   })
 
   expect(snapshot()).toEqual({
     status: 'Waiting',
     detail: 'waiting for an external build',
-    waitingDotVisible: true,
+    waitingHourglassVisible: true,
   })
 })
 
@@ -4793,17 +4878,36 @@ it('shows the compacting status and summary instead of stale tool details', () =
     ],
   )
 
-  const getSnapshot = () => ({
-    workingStatus: container.querySelector('.conversation-status-band-label')
-      ?.textContent,
-    detail:
-      container.querySelector('.conversation-status-band-inline-detail')
-        ?.textContent ?? null,
-    inProgressItems: container.querySelectorAll('.tool-in-progress').length,
-  })
-  expect(getSnapshot()).toEqual({
+  expect(getCompactingStatusSnapshot()).toEqual({
     workingStatus: 'Compacting…',
     detail: '古い会話を要約しています',
+    inProgressItems: 0,
+  })
+})
+
+it('shows an active tool while a working session is marked as compacting', () => {
+  renderView(
+    vi.fn().mockResolvedValue(true),
+    {
+      ...session,
+      category: 'in_progress',
+      activityStatus: 'working',
+      isCompacting: true,
+      elapsedSeconds: 92,
+    },
+    undefined,
+    [
+      {
+        type: 'tool_in_progress',
+        tool: 'exec',
+        target: 'cargo check --package fixture',
+      },
+    ],
+  )
+
+  expect(getCompactingStatusSnapshot()).toEqual({
+    workingStatus: 'Working · 1m 32s',
+    detail: 'Bash  cargo check --package fixture',
     inProgressItems: 0,
   })
 })
@@ -4904,9 +5008,9 @@ it('keeps background tasks visible while the session waits for input', () => {
   const snapshot = () => ({
     status: container.querySelector('.conversation-status-band-label')
       ?.textContent,
-    waitingDotVisible:
+    waitingHourglassVisible:
       container.querySelector(
-        '.conversation-status-band--waiting .conversation-status-band-dot',
+        '.conversation-status-band--waiting .conversation-status-band-hourglass',
       ) !== null,
     backgroundTasks: container.querySelector(
       '.conversation-status-band-inline-detail',
@@ -4916,7 +5020,7 @@ it('keeps background tasks visible while the session waits for input', () => {
 
   expect(snapshot()).toEqual({
     status: 'Waiting',
-    waitingDotVisible: true,
+    waitingHourglassVisible: true,
     backgroundTasks: 'Background tasks (1)',
     expanded: 'false',
   })
@@ -5207,742 +5311,7 @@ it('updates running task elapsed time from the loaded conversation timestamp', a
   expect(snapshot()).toEqual({ before: '1m 1s', after: '1m 2s' })
 })
 
-it('keeps the Decisions tab active when running tasks appear', async () => {
-  const jsonResponse = (body: unknown) =>
-    new Response(JSON.stringify(body), {
-      headers: { 'Content-Type': 'application/json' },
-    })
-  const decision: ChatItem = {
-    type: 'decision',
-    seq: 1,
-    title: 'Choose a retry policy',
-    why: 'The service needs a predictable recovery path.',
-    considered: ['Retry using a fixed limit'],
-    easyToChange: 'One configuration value.',
-    review: null,
-    createdAt: '2026-11-11T03:25:59Z',
-  }
-  const runningTask: BackgroundTask = {
-    id: 'fixture-started-subagent',
-    description: 'Inspect the synthetic module',
-    elapsedSeconds: 7,
-    kind: 'subagent',
-    agentType: 'FixtureExplorer',
-  }
-  const fetcher = vi
-    .fn<typeof fetch>()
-    .mockResolvedValueOnce(jsonResponse(messagesResponse([decision])))
-    .mockResolvedValueOnce(jsonResponse(actions))
-    .mockResolvedValueOnce(
-      jsonResponse(messagesResponse([decision], [runningTask])),
-    )
-    .mockResolvedValueOnce(jsonResponse(actions))
-  vi.stubGlobal('fetch', fetcher)
-  root = createRoot(container)
-  const renderConversation = (refreshKey: number) => {
-    root?.render(
-      <ConversationPane
-        session={{
-          ...session,
-          category: 'needs_action',
-          decisionCount: 1,
-          unreviewedDecisionCount: 1,
-        }}
-        refreshKey={refreshKey}
-        sessionTreeRefreshKey={0}
-        onSelectSession={() => undefined}
-        statusPanelOpen
-      />,
-    )
-  }
-  act(() => {
-    renderConversation(0)
-  })
-  await act(async () => {
-    for (let index = 0; index < 12; index += 1) await Promise.resolve()
-  })
-
-  const snapshot = () => ({
-    tabs: Array.from(container.querySelectorAll('[role="tab"]'), (tab) => ({
-      label: tab.textContent,
-      selected: tab.getAttribute('aria-selected'),
-    })),
-    selectedTab: container.querySelector('[role="tab"][aria-selected="true"]')
-      ?.textContent,
-    decisionHeading: container.querySelector('.decisions-panel-header h2')
-      ?.textContent,
-  })
-  const beforeTaskStarts = snapshot()
-  act(() => {
-    renderConversation(1)
-  })
-  await act(async () => {
-    for (let index = 0; index < 12; index += 1) await Promise.resolve()
-  })
-
-  const states = () => ({ beforeTaskStarts, afterTaskStarts: snapshot() })
-  expect(states()).toEqual({
-    beforeTaskStarts: {
-      tabs: [{ label: 'Decisions1', selected: 'true' }],
-      selectedTab: 'Decisions1',
-      decisionHeading: 'Decisions in this session',
-    },
-    afterTaskStarts: {
-      tabs: [
-        { label: 'Running1', selected: 'false' },
-        { label: 'Decisions1', selected: 'true' },
-      ],
-      selectedTab: 'Decisions1',
-      decisionHeading: 'Decisions in this session',
-    },
-  })
-})
-
-it('jumps from a mobile Decisions tab to the selected conversation message', async () => {
-  const decision: ChatItem = {
-    type: 'decision',
-    seq: 12,
-    title: 'Keep retry limits predictable',
-    why: 'A fixed limit prevents repeated delivery attempts.',
-    considered: ['Retry until the request succeeds'],
-    easyToChange: 'Update one worker setting.',
-    review: null,
-    createdAt: '2026-11-11T03:25:59Z',
-  }
-  const fetcher = vi.fn<typeof fetch>((input) => {
-    const url = requestUrl(input)
-    if (url.endsWith('/messages?limit=100')) {
-      return Promise.resolve(jsonResponse(messagesResponse([decision])))
-    }
-    if (url.endsWith('/actions')) {
-      return Promise.resolve(jsonResponse(actions))
-    }
-    return Promise.resolve(jsonResponse({}))
-  })
-  vi.stubGlobal('fetch', fetcher)
-
-  function MobileConversationHarness() {
-    const [statusPanelOpen, setStatusPanelOpen] = useState(true)
-    return (
-      <ConversationPane
-        session={{ ...session, decisionCount: 1, unreviewedDecisionCount: 1 }}
-        shouldSkipSessionTreeFetch
-        initialSessionTree={[]}
-        refreshKey={0}
-        sessionTreeRefreshKey={0}
-        onSelectSession={() => undefined}
-        isMobile
-        statusPanelOpen={statusPanelOpen}
-        onCloseStatusPanel={() => {
-          setStatusPanelOpen(false)
-        }}
-      />
-    )
-  }
-
-  root = createRoot(container)
-  act(() => root?.render(<MobileConversationHarness />))
-  await waitForState(
-    () => container.querySelector('.decision-card--panel') !== null,
-  )
-  const decisionRow = requireElement(
-    container.querySelector<HTMLElement>('#decision-row-12'),
-  )
-  const scrollIntoView = vi.spyOn(decisionRow, 'scrollIntoView')
-  await act(async () => {
-    await userEvent.click(
-      requireElement(
-        container.querySelector<HTMLButtonElement>(
-          '.decision-card--panel .decision-panel-card-heading',
-        ),
-      ),
-    )
-  })
-
-  const snapshot = () => ({
-    statusPanelVisible:
-      container.querySelector('.mobile-session-status-overlay') !== null,
-    selected: decisionRow.getAttribute('data-selected'),
-    scrollCalls: scrollIntoView.mock.calls,
-  })
-  expect(snapshot()).toEqual({
-    statusPanelVisible: false,
-    selected: 'true',
-    scrollCalls: [[{ block: 'center' }]],
-  })
-})
-
-it('loads older messages before jumping to a pruned mobile decision', async () => {
-  const decision: ChatItem = {
-    type: 'decision',
-    seq: 12,
-    title: 'Keep retry limits predictable',
-    why: 'A fixed limit prevents repeated delivery attempts.',
-    considered: ['Retry until the request succeeds'],
-    easyToChange: 'Update one worker setting.',
-    review: null,
-    createdAt: '2026-11-11T03:25:59Z',
-  }
-  const assistantMessage = (index: number): ChatItem => ({
-    type: 'assistant',
-    text: `Message ${String(index)}.`,
-  })
-  const latestPage = Array.from({ length: 100 }, (_, index) =>
-    assistantMessage(index + 200),
-  )
-  const middlePage = Array.from({ length: 100 }, (_, index) =>
-    assistantMessage(index + 100),
-  )
-  const oldestPage = Array.from({ length: 100 }, (_, index) =>
-    assistantMessage(index),
-  )
-  oldestPage[99] = decision
-  const fetcher = vi.fn<typeof fetch>((input) => {
-    const url = requestUrl(input)
-    if (url.endsWith('/messages?before=200&limit=100')) {
-      return Promise.resolve(
-        jsonResponse(
-          messagesResponse(middlePage, [], {
-            start: 100,
-            total: 300,
-            decisions: [decision],
-          }),
-        ),
-      )
-    }
-    if (url.endsWith('/messages?before=100&limit=100')) {
-      return Promise.resolve(
-        jsonResponse(
-          messagesResponse(oldestPage, [], {
-            start: 0,
-            total: 300,
-            decisions: [decision],
-          }),
-        ),
-      )
-    }
-    if (url.endsWith('/messages?limit=100')) {
-      return Promise.resolve(
-        jsonResponse(
-          messagesResponse(latestPage, [], {
-            start: 200,
-            total: 300,
-            decisions: [decision],
-          }),
-        ),
-      )
-    }
-    if (url.endsWith('/actions')) {
-      return Promise.resolve(jsonResponse(actions))
-    }
-    return Promise.resolve(jsonResponse({}))
-  })
-  vi.stubGlobal('fetch', fetcher)
-
-  function MobileConversationHarness() {
-    const [statusPanelOpen, setStatusPanelOpen] = useState(true)
-    return (
-      <ConversationPane
-        session={{ ...session, decisionCount: 1, unreviewedDecisionCount: 1 }}
-        shouldSkipSessionTreeFetch
-        initialSessionTree={[]}
-        refreshKey={0}
-        sessionTreeRefreshKey={0}
-        onSelectSession={() => undefined}
-        isMobile
-        statusPanelOpen={statusPanelOpen}
-        onCloseStatusPanel={() => {
-          setStatusPanelOpen(false)
-        }}
-      />
-    )
-  }
-
-  root = createRoot(container)
-  act(() => root?.render(<MobileConversationHarness />))
-  await waitForState(
-    () => container.querySelector('.decision-card--panel') !== null,
-  )
-  await act(async () => {
-    await userEvent.click(
-      requireElement(
-        container.querySelector<HTMLButtonElement>(
-          '.decision-card--panel .decision-panel-card-heading',
-        ),
-      ),
-    )
-  })
-  await waitForState(() => container.querySelector('#decision-row-12') !== null)
-
-  const snapshot = () => ({
-    statusPanelVisible:
-      container.querySelector('.mobile-session-status-overlay') !== null,
-    decisionVisible: container.querySelector('#decision-row-12') !== null,
-    olderRequests: fetcher.mock.calls
-      .map(([input]) => requestUrl(input))
-      .filter((url) => url.includes('/messages?before=')),
-  })
-  expect(snapshot()).toEqual({
-    statusPanelVisible: false,
-    decisionVisible: true,
-    olderRequests: [
-      '/api/sessions/sample-session/messages?before=200&limit=100',
-      '/api/sessions/sample-session/messages?before=100&limit=100',
-    ],
-  })
-})
-
-it('clears a mobile decision jump when no older messages remain', async () => {
-  const decision: ChatItem = {
-    type: 'decision',
-    seq: 12,
-    title: 'Keep retry limits predictable',
-    why: 'A fixed limit prevents repeated delivery attempts.',
-    considered: ['Retry until the request succeeds'],
-    easyToChange: 'Update one worker setting.',
-    review: null,
-    createdAt: '2026-11-11T03:25:59Z',
-  }
-  const message: ChatItem = { type: 'assistant', text: 'A current message.' }
-  let showDecisionInConversation = false
-  const fetcher = vi.fn<typeof fetch>((input) => {
-    const url = requestUrl(input)
-    if (url.endsWith('/messages?limit=100')) {
-      return Promise.resolve(
-        jsonResponse(
-          messagesResponse(
-            showDecisionInConversation ? [message, decision] : [message],
-            [],
-            { start: 0, total: 2, decisions: [decision] },
-          ),
-        ),
-      )
-    }
-    if (url.includes('/messages?from=0')) {
-      showDecisionInConversation = true
-      return Promise.resolve(
-        jsonResponse(
-          messagesResponse([message, decision], [], {
-            start: 0,
-            total: 2,
-            decisions: [decision],
-          }),
-        ),
-      )
-    }
-    if (url.endsWith('/actions')) {
-      return Promise.resolve(jsonResponse(actions))
-    }
-    return Promise.resolve(jsonResponse({}))
-  })
-  vi.stubGlobal('fetch', fetcher)
-  const scrollIntoView = vi.spyOn(HTMLElement.prototype, 'scrollIntoView')
-
-  function MobileConversationHarness() {
-    const [statusPanelOpen, setStatusPanelOpen] = useState(true)
-    const [refreshKey, setRefreshKey] = useState(0)
-    return (
-      <>
-        <button
-          type="button"
-          aria-label="Refresh conversation"
-          onClick={() => {
-            setRefreshKey((current) => current + 1)
-          }}
-        />
-        <ConversationPane
-          session={{ ...session, decisionCount: 1, unreviewedDecisionCount: 1 }}
-          shouldSkipSessionTreeFetch
-          initialSessionTree={[]}
-          refreshKey={refreshKey}
-          sessionTreeRefreshKey={0}
-          onSelectSession={() => undefined}
-          isMobile
-          statusPanelOpen={statusPanelOpen}
-          onCloseStatusPanel={() => {
-            setStatusPanelOpen(false)
-          }}
-        />
-      </>
-    )
-  }
-
-  root = createRoot(container)
-  act(() => root?.render(<MobileConversationHarness />))
-  await waitForState(
-    () => container.querySelector('.decision-card--panel') !== null,
-  )
-  await act(async () => {
-    await userEvent.click(
-      requireElement(
-        container.querySelector<HTMLButtonElement>(
-          '.decision-card--panel .decision-panel-card-heading',
-        ),
-      ),
-    )
-  })
-  await act(async () => {
-    await userEvent.click(
-      requireElement(
-        container.querySelector<HTMLButtonElement>(
-          'button[aria-label="Refresh conversation"]',
-        ),
-      ),
-    )
-  })
-  await waitForState(() => container.querySelector('#decision-row-12') !== null)
-
-  const snapshot = () => ({
-    statusPanelVisible:
-      container.querySelector('.mobile-session-status-overlay') !== null,
-    decisionVisible: container.querySelector('#decision-row-12') !== null,
-    scrollCalls: scrollIntoView.mock.calls,
-  })
-  expect(snapshot()).toEqual({
-    statusPanelVisible: true,
-    decisionVisible: true,
-    scrollCalls: [],
-  })
-})
-
-it('does not retry a mobile decision jump after older history fails', async () => {
-  const decision: ChatItem = {
-    type: 'decision',
-    seq: 12,
-    title: 'Keep retry limits predictable',
-    why: 'A fixed limit prevents repeated delivery attempts.',
-    considered: ['Retry until the request succeeds'],
-    easyToChange: 'Update one worker setting.',
-    review: null,
-    createdAt: '2026-11-11T03:25:59Z',
-  }
-  const message: ChatItem = { type: 'assistant', text: 'A current message.' }
-  let olderRequestCount = 0
-  const fetcher = vi.fn<typeof fetch>((input) => {
-    const url = requestUrl(input)
-    if (url.endsWith('/messages?before=100&limit=100')) {
-      olderRequestCount += 1
-      if (olderRequestCount === 1) {
-        return Promise.reject(new Error('History unavailable'))
-      }
-      return Promise.resolve(
-        jsonResponse(
-          messagesResponse([], [], {
-            start: 0,
-            total: 101,
-            decisions: [decision],
-          }),
-        ),
-      )
-    }
-    if (url.endsWith('/messages?limit=100')) {
-      return Promise.resolve(
-        jsonResponse(
-          messagesResponse([message], [], {
-            start: 100,
-            total: 101,
-            decisions: [decision],
-          }),
-        ),
-      )
-    }
-    if (url.includes('/messages?from=')) {
-      return Promise.resolve(
-        jsonResponse(
-          messagesResponse([message, decision], [], {
-            start: 100,
-            total: 102,
-            decisions: [decision],
-          }),
-        ),
-      )
-    }
-    if (url.endsWith('/actions')) {
-      return Promise.resolve(jsonResponse(actions))
-    }
-    return Promise.resolve(jsonResponse({}))
-  })
-  vi.stubGlobal('fetch', fetcher)
-  const scrollIntoView = vi.spyOn(HTMLElement.prototype, 'scrollIntoView')
-
-  function MobileConversationHarness() {
-    const [statusPanelOpen, setStatusPanelOpen] = useState(true)
-    const [refreshKey, setRefreshKey] = useState(0)
-    return (
-      <>
-        <button
-          type="button"
-          aria-label="Refresh conversation"
-          onClick={() => {
-            setRefreshKey((current) => current + 1)
-          }}
-        />
-        <ConversationPane
-          session={{ ...session, decisionCount: 1, unreviewedDecisionCount: 1 }}
-          shouldSkipSessionTreeFetch
-          initialSessionTree={[]}
-          refreshKey={refreshKey}
-          sessionTreeRefreshKey={0}
-          onSelectSession={() => undefined}
-          isMobile
-          statusPanelOpen={statusPanelOpen}
-          onCloseStatusPanel={() => {
-            setStatusPanelOpen(false)
-          }}
-        />
-      </>
-    )
-  }
-
-  root = createRoot(container)
-  act(() => root?.render(<MobileConversationHarness />))
-  await waitForState(
-    () => container.querySelector('.decision-card--panel') !== null,
-  )
-  await act(async () => {
-    await userEvent.click(
-      requireElement(
-        container.querySelector<HTMLButtonElement>(
-          '.decision-card--panel .decision-panel-card-heading',
-        ),
-      ),
-    )
-  })
-  await waitForState(() => {
-    const loadOlderButton = container.querySelector<HTMLButtonElement>(
-      '.conversation-load-older',
-    )
-    return (
-      loadOlderButton !== null &&
-      !loadOlderButton.disabled &&
-      loadOlderButton.textContent === 'Load older messages' &&
-      container.querySelector('[role="alert"]')?.textContent ===
-        'History unavailable'
-    )
-  })
-  const afterFailure = {
-    statusPanelVisible:
-      container.querySelector('.mobile-session-status-overlay') !== null,
-    olderRequestCount,
-    loadOlderButton: container.querySelector('.conversation-load-older')
-      ?.textContent,
-  }
-  await act(async () => {
-    await userEvent.click(
-      requireElement(
-        container.querySelector<HTMLButtonElement>(
-          'button[aria-label="Refresh conversation"]',
-        ),
-      ),
-    )
-  })
-  await waitForState(() => container.querySelector('#decision-row-12') !== null)
-
-  const afterRefresh = {
-    statusPanelVisible:
-      container.querySelector('.mobile-session-status-overlay') !== null,
-    decisionVisible: container.querySelector('#decision-row-12') !== null,
-    olderRequestCount,
-    scrollCalls: scrollIntoView.mock.calls,
-  }
-  const expected = {
-    afterFailure: {
-      statusPanelVisible: true,
-      olderRequestCount: 1,
-      loadOlderButton: 'Load older messages',
-    },
-    afterRefresh: {
-      statusPanelVisible: true,
-      decisionVisible: true,
-      olderRequestCount: 1,
-      scrollCalls: [],
-    },
-  }
-  const snapshot = () => ({ afterFailure, afterRefresh })
-  expect(snapshot()).toEqual(expected)
-})
-
-it('selects Running by default and switches to Decisions from its tab', () => {
-  const decision: ChatItem = {
-    type: 'decision',
-    seq: 1,
-    title: 'Choose a retry policy',
-    why: 'The service needs a predictable recovery path.',
-    considered: ['Retry using a fixed limit'],
-    easyToChange: 'One configuration value.',
-    review: null,
-    createdAt: '2026-11-11T03:25:59Z',
-  }
-  const runningTask: BackgroundTask = {
-    id: 'fixture-running-subagent',
-    description: 'Inspect the synthetic module',
-    elapsedSeconds: 7,
-    kind: 'subagent',
-    agentType: 'FixtureExplorer',
-  }
-  const reviewSession: Session = {
-    ...session,
-    category: 'needs_action',
-    decisionCount: 1,
-    unreviewedDecisionCount: 1,
-  }
-  function StatusPanelHarness() {
-    const statusPanel = useConversationStatusPanel({
-      session: reviewSession,
-      messages: [decision],
-      backgroundTasks: [runningTask],
-      onAction: () => Promise.resolve(true),
-      onCloseStatusPanel: () => undefined,
-    })
-    return (
-      <>
-        <ConversationPaneView
-          session={reviewSession}
-          messages={[decision]}
-          backgroundTasks={[runningTask]}
-          actions={actions}
-          loading={false}
-          error={null}
-          onAction={() => Promise.resolve(true)}
-          onSelectSession={() => undefined}
-          statusPanelOpen
-          selectedDecisionSeq={statusPanel.selectedDecisionSeq}
-          onSelectDecision={statusPanel.onSelectDecision}
-        />
-        <SessionStatusPanel
-          tabs={statusPanel.tabs}
-          activeTabId={statusPanel.activeTabId}
-          onTabChange={statusPanel.onTabChange}
-          onClose={() => undefined}
-        />
-      </>
-    )
-  }
-  root = createRoot(container)
-  act(() => {
-    root?.render(<StatusPanelHarness />)
-  })
-
-  const snapshot = () => ({
-    tabs: Array.from(container.querySelectorAll('[role="tab"]'), (tab) => ({
-      label: tab.textContent,
-      selected: tab.getAttribute('aria-selected'),
-    })),
-    selectedTab: container.querySelector('[role="tab"][aria-selected="true"]')
-      ?.textContent,
-    sections: Array.from(
-      container.querySelectorAll('.running-tasks-group h2'),
-      (heading) => heading.textContent,
-    ),
-    decisionHeading: container.querySelector('.decisions-panel-header h2')
-      ?.textContent,
-  })
-  const runningState = snapshot()
-  act(() => {
-    requireElement(
-      container.querySelectorAll<HTMLButtonElement>('[role="tab"]').item(1),
-    ).click()
-  })
-  const states = () => ({ runningState, decisionsState: snapshot() })
-  expect(states()).toEqual({
-    runningState: {
-      tabs: [
-        { label: 'Running1', selected: 'true' },
-        { label: 'Decisions1', selected: 'false' },
-      ],
-      selectedTab: 'Running1',
-      sections: ['SUBAGENTS'],
-      decisionHeading: undefined,
-    },
-    decisionsState: {
-      tabs: [
-        { label: 'Running1', selected: 'false' },
-        { label: 'Decisions1', selected: 'true' },
-      ],
-      selectedTab: 'Decisions1',
-      sections: [],
-      decisionHeading: 'Decisions in this session',
-    },
-  })
-})
-
-it('shows the unreviewed count instead of the total on the Decisions tab', () => {
-  const decisions: ChatItem[] = [
-    {
-      type: 'decision',
-      seq: 1,
-      title: 'Choose a retry limit',
-      why: 'Keep recovery bounded.',
-      considered: ['Retry indefinitely'],
-      easyToChange: 'Update one setting.',
-      review: null,
-      createdAt: '2026-11-11T03:25:59Z',
-    },
-    {
-      type: 'decision',
-      seq: 2,
-      title: 'Keep the current interval',
-      why: 'It already meets the service limit.',
-      considered: ['Use a shorter interval'],
-      easyToChange: 'Update one setting.',
-      review: 'ok',
-      createdAt: '2026-11-11T03:27:59Z',
-    },
-  ]
-  const reviewSession: Session = {
-    ...session,
-    decisionCount: 2,
-    unreviewedDecisionCount: 1,
-  }
-  function StatusPanelHarness() {
-    const statusPanel = useConversationStatusPanel({
-      session: reviewSession,
-      messages: decisions,
-      backgroundTasks: [],
-      onAction: () => Promise.resolve(true),
-      onCloseStatusPanel: () => undefined,
-    })
-    return (
-      <SessionStatusPanel
-        tabs={statusPanel.tabs}
-        activeTabId={statusPanel.activeTabId}
-        onTabChange={statusPanel.onTabChange}
-        onClose={() => undefined}
-      />
-    )
-  }
-  root = createRoot(container)
-  act(() => {
-    root?.render(<StatusPanelHarness />)
-  })
-
-  const snapshot = () => ({
-    tab: container.querySelector('[role="tab"]')?.textContent,
-    decisions: Array.from(
-      container.querySelectorAll('.decision-card--panel'),
-      (card) => card.getAttribute('data-review'),
-    ),
-    progress: container.querySelector('.decisions-panel-header span')
-      ?.textContent,
-  })
-  expect(snapshot()).toEqual({
-    tab: 'Decisions1',
-    decisions: ['unreviewed', 'ok'],
-    progress: '1 / 2 reviewed',
-  })
-})
-
 it('opens a registered web UI when other status tabs are available', () => {
-  const decision: ChatItem = {
-    type: 'decision',
-    seq: 1,
-    title: 'Choose a retry policy',
-    why: 'The service needs a predictable recovery path.',
-    considered: ['Retry using a fixed limit'],
-    easyToChange: 'One configuration value.',
-    review: null,
-    createdAt: '2026-11-11T03:25:59Z',
-  }
   const runningTask: BackgroundTask = {
     id: 'fixture-running-subagent',
     description: 'Inspect the synthetic module',
@@ -5962,10 +5331,7 @@ it('opens a registered web UI when other status tabs are available', () => {
             url: 'http://127.0.0.1:5000/design/sample/',
           },
         ],
-        decisionCount: 1,
-        unreviewedDecisionCount: 1,
       },
-      messages: [decision],
       backgroundTasks: [runningTask],
       onAction: () => Promise.resolve(true),
       onCloseStatusPanel: () => undefined,
@@ -5997,7 +5363,6 @@ it('opens a registered web UI when other status tabs are available', () => {
   expect(snapshot()).toEqual({
     tabs: [
       { label: 'Running1', selected: 'false' },
-      { label: 'Decisions1', selected: 'false' },
       { label: 'Design editor', selected: 'true' },
     ],
     selectedTab: 'Design editor',
@@ -6076,151 +5441,6 @@ it('opens a registered deep link when the desktop status panel starts closed', a
   })
 })
 
-it('posts decision reviews and reflects the refreshed review state', async () => {
-  const jsonResponse = (body: unknown) =>
-    new Response(JSON.stringify(body), {
-      headers: { 'Content-Type': 'application/json' },
-    })
-  const firstDecision: ChatItem = {
-    type: 'decision',
-    seq: 1,
-    title: 'Use a fixed retry limit',
-    why: 'The current service has no reliable timing data.',
-    considered: ['Retry using the latest duration'],
-    easyToChange: 'One configuration value in the CI workflow.',
-    review: null,
-    createdAt: '2026-11-11T03:25:59Z',
-  }
-  const secondDecision: ChatItem = {
-    ...firstDecision,
-    seq: 2,
-    title: 'Keep the current backoff interval',
-    review: null,
-  }
-  const fetcher = vi
-    .fn<typeof fetch>()
-    .mockResolvedValueOnce(
-      jsonResponse(messagesResponse([firstDecision, secondDecision])),
-    )
-    .mockResolvedValueOnce(jsonResponse(actions))
-    .mockResolvedValueOnce(new Response(null, { status: 204 }))
-    .mockResolvedValueOnce(
-      jsonResponse(
-        messagesResponse([{ ...firstDecision, review: 'ok' }, secondDecision]),
-      ),
-    )
-    .mockResolvedValueOnce(jsonResponse(actions))
-    .mockResolvedValueOnce(new Response(null, { status: 204 }))
-    .mockResolvedValueOnce(
-      jsonResponse(
-        messagesResponse([
-          { ...firstDecision, review: 'ok' },
-          { ...secondDecision, review: 'change' },
-        ]),
-      ),
-    )
-    .mockResolvedValueOnce(jsonResponse(actions))
-  vi.stubGlobal('fetch', fetcher)
-  root = createRoot(container)
-  act(() => {
-    root?.render(
-      <ConversationPane
-        session={{ ...session, decisionCount: 2, unreviewedDecisionCount: 2 }}
-        refreshKey={0}
-        sessionTreeRefreshKey={0}
-        onSelectSession={() => undefined}
-      />,
-    )
-  })
-  await act(async () => {
-    for (let index = 0; index < 12; index += 1) await Promise.resolve()
-  })
-
-  const cards = () => container.querySelectorAll<HTMLElement>('.decision-card')
-  const summary = (index: number) =>
-    requireElement(
-      container
-        .querySelectorAll<HTMLButtonElement>('.decision-card-summary')
-        .item(index),
-    )
-  act(() => {
-    summary(0).click()
-  })
-  act(() => {
-    requireElement(
-      cards()
-        .item(0)
-        .querySelector<HTMLButtonElement>('.decision-card-buttons button'),
-    ).click()
-  })
-  await act(async () => {
-    for (let index = 0; index < 12; index += 1) await Promise.resolve()
-  })
-
-  act(() => {
-    summary(1).click()
-  })
-  act(() => {
-    requireElement(
-      cards()
-        .item(1)
-        .querySelector<HTMLButtonElement>(
-          '.decision-card-buttons button + button',
-        ),
-    ).click()
-  })
-  setTextareaValue(
-    requireElement(container.querySelector<HTMLTextAreaElement>('textarea')),
-    'Add a timing sample first',
-  )
-  await act(async () => {
-    requireElement(
-      cards()
-        .item(1)
-        .querySelector<HTMLButtonElement>('.decision-card-change-form button'),
-    ).click()
-    for (let index = 0; index < 12; index += 1) await Promise.resolve()
-  })
-
-  const postRequests = fetcher.mock.calls
-    .filter(([, init]) => init?.method === 'POST')
-    .map(([input, init]) => ({
-      url:
-        typeof input === 'string'
-          ? input
-          : input instanceof URL
-            ? input.href
-            : input.url,
-      method: init?.method,
-      body: init?.body ?? null,
-    }))
-  const reviewState = Array.from(
-    container.querySelectorAll('.decision-card-review-state'),
-    (element) => element.textContent,
-  )
-  const positions = Array.from(
-    container.querySelectorAll('.decision-card-position'),
-    (element) => element.textContent,
-  )
-  const snapshot = () => ({ postRequests, reviewState, positions })
-  expect(snapshot()).toEqual({
-    postRequests: [
-      {
-        url: '/api/sessions/sample-session/decisions/1/ok',
-        method: 'POST',
-        body: null,
-      },
-      {
-        url: '/api/sessions/sample-session/decisions/2/change',
-        method: 'POST',
-        body: JSON.stringify({ comment: 'Add a timing sample first' }),
-      },
-    ],
-    reviewState: ['Reviewed · OK', 'Change requested'],
-    positions: ['1 of 2', '2 of 2'],
-  })
-})
-
 it('shows the status panel toggle and reports its open state', () => {
   const onToggleStatusPanel = vi.fn<() => void>()
   renderView(
@@ -6280,14 +5500,12 @@ it('shows the open action when the status panel is closed', () => {
   })
 })
 
-it('keeps Decisions in the status panel and toggles Starred from the header', () => {
+it('toggles Starred from the header', () => {
   const onToggleToday = vi.fn<(isToday: boolean) => void>()
   renderView(
     vi.fn(() => Promise.resolve(true)),
     {
       ...session,
-      decisionCount: 2,
-      unreviewedDecisionCount: 0,
     },
     undefined,
     [],
@@ -6308,9 +5526,6 @@ it('keeps Decisions in the status panel and toggles Starred from the header', ()
   })
 
   const snapshot = () => ({
-    noDecisionsAction: container.querySelector(
-      '.conversation-decisions-toggle',
-    ),
     label: toggle.getAttribute('aria-label'),
     icon: toggle.textContent,
     pressed: toggle.getAttribute('aria-pressed'),
@@ -6318,23 +5533,12 @@ it('keeps Decisions in the status panel and toggles Starred from the header', ()
     calls: onToggleToday.mock.calls,
   })
   expect(snapshot()).toEqual({
-    noDecisionsAction: null,
     label: 'Add to Starred',
     icon: '☆',
     pressed: 'false',
     title: 'Add to Starred',
     calls: [[true]],
   })
-})
-
-it('keeps the Starred toggle available when a session has no decisions', () => {
-  renderView(vi.fn(() => Promise.resolve(true)))
-
-  const snapshot = () => ({
-    star: container.querySelector('.conversation-today-toggle') !== null,
-    decisions: container.querySelector('.conversation-decisions-toggle'),
-  })
-  expect(snapshot()).toEqual({ star: true, decisions: null })
 })
 
 it('removes a session from Starred from the desktop header', () => {
@@ -6379,16 +5583,6 @@ it('opens and closes the existing status panel over the mobile conversation', as
     new Response(JSON.stringify(body), {
       headers: { 'Content-Type': 'application/json' },
     })
-  const decision: ChatItem = {
-    type: 'decision',
-    seq: 1,
-    title: 'Use a bounded retry limit',
-    why: 'The service does not expose reliable timing data yet.',
-    considered: ['Retry until the service recovers'],
-    easyToChange: 'Update the retry limit configuration.',
-    review: null,
-    createdAt: '2026-11-11T03:25:59Z',
-  }
   const pullRequests = [
     {
       number: 42,
@@ -6420,7 +5614,7 @@ it('opens and closes the existing status panel over the mobile conversation', as
     'fetch',
     vi
       .fn<typeof fetch>()
-      .mockResolvedValueOnce(jsonResponse(messagesResponse([decision])))
+      .mockResolvedValueOnce(jsonResponse(messagesResponse([])))
       .mockResolvedValueOnce(jsonResponse(actions)),
   )
   function ToggleHarness() {
@@ -6463,8 +5657,6 @@ it('opens and closes the existing status panel over the mobile conversation', as
       document.activeElement ===
       container.querySelector('.mobile-session-status-overlay [role="dialog"]'),
     selectedTab: container.querySelector('[role="tab"][aria-selected="true"]')
-      ?.textContent,
-    decisionHeading: container.querySelector('.decisions-panel-header h2')
       ?.textContent,
     backButtonFocused:
       document.activeElement ===
@@ -6523,11 +5715,13 @@ it('opens and closes the existing status panel over the mobile conversation', as
     opened: {
       overlay: true,
       dialogFocused: true,
-      selectedTab: 'Decisions1',
-      decisionHeading: 'Decisions in this session',
+      selectedTab: 'PRs2',
       backButtonFocused: false,
-      pullRequestTabs: ['PRs2', 'Decisions1'],
-      pullRequestRows: [],
+      pullRequestTabs: ['PRs2'],
+      pullRequestRows: [
+        { title: '#42 Allow a bounded retry policy', action: 'Merge' },
+        { title: '#43 Record retry outcomes', action: 'CI failing' },
+      ],
     },
     pullRequestTab: {
       selectedTab: 'PRs2',
@@ -8071,8 +7265,8 @@ it('sends pasted file data with the message and keeps it when sending fails', as
   expect(
     await waitForState(
       () =>
-        container.querySelector('.attachment-preview-item span')
-          ?.textContent === file.name,
+        container.querySelector('.composer-attachment-name')?.textContent ===
+        file.name,
     ),
   ).toBe(true)
   act(() => {
@@ -8083,7 +7277,7 @@ it('sends pasted file data with the message and keeps it when sending fails', as
   const snapshot = () => ({
     actionCalls: onAction.mock.calls,
     attachmentNames: Array.from(
-      container.querySelectorAll('.attachment-preview-item span'),
+      container.querySelectorAll('.composer-attachment-name'),
       (element) => element.textContent,
     ),
   })
@@ -8135,7 +7329,7 @@ it('warns before leaving after its conversation pane unmounts', async () => {
   })
   expect(
     await waitForState(
-      () => container.querySelector('.attachment-preview-item') !== null,
+      () => container.querySelector('.composer-attachment') !== null,
     ),
   ).toBe(true)
   const event = new Event('beforeunload', { cancelable: true })
@@ -8191,7 +7385,7 @@ it('warns before leaving while an attachment is being processed', async () => {
     await Promise.resolve()
   })
   await waitForState(
-    () => container.querySelector('.attachment-preview-item') !== null,
+    () => container.querySelector('.composer-attachment') !== null,
   )
   const whileQueued = new Event('beforeunload', { cancelable: true })
   act(() => {
@@ -8227,8 +7421,9 @@ it('attaches dropped files through the composer and sends their data', async () 
   expect(
     await waitForState(
       () =>
-        container.querySelector('.attachment-preview-item span')
-          ?.textContent === file.name,
+        container
+          .querySelector('.composer-attachment-image')
+          ?.getAttribute('alt') === file.name,
     ),
   ).toBe(true)
   const textarea = requireElement(
@@ -8241,7 +7436,7 @@ it('attaches dropped files through the composer and sends their data', async () 
     await waitForState(
       () =>
         onAction.mock.calls.length === 1 &&
-        container.querySelector('.attachment-preview-item') === null,
+        container.querySelector('.composer-attachment') === null,
     ),
   ).toBe(true)
 
@@ -8251,13 +7446,13 @@ it('attaches dropped files through the composer and sends their data', async () 
       container.querySelector('.conversation-drop-target')?.textContent ?? null,
     dropPrevented: drop.defaultPrevented,
     attachmentNames: Array.from(
-      container.querySelectorAll('.attachment-preview-item span'),
+      container.querySelectorAll('.composer-attachment-name'),
       (element) => element.textContent,
     ),
     actionCalls: onAction.mock.calls,
   })
   expect(snapshot()).toEqual({
-    targetVisibleDuringDrag: 'Drop files to attach',
+    targetVisibleDuringDrag: 'Drop images to attach',
     targetAfterDrop: null,
     dropPrevented: true,
     attachmentNames: [],
@@ -8340,12 +7535,9 @@ it('attaches files dropped on a proposal comment without activating the conversa
       ),
       (element) => element.textContent,
     ),
-    composerAttachmentNames: Array.from(
-      container.querySelectorAll(
-        '.conversation-composer .attachment-preview-item span',
-      ),
-      (element) => element.textContent,
-    ),
+    composerAttachmentCount: container.querySelectorAll(
+      '.conversation-composer .composer-attachment',
+    ).length,
     actionCalls: onAction.mock.calls,
   })
   expect(snapshot()).toEqual({
@@ -8358,7 +7550,7 @@ it('attaches files dropped on a proposal comment without activating the conversa
     targetAfterDragOver: 'Drop files to attach',
     targetAfterDrop: null,
     commentAttachmentNames: ['dropped.png'],
-    composerAttachmentNames: [],
+    composerAttachmentCount: 0,
     actionCalls: [],
   })
 })
@@ -8388,7 +7580,7 @@ it('hides the drop target when a file drag leaves the conversation', () => {
       container.querySelector('.conversation-drop-target')?.textContent ?? null,
   })
   expect(snapshot()).toEqual({
-    targetAfterEnter: 'Drop files to attach',
+    targetAfterEnter: 'Drop images to attach',
     targetAfterLeave: null,
   })
 })
@@ -8412,8 +7604,8 @@ it('clears pasted attachments after a successful send', async () => {
   expect(
     await waitForState(
       () =>
-        container.querySelector('.attachment-preview-item span')
-          ?.textContent === file.name,
+        container.querySelector('.composer-attachment-name')?.textContent ===
+        file.name,
     ),
   ).toBe(true)
   act(() => {
@@ -8423,14 +7615,14 @@ it('clears pasted attachments after a successful send', async () => {
     await waitForState(
       () =>
         onAction.mock.calls.length === 1 &&
-        container.querySelector('.attachment-preview-item') === null,
+        container.querySelector('.composer-attachment') === null,
     ),
   ).toBe(true)
 
   const snapshot = () => ({
     actionCalls: onAction.mock.calls,
     attachmentNames: Array.from(
-      container.querySelectorAll('.attachment-preview-item span'),
+      container.querySelectorAll('.composer-attachment-name'),
       (element) => element.textContent,
     ),
   })
@@ -8482,7 +7674,7 @@ it('names the attachment that crosses the message size limit before sending', as
   })
   expect(
     await waitForState(
-      () => container.querySelectorAll('.attachment-preview-item').length === 2,
+      () => container.querySelectorAll('.composer-attachment').length === 2,
     ),
   ).toBe(true)
   act(() => {
@@ -8499,7 +7691,7 @@ it('names the attachment that crosses the message size limit before sending', as
   const snapshot = () => ({
     error: container.querySelector('[role="alert"]')?.textContent ?? null,
     attachmentNames: Array.from(
-      container.querySelectorAll('.attachment-preview-item span'),
+      container.querySelectorAll('.composer-attachment-name'),
       (element) => element.textContent,
     ),
     actionCalls: onAction.mock.calls,
@@ -8531,7 +7723,7 @@ it('names and blocks the attachment that crosses the attachment count limit', as
   expect(
     await waitForState(
       () =>
-        container.querySelectorAll('.attachment-preview-item').length ===
+        container.querySelectorAll('.composer-attachment').length ===
         files.length,
     ),
   ).toBe(true)
@@ -8549,7 +7741,7 @@ it('names and blocks the attachment that crosses the attachment count limit', as
   const snapshot = () => ({
     error: container.querySelector('[role="alert"]')?.textContent ?? null,
     attachmentNames: Array.from(
-      container.querySelectorAll('.attachment-preview-item span'),
+      container.querySelectorAll('.composer-attachment-name'),
       (element) => element.textContent,
     ),
     actionCalls: onAction.mock.calls,
@@ -8637,8 +7829,8 @@ it('shows a server attachment validation error and retains the rejected attachme
   expect(
     await waitForState(
       () =>
-        container.querySelector('.attachment-preview-item span')
-          ?.textContent === file.name,
+        container.querySelector('.composer-attachment-name')?.textContent ===
+        file.name,
     ),
   ).toBe(true)
   act(() => {
@@ -8650,14 +7842,14 @@ it('shows a server attachment validation error and retains the rejected attachme
         container.querySelector('[role="alert"]')?.textContent ===
           'file attachment data is invalid' &&
         fetcher.mock.calls.length === 3 &&
-        container.querySelector('.attachment-preview-item span')
-          ?.textContent === file.name,
+        container.querySelector('.composer-attachment-name')?.textContent ===
+          file.name,
     ),
   ).toBe(true)
 
   const snapshot = () => ({
     error: container.querySelector('[role="alert"]')?.textContent ?? null,
-    attachmentName: container.querySelector('.attachment-preview-item span')
+    attachmentName: container.querySelector('.composer-attachment-name')
       ?.textContent,
     postBody: normalizeQueuedMessagePostBody(fetcher.mock.calls[2]?.[1]?.body),
   })
@@ -8761,8 +7953,9 @@ it('waits for pasted image optimization and sends the optimized attachment', asy
   expect(
     await waitForState(
       () =>
-        container.querySelector('.attachment-preview-item span')
-          ?.textContent === 'photo.jpg' && !sendButton.disabled,
+        container
+          .querySelector('.composer-attachment-image')
+          ?.getAttribute('alt') === 'photo.jpg' && !sendButton.disabled,
     ),
   ).toBe(true)
   act(() => {
@@ -9045,9 +8238,7 @@ it('blocks duplicate sends and shows their pending status', async () => {
     buttonDisabled: sendButton.disabled,
     defaultPrevented: events.map((event) => event.defaultPrevented),
     draft: textarea.value,
-    status:
-      container.querySelector('.composer-footer [role="status"]')
-        ?.textContent ?? null,
+    status: container.querySelector('.composer-status')?.textContent ?? null,
   })
   const pendingSnapshot = duringSend()
 
@@ -9061,9 +8252,7 @@ it('blocks duplicate sends and shows their pending status', async () => {
     afterSend: {
       buttonDisabled: sendButton.disabled,
       draft: textarea.value,
-      status:
-        container.querySelector('.composer-footer [role="status"]')
-          ?.textContent ?? null,
+      status: container.querySelector('.composer-status')?.textContent ?? null,
     },
   })
   const expected = {
@@ -9098,6 +8287,9 @@ it('follows new messages at the bottom without moving a reader who scrolled up',
   scrollToPosition(scroll, 200)
   const initialBottom = scroll.scrollTop
 
+  act(() => {
+    scroll.dispatchEvent(new Event('wheel'))
+  })
   setHeight(500)
   renderView(onAction, session, undefined, [
     firstMessage,
@@ -9973,6 +9165,784 @@ it.each([
     buttonStates,
   ])
   expect(actual).toBe(expected)
+})
+
+it('keeps a message send error through refreshes until a send succeeds', async () => {
+  let refreshConversation: () => void = () => undefined
+  let sendCount = 0
+  const fetcher = vi.fn<typeof fetch>((input, init) => {
+    const url = requestUrl(input)
+    if (init?.method === 'POST' && url.endsWith('/messages')) {
+      sendCount += 1
+      return Promise.resolve(
+        sendCount === 1
+          ? jsonResponse({ error: 'The message could not be sent.' }, 503)
+          : jsonResponse({ queuedPromptId: 'fixture-queued-prompt' }),
+      )
+    }
+    if (url.includes('/messages?')) {
+      return Promise.resolve(jsonResponse(messagesResponse([permission])))
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    return Promise.resolve(jsonResponse({}))
+  })
+  const messageRefreshCount = () =>
+    fetcher.mock.calls.filter(
+      ([input, init]) =>
+        init?.method !== 'POST' && requestUrl(input).includes('/messages?'),
+    ).length
+  vi.stubGlobal('fetch', fetcher)
+
+  function ConversationHarness() {
+    const [refreshKey, setRefreshKey] = useState(0)
+    refreshConversation = () => {
+      setRefreshKey((current) => current + 1)
+    }
+    return (
+      <ConversationPane
+        session={session}
+        shouldSkipSessionTreeFetch
+        initialSessionTree={[]}
+        refreshKey={refreshKey}
+        sessionTreeRefreshKey={0}
+        onSelectSession={() => undefined}
+      />
+    )
+  }
+
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <SessionConversationCacheProvider>
+        <ConversationHarness />
+      </SessionConversationCacheProvider>,
+    )
+  })
+  await waitForState(
+    () =>
+      container.querySelector<HTMLTextAreaElement>('textarea')?.disabled ===
+      false,
+  )
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  setTextareaValue(textarea, 'Retain this prompt')
+  await act(async () => {
+    dispatchKey(textarea, 'Enter')
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  await waitForState(
+    () =>
+      container.querySelector('[role="alert"]')?.textContent ===
+      'The message could not be sent.',
+  )
+  const afterFailedSend = {
+    alert: container.querySelector('[role="alert"]')?.textContent ?? null,
+    draft: textarea.value,
+  }
+
+  await act(async () => {
+    await userEvent.click(
+      requireElement(
+        container.querySelector<HTMLButtonElement>(
+          '.permission-actions button',
+        ),
+      ),
+    )
+  })
+  const unrelatedActionRefreshCompleted = await waitForState(
+    () => messageRefreshCount() === 2,
+  )
+  const afterUnrelatedAction = {
+    completed: unrelatedActionRefreshCompleted,
+    alert: container.querySelector('[role="alert"]')?.textContent ?? null,
+    draft: textarea.value,
+  }
+
+  const refreshCountBeforeExplicitRefresh = messageRefreshCount()
+  await act(async () => {
+    refreshConversation()
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  const explicitRefreshCompleted = await waitForState(
+    () => messageRefreshCount() > refreshCountBeforeExplicitRefresh,
+  )
+  const afterRefresh = {
+    completed: explicitRefreshCompleted,
+    alert: container.querySelector('[role="alert"]')?.textContent ?? null,
+    draft: textarea.value,
+  }
+
+  await act(async () => {
+    dispatchKey(textarea, 'Enter')
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  await waitForState(
+    () => sendCount === 2 && container.querySelector('[role="alert"]') === null,
+  )
+
+  const snapshot = () => ({
+    afterFailedSend,
+    afterUnrelatedAction,
+    afterRefresh,
+    afterSuccessfulSend: {
+      alert: container.querySelector('[role="alert"]')?.textContent ?? null,
+      draft: textarea.value,
+    },
+  })
+  expect(snapshot()).toEqual({
+    afterFailedSend: {
+      alert: 'The message could not be sent.',
+      draft: 'Retain this prompt',
+    },
+    afterUnrelatedAction: {
+      completed: true,
+      alert: 'The message could not be sent.',
+      draft: 'Retain this prompt',
+    },
+    afterRefresh: {
+      completed: true,
+      alert: 'The message could not be sent.',
+      draft: 'Retain this prompt',
+    },
+    afterSuccessfulSend: { alert: null, draft: '' },
+  })
+})
+
+it('shows permission errors alongside a retained message send error', async () => {
+  let sendCount = 0
+  let permissionRequestCount = 0
+  const fetcher = vi.fn<typeof fetch>((input, init) => {
+    const url = requestUrl(input)
+    if (init?.method === 'POST' && url.endsWith('/messages')) {
+      sendCount += 1
+      return Promise.resolve(
+        sendCount === 1
+          ? jsonResponse({ error: 'The message could not be sent.' }, 503)
+          : jsonResponse({ queuedPromptId: 'fixture-queued-prompt' }),
+      )
+    }
+    if (init?.method === 'POST' && url.endsWith('/permission/approve')) {
+      permissionRequestCount += 1
+      return Promise.resolve(
+        permissionRequestCount === 1
+          ? jsonResponse(
+              { error: 'The permission could not be approved.' },
+              503,
+            )
+          : jsonResponse({}),
+      )
+    }
+    if (url.includes('/messages?')) {
+      return Promise.resolve(jsonResponse(messagesResponse([permission])))
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <SessionConversationCacheProvider>
+        <ConversationPane
+          session={session}
+          shouldSkipSessionTreeFetch
+          initialSessionTree={[]}
+          refreshKey={0}
+          sessionTreeRefreshKey={0}
+          onSelectSession={() => undefined}
+        />
+      </SessionConversationCacheProvider>,
+    )
+  })
+  await waitForState(
+    () =>
+      container.querySelector<HTMLTextAreaElement>('textarea')?.disabled ===
+      false,
+  )
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  setTextareaValue(textarea, 'Retain this prompt')
+  await act(async () => {
+    dispatchKey(textarea, 'Enter')
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  await waitForState(
+    () =>
+      container.querySelector('[role="alert"]')?.textContent ===
+      'The message could not be sent.',
+  )
+
+  const approveButton = () =>
+    requireElement(
+      container.querySelector<HTMLButtonElement>(
+        '.chat-permission-card .permission-actions button',
+      ),
+    )
+  await act(async () => userEvent.click(approveButton()))
+  await waitForState(
+    () =>
+      permissionRequestCount === 1 &&
+      container.querySelector('[role="alert"]')?.textContent ===
+        'The permission could not be approved.',
+  )
+  const afterFailedApproval =
+    container.querySelector('[role="alert"]')?.textContent ?? null
+
+  await act(async () => userEvent.click(approveButton()))
+  await waitForState(
+    () =>
+      permissionRequestCount === 2 &&
+      container.querySelector('[role="alert"]')?.textContent ===
+        'The message could not be sent.',
+  )
+  const afterSuccessfulApproval =
+    container.querySelector('[role="alert"]')?.textContent ?? null
+
+  await act(async () => {
+    dispatchKey(textarea, 'Enter')
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  const successfulSendCompleted = await waitForState(
+    () => sendCount === 2 && container.querySelector('[role="alert"]') === null,
+  )
+
+  const snapshot = () => ({
+    afterFailedApproval,
+    afterSuccessfulApproval,
+    successfulSendCompleted,
+  })
+  expect(snapshot()).toEqual({
+    afterFailedApproval: 'The permission could not be approved.',
+    afterSuccessfulApproval: 'The message could not be sent.',
+    successfulSendCompleted: true,
+  })
+})
+
+it('shows an attachment size warning over a retained message send error', async () => {
+  let sendCount = 0
+  const attachmentSession = { ...session, id: crypto.randomUUID() }
+  renderedSessionIds.add(attachmentSession.id)
+  const fetcher = vi.fn<typeof fetch>((input, init) => {
+    const url = requestUrl(input)
+    if (init?.method === 'POST' && url.endsWith('/messages')) {
+      sendCount += 1
+      return Promise.resolve(
+        jsonResponse({ error: 'The message could not be sent.' }, 503),
+      )
+    }
+    if (url.includes('/messages?')) {
+      return Promise.resolve(jsonResponse(messagesResponse([])))
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <SessionConversationCacheProvider>
+        <ConversationPane
+          session={attachmentSession}
+          shouldSkipSessionTreeFetch
+          initialSessionTree={[]}
+          refreshKey={0}
+          sessionTreeRefreshKey={0}
+          onSelectSession={() => undefined}
+        />
+      </SessionConversationCacheProvider>,
+    )
+  })
+  await waitForState(
+    () =>
+      container.querySelector<HTMLTextAreaElement>('textarea')?.disabled ===
+      false,
+  )
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  setTextareaValue(textarea, 'Retain this prompt')
+  await act(async () => {
+    dispatchKey(textarea, 'Enter')
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  await waitForState(
+    () =>
+      container.querySelector('[role="alert"]')?.textContent ===
+      'The message could not be sent.',
+  )
+
+  const firstFile = new File(['first'], 'first.bin', {
+    type: 'application/octet-stream',
+  })
+  const limitCrossingFile = new File(['second'], 'limit-crossing.bin', {
+    type: 'application/octet-stream',
+  })
+  Object.defineProperty(firstFile, 'size', { value: 30 * 1024 * 1024 })
+  Object.defineProperty(limitCrossingFile, 'size', { value: 21 * 1024 * 1024 })
+  const pasteEvent = new Event('paste', { bubbles: true, cancelable: true })
+  Object.defineProperty(pasteEvent, 'clipboardData', {
+    value: { files: [firstFile, limitCrossingFile] },
+  })
+  act(() => {
+    void textarea.dispatchEvent(pasteEvent)
+  })
+  const limitWarning =
+    'limit-crossing.bin would exceed the 50 MiB attachment limit'
+  const warningDisplayed = await waitForState(
+    () =>
+      container.querySelectorAll('.composer-attachment').length === 2 &&
+      container.querySelector('[role="alert"]')?.textContent === limitWarning,
+  )
+
+  await act(async () => {
+    await userEvent.click(
+      requireElement(
+        container.querySelector<HTMLButtonElement>(
+          '[aria-label="Remove limit-crossing.bin"]',
+        ),
+      ),
+    )
+  })
+  const retainedErrorRestored = await waitForState(
+    () =>
+      container.querySelectorAll('.composer-attachment').length === 1 &&
+      container.querySelector('[role="alert"]')?.textContent ===
+        'The message could not be sent.',
+  )
+
+  await act(async () => {
+    dispatchKey(textarea, 'Enter')
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    warningDisplayed,
+    retainedErrorRestored,
+    alert: container.querySelector('[role="alert"]')?.textContent ?? null,
+    sendCount,
+  })
+  expect(snapshot()).toEqual({
+    warningDisplayed: true,
+    retainedErrorRestored: true,
+    alert: 'The message could not be sent.',
+    sendCount: 1,
+  })
+})
+
+it('keeps a retained message error visible after an empty attachment error', async () => {
+  let sendCount = 0
+  let encodingFailureCount = 0
+  const attachmentSession = { ...session, id: crypto.randomUUID() }
+  renderedSessionIds.add(attachmentSession.id)
+  const fetcher = vi.fn<typeof fetch>((input, init) => {
+    const url = requestUrl(input)
+    if (init?.method === 'POST' && url.endsWith('/messages')) {
+      sendCount += 1
+      return Promise.resolve(
+        jsonResponse({ error: 'The message could not be sent.' }, 503),
+      )
+    }
+    if (url.includes('/messages?')) {
+      return Promise.resolve(jsonResponse(messagesResponse([])))
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <SessionConversationCacheProvider>
+        <ConversationPane
+          session={attachmentSession}
+          shouldSkipSessionTreeFetch
+          initialSessionTree={[]}
+          refreshKey={0}
+          sessionTreeRefreshKey={0}
+          onSelectSession={() => undefined}
+        />
+      </SessionConversationCacheProvider>,
+    )
+  })
+  await waitForState(
+    () =>
+      container.querySelector<HTMLTextAreaElement>('textarea')?.disabled ===
+      false,
+  )
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  setTextareaValue(textarea, 'Retain this prompt')
+  await act(async () => {
+    dispatchKey(textarea, 'Enter')
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  await waitForState(
+    () =>
+      container.querySelector('[role="alert"]')?.textContent ===
+      'The message could not be sent.',
+  )
+
+  const brokenFile = new File(['payload'], 'broken.bin', {
+    type: 'application/octet-stream',
+  })
+  vi.spyOn(Blob.prototype, 'arrayBuffer').mockImplementation(() => {
+    encodingFailureCount += 1
+    return Promise.reject(new Error(''))
+  })
+  const pasteEvent = new Event('paste', { bubbles: true, cancelable: true })
+  Object.defineProperty(pasteEvent, 'clipboardData', {
+    value: { files: [brokenFile] },
+  })
+  act(() => {
+    void textarea.dispatchEvent(pasteEvent)
+  })
+  await waitForState(
+    () => container.querySelector('.composer-attachment') !== null,
+  )
+  await waitForState(
+    () =>
+      container
+        .querySelector('.conversation-composer')
+        ?.getAttribute('aria-busy') === 'false',
+  )
+
+  await act(async () => {
+    dispatchKey(textarea, 'Enter')
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  const retainedErrorAfterEncodingFailure = await waitForState(
+    () =>
+      encodingFailureCount > 0 &&
+      container.querySelector('[role="alert"]')?.textContent ===
+        'The message could not be sent.',
+  )
+
+  const snapshot = () => ({
+    retainedErrorAfterEncodingFailure,
+    alert: container.querySelector('[role="alert"]')?.textContent ?? null,
+    encodingFailed: encodingFailureCount > 0,
+    sendCount,
+  })
+  expect(snapshot()).toEqual({
+    retainedErrorAfterEncodingFailure: true,
+    alert: 'The message could not be sent.',
+    encodingFailed: true,
+    sendCount: 1,
+  })
+})
+
+it('keeps a permission error until the same request succeeds', async () => {
+  let permissionRequestCount = 0
+  const fetcher = vi.fn<typeof fetch>((input, init) => {
+    const url = requestUrl(input)
+    if (init?.method === 'POST' && url.endsWith('/permission/approve')) {
+      permissionRequestCount += 1
+      return Promise.resolve(
+        permissionRequestCount === 1
+          ? jsonResponse(
+              { error: 'The permission could not be approved.' },
+              503,
+            )
+          : jsonResponse({}),
+      )
+    }
+    if (url.includes('/messages?')) {
+      return Promise.resolve(
+        jsonResponse(messagesResponse([permission, otherPermission])),
+      )
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <SessionConversationCacheProvider>
+        <ConversationPane
+          session={session}
+          shouldSkipSessionTreeFetch
+          initialSessionTree={[]}
+          refreshKey={0}
+          sessionTreeRefreshKey={0}
+          onSelectSession={() => undefined}
+        />
+      </SessionConversationCacheProvider>,
+    )
+  })
+  await waitForState(
+    () =>
+      container.querySelectorAll<HTMLButtonElement>(
+        '.chat-permission-card .permission-actions button',
+      ).length === 4 &&
+      Array.from(
+        container.querySelectorAll<HTMLButtonElement>(
+          '.chat-permission-card .permission-actions button',
+        ),
+      ).every((button) => !button.disabled),
+  )
+  const approveButtons = () =>
+    container.querySelectorAll<HTMLButtonElement>(
+      '.chat-permission-card .permission-actions button',
+    )
+  await act(async () => {
+    await userEvent.click(requireElement(approveButtons().item(0)))
+  })
+  await waitForState(
+    () =>
+      container.querySelector('[role="alert"]')?.textContent ===
+      'The permission could not be approved.',
+  )
+  const afterFailedRequest =
+    container.querySelector('[role="alert"]')?.textContent ?? null
+
+  await act(async () => {
+    await userEvent.click(requireElement(approveButtons().item(2)))
+  })
+  const unrelatedRequestCompleted = await waitForState(
+    () =>
+      permissionRequestCount === 2 &&
+      fetcher.mock.calls.filter(
+        ([input, init]) =>
+          init?.method !== 'POST' && requestUrl(input).includes('/messages?'),
+      ).length === 2,
+  )
+  const afterDifferentRequestSucceeded = {
+    completed: unrelatedRequestCompleted,
+    alert: container.querySelector('[role="alert"]')?.textContent ?? null,
+  }
+
+  await act(async () => {
+    await userEvent.click(requireElement(approveButtons().item(0)))
+  })
+  const sameRequestCompleted = await waitForState(
+    () =>
+      permissionRequestCount === 3 &&
+      container.querySelector('[role="alert"]') === null,
+  )
+
+  const snapshot = () => ({
+    afterFailedRequest,
+    afterDifferentRequestSucceeded,
+    afterSameRequestSucceeded: sameRequestCompleted,
+  })
+  expect(snapshot()).toEqual({
+    afterFailedRequest: 'The permission could not be approved.',
+    afterDifferentRequestSucceeded: {
+      completed: true,
+      alert: 'The permission could not be approved.',
+    },
+    afterSameRequestSucceeded: true,
+  })
+})
+
+it('clears a proposal error after an edited answer succeeds', async () => {
+  let answerCount = 0
+  const answerComments: string[] = []
+  const fetcher = vi.fn<typeof fetch>((input, init) => {
+    const url = requestUrl(input)
+    if (init?.method === 'POST' && url.endsWith('/proposals/3/answer')) {
+      answerCount += 1
+      if (typeof init.body === 'string') {
+        const body: unknown = JSON.parse(init.body)
+        if (typeof body === 'object' && body !== null) {
+          const comment = 'comment' in body ? body.comment : undefined
+          if (typeof comment === 'string') answerComments.push(comment)
+        }
+      }
+      return Promise.resolve(
+        answerCount === 1
+          ? jsonResponse(
+              { error: 'The proposal answer could not be saved.' },
+              503,
+            )
+          : jsonResponse({}),
+      )
+    }
+    if (url.includes('/messages?')) {
+      return Promise.resolve(jsonResponse(messagesResponse([proposal])))
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <SessionConversationCacheProvider>
+        <ConversationPane
+          session={session}
+          shouldSkipSessionTreeFetch
+          initialSessionTree={[]}
+          refreshKey={0}
+          sessionTreeRefreshKey={0}
+          onSelectSession={() => undefined}
+        />
+      </SessionConversationCacheProvider>,
+    )
+  })
+  await waitForState(
+    () => container.querySelector('.chat-proposal-comment') !== null,
+  )
+  const comment = requireElement(
+    container.querySelector<HTMLTextAreaElement>('.chat-proposal-comment'),
+  )
+  setTextareaValue(comment, 'First answer')
+  act(() => {
+    requireElement(
+      container.querySelector<HTMLInputElement>('.chat-proposal-option input'),
+    ).click()
+  })
+  const submit = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      '.chat-proposal-actions .aw-button--primary',
+    ),
+  )
+  await act(async () => {
+    await userEvent.click(submit)
+  })
+  await waitForState(
+    () =>
+      container.querySelector('[role="alert"]')?.textContent ===
+      'The proposal answer could not be saved.',
+  )
+  const afterFailedAnswer =
+    container.querySelector('[role="alert"]')?.textContent ?? null
+
+  const updatedComment = requireElement(
+    container.querySelector<HTMLTextAreaElement>('.chat-proposal-comment'),
+  )
+  setTextareaValue(updatedComment, 'Revised answer')
+  const updatedSubmit = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      '.chat-proposal-actions .aw-button--primary',
+    ),
+  )
+  await act(async () => userEvent.click(updatedSubmit))
+  const editedAnswerCompleted = await waitForState(
+    () =>
+      answerCount === 2 && container.querySelector('[role="alert"]') === null,
+  )
+
+  const snapshot = () => ({
+    afterFailedAnswer,
+    editedAnswerCompleted,
+    submittedComments: answerComments,
+  })
+  expect(snapshot()).toEqual({
+    afterFailedAnswer: 'The proposal answer could not be saved.',
+    editedAnswerCompleted: true,
+    submittedComments: ['First answer', 'Revised answer'],
+  })
+})
+
+it('clears a todo error after a retry with an edited comment succeeds', async () => {
+  const todo: ChatItem = {
+    type: 'todo',
+    seq: 4,
+    title: 'Check a status panel',
+    detail: 'Confirm the panel closes after resolution.',
+    completed: false,
+    resolution: null,
+    comment: null,
+  }
+  let resolutionCount = 0
+  const submittedComments: string[] = []
+  const fetcher = vi.fn<typeof fetch>((input, init) => {
+    const url = requestUrl(input)
+    if (init?.method === 'POST' && url.endsWith('/todos/4/resolve')) {
+      resolutionCount += 1
+      if (typeof init.body === 'string') {
+        const body: unknown = JSON.parse(init.body)
+        if (typeof body === 'object' && body !== null && 'comment' in body) {
+          const comment = body.comment
+          if (typeof comment === 'string') submittedComments.push(comment)
+        }
+      }
+      return Promise.resolve(
+        resolutionCount === 1
+          ? jsonResponse({ error: 'The todo could not be resolved.' }, 503)
+          : jsonResponse({}),
+      )
+    }
+    if (url.includes('/messages?')) {
+      return Promise.resolve(jsonResponse(messagesResponse([todo])))
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <SessionConversationCacheProvider>
+        <ConversationPane
+          session={session}
+          shouldSkipSessionTreeFetch
+          initialSessionTree={[]}
+          refreshKey={0}
+          sessionTreeRefreshKey={0}
+          onSelectSession={() => undefined}
+        />
+      </SessionConversationCacheProvider>,
+    )
+  })
+  await waitForState(
+    () => container.querySelector('.chat-todo-comment') !== null,
+  )
+  const comment = requireElement(
+    container.querySelector<HTMLTextAreaElement>('.chat-todo-comment'),
+  )
+  setTextareaValue(comment, 'First resolution')
+  const markDone = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      '.chat-todo-footer .aw-button--primary',
+    ),
+  )
+  await act(async () => userEvent.click(markDone))
+  await waitForState(
+    () =>
+      container.querySelector('[role="alert"]')?.textContent ===
+      'The todo could not be resolved.',
+  )
+  const afterFailedResolution =
+    container.querySelector('[role="alert"]')?.textContent ?? null
+
+  const updatedComment = requireElement(
+    container.querySelector<HTMLTextAreaElement>('.chat-todo-comment'),
+  )
+  setTextareaValue(updatedComment, 'Revised resolution')
+  const updatedMarkDone = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      '.chat-todo-footer .aw-button--primary',
+    ),
+  )
+  await act(async () => userEvent.click(updatedMarkDone))
+  const editedResolutionCompleted = await waitForState(
+    () =>
+      resolutionCount === 2 &&
+      container.querySelector('[role="alert"]') === null,
+  )
+
+  const snapshot = () => ({
+    afterFailedResolution,
+    editedResolutionCompleted,
+    submittedComments,
+  })
+  expect(snapshot()).toEqual({
+    afterFailedResolution: 'The todo could not be resolved.',
+    editedResolutionCompleted: true,
+    submittedComments: ['First resolution', 'Revised resolution'],
+  })
 })
 
 it.each([
@@ -11759,6 +11729,161 @@ it('keeps a merge result after the messages present when an older page is prepen
   })
 })
 
+it('coalesces refresh-key changes while keeping the in-flight response', async () => {
+  const messageResponses: Array<(response: Response) => void> = []
+  let refreshKey = 0
+  let actionsRequestCount = 0
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.includes('/messages?')) {
+      return new Promise<Response>((resolve) => {
+        messageResponses.push(resolve)
+      })
+    }
+    if (url.endsWith('/actions')) {
+      actionsRequestCount += 1
+      return Promise.resolve(jsonResponse(actions))
+    }
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  const renderConversation = () => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        shouldSkipSessionTreeFetch
+        initialSessionTree={[]}
+        refreshKey={refreshKey}
+        sessionTreeRefreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  }
+  const visibleMessages = () =>
+    Array.from(
+      container.querySelectorAll('.chat-assistant-message'),
+      (element) => element.textContent,
+    )
+
+  act(renderConversation)
+  await waitForState(() => messageResponses.length === 1)
+  refreshKey = 1
+  act(renderConversation)
+  refreshKey = 2
+  act(renderConversation)
+  const requestsBeforeResponse = messageResponses.length
+  const actionsRequestsBeforeResponse = actionsRequestCount
+  const resolveFirstResponse = messageResponses[0]
+  if (resolveFirstResponse === undefined)
+    throw new Error('Expected the initial message response')
+  await act(async () => {
+    resolveFirstResponse(
+      jsonResponse(
+        messagesResponse([{ type: 'assistant', text: 'Initial message.' }], []),
+      ),
+    )
+    await Promise.resolve()
+  })
+  await waitForState(() => messageResponses.length === 2)
+
+  const snapshot = () => ({
+    requestUrls: fetcher.mock.calls
+      .map(([url]) => requestUrl(url))
+      .filter((url) => url.includes('/messages?')),
+    requestsBeforeResponse,
+    requestsAfterResponse: messageResponses.length,
+    actionsRequestsBeforeResponse,
+    actionsRequestCount,
+    visibleMessages: visibleMessages(),
+    loadingStatus:
+      container.querySelector('.conversation-status')?.textContent ?? null,
+  })
+  expect(snapshot()).toEqual({
+    requestUrls: [
+      '/api/sessions/sample-session/messages?limit=100',
+      '/api/sessions/sample-session/messages?from=0',
+    ],
+    requestsBeforeResponse: 1,
+    requestsAfterResponse: 2,
+    actionsRequestsBeforeResponse: 3,
+    actionsRequestCount: 4,
+    visibleMessages: ['Initial message.'],
+    loadingStatus: null,
+  })
+})
+
+it('discards a message response after switching away and back to its session', async () => {
+  const messageResponses: Array<(response: Response) => void> = []
+  let selectedSession = session
+  const otherSession = { ...session, id: 'other-session' }
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.includes('/messages?')) {
+      return new Promise<Response>((resolve) => {
+        messageResponses.push(resolve)
+      })
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  const renderConversation = () => {
+    root?.render(
+      <ConversationPane
+        session={selectedSession}
+        shouldSkipSessionTreeFetch
+        initialSessionTree={[]}
+        refreshKey={0}
+        sessionTreeRefreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  }
+  const resolveMessageResponse = async (index: number, text: string) => {
+    const resolve = messageResponses[index]
+    if (resolve === undefined) throw new Error('Expected a message response')
+    await act(async () => {
+      resolve(jsonResponse(messagesResponse([{ type: 'assistant', text }], [])))
+      await Promise.resolve()
+    })
+  }
+  const visibleMessages = () =>
+    Array.from(
+      container.querySelectorAll('.chat-assistant-message'),
+      (element) => element.textContent,
+    )
+
+  act(renderConversation)
+  await waitForState(() => messageResponses.length === 1)
+  selectedSession = otherSession
+  act(renderConversation)
+  selectedSession = session
+  act(renderConversation)
+  await resolveMessageResponse(0, 'Previous visit message.')
+  await waitForState(() => messageResponses.length === 2)
+  const afterPreviousVisitResponse = visibleMessages()
+  await resolveMessageResponse(1, 'Current session message.')
+  await waitForState(() => visibleMessages()[0] === 'Current session message.')
+
+  const snapshot = () => ({
+    requestUrls: fetcher.mock.calls
+      .map(([url]) => requestUrl(url))
+      .filter((url) => url.includes('/messages?')),
+    afterPreviousVisitResponse,
+    visibleMessages: visibleMessages(),
+  })
+  expect(snapshot()).toEqual({
+    requestUrls: [
+      '/api/sessions/sample-session/messages?limit=100',
+      '/api/sessions/sample-session/messages?limit=100',
+    ],
+    afterPreviousVisitResponse: [],
+    visibleMessages: ['Current session message.'],
+  })
+})
+
 it('keeps the current page when older history ends and clears its scroll anchor', async () => {
   const resetMessages: ChatItem[] = [
     { type: 'assistant', text: 'Reset fixture response.' },
@@ -12191,16 +12316,6 @@ it('prunes to the latest 200 messages at the bottom and can load the discarded r
     type: 'assistant',
     text: `Message ${String(index)}.`,
   })
-  const decision = (seq: number): Extract<ChatItem, { type: 'decision' }> => ({
-    type: 'decision',
-    seq,
-    title: `Decision ${String(seq)}`,
-    why: 'Keep the behavior predictable.',
-    considered: ['Use the existing flow'],
-    easyToChange: 'Change one setting.',
-    review: null,
-    createdAt: '2026-11-11T03:25:59Z',
-  })
   const firstPage = Array.from({ length: 100 }, (_, index) =>
     assistantMessage(index + 200),
   )
@@ -12210,19 +12325,17 @@ it('prunes to the latest 200 messages at the bottom and can load the discarded r
   const thirdPage = Array.from({ length: 100 }, (_, index) =>
     assistantMessage(index),
   )
-  const allDecisions = [decision(1), decision(2), decision(3)]
   const refreshedMessages = Array.from({ length: 301 }, (_, index) =>
     assistantMessage(index),
   )
   refreshedMessages[150] = proposal
   refreshedMessages[300] = question
-  refreshedMessages[250] = decision(2)
   const refetchedOlderMessages = Array.from({ length: 100 }, (_, index) =>
     assistantMessage(index + 1),
   )
   const conversationMessageCount = () =>
     container.querySelectorAll(
-      '.chat-assistant-message, .chat-question-card, .chat-proposal-card, .decision-card--conversation',
+      '.chat-assistant-message, .chat-question-card, .chat-proposal-card',
     ).length
   let refreshKey = 0
   const fetcher = vi.fn<typeof fetch>((input) => {
@@ -12255,7 +12368,6 @@ it('prunes to the latest 200 messages at the bottom and can load the discarded r
           messagesResponse(refreshedMessages, [], {
             start: 0,
             total: 301,
-            decisions: allDecisions,
             hasUnansweredProposal: true,
             activeQuestionIndex: 300,
           }),
@@ -12291,7 +12403,7 @@ it('prunes to the latest 200 messages at the bottom and can load the discarded r
       get: () =>
         100 +
         container.querySelectorAll(
-          '.chat-assistant-message, .chat-question-card, .chat-proposal-card, .decision-card--conversation',
+          '.chat-assistant-message, .chat-question-card, .chat-proposal-card',
         ).length *
           10,
     },
@@ -12326,17 +12438,12 @@ it('prunes to the latest 200 messages at the bottom and can load the discarded r
     endOfMessages: Array.from(
       container.querySelectorAll('.chat-assistant-message'),
     ).at(-1)?.textContent,
-    decisionPosition: container.querySelector(
-      '.decision-card--conversation .decision-card-position',
-    )?.textContent,
     questionChoicesDisabled: Array.from(
       container.querySelectorAll<HTMLButtonElement>(
         '.chat-question-choices button',
       ),
       (button) => button.disabled,
     ),
-    statusPanelDecisions: container.querySelectorAll('.decision-card--panel')
-      .length,
     composerPlaceholder: container
       .querySelector<HTMLTextAreaElement>(
         'form.conversation-composer:not(.chat-question-composer) textarea',
@@ -12372,9 +12479,7 @@ it('prunes to the latest 200 messages at the bottom and can load the discarded r
     prunedState: {
       startOfMessages: 'Message 101.',
       endOfMessages: 'Message 299.',
-      decisionPosition: '2 of 3',
       questionChoicesDisabled: [false, false],
-      statusPanelDecisions: 3,
       composerPlaceholder: 'Choose an option above, or message the session',
     },
     reloadedFirstMessage: 'Message 1.',
@@ -12735,24 +12840,11 @@ it('discards an older page after a refresh changes the conversation epoch', asyn
   })
 })
 
-it('uses full conversation metadata for questions, proposals, and decisions', async () => {
+it('uses full conversation metadata for questions and proposals', async () => {
   const jsonResponse = (body: unknown) =>
     new Response(JSON.stringify(body), {
       headers: { 'Content-Type': 'application/json' },
     })
-  const decision = (
-    seq: number,
-    title: string,
-  ): Extract<ChatItem, { type: 'decision' }> => ({
-    type: 'decision',
-    seq,
-    title,
-    why: 'Keep behavior predictable.',
-    considered: ['Use the simpler path'],
-    easyToChange: 'Change one setting.',
-    review: null,
-    createdAt: '2026-11-11T03:25:59Z',
-  })
   const firstQuestion: ChatItem = {
     ...question,
     questions: [
@@ -12772,23 +12864,12 @@ it('uses full conversation metadata for questions, proposals, and decisions', as
       },
     ],
   }
-  const visibleDecision = decision(2, 'Visible decision')
-  const fullDecisions = [
-    decision(1, 'Earlier decision'),
-    visibleDecision,
-    decision(3, 'Later decision'),
-  ]
-  const page = messagesResponse(
-    [firstQuestion, visibleDecision, laterQuestion],
-    [],
-    {
-      start: 10,
-      total: 20,
-      decisions: fullDecisions,
-      hasUnansweredProposal: true,
-      activeQuestionIndex: 10,
-    },
-  )
+  const page = messagesResponse([firstQuestion, laterQuestion], [], {
+    start: 10,
+    total: 20,
+    hasUnansweredProposal: true,
+    activeQuestionIndex: 10,
+  })
   const fetcher = vi
     .fn<typeof fetch>()
     .mockResolvedValueOnce(jsonResponse(page))
@@ -12819,12 +12900,6 @@ it('uses full conversation metadata for questions, proposals, and decisions', as
       ),
       (button) => button.disabled,
     ),
-    conversationDecisionPosition: container.querySelector(
-      '.decision-card--conversation .decision-card-position',
-    )?.textContent,
-    statusPanelDecisionCount: container.querySelectorAll(
-      '.decision-card--panel',
-    ).length,
     composerPlaceholder: container
       .querySelector<HTMLTextAreaElement>(
         'form.conversation-composer:not(.chat-question-composer) textarea',
@@ -12837,8 +12912,6 @@ it('uses full conversation metadata for questions, proposals, and decisions', as
       '/api/sessions/sample-session/actions',
     ],
     questionChoicesDisabled: [false, false, true, true],
-    conversationDecisionPosition: '2 of 3',
-    statusPanelDecisionCount: 3,
     composerPlaceholder: 'Choose an option above, or message the session',
   })
 })
@@ -12851,7 +12924,6 @@ it('skips committing an unchanged memoized conversation row', () => {
   const sessions: Session[] = []
   const onAction = () => Promise.resolve(true)
   const onOpenInTerminal = () => undefined
-  const onSelectDecision = () => undefined
   const onSelectSession = () => undefined
   const renderMessage = vi.mocked(renderConversationMessage)
   renderMessage.mockClear()
@@ -12859,8 +12931,6 @@ it('skips committing an unchanged memoized conversation row', () => {
     actions,
     actionsReady: true,
     isMobile: false,
-    selected: false,
-    decisionPosition: undefined,
     message,
     pendingAction: null,
     openInTerminalStatus: null,
@@ -12868,7 +12938,6 @@ it('skips committing an unchanged memoized conversation row', () => {
     sessions,
     onAction,
     onOpenInTerminal,
-    onSelectDecision,
     onSelectSession,
   }
   root = createRoot(container)
@@ -12891,7 +12960,6 @@ it('rerenders a user message when rewind becomes available', () => {
   const sessions: Session[] = []
   const onAction = () => Promise.resolve(true)
   const onOpenInTerminal = () => undefined
-  const onSelectDecision = () => undefined
   const onSelectSession = () => undefined
   const onRewind = () => Promise.resolve(true)
   const renderMessage = vi.mocked(renderConversationMessage)
@@ -12900,8 +12968,6 @@ it('rerenders a user message when rewind becomes available', () => {
     actions,
     actionsReady: true,
     isMobile: false,
-    selected: false,
-    decisionPosition: undefined,
     message,
     pendingAction: null,
     openInTerminalStatus: null,
@@ -12909,7 +12975,6 @@ it('rerenders a user message when rewind becomes available', () => {
     sessions,
     onAction,
     onOpenInTerminal,
-    onSelectDecision,
     onSelectSession,
     onRewind,
   }
@@ -12949,7 +13014,6 @@ it('refreshes a memoized message time when the local day changes', () => {
   const sessions: Session[] = []
   const onAction = () => Promise.resolve(true)
   const onOpenInTerminal = () => undefined
-  const onSelectDecision = () => undefined
   const onSelectSession = () => undefined
   const renderMessage = vi.mocked(renderConversationMessage)
   renderMessage.mockClear()
@@ -12958,8 +13022,6 @@ it('refreshes a memoized message time when the local day changes', () => {
     actions,
     actionsReady: true,
     isMobile: false,
-    selected: false,
-    decisionPosition: undefined,
     message,
     now: beforeMidnight,
     pendingAction: null,
@@ -12968,7 +13030,6 @@ it('refreshes a memoized message time when the local day changes', () => {
     sessions,
     onAction,
     onOpenInTerminal,
-    onSelectDecision,
     onSelectSession,
   }
   const afterMidnight = new Date(2030, 8, 12, 0, 1)
@@ -13008,7 +13069,6 @@ it('passes the changed local day through the memoized message elements', () => {
   const sessions: Session[] = []
   const pendingPermissionActions = {}
   const onAction = () => Promise.resolve(true)
-  const onSelectDecision = () => undefined
   const onSelectSession = () => undefined
   const render = () => {
     root ??= createRoot(container)
@@ -13024,7 +13084,6 @@ it('passes the changed local day through the memoized message elements', () => {
           error={null}
           onAction={onAction}
           onSelectSession={onSelectSession}
-          onSelectDecision={onSelectDecision}
         />,
       )
     })
@@ -13065,49 +13124,6 @@ it('keeps a todo comment when a preceding conversation row arrives', () => {
   )
 
   expectDraftRetained(textarea, '.chat-todo-comment', 'Keep the rollback step')
-})
-
-it('keeps a decision change comment when a preceding conversation row arrives', () => {
-  const decision: ChatItem = {
-    type: 'decision',
-    seq: 14,
-    title: 'Use a bounded retry policy',
-    why: 'The service has no reliable duration estimate.',
-    considered: ['Retry using the latest duration'],
-    easyToChange: 'Adjust one configuration value.',
-    review: null,
-    createdAt: '2026-11-11T12:00:00Z',
-  }
-  renderConversationMessages([decision], 0)
-  act(() => {
-    requireElement(
-      container.querySelector<HTMLButtonElement>('.decision-card-summary'),
-    ).click()
-  })
-  act(() => {
-    requireElement(
-      Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find(
-        (button) => button.textContent.trim() === 'Change…',
-      ) ?? null,
-    ).click()
-  })
-  const textarea = requireElement(
-    container.querySelector<HTMLTextAreaElement>(
-      '.decision-card-change-form textarea',
-    ),
-  )
-  setTextareaValue(textarea, 'Include a timeout limit')
-
-  renderConversationMessages(
-    [{ type: 'assistant', text: 'A new reply arrived.' }, decision],
-    1,
-  )
-
-  expectDraftRetained(
-    textarea,
-    '.decision-card-change-form textarea',
-    'Include a timeout limit',
-  )
 })
 
 it('keeps a question answer draft when a preceding conversation row arrives', () => {

@@ -11,7 +11,6 @@ const response = (message: unknown) => ({
   backgroundTasks: [],
   start: 0,
   total: 1,
-  decisions: [],
   hasUnansweredProposal: false,
   activeQuestionIndex: null,
 })
@@ -92,12 +91,39 @@ it('accepts a compact boundary event from the conversation API', () => {
       backgroundTasks: [],
       start: 0,
       total: 1,
-      decisions: [],
       hasUnansweredProposal: false,
       activeQuestionIndex: null,
     }),
   ).toBe(true)
 })
+
+it.each([
+  {
+    name: 'string IDs',
+    confirmedQueuedPromptIds: ['fixture-message-id'],
+    expected: true,
+  },
+  {
+    name: 'non-string IDs',
+    confirmedQueuedPromptIds: [42],
+    expected: false,
+  },
+])(
+  'validates $name for confirmed queued prompts',
+  ({ confirmedQueuedPromptIds, expected }) => {
+    expect(
+      isConversationResponse({
+        ...response({
+          type: 'event',
+          kind: 'system',
+          text: 'A system event',
+          failed: false,
+        }),
+        confirmedQueuedPromptIds,
+      }),
+    ).toEqual(expected)
+  },
+)
 
 it.each([
   {
@@ -117,7 +143,6 @@ it.each([
       backgroundTasks: [],
       start: 0,
       total: 0,
-      decisions: [],
       hasUnansweredProposal: false,
       activeQuestionIndex: null,
       vibeMode,
@@ -153,7 +178,6 @@ it.each([
           task: null,
           repo: 'sample/repo',
           ...(vibeMode === undefined ? {} : { vibeMode }),
-          decisionCount: 0,
           pullRequest: null,
         },
       ],
@@ -228,7 +252,6 @@ it('accepts narration and grouped thinking from the conversation API', () => {
       backgroundTasks: [],
       start: 0,
       total: 4,
-      decisions: [],
       hasUnansweredProposal: false,
       activeQuestionIndex: null,
     }),

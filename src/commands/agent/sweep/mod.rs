@@ -42,12 +42,15 @@ use super::store;
 use super::tmux_sync::{LiveTmuxStatusSyncer, TmuxStatusSyncer};
 use super::types::{Engine, Session, SessionStatus};
 use crate::infra::process::ProcessSnapshot;
-use crate::shared::active_session::{DraftProbe, TmuxDraftProbe, effective_updated_at};
+use crate::shared::active_session::{
+    DraftObservation, DraftProbe, TmuxDraftProbe, effective_updated_at_from_observation,
+};
 use crate::shared::config;
 use crate::shared::log::short_run_id;
 
 mod codex_turn_status;
 mod crit_cleanup;
+mod deferred_stop;
 mod merged_close;
 mod service;
 mod undelivered_redelivery;
@@ -127,7 +130,7 @@ async fn run_sweep(args: &SweepArgs) -> Result<()> {
         let snapshot = ProcessSnapshot::capture();
         let probe = TmuxSessionProbe {
             snapshot: snapshot.as_ref(),
-            drafts: TmuxDraftProbe,
+            drafts: TmuxDraftProbe::default(),
             tasks_dir,
         };
         let syncer = LiveTmuxStatusSyncer;
@@ -156,6 +159,16 @@ async fn run_sweep(args: &SweepArgs) -> Result<()> {
         |warning| eprintln!("{warning}"),
     )
     .await;
+    let deferred_stop_notifications = recover_sweep_pass(
+        deferred_stop::notify_ready(
+            &sessions_dir,
+            config.agent.unreported_stop_notification.as_deref(),
+            args.dry_run,
+        ),
+        "agent.sweep.deferred_unreported_stop_failed",
+        "deferred unreported-stop notification failed",
+        &mut |warning| eprintln!("{warning}"),
+    );
     tracing::info!(
         event = "agent.sweep.summary",
         scanned = report.scanned,
@@ -168,6 +181,7 @@ async fn run_sweep(args: &SweepArgs) -> Result<()> {
         merged_closed,
         crit_links_cleared,
         redelivery_started,
+        deferred_stop_notifications,
         timeout = %timeout_str,
         dry_run = args.dry_run,
     );
@@ -183,10 +197,11 @@ async fn run_sweep(args: &SweepArgs) -> Result<()> {
         || codex_updates.total() > 0
         || merged_closed > 0
         || crit_links_cleared > 0
+        || deferred_stop_notifications > 0
         || args.dry_run
     {
         eprintln!(
-            "[armyknife] agent sweep: scanned={} paused={} codex_failed={} codex_interrupted={} merged_closed={} crit_links_cleared={} redelivery_started={} signaled={} waiting={} active={} (timeout={})",
+            "[armyknife] agent sweep: scanned={} paused={} codex_failed={} codex_interrupted={} merged_closed={} crit_links_cleared={} redelivery_started={} deferred_stop_notifications={} signaled={} waiting={} active={} (timeout={})",
             report.scanned,
             report.paused,
             codex_updates.failed,
@@ -194,6 +209,7 @@ async fn run_sweep(args: &SweepArgs) -> Result<()> {
             merged_closed,
             crit_links_cleared,
             redelivery_started,
+            deferred_stop_notifications,
             report.signaled,
             report.waiting,
             report.active,
@@ -279,14 +295,24 @@ where
     }
 }
 
-/// Adds the "which pid hosts this session?" question on top of the shared
-/// `DraftProbe`. Sweep is the only caller that needs to actually kill a
-/// process; agent clean can use a plain `DraftProbe` and skip the snapshot
-/// walk entirely.
+/// Adds sweep-only process signaling and background-run checks to the shared
+/// `DraftProbe`.
 pub(crate) trait SessionProbe: DraftProbe {
     /// Returns the pid of the live process hosting `session` (per
     /// `session.engine`), if one can be located via the session's tmux pane.
     fn resolve_pid(&self, session: &Session) -> Result<Option<u32>>;
+
+    /// A fresh negative result takes precedence over a snapshot that may retain a dead child.
+    fn resolve_pid_for_pause(
+        &self,
+        session: &Session,
+        draft_observation: &DraftObservation,
+    ) -> Result<Option<u32>> {
+        if draft_observation.codex_process_running == Some(false) {
+            return Ok(None);
+        }
+        self.resolve_pid(session)
+    }
 
     /// Returns whether armyknife is tracking a detached background command
     /// for this session.
@@ -315,6 +341,10 @@ const MAX_DESCENDANT_NODES: usize = 64;
 impl<A: DraftProbe> DraftProbe for TmuxSessionProbe<'_, A> {
     fn draft_observed_at(&self, session: &Session, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
         self.drafts.draft_observed_at(session, now)
+    }
+
+    fn observe_draft(&self, session: &Session, now: DateTime<Utc>) -> DraftObservation {
+        self.drafts.observe_draft(session, now)
     }
 }
 
@@ -519,10 +549,12 @@ where
         // N.B. We intentionally do NOT mutate session.updated_at here --
         // the effective timestamp is only for the timeout decision, not for
         // persisting to disk.
-        let effective = effective_updated_at(&session, probe, now);
+        let draft_observation = probe.observe_draft(&session, now);
+        let effective = effective_updated_at_from_observation(&session, &draft_observation);
 
         match auto_pause::decide_pause_with_effective(&session, now, timeout, effective) {
-            PauseDecision::Pause => match probe.resolve_pid(&session) {
+            PauseDecision::Pause => match probe.resolve_pid_for_pause(&session, &draft_observation)
+            {
                 Ok(Some(pid)) if probe.has_remote_control(&session, pid) => {
                     tracing::info!(
                         event = "agent.sweep.remote_control_active",
@@ -779,6 +811,7 @@ mod tests {
     struct FakeProbe {
         pids: RefCell<HashMap<String, u32>>,
         drafts: RefCell<HashSet<String>>,
+        codex_process_states: RefCell<HashMap<String, bool>>,
         failed_queries: RefCell<HashSet<String>>,
         remote_control_pids: HashSet<u32>,
     }
@@ -799,6 +832,15 @@ mod tests {
         fn with_drafts(mut self, session_ids: &[&str]) -> Self {
             for session_id in session_ids {
                 self.drafts.get_mut().insert((*session_id).to_string());
+            }
+            self
+        }
+
+        fn with_codex_process_states(mut self, states: &[(&str, bool)]) -> Self {
+            for (session_id, is_running) in states {
+                self.codex_process_states
+                    .get_mut()
+                    .insert((*session_id).to_string(), *is_running);
             }
             self
         }
@@ -828,6 +870,22 @@ mod tests {
                 .borrow()
                 .contains(&session.session_id)
                 .then_some(now)
+        }
+
+        fn observe_draft(&self, session: &Session, now: DateTime<Utc>) -> DraftObservation {
+            let codex_process_running = self
+                .codex_process_states
+                .borrow()
+                .get(&session.session_id)
+                .copied();
+            DraftObservation {
+                observed_at: if codex_process_running == Some(false) {
+                    None
+                } else {
+                    self.draft_observed_at(session, now)
+                },
+                codex_process_running,
+            }
         }
     }
 
@@ -1858,6 +1916,53 @@ mod tests {
             .expect("load")
             .expect("session exists");
         assert_eq!(reloaded.status, SessionStatus::Stopped);
+    }
+
+    #[rstest]
+    fn stale_snapshot_does_not_signal_codex_after_fresh_exit_observation(test_dir: TestDir) {
+        let old = Utc::now() - TimeDelta::hours(1);
+        let session = make_codex_session("codex-exited", old);
+        save_session_to(&test_dir.path, &session).expect("save");
+
+        let sender = RecordingSender::default();
+        let probe = FakeProbe::with_pids(&[("codex-exited", 4242)])
+            .with_drafts(&["codex-exited"])
+            .with_codex_process_states(&[("codex-exited", false)]);
+        let report = sweep_impl(
+            &test_dir.path,
+            Duration::from_secs(1),
+            &sender,
+            &probe,
+            &RecordingTmuxStatusSyncer::default(),
+            false,
+        )
+        .expect("sweep");
+        let reloaded = store::load_session_from(&test_dir.path, "codex-exited")
+            .expect("load")
+            .expect("session exists");
+
+        assert_eq!(
+            (
+                report,
+                sender.ctrl_d_calls.borrow().clone(),
+                sender.calls.borrow().clone(),
+                reloaded.status,
+                reloaded.sweep_signaled,
+            ),
+            (
+                SweepReport {
+                    scanned: 1,
+                    paused: 1,
+                    signaled: 0,
+                    waiting: 0,
+                    active: 0,
+                },
+                Vec::new(),
+                Vec::new(),
+                SessionStatus::Paused,
+                false,
+            )
+        );
     }
 
     #[rstest]

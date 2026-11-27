@@ -6,7 +6,6 @@ import type {
   CommandOutputRefresh,
   CommandOutputStart,
 } from '#components/command-result-message'
-import { DecisionCard } from '#components/decision-card'
 import { FileAttachmentCard } from '#components/file-attachment-card'
 import { MarkdownMessage } from '#components/markdown-message'
 import { formatMessageTime } from '#components/message-time'
@@ -32,14 +31,14 @@ import type {
   SessionLinkTarget,
 } from '#types'
 
+const EMPTY_IMAGE_SOURCES: Readonly<Record<string, string | null>> = {}
+
 export type ConversationMessageRowProps = {
   actions: SessionActions | null
   actionsReady: boolean
   isMobile: boolean
-  selected: boolean
-  decisionPosition: string | undefined
-  onSelectDecision: (seq: number) => void
   message: ChatItem
+  imageSources?: Readonly<Record<string, string | null>>
   pendingAction: PendingPermissionActionState
   openInTerminalStatus: OpenInTerminalStatus
   onAction: (
@@ -68,10 +67,8 @@ export function renderConversationMessage({
   actions,
   actionsReady,
   isMobile,
-  selected,
-  decisionPosition,
-  onSelectDecision,
   message,
+  imageSources,
   conversationIndex,
   pendingAction,
   openInTerminalStatus,
@@ -145,6 +142,10 @@ export function renderConversationMessage({
     )
   }
   if (message.type === 'assistant' || message.type === 'narration') {
+    const effectiveImageSources =
+      message.type === 'assistant'
+        ? (imageSources ?? EMPTY_IMAGE_SOURCES)
+        : imageSources
     const className =
       message.type === 'narration'
         ? 'chat-assistant-message chat-narration-message'
@@ -152,6 +153,9 @@ export function renderConversationMessage({
     return (
       <article className={className}>
         <MarkdownMessage
+          {...(effectiveImageSources === undefined
+            ? {}
+            : { imageSources: effectiveImageSources })}
           {...(sessionId === undefined ? {} : { sessionId })}
           {...(onCommandExecuted === undefined ? {} : { onCommandExecuted })}
           {...(onCommandStarted === undefined ? {} : { onCommandStarted })}
@@ -228,26 +232,6 @@ export function renderConversationMessage({
       />
     )
   }
-  if (message.type === 'decision') {
-    return (
-      <DecisionCard
-        {...(sessionId === undefined ? {} : { sessionId })}
-        decision={message}
-        variant="conversation"
-        selected={selected}
-        {...(decisionPosition === undefined
-          ? {}
-          : { position: decisionPosition })}
-        onSelect={() => {
-          onSelectDecision(message.seq)
-        }}
-        onOk={() => onAction(`decisions/${String(message.seq)}/ok`)}
-        onRequestChange={(comment) =>
-          onAction(`decisions/${String(message.seq)}/change`, { comment })
-        }
-      />
-    )
-  }
   if (message.type === 'proposal') {
     return (
       <ProposalCard
@@ -260,6 +244,7 @@ export function renderConversationMessage({
         resolved={message.resolved}
         resolution={message.resolution}
         withdrawalComment={message.comment}
+        {...(imageSources === undefined ? {} : { imageSources })}
         isMobile={isMobile}
         onAnswer={(answer, attachments) =>
           onAction(`proposals/${String(message.seq)}/answer`, {
@@ -283,6 +268,7 @@ export function renderConversationMessage({
         {...(sessionId === undefined ? {} : { sessionId })}
         title={message.title}
         detail={message.detail}
+        {...(imageSources === undefined ? {} : { imageSources })}
         folded={message.folded ?? false}
         addedFolded={message.addedFolded ?? false}
         resolution={message.resolution}

@@ -1,6 +1,7 @@
 import '#components/conversation-status-band.css'
 
 import { Button } from '@fohte/ui/button'
+import { Hourglass } from 'lucide-react'
 import { useId, useState } from 'react'
 
 import { useBackgroundTaskElapsedSeconds } from '#components/background-task-elapsed-context'
@@ -179,7 +180,15 @@ export function ConversationStatusBand({
             }
       }
     >
-      <span className="conversation-status-band-dot" aria-hidden="true" />
+      {state.kind === 'waiting' ? (
+        <Hourglass
+          className="conversation-status-band-hourglass"
+          aria-hidden="true"
+          size={14}
+        />
+      ) : (
+        <span className="conversation-status-band-dot" aria-hidden="true" />
+      )}
       <strong className="conversation-status-band-label">{title}</strong>
       {hasInlineDetail ? (
         <span className="conversation-status-band-separator" aria-hidden="true">

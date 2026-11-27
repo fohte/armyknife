@@ -16,7 +16,9 @@ mod close;
 mod codex;
 pub(crate) mod codex_steer;
 mod codex_subagent_stop;
+mod compact_transcript_slim;
 mod crit;
+mod current;
 mod decision;
 mod display;
 mod error;
@@ -47,6 +49,8 @@ mod signal;
 mod status;
 pub(crate) mod store;
 mod sweep;
+#[cfg(test)]
+mod test_support;
 mod title;
 pub(crate) mod tmux_sync;
 mod todo;
@@ -82,7 +86,6 @@ pub(crate) use close::{SessionLifecyclePersistenceError, close_from_watch_web};
 pub use codex::CodexArgs;
 pub use codex_subagent_stop::{CodexSubagentStopArgs, CodexSubagentStopWorkerArgs};
 pub use crit::CritCommands;
-pub use file::FileCommands;
 pub use focus::FocusArgs;
 pub use generate_title_detached::GenerateTitleDetachedArgs;
 pub use hook::HookArgs;
@@ -100,6 +103,7 @@ pub use status::StatusCommands;
 pub use sweep::SweepArgs;
 pub use title::TitleCommands;
 pub use todo::TodoCommands;
+pub use transcript::{SlimArgs, TranscriptCommands};
 pub use unreported_stop_notification::UnreportedStopNotificationArgs;
 pub use usage::{RecordArgs, UsageCommands};
 pub use vibe::{VibeCommands, is_vibe_enabled};
@@ -116,6 +120,9 @@ pub enum AgentCommands {
 
     /// Start Codex and bind its thread ID to the current tmux pane
     Codex(CodexArgs),
+
+    /// Print the current agent engine as JSON
+    Current(current::CurrentArgs),
 
     /// Wake an idle Codex parent after a subagent turn completes
     #[command(name = "codex-subagent-stop")]
@@ -166,10 +173,6 @@ pub enum AgentCommands {
     /// Focus on a Claude Code session's tmux pane
     Focus(FocusArgs),
 
-    /// Send files to the calling session's watch-web conversation
-    #[command(subcommand)]
-    File(FileCommands),
-
     /// Mark the pane's Claude Code session as read (wire from tmux pane-focus-in)
     #[command(name = "mark-read")]
     MarkRead(MarkReadArgs),
@@ -189,6 +192,10 @@ pub enum AgentCommands {
     /// Record user tasks for watch-web
     #[command(subcommand)]
     Todo(TodoCommands),
+
+    /// Reduce the size of a Claude Code transcript
+    #[command(subcommand)]
+    Transcript(TranscriptCommands),
 
     /// Record Claude Code status-line usage for watch-web
     #[command(subcommand)]
@@ -265,6 +272,13 @@ impl AgentCommands {
         match self {
             Self::New(args) => new::run(args)?,
             Self::Codex(args) => codex::run(args)?,
+            Self::Current(_) => {
+                let output = current::run(&current::ProcessContext);
+                if let Some(stdout) = output.stdout {
+                    println!("{stdout}");
+                }
+                return Ok(Some(output.exit_code));
+            }
             Self::CodexSubagentStop(args) => codex_subagent_stop::run(args)?,
             Self::CodexSubagentStopWorker(args) => codex_subagent_stop::run_worker(args)?,
             Self::Clean(args) => clean::run(args).await?,
@@ -278,12 +292,12 @@ impl AgentCommands {
             Self::Watch(args) => watch::run(args)?,
             Self::WatchWeb(args) => watch_web::run(args).await?,
             Self::Focus(args) => focus::run(args)?,
-            Self::File(command) => file::run(command)?,
             Self::MarkRead(args) => mark_read::run(args)?,
             Self::Status(command) => status::run(command)?,
             Self::Decision(command) => decision::run(command)?,
             Self::Proposal(command) => proposal::run(command)?,
             Self::Todo(command) => todo::run(command)?,
+            Self::Transcript(command) => transcript::run(command)?,
             Self::Usage(command) => usage::run(command)?,
             Self::Title(command) => title::run(command)?,
             Self::Profile(command) => profile::run(command)?,

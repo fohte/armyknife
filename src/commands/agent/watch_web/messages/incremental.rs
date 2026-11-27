@@ -411,7 +411,6 @@ fn render_parser(
         IncrementalTranscriptParser::Claude(parser) => render_claude_parser(parser, input),
         IncrementalTranscriptParser::Codex(parser) => {
             let placement_cards = parser::cards::cards_from_sources(
-                input.additions.decisions,
                 input.additions.proposals,
                 input.additions.todos,
                 input.additions.peer_out_messages,
@@ -547,7 +546,6 @@ mod tests {
                     parent: None,
                     pending_tool: None,
                     user_marker: (engine == Engine::Claude).then_some(session_marker),
-                    decisions: &[],
                     queued_prompts: prompts,
                     peer_out_messages: &[],
                     proposals: &[],
@@ -636,7 +634,6 @@ mod tests {
                     parent: None,
                     pending_tool: None,
                     user_marker: None,
-                    decisions: &[],
                     queued_prompts: &[],
                     peer_out_messages: &[],
                     proposals: &[],
@@ -689,7 +686,6 @@ mod tests {
                 parent: None,
                 pending_tool: None,
                 user_marker: None,
-                decisions: &[],
                 queued_prompts: &[],
                 peer_out_messages: &[],
                 proposals: &[],
@@ -700,11 +696,11 @@ mod tests {
     }
 
     fn epoch_range(epoch: &str) -> MessageRange {
-        serde_json::from_value(serde_json::json!({
-            "from": 0,
-            "epoch": epoch,
-        }))
-        .unwrap()
+        MessageRange {
+            from: Some(0),
+            epoch: Some(epoch.to_owned()),
+            ..MessageRange::default()
+        }
     }
 
     fn expected_epoch_response(
@@ -747,7 +743,10 @@ mod tests {
         let path = epoch_transcript.path().join("fixture.jsonl");
         let mut full = parse_session_transcript(epoch_input(&path)).unwrap().0;
         full.initial_epoch = true;
-        full.apply_range(serde_json::from_value(serde_json::json!({"limit": 100})).unwrap());
+        full.apply_range(MessageRange {
+            limit: Some(100),
+            ..MessageRange::default()
+        });
         let epoch = full.epoch.clone().unwrap();
         let cache = MessageCache::default();
         let actual = parse_epoch_refresh(&path, &epoch, &cache);
@@ -779,8 +778,10 @@ mod tests {
             ..ConversationResponse::default()
         };
         initial_page.update_metadata();
-        initial_page
-            .apply_range(serde_json::from_value(serde_json::json!({"limit": 100})).unwrap());
+        initial_page.apply_range(MessageRange {
+            limit: Some(100),
+            ..MessageRange::default()
+        });
         let epoch = initial_page.epoch.clone().unwrap();
         let cache = MessageCache::default();
         let actual = parse_epoch_refresh(&path, &epoch, &cache);

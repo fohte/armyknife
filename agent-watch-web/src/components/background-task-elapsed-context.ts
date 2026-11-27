@@ -7,7 +7,7 @@ const BackgroundTaskElapsedStartedAtContext = createContext<number | null>(null)
 export const BackgroundTaskElapsedStartedAtProvider =
   BackgroundTaskElapsedStartedAtContext.Provider
 
-export function useBackgroundTaskElapsedStartedAt() {
+function useBackgroundTaskElapsedStartedAt() {
   return useContext(BackgroundTaskElapsedStartedAtContext)
 }
 

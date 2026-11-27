@@ -3,8 +3,19 @@ import { expect, it } from 'vitest'
 
 import { MarkdownMessage } from '#components/markdown-message'
 
-function renderMessage(markdown: string, className?: string) {
-  const props = className === undefined ? {} : { className }
+function renderMessage(
+  markdown: string,
+  className?: string,
+  imageSources?: Readonly<Record<string, string | null>>,
+  unmappedImagePathsAreLocal?: boolean,
+) {
+  const props = {
+    ...(className === undefined ? {} : { className }),
+    ...(imageSources === undefined ? {} : { imageSources }),
+    ...(unmappedImagePathsAreLocal === undefined
+      ? {}
+      : { unmappedImagePathsAreLocal }),
+  }
   return renderToStaticMarkup(
     <MarkdownMessage {...props}>{markdown}</MarkdownMessage>,
   )
@@ -56,6 +67,100 @@ it('renders markdown images with the shared conversation image treatment', () =>
   )
 })
 
+it('shows unavailable for an unmapped local image by default', () => {
+  expect(renderMessage('![](/Users/guest/screenshot.png)')).toBe(
+    '<div class="markdown-message"><p><span class="markdown-image-unavailable">表示できません: /Users/guest/screenshot.png</span></p></div>',
+  )
+})
+
+it('keeps standalone root-relative image URLs', () => {
+  expect(renderMessage('![Sample](/fixture-illustration.png)')).toBe(
+    '<div class="markdown-message"><p><button class="image-lightbox-trigger" type="button" aria-label="Enlarge Sample"><img class="chat-user-image" src="/fixture-illustration.png" alt="Sample" loading="lazy" decoding="async"/></button></p></div>',
+  )
+})
+
+it('keeps nested root-relative asset URLs', () => {
+  expect(renderMessage('![Sample](/assets/diagram.png)')).toBe(
+    '<div class="markdown-message"><p><button class="image-lightbox-trigger" type="button" aria-label="Enlarge Sample"><img class="chat-user-image" src="/assets/diagram.png" alt="Sample" loading="lazy" decoding="async"/></button></p></div>',
+  )
+})
+
+it('uses the server source for a copied assistant image', () => {
+  expect(
+    renderMessage('![](/tmp/fixture.png)', undefined, {
+      '/tmp/fixture.png':
+        '/api/sessions/fixture-session/answer-images/fixture-key',
+    }),
+  ).toBe(
+    '<div class="markdown-message"><p><button class="image-lightbox-trigger" type="button" aria-label="Enlarge image"><img class="chat-user-image" src="/api/sessions/fixture-session/answer-images/fixture-key" alt="" loading="lazy" decoding="async"/></button></p></div>',
+  )
+})
+
+it('matches copied assistant images with spaces and non-ASCII path characters', () => {
+  const path = '/tmp/画像 samples/final image.png'
+  expect(
+    renderMessage(`![](<${path}>)`, undefined, {
+      [path]: '/api/sessions/fixture-session/answer-images/fixture-key',
+    }),
+  ).toBe(
+    '<div class="markdown-message"><p><button class="image-lightbox-trigger" type="button" aria-label="Enlarge image"><img class="chat-user-image" src="/api/sessions/fixture-session/answer-images/fixture-key" alt="" loading="lazy" decoding="async"/></button></p></div>',
+  )
+})
+
+const escapedPath = String.raw`/tmp/fixture\(v1\).png`
+
+it.each([
+  [
+    'a Markdown escape is not mapped',
+    `![](<${escapedPath}>)`,
+    '/tmp/fixture(v1).png',
+  ],
+  [
+    'a reference image is not mapped',
+    '![fixture][sample-image]\n\n[sample-image]: </tmp/fixture.png>',
+    '/tmp/fixture.png',
+  ],
+])('shows unavailable local images when %s', (_name, markdown, src) => {
+  expect(renderMessage(markdown, undefined, {}, true)).toBe(
+    `<div class="markdown-message"><p><span class="markdown-image-unavailable">表示できません: ${src}</span></p></div>`,
+  )
+})
+
+it('shows an unavailable message for an ineligible assistant image', () => {
+  expect(
+    renderMessage('![](/tmp/fixture.txt)', undefined, {
+      '/tmp/fixture.txt': null,
+    }),
+  ).toBe(
+    '<div class="markdown-message"><p><span class="markdown-image-unavailable">表示できません: /tmp/fixture.txt</span></p></div>',
+  )
+})
+
+it.each([
+  [
+    'a matched unavailable path',
+    { '/tmp/画像 samples/final image.png': null },
+    '/tmp/画像 samples/final image.png',
+    '<div class="markdown-message"><p><span class="markdown-image-unavailable">表示できません: /tmp/画像 samples/final image.png</span></p></div>',
+  ],
+  [
+    'an unmatched path',
+    {},
+    '/tmp/画像 samples/final image.png',
+    '<div class="markdown-message"><p><span class="markdown-image-unavailable">表示できません: /tmp/画像 samples/final image.png</span></p></div>',
+  ],
+  [
+    'a matched path containing a literal percent sequence',
+    { '/tmp/fixture%20name.png': null },
+    '/tmp/fixture%20name.png',
+    '<div class="markdown-message"><p><span class="markdown-image-unavailable">表示できません: /tmp/fixture%20name.png</span></p></div>',
+  ],
+])('shows the original path for %s', (_name, imageSources, path, expected) => {
+  expect(renderMessage(`![](<${path}>)`, undefined, imageSources, true)).toBe(
+    expected,
+  )
+})
+
 it('keeps untagged fenced code in a preformatted block', () => {
   const html = renderMessage(`~~~
 set VALUE=preview
@@ -78,11 +183,84 @@ it('shows a copy toolbar for every fenced code block', () => {
 
 it('keeps raw HTML as text and blocks unsafe link protocols', () => {
   const html = renderMessage(
-    '<img src=x onerror=alert(1)> [unsafe](javascript:alert(1))',
+    '<img src=x onerror=alert(1)> <script>alert(1)</script> [unsafe](javascript:alert(1))',
   )
 
   expect(html).toBe(
-    '<div class="markdown-message"><p>&lt;img src=x onerror=alert(1)&gt; <a href="" target="_blank" rel="noopener noreferrer">unsafe</a></p></div>',
+    '<div class="markdown-message"><p>&lt;img src=x onerror=alert(1)&gt; &lt;script&gt;alert(1)&lt;/script&gt; <a href="" target="_blank" rel="noopener noreferrer">unsafe</a></p></div>',
+  )
+})
+
+it('renders details and summary while keeping other raw HTML as text', () => {
+  const html = renderMessage(`<details open>
+<summary>Additional information</summary>
+
+Body content is parsed as Markdown. http://example.com/日本語
+
+<img src=x onerror=alert(1)>
+
+<script>alert(1)</script>
+</details>`)
+
+  expect(html).toBe(
+    '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Additional information</span></button><div class="markdown-details-body"><p>Body content is parsed as Markdown. <a href="http://example.com/" target="_blank" rel="noopener noreferrer">http://example.com/</a>日本語</p>&lt;img src=x onerror=alert(1)&gt;&lt;script&gt;alert(1)&lt;/script&gt;</div></div></div>',
+  )
+})
+
+it('renders an inline summary on the details opening line', () => {
+  const html = renderMessage(
+    '<details open><summary>Inline summary</summary>\nBody content\n</details>',
+  )
+
+  expect(html).toBe(
+    '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Inline summary</span></button><div class="markdown-details-body"><p>Body content</p></div></div></div>',
+  )
+})
+
+it.each([
+  {
+    name: 'the details tag is unclosed',
+    markdown: '<details>\n<summary>Unclosed details</summary>\nBody',
+    expected:
+      '<div class="markdown-message">&lt;details&gt;\n&lt;summary&gt;Unclosed details&lt;/summary&gt;\nBody</div>',
+  },
+  {
+    name: 'the details tag has an onclick attribute',
+    markdown:
+      '<details onclick="runUnsafe()">\n<summary>Unsafe details</summary>\nBody\n</details>',
+    expected:
+      '<div class="markdown-message">&lt;details onclick=&quot;runUnsafe()&quot;&gt;\n&lt;summary&gt;Unsafe details&lt;/summary&gt;\nBody\n&lt;/details&gt;</div>',
+  },
+  {
+    name: 'the summary tag has a style attribute',
+    markdown:
+      '<details>\n<summary style="color: red">Styled summary</summary>\nBody\n</details>',
+    expected:
+      '<div class="markdown-message">&lt;details&gt;\n&lt;summary style=&quot;color: red&quot;&gt;Styled summary&lt;/summary&gt;\nBody\n&lt;/details&gt;</div>',
+  },
+])(
+  'keeps unsupported or incomplete details HTML as text when $name',
+  ({ markdown, expected }) => {
+    expect(renderMessage(markdown)).toBe(expected)
+  },
+)
+
+it('keeps closing details tags inside fenced and indented code blocks', () => {
+  const html = renderMessage(`<details open>
+<summary>Code samples</summary>
+
+~~~
+</details>
+~~~
+
+    </details>
+    Still indented.
+
+Still inside.
+</details>`)
+
+  expect(html).toBe(
+    '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Code samples</span></button><div class="markdown-details-body"><div class="syntax-code-block-container"><div class="syntax-code-block-toolbar"><span class="syntax-code-block-language">text</span><button class="syntax-code-block-copy-button" type="button" aria-label="Copy code" title="Copy code">Copy</button></div><pre class="syntax-code-block" data-language="text"><code class="language-text">&lt;/details&gt;\n</code></pre></div><div class="syntax-code-block-container"><div class="syntax-code-block-toolbar"><span class="syntax-code-block-language">text</span><button class="syntax-code-block-copy-button" type="button" aria-label="Copy code" title="Copy code">Copy</button></div><pre class="syntax-code-block" data-language="text"><code class="language-text">&lt;/details&gt;\nStill indented.\n</code></pre></div><p>Still inside.</p></div></div></div>',
   )
 })
 

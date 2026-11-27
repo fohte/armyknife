@@ -22,8 +22,10 @@ import type {
 
 type UseConversationMessageElementsOptions = {
   messages: readonly ChatItem[]
+  messageImageSources?: Readonly<
+    Record<string, Readonly<Record<string, string | null>>>
+  >
   start: number
-  decisions?: readonly Extract<ChatItem, { type: 'decision' }>[]
   hasUnansweredProposal?: boolean
   sessionCategory: Session['category']
   sessionId?: string
@@ -32,8 +34,6 @@ type UseConversationMessageElementsOptions = {
   actions: SessionActions | null
   actionsReady: boolean
   isMobile: boolean
-  selectedDecisionSeq: number | null
-  onSelectDecision: (seq: number) => void
   onAction: (
     action: string,
     payload?: Record<string, unknown>,
@@ -79,7 +79,6 @@ function getConversationMessageIdentity(message: ChatItem): string {
   switch (message.type) {
     case 'proposal':
     case 'todo':
-    case 'decision':
       return `${message.type}:${String(message.seq)}`
     case 'question':
       return message.requestId === undefined
@@ -166,8 +165,8 @@ function getConversationMessageIdentity(message: ChatItem): string {
 
 export function useConversationMessageElements({
   messages,
+  messageImageSources,
   start,
-  decisions: allDecisions,
   hasUnansweredProposal: proposalPending,
   sessionCategory,
   sessionId,
@@ -176,8 +175,6 @@ export function useConversationMessageElements({
   actions,
   actionsReady,
   isMobile,
-  selectedDecisionSeq,
-  onSelectDecision,
   onAction,
   onCommandExecuted,
   onCommandStarted,
@@ -197,14 +194,6 @@ export function useConversationMessageElements({
       messages,
       sessionCategory,
       isCompacting,
-    )
-    const decisions =
-      allDecisions ??
-      conversationMessages.flatMap(({ message }) =>
-        message.type === 'decision' ? [message] : [],
-      )
-    const decisionPositions = new Map(
-      decisions.map((decision, index) => [decision.seq, index + 1]),
     )
     const hasUnansweredProposal =
       proposalPending ??
@@ -231,14 +220,15 @@ export function useConversationMessageElements({
           actions,
           actionsReady,
           isMobile,
-          selected:
-            message.type === 'decision' && message.seq === selectedDecisionSeq,
-          decisionPosition:
-            message.type === 'decision'
-              ? `${String(decisionPositions.get(message.seq))} of ${String(decisions.length)}`
-              : undefined,
-          onSelectDecision,
           message,
+          ...((message.type === 'assistant' ||
+            message.type === 'todo' ||
+            message.type === 'proposal') &&
+          messageImageSources?.[String(start + index)] !== undefined
+            ? {
+                imageSources: messageImageSources[String(start + index)],
+              }
+            : {}),
           onAction,
           ...(onCommandExecuted === undefined ? {} : { onCommandExecuted }),
           ...(onCommandStarted === undefined ? {} : { onCommandStarted }),
@@ -268,23 +258,21 @@ export function useConversationMessageElements({
   }, [
     actions,
     actionsReady,
-    allDecisions,
     isCompacting,
     isMobile,
     messages,
+    messageImageSources,
     start,
     now,
     onAction,
     onCommandExecuted,
     onCommandStarted,
     onOpenInTerminal,
-    onSelectDecision,
     onSelectSession,
     onRewind,
     openInTerminalStatus,
     pendingActions,
     proposalPending,
-    selectedDecisionSeq,
     sessionCategory,
     sessionEngine,
     sessionId,

@@ -60,6 +60,14 @@ impl ActionRuntime for LiveActionRuntime {
         )
     }
 
+    fn capture_pane(&self, tmux_info: &TmuxInfo) -> Result<String> {
+        crate::infra::tmux::capture_pane_for_socket_result(
+            tmux_info.socket_path.as_deref(),
+            &tmux_info.pane_id,
+        )
+        .map_err(anyhow::Error::from)
+    }
+
     fn send_claude_escape_if_agent_is_running(
         &self,
         tmux_info: &TmuxInfo,
@@ -172,6 +180,7 @@ mod tests {
 
     #[test]
     fn ended_resume_uses_the_worktree_layout_from_config() {
+        let temp_dir = tempfile::tempdir().unwrap();
         let mut config = Config::default();
         config.agent.worktree.layout = LayoutNode::Pane(PaneConfig {
             command: "fixture-editor".to_string(),
@@ -188,6 +197,7 @@ mod tests {
             "last_message": null,
         }))
         .unwrap();
+        session.cwd = temp_dir.path().to_path_buf();
         session.engine = Engine::Codex;
         session.tmux_info = Some(TmuxInfo {
             session_name: "fixture-session-window".to_string(),

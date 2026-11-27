@@ -171,6 +171,36 @@ fn adds_unreported_stop_peer_cursor_to_version_twenty_seven_database(
 }
 
 #[rstest]
+fn adds_deferred_unreported_stop_records_to_version_thirty_two_database(
+    database_fixture: DatabaseFixture,
+) {
+    let DatabaseFixture {
+        temp_dir,
+        mut connection,
+    } = database_fixture;
+    Migrations::from_slice(&MIGRATION_ENTRIES[..32])
+        .to_latest(&mut connection)
+        .expect("version thirty two schema should be created");
+    drop(connection);
+
+    let connection = super::super::open_connection(temp_dir.path())
+        .expect("version thirty two database should add deferred stop records");
+    let actual_schema = connection
+        .query_row(
+            indoc! {"
+                SELECT
+                EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'agent_deferred_unreported_stop'),
+                EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = 'agent_deferred_unreported_stop_delete_session')
+            "},
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("deferred stop schema should be queryable");
+
+    assert_eq!(actual_schema, (true, true));
+}
+
+#[rstest]
 fn adds_folded_todo_columns_to_version_twenty_eight_database(database_fixture: DatabaseFixture) {
     let DatabaseFixture {
         temp_dir,

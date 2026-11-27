@@ -4,6 +4,7 @@ import { Button } from '@fohte/ui/button'
 import type { ClipboardEvent } from 'react'
 
 import { ImageLightbox } from '#components/image-lightbox'
+import { formatFileSize } from '#lib/format-file-size'
 
 export type AttachmentPreview = {
   id: string
@@ -27,16 +28,6 @@ type AttachmentPreviewListProps = {
   onRemove?: (id: string) => void
   label?: string
   showRemove?: boolean
-}
-
-function formatFileSize(bytes: number) {
-  if (bytes < 1024) return `${String(bytes)} B`
-  const kibibytes = bytes / 1024
-  const formatted = new Intl.NumberFormat(undefined, {
-    maximumFractionDigits: 1,
-  })
-  if (kibibytes < 1024) return `${formatted.format(kibibytes)} KiB`
-  return `${formatted.format(kibibytes / 1024)} MiB`
 }
 
 export function AttachmentPreviewList({

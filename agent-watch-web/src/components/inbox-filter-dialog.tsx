@@ -165,15 +165,13 @@ export function InboxFilterDialog({
       </div>
       <p className="inbox-filter-example">
         Type to filter:{' '}
-        <code>project:web-app kind:review,question task:#123 has:decision</code>
+        <code>project:web-app kind:review,question task:#123</code>
       </p>
       {mobile ? (
         <div className="inbox-filter-mobile-footer">
           <p>
             Type to filter:{' '}
-            <code>
-              project:sample-service kind:review task:#123 has:decision
-            </code>
+            <code>project:sample-service kind:review task:#123</code>
           </p>
           <Button type="button" variant="plain" onClick={onApply}>
             Show {matchingSessionCount} sessions

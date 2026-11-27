@@ -51,16 +51,6 @@ const questionMessage: Extract<ChatItem, { type: 'question' }> = {
     },
   ],
 }
-const decisionMessage: Extract<ChatItem, { type: 'decision' }> = {
-  type: 'decision',
-  seq: 2,
-  title: 'Decision',
-  why: 'Reason',
-  considered: [],
-  easyToChange: 'Yes',
-  review: null,
-  createdAt: '2026-01-01T00:00:00Z',
-}
 const proposalMessage: Extract<ChatItem, { type: 'proposal' }> = {
   type: 'proposal',
   seq: 3,
@@ -92,17 +82,10 @@ const deniedMessage: Extract<ChatItem, { type: 'permission_denied' }> = {
   resolution: null,
 }
 const conversation: ConversationResponse = {
-  messages: [
-    questionMessage,
-    decisionMessage,
-    proposalMessage,
-    todoMessage,
-    deniedMessage,
-  ],
+  messages: [questionMessage, proposalMessage, todoMessage, deniedMessage],
   backgroundTasks: [],
   start: 0,
-  total: 5,
-  decisions: [decisionMessage],
+  total: 4,
   hasUnansweredProposal: true,
   activeQuestionIndex: 0,
 }
@@ -114,7 +97,6 @@ const conversationWithTrailingItems: ConversationResponse = {
   ...conversation,
   messages: [messageBeforeTrailingItems, todoMessage, deniedMessage],
   total: 3,
-  decisions: [],
   hasUnansweredProposal: false,
   activeQuestionIndex: null,
 }
@@ -259,22 +241,6 @@ const requests: {
     },
     path: 'answer',
     body: { requestId: 'question-request', skip: true },
-  },
-  {
-    name: 'approve decision',
-    operation: { type: 'decision_ok', sessionId: 'test-session', seq: 2 },
-    path: 'decisions/2/ok',
-  },
-  {
-    name: 'request decision change',
-    operation: {
-      type: 'decision_change',
-      sessionId: 'test-session',
-      seq: 2,
-      comment: 'Change this decision',
-    },
-    path: 'decisions/2/change',
-    body: { comment: 'Change this decision' },
   },
   {
     name: 'answer proposal',
@@ -706,23 +672,6 @@ const operationFactories: [
       sessionId: session.id,
       requestId: 'question-request',
       skip: true,
-    },
-  ],
-  [
-    'decision approval',
-    'decisions/2/ok',
-    {},
-    { type: 'decision_ok', sessionId: session.id, seq: 2 },
-  ],
-  [
-    'decision change',
-    'decisions/2/change',
-    { comment: 'Change this decision' },
-    {
-      type: 'decision_change',
-      sessionId: session.id,
-      seq: 2,
-      comment: 'Change this decision',
     },
   ],
   [
@@ -1225,7 +1174,6 @@ it.each(sessionReducerCases)(
   },
 )
 
-const decisionList = [decisionMessage]
 const conversationReducerCases: [
   string,
   SessionOperation,
@@ -1245,7 +1193,7 @@ const conversationReducerCases: [
           size: 3,
         },
       ],
-      messageCountBefore: 5,
+      messageCountBefore: 4,
     },
     {
       ...conversation,
@@ -1263,7 +1211,7 @@ const conversationReducerCases: [
           ],
         },
       ],
-      total: 6,
+      total: 5,
     },
   ],
   [
@@ -1284,12 +1232,10 @@ const conversationReducerCases: [
             answer: 'Option A',
           })),
         },
-        decisionMessage,
         proposalMessage,
         todoMessage,
         deniedMessage,
       ],
-      decisions: decisionList,
     },
   ],
   [
@@ -1302,44 +1248,8 @@ const conversationReducerCases: [
     },
     {
       ...conversation,
-      messages: [decisionMessage, proposalMessage, todoMessage, deniedMessage],
-      decisions: decisionList,
+      messages: [proposalMessage, todoMessage, deniedMessage],
       activeQuestionIndex: null,
-    },
-  ],
-  [
-    'approves a decision',
-    { type: 'decision_ok', sessionId: session.id, seq: 2 },
-    {
-      ...conversation,
-      messages: [
-        questionMessage,
-        { ...decisionMessage, review: 'ok' },
-        proposalMessage,
-        todoMessage,
-        deniedMessage,
-      ],
-      decisions: [{ ...decisionMessage, review: 'ok' }],
-    },
-  ],
-  [
-    'requests a decision change',
-    {
-      type: 'decision_change',
-      sessionId: session.id,
-      seq: 2,
-      comment: 'Change this decision',
-    },
-    {
-      ...conversation,
-      messages: [
-        questionMessage,
-        { ...decisionMessage, review: 'change' },
-        proposalMessage,
-        todoMessage,
-        deniedMessage,
-      ],
-      decisions: [{ ...decisionMessage, review: 'change' }],
     },
   ],
   [
@@ -1355,7 +1265,6 @@ const conversationReducerCases: [
       ...conversation,
       messages: [
         questionMessage,
-        decisionMessage,
         {
           ...proposalMessage,
           answer: { choice: 0, comment: null },
@@ -1364,7 +1273,6 @@ const conversationReducerCases: [
         todoMessage,
         deniedMessage,
       ],
-      decisions: decisionList,
       hasUnansweredProposal: false,
     },
   ],
@@ -1381,7 +1289,6 @@ const conversationReducerCases: [
       ...conversation,
       messages: [
         questionMessage,
-        decisionMessage,
         proposalMessage,
         {
           ...todoMessage,
@@ -1391,7 +1298,6 @@ const conversationReducerCases: [
         },
         deniedMessage,
       ],
-      decisions: decisionList,
     },
   ],
   [
@@ -1407,7 +1313,6 @@ const conversationReducerCases: [
       ...conversation,
       messages: [
         questionMessage,
-        decisionMessage,
         proposalMessage,
         {
           ...todoMessage,
@@ -1417,7 +1322,6 @@ const conversationReducerCases: [
         },
         deniedMessage,
       ],
-      decisions: decisionList,
       hasUnansweredProposal: true,
     },
   ],
@@ -1433,12 +1337,10 @@ const conversationReducerCases: [
       ...conversation,
       messages: [
         questionMessage,
-        decisionMessage,
         proposalMessage,
         { ...todoMessage, folded: true },
         deniedMessage,
       ],
-      decisions: decisionList,
     },
   ],
   [
@@ -1448,12 +1350,10 @@ const conversationReducerCases: [
       ...conversation,
       messages: [
         questionMessage,
-        decisionMessage,
         proposalMessage,
         todoMessage,
         { ...deniedMessage, resolved: true, resolution: 'approved' },
       ],
-      decisions: decisionList,
     },
   ],
   [
@@ -1463,12 +1363,10 @@ const conversationReducerCases: [
       ...conversation,
       messages: [
         questionMessage,
-        decisionMessage,
         proposalMessage,
         todoMessage,
         { ...deniedMessage, resolved: true, resolution: 'dismissed' },
       ],
-      decisions: decisionList,
     },
   ],
 ]
@@ -1509,7 +1407,7 @@ function readTodoFoldConfirmationState(
 ) {
   return {
     optimisticTodo: applyConversationOperation(conversation, operation)
-      .messages[3],
+      .messages[2],
     confirmed: isConversationOperationConfirmed(
       serverConversation,
       operation,
@@ -1592,7 +1490,6 @@ const conversationWithInProgressTool: ConversationResponse = {
   ...conversation,
   messages: [{ type: 'tool_in_progress', tool: 'exec' }],
   total: 1,
-  decisions: [],
   hasUnansweredProposal: false,
   activeQuestionIndex: null,
 }
@@ -1621,7 +1518,6 @@ it('shows the queued message before delivery while a tool is in progress', () =>
       },
     ],
     total: 2,
-    decisions: [],
     hasUnansweredProposal: false,
     activeQuestionIndex: null,
   })
@@ -1663,6 +1559,21 @@ it('reconciles an unresolved queued user by its prompt ID', () => {
   )
   expect(
     isConversationOperationConfirmed(serverConversation, operation, null),
+  ).toBe(true)
+})
+
+it('confirms a cancelled queued user from the server response', () => {
+  const serverConversation: ConversationResponse = {
+    ...conversationWithTrailingItems,
+    confirmedQueuedPromptIds: ['fixture-message-id'],
+  }
+
+  expect(
+    isConversationOperationConfirmed(
+      serverConversation,
+      operationWithReservedMessageId,
+      null,
+    ),
   ).toBe(true)
 })
 
@@ -1910,8 +1821,6 @@ const answeredQuestion: Extract<ChatItem, { type: 'question' }> = {
     answer: 'Option A',
   })),
 }
-const approvedDecision = { ...decisionMessage, review: 'ok' as const }
-const changedDecision = { ...decisionMessage, review: 'change' as const }
 const answeredProposal = {
   ...proposalMessage,
   answer: { choice: 0, comment: 'Use the first option.' },
@@ -1978,48 +1887,6 @@ const conversationConfirmationCases: [
     true,
   ],
   [
-    'keeps a decision review pending on the old decision',
-    { type: 'decision_ok', sessionId: session.id, seq: decisionMessage.seq },
-    conversation,
-    allowedActions,
-    false,
-  ],
-  [
-    'confirms a decision review from the updated decision',
-    { type: 'decision_ok', sessionId: session.id, seq: decisionMessage.seq },
-    {
-      ...conversation,
-      messages: [
-        questionMessage,
-        approvedDecision,
-        ...conversation.messages.slice(2),
-      ],
-      decisions: [approvedDecision],
-    },
-    allowedActions,
-    true,
-  ],
-  [
-    'confirms a decision change from the updated decision',
-    {
-      type: 'decision_change',
-      sessionId: session.id,
-      seq: decisionMessage.seq,
-      comment: 'Change the retry limit.',
-    },
-    {
-      ...conversation,
-      messages: [
-        questionMessage,
-        changedDecision,
-        ...conversation.messages.slice(2),
-      ],
-      decisions: [changedDecision],
-    },
-    allowedActions,
-    true,
-  ],
-  [
     'keeps a proposal answer pending while the proposal is unresolved',
     {
       type: 'proposal_answer',
@@ -2045,9 +1912,8 @@ const conversationConfirmationCases: [
       ...conversation,
       messages: [
         questionMessage,
-        decisionMessage,
         answeredProposal,
-        ...conversation.messages.slice(3),
+        ...conversation.messages.slice(2),
       ],
       hasUnansweredProposal: false,
     },

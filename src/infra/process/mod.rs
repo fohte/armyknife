@@ -14,12 +14,17 @@ use std::time::{Duration, Instant};
 
 use crate::shared::command;
 
+mod ancestry;
+mod exit_wait;
 mod identity;
 mod output_tail;
 mod snapshot;
 
 use snapshot::list_process_cwds;
 
+pub use ancestry::get_parent_pid;
+pub(crate) use ancestry::{ProcessInfo, get_process_info};
+pub(crate) use exit_wait::{Wake, dir_entry_names, wait_for_exit_or_dir_change};
 pub(crate) use identity::{process_start_time, process_start_time_matches};
 
 pub(crate) use output_tail::{
@@ -27,7 +32,7 @@ pub(crate) use output_tail::{
 };
 pub use snapshot::{
     ProcessInPath, ProcessSnapshot, SHELL_COMMANDS, find_caller_pids_in_path,
-    find_non_shell_processes_in_path, get_parent_pid,
+    find_non_shell_processes_in_path,
 };
 pub(crate) use snapshot::{
     WorktreeProcessInspection, current_caller_pane_pid, inspect_worktree_processes,

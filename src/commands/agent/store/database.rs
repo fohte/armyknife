@@ -1,5 +1,5 @@
 use std::cell::Cell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 use std::time::Duration;
@@ -14,6 +14,7 @@ use crate::commands::agent::types::Session;
 mod activity;
 mod agent_files;
 mod decisions;
+mod deferred_stops;
 mod initial_prompt;
 mod initialization;
 mod migration;
@@ -35,10 +36,13 @@ mod web_state;
 
 pub(crate) use activity::agent_response_timestamps;
 pub(crate) use agent_files::AgentFile;
-pub(crate) use agent_files::{agent_file, agent_files, insert_agent_files};
+pub(crate) use agent_files::{agent_file, agent_files};
 pub(crate) use decisions::{
     AgentDecision, AgentDecisionCounts, agent_decision_counts_by_session, agent_decisions,
     insert_agent_decision, set_agent_decision_review,
+};
+pub(crate) use deferred_stops::{
+    DeferredStop, clear_deferred_stop, record_deferred_stop, take_mature_deferred_stops,
 };
 pub(crate) use initial_prompt::{clear_pending_initial_prompt, mark_pending_initial_prompt};
 pub(crate) use one_time_permissions::{
@@ -88,10 +92,14 @@ pub(crate) use web_state::WatchWebSessionState;
 pub(crate) use web_state::set_watch_web_compacting;
 pub(super) use web_state::{
     clear_watch_web_later, set_watch_web_later, set_watch_web_primary_task, set_watch_web_today,
-    watch_web_session_states, watch_web_user_marker,
+    watch_web_session_start_generation, watch_web_session_states, watch_web_user_marker,
 };
 
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+
+pub(super) fn lock_crit_port(sessions_dir: &Path, port: u16) -> Result<fs::File> {
+    resolution_lock::lock_file(sessions_dir, "crit-port-locks", &format!("{port}.lock"))
+}
 
 #[derive(Debug)]
 pub(crate) struct SessionStoreChanges {
@@ -106,6 +114,7 @@ pub(crate) struct SessionLock {
     connection: Connection,
     session_id: String,
     transaction_active: Cell<bool>,
+    pending_compacting: Cell<Option<bool>>,
 }
 
 pub(crate) struct WakeLock {
@@ -174,6 +183,7 @@ pub(crate) fn lock_session_for_update(
         connection,
         session_id: session_id.to_string(),
         transaction_active: Cell::new(true),
+        pending_compacting: Cell::new(None),
     })
 }
 
@@ -290,6 +300,15 @@ impl SessionLock {
         Ok(())
     }
 
+    pub(crate) fn queue_watch_web_compacting(&self, is_compacting: bool) {
+        self.pending_compacting.set(Some(is_compacting));
+    }
+
+    pub(crate) fn record_watch_web_session_start(&self) -> Result<()> {
+        self.ensure_transaction()?;
+        web_state::record_watch_web_session_start_in_transaction(&self.connection, &self.session_id)
+    }
+
     pub(crate) fn save(&self, session: &Session) -> Result<()> {
         ensure!(
             session.session_id == self.session_id,
@@ -297,6 +316,7 @@ impl SessionLock {
         );
         self.ensure_transaction()?;
         write_session(&self.connection, session)?;
+        self.apply_pending_watch_web_compacting()?;
         self.connection.execute_batch("COMMIT")?;
         self.transaction_active.set(false);
         Ok(())
@@ -318,6 +338,7 @@ impl SessionLock {
             .map(|current| current != session.vibe_enabled)
             .unwrap_or(session.vibe_enabled);
         write_session(&self.connection, session)?;
+        self.apply_pending_watch_web_compacting()?;
         if !vibe_setting_changed {
             vibe_setting_revision::rotate(&self.connection, &self.session_id)?;
         }
@@ -348,6 +369,17 @@ impl SessionLock {
         if !self.transaction_active.get() {
             self.connection.execute_batch("BEGIN IMMEDIATE")?;
             self.transaction_active.set(true);
+        }
+        Ok(())
+    }
+
+    fn apply_pending_watch_web_compacting(&self) -> Result<()> {
+        if let Some(is_compacting) = self.pending_compacting.take() {
+            web_state::set_watch_web_compacting_in_transaction(
+                &self.connection,
+                &self.session_id,
+                is_compacting,
+            )?;
         }
         Ok(())
     }
@@ -446,6 +478,17 @@ pub(crate) fn all_sessions(sessions_dir: &Path) -> Result<Vec<Session>> {
 pub(crate) fn session_store_revision(sessions_dir: &Path) -> Result<i64> {
     let connection = open_connection(sessions_dir)?;
     read_revision(&connection)
+}
+
+pub(crate) fn session_revisions_by_session(sessions_dir: &Path) -> Result<HashMap<String, i64>> {
+    if !sessions_dir.exists() {
+        return Ok(HashMap::new());
+    }
+    let connection = open_connection(sessions_dir)?;
+    let mut statement = connection.prepare("SELECT session_id, rev FROM sessions")?;
+    let rows = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+    rows.collect::<rusqlite::Result<HashMap<_, _>>>()
+        .map_err(Into::into)
 }
 
 pub(crate) fn session_changes_since(
@@ -578,6 +621,19 @@ pub(crate) fn increment_revision(connection: &Connection) -> Result<i64> {
         [],
     )?;
     read_revision(connection)
+}
+
+fn bump_session_revision(connection: &Connection, session_id: &str) -> Result<i64> {
+    let revision = increment_revision(connection)?;
+    let updated = connection.execute(
+        "UPDATE sessions SET rev = ?1 WHERE session_id = ?2",
+        params![revision, session_id],
+    )?;
+    ensure!(
+        updated == 1,
+        "session {session_id} disappeared during update"
+    );
+    Ok(revision)
 }
 
 fn read_revision(connection: &Connection) -> Result<i64> {

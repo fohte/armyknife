@@ -16,7 +16,6 @@ const sessions: SessionLinkTarget[] = []
 const callbacks = {
   onAction: () => Promise.resolve(true),
   onOpenInTerminal: () => undefined,
-  onSelectDecision: () => undefined,
   onSelectSession: () => undefined,
 }
 
@@ -26,8 +25,6 @@ const meta = {
     actions,
     actionsReady: true,
     isMobile: false,
-    selected: false,
-    decisionPosition: undefined,
     message: {
       type: 'assistant',
       text: 'The retry flow is ready for review.',
@@ -93,24 +90,6 @@ export const AnswerableQuestion: Story = {
           answer: null,
         },
       ],
-    },
-  },
-}
-
-export const SelectedDecision: Story = {
-  name: 'A selected decision shows its position in the review',
-  args: {
-    selected: true,
-    decisionPosition: '1 of 1',
-    message: {
-      type: 'decision',
-      seq: 1,
-      title: 'Retry with exponential delay',
-      why: 'A short delay avoids repeating temporary failures immediately.',
-      considered: ['Retry without delay'],
-      easyToChange: 'Adjust the retry delay.',
-      review: null,
-      createdAt: '2026-11-11T09:00:00Z',
     },
   },
 }

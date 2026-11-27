@@ -4,6 +4,7 @@
 //! external code accesses values through the `EnvVars` struct.
 
 const SKIP_HOOKS: &str = "ARMYKNIFE_SKIP_HOOKS";
+const SLIM_TRANSCRIPT_ON_COMPACT: &str = "ARMYKNIFE_SLIM_TRANSCRIPT_ON_COMPACT";
 const SESSION_ID: &str = "ARMYKNIFE_SESSION_ID";
 const CLAUDE_CODE_SESSION_ID: &str = "CLAUDE_CODE_SESSION_ID";
 const CODEX_SESSION_ID: &str = "CODEX_SESSION_ID";
@@ -37,9 +38,11 @@ const SESSION_HAS_INITIAL_PROMPT: &str = "ARMYKNIFE_SESSION_HAS_INITIAL_PROMPT";
 /// Snapshot of all ARMYKNIFE_* environment variables at load time.
 #[derive(Default)]
 pub struct EnvVars {
-    /// When set, hooks are skipped entirely.
+    /// When set, normal hook processing is skipped.
     /// Used by `claude -p` invocations to prevent infinite recursion.
     pub skip_hooks: bool,
+    /// Whether compact SessionStart hooks may slim transcripts while other hooks are skipped.
+    pub slim_transcript_on_compact: bool,
 
     /// Session ID set by the armyknife Claude Code hook.
     pub session_id: Option<String>,
@@ -96,6 +99,7 @@ impl EnvVars {
     pub fn load() -> Self {
         Self {
             skip_hooks: std::env::var(SKIP_HOOKS).is_ok(),
+            slim_transcript_on_compact: std::env::var(SLIM_TRANSCRIPT_ON_COMPACT).is_ok(),
             session_id: non_empty_var(SESSION_ID),
             claude_code_session_id: non_empty_var(CLAUDE_CODE_SESSION_ID),
             codex_session_id: non_empty_var(CODEX_SESSION_ID),
@@ -319,6 +323,16 @@ mod tests {
     fn loads_initial_prompt_marker(#[case] value: Option<&str>, #[case] expected: Option<bool>) {
         let result = temp_env::with_vars([(SESSION_HAS_INITIAL_PROMPT, value)], || {
             EnvVars::load().session_has_initial_prompt
+        });
+        assert_eq!(result, expected);
+    }
+
+    #[rstest]
+    #[case::unset(None, false)]
+    #[case::set(Some("1"), true)]
+    fn loads_compact_transcript_slim_marker(#[case] value: Option<&str>, #[case] expected: bool) {
+        let result = temp_env::with_vars([(SLIM_TRANSCRIPT_ON_COMPACT, value)], || {
+            EnvVars::load().slim_transcript_on_compact
         });
         assert_eq!(result, expected);
     }

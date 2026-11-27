@@ -66,7 +66,10 @@ export function ReviewDocumentFocus({
         >
           <h2>PREVIEW</h2>
           <div className="review-document-focus-rendered">
-            <MarkdownMessage className="review-document-body">
+            <MarkdownMessage
+              className="review-document-body"
+              unmappedImagePathsAreLocal={false}
+            >
               {body}
             </MarkdownMessage>
           </div>

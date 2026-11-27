@@ -1,10 +1,11 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use serde::Serialize;
 
 use crate::commands::agent::proposal::{ProposalAnswer, ProposalOption};
 use crate::commands::agent::store::{
-    AgentDecision, PermissionDeniedResolution, ProposalResolution, TodoResolution,
+    PermissionDeniedResolution, ProposalResolution, TodoResolution,
 };
 
 use super::questions::QuestionPrompt;
@@ -185,17 +186,6 @@ pub(super) enum ChatItem {
         resolved: bool,
         resolution: Option<PermissionDeniedResolution>,
     },
-    Decision {
-        seq: i64,
-        title: String,
-        why: String,
-        considered: Vec<String>,
-        #[serde(rename = "easyToChange")]
-        easy_to_change: String,
-        review: Option<String>,
-        #[serde(rename = "createdAt")]
-        created_at: String,
-    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -219,20 +209,6 @@ fn is_false(value: &bool) -> bool {
     !value
 }
 
-impl From<AgentDecision> for ChatItem {
-    fn from(decision: AgentDecision) -> Self {
-        Self::Decision {
-            seq: decision.seq,
-            title: decision.title,
-            why: decision.why,
-            considered: decision.considered,
-            easy_to_change: decision.easy_to_change,
-            review: decision.review,
-            created_at: decision.created_at,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum PeerDirection {
@@ -253,6 +229,10 @@ pub(super) enum EventKind {
 #[serde(rename_all = "camelCase")]
 pub(super) struct ConversationResponse {
     pub(super) messages: Vec<ChatItem>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub(super) message_image_sources: BTreeMap<usize, BTreeMap<String, Option<String>>>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) confirmed_queued_prompt_ids: Vec<String>,
     pub(super) background_tasks: Vec<BackgroundTask>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(super) skills: Vec<SkillSuggestion>,
@@ -262,7 +242,6 @@ pub(super) struct ConversationResponse {
     pub(super) skill_suggestions_are_fallback: bool,
     pub(super) start: usize,
     pub(super) total: usize,
-    pub(super) decisions: Vec<ChatItem>,
     pub(super) has_unanswered_proposal: bool,
     pub(super) active_question_index: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]

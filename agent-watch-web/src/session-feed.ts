@@ -1,5 +1,6 @@
 import { err, errAsync, ok, Result, ResultAsync } from 'neverthrow'
 
+import { createEventSourceReconnectScheduler } from '#session-feed/reconnect'
 import { isPullRequest, isSessionTask } from '#session-record-validation'
 import {
   isPageVisible,
@@ -10,15 +11,18 @@ import type { Session, SessionsResponse } from '#types'
 import { isVibeMode } from '#vibe-mode'
 
 type SessionEventSource = {
+  readyState: number
   addEventListener: (type: string, listener: EventListener) => void
   removeEventListener: (type: string, listener: EventListener) => void
   close: () => void
 }
 
+const EVENT_SOURCE_CLOSED = 2
+
 type SessionFeedDependencies = {
   fetcher?: typeof fetch
   createEventSource?: (url: string) => SessionEventSource
-  requestRetryDelayMs?: number
+  reconnectRetryDelayMs?: number
   initialServerVersion?: string | null
   onUpdateAvailable?: (version: string | null) => void
   visibilityTarget?: PageVisibilityTarget
@@ -285,7 +289,7 @@ export function startSessionFeed(
   {
     fetcher = fetch,
     createEventSource = (url) => new EventSource(url),
-    requestRetryDelayMs = 2_000,
+    reconnectRetryDelayMs = 2_000,
     initialServerVersion = readInitialServerVersion(),
     onUpdateAvailable,
     visibilityTarget = typeof document === 'undefined' ? undefined : document,
@@ -298,13 +302,11 @@ export function startSessionFeed(
   let requestError = false
   let streamError = false
   let currentSessions: CurrentSessions | null = null
-  let requestRetryTimer: ReturnType<typeof setTimeout> | null = null
-  let reconnectPollTimer: ReturnType<typeof setInterval> | null = null
   let eventSource: SessionEventSource | null = null
 
   const reportStatus = () => {
     if (requestError) {
-      onError('Unable to load sessions. Retrying…')
+      onError('Unable to load sessions. Waiting for a stream update…')
     } else if (streamError) {
       onError('Connection lost. Reconnecting…')
     } else {
@@ -312,27 +314,10 @@ export function startSessionFeed(
     }
   }
 
-  const clearRequestRetry = () => {
-    if (requestRetryTimer !== null) {
-      clearTimeout(requestRetryTimer)
-      requestRetryTimer = null
-    }
-  }
-
-  const scheduleRequestRetry = () => {
-    if (requestRetryTimer === null) {
-      requestRetryTimer = setTimeout(() => {
-        requestRetryTimer = null
-        refresh()
-      }, requestRetryDelayMs)
-    }
-  }
-
   const reportRequestError = () => {
     if (active && visible) {
       requestError = true
       reportStatus()
-      scheduleRequestRetry()
     }
   }
 
@@ -356,10 +341,6 @@ export function startSessionFeed(
               return
             }
 
-            const revisionChanged =
-              body.mode === 'delta' &&
-              currentSessions?.response.revision !==
-                applied.value.response.revision
             currentSessions = applied.value
             const changedSessionIds =
               body.mode === 'full'
@@ -373,12 +354,10 @@ export function startSessionFeed(
                     ...new Set([
                       ...body.updatedSessions.map((session) => session.id),
                       ...body.removedSessionIds,
-                      ...(revisionChanged ? body.sessionOrder : []),
                     ]),
                   ]
             onSessions(currentSessions.response, changedSessionIds)
             requestError = false
-            clearRequestRetry()
             reportStatus()
           }
         },
@@ -417,8 +396,9 @@ export function startSessionFeed(
     }
     streamError = true
     reportStatus()
-    if (reconnectPollTimer === null) {
-      reconnectPollTimer = setInterval(refresh, requestRetryDelayMs)
+    if (eventSource?.readyState === EVENT_SOURCE_CLOSED) {
+      stopEventSource()
+      reconnectScheduler.schedule()
     }
   }
   const onServerVersion: EventListener = (event) => {
@@ -440,10 +420,7 @@ export function startSessionFeed(
       return
     }
     streamError = false
-    if (reconnectPollTimer !== null) {
-      clearInterval(reconnectPollTimer)
-      reconnectPollTimer = null
-    }
+    reconnectScheduler.reset()
     reportStatus()
     refresh()
   }
@@ -458,6 +435,11 @@ export function startSessionFeed(
     eventSource.addEventListener('error', onConnectionError)
     eventSource.addEventListener('open', onConnectionOpen)
   }
+
+  const reconnectScheduler = createEventSourceReconnectScheduler(
+    reconnectRetryDelayMs,
+    startEventSource,
+  )
 
   const stopEventSource = () => {
     if (eventSource === null) {
@@ -479,11 +461,7 @@ export function startSessionFeed(
     visible = nextVisible
     if (!visible) {
       refreshQueued = false
-      clearRequestRetry()
-      if (reconnectPollTimer !== null) {
-        clearInterval(reconnectPollTimer)
-        reconnectPollTimer = null
-      }
+      reconnectScheduler.clear()
       requestError = false
       streamError = false
       reportStatus()
@@ -505,11 +483,7 @@ export function startSessionFeed(
 
   return () => {
     active = false
-    clearRequestRetry()
-    if (reconnectPollTimer !== null) {
-      clearInterval(reconnectPollTimer)
-      reconnectPollTimer = null
-    }
+    reconnectScheduler.clear()
     unsubscribeVisibility()
     stopEventSource()
   }

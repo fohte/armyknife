@@ -116,7 +116,6 @@ struct SessionRowView {
     task: Option<TqTaskView>,
     repo: String,
     vibe_mode: VibeState,
-    decision_count: i64,
 }
 
 struct SessionRowDetails {
@@ -128,7 +127,6 @@ struct SessionRowDetails {
     task: Option<TqTaskView>,
     repo: String,
     vibe_mode: VibeState,
-    decision_count: i64,
 }
 
 impl SessionRowView {
@@ -145,7 +143,6 @@ impl SessionRowView {
             task: details.task,
             repo: details.repo,
             vibe_mode: details.vibe_mode,
-            decision_count: details.decision_count,
         }
     }
 }
@@ -211,7 +208,6 @@ struct SessionView {
     later_until: Option<DateTime<Utc>>,
     is_today: bool,
     is_compacting: bool,
-    unreviewed_decision_count: i64,
     #[serde(skip_serializing_if = "is_zero")]
     todo_later_count: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -220,6 +216,9 @@ struct SessionView {
     review_document_id: Option<String>,
     #[serde(skip_serializing_if = "is_zero")]
     review_document_count: usize,
+    // Side-table writes can change `/messages` without changing serialized session fields.
+    #[serde(skip)]
+    rev: i64,
 }
 
 impl std::ops::Deref for SessionView {
@@ -252,7 +251,7 @@ pub(super) struct SessionSnapshot {
     web_states: Vec<store::WatchWebSessionState>,
     title_by_id: HashMap<String, String>,
     repo_by_id: HashMap<String, String>,
-    decision_counts: HashMap<String, store::AgentDecisionCounts>,
+    session_revisions: HashMap<String, i64>,
     agent_response_timestamps: HashMap<String, DateTime<Utc>>,
     unanswered_proposal_titles: HashMap<String, String>,
     unanswered_todo_titles: HashMap<String, String>,
@@ -375,22 +374,6 @@ pub(super) fn router(
     })
 }
 
-pub(super) fn decision_category_is_done(
-    session: &Session,
-    agent_config: &AgentConfig,
-    has_running_background_task: bool,
-    state: Option<&store::WatchWebSessionState>,
-    now: DateTime<Utc>,
-) -> bool {
-    category::decision_category_is_done(
-        session,
-        agent_config,
-        has_running_background_task,
-        state,
-        now,
-    )
-}
-
 fn router_with_source<S: SessionSource>(source: S) -> Router {
     router_with_source_and_cache(
         source,
@@ -490,6 +473,7 @@ async fn list_sessions<S: SessionSource>(
         session_vibe_modes(&snapshot, &response_sessions, &snapshot.repo_by_id).await?;
     let now = source.now();
     let agent_response_timestamps = snapshot.agent_response_timestamps;
+    let session_revisions = snapshot.session_revisions;
     let state_by_id = snapshot
         .web_states
         .into_iter()
@@ -587,8 +571,7 @@ async fn list_sessions<S: SessionSource>(
                     now,
                 },
             );
-            let waiting =
-                agent_is_waiting && category_when_not_later == SessionCategory::InProgress;
+            let waiting = agent_is_waiting && category_when_not_later == SessionCategory::Waiting;
             let crit_url = session.crit_urls.last().cloned();
             let crit_exposed_url = crit_url.as_ref().and_then(|url| {
                 session
@@ -638,10 +621,6 @@ async fn list_sessions<S: SessionSource>(
                 .signed_duration_since(last_conversation_activity_at)
                 .num_seconds()
                 .max(0) as u64;
-            let decision_count = snapshot
-                .decision_counts
-                .get(&session.session_id)
-                .map_or(0, |counts| counts.total);
             SessionView {
                 row: SessionRowView::new(
                     session,
@@ -654,7 +633,6 @@ async fn list_sessions<S: SessionSource>(
                         task,
                         repo: repo.clone(),
                         vibe_mode,
-                        decision_count,
                     },
                 ),
                 is_paused: session.status == SessionStatus::Paused,
@@ -669,7 +647,8 @@ async fn list_sessions<S: SessionSource>(
                     SessionActivityStatus::Stopped
                 },
                 waiting_reason: if agent_is_waiting
-                    && (category_when_not_later == SessionCategory::InProgress
+                    && (category_when_not_later == SessionCategory::Waiting
+                        || category_when_not_later == SessionCategory::InProgress
                         || is_waiting_for_crit_review)
                 {
                     session
@@ -707,10 +686,6 @@ async fn list_sessions<S: SessionSource>(
                 later_until: state.and_then(|state| state.later_until),
                 is_today: state.is_some_and(|state| state.is_today),
                 is_compacting: state.is_some_and(|state| state.is_compacting),
-                unreviewed_decision_count: snapshot
-                    .decision_counts
-                    .get(&session.session_id)
-                    .map_or(0, |counts| counts.unreviewed),
                 todo_later_count: snapshot
                     .folded_todo_summaries
                     .get(&session.session_id)
@@ -725,6 +700,10 @@ async fn list_sessions<S: SessionSource>(
                 review_document_count: review_document_states
                     .get(&session.session_id)
                     .map_or(0, |state| state.count),
+                rev: session_revisions
+                    .get(&session.session_id)
+                    .copied()
+                    .unwrap_or_default(),
             }
         })
         .collect::<Vec<_>>();
@@ -780,7 +759,7 @@ fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
     let sessions_dir = store::sessions_dir()?;
     let vibe_sessions_dir = sessions_dir.clone();
     let agent_response_timestamps = store::agent_response_timestamps_from(&sessions_dir)?;
-    let decision_counts = store::agent_decision_counts_by_session_from(&sessions_dir)?;
+    let session_revisions = store::session_revisions_by_session_from(&sessions_dir)?;
     let mut unanswered_proposal_titles = HashMap::new();
     let visible_session_ids = all_sessions
         .iter()
@@ -808,7 +787,7 @@ fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
         web_states: store::watch_web_session_states_from(&store::sessions_dir()?)?,
         title_by_id,
         repo_by_id,
-        decision_counts,
+        session_revisions,
         agent_response_timestamps,
         unanswered_proposal_titles,
         unanswered_todo_titles,
@@ -921,7 +900,8 @@ mod tests {
         task_priority_order: HashMap<String, usize>,
         task_projects: HashMap<String, String>,
         pull_requests: HashMap<String, Vec<SessionPullRequestInfo>>,
-        decision_counts: HashMap<String, store::AgentDecisionCounts>,
+        session_revisions: HashMap<String, i64>,
+        session_store_dir: Option<PathBuf>,
         agent_response_timestamps: HashMap<String, DateTime<Utc>>,
         work_type_nav_labels: HashMap<String, String>,
         agent_statuses: HashMap<String, AgentStatusConfig>,
@@ -935,15 +915,22 @@ mod tests {
 
     impl SessionSource for TestSessionSource {
         async fn load_snapshot(&self) -> anyhow::Result<SessionSnapshot> {
+            let (revision, session_revisions) = match self.session_store_dir.as_deref() {
+                Some(sessions_dir) => (
+                    store::session_store_revision_from(sessions_dir)?,
+                    store::session_revisions_by_session_from(sessions_dir)?,
+                ),
+                None => (self.revision, self.session_revisions.clone()),
+            };
             Ok(SessionSnapshot {
-                revision: self.revision,
+                revision,
                 sessions: self.sessions.clone(),
                 all_sessions: self.all_sessions.clone(),
                 closed_session_ids: self.closed_session_ids.clone(),
                 web_states: self.web_states.clone(),
                 title_by_id: self.title_by_id.clone(),
                 repo_by_id: self.repo_by_id.clone(),
-                decision_counts: self.decision_counts.clone(),
+                session_revisions,
                 agent_response_timestamps: self.agent_response_timestamps.clone(),
                 unanswered_proposal_titles: self.unanswered_proposal_titles.clone(),
                 unanswered_todo_titles: self.unanswered_todo_titles.clone(),
@@ -1047,13 +1034,9 @@ mod tests {
                 snapshot
                     .all_sessions
                     .retain(|session| session.session_id != "removed-session");
-                if let Some(session) = snapshot
-                    .sessions
-                    .iter_mut()
-                    .find(|session| session.session_id == "child-session")
-                {
-                    session.last_message = Some("updated session preview".to_string());
-                }
+                snapshot
+                    .session_revisions
+                    .insert("child-session".to_string(), 1);
             }
             Ok(snapshot)
         }
@@ -1213,18 +1196,12 @@ mod tests {
                     },
                 ],
             )]),
-            decision_counts: HashMap::from([(
-                "child-session".to_string(),
-                store::AgentDecisionCounts {
-                    total: 4,
-                    unreviewed: 2,
-                },
-            )]),
+            session_revisions: HashMap::new(),
+            session_store_dir: None,
             agent_response_timestamps: HashMap::new(),
             work_type_nav_labels: HashMap::new(),
             agent_statuses: HashMap::new(),
             message_loaders: super::super::messages::RouteLoaders::new(
-                |_| Ok(Vec::new()),
                 |_| Ok(Vec::new()),
                 |_| Ok(Vec::new()),
                 |_, _| Ok(()),
@@ -1518,6 +1495,23 @@ mod tests {
         (status, value)
     }
 
+    async fn session_delta(
+        router: &Router,
+        token: &str,
+    ) -> (StatusCode, String, Vec<String>, serde_json::Value) {
+        let (status, mut response) =
+            sessions_request(router, &format!("/api/sessions?since={token}")).await;
+        let next_token = response["token"].as_str().unwrap().to_string();
+        let updated_session_ids = response["updatedSessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|session| session["id"].as_str().unwrap().to_string())
+            .collect();
+        response.as_object_mut().unwrap().remove("token");
+        (status, next_token, updated_session_ids, response)
+    }
+
     async fn session_tree_response(
         source: TestSessionSource,
         session_id: &str,
@@ -1561,7 +1555,6 @@ mod tests {
                 },
                 "repo": "example-org/example-repo",
                 "vibeMode": vibe_mode,
-                "decisionCount": 4,
                 "pullRequest": { "number": 42, "state": "Open" },
                 "pullRequests": [
                     { "number": 42, "state": "Open" },
@@ -1682,7 +1675,6 @@ mod tests {
                         },
                         "repo": "example-org/example-repo",
                         "vibeMode": { "mode": "repo_disabled" },
-                        "decisionCount": 4,
                         "pullRequest": { "number": 42, "state": "Open" },
                         "pullRequests": [
                             { "number": 42, "state": "Open" },
@@ -1757,7 +1749,6 @@ mod tests {
                         },
                         "repo": "example-org/example-repo",
                         "vibeMode": { "mode": "repo_disabled" },
-                        "decisionCount": 4,
                         "pullRequest": { "number": 42, "state": "Open" },
                         "pullRequests": [
                             { "number": 42, "state": "Open" },
@@ -1778,7 +1769,6 @@ mod tests {
                         "task": null,
                         "repo": "example-org/grandchild-repo",
                         "vibeMode": { "mode": "repo_disabled" },
-                        "decisionCount": 0,
                         "pullRequest": null,
                         "pullRequests": [],
                     },
@@ -1939,8 +1929,6 @@ mod tests {
                 "laterUntil": later_until,
                 "isToday": is_today,
                 "isCompacting": false,
-                "decisionCount": 4,
-                "unreviewedDecisionCount": 2,
                 "critUrl": details.crit_url,
                 "isWaitingForCritReview": false
             }]
@@ -2099,7 +2087,8 @@ mod tests {
         let (_transcript_dir, transcript_path) = write_transcript(&[first_record]);
         source.sessions[0].transcript_path = Some(transcript_path.clone());
 
-        let first_response = sessions_response(source.clone()).await;
+        let router = Router::new().nest("/api", router_with_source(source));
+        let (first_status, first_response) = sessions_request(&router, "/api/sessions").await;
         let mut transcript = std::fs::read(&transcript_path).unwrap();
         transcript.extend(
             serde_json::to_vec(&serde_json::json!({
@@ -2115,16 +2104,32 @@ mod tests {
         );
         transcript.push(b'\n');
         std::fs::write(&transcript_path, transcript).unwrap();
-        let second_response = sessions_response(source).await;
-
-        let first_expected = question_inbox_response("Question", Some("Which initial layout?"));
-        let second_expected = question_inbox_response("Question", Some("Which updated layout?"));
+        let token = first_response["token"].as_str().unwrap();
+        let (second_status, _, updated_session_ids, second_response) =
+            session_delta(&router, token).await;
+        let mut expected_session = first_response["sessions"][0].clone();
+        expected_session["preview"] = serde_json::json!("Which updated layout?");
 
         assert_eq!(
-            (first_response, second_response),
             (
-                (StatusCode::OK, first_expected),
-                (StatusCode::OK, second_expected),
+                first_status,
+                first_response["sessions"][0]["preview"].clone(),
+                second_status,
+                updated_session_ids,
+                second_response,
+            ),
+            (
+                StatusCode::OK,
+                serde_json::json!("Which initial layout?"),
+                StatusCode::OK,
+                vec!["child-session".to_string()],
+                serde_json::json!({
+                    "mode": "delta",
+                    "revision": 7,
+                    "updatedSessions": [expected_session],
+                    "removedSessionIds": [],
+                    "sessionOrder": ["child-session"],
+                }),
             ),
         );
     }
@@ -2174,7 +2179,6 @@ mod tests {
             "fixture-permission-question".to_string(),
         );
         source.message_loaders = super::super::messages::RouteLoaders::new(
-            |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_, _| Ok(()),
@@ -2248,6 +2252,9 @@ mod tests {
         std::fs::write(&queued_review_document_path, "queued fixture").unwrap();
         let _review_lock =
             crate::shared::human_in_the_loop::LockGuard::acquire(&review_document_path).unwrap();
+        let _queued_review_lock =
+            crate::shared::human_in_the_loop::LockGuard::acquire(&queued_review_document_path)
+                .unwrap();
         source.sessions[0].pending_human_review_ids.insert(format!(
             "fixture-review\0v2\0{}\0{}\0",
             42,
@@ -2487,7 +2494,6 @@ mod tests {
             .find(|session| session["id"] == "child-session")
             .unwrap()
             .clone();
-        updated_child["preview"] = serde_json::json!("updated session preview");
         updated_child["elapsedSeconds"] = serde_json::json!(102);
         let mut fallback_child = updated_child.clone();
         fallback_child["elapsedSeconds"] = serde_json::json!(104);
@@ -2555,6 +2561,187 @@ mod tests {
                 }),
             ),
         );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn session_scoped_message_store_changes_update_only_the_affected_session(
+        mut source: TestSessionSource,
+    ) {
+        let sessions_dir = tempfile::tempdir().unwrap();
+        let mut sibling = source.sessions[0].clone();
+        sibling.session_id = "sibling-session".to_string();
+        source.sessions.push(sibling.clone());
+        source.all_sessions.push(sibling);
+        store::save_session_to(sessions_dir.path(), &source.sessions[0]).unwrap();
+        store::save_session_to(sessions_dir.path(), &source.sessions[1]).unwrap();
+        let initial_revision = store::session_store_revision_from(sessions_dir.path()).unwrap();
+        source.session_store_dir = Some(sessions_dir.path().to_path_buf());
+
+        let router = Router::new().nest("/api", router_with_source(source));
+        let (full_status, full) = sessions_request(&router, "/api/sessions").await;
+        let mut token = full["token"].as_str().unwrap().to_string();
+        let mut deltas = Vec::new();
+
+        macro_rules! record_delta {
+            () => {{
+                let (status, next_token, _, response) = session_delta(&router, &token).await;
+                token = next_token;
+                deltas.push((status, response));
+            }};
+        }
+
+        let session_id = "child-session";
+        let tool_input = serde_json::json!({"command": "fixture command"});
+        let permission_denial_seq = store::add_permission_denied_from(
+            sessions_dir.path(),
+            session_id,
+            Some("fixture-tool-use"),
+            "Bash",
+            &tool_input,
+            Some("fixture reason"),
+        )
+        .unwrap();
+        record_delta!();
+        store::resolve_permission_denied_from(
+            sessions_dir.path(),
+            session_id,
+            permission_denial_seq,
+            store::PermissionDeniedResolution::Approved,
+        )
+        .unwrap();
+        record_delta!();
+        store::add_permission_denied_from(
+            sessions_dir.path(),
+            session_id,
+            Some("fixture-unclassified-use"),
+            "Bash",
+            &tool_input,
+            None,
+        )
+        .unwrap();
+        record_delta!();
+        store::resolve_matching_unclassified_permission_denials_from(
+            sessions_dir.path(),
+            session_id,
+            "Bash",
+            &tool_input,
+            store::PermissionDeniedResolution::Dismissed,
+        )
+        .unwrap();
+        record_delta!();
+
+        let first_proposal_seq = store::add_agent_proposal_in(
+            sessions_dir.path(),
+            session_id,
+            r#"{"title":"fixture first proposal"}"#,
+        )
+        .unwrap();
+        record_delta!();
+        let second_proposal_seq = store::add_agent_proposal_in(
+            sessions_dir.path(),
+            session_id,
+            r#"{"title":"fixture second proposal"}"#,
+        )
+        .unwrap();
+        record_delta!();
+        store::edit_agent_proposal_from(
+            sessions_dir.path(),
+            session_id,
+            second_proposal_seq,
+            r#"{"title":"fixture edited proposal"}"#,
+        )
+        .unwrap();
+        record_delta!();
+        store::write_agent_proposal_answer_at_from(
+            sessions_dir.path(),
+            session_id,
+            second_proposal_seq,
+            "fixture answer",
+            Utc.timestamp_opt(1_100, 0).unwrap(),
+        )
+        .unwrap();
+        record_delta!();
+        store::resolve_agent_proposal_from(
+            sessions_dir.path(),
+            session_id,
+            first_proposal_seq,
+            Some("fixture comment"),
+        )
+        .unwrap();
+        record_delta!();
+
+        let todo_seq = store::add_agent_todo_in(
+            sessions_dir.path(),
+            session_id,
+            "fixture todo",
+            Some("fixture details"),
+            false,
+        )
+        .unwrap();
+        record_delta!();
+        store::edit_agent_todo_from(
+            sessions_dir.path(),
+            session_id,
+            todo_seq,
+            "fixture edited todo",
+            Some("fixture edited details"),
+            false,
+        )
+        .unwrap();
+        record_delta!();
+        store::set_agent_todo_folded_from(sessions_dir.path(), session_id, todo_seq, true).unwrap();
+        record_delta!();
+        store::resolve_agent_todo_from(
+            sessions_dir.path(),
+            session_id,
+            todo_seq,
+            store::TodoResolution::Completed,
+            Some("fixture completion"),
+        )
+        .unwrap();
+        record_delta!();
+
+        let (unchanged_status, _, _, unchanged_response) = session_delta(&router, &token).await;
+        deltas.push((unchanged_status, unchanged_response));
+
+        let updated_session = full["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|session| session["id"] == session_id)
+            .unwrap()
+            .clone();
+        let session_order = full["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|session| session["id"].clone())
+            .collect::<Vec<_>>();
+        let changed_delta = serde_json::json!({
+            "mode": "delta",
+            "revision": 0,
+            "updatedSessions": [updated_session],
+            "removedSessionIds": [],
+            "sessionOrder": session_order.clone(),
+        });
+        let unchanged_delta = serde_json::json!({
+            "mode": "delta",
+            "revision": initial_revision + 13,
+            "updatedSessions": [],
+            "removedSessionIds": [],
+            "sessionOrder": session_order,
+        });
+        let expected_deltas = (1..=13)
+            .map(|offset| {
+                let mut delta = changed_delta.clone();
+                delta["revision"] = serde_json::json!(initial_revision + offset);
+                (StatusCode::OK, delta)
+            })
+            .chain(std::iter::once((StatusCode::OK, unchanged_delta)))
+            .collect::<Vec<_>>();
+
+        assert_eq!((full_status, deltas), (StatusCode::OK, expected_deltas),);
     }
 
     #[rstest]
@@ -3216,12 +3403,12 @@ mod tests {
         source.web_states[0].later_until = None;
 
         let mut expected = expected_response(
-            "in_progress",
+            "waiting",
             None,
             true,
             ExpectedSessionDetails {
                 kind: Some("Stopped"),
-                category_when_not_later: "in_progress",
+                category_when_not_later: "waiting",
                 is_paused: false,
                 unread: true,
                 crit_url: None,

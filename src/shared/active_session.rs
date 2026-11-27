@@ -17,9 +17,8 @@ use chrono::{DateTime, Utc};
 
 use crate::commands::agent::auto_pause::{PauseDecision, decide_pause_with_effective};
 use crate::commands::agent::pane;
-#[cfg(test)]
-use crate::commands::agent::types::Engine;
-use crate::commands::agent::types::{Session, SessionStatus};
+use crate::commands::agent::types::{Engine, Session, SessionStatus};
+use crate::infra::process::ProcessSnapshot;
 
 /// Source of the observation time for a session with an unsent composer draft.
 ///
@@ -27,6 +26,20 @@ use crate::commands::agent::types::{Session, SessionStatus};
 /// instead of poking real tmux panes.
 pub trait DraftProbe {
     fn draft_observed_at(&self, session: &Session, now: DateTime<Utc>) -> Option<DateTime<Utc>>;
+
+    fn observe_draft(&self, session: &Session, now: DateTime<Utc>) -> DraftObservation {
+        DraftObservation {
+            observed_at: self.draft_observed_at(session, now),
+            ..DraftObservation::default()
+        }
+    }
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct DraftObservation {
+    pub observed_at: Option<DateTime<Utc>>,
+    /// Fresh liveness for a composer draft, when checked for Codex.
+    pub codex_process_running: Option<bool>,
 }
 
 /// Probe that reports no observed composer draft. Useful when tmux is not
@@ -41,16 +54,84 @@ impl DraftProbe for NoDraftProbe {
 }
 
 /// Production probe that checks whether the live composer contains a draft.
-pub struct TmuxDraftProbe;
+/// A Codex composer is ignored when its process is known to have left the pane.
+pub struct TmuxDraftProbe {
+    runtime: Box<dyn TmuxDraftRuntime>,
+}
+
+trait TmuxDraftRuntime {
+    fn codex_process_is_running(&self, socket_path: Option<&str>, pane_id: &str) -> Option<bool>;
+
+    fn pane_has_draft(
+        &self,
+        socket_path: Option<&str>,
+        pane_id: &str,
+        engine: Engine,
+    ) -> Option<bool>;
+}
+
+struct LiveTmuxDraftRuntime;
+
+impl TmuxDraftRuntime for LiveTmuxDraftRuntime {
+    fn codex_process_is_running(&self, socket_path: Option<&str>, pane_id: &str) -> Option<bool> {
+        let pane_pid = crate::infra::tmux::get_pane_pid_for_socket(socket_path, pane_id).ok()??;
+        let snapshot = ProcessSnapshot::capture()?;
+        Some(pane::process::pane_has_live_agent_process(
+            pane_pid,
+            Engine::Codex,
+            Some(&snapshot),
+        ))
+    }
+
+    fn pane_has_draft(
+        &self,
+        socket_path: Option<&str>,
+        pane_id: &str,
+        engine: Engine,
+    ) -> Option<bool> {
+        pane::input::pane_has_draft_for_socket(socket_path, pane_id, engine)
+    }
+}
+
+impl Default for TmuxDraftProbe {
+    fn default() -> Self {
+        Self {
+            runtime: Box::new(LiveTmuxDraftRuntime),
+        }
+    }
+}
 
 impl TmuxDraftProbe {
-    fn draft_observed_at_with(
-        session: &Session,
-        now: DateTime<Utc>,
-        pane_has_draft: impl FnOnce(Option<&str>, &str) -> Option<bool>,
-    ) -> Option<DateTime<Utc>> {
-        let tmux_info = session.tmux_info.as_ref()?;
-        match pane_has_draft(tmux_info.socket_path.as_deref(), &tmux_info.pane_id) {
+    #[cfg(test)]
+    fn with_runtime(runtime: impl TmuxDraftRuntime + 'static) -> Self {
+        Self {
+            runtime: Box::new(runtime),
+        }
+    }
+}
+
+impl DraftProbe for TmuxDraftProbe {
+    fn draft_observed_at(&self, session: &Session, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+        self.observe_draft(session, now).observed_at
+    }
+
+    fn observe_draft(&self, session: &Session, now: DateTime<Utc>) -> DraftObservation {
+        let Some(tmux_info) = session.tmux_info.as_ref() else {
+            return DraftObservation::default();
+        };
+        let socket_path = tmux_info.socket_path.as_deref();
+        let pane_id = &tmux_info.pane_id;
+        let composer_has_draft = self
+            .runtime
+            .pane_has_draft(socket_path, pane_id, session.engine);
+        let codex_process_running =
+            if session.engine == Engine::Codex && composer_has_draft == Some(true) {
+                self.runtime.codex_process_is_running(socket_path, pane_id)
+            } else {
+                None
+            };
+        let observed_at = match composer_has_draft {
+            Some(true) if codex_process_running == Some(false) => None,
             Some(true) => {
                 tracing::debug!(
                     event = "agent.composer.draft_protected",
@@ -68,15 +149,11 @@ impl TmuxDraftProbe {
                 );
                 None
             }
+        };
+        DraftObservation {
+            observed_at,
+            codex_process_running,
         }
-    }
-}
-
-impl DraftProbe for TmuxDraftProbe {
-    fn draft_observed_at(&self, session: &Session, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
-        Self::draft_observed_at_with(session, now, |socket_path, pane_id| {
-            pane::input::pane_has_draft_for_socket(socket_path, pane_id, session.engine)
-        })
     }
 }
 
@@ -87,7 +164,14 @@ pub fn effective_updated_at<P: DraftProbe>(
     probe: &P,
     now: DateTime<Utc>,
 ) -> DateTime<Utc> {
-    match probe.draft_observed_at(session, now) {
+    effective_updated_at_from_observation(session, &probe.observe_draft(session, now))
+}
+
+pub(crate) fn effective_updated_at_from_observation(
+    session: &Session,
+    observation: &DraftObservation,
+) -> DateTime<Utc> {
+    match observation.observed_at {
         Some(activity_at) if activity_at > session.updated_at => activity_at,
         _ => session.updated_at,
     }
@@ -146,9 +230,10 @@ mod tests {
     use std::cell::RefCell;
     use std::collections::{BTreeSet, HashSet};
     use std::path::PathBuf;
+    use std::rc::Rc;
 
     use chrono::TimeDelta;
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
 
     use super::*;
     use crate::commands::agent::types::TmuxInfo;
@@ -179,6 +264,61 @@ mod tests {
                 .contains(&session.session_id)
                 .then_some(now)
         }
+    }
+
+    #[derive(Clone, Debug, Default, PartialEq, Eq)]
+    struct TmuxDraftProbeCalls {
+        process_checks: Vec<(Option<String>, String)>,
+        composer_checks: Vec<(Option<String>, String, Engine)>,
+    }
+
+    struct FakeTmuxDraftRuntime {
+        process_is_running: Option<bool>,
+        composer_has_draft: Option<bool>,
+        calls: Rc<RefCell<TmuxDraftProbeCalls>>,
+    }
+
+    impl TmuxDraftRuntime for FakeTmuxDraftRuntime {
+        fn codex_process_is_running(
+            &self,
+            socket_path: Option<&str>,
+            pane_id: &str,
+        ) -> Option<bool> {
+            self.calls
+                .borrow_mut()
+                .process_checks
+                .push((socket_path.map(str::to_string), pane_id.to_string()));
+            self.process_is_running
+        }
+
+        fn pane_has_draft(
+            &self,
+            socket_path: Option<&str>,
+            pane_id: &str,
+            engine: Engine,
+        ) -> Option<bool> {
+            self.calls.borrow_mut().composer_checks.push((
+                socket_path.map(str::to_string),
+                pane_id.to_string(),
+                engine,
+            ));
+            self.composer_has_draft
+        }
+    }
+
+    fn tmux_draft_probe(
+        process_is_running: Option<bool>,
+        composer_has_draft: Option<bool>,
+    ) -> (TmuxDraftProbe, Rc<RefCell<TmuxDraftProbeCalls>>) {
+        let calls = Rc::default();
+        (
+            TmuxDraftProbe::with_runtime(FakeTmuxDraftRuntime {
+                process_is_running,
+                composer_has_draft,
+                calls: Rc::clone(&calls),
+            }),
+            calls,
+        )
     }
 
     fn make_session(id: &str, status: SessionStatus, updated_at: DateTime<Utc>) -> Session {
@@ -234,6 +374,21 @@ mod tests {
         }
     }
 
+    #[fixture]
+    fn stopped_codex_session() -> Session {
+        let now = Utc::now();
+        let mut session = make_session("s", SessionStatus::Stopped, now);
+        session.engine = Engine::Codex;
+        session.tmux_info = Some(TmuxInfo {
+            session_name: "main".to_string(),
+            window_name: "editor".to_string(),
+            window_index: 0,
+            pane_id: "%23".to_string(),
+            socket_path: None,
+        });
+        session
+    }
+
     #[test]
     fn tmux_draft_probe_uses_session_socket() {
         let now = Utc::now();
@@ -245,22 +400,90 @@ mod tests {
             pane_id: "%23".to_string(),
             socket_path: Some("/tmp/armyknife-test/server.sock".to_string()),
         });
-        let mut probe_input = None;
-
-        let observed_at =
-            TmuxDraftProbe::draft_observed_at_with(&session, now, |socket_path, pane_id| {
-                probe_input = Some((socket_path.map(str::to_string), pane_id.to_string()));
-                Some(true)
-            });
+        let (probe, calls) = tmux_draft_probe(None, Some(true));
+        let observed_at = probe.draft_observed_at(&session, now);
 
         assert_eq!(
-            (probe_input, observed_at),
+            (observed_at, calls.borrow().clone()),
             (
-                Some((
-                    Some("/tmp/armyknife-test/server.sock".to_string()),
-                    "%23".to_string(),
-                )),
                 Some(now),
+                TmuxDraftProbeCalls {
+                    process_checks: Vec::new(),
+                    composer_checks: vec![(
+                        Some("/tmp/armyknife-test/server.sock".to_string()),
+                        "%23".to_string(),
+                        Engine::Claude,
+                    )],
+                },
+            )
+        );
+    }
+
+    #[rstest]
+    #[case::process_exited(
+        Some(false),
+        Some(true),
+        false,
+        Some(false),
+        vec![(None, "%23".to_string())],
+        vec![(None, "%23".to_string(), Engine::Codex)]
+    )]
+    #[case::process_running(
+        Some(true),
+        Some(true),
+        true,
+        Some(true),
+        vec![(None, "%23".to_string())],
+        vec![(None, "%23".to_string(), Engine::Codex)]
+    )]
+    #[case::process_state_unknown(
+        None,
+        Some(true),
+        true,
+        None,
+        vec![(None, "%23".to_string())],
+        vec![(None, "%23".to_string(), Engine::Codex)]
+    )]
+    #[case::composer_has_no_draft(
+        Some(false),
+        Some(false),
+        false,
+        None,
+        Vec::new(),
+        vec![(None, "%23".to_string(), Engine::Codex)]
+    )]
+    #[case::composer_state_unknown(
+        Some(false),
+        None,
+        false,
+        None,
+        Vec::new(),
+        vec![(None, "%23".to_string(), Engine::Codex)]
+    )]
+    fn codex_composer_protection_checks_process_only_for_drafts(
+        stopped_codex_session: Session,
+        #[case] process_is_running: Option<bool>,
+        #[case] composer_has_draft: Option<bool>,
+        #[case] expected_protected: bool,
+        #[case] expected_codex_process_running: Option<bool>,
+        #[case] expected_process_checks: Vec<(Option<String>, String)>,
+        #[case] expected_composer_checks: Vec<(Option<String>, String, Engine)>,
+    ) {
+        let now = stopped_codex_session.updated_at;
+        let (probe, calls) = tmux_draft_probe(process_is_running, composer_has_draft);
+        let observation = probe.observe_draft(&stopped_codex_session, now);
+
+        assert_eq!(
+            (observation, calls.borrow().clone()),
+            (
+                DraftObservation {
+                    observed_at: expected_protected.then_some(now),
+                    codex_process_running: expected_codex_process_running,
+                },
+                TmuxDraftProbeCalls {
+                    process_checks: expected_process_checks,
+                    composer_checks: expected_composer_checks,
+                },
             )
         );
     }

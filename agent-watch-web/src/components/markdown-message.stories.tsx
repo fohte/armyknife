@@ -57,6 +57,34 @@ export const RawHtmlStaysText: Story = {
   },
 }
 
+export const CollapsedDetails: Story = {
+  name: 'A details section keeps its long summary visible while collapsed',
+  args: {
+    children: `<details>
+<summary>This longer summary wraps onto another line without being shortened</summary>
+
+The details body keeps the same left edge as the surrounding message.
+
+<details>
+<summary>Nested details use the same disclosure control</summary>
+
+Nested content appears below its summary.
+</details>
+</details>`,
+  },
+}
+
+export const ExpandedDetails: Story = {
+  name: 'An open attribute shows the details body initially',
+  args: {
+    children: `<details open>
+<summary>Additional information</summary>
+
+The body starts expanded and can be collapsed from its summary row.
+</details>`,
+  },
+}
+
 const linkedSession: SessionLinkTarget = {
   id: '11111111-1111-4111-8111-111111111111',
   repo: 'example/toolkit',
@@ -159,5 +187,25 @@ export const GenericMarkdownCodeBlock: Story = {
   name: 'A generic Markdown code block has a copy toolbar',
   args: {
     children: '~~~text\nRendered with a toolbar.\n~~~',
+  },
+}
+
+const localImagePath = '/tmp/fixture.png'
+const savedImagePreview =
+  'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22160%22 height=%2296%22 viewBox=%220 0 160 96%22%3E%3Crect width=%22160%22 height=%2296%22 rx=%2212%22 fill=%22%233b82f6%22/%3E%3C/svg%3E'
+
+export const CopiedAssistantImage: Story = {
+  name: 'An assistant image renders from its copied source',
+  args: {
+    children: `![Chart preview](${localImagePath})`,
+    imageSources: { [localImagePath]: savedImagePreview },
+  },
+}
+
+export const UnavailableAssistantImage: Story = {
+  name: 'An unavailable assistant image shows its local path',
+  args: {
+    children: '![Draft diagram](/tmp/missing.png)',
+    imageSources: { '/tmp/missing.png': null },
   },
 }

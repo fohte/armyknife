@@ -9,7 +9,7 @@ pub(super) fn contains_markdown_source(messages: &[ChatItem], expected: &str) ->
 fn message_contains_markdown_source(message: &ChatItem, expected: &str) -> bool {
     match message {
         ChatItem::User { text, .. }
-        | ChatItem::Assistant { text }
+        | ChatItem::Assistant { text, .. }
         | ChatItem::Narration { text, .. } => text == expected,
         ChatItem::QueuedUser { content, .. }
         | ChatItem::UserWithContent { content, .. }
@@ -42,16 +42,6 @@ fn message_contains_markdown_source(message: &ChatItem, expected: &str) -> bool 
         ChatItem::Todo {
             detail, comment, ..
         } => detail.as_deref() == Some(expected) || comment.as_deref() == Some(expected),
-        ChatItem::Decision {
-            why,
-            considered,
-            easy_to_change,
-            ..
-        } => {
-            why == expected
-                || easy_to_change == expected
-                || considered.iter().any(|item| item == expected)
-        }
         ChatItem::Event { .. }
         | ChatItem::FileAttachment { .. }
         | ChatItem::Thinking { .. }
@@ -160,15 +150,6 @@ mod tests {
                 resolution: None,
                 comment: Some("todo comment".to_string()),
             },
-            ChatItem::Decision {
-                seq: 3,
-                title: "decision title".to_string(),
-                why: "decision why".to_string(),
-                considered: vec!["decision option".to_string()],
-                easy_to_change: "decision reversibility".to_string(),
-                review: None,
-                created_at: "2026-01-01T00:00:00Z".to_string(),
-            },
         ];
         let sources = [
             "assistant text",
@@ -186,11 +167,7 @@ mod tests {
             "proposal withdrawal",
             "todo detail",
             "todo comment",
-            "decision why",
-            "decision option",
-            "decision reversibility",
             "proposal option label",
-            "decision title",
         ];
 
         assert_eq!(
@@ -200,7 +177,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             [
                 true, true, false, true, true, true, true, true, true, true, true, true, true,
-                true, true, true, true, true, false, false,
+                true, true, false,
             ],
         );
     }
