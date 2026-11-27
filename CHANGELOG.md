@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.974](https://github.com/fohte/armyknife/compare/v0.1.973...v0.1.974) (2026-11-27)
+
+
+### Features
+
+* **agent-watch-web:** collapse Markdown details ([#2380](https://github.com/fohte/armyknife/issues/2380)) ([0191767](https://github.com/fohte/armyknife/commit/019176735a183ef4989aecf66351a6b19364c1ee))
+
 ## [0.1.973](https://github.com/fohte/armyknife/compare/v0.1.972...v0.1.973) (2026-11-27)
 
 
