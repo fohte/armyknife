@@ -44,7 +44,7 @@ fn attach_with_storage_root(
         for text in markdown_image_texts(message) {
             for path in markdown_image_paths(text) {
                 if seen_paths.insert(path.clone()) {
-                    paths.push((text, path));
+                    paths.push(path);
                 }
             }
         }
@@ -53,12 +53,15 @@ fn attach_with_storage_root(
         }
         let mut sources = BTreeMap::new();
         let mut total_size = 0_u64;
-        for (path_index, (text, path)) in paths.iter().enumerate() {
+        for (path_index, path) in paths.iter().enumerate() {
             if path_index >= MAX_IMAGES_PER_MESSAGE || has_markdown_destination_escape(path) {
                 sources.insert(path.clone(), None);
                 continue;
             }
-            let key = image_key(session_id, text, path);
+            let Some(key) = image_key(session_id, message, path) else {
+                sources.insert(path.clone(), None);
+                continue;
+            };
             let copied = match snapshot_image(
                 storage_root,
                 session_id,
@@ -137,14 +140,25 @@ fn markdown_image_texts(message: &super::ChatItem) -> Vec<&str> {
     }
 }
 
-fn image_key(session_id: &str, text: &str, path: &str) -> String {
+fn image_key(session_id: &str, message: &super::ChatItem, path: &str) -> Option<String> {
     let mut digest = Sha256::new();
     digest.update(session_id.as_bytes());
     digest.update([0]);
-    digest.update(text.as_bytes());
+    match message {
+        super::ChatItem::Assistant { text } => digest.update(text.as_bytes()),
+        super::ChatItem::Todo { seq, .. } => {
+            digest.update(b"todo");
+            digest.update(seq.to_be_bytes());
+        }
+        super::ChatItem::Proposal { seq, .. } => {
+            digest.update(b"proposal");
+            digest.update(seq.to_be_bytes());
+        }
+        _ => return None,
+    }
     digest.update([0]);
     digest.update(path.as_bytes());
-    crate::shared::hex::encode(&digest.finalize())
+    Some(crate::shared::hex::encode(&digest.finalize()))
 }
 
 fn snapshot_image(
@@ -327,6 +341,7 @@ fn extract_inline_images(line: &str, paths: &mut Vec<String>, seen: &mut HashSet
         if bytes.get(close) == Some(&b')') && close_destination > destination {
             if let Ok(value) = std::str::from_utf8(&bytes[destination..close_destination])
                 && !value.starts_with("//")
+                && !value.starts_with("/api/images/")
                 && Path::new(value).is_absolute()
                 && seen.insert(value.to_owned())
             {
@@ -460,6 +475,19 @@ mod tests {
         ChatItem::Assistant { text }
     }
 
+    fn todo(seq: i64, detail: Option<String>, comment: Option<String>) -> ChatItem {
+        ChatItem::Todo {
+            seq,
+            title: "A task".to_owned(),
+            detail,
+            folded: false,
+            added_folded: false,
+            completed: false,
+            resolution: None,
+            comment,
+        }
+    }
+
     fn conversation(text: String) -> ConversationResponse {
         ConversationResponse {
             messages: vec![assistant(text)],
@@ -552,6 +580,134 @@ mod tests {
     }
 
     #[test]
+    fn keys_card_snapshots_by_card_identity_and_path() {
+        let sources = tempfile::tempdir().unwrap();
+        let storage = tempfile::tempdir().unwrap();
+        let path = image_file(&sources, "shared.png", 8);
+        let path_text = path.display().to_string();
+        let original = fs::read(&path).unwrap();
+        let repeated_text = format!("Shared detail ![](<{path_text}>)");
+        let first_card = todo(1, Some(repeated_text.clone()), None);
+        let mut first_conversation = ConversationResponse {
+            messages: vec![first_card.clone()],
+            ..ConversationResponse::default()
+        };
+
+        attach_with_storage_root("fixture-session", &mut first_conversation, storage.path());
+
+        let updated = [PNG_HEADER, b"updated"].concat();
+        fs::write(&path, &updated).unwrap();
+        let second_card = todo(2, Some(repeated_text), None);
+        let mut second_conversation = ConversationResponse {
+            messages: vec![second_card.clone()],
+            ..ConversationResponse::default()
+        };
+
+        attach_with_storage_root("fixture-session", &mut second_conversation, storage.path());
+
+        fs::remove_file(&path).unwrap();
+        let edited_card = todo(2, Some(format!("Edited detail ![](<{path_text}>)")), None);
+        let mut edited_conversation = ConversationResponse {
+            messages: vec![edited_card],
+            ..ConversationResponse::default()
+        };
+
+        attach_with_storage_root("fixture-session", &mut edited_conversation, storage.path());
+
+        let source_for = |conversation: &ConversationResponse| {
+            conversation.message_image_sources[&0][&path_text].clone()
+        };
+        let first_source = source_for(&first_conversation);
+        let second_source = source_for(&second_conversation);
+        let edited_source = source_for(&edited_conversation);
+        let snapshot_for = |source: Option<&String>| {
+            source
+                .and_then(|source| source.rsplit('/').next())
+                .and_then(|key| {
+                    super::read_snapshot(storage.path(), "fixture-session", key).unwrap()
+                })
+        };
+        let normalize_sources = |conversation: &ConversationResponse| {
+            conversation
+                .message_image_sources
+                .iter()
+                .map(|(index, sources)| {
+                    (
+                        *index,
+                        sources
+                            .iter()
+                            .map(|(path, source)| (path.clone(), source.as_ref().map(|_| "served")))
+                            .collect::<BTreeMap<_, _>>(),
+                    )
+                })
+                .collect::<BTreeMap<_, _>>()
+        };
+        let expected_sources = BTreeMap::from([(0, BTreeMap::from([(path_text, Some("served"))]))]);
+
+        assert_eq!(
+            (
+                normalize_sources(&first_conversation),
+                normalize_sources(&second_conversation),
+                normalize_sources(&edited_conversation),
+                first_source.is_some(),
+                second_source.is_some(),
+                edited_source.is_some(),
+                first_source != second_source,
+                second_source == edited_source,
+                (
+                    snapshot_for(first_source.as_ref()),
+                    snapshot_for(second_source.as_ref())
+                ),
+            ),
+            (
+                expected_sources.clone(),
+                expected_sources.clone(),
+                expected_sources,
+                true,
+                true,
+                true,
+                true,
+                true,
+                (Some((original, "image/png")), Some((updated, "image/png"))),
+            ),
+        );
+    }
+
+    #[test]
+    fn leaves_uploaded_card_image_previews_for_the_browser() {
+        let storage = tempfile::tempdir().unwrap();
+        let todo_preview = "/api/images/fixture-todo-image.png";
+        let proposal_preview = "/api/images/fixture-proposal-image.png";
+        let mut conversation = ConversationResponse {
+            messages: vec![
+                todo(
+                    1,
+                    None,
+                    Some(format!("Resolved with ![](<{todo_preview}>)")),
+                ),
+                ChatItem::Proposal {
+                    seq: 2,
+                    title: "A choice".to_owned(),
+                    summary: None,
+                    options: Vec::new(),
+                    answer: Some(ProposalAnswer {
+                        choice: Some(0),
+                        comment: Some(format!("Answered with ![](<{proposal_preview}>)")),
+                    }),
+                    resolved: true,
+                    resolution: None,
+                    comment: None,
+                },
+            ],
+            ..ConversationResponse::default()
+        };
+
+        attach_with_storage_root("fixture-session", &mut conversation, storage.path());
+
+        assert_eq!(conversation.message_image_sources, BTreeMap::new());
+    }
+
+    #[test]
     fn snapshots_images_with_spaces_and_non_ascii_path_characters() {
         let sources = tempfile::tempdir().unwrap();
         let storage = tempfile::tempdir().unwrap();
@@ -561,7 +717,12 @@ mod tests {
 
         attach_with_storage_root("fixture-session", &mut messages, storage.path());
 
-        let key = image_key("fixture-session", &answer, &path.display().to_string());
+        let key = image_key(
+            "fixture-session",
+            &assistant(answer.clone()),
+            &path.display().to_string(),
+        )
+        .unwrap();
         assert_eq!(
             messages.message_image_sources,
             BTreeMap::from([(
@@ -598,38 +759,37 @@ mod tests {
         let proposal_option = markdown(texts[3], &paths[3]);
         let proposal_answer = markdown(texts[4], &paths[4]);
         let proposal_comment = markdown(texts[5], &paths[5]);
+        let todo_message = ChatItem::Todo {
+            seq: 1,
+            title: "A task".to_owned(),
+            detail: Some(todo_detail.clone()),
+            folded: false,
+            added_folded: false,
+            completed: false,
+            resolution: None,
+            comment: Some(todo_comment.clone()),
+        };
+        let proposal_message = ChatItem::Proposal {
+            seq: 2,
+            title: "A choice".to_owned(),
+            summary: Some(proposal_summary.clone()),
+            options: vec![ProposalOption {
+                label: "Option".to_owned(),
+                description: Some(proposal_option.clone()),
+                pros: Vec::new(),
+                cons: Vec::new(),
+                recommended: false,
+            }],
+            answer: Some(ProposalAnswer {
+                choice: Some(0),
+                comment: Some(proposal_answer.clone()),
+            }),
+            resolved: false,
+            resolution: None,
+            comment: Some(proposal_comment.clone()),
+        };
         let mut conversation = ConversationResponse {
-            messages: vec![
-                ChatItem::Todo {
-                    seq: 1,
-                    title: "A task".to_owned(),
-                    detail: Some(todo_detail.clone()),
-                    folded: false,
-                    added_folded: false,
-                    completed: false,
-                    resolution: None,
-                    comment: Some(todo_comment.clone()),
-                },
-                ChatItem::Proposal {
-                    seq: 2,
-                    title: "A choice".to_owned(),
-                    summary: Some(proposal_summary.clone()),
-                    options: vec![ProposalOption {
-                        label: "Option".to_owned(),
-                        description: Some(proposal_option.clone()),
-                        pros: Vec::new(),
-                        cons: Vec::new(),
-                        recommended: false,
-                    }],
-                    answer: Some(ProposalAnswer {
-                        choice: Some(0),
-                        comment: Some(proposal_answer.clone()),
-                    }),
-                    resolved: false,
-                    resolution: None,
-                    comment: Some(proposal_comment.clone()),
-                },
-            ],
+            messages: vec![todo_message.clone(), proposal_message.clone()],
             start: 7,
             ..ConversationResponse::default()
         };
@@ -637,17 +797,17 @@ mod tests {
         attach_with_storage_root("fixture-session", &mut conversation, storage.path());
 
         let expected_sources = [
-            (7, &todo_detail, &paths[0]),
-            (7, &todo_comment, &paths[1]),
-            (8, &proposal_summary, &paths[2]),
-            (8, &proposal_option, &paths[3]),
-            (8, &proposal_answer, &paths[4]),
-            (8, &proposal_comment, &paths[5]),
+            (7, &todo_message, &paths[0]),
+            (7, &todo_message, &paths[1]),
+            (8, &proposal_message, &paths[2]),
+            (8, &proposal_message, &paths[3]),
+            (8, &proposal_message, &paths[4]),
+            (8, &proposal_message, &paths[5]),
         ]
         .into_iter()
         .fold(
             BTreeMap::new(),
-            |mut sources, (message_index, text, path)| {
+            |mut sources, (message_index, message, path)| {
                 sources
                     .entry(message_index)
                     .or_insert_with(BTreeMap::new)
@@ -655,7 +815,8 @@ mod tests {
                         path.display().to_string(),
                         Some(format!(
                             "/api/sessions/fixture-session/answer-images/{}",
-                            image_key("fixture-session", text, &path.display().to_string())
+                            image_key("fixture-session", message, &path.display().to_string())
+                                .unwrap()
                         )),
                     );
                 sources
@@ -733,23 +894,24 @@ mod tests {
         };
         let summary = markdown(&paths[..8]);
         let option_description = markdown(&paths[8..]);
-        let mut conversation = ConversationResponse {
-            messages: vec![ChatItem::Proposal {
-                seq: 1,
-                title: "A choice".to_owned(),
-                summary: Some(summary.clone()),
-                options: vec![ProposalOption {
-                    label: "Option".to_owned(),
-                    description: Some(option_description.clone()),
-                    pros: Vec::new(),
-                    cons: Vec::new(),
-                    recommended: false,
-                }],
-                answer: None,
-                resolved: false,
-                resolution: None,
-                comment: None,
+        let proposal = ChatItem::Proposal {
+            seq: 1,
+            title: "A choice".to_owned(),
+            summary: Some(summary.clone()),
+            options: vec![ProposalOption {
+                label: "Option".to_owned(),
+                description: Some(option_description.clone()),
+                pros: Vec::new(),
+                cons: Vec::new(),
+                recommended: false,
             }],
+            answer: None,
+            resolved: false,
+            resolution: None,
+            comment: None,
+        };
+        let mut conversation = ConversationResponse {
+            messages: vec![proposal.clone()],
             ..ConversationResponse::default()
         };
 
@@ -760,13 +922,8 @@ mod tests {
             .enumerate()
             .map(|(index, path)| {
                 let path = path.display().to_string();
-                let text = if index < 8 {
-                    &summary
-                } else {
-                    &option_description
-                };
                 let source = (index < MAX_IMAGES_PER_MESSAGE).then(|| {
-                    let key = image_key("fixture-session", text, &path);
+                    let key = image_key("fixture-session", &proposal, &path).unwrap();
                     format!("/api/sessions/fixture-session/answer-images/{key}")
                 });
                 (path, source)
@@ -797,7 +954,12 @@ mod tests {
 
         attach_with_storage_root("fixture-session", &mut conversation, storage.path());
 
-        let key = image_key("fixture-session", &answer, &path.display().to_string());
+        let key = image_key(
+            "fixture-session",
+            &assistant(answer.clone()),
+            &path.display().to_string(),
+        )
+        .unwrap();
         let snapshot = super::read_snapshot(storage.path(), "fixture-session", &key).unwrap();
         assert_eq!(
             (conversation.message_image_sources, snapshot),
@@ -933,7 +1095,8 @@ mod tests {
             .map(|(index, path)| {
                 let path = path.display().to_string();
                 let source = (index < MAX_IMAGES_PER_MESSAGE).then(|| {
-                    let key = image_key("count-session", &count_answer, &path);
+                    let key = image_key("count-session", &assistant(count_answer.clone()), &path)
+                        .unwrap();
                     format!("/api/sessions/count-session/answer-images/{key}")
                 });
                 (path, source)
@@ -978,7 +1141,8 @@ mod tests {
             .map(|(index, path)| {
                 let path = path.display().to_string();
                 let source = (index < 5).then(|| {
-                    let key = image_key("bytes-session", &byte_answer, &path);
+                    let key =
+                        image_key("bytes-session", &assistant(byte_answer.clone()), &path).unwrap();
                     format!("/api/sessions/bytes-session/answer-images/{key}")
                 });
                 (path, source)
