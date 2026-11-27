@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.986](https://github.com/fohte/armyknife/compare/v0.1.985...v0.1.986) (2026-11-27)
+
+
+### Features
+
+* **agent/watch-web:** expose resume startup state ([#2396](https://github.com/fohte/armyknife/issues/2396)) ([9165007](https://github.com/fohte/armyknife/commit/916500792eb593f07d807407fa11db7f23f1533d))
+
 ## [0.1.985](https://github.com/fohte/armyknife/compare/v0.1.984...v0.1.985) (2026-11-27)
 
 
