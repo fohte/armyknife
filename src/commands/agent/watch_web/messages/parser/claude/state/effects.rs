@@ -97,6 +97,7 @@ impl ClaudeParserState {
                                 effects.push(ClaudeEffect::SendUserFile { tool_use, failed });
                             } else {
                                 effects.push(ClaudeEffect::ToolAction {
+                                    tool_assistant_uuid: tool_use.assistant_uuid.clone(),
                                     name: tool_use.name.clone(),
                                     input: tool_use.input.clone(),
                                     failed,

@@ -141,6 +141,8 @@ fn is_first_parallel_result(
     };
     first_call.is_tool_use_assistant
         && second_call.is_tool_use_assistant
+        && first_call.tool_use_ids.len() == 1
+        && second_call.tool_use_ids.len() == 1
         && is_simple_record(record)
         && second_call.parent_uuid.as_deref() == Some(first_uuid)
         && record_parent_uuid(record).as_deref() == Some(first_uuid)
@@ -183,6 +185,8 @@ fn is_final_parallel_result(
     };
     first_call.is_tool_use_assistant
         && second_call.is_tool_use_assistant
+        && first_call.tool_use_ids.len() == 1
+        && second_call.tool_use_ids.len() == 1
         && first_result.is_tool_result_only
         && first_result.is_simple
         && is_simple_record(record)

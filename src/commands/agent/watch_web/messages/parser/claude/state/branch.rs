@@ -5,6 +5,51 @@ use super::ClaudeParserState;
 use super::tool_results::tool_result_blocks;
 
 impl ClaudeParserState {
+    pub(in crate::commands::agent::watch_web::messages::parser::claude) fn parallel_pending_tool_use_uuid(
+        &self,
+        record: &Value,
+    ) -> Option<String> {
+        if !super::super::user_input::is_tool_result_only_user_record(record) {
+            return None;
+        }
+        let owner_uuid = super::record_parent_uuid(record)?;
+        let owner = self.transcript_nodes.get(&owner_uuid)?;
+        let result_ids = record_tool_result_ids(record);
+        if owner.tool_use_ids.len() != 1 || result_ids != owner.tool_use_ids {
+            return None;
+        }
+        let mut candidates = self
+            .transcript_children
+            .get(&owner_uuid)?
+            .iter()
+            .filter_map(|uuid| {
+                let node = self.transcript_nodes.get(uuid)?;
+                (node.has_tool_use
+                    && node.tool_use_ids.len() == 1
+                    && node.parent_uuid.as_deref() == Some(owner_uuid.as_str())
+                    && !self.has_tool_result_for_tool(uuid, &node.tool_use_ids[0]))
+                .then(|| uuid.clone())
+            });
+        let candidate = candidates.next()?;
+        candidates.next().is_none().then_some(candidate)
+    }
+
+    fn has_tool_result_for_tool(&self, assistant_uuid: &str, tool_use_id: &str) -> bool {
+        self.transcript_children
+            .get(assistant_uuid)
+            .is_some_and(|children| {
+                children.iter().any(|child_uuid| {
+                    self.transcript_nodes.get(child_uuid).is_some_and(|child| {
+                        child.is_tool_result_only
+                            && child
+                                .tool_result_ids
+                                .iter()
+                                .any(|result_id| result_id == tool_use_id)
+                    })
+                })
+            })
+    }
+
     pub(in crate::commands::agent::watch_web::messages::parser::claude) fn rebuild_transcript_children(
         &mut self,
     ) {
@@ -120,4 +165,14 @@ impl ClaudeParserState {
                     })
             })
     }
+}
+
+fn record_tool_result_ids(record: &Value) -> Vec<String> {
+    let Some(message) = record.get("message") else {
+        return Vec::new();
+    };
+    tool_result_blocks(message)
+        .filter_map(|block| block.get("tool_use_id").and_then(Value::as_str))
+        .map(str::to_owned)
+        .collect()
 }

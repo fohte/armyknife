@@ -107,28 +107,20 @@ impl ClaudeParserState {
         );
         let queued_peer_delivery = self.is_queued_peer_delivery(&record, uuid);
         let mut active_record = uuid.is_none();
-        if is_tool_result_only {
-            active_record = pending_tool_result_on_active_branch;
-        } else if queued_peer_delivery || side_branch_continuation {
+        if queued_peer_delivery || side_branch_continuation {
             active_record = true;
             if let Some(uuid) = uuid {
                 is_inactive_branch(uuid, &mut self.transcript_nodes);
             }
         } else if let Some(uuid) = uuid {
             let membership = self.transcript_nodes.get(uuid).map(|node| node.membership);
-            let bypass_branch_check = task_notification.is_some();
+            let bypass_branch_check = is_tool_result_only || task_notification.is_some();
             active_record = match membership {
                 None => bypass_branch_check,
                 Some(BranchMembership::Unknown) if !bypass_branch_check => {
                     !is_inactive_branch(uuid, &mut self.transcript_nodes)
                 }
-                Some(BranchMembership::Active) => true,
-                Some(
-                    BranchMembership::ReachesActive
-                    | BranchMembership::Disconnected
-                    | BranchMembership::Visiting,
-                ) => false,
-                Some(BranchMembership::Unknown) => true,
+                Some(_) => true,
             };
         }
 
@@ -160,6 +152,7 @@ impl ClaudeParserState {
 
         let effects = self.record_effects(&record, task_notification.as_deref(), now);
         self.events.push(TimedClaudeEvent {
+            uuid: uuid.map(str::to_owned),
             timestamp: record_timestamp(&record),
             effects,
         });

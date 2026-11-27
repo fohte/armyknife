@@ -2,6 +2,9 @@ use std::collections::BTreeMap;
 
 use serde_json::Value;
 
+use super::background_tasks::task_notification_text;
+use super::user_input::is_tool_result_only_user_record;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum BranchMembership {
     Unknown,
@@ -13,23 +16,51 @@ pub(super) enum BranchMembership {
 
 #[derive(Clone)]
 pub(super) struct TranscriptNode {
+    pub(super) record_order: u64,
     pub(super) parent_uuid: Option<String>,
     pub(super) membership: BranchMembership,
     pub(super) has_tool_use: bool,
+    pub(super) tool_use_ids: Vec<String>,
+    pub(super) tool_result_ids: Vec<String>,
+    pub(super) is_tool_result_only: bool,
+    pub(super) is_task_notification: bool,
     pub(super) was_valid_tool_result: bool,
     pub(super) processed: bool,
 }
 
 impl TranscriptNode {
-    pub(super) fn from_record(record: &Value, parent_uuid: Option<String>) -> Self {
+    pub(super) fn from_record(
+        record: &Value,
+        parent_uuid: Option<String>,
+        record_order: u64,
+    ) -> Self {
         Self {
+            record_order,
             parent_uuid,
             membership: BranchMembership::Unknown,
             has_tool_use: is_tool_use_assistant(record),
+            tool_use_ids: content_ids(record, "tool_use"),
+            tool_result_ids: content_ids(record, "tool_result"),
+            is_tool_result_only: is_tool_result_only_user_record(record),
+            is_task_notification: task_notification_text(record).is_some(),
             was_valid_tool_result: false,
             processed: false,
         }
     }
+}
+
+fn content_ids(record: &Value, kind: &str) -> Vec<String> {
+    record
+        .get("message")
+        .and_then(|message| message.get("content"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|block| block.get("type").and_then(Value::as_str) == Some(kind))
+        .filter_map(|block| block.get("id").or_else(|| block.get("tool_use_id")))
+        .filter_map(Value::as_str)
+        .map(str::to_owned)
+        .collect()
 }
 
 pub(super) fn is_tool_use_assistant(record: &Value) -> bool {
@@ -106,4 +137,44 @@ pub(super) fn is_inactive_branch(
         }
     }
     reaches_active
+}
+
+pub(super) fn active_record_uuids(
+    transcript_nodes: &BTreeMap<String, TranscriptNode>,
+    latest_uuid: Option<&str>,
+) -> std::collections::HashSet<String> {
+    let mut transcript_nodes = transcript_nodes.clone();
+    for node in transcript_nodes.values_mut() {
+        node.membership = BranchMembership::Unknown;
+    }
+    mark_active_branch(&mut transcript_nodes, latest_uuid);
+
+    let mut records = transcript_nodes
+        .iter()
+        .map(|(uuid, node)| {
+            (
+                node.record_order,
+                uuid.clone(),
+                node.is_tool_result_only || node.is_task_notification,
+            )
+        })
+        .collect::<Vec<_>>();
+    records.sort_by(|left, right| (left.0, &left.1).cmp(&(right.0, &right.1)));
+
+    let mut active_uuids = std::collections::HashSet::new();
+    for (_, uuid, bypass_branch_check) in records {
+        let membership = transcript_nodes.get(&uuid).map(|node| node.membership);
+        let active_record = match membership {
+            Some(BranchMembership::Unknown) if !bypass_branch_check => {
+                !is_inactive_branch(&uuid, &mut transcript_nodes)
+            }
+            Some(_) => true,
+            None => bypass_branch_check,
+        };
+        if active_record {
+            active_uuids.insert(uuid);
+        }
+    }
+
+    active_uuids
 }
