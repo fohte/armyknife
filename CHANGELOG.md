@@ -1,5 +1,40 @@
 # Changelog
 
+## [0.1.972](https://github.com/fohte/armyknife/compare/v0.1.971...v0.1.972) (2026-11-27)
+
+
+### Features
+
+* **agent-watch-web:** match drop overlay design ([#2374](https://github.com/fohte/armyknife/issues/2374)) ([f04ee0b](https://github.com/fohte/armyknife/commit/f04ee0b28b8a336843aa0a863c3e9ab38dab6b4c))
+
+## [0.1.971](https://github.com/fohte/armyknife/compare/v0.1.970...v0.1.971) (2026-11-27)
+
+
+### Features
+
+* **agent-watch-web:** add session launch feedback ([#2373](https://github.com/fohte/armyknife/issues/2373)) ([b1161dd](https://github.com/fohte/armyknife/commit/b1161dd4e5d6b33f9744131950a9ec63ee158c4e))
+
+## [0.1.970](https://github.com/fohte/armyknife/compare/v0.1.969...v0.1.970) (2026-11-27)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** avoid launch auto-navigation ([#2370](https://github.com/fohte/armyknife/issues/2370)) ([e4bca2e](https://github.com/fohte/armyknife/commit/e4bca2eee1a07fd70bd3842114ec91b61d24fbb8))
+
+## [0.1.969](https://github.com/fohte/armyknife/compare/v0.1.968...v0.1.969) (2026-11-27)
+
+
+### Features
+
+* **agent:** remove SessionStart decision guidance ([#2366](https://github.com/fohte/armyknife/issues/2366)) ([28b8a45](https://github.com/fohte/armyknife/commit/28b8a45a2655b5cdb4ee5003193c9c118f82ac51))
+
+## [0.1.968](https://github.com/fohte/armyknife/compare/v0.1.967...v0.1.968) (2026-11-27)
+
+
+### Bug Fixes
+
+* **agent-watch-desktop:** update without sudo ([#2365](https://github.com/fohte/armyknife/issues/2365)) ([20431ce](https://github.com/fohte/armyknife/commit/20431ce38514156392778e9c537defe2cba539e8))
+
 ## [0.1.967](https://github.com/fohte/armyknife/compare/v0.1.966...v0.1.967) (2026-11-27)
 
 
