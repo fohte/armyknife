@@ -44,6 +44,7 @@ const appTestFiles = [
   'src/components/command-palette.test.tsx',
   'src/command-palette-controller.browser.test.tsx',
   'src/components/confirm-dialog.browser.test.tsx',
+  'src/components/session-discard-confirmation.browser.test.tsx',
   'src/components/conversation-message-row.browser.test.tsx',
   'src/components/board-view.test.tsx',
   'src/components/conversation-pane.test.tsx',
