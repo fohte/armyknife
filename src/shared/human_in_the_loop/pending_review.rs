@@ -513,9 +513,6 @@ mod tests {
             started_at: if format == "v2" { 123 } else { 0 },
         });
 
-        assert_eq!(
-            review_document_marker_with(&review_id, |_, _| false),
-            expected
-        );
+        assert_eq!(review_document_marker(&review_id), expected);
     }
 }

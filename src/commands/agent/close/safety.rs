@@ -157,6 +157,7 @@ mod tests {
     use indoc::indoc;
     use rstest::{fixture, rstest};
     use serde_json::json;
+    use tempfile::TempDir;
 
     use super::pending_work_error;
     use crate::commands::agent::bg_tasks::PendingTask;
@@ -242,9 +243,12 @@ mod tests {
         session.pending_bg_task_ids.clear();
         session.pending_agent_task_ids.clear();
         session.pending_human_review_ids.clear();
+        let temp_dir = TempDir::new().expect("review fixture directory should be created");
+        let review_path = temp_dir.path().join("fixture-review.md");
+        let review_path = review_path.display().to_string();
         let review_id = match format {
-            "v2" => ["review-id", "v2", "12345", "/fixture/review.md", "queue"].join("\0"),
-            "legacy" => "review-id\0/fixture/review.md".to_string(),
+            "v2" => ["review-id", "v2", "12345", review_path.as_str(), "queue"].join("\0"),
+            "legacy" => format!("review-id\0{review_path}"),
             _ => unreachable!("test case uses a known marker format"),
         };
         session.pending_human_review_ids.insert(review_id);

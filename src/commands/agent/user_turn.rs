@@ -341,14 +341,26 @@ mod tests {
     }
 
     #[rstest]
-    #[case::v2(
-        ["pr-draft-review:example-review", "v2", "123", "/fixture/draft.md", "queue"]
-            .join("\0")
-    )]
-    #[case::legacy("pr-draft-review:example-review\0/fixture/draft.md".to_string())]
-    fn stale_pr_draft_marker_does_not_create_a_body_turn(#[case] marker: String) {
+    #[case::v2("v2")]
+    #[case::legacy("legacy")]
+    fn stale_pr_draft_marker_does_not_create_a_body_turn(#[case] format: &str) {
         let mut session = session("waiting", timestamp(1));
         session.status = SessionStatus::WaitingInput;
+        let temp_dir = TempDir::new().expect("review fixture directory should be created");
+        let review_path = temp_dir.path().join("fixture-draft.md");
+        let review_path = review_path.display().to_string();
+        let marker = match format {
+            "v2" => [
+                "pr-draft-review:example-review",
+                "v2",
+                "123",
+                review_path.as_str(),
+                "queue",
+            ]
+            .join("\0"),
+            "legacy" => format!("pr-draft-review:example-review\0{review_path}"),
+            _ => unreachable!("test case uses a known marker format"),
+        };
         session.pending_human_review_ids.insert(marker);
 
         assert_eq!(
