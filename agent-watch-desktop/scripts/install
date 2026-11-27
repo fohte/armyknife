@@ -18,7 +18,7 @@ restore_on_failure() {
 trap restore_on_failure EXIT
 
 cd "$package_dir"
-nr package
+pnpm run package
 
 built_app=''
 for candidate in "$package_dir"/release/mac*/"$app_name"; do

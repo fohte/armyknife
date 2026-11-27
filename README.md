@@ -1353,7 +1353,7 @@ On macOS, build and install the unsigned `Agent Watch.app` from the repository:
 
 ```sh
 cd agent-watch-desktop
-ni
+pnpm install --frozen-lockfile
 ./scripts/install
 ```
 
@@ -1361,7 +1361,7 @@ Run the same install command after pulling updates to replace the app in `/Appli
 
 The app opens the watch-web server at `http://127.0.0.1:4317`; it does not start or stop the server. If the server is unavailable, the app shows the command to start it and reconnects automatically. The app is unsigned, so macOS may ask you to confirm the first launch.
 
-For development, set `AGENT_WATCH_URL` to an `http://localhost` or `http://127.0.0.1` URL with the development server's port, then run `nr start` from `agent-watch-desktop`.
+For development, set `AGENT_WATCH_URL` to an `http://localhost` or `http://127.0.0.1` URL with the development server's port, then run `pnpm run start` from `agent-watch-desktop`.
 
 ### `a agent clean`
 
