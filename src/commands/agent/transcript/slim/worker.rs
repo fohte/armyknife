@@ -120,15 +120,18 @@ fn slim_failure_event(error: &anyhow::Error) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::fs::{self, OpenOptions};
     use std::path::Path;
+    use std::time::Duration;
 
+    use indoc::indoc;
     use rstest::rstest;
     use tempfile::tempdir;
 
     use super::{
-        LOCK_DIRECTORY, PostReplacementFailure, SlimArgs, lock_transcript_path_in,
-        lock_transcript_session_in, resolve_transcript_path, slim_failure_event,
+        LOCK_DIRECTORY, SlimArgs, lock_transcript_path_in, lock_transcript_session_in,
+        resolve_transcript_path, slim_failure_event,
     };
 
     #[test]
@@ -212,15 +215,38 @@ mod tests {
         #[case] post_replacement: bool,
         #[case] expected_event: &str,
     ) {
-        let inner_error = anyhow::anyhow!("{message}");
         let error: anyhow::Error = if post_replacement {
-            PostReplacementFailure {
-                message: message.to_string(),
-                source: inner_error,
-            }
-            .into()
+            let directory = tempdir().expect("temporary directory should be created");
+            let transcript = directory.path().join("fixture-transcript.jsonl");
+            fs::write(
+                &transcript,
+                indoc! {r#"
+                    {"type":"user","uuid":"fixture-old","message":{"content":"fixture old"}}
+                    {"type":"system","subtype":"compact_boundary","compactMetadata":{"preservedMessages":{"uuids":[]}}}
+                "#},
+            )
+            .expect("fixture transcript should be written");
+            let inspection_count = Cell::new(0);
+
+            super::super::slim_transcript_with(
+                &transcript,
+                || {},
+                || {},
+                || {},
+                |_| {
+                    inspection_count.set(inspection_count.get() + 1);
+                    if inspection_count.get() == 1 {
+                        Ok(false)
+                    } else {
+                        Err(anyhow::anyhow!("{message}"))
+                    }
+                },
+                Duration::from_millis(50),
+            )
+            .err()
+            .expect("post-replacement writer inspection should fail")
         } else {
-            inner_error
+            anyhow::anyhow!("{message}")
         };
 
         assert_eq!(slim_failure_event(&error), expected_event);
