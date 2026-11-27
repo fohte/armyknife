@@ -1,7 +1,6 @@
 use std::io::Write;
 
 use anyhow::Result;
-use indoc::formatdoc;
 
 use super::stop;
 use crate::commands::agent::types::{Engine, HookEvent};
@@ -29,13 +28,8 @@ pub(super) fn write_without_instruction(output: impl Write) -> Result<()> {
 }
 
 fn session_start_context(marker: Option<&str>) -> String {
-    let decision_instruction = super::super::decision::session_start_instruction();
     let web_ui_instruction = super::super::web_ui::session_start_instruction();
-    let mut context = formatdoc! {"
-        {decision_instruction}
-
-        {web_ui_instruction}"
-    };
+    let mut context = web_ui_instruction.to_string();
     if let Some(marker) = marker {
         context.push('\n');
         context.push('\n');
@@ -59,7 +53,7 @@ mod tests {
         Some("⟦armyknife-user:fixture-marker-cobalt⟧")
     )]
     #[case::codex(Engine::Codex, None)]
-    fn session_start_response_includes_the_decision_and_web_ui_instructions(
+    fn session_start_response_includes_the_web_ui_instruction_without_the_decision_instruction(
         #[case] engine: Engine,
         #[case] marker: Option<&str>,
     ) {
@@ -68,13 +62,8 @@ mod tests {
         write_hook_response(HookEvent::SessionStart, engine, None, marker, &mut output)
             .expect("SessionStart response should serialize");
 
-        let decision_instruction = crate::commands::agent::decision::session_start_instruction();
-        let web_ui_instruction = "When you start a local web UI (an HTTP server with a port), register it with `a agent web-ui add <URL> --name <NAME>`.";
-        let mut expected_context = indoc::formatdoc! {"
-            {decision_instruction}
-
-            {web_ui_instruction}"
-        };
+        let web_ui_instruction = crate::commands::agent::web_ui::session_start_instruction();
+        let mut expected_context = web_ui_instruction.to_string();
         if let Some(marker) = marker {
             expected_context.push('\n');
             expected_context.push('\n');
