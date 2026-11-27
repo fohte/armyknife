@@ -416,10 +416,16 @@ async fn codex_resume_keeps_startup_status_while_marked_stopped(action_context: 
         .await
         .unwrap();
 
+    let duplicate_resume = app
+        .clone()
+        .oneshot(post_empty("/sessions/fixture-session/resume"))
+        .await
+        .unwrap();
+
     advance(Duration::from_secs(20)).await;
     updates.changed().await.unwrap();
 
-    let retry = app
+    let retry_after_stuck = app
         .clone()
         .oneshot(post_empty("/sessions/fixture-session/resume"))
         .await
@@ -438,7 +444,8 @@ async fn codex_resume_keeps_startup_status_while_marked_stopped(action_context: 
         (
             response_snapshot(resume, &action_context).await,
             response_snapshot(pending, &action_context).await,
-            response_snapshot(retry, &action_context).await,
+            response_snapshot(duplicate_resume, &action_context).await,
+            response_snapshot(retry_after_stuck, &action_context).await,
             response_snapshot(stuck, &action_context).await,
         ),
         (
@@ -462,6 +469,15 @@ async fn codex_resume_keeps_startup_status_while_marked_stopped(action_context: 
                     "openInTerminal": true,
                     "rewind": true,
                 },
+                "calls": [{
+                    "kind": "resume",
+                    "sessionId": "fixture-session",
+                    "status": SessionStatus::Ended,
+                }],
+            }),
+            json!({
+                "status": StatusCode::CONFLICT.as_u16(),
+                "body": { "error": "session resume is already in progress" },
                 "calls": [{
                     "kind": "resume",
                     "sessionId": "fixture-session",
