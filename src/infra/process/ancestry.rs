@@ -35,23 +35,28 @@ pub(crate) fn get_process_info(pid: u32) -> Option<ProcessInfo> {
 
         // SAFETY: `proc_pidinfo` filled the entire struct as checked above.
         let info = unsafe { info.assume_init() };
-        let parent_pid = info.pbi_ppid;
-        let comm = info
-            .pbi_comm
-            .iter()
-            .take_while(|&&byte| byte != 0)
-            .map(|&byte| byte as u8)
-            .collect::<Vec<_>>();
-        Some(ProcessInfo {
-            parent_pid,
-            comm: String::from_utf8_lossy(&comm).into_owned(),
-        })
+        Some(process_info_from_bsdinfo(info))
     }
 
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         let _ = pid;
         None
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn process_info_from_bsdinfo(info: libc::proc_bsdinfo) -> ProcessInfo {
+    let parent_pid = info.pbi_ppid;
+    let comm = info
+        .pbi_comm
+        .iter()
+        .take_while(|&&byte| byte != 0)
+        .map(|&byte| byte as u8)
+        .collect::<Vec<_>>();
+    ProcessInfo {
+        parent_pid,
+        comm: String::from_utf8_lossy(&comm).into_owned(),
     }
 }
 
@@ -123,6 +128,29 @@ mod linux_tests {
                 parent_pid,
                 comm: comm.to_string(),
             }),
+        );
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod macos_tests {
+    use super::{ProcessInfo, process_info_from_bsdinfo};
+
+    #[test]
+    fn process_info_from_bsdinfo_preserves_parent_and_comm() {
+        // SAFETY: zero is valid for every integer and byte-array field in `proc_bsdinfo`.
+        let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+        info.pbi_ppid = 42;
+        for (target, byte) in info.pbi_comm.iter_mut().zip(b"claude") {
+            *target = *byte as libc::c_char;
+        }
+
+        assert_eq!(
+            process_info_from_bsdinfo(info),
+            ProcessInfo {
+                parent_pid: 42,
+                comm: "claude".to_string(),
+            },
         );
     }
 }

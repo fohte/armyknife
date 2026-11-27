@@ -49,7 +49,15 @@ fn has_parent_agent_process_with(
         if !visited.insert(current_pid) {
             break;
         }
-        let info = get_process_info(current_pid)?;
+        let Some(info) = get_process_info(current_pid) else {
+            tracing::debug!(
+                event = "agent.hook.pane_binding.ancestry_unavailable",
+                pid,
+                ancestor_pid = current_pid,
+                "Could not inspect hook process ancestry"
+            );
+            return None;
+        };
         if current_pid != pid
             && [Engine::Claude, Engine::Codex]
                 .into_iter()
@@ -57,7 +65,7 @@ fn has_parent_agent_process_with(
         {
             agent_ancestor_count += 1;
         }
-        if info.parent_pid == 0 || info.parent_pid == current_pid {
+        if info.parent_pid <= 1 || info.parent_pid == current_pid {
             break;
         }
         current_pid = info.parent_pid;
@@ -123,6 +131,15 @@ mod tests {
         "},
         300,
         None,
+    )]
+    #[case::pid_one_is_not_required(
+        indoc! {"
+            100 1 zsh
+            200 100 claude
+            300 200 hook
+        "},
+        300,
+        Some(false),
     )]
     fn has_parent_agent_process_cases(
         #[case] process_table: &str,
