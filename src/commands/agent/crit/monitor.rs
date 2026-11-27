@@ -1,5 +1,7 @@
 //! Detached cleanup worker for crit review daemons.
 
+mod client_started;
+mod clients;
 mod registration;
 mod start;
 mod status;
@@ -24,10 +26,10 @@ use crate::infra::process;
 use crate::infra::tmux;
 use crate::shared::log::short_run_id;
 
+pub use self::client_started::ClientStartedArgs;
+pub(super) use self::client_started::run as run_client_started;
 pub(super) use self::start::{ensure_started, ensure_started_with_status};
-use self::wait_state::{
-    crit_client_waiting_on_port, set_crit_wait_state, set_crit_wait_state_if_changed,
-};
+use self::wait_state::{crit_client_waiting, set_crit_wait_state, set_crit_wait_state_if_changed};
 
 pub(super) fn prepare_registration(port: u16, url: &str) -> (String, Option<serde_json::Value>) {
     registration::prepare_registration(port, url)
@@ -89,21 +91,18 @@ pub(super) fn run(args: &MonitorArgs) -> Result<()> {
     let mut previous_waiting = None;
     loop {
         while process::is_process_alive(watched_pid) {
-            let waiting = match crit_client_waiting_on_port(
-                args.port,
-                watched_pid,
-                process::run_with_timeout,
-            ) {
-                Ok(waiting) => Some(waiting),
-                Err(error) => {
-                    tracing::warn!(
-                        event = "agent.crit.monitor.client_check_failed",
-                        port = args.port,
-                        error = %error,
-                    );
-                    None
-                }
-            };
+            let waiting =
+                match crit_client_waiting(args.port, watched_pid, process::run_with_timeout) {
+                    Ok(waiting) => Some(waiting),
+                    Err(error) => {
+                        tracing::warn!(
+                            event = "agent.crit.monitor.client_check_failed",
+                            port = args.port,
+                            error = %error,
+                        );
+                        None
+                    }
+                };
             if let Err(error) =
                 set_crit_wait_state_if_changed(&mut previous_waiting, waiting, |waiting| {
                     set_crit_wait_state(args.port, waiting)
@@ -151,6 +150,7 @@ pub(super) fn run(args: &MonitorArgs) -> Result<()> {
             error = %error,
         );
     }
+    clients::remove_clients(args.port);
     remove_marker_if_owned(&marker);
     tracing::info!(event = "agent.crit.monitor.exit", daemon_pid = watched_pid);
     Ok(())
