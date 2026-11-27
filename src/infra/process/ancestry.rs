@@ -1,22 +1,18 @@
 #[cfg(target_os = "linux")]
 use std::fs;
 
+use super::identity::{ProcessIdentity, process_identity};
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ProcessInfo {
     pub(crate) parent_pid: u32,
     pub(crate) argv0: String,
 }
 
-#[derive(Debug, PartialEq, Eq)]
-struct ProcessIdentity<T> {
-    parent_pid: u32,
-    start_time: T,
-}
-
-fn process_info_if_stable<T: PartialEq>(
-    before: ProcessIdentity<T>,
+fn process_info_if_stable(
+    before: ProcessIdentity,
     argv0: String,
-    after: ProcessIdentity<T>,
+    after: ProcessIdentity,
 ) -> Option<ProcessInfo> {
     (before == after).then_some(ProcessInfo {
         parent_pid: before.parent_pid,
@@ -28,19 +24,19 @@ fn process_info_if_stable<T: PartialEq>(
 pub(crate) fn get_process_info(pid: u32) -> Option<ProcessInfo> {
     #[cfg(target_os = "linux")]
     {
-        let before = read_process_identity(pid)?;
+        let before = process_identity(pid)?;
         let cmdline = fs::read(format!("/proc/{pid}/cmdline")).ok()?;
         let argv0 = parse_linux_process_argv0(&cmdline)?;
-        let after = read_process_identity(pid)?;
+        let after = process_identity(pid)?;
         process_info_if_stable(before, argv0, after)
     }
 
     #[cfg(target_os = "macos")]
     {
-        let pid = libc::pid_t::try_from(pid).ok()?;
-        let before = read_process_identity(pid)?;
-        let argv0 = process_argv0(pid)?;
-        let after = read_process_identity(pid)?;
+        let process_pid = libc::pid_t::try_from(pid).ok()?;
+        let before = process_identity(pid)?;
+        let argv0 = process_argv0(process_pid)?;
+        let after = process_identity(pid)?;
         process_info_if_stable(before, argv0, after)
     }
 
@@ -117,64 +113,7 @@ fn parse_macos_process_argv0(args: &[u8]) -> Option<String> {
 
 /// Looks up the parent PID of `pid` without spawning a process.
 pub fn get_parent_pid(pid: u32) -> Option<u32> {
-    #[cfg(target_os = "linux")]
-    {
-        read_process_identity(pid).map(|identity| identity.parent_pid)
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        let pid = libc::pid_t::try_from(pid).ok()?;
-        read_process_identity(pid).map(|identity| identity.parent_pid)
-    }
-
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        let _ = pid;
-        None
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn read_process_identity(pid: u32) -> Option<ProcessIdentity<u64>> {
-    let stat = fs::read(format!("/proc/{pid}/stat")).ok()?;
-    parse_linux_process_stat(pid, &stat)
-}
-
-#[cfg(any(target_os = "linux", test))]
-fn parse_linux_process_stat(pid: u32, stat: &[u8]) -> Option<ProcessIdentity<u64>> {
-    const PARENT_PID_INDEX_AFTER_COMMAND: usize = 1;
-    const START_TIME_INDEX_AFTER_COMMAND: usize = 19;
-
-    let command_start = stat.iter().position(|&byte| byte == b'(')?;
-    let command_end = stat.iter().rposition(|&byte| byte == b')')?;
-    if command_end <= command_start {
-        return None;
-    }
-
-    let stat_pid = std::str::from_utf8(stat.get(..command_start)?)
-        .ok()?
-        .trim()
-        .parse::<u32>()
-        .ok()?;
-    if stat_pid != pid {
-        return None;
-    }
-
-    let mut fields = std::str::from_utf8(stat.get(command_end + 1..)?)
-        .ok()?
-        .split_whitespace();
-    Some(ProcessIdentity {
-        parent_pid: fields
-            .clone()
-            .nth(PARENT_PID_INDEX_AFTER_COMMAND)?
-            .parse::<u32>()
-            .ok()?,
-        start_time: fields
-            .nth(START_TIME_INDEX_AFTER_COMMAND)?
-            .parse::<u64>()
-            .ok()?,
-    })
+    process_identity(pid).map(|identity| identity.parent_pid)
 }
 
 #[cfg(any(target_os = "linux", test))]
@@ -186,60 +125,31 @@ fn parse_linux_process_argv0(cmdline: &[u8]) -> Option<String> {
     Some(String::from_utf8_lossy(argv0).into_owned())
 }
 
-#[cfg(target_os = "macos")]
-fn read_process_identity(pid: libc::pid_t) -> Option<ProcessIdentity<(u64, u64)>> {
-    let info = read_process_bsdinfo(pid)?;
-    Some(ProcessIdentity {
-        parent_pid: info.pbi_ppid,
-        start_time: (info.pbi_start_tvsec, info.pbi_start_tvusec),
-    })
-}
-
-#[cfg(target_os = "macos")]
-fn read_process_bsdinfo(pid: libc::pid_t) -> Option<libc::proc_bsdinfo> {
-    let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
-    // SAFETY: `info` points to writable storage sized for `proc_bsdinfo`.
-    let size = unsafe {
-        libc::proc_pidinfo(
-            pid,
-            libc::PROC_PIDTBSDINFO,
-            0,
-            info.as_mut_ptr().cast(),
-            std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int,
-        )
-    };
-    if size != std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int {
-        return None;
-    }
-
-    // SAFETY: `proc_pidinfo` filled the entire struct as checked above.
-    Some(unsafe { info.assume_init() })
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{ProcessIdentity, ProcessInfo, process_info_if_stable};
+    use super::super::identity::{ProcessIdentity, ProcessStartTime};
+    use super::{ProcessInfo, process_info_if_stable};
     use rstest::rstest;
 
     #[rstest]
     #[case::stable_identity(
-        ProcessIdentity { parent_pid: 7, start_time: 42 },
-        ProcessIdentity { parent_pid: 7, start_time: 42 },
+        ProcessIdentity { parent_pid: 7, start_time: ProcessStartTime::Linux(42) },
+        ProcessIdentity { parent_pid: 7, start_time: ProcessStartTime::Linux(42) },
         Some(ProcessInfo { parent_pid: 7, argv0: "claude".to_string() }),
     )]
     #[case::reused_pid(
-        ProcessIdentity { parent_pid: 7, start_time: 42 },
-        ProcessIdentity { parent_pid: 7, start_time: 43 },
+        ProcessIdentity { parent_pid: 7, start_time: ProcessStartTime::Linux(42) },
+        ProcessIdentity { parent_pid: 7, start_time: ProcessStartTime::Linux(43) },
         None,
     )]
     #[case::changed_parent(
-        ProcessIdentity { parent_pid: 7, start_time: 42 },
-        ProcessIdentity { parent_pid: 8, start_time: 42 },
+        ProcessIdentity { parent_pid: 7, start_time: ProcessStartTime::Linux(42) },
+        ProcessIdentity { parent_pid: 8, start_time: ProcessStartTime::Linux(42) },
         None,
     )]
     fn process_info_requires_stable_identity(
-        #[case] before: ProcessIdentity<u64>,
-        #[case] after: ProcessIdentity<u64>,
+        #[case] before: ProcessIdentity,
+        #[case] after: ProcessIdentity,
         #[case] expected: Option<ProcessInfo>,
     ) {
         assert_eq!(
@@ -274,35 +184,8 @@ mod tests {
 
 #[cfg(test)]
 mod linux_tests {
-    use super::{ProcessIdentity, parse_linux_process_argv0, parse_linux_process_stat};
+    use super::parse_linux_process_argv0;
     use rstest::rstest;
-
-    #[rstest]
-    #[case::simple_command(
-        b"42 (claude) S 7 8 9 0 -1 0 0 0 0 0 0 0 0 0 0 0 0 0 12345",
-        42,
-        Some(ProcessIdentity { parent_pid: 7, start_time: 12345 }),
-    )]
-    #[case::command_with_spaces_and_parentheses(
-        b"42 (worker (nested) name) S 7 8 9 0 -1 0 0 0 0 0 0 0 0 0 0 0 0 0 12345",
-        42,
-        Some(ProcessIdentity { parent_pid: 7, start_time: 12345 }),
-    )]
-    #[case::different_pid(b"42 (claude) S 7 8 9 0 -1 0 0 0 0 0 0 0 0 0 0 0 0 0 12345", 43, None)]
-    #[case::missing_parent(b"42 (claude)", 42, None)]
-    #[case::missing_start_time(b"42 (claude) S 7", 42, None)]
-    #[case::truncated_unicode_command_name(
-        b"42 (worker-\xe2\x82) S 7 8 9 0 -1 0 0 0 0 0 0 0 0 0 0 0 0 0 12345",
-        42,
-        Some(ProcessIdentity { parent_pid: 7, start_time: 12345 }),
-    )]
-    fn parse_linux_process_stat_cases(
-        #[case] stat: &[u8],
-        #[case] pid: u32,
-        #[case] expected: Option<ProcessIdentity<u64>>,
-    ) {
-        assert_eq!(parse_linux_process_stat(pid, stat), expected);
-    }
 
     #[rstest]
     #[case::bare_name(b"claude\0--flag\0", Some("claude"))]
