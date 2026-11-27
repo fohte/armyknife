@@ -160,9 +160,10 @@ pub async fn run(args: &WatchWebArgs) -> Result<()> {
 
     let executable = std::env::current_exe()?;
     let mut executable_identity = restart::ExecutableIdentity::read(&executable)?;
-    let mut executable_watcher = restart::ExecutableWatcher::new(&executable)?;
-    let mut startup_replacement_pending =
-        restart::ExecutableIdentity::read(&executable)? != executable_identity;
+    let mut executable_watcher =
+        restart::create_watcher_or_warn(|| restart::ExecutableWatcher::new(&executable));
+    let mut startup_replacement_pending = executable_watcher.is_some()
+        && restart::ExecutableIdentity::read(&executable)? != executable_identity;
     let (listener, address) = bind_listener(args.port).await?;
     ensure_port_allowed(address.port(), own_session_id.as_deref())?;
     let restart_args = restart_args_with_port(std::env::args_os().skip(1), address.port());
@@ -218,7 +219,9 @@ pub async fn run(args: &WatchWebArgs) -> Result<()> {
                 &executable,
                 executable_identity,
                 &mut startup_replacement_pending,
-                &mut executable_watcher.events,
+                executable_watcher
+                    .as_mut()
+                    .map(|watcher| &mut watcher.events),
             ),
             restart_sender,
             restart::SERVER_SHUTDOWN_TIMEOUT,

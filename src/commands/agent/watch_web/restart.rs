@@ -83,6 +83,22 @@ impl ExecutableWatcher {
     }
 }
 
+pub(super) fn create_watcher_or_warn<T, E>(create: impl FnOnce() -> Result<T, E>) -> Option<T>
+where
+    E: std::fmt::Display,
+{
+    match create() {
+        Ok(watcher) => Some(watcher),
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                "failed to watch watch-web executable; automatic restart is disabled"
+            );
+            None
+        }
+    }
+}
+
 impl ExecutableIdentity {
     pub(super) fn read(path: &Path) -> io::Result<Self> {
         let metadata = fs::metadata(path)?;
@@ -106,8 +122,12 @@ pub(super) async fn wait_for_replacement(
     executable: &Path,
     identity: ExecutableIdentity,
     startup_replacement_pending: &mut bool,
-    events: &mut UnboundedReceiver<notify::Result<notify::Event>>,
+    events: Option<&mut UnboundedReceiver<notify::Result<notify::Event>>>,
 ) {
+    let Some(events) = events else {
+        return std::future::pending().await;
+    };
+
     if std::mem::take(startup_replacement_pending) {
         return;
     }
@@ -115,7 +135,11 @@ pub(super) async fn wait_for_replacement(
     loop {
         match events.recv().await {
             Some(Ok(event))
-                if event.need_rescan() || event.paths.iter().any(|path| path == executable) =>
+                if event.need_rescan()
+                    || event
+                        .paths
+                        .iter()
+                        .any(|path| event_path_matches_executable(path, executable)) =>
             {
                 if executable_was_replaced(executable, identity) {
                     return;
@@ -131,6 +155,13 @@ pub(super) async fn wait_for_replacement(
             None => std::future::pending::<()>().await,
         }
     }
+}
+
+fn event_path_matches_executable(event_path: &Path, executable: &Path) -> bool {
+    matches!(
+        (fs::canonicalize(event_path), fs::canonicalize(executable)),
+        (Ok(event_path), Ok(executable)) if event_path == executable
+    )
 }
 
 fn executable_was_replaced(executable: &Path, identity: ExecutableIdentity) -> bool {
@@ -188,7 +219,7 @@ mod tests {
 
     use rstest::{fixture, rstest};
     use tokio::sync::mpsc;
-    use tokio::sync::watch;
+    use tokio::sync::{oneshot, watch};
 
     use super::{ExecutableIdentity, ServerOutcome};
 
@@ -270,7 +301,7 @@ mod tests {
             &executable,
             identity,
             &mut startup_replacement_pending,
-            &mut events,
+            Some(&mut events),
         );
         tokio::pin!(waiting);
 
@@ -324,7 +355,7 @@ mod tests {
             &executable,
             identity,
             &mut startup_replacement_pending,
-            &mut events,
+            Some(&mut events),
         );
         tokio::pin!(waiting);
 
@@ -358,7 +389,7 @@ mod tests {
             &executable,
             identity,
             &mut startup_replacement_pending,
-            &mut events,
+            Some(&mut events),
         ));
 
         let completed = tokio::time::timeout(Duration::from_secs(1), &mut waiting)
@@ -385,7 +416,7 @@ mod tests {
             &executable,
             identity,
             &mut startup_replacement_pending,
-            &mut events,
+            Some(&mut events),
         );
         tokio::pin!(waiting);
 
@@ -397,6 +428,78 @@ mod tests {
             .await
             .is_ok();
         assert!(completed);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn keeps_serving_without_automatic_restart_when_watcher_creation_fails(
+        executable_replacement: ExecutableReplacement,
+    ) {
+        let ExecutableReplacement {
+            _directory,
+            executable,
+            identity,
+            ..
+        } = executable_replacement;
+        let mut events = super::create_watcher_or_warn(|| {
+            Err::<mpsc::UnboundedReceiver<notify::Result<notify::Event>>, _>(io::Error::other(
+                "synthetic watcher error",
+            ))
+        });
+        let watcher_unavailable = events.is_none();
+        let (server_exit_sender, server_exit_receiver) = oneshot::channel();
+        let server = async move {
+            server_exit_receiver.await.map_err(io::Error::other)?;
+            Ok::<_, io::Error>(())
+        };
+        let (restart_sender, restart_receiver) = watch::channel(false);
+        let mut startup_replacement_pending = false;
+        let replacement = super::wait_for_replacement(
+            &executable,
+            identity,
+            &mut startup_replacement_pending,
+            events.as_mut(),
+        );
+        let waiting = super::wait_for_server_or_restart(
+            server,
+            replacement,
+            restart_sender,
+            Duration::from_secs(1),
+        );
+        tokio::pin!(waiting);
+
+        let server_keeps_running = tokio::time::timeout(Duration::from_millis(1), &mut waiting)
+            .await
+            .is_err();
+        server_exit_sender
+            .send(())
+            .expect("server should stay active until its shutdown signal");
+        let outcome = tokio::time::timeout(Duration::from_secs(1), &mut waiting)
+            .await
+            .expect("server shutdown should complete")
+            .expect("server shutdown should succeed");
+
+        assert_eq!(
+            (
+                watcher_unavailable,
+                server_keeps_running,
+                outcome,
+                *restart_receiver.borrow()
+            ),
+            (true, true, ServerOutcome::Exited, false),
+        );
+    }
+
+    #[test]
+    fn matches_canonical_event_paths_for_symlinked_executables() {
+        let directory = tempfile::tempdir().expect("temporary directory should be created");
+        let executable = directory.path().join("a");
+        let symlink = directory.path().join("a-link");
+        fs::write(&executable, "binary").expect("executable should be written");
+        std::os::unix::fs::symlink(&executable, &symlink).expect("symlink should be created");
+        let event_path = fs::canonicalize(&executable).expect("event path should be canonical");
+
+        assert!(super::event_path_matches_executable(&event_path, &symlink));
     }
 
     #[test]
