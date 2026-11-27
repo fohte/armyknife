@@ -56,6 +56,9 @@ const TRANSCRIPT_RETRY_DELAY: Duration = Duration::from_millis(100);
 /// Maximum number of retries when transcript hasn't been updated yet.
 const TRANSCRIPT_MAX_RETRIES: u32 = 5;
 
+/// Compact hooks only schedule slimming when the transcript is larger than 20 MiB.
+const TRANSCRIPT_SLIM_MIN_BYTES: u64 = 20 * 1024 * 1024;
+
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct HookArgs {
     /// Hook event name (e.g., user-prompt-submit, stop, stop-failure)
@@ -418,6 +421,32 @@ fn process_hook_event_impl(
         side_effects,
         stop_hook_instruction,
     )
+}
+
+fn maybe_schedule_transcript_slim(event: HookEvent, input: &HookInput, side_effects: &SideEffects) {
+    if !side_effects.transcript_slim
+        || event != HookEvent::SessionStart
+        || input.engine != Engine::Claude
+        || input.source.as_deref() != Some("compact")
+    {
+        return;
+    }
+    let Some(transcript_path) = input.transcript_path.as_deref() else {
+        return;
+    };
+
+    match fs::metadata(transcript_path) {
+        Ok(metadata) if metadata.len() > TRANSCRIPT_SLIM_MIN_BYTES => {
+            side_effects.schedule_transcript_slim(&input.session_id, &input.cwd);
+        }
+        Ok(_) => {}
+        Err(error) => tracing::warn!(
+            event = "agent.transcript.slim.inspect_failed",
+            session = %input.session_id,
+            transcript = %transcript_path.display(),
+            error = %error,
+        ),
+    }
 }
 
 fn process_hook_event_impl_with_instruction(
@@ -1244,6 +1273,8 @@ fn process_hook_event_impl_with_env_and_unreported_stop(
         }
     }
 
+    maybe_schedule_transcript_slim(event, &input, side_effects);
+
     if let Some(reason) = stop_block_reason {
         return Ok(ProcessResult::StopBlocked(reason.to_string()));
     }
@@ -1848,6 +1879,63 @@ mod tests {
         side_effects: &SideEffects,
     ) -> Result<ProcessResult> {
         process_hook_event_impl_with_instruction(event, input, sessions_dir, side_effects, None)
+    }
+
+    #[rstest]
+    #[case::large_compact_starts_worker(HookEvent::SessionStart, Engine::Claude, "compact", super::TRANSCRIPT_SLIM_MIN_BYTES + 1, true)]
+    #[case::at_limit_skips_worker(
+        HookEvent::SessionStart,
+        Engine::Claude,
+        "compact",
+        super::TRANSCRIPT_SLIM_MIN_BYTES,
+        false
+    )]
+    #[case::resume_skips_worker(HookEvent::SessionStart, Engine::Claude, "resume", super::TRANSCRIPT_SLIM_MIN_BYTES + 1, false)]
+    #[case::startup_skips_worker(HookEvent::SessionStart, Engine::Claude, "startup", super::TRANSCRIPT_SLIM_MIN_BYTES + 1, false)]
+    #[case::codex_skips_worker(HookEvent::SessionStart, Engine::Codex, "compact", super::TRANSCRIPT_SLIM_MIN_BYTES + 1, false)]
+    #[case::other_hook_skips_worker(HookEvent::Stop, Engine::Claude, "compact", super::TRANSCRIPT_SLIM_MIN_BYTES + 1, false)]
+    fn compact_session_start_schedules_transcript_slim_only_for_large_claude_transcripts(
+        #[case] event: HookEvent,
+        #[case] engine: Engine,
+        #[case] source: &str,
+        #[case] transcript_size: u64,
+        #[case] expected_scheduled: bool,
+    ) {
+        use std::fs::File;
+
+        let temp_dir = tempfile::TempDir::new().expect("hook fixture directory should be created");
+        let project_dir = temp_dir.path().join("fixture-project");
+        std::fs::create_dir(&project_dir).expect("project directory should be created");
+        let transcript_path = project_dir.join("fixture-transcript.jsonl");
+        File::create(&transcript_path)
+            .expect("transcript fixture should be created")
+            .set_len(transcript_size)
+            .expect("transcript fixture size should be set");
+
+        let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let side_effects = SideEffects {
+            transcript_slim: true,
+            transcript_slim_calls: Some(calls.clone()),
+            ..SideEffects::none()
+        };
+        let mut input = create_test_input_with_source(None, Some(source));
+        input.cwd = project_dir.clone();
+        input.transcript_path = Some(transcript_path);
+        input.engine = engine;
+
+        super::maybe_schedule_transcript_slim(event, &input, &side_effects);
+
+        assert_eq!(
+            calls
+                .lock()
+                .expect("transcript slim calls should lock")
+                .clone(),
+            if expected_scheduled {
+                vec![("test-123".to_string(), project_dir)]
+            } else {
+                Vec::new()
+            },
+        );
     }
 
     #[test]
@@ -4262,6 +4350,7 @@ mod tests {
             tmux: false,
             notifications: false,
             auto_compact: false,
+            transcript_slim: false,
             title_generation: false,
             capture_pr_context: None,
             tq_archive: false,
@@ -4273,6 +4362,7 @@ mod tests {
             tq_archive_calls: None,
             notification_calls: None,
             auto_compact_calls: None,
+            transcript_slim_calls: None,
             title_generation_calls: None,
             redelivery_calls: None,
         };
@@ -4861,6 +4951,7 @@ mod tests {
             tmux: false,
             notifications: false,
             auto_compact: false,
+            transcript_slim: false,
             title_generation: false,
             capture_pr_context: None,
             tq_archive: false,
@@ -4872,6 +4963,7 @@ mod tests {
             tq_archive_calls: None,
             notification_calls: None,
             auto_compact_calls: None,
+            transcript_slim_calls: None,
             title_generation_calls: None,
             redelivery_calls: None,
         };
@@ -5593,6 +5685,7 @@ mod tests {
             tmux: false,
             notifications: true,
             auto_compact: true,
+            transcript_slim: false,
             title_generation: false,
             capture_pr_context: None,
             tq_archive: false,
@@ -5604,6 +5697,7 @@ mod tests {
             tq_archive_calls: None,
             notification_calls: Some(notification_calls.clone()),
             auto_compact_calls: Some(auto_compact_calls.clone()),
+            transcript_slim_calls: None,
             title_generation_calls: None,
             redelivery_calls: None,
         };

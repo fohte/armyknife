@@ -19,6 +19,11 @@ type TitleGenerationCall = (String, String, Option<String>, bool);
 #[cfg(test)]
 type TitleGenerationCallSink = std::sync::Arc<std::sync::Mutex<Vec<TitleGenerationCall>>>;
 
+#[cfg(test)]
+type TranscriptSlimCall = (String, std::path::PathBuf);
+#[cfg(test)]
+type TranscriptSlimCallSink = std::sync::Arc<std::sync::Mutex<Vec<TranscriptSlimCall>>>;
+
 pub(super) trait PaneBindingOperations: Send + Sync {
     fn resolve(&self, input: &HookInput) -> Option<PaneInfo>;
     fn set_session_id(&self, pane_id: &str, session_id: &str);
@@ -53,6 +58,9 @@ pub(super) struct SideEffects {
     /// Spawn the detached `a agent auto-compact schedule` worker on Stop events.
     /// Off in tests (would fork a real process and survive past the test).
     pub(super) auto_compact: bool,
+    /// Spawn the detached transcript slimmer after a large Claude compact.
+    /// Off in tests (would fork a real process and survive past the test).
+    pub(super) transcript_slim: bool,
     /// Spawn one detached session-title generation after an eligible Stop.
     pub(super) title_generation: bool,
     pub(super) capture_pr_context: Option<PrContextCapture>,
@@ -84,6 +92,9 @@ pub(super) struct SideEffects {
     /// Test-only sink that records sessions passed to the auto-compact worker.
     #[cfg(test)]
     pub(super) auto_compact_calls: Option<std::sync::Arc<std::sync::Mutex<Vec<String>>>>,
+    /// Test-only sink that records (session, cwd) passed to the transcript slimmer.
+    #[cfg(test)]
+    pub(super) transcript_slim_calls: Option<TranscriptSlimCallSink>,
     /// Test-only sink that records detached title-generation requests.
     #[cfg(test)]
     pub(super) title_generation_calls: Option<TitleGenerationCallSink>,
@@ -107,6 +118,7 @@ impl SideEffects {
             tmux: true,
             notifications: true,
             auto_compact: true,
+            transcript_slim: true,
             title_generation: true,
             capture_pr_context: Some(Arc::new(super::super::session_pr_context::capture)),
             tq_archive: true,
@@ -124,6 +136,8 @@ impl SideEffects {
             #[cfg(test)]
             auto_compact_calls: None,
             #[cfg(test)]
+            transcript_slim_calls: None,
+            #[cfg(test)]
             title_generation_calls: None,
             #[cfg(test)]
             redelivery_calls: None,
@@ -136,6 +150,7 @@ impl SideEffects {
             tmux: false,
             notifications: false,
             auto_compact: false,
+            transcript_slim: false,
             title_generation: false,
             capture_pr_context: None,
             tq_archive: false,
@@ -147,6 +162,7 @@ impl SideEffects {
             tq_archive_calls: None,
             notification_calls: None,
             auto_compact_calls: None,
+            transcript_slim_calls: None,
             title_generation_calls: None,
             redelivery_calls: None,
         }
@@ -190,6 +206,29 @@ impl SideEffects {
         }
         #[cfg(not(test))]
         super::super::auto_compact::spawn_in_background(session_id);
+    }
+
+    pub(super) fn schedule_transcript_slim(&self, session_id: &str, cwd: &Path) {
+        if !self.transcript_slim {
+            return;
+        }
+        #[cfg(test)]
+        if let Some(calls) = &self.transcript_slim_calls {
+            calls
+                .lock()
+                .expect("transcript_slim_calls mutex poisoned")
+                .push((session_id.to_string(), cwd.to_path_buf()));
+        }
+        #[cfg(not(test))]
+        {
+            let cwd = cwd.to_string_lossy().into_owned();
+            crate::infra::process::spawn_self_detached(
+                "agent.transcript.slim.spawn",
+                "agent.transcript.slim.spawn_failed",
+                session_id,
+                &["agent", "transcript", "slim", session_id, "--cwd", &cwd],
+            );
+        }
     }
 
     pub(super) fn generate_title(
