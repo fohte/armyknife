@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.982](https://github.com/fohte/armyknife/compare/v0.1.981...v0.1.982) (2026-11-27)
+
+
+### Features
+
+* **agent-watch-web:** return close check details ([#2393](https://github.com/fohte/armyknife/issues/2393)) ([6c77722](https://github.com/fohte/armyknife/commit/6c777221781d97f35c734209a896aa95266d32c9))
+
 ## [0.1.981](https://github.com/fohte/armyknife/compare/v0.1.980...v0.1.981) (2026-11-27)
 
 
