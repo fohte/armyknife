@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::fs::{self, File, Metadata, OpenOptions};
+use std::fs::{self, File, Metadata};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write, copy};
 use std::path::{Path, PathBuf};
 use std::thread;
@@ -7,21 +7,21 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
-use sha2::{Digest, Sha256};
 use tempfile::{Builder, NamedTempFile, TempPath};
-
-use super::super::claude_sessions::session_jsonl_path;
 
 mod reconcile;
 mod transform;
+mod worker;
 mod writer;
+
+pub(in crate::commands::agent) fn run(command: &TranscriptCommands) -> Result<()> {
+    worker::run(command)
+}
 
 #[cfg(not(test))]
 use self::writer::has_writable_open_handle;
 
 const MAX_TRANSCRIPT_RECONCILE_WAIT: Duration = Duration::from_secs(5);
-const POST_REPLACEMENT_FAILURE_PREFIX: &str = "transcript replacement completed";
-const TRANSCRIPT_SLIM_LOCK_DIRECTORY: &str = "agent-transcript-slim";
 
 #[derive(Subcommand, Clone, PartialEq, Eq)]
 pub enum TranscriptCommands {
@@ -39,92 +39,6 @@ pub struct SlimArgs {
     pub cwd: PathBuf,
 }
 
-pub fn run(command: &TranscriptCommands) -> Result<()> {
-    match command {
-        TranscriptCommands::Slim(args) => {
-            let result = slim_session_transcript(args);
-            match result {
-                Ok(result) => {
-                    tracing::info!(
-                        event = "agent.transcript.slim.completed",
-                        session = %args.session_id,
-                        original_bytes = result.original_bytes,
-                        final_bytes = result.final_bytes,
-                    );
-                    println!(
-                        "Slimmed transcript: {} -> {} bytes ({} bytes removed)",
-                        result.original_bytes,
-                        result.final_bytes,
-                        result.original_bytes.saturating_sub(result.final_bytes)
-                    );
-                }
-                Err(error) => {
-                    tracing::warn!(
-                        event = slim_failure_event(&error),
-                        session = %args.session_id,
-                        error = %format!("{error:#}"),
-                    );
-                    return Err(error);
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-fn slim_session_transcript(args: &SlimArgs) -> Result<SlimResult> {
-    validate_session_id(&args.session_id)?;
-    let _lock = lock_transcript_session(&args.session_id)?;
-    let cwd = fs::canonicalize(&args.cwd)
-        .with_context(|| format!("resolve project directory {}", args.cwd.display()))?;
-    let path =
-        session_jsonl_path(&cwd, &args.session_id).context("resolve Claude Code home directory")?;
-    slim_transcript(&path)
-}
-
-fn lock_transcript_session(session_id: &str) -> Result<File> {
-    let cache_dir =
-        crate::shared::cache::base_dir().context("resolve armyknife cache directory")?;
-    lock_transcript_session_in(&cache_dir, session_id)
-}
-
-fn lock_transcript_session_in(cache_dir: &Path, session_id: &str) -> Result<File> {
-    let lock_dir = cache_dir.join(TRANSCRIPT_SLIM_LOCK_DIRECTORY);
-    fs::create_dir_all(&lock_dir).with_context(|| {
-        format!(
-            "create transcript slim lock directory {}",
-            lock_dir.display()
-        )
-    })?;
-    let digest = Sha256::digest(session_id.as_bytes())
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<Vec<_>>()
-        .join("");
-    let lock_path = lock_dir.join(format!("{digest}.lock"));
-    let lock_file = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(&lock_path)
-        .with_context(|| format!("open transcript slim lock {}", lock_path.display()))?;
-    lock_file
-        .lock()
-        .with_context(|| format!("lock transcript slim session {session_id}"))?;
-    Ok(lock_file)
-}
-
-fn slim_failure_event(error: &anyhow::Error) -> &'static str {
-    if error
-        .to_string()
-        .starts_with(POST_REPLACEMENT_FAILURE_PREFIX)
-    {
-        "agent.transcript.slim.post_replacement_failed"
-    } else {
-        "agent.transcript.slim.failed"
-    }
-}
-
 fn validate_session_id(session_id: &str) -> Result<()> {
     let path = Path::new(session_id);
     if session_id.is_empty()
@@ -140,6 +54,10 @@ struct SlimResult {
     original_bytes: u64,
     final_bytes: u64,
 }
+
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+struct PostReplacementFailure(#[source] anyhow::Error);
 
 struct TranscriptAnalysis {
     boundary_offset: Option<u64>,
@@ -283,14 +201,16 @@ where
             "transcript replacement completed, but post-replacement reconciliation failed for {}",
             path.display()
         )
-    })?;
+    })
+    .map_err(PostReplacementFailure)?;
     let final_bytes = fs::metadata(path)
         .with_context(|| {
             format!(
                 "transcript replacement completed, but could not inspect the replaced transcript {}",
                 path.display()
             )
-        })?
+        })
+        .map_err(PostReplacementFailure)?
         .len();
     Ok(SlimResult {
         original_bytes,
@@ -535,7 +455,7 @@ fn stage_final_appends(source: &mut File, replacement: &mut File, copied_to: u64
 #[cfg(test)]
 mod tests {
     use std::cell::{Cell, RefCell};
-    use std::fs::{self, OpenOptions};
+    use std::fs;
     use std::io::Write;
     use std::path::Path;
     use std::time::Duration;
@@ -545,49 +465,7 @@ mod tests {
     use serde_json::Value;
     use tempfile::tempdir;
 
-    use super::{
-        MAX_TRANSCRIPT_RECONCILE_WAIT, lock_transcript_session_in, slim_failure_event,
-        slim_transcript, slim_transcript_with,
-    };
-
-    #[test]
-    fn session_lock_prevents_a_second_slim_from_running_concurrently() {
-        let directory = tempdir().expect("lock root should be created");
-        let first_lock = lock_transcript_session_in(directory.path(), "fixture-session")
-            .expect("first lock should be acquired");
-        let lock_path = fs::read_dir(directory.path().join("agent-transcript-slim"))
-            .expect("lock directory should be readable")
-            .next()
-            .expect("session lock should exist")
-            .expect("session lock entry should be readable")
-            .path();
-        let second_lock = OpenOptions::new()
-            .write(true)
-            .open(lock_path)
-            .expect("second lock handle should open");
-
-        assert!(
-            second_lock
-                .try_lock()
-                .is_err_and(|error| matches!(error, std::fs::TryLockError::WouldBlock)),
-        );
-        drop(first_lock);
-    }
-
-    #[rstest]
-    #[case::before_replacement("failed to inspect transcript", "agent.transcript.slim.failed")]
-    #[case::after_replacement(
-        "transcript replacement completed, but post-replacement reconciliation failed",
-        "agent.transcript.slim.post_replacement_failed"
-    )]
-    fn slim_failures_are_logged_by_replacement_state(
-        #[case] message: &str,
-        #[case] expected_event: &str,
-    ) {
-        let error = anyhow::anyhow!("{message}");
-
-        assert_eq!(slim_failure_event(&error), expected_event);
-    }
+    use super::{MAX_TRANSCRIPT_RECONCILE_WAIT, slim_transcript, slim_transcript_with};
 
     #[test]
     fn slims_only_discardable_data_before_the_latest_compact_boundary() {

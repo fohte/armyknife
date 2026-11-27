@@ -1893,7 +1893,7 @@ mod tests {
     #[case::resume_skips_worker(HookEvent::SessionStart, Engine::Claude, "resume", super::TRANSCRIPT_SLIM_MIN_BYTES + 1, false)]
     #[case::startup_skips_worker(HookEvent::SessionStart, Engine::Claude, "startup", super::TRANSCRIPT_SLIM_MIN_BYTES + 1, false)]
     #[case::codex_skips_worker(HookEvent::SessionStart, Engine::Codex, "compact", super::TRANSCRIPT_SLIM_MIN_BYTES + 1, false)]
-    #[case::other_hook_skips_worker(HookEvent::Stop, Engine::Claude, "compact", super::TRANSCRIPT_SLIM_MIN_BYTES + 1, false)]
+    #[case::other_hook_skips_worker(HookEvent::PostModelSwitch, Engine::Claude, "compact", super::TRANSCRIPT_SLIM_MIN_BYTES + 1, false)]
     fn compact_session_start_schedules_transcript_slim_only_for_large_claude_transcripts(
         #[case] event: HookEvent,
         #[case] engine: Engine,
@@ -1902,15 +1902,26 @@ mod tests {
         #[case] expected_scheduled: bool,
     ) {
         use std::fs::File;
+        use std::io::{Seek, SeekFrom, Write};
 
         let temp_dir = tempfile::TempDir::new().expect("hook fixture directory should be created");
         let project_dir = temp_dir.path().join("fixture-project");
         std::fs::create_dir(&project_dir).expect("project directory should be created");
         let transcript_path = project_dir.join("fixture-transcript.jsonl");
-        File::create(&transcript_path)
-            .expect("transcript fixture should be created")
-            .set_len(transcript_size)
+        let assistant_row = br#"{"type":"assistant","message":{"model":"fixture-model"}}"#;
+        let mut transcript =
+            File::create(&transcript_path).expect("transcript fixture should be created");
+        transcript
+            .set_len(transcript_size - assistant_row.len() as u64 - 2)
             .expect("transcript fixture size should be set");
+        transcript
+            .seek(SeekFrom::End(0))
+            .expect("transcript fixture should seek to the end");
+        transcript
+            .write_all(b"\n")
+            .and_then(|()| transcript.write_all(assistant_row))
+            .and_then(|()| transcript.write_all(b"\n"))
+            .expect("assistant fixture row should be written");
 
         let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let side_effects = SideEffects {
@@ -1923,7 +1934,27 @@ mod tests {
         input.transcript_path = Some(transcript_path);
         input.engine = engine;
 
-        super::maybe_schedule_transcript_slim(event, &input, &side_effects);
+        let home = temp_dir
+            .path()
+            .to_str()
+            .expect("fixture home should be UTF-8");
+        temp_env::with_vars(
+            [
+                ("HOME", Some(home)),
+                ("CLAUDE_CONFIG_DIR", None::<&str>),
+                ("CLAUDE_ENV_FILE", None::<&str>),
+            ],
+            || {
+                process_hook_event_impl_with_instruction(
+                    event,
+                    input,
+                    temp_dir.path(),
+                    &side_effects,
+                    None,
+                )
+            },
+        )
+        .expect("hook event should succeed");
 
         assert_eq!(
             calls
