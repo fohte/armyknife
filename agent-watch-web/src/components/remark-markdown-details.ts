@@ -7,377 +7,318 @@ import {
   type MarkdownParser,
   parseMarkdownSection,
   type ReferenceDefinitionSource,
-  shiftMarkdownNodeOffsets,
 } from '#components/remark-markdown-details/source'
 
-const detailsOpenPattern =
-  /^<details(?:\s+open(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?)?\s*>$/i
-const detailsStartPattern =
-  /^\s*<details(?:\s+open(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?)?\s*>/i
-const detailsClosePattern = /^<\/details\s*>$/i
-const summaryOpenPattern = /^<summary\s*>$/i
-const summaryClosePattern = /^<\/summary\s*>$/i
+const controlTag =
+  /^(<details(?:\s+open(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?)?\s*>|<\/details\s*>|<summary\s*>|<\/summary\s*>)/i
+const inlineSummary = /^\s*<summary\s*>([\s\S]*?)<\/summary\s*>/i
 const maxDetailsNesting = 32
-const htmlLexemePattern =
-  /<!--[\s\S]*?(?:-->|$)|<(script|style|pre|textarea)\b[\s\S]*?(?:<\/\1\s*>|$)|<\/?(?:details|summary)\b(?:[^>"']|"[^"]*"|'[^']*')*>/gi
 
-type MarkdownProcessor = { parse: (value: string) => unknown }
-
-type Token = {
-  kind:
-    'text' | 'details-open' | 'details-close' | 'summary-open' | 'summary-close'
-  value: string
-  offset: number
-  group: HtmlGroup
-  summaryOpen?: Token
-  summaryClose?: Token
-  matched?: boolean
-  index?: number
-  pairIndex?: number
-  summaryOpenIndex?: number
-  summaryCloseIndex?: number
-  afterMatchedClose?: boolean
-}
-
-type HtmlGroup = {
-  node: MarkdownNode
-  tokens: Token[]
-}
-
-type Unit = { node: MarkdownNode } | { token: Token }
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null
-}
+type Processor = { parse: (value: string) => unknown }
+type Kind =
+  | 'details-open'
+  | 'details-close'
+  | 'summary-open'
+  | 'summary-close'
+  | 'summary-text'
+type Marker = { kind: Kind; value: string; node: MarkdownNode; offset: number }
+type Unit = { node: MarkdownNode } | { marker: Marker }
+type Pair = { close: number; summaryOpen: number; summaryClose: number }
 
 function isRoot(value: unknown): value is MarkdownRoot {
   return (
-    isRecord(value) &&
-    value['type'] === 'root' &&
-    Array.isArray(value['children'])
+    typeof value === 'object' &&
+    value !== null &&
+    'type' in value &&
+    value.type === 'root' &&
+    'children' in value &&
+    Array.isArray(value.children)
   )
 }
 
-function tokenizeHtml(node: MarkdownNode): HtmlGroup | null {
-  if (node.type !== 'html' || node.value === undefined) return null
-  const value = node.value
-  const firstTag = /^\s*(<[^>]+>)/.exec(value)?.[1]
-  if (
-    firstTag === undefined ||
-    (!detailsStartPattern.test(value) &&
-      !detailsClosePattern.test(firstTag) &&
-      !summaryOpenPattern.test(firstTag) &&
-      !summaryClosePattern.test(firstTag))
-  ) {
-    return null
-  }
-
-  const group: HtmlGroup = { node, tokens: [] }
-  const add = (kind: Token['kind'], value: string, offset: number) => {
-    group.tokens.push({ kind, value, offset, group })
-  }
-  let cursor = 0
-  htmlLexemePattern.lastIndex = 0
-  for (const match of value.matchAll(htmlLexemePattern)) {
-    const tag = match[0]
-    if (
-      tag.startsWith('<!--') ||
-      /^<(?:script|style|pre|textarea)\b/i.test(tag)
-    ) {
-      continue
-    }
-    const matchIndex = match.index
-    const openDetails = detailsOpenPattern.test(tag)
-    const closeDetails = detailsClosePattern.test(tag)
-    const openSummary = summaryOpenPattern.test(tag)
-    const closeSummary = summaryClosePattern.test(tag)
-    const kind = openDetails
-      ? 'details-open'
-      : closeDetails
-        ? 'details-close'
-        : openSummary
-          ? 'summary-open'
-          : closeSummary
-            ? 'summary-close'
-            : null
-    if (kind === null) {
-      continue
-    }
-    if (matchIndex > cursor)
-      add('text', value.slice(cursor, matchIndex), cursor)
-    add(kind, tag, matchIndex)
-    cursor = matchIndex + tag.length
-  }
-  if (cursor < value.length) add('text', value.slice(cursor), cursor)
-  return group
+function marker(
+  kind: Kind,
+  value: string,
+  node: MarkdownNode,
+  offset: number,
+): Unit {
+  return { marker: { kind, value, node, offset } }
 }
 
-function toUnits(
-  nodes: MarkdownNode[],
+function section(
+  source: string,
+  offset: number,
   parse: MarkdownParser,
   references: readonly ReferenceDefinitionSource[],
-  depth: number,
-): Unit[] {
+) {
+  return source.trim() === ''
+    ? []
+    : parseMarkdownSection(source, parse, references, offset)
+}
+
+function splitHtml(
+  node: MarkdownNode,
+  parse: MarkdownParser,
+  references: readonly ReferenceDefinitionSource[],
+): Unit[] | null {
+  if (node.type !== 'html' || node.value === undefined) return null
+  const leading = node.value.length - node.value.trimStart().length
+  const raw = node.value.slice(leading)
+  const base = (node.position?.start.offset ?? 0) + leading
   const units: Unit[] = []
-  for (const node of nodes) {
-    if (node.children !== undefined) {
-      node.children = transformNodes(node.children, parse, references, depth)
+  let consumed = 0
+  const add = (kind: Kind, value: string, at: number) => {
+    units.push(marker(kind, value, node, base + at))
+  }
+
+  const tag = controlTag.exec(raw)?.[0]
+  if (tag === undefined) return null
+  const kind: Kind = /^<details/i.test(tag)
+    ? 'details-open'
+    : /^<\/details/i.test(tag)
+      ? 'details-close'
+      : /^<summary/i.test(tag)
+        ? 'summary-open'
+        : 'summary-close'
+  add(kind, tag, 0)
+  consumed = tag.length
+
+  if (kind === 'details-open') {
+    const inline = inlineSummary.exec(raw.slice(consumed))
+    if (inline !== null) {
+      const start = consumed + inline[0].length - inline[0].trimStart().length
+      add('summary-open', '<summary>', start)
+      add('summary-text', inline[1] ?? '', start + '<summary>'.length)
+      add(
+        'summary-close',
+        '</summary>',
+        start + inline[0].length - '</summary>'.length,
+      )
+      consumed += inline[0].length
     }
-    const group = tokenizeHtml(node)
-    if (group === null) units.push({ node })
-    else for (const token of group.tokens) units.push({ token })
+  } else if (kind === 'summary-open') {
+    const inner = /^[\s\S]*?<\/summary\s*>/i.exec(raw.slice(consumed))
+    if (inner !== null) {
+      const endTag = /<\/summary\s*>$/i.exec(inner[0])?.[0] ?? '</summary>'
+      add('summary-text', inner[0].slice(0, -endTag.length), consumed)
+      add('summary-close', endTag, consumed + inner[0].length - endTag.length)
+      consumed += inner[0].length
+    }
+  }
+
+  for (const unit of unitsFrom(
+    section(
+      node.value.slice(leading + consumed),
+      base + consumed,
+      parse,
+      references,
+    ),
+    parse,
+    references,
+  )) {
+    units.push(unit)
   }
   return units
 }
 
-function pairDetails(units: Unit[]) {
-  const stack: Array<{
-    open: Token
-    summaryOpen?: Token
-    summaryClose?: Token
-  }> = []
+function unitsFrom(
+  nodes: MarkdownNode[],
+  parse: MarkdownParser,
+  references: readonly ReferenceDefinitionSource[],
+): Unit[] {
+  const units: Unit[] = []
+  for (const node of nodes) {
+    const split = splitHtml(node, parse, references)
+    if (split === null) units.push({ node })
+    else for (const unit of split) units.push(unit)
+  }
+  return units
+}
+
+function pairDetails(units: Unit[]): Map<number, Pair> {
+  type Frame = { open: number; summaryOpen?: number; summaryClose?: number }
+  const pairs = new Map<number, Pair>()
+  const stack: Frame[] = []
+  const pending = new Set<Frame>()
+  const invalidatePending = () => {
+    pending.clear()
+  }
+
   for (const [index, unit] of units.entries()) {
-    if (!('token' in unit)) continue
-    const token = unit.token
-    token.index = index
-    if (token.kind === 'details-open') {
-      stack.push({ open: token })
-    } else if (token.kind === 'summary-open') {
+    if (!('marker' in unit)) {
+      invalidatePending()
+      continue
+    }
+    const { kind } = unit.marker
+    if (kind === 'details-open') {
+      invalidatePending()
+      const frame = { open: index }
+      stack.push(frame)
+      pending.add(frame)
+    } else if (kind === 'summary-open') {
       const frame = stack.at(-1)
-      if (frame !== undefined && frame.summaryOpen === undefined) {
-        frame.summaryOpen = token
-      }
-    } else if (token.kind === 'summary-close') {
+      if (frame !== undefined && pending.delete(frame))
+        frame.summaryOpen = index
+      else invalidatePending()
+    } else if (kind === 'summary-close') {
       const frame = stack.at(-1)
       if (
         frame?.summaryOpen !== undefined &&
         frame.summaryClose === undefined
       ) {
-        frame.summaryClose = token
-      }
-    } else if (token.kind === 'details-close') {
+        frame.summaryClose = index
+      } else invalidatePending()
+    } else if (kind === 'details-close') {
       const frame = stack.pop()
-      if (
-        frame?.summaryOpen !== undefined &&
-        frame.summaryClose !== undefined &&
-        frame.summaryOpen.index !== undefined &&
-        frame.summaryClose.index !== undefined &&
-        frame.open.index !== undefined
-      ) {
-        frame.open.pairIndex = index
-        frame.open.summaryOpen = frame.summaryOpen
-        frame.open.summaryClose = frame.summaryClose
-        frame.open.summaryOpenIndex = frame.summaryOpen.index
-        frame.open.summaryCloseIndex = frame.summaryClose.index
-        token.matched = true
+      if (frame === undefined) continue
+      pending.delete(frame)
+      if (frame.summaryOpen !== undefined && frame.summaryClose !== undefined) {
+        pairs.set(frame.open, {
+          close: index,
+          summaryOpen: frame.summaryOpen,
+          summaryClose: frame.summaryClose,
+        })
       }
     }
   }
-  const afterClose = new Map<HtmlGroup, boolean>()
-  for (const unit of units) {
-    if (!('token' in unit)) continue
-    const token = unit.token
-    if (token.kind === 'details-close' && token.matched === true) {
-      afterClose.set(token.group, true)
-    }
-    token.afterMatchedClose = afterClose.get(token.group) ?? false
-  }
+  return pairs
 }
 
-function markdownNodes(
-  source: string,
-  offset: number,
-  parse: MarkdownParser,
-  references: readonly ReferenceDefinitionSource[],
-  depth: number,
-) {
-  if (source.trim() === '') return []
-  const parsed = parseMarkdownSection(source, parse, references, offset)
-  shiftMarkdownNodeOffsets(parsed.tree.children, offset)
-  return transformNodes(parsed.tree.children, parse, references, depth)
-}
-
-function parseSummary(
+function summaryNode(
   units: Unit[],
   start: number,
   end: number,
-  source: string,
   parse: MarkdownParser,
   references: readonly ReferenceDefinitionSource[],
-  depth: number,
-) {
+): MarkdownNode {
   const children: MarkdownNode[] = []
-  const appendParagraphs = (nodes: MarkdownNode[]) => {
+  let fallback = ''
+  const append = (nodes: MarkdownNode[]) => {
     for (const node of nodes) {
       if (node.type !== 'paragraph') continue
       if (children.length > 0) children.push({ type: 'break' })
-      children.push(...(node.children ?? []))
+      for (const child of node.children ?? []) children.push(child)
     }
   }
   for (let index = start; index < end; index += 1) {
     const unit = units[index]
     if (unit === undefined) continue
-    if ('token' in unit && unit.token.kind === 'text') {
-      appendParagraphs(
-        markdownNodes(
-          unit.token.value,
-          (unit.token.group.node.position?.start.offset ?? 0) +
-            unit.token.offset,
-          parse,
-          references,
-          depth,
-        ),
-      )
-    } else if (!('token' in unit) && unit.node.type === 'paragraph') {
-      appendParagraphs([unit.node])
+    if ('marker' in unit && unit.marker.kind === 'summary-text') {
+      fallback += unit.marker.value
+      append(section(unit.marker.value, unit.marker.offset, parse, references))
+    } else if (!('marker' in unit) && unit.node.type === 'paragraph') {
+      append([unit.node])
+      fallback += (unit.node.children ?? [])
+        .filter((child) => child.type === 'text')
+        .map((child) => child.value ?? '')
+        .join('')
+    } else if (!('marker' in unit) && unit.node.type === 'html') {
+      fallback += unit.node.value ?? ''
     }
   }
   return {
     type: 'summary',
     children:
-      children.length === 0 ? [{ type: 'text', value: source }] : children,
+      children.length === 0 ? [{ type: 'text', value: fallback }] : children,
     data: {
       hName: 'span',
       hProperties: { className: 'markdown-details-summary-content' },
     },
-  } satisfies MarkdownNode
+  }
+}
+
+function toNode(unit: Unit): MarkdownNode {
+  if (!('marker' in unit)) return unit.node
+  if (unit.marker.kind === 'summary-text') {
+    return { type: 'text', value: unit.marker.value }
+  }
+  return { ...unit.marker.node, type: 'html', value: unit.marker.value }
 }
 
 function renderUnits(
-  units: Unit[],
-  parse: MarkdownParser,
-  references: readonly ReferenceDefinitionSource[],
-  markdownContext: boolean,
-  depth: number,
-): MarkdownNode[] {
-  pairDetails(units)
-  return renderRange(
-    units,
-    0,
-    units.length,
-    parse,
-    references,
-    markdownContext,
-    depth,
-  )
-}
-
-function renderRange(
-  units: Unit[],
-  start: number,
-  end: number,
-  parse: MarkdownParser,
-  references: readonly ReferenceDefinitionSource[],
-  markdownContext: boolean,
-  depth: number,
-): MarkdownNode[] {
-  const result: MarkdownNode[] = []
-  for (let index = start; index < end; index += 1) {
-    const unit = units[index]
-    if (unit === undefined) continue
-    if ('token' in unit) {
-      const token = unit.token
-      if (token.kind === 'details-open' && token.pairIndex !== undefined) {
-        const closeIndex = token.pairIndex ?? -1
-        const summaryStart = token.summaryOpen
-        const summaryEnd = token.summaryClose
-        if (summaryStart === undefined || summaryEnd === undefined) {
-          continue
-        }
-        if (depth >= maxDetailsNesting) {
-          for (let rawIndex = index; rawIndex <= closeIndex; rawIndex += 1) {
-            const rawUnit = units[rawIndex]
-            if (rawUnit === undefined) continue
-            result.push(
-              'token' in rawUnit
-                ? { ...rawUnit.token.group.node, value: rawUnit.token.value }
-                : rawUnit.node,
-            )
-          }
-          index = closeIndex
-          continue
-        }
-        const summaryStartIndex = token.summaryOpenIndex ?? -1
-        const summaryEndIndex = token.summaryCloseIndex ?? -1
-        const summaryUnits = units.slice(summaryStartIndex + 1, summaryEndIndex)
-        const summaryText = summaryUnits
-          .map((summaryUnit) =>
-            'token' in summaryUnit ? summaryUnit.token.value : '',
-          )
-          .join('')
-        const openAttribute = /^<details\s+open(?:\s*=|\s*>)/i.test(token.value)
-        const children = renderRange(
-          units,
-          summaryEndIndex + 1,
-          closeIndex,
-          parse,
-          references,
-          true,
-          depth + 1,
-        )
-        result.push({
-          type: 'details',
-          children: [
-            parseSummary(
-              units,
-              summaryStartIndex + 1,
-              summaryEndIndex,
-              summaryText,
-              parse,
-              references,
-              depth,
-            ),
-            ...children,
-          ],
-          data: {
-            hName: 'details',
-            ...(openAttribute ? { hProperties: { open: true } } : {}),
-          },
-        })
-        index = closeIndex
-        continue
-      }
-      if (token.kind === 'text') {
-        const base = token.group.node.position?.start.offset ?? 0
-        if (markdownContext || token.afterMatchedClose === true) {
-          result.push(
-            ...markdownNodes(
-              token.value,
-              base + token.offset,
-              parse,
-              references,
-              depth,
-            ),
-          )
-        } else {
-          result.push({ ...token.group.node, value: token.value })
-        }
-      } else if (token.matched !== true) {
-        result.push({ ...token.group.node, value: token.value })
-      }
-      continue
-    }
-    result.push(unit.node)
-  }
-  return result
-}
-
-function transformNodes(
   nodes: MarkdownNode[],
   parse: MarkdownParser,
   references: readonly ReferenceDefinitionSource[],
   depth: number,
 ): MarkdownNode[] {
-  return renderUnits(
-    toUnits(nodes, parse, references, depth),
-    parse,
-    references,
-    false,
-    depth,
-  )
+  const units = unitsFrom(nodes, parse, references)
+  const pairs = pairDetails(units)
+  const result: MarkdownNode[] = []
+  const frames: Array<{
+    close: number
+    node: MarkdownNode
+    parent: MarkdownNode[]
+  }> = []
+  let output = result
+
+  for (let index = 0; index < units.length; index += 1) {
+    const unit = units[index]
+    if (unit === undefined) continue
+    if ('marker' in unit && unit.marker.kind === 'details-open') {
+      const pair = pairs.get(index)
+      if (pair !== undefined) {
+        if (depth + frames.length >= maxDetailsNesting) {
+          for (let raw = index; raw <= pair.close; raw += 1) {
+            const rawUnit = units[raw]
+            if (rawUnit !== undefined) output.push(toNode(rawUnit))
+          }
+          index = pair.close
+          continue
+        }
+        const children = [
+          summaryNode(
+            units,
+            pair.summaryOpen + 1,
+            pair.summaryClose,
+            parse,
+            references,
+          ),
+        ]
+        const node: MarkdownNode = {
+          type: 'details',
+          children,
+          data: {
+            hName: 'details',
+            ...(/^<details\s+open(?:\s*=|\s*>)/i.test(unit.marker.value)
+              ? { hProperties: { open: true } }
+              : {}),
+          },
+        }
+        frames.push({ close: pair.close, node, parent: output })
+        output = children
+        index = pair.summaryClose
+        continue
+      }
+    }
+
+    if (
+      'marker' in unit &&
+      unit.marker.kind === 'details-close' &&
+      frames.at(-1)?.close === index
+    ) {
+      const frame = frames.pop()
+      if (frame !== undefined) {
+        output = frame.parent
+        output.push(frame.node)
+      }
+    } else if ('marker' in unit) {
+      output.push(toNode(unit))
+    } else {
+      if (unit.node.children !== undefined) {
+        unit.node.children = renderUnits(
+          unit.node.children,
+          parse,
+          references,
+          depth + frames.length,
+        )
+      }
+      output.push(unit.node)
+    }
+  }
+  return result
 }
 
-export function remarkMarkdownDetails(this: MarkdownProcessor) {
+export function remarkMarkdownDetails(this: Processor) {
   const parse: MarkdownParser = (value) => {
     const tree = this.parse(value)
     return isRoot(tree) ? tree : { type: 'root', children: [] }
@@ -388,6 +329,6 @@ export function remarkMarkdownDetails(this: MarkdownProcessor) {
         ? file.value
         : new TextDecoder().decode(file.value)
     const references = getReferenceDefinitionSources(tree.children, source)
-    tree.children = transformNodes(tree.children, parse, references, 0)
+    tree.children = renderUnits(tree.children, parse, references, 0)
   }
 }

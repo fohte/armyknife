@@ -4,16 +4,9 @@ import type {
 } from '#components/markdown-message-types'
 
 export type MarkdownParser = (value: string) => MarkdownRoot
+export type ReferenceDefinitionSource = { offset: number; source: string }
 
-export type ReferenceDefinitionSource = {
-  offset: number
-  source: string
-}
-
-export function shiftMarkdownNodeOffsets(
-  nodes: MarkdownNode[],
-  offset: number,
-) {
+function shiftMarkdownNodeOffsets(nodes: MarkdownNode[], offset: number) {
   const pending = [...nodes]
   while (pending.length > 0) {
     const node = pending.pop()
@@ -33,7 +26,9 @@ export function shiftMarkdownNodeOffsets(
         },
       }
     }
-    if (node.children !== undefined) pending.push(...node.children)
+    if (node.children !== undefined) {
+      for (const child of node.children) pending.push(child)
+    }
   }
 }
 
@@ -41,12 +36,8 @@ export function getReferenceDefinitionSources(
   nodes: readonly MarkdownNode[],
   source: string,
 ): ReferenceDefinitionSource[] {
+  const pending = [...nodes].reverse()
   const definitions: ReferenceDefinitionSource[] = []
-  const pending: MarkdownNode[] = []
-  for (let index = nodes.length - 1; index >= 0; index -= 1) {
-    const node = nodes[index]
-    if (node !== undefined) pending.push(node)
-  }
   while (pending.length > 0) {
     const node = pending.pop()
     if (node === undefined) continue
@@ -70,26 +61,17 @@ export function getReferenceDefinitionSources(
 export function parseMarkdownSection(
   source: string,
   parse: MarkdownParser,
-  referenceDefinitions: readonly ReferenceDefinitionSource[],
+  definitions: readonly ReferenceDefinitionSource[],
   sourceOffset: number,
-) {
-  const precedingDefinitions: string[] = []
-  const followingDefinitions: string[] = []
-  for (const definition of referenceDefinitions) {
-    if (definition.offset < sourceOffset)
-      precedingDefinitions.push(definition.source)
-    else if (definition.offset >= sourceOffset + source.length) {
-      followingDefinitions.push(definition.source)
-    }
-  }
-  const prefix =
-    precedingDefinitions.length === 0
-      ? ''
-      : `${precedingDefinitions.join('\n\n')}\n\n`
-  const suffix =
-    followingDefinitions.length === 0
-      ? ''
-      : `\n\n${followingDefinitions.join('\n\n')}`
+): MarkdownNode[] {
+  const preceding = definitions
+    .filter((definition) => definition.offset < sourceOffset)
+    .map((definition) => definition.source)
+  const following = definitions
+    .filter((definition) => definition.offset >= sourceOffset + source.length)
+    .map((definition) => definition.source)
+  const prefix = preceding.length > 0 ? `${preceding.join('\n\n')}\n\n` : ''
+  const suffix = following.length > 0 ? `\n\n${following.join('\n\n')}` : ''
   const sectionStart = prefix.length
   const sectionEnd = sectionStart + source.length
   const tree = parse(`${prefix}${source}${suffix}`)
@@ -97,6 +79,6 @@ export function parseMarkdownSection(
     const start = node.position?.start.offset
     return start === undefined || (start >= sectionStart && start < sectionEnd)
   })
-  shiftMarkdownNodeOffsets(tree.children, -sectionStart)
-  return { source, tree }
+  shiftMarkdownNodeOffsets(tree.children, sourceOffset - sectionStart)
+  return tree.children
 }

@@ -236,6 +236,19 @@ it('keeps details that close outside their list item as text once', () => {
   )
 })
 
+it('keeps details as text when content precedes the summary', () => {
+  expect(
+    renderMessage(`<details>
+foo
+<summary>Summary</summary>
+
+Body
+</details>`),
+  ).toBe(
+    '<div class="markdown-message">&lt;details&gt;<p>foo</p>&lt;summary&gt;Summary&lt;/summary&gt;<p>Body</p>&lt;/details&gt;</div>',
+  )
+})
+
 it('keeps unsafe summary HTML as text', () => {
   expect(
     renderMessage(
@@ -256,102 +269,94 @@ Inner body
   )
 })
 
-it('preserves a heading immediately after a details block', () => {
-  expect(
-    renderMessage(`<details>
+it.each([
+  {
+    name: 'a heading',
+    markdown: `<details>
 <summary>Context</summary>
 
 Hidden context
 </details>
-## Next heading`),
-  ).toBe(
-    '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="false" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Context</span></button></div><h2>Next heading</h2></div>',
-  )
-})
-
-it('preserves text after an inline details closing tag', () => {
-  expect(
-    renderMessage(`<details open>
+## Next heading`,
+    expected:
+      '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="false" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Context</span></button></div><h2>Next heading</h2></div>',
+  },
+  {
+    name: 'inline text',
+    markdown: `<details open>
 <summary>Context</summary>
 Hidden context
-</details>Visible text`),
-  ).toBe(
-    '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Context</span></button><div class="markdown-details-body"><p>Hidden context</p></div></div><p>Visible text</p></div>',
-  )
-})
-
-it('trims non-ASCII autolinks immediately after an inline details block', () => {
-  expect(
-    renderMessage(`<details open>
+</details>Visible text`,
+    expected:
+      '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Context</span></button><div class="markdown-details-body"><p>Hidden context</p></div></div><p>Visible text</p></div>',
+  },
+  {
+    name: 'a non-ASCII autolink',
+    markdown: `<details open>
 <summary>Context</summary>
 Hidden context
-</details>http://example.com/日本語 説明`),
-  ).toBe(
-    '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Context</span></button><div class="markdown-details-body"><p>Hidden context</p></div></div><p><a href="http://example.com/" target="_blank" rel="noopener noreferrer">http://example.com/</a>日本語 説明</p></div>',
-  )
-})
-
-it('preserves a second details block immediately after the first', () => {
-  expect(
-    renderMessage(`<details>
+</details>http://example.com/日本語 説明`,
+    expected:
+      '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Context</span></button><div class="markdown-details-body"><p>Hidden context</p></div></div><p><a href="http://example.com/" target="_blank" rel="noopener noreferrer">http://example.com/</a>日本語 説明</p></div>',
+  },
+  {
+    name: 'a second details block',
+    markdown: `<details>
 <summary>First section</summary>
 First body
 </details>
 <details>
 <summary>Second section</summary>
 Second body
-</details>`),
-  ).toBe(
-    '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="false" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">First section</span></button></div><div class="markdown-details"><button aria-expanded="false" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Second section</span></button></div></div>',
-  )
+</details>`,
+    expected:
+      '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="false" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">First section</span></button></div><div class="markdown-details"><button aria-expanded="false" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Second section</span></button></div></div>',
+  },
+])('preserves $name after details', ({ markdown, expected }) => {
+  expect(renderMessage(markdown)).toBe(expected)
 })
 
-it('resolves reference links defined outside a details block', () => {
-  expect(
-    renderMessage(`<details open>
+it.each([
+  {
+    name: 'a reference defined outside the block',
+    markdown: `<details open>
 <summary>References</summary>
 
 See the [guide][shared-guide].
 </details>
 
-[shared-guide]: https://example.com/guide`),
-  ).toBe(
-    '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">References</span></button><div class="markdown-details-body"><p>See the <a href="https://example.com/guide" target="_blank" rel="noopener noreferrer">guide</a>.</p></div></div></div>',
-  )
-})
-
-it('preserves the source order of duplicate reference definitions', () => {
-  expect(
-    renderMessage(`[shared-guide]: https://example.com/outside
+[shared-guide]: https://example.com/guide`,
+    expected:
+      '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">References</span></button><div class="markdown-details-body"><p>See the <a href="https://example.com/guide" target="_blank" rel="noopener noreferrer">guide</a>.</p></div></div></div>',
+  },
+  {
+    name: 'source order for duplicate definitions',
+    markdown: `[shared-guide]: https://example.com/outside
 
 <details open>
 <summary>References</summary>
 
 See the [guide][shared-guide].
 [shared-guide]: https://example.com/inside
-</details>`),
-  ).toBe(
-    '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">References</span></button><div class="markdown-details-body"><p>See the <a href="https://example.com/outside" target="_blank" rel="noopener noreferrer">guide</a>.</p></div></div></div>',
-  )
-})
-
-it('resolves a details summary reference defined in its body', () => {
-  expect(
-    renderMessage(`<details open>
+</details>`,
+    expected:
+      '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">References</span></button><div class="markdown-details-body"><p>See the <a href="https://example.com/outside" target="_blank" rel="noopener noreferrer">guide</a>.</p></div></div></div>',
+  },
+  {
+    name: 'a summary reference defined in the body',
+    markdown: `<details open>
 <summary>See the [guide][shared-guide]</summary>
 
 [shared-guide]: https://example.com/summary
 
 Body
-</details>`),
-  ).toBe(
-    '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">See the <a href="https://example.com/summary" target="_blank" rel="noopener noreferrer">guide</a></span></button><div class="markdown-details-body"><p>Body</p></div></div></div>',
-  )
-})
-
-it('resolves references from an outer details body inside nested details', () => {
-  expect(
-    renderMessage(`<details open>
+</details>`,
+    expected:
+      '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">See the <a href="https://example.com/summary" target="_blank" rel="noopener noreferrer">guide</a></span></button><div class="markdown-details-body"><p>Body</p></div></div></div>',
+  },
+  {
+    name: 'an outer-body reference inside nested details',
+    markdown: `<details open>
 <summary>Outer</summary>
 
 [shared-guide]: https://example.com/nested
@@ -361,10 +366,12 @@ it('resolves references from an outer details body inside nested details', () =>
 
 See the [guide][shared-guide].
 </details>
-</details>`),
-  ).toBe(
-    '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Outer</span></button><div class="markdown-details-body"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Inner</span></button><div class="markdown-details-body"><p>See the <a href="https://example.com/nested" target="_blank" rel="noopener noreferrer">guide</a>.</p></div></div></div></div></div>',
-  )
+</details>`,
+    expected:
+      '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Outer</span></button><div class="markdown-details-body"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Inner</span></button><div class="markdown-details-body"><p>See the <a href="https://example.com/nested" target="_blank" rel="noopener noreferrer">guide</a>.</p></div></div></div></div></div>',
+  },
+])('resolves $name', ({ markdown, expected }) => {
+  expect(renderMessage(markdown)).toBe(expected)
 })
 
 it('preserves indentation in a leading code block inside details', () => {
