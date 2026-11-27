@@ -144,10 +144,6 @@
   white-space: nowrap;
 }
 
-.session-row-content .session-preview.is-decision-preview {
-  color: var(--aw-text-body);
-}
-
 .session-row-content .session-meta-line,
 .session-row-content .session-repo-line {
   display: flex;
@@ -293,12 +289,6 @@
 .session-row-content .session-repo-line .session-repo {
   flex: 0 1 auto;
 }
-
-.session-row-content .session-decision-count {
-  flex: none;
-  color: var(--aw-color-warning);
-}
-
 .session-row-content.is-mobile.density-full {
   padding: 10px 16px;
   grid-template-columns: 16px minmax(0, 1fr);

@@ -557,7 +557,7 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | `focus <session_id> [--review-pane-id <pane_id>]`                                                     |         | Focus the review pane when available, then the session's tmux pane                          |
 | `mark-read [-t <pane_id>]`                                                                            |         | Mark the pane's session as read (wire from tmux `pane-focus-in`)                            |
 | `status set <kind> <note>`                                                                            |         | Set the calling session's reason for stopping                                               |
-| `decision add <TITLE> --why <WHY> --considered <ALT> [--considered <ALT>...] --easy-to-change <TEXT>` |         | Record a provisional decision for later review                                              |
+| `decision add <TITLE> --why <WHY> --considered <ALT> [--considered <ALT>...] --easy-to-change <TEXT>` |         | Record a provisional decision in the session store                                          |
 | `proposal add`                                                                                        |         | Record a structured proposal from JSON read from stdin                                      |
 | `proposal edit <seq>`                                                                                 |         | Replace a pending proposal from the calling session using JSON read from stdin              |
 | `proposal withdraw <seq> [--comment <reason>]`                                                        |         | Withdraw a pending proposal from the calling session                                        |
@@ -1300,8 +1300,6 @@ Files sent by an agent are served by `GET /api/sessions/{id}/files/{file_id}` on
 - `POST /api/sessions/{id}/later` with `{"preset":"one_hour"}` (also accepts `this_evening`, `tomorrow`, `next_week`, `until_it_changes`, and `back_now`)
 - `POST /api/sessions/{id}/today` with `{"isToday":true}` or `{"isToday":false}`
 - `POST /api/sessions/{id}/title` with `{"title":"A fixture title"}`; an empty or whitespace-only title restores the automatic title
-- `POST /api/sessions/{id}/decisions/{seq}/ok` to mark a decision reviewed
-- `POST /api/sessions/{id}/decisions/{seq}/change` with `{"comment":"Revise the fixture choice."}` to request a change
 
 Session launches, messages, proposal answers, and todo resolutions may include up to 16 file attachments with a combined size of 50 MiB. Each attachment has a sanitized file name, MIME type, byte size, and base64-encoded data. PNG, JPEG, GIF, and WebP attachments with matching file signatures keep their conversation previews; other files appear by name:
 

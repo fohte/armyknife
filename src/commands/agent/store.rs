@@ -235,6 +235,10 @@ pub(crate) fn insert_agent_decision(
     )
 }
 
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "Part of the persisted agent decision API.")
+)]
 pub(crate) fn agent_decisions_from(
     sessions_dir: &Path,
     session_id: &str,
@@ -242,12 +246,20 @@ pub(crate) fn agent_decisions_from(
     database::agent_decisions(sessions_dir, session_id)
 }
 
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "Part of the persisted agent decision API.")
+)]
 pub(crate) fn agent_decision_counts_by_session_from(
     sessions_dir: &Path,
 ) -> Result<HashMap<String, AgentDecisionCounts>> {
     database::agent_decision_counts_by_session(sessions_dir)
 }
 
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "Part of the persisted agent decision API.")
+)]
 pub(crate) fn set_agent_decision_review_from(
     sessions_dir: &Path,
     session_id: &str,

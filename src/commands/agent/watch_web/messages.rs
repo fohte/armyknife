@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 
 #[cfg(test)]
-use crate::commands::agent::store::{AgentDecision, WatchWebPeerOutMessage, WatchWebQueuedPrompt};
+use crate::commands::agent::store::{WatchWebPeerOutMessage, WatchWebQueuedPrompt};
 use crate::commands::agent::types::Engine;
 #[cfg(test)]
 use crate::commands::agent::types::Session;
@@ -90,10 +90,9 @@ pub(super) fn claude_content_text(content: Option<&Value>) -> String {
 }
 
 #[cfg(test)]
-fn routes_with_decisions_and_queued_prompts_and_peer_out_messages(
+fn routes_with_queued_prompts_and_peer_out_messages(
     load_session: impl Fn(&str) -> Result<Option<Session>> + Send + Sync + 'static,
     load_user_marker: impl Fn(&str) -> Result<Option<String>> + Send + Sync + 'static,
-    load_decisions: impl Fn(&str) -> Result<Vec<AgentDecision>> + Send + Sync + 'static,
     load_queued_prompts: impl Fn(&str) -> Result<Vec<WatchWebQueuedPrompt>> + Send + Sync + 'static,
     load_peer_out_messages: impl Fn(&str) -> Result<Vec<WatchWebPeerOutMessage>> + Send + Sync + 'static,
     mark_queued_prompts_resolved: impl Fn(&str, &[i64]) -> Result<()> + Send + Sync + 'static,
@@ -102,7 +101,6 @@ fn routes_with_decisions_and_queued_prompts_and_peer_out_messages(
         load_session,
         load_user_marker,
         RouteLoaders::new(
-            load_decisions,
             load_queued_prompts,
             load_peer_out_messages,
             mark_queued_prompts_resolved,
@@ -117,7 +115,6 @@ fn load_messages_with(
     load_session: impl FnMut(&str) -> Result<Option<Session>>,
 ) -> Result<Option<Vec<ChatItem>>> {
     let loaders = RouteLoaders::new(
-        |_| Ok(Vec::new()),
         |_| Ok(Vec::new()),
         |_| Ok(Vec::new()),
         |_, _| Ok(()),
@@ -220,7 +217,7 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::io::Write;
     use std::path::{Path, PathBuf};
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
 
     use axum::Router;
@@ -236,13 +233,12 @@ mod tests {
     use super::{
         ChatItem, MAX_PERMISSION_COMMAND_BYTES, QuestionChoice, QuestionPrompt, RouteLoaders,
         load_conversation_with_queued_prompts, load_messages_with,
-        routes_with_decisions_and_queued_prompts_and_peer_out_messages,
         routes_with_proposals_and_peer_out_messages,
+        routes_with_queued_prompts_and_peer_out_messages,
     };
     use crate::commands::agent::store::{
-        AgentDecision, AgentFile, AgentProposal, AgentTodo, PermissionDeniedOperation,
-        PermissionRequestData, ProposalResolution, TodoResolution, WatchWebPeerOutMessage,
-        WatchWebQueuedPrompt,
+        AgentFile, AgentProposal, AgentTodo, PermissionDeniedOperation, PermissionRequestData,
+        ProposalResolution, TodoResolution, WatchWebPeerOutMessage, WatchWebQueuedPrompt,
     };
     use crate::commands::agent::types::{Engine, MAIN_THREAD_AGENT_KEY, Session};
     use crate::shared::config::Config;
@@ -262,7 +258,6 @@ mod tests {
     #[fixture]
     fn empty_route_loaders() -> RouteLoaders {
         RouteLoaders::new(
-            |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_, _| Ok(()),
@@ -377,7 +372,6 @@ mod tests {
                 Ok(Vec::new())
             },
             |_| Ok(Vec::new()),
-            |_| Ok(Vec::new()),
             |_, _| Ok(()),
             |_| Ok(Vec::new()),
         );
@@ -413,10 +407,9 @@ mod tests {
 
         let mut session = stored_session();
         session.transcript_path = Some(transcript_path.clone());
-        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
+        let router = routes_with_queued_prompts_and_peer_out_messages(
             move |id| Ok((id == "fixture-session").then(|| session.clone())),
             |_| Ok(None),
-            |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_, _| Ok(()),
@@ -437,17 +430,17 @@ mod tests {
                 (
                     StatusCode::OK,
                     Some("application/json".to_string()),
-                    json!({"messages":[{"type":"assistant","text":"First response."}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null})
+                    json!({"messages":[{"type":"assistant","text":"First response."}],"backgroundTasks":[],"start":0,"total":1,"hasUnansweredProposal":false,"activeQuestionIndex":null})
                 ),
                 (
                     StatusCode::OK,
                     Some("application/json".to_string()),
-                    json!({"messages":[{"type":"assistant","text":"First response."}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null})
+                    json!({"messages":[{"type":"assistant","text":"First response."}],"backgroundTasks":[],"start":0,"total":1,"hasUnansweredProposal":false,"activeQuestionIndex":null})
                 ),
                 (
                     StatusCode::OK,
                     Some("application/json".to_string()),
-                    json!({"messages":[{"type":"assistant","text":"Other response."}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null})
+                    json!({"messages":[{"type":"assistant","text":"Other response."}],"backgroundTasks":[],"start":0,"total":1,"hasUnansweredProposal":false,"activeQuestionIndex":null})
                 ),
             ),
         );
@@ -498,29 +491,7 @@ mod tests {
                 created_at: file_created_at(),
             },
         ];
-        let decision = AgentDecision {
-            session_id: "fixture-session".to_string(),
-            seq: 1,
-            title: "Keep the timeline order".to_string(),
-            why: "The fixture places a decision between the file and later message.".to_string(),
-            considered: Vec::new(),
-            easy_to_change: "Change the fixture timestamp.".to_string(),
-            created_at: "2026-01-01T00:00:04.500Z".to_string(),
-            review: Some("accepted".to_string()),
-            reviewed_at: Some("2026-01-01T00:00:04.500Z".to_string()),
-        };
-        let decision_item = json!({
-            "type": "decision",
-            "seq": 1,
-            "title": "Keep the timeline order",
-            "why": "The fixture places a decision between the file and later message.",
-            "considered": [],
-            "easyToChange": "Change the fixture timestamp.",
-            "review": "accepted",
-            "createdAt": "2026-01-01T00:00:04.500Z",
-        });
         let loaders = RouteLoaders::new(
-            move |_| Ok(vec![decision.clone()]),
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_, _| Ok(()),
@@ -559,13 +530,11 @@ mod tests {
             "messages": [
                 {"type": "user", "text": "Earlier message.", "timestamp": "2026-01-01T00:00:01+00:00"},
                 {"type": "assistant", "text": "Assistant response."},
-                decision_item.clone(),
                 {"type": "user", "text": "Later message.", "timestamp": "2026-01-01T00:00:05+00:00"},
             ],
             "backgroundTasks": [],
             "start": 0,
-            "total": 4,
-            "decisions": [decision_item.clone()],
+            "total": 3,
             "hasUnansweredProposal": false,
             "activeQuestionIndex": null,
         });
@@ -593,18 +562,17 @@ mod tests {
                     "caption": "Compare these files.",
                     "timestamp": "2026-01-01T00:00:04+00:00",
                 },
-                decision_item.clone(),
                 {"type": "user", "text": "Later message.", "timestamp": "2026-01-01T00:00:05+00:00"},
             ],
             "backgroundTasks": [],
             "start": 0,
-            "total": 5,
-            "decisions": [decision_item.clone()],
+            "total": 4,
             "hasUnansweredProposal": false,
             "activeQuestionIndex": null,
         });
         let expected_ranged = json!({
             "messages": [
+                {"type": "assistant", "text": "Assistant response."},
                 {
                     "type": "file_attachment",
                     "files": [{
@@ -625,13 +593,11 @@ mod tests {
                     "caption": "Compare these files.",
                     "timestamp": "2026-01-01T00:00:04+00:00",
                 },
-                decision_item.clone(),
                 {"type": "user", "text": "Later message.", "timestamp": "2026-01-01T00:00:05+00:00"},
             ],
             "backgroundTasks": [],
-            "start": 2,
-            "total": 5,
-            "decisions": [decision_item],
+            "start": 1,
+            "total": 4,
             "hasUnansweredProposal": false,
             "activeQuestionIndex": null,
         });
@@ -708,7 +674,6 @@ mod tests {
         let loaders = RouteLoaders::new(
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
-            |_| Ok(Vec::new()),
             |_, _| Ok(()),
             |_| Ok(Vec::new()),
         )
@@ -744,7 +709,6 @@ mod tests {
                     "backgroundTasks": [],
                     "start": 0,
                     "total": 1,
-                    "decisions": [],
                     "hasUnansweredProposal": false,
                     "activeQuestionIndex": null,
                 }),
@@ -821,7 +785,6 @@ mod tests {
         let loaders = RouteLoaders::new(
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
-            |_| Ok(Vec::new()),
             |_, _| Ok(()),
             |_| Ok(Vec::new()),
         )
@@ -893,7 +856,6 @@ mod tests {
                     "backgroundTasks": [],
                     "start": 0,
                     "total": 6,
-                    "decisions": [],
                     "hasUnansweredProposal": false,
                     "activeQuestionIndex": null,
                 }),
@@ -946,7 +908,6 @@ mod tests {
         let loaders = RouteLoaders::new(
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
-            |_| Ok(Vec::new()),
             |_, _| Ok(()),
             |_| Ok(Vec::new()),
         )
@@ -986,7 +947,6 @@ mod tests {
                 "backgroundTasks": [],
                 "start": 0,
                 "total": 2,
-                "decisions": [],
                 "hasUnansweredProposal": false,
                 "activeQuestionIndex": null,
             })
@@ -1068,7 +1028,6 @@ mod tests {
         let loaders = RouteLoaders::new(
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
-            |_| Ok(Vec::new()),
             |_, _| Ok(()),
             |_| Ok(Vec::new()),
         );
@@ -1095,7 +1054,6 @@ mod tests {
                 "backgroundTasks": [],
                 "start": 0,
                 "total": 1,
-                "decisions": [],
                 "hasUnansweredProposal": false,
                 "activeQuestionIndex": null,
             }),
@@ -1111,7 +1069,6 @@ mod tests {
                 "backgroundTasks": [],
                 "start": 0,
                 "total": 2,
-                "decisions": [],
                 "hasUnansweredProposal": false,
                 "activeQuestionIndex": null,
             }),
@@ -1130,89 +1087,6 @@ mod tests {
                 expected_first,
                 expected_appended,
                 Some(TranscriptChange::Appended),
-            ),
-        );
-    }
-
-    #[tokio::test]
-    async fn messages_route_renders_new_decisions_without_reparsing_the_transcript() {
-        let directory = tempfile::tempdir().unwrap();
-        let transcript_path = directory.path().join("fixture.jsonl");
-        std::fs::write(
-            &transcript_path,
-            indoc::indoc! {r#"
-                {"type":"assistant","timestamp":"2026-11-10T00:00:00Z","message":{"content":[{"type":"text","text":"Fixture response."}]}}
-            "#},
-        )
-        .unwrap();
-        let mut session = stored_session();
-        session.transcript_path = Some(transcript_path);
-        let decision_enabled = Arc::new(AtomicBool::new(false));
-        let decision_loader_enabled = Arc::clone(&decision_enabled);
-        let loaders = RouteLoaders::new(
-            move |_| {
-                Ok(if decision_loader_enabled.load(Ordering::Relaxed) {
-                    vec![fixture_decision(1)]
-                } else {
-                    Vec::new()
-                })
-            },
-            |_| Ok(Vec::new()),
-            |_| Ok(Vec::new()),
-            |_, _| Ok(()),
-            |_| Ok(Vec::new()),
-        );
-        let message_cache = loaders.message_cache.clone();
-        let router = routes_with_proposals_and_peer_out_messages(
-            move |id| Ok((id == "fixture-session").then(|| session.clone())),
-            |_| Ok(None),
-            loaders,
-        );
-
-        let initial = message_response(&router).await;
-        decision_enabled.store(true, Ordering::Relaxed);
-        let updated = message_response(&router).await;
-        let decision = fixture_decision_json(1);
-        let slot = message_cache.transcript_parser_slot("fixture-session");
-        let last_change = slot
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .as_ref()
-            .map(|entry| entry.last_change);
-
-        assert_eq!(
-            (initial, updated, last_change),
-            (
-                (
-                    StatusCode::OK,
-                    Some("application/json".to_string()),
-                    json!({
-                        "messages": [{"type": "assistant", "text": "Fixture response."}],
-                        "backgroundTasks": [],
-                        "start": 0,
-                        "total": 1,
-                        "decisions": [],
-                        "hasUnansweredProposal": false,
-                        "activeQuestionIndex": null,
-                    }),
-                ),
-                (
-                    StatusCode::OK,
-                    Some("application/json".to_string()),
-                    json!({
-                        "messages": [
-                            {"type": "assistant", "text": "Fixture response."},
-                            decision.clone(),
-                        ],
-                        "backgroundTasks": [],
-                        "start": 0,
-                        "total": 2,
-                        "decisions": [decision],
-                        "hasUnansweredProposal": false,
-                        "activeQuestionIndex": null,
-                    }),
-                ),
-                Some(TranscriptChange::Unchanged),
             ),
         );
     }
@@ -1323,7 +1197,6 @@ mod tests {
                     ],
                     "start": 0,
                     "total": 0,
-                    "decisions": [],
                     "hasUnansweredProposal": false,
                     "activeQuestionIndex": null,
                 }),
@@ -1485,7 +1358,6 @@ mod tests {
                     "skills": expected_skills,
                     "start": 0,
                     "total": 0,
-                    "decisions": [],
                     "hasUnansweredProposal": false,
                     "activeQuestionIndex": null,
                 }),
@@ -1670,7 +1542,6 @@ mod tests {
                     }],
                     "start": 0,
                     "total": 0,
-                    "decisions": [],
                     "hasUnansweredProposal": false,
                     "activeQuestionIndex": null,
                 }),
@@ -1755,7 +1626,6 @@ mod tests {
                         }],
                         "start": 0,
                         "total": 0,
-                        "decisions": [],
                         "hasUnansweredProposal": false,
                         "activeQuestionIndex": null,
                     }),
@@ -1772,7 +1642,6 @@ mod tests {
                         }],
                         "start": 0,
                         "total": 0,
-                        "decisions": [],
                         "hasUnansweredProposal": false,
                         "activeQuestionIndex": null,
                     }),
@@ -1801,10 +1670,9 @@ mod tests {
         let mut session = stored_session();
         session.engine = Engine::Codex;
         session.transcript_path = Some(transcript_path);
-        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
+        let router = routes_with_queued_prompts_and_peer_out_messages(
             move |id| Ok((id == "fixture-session").then(|| session.clone())),
             |_| Ok(None),
-            |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_, _| Ok(()),
@@ -1821,17 +1689,17 @@ mod tests {
                 (
                     StatusCode::OK,
                     Some("application/json".to_string()),
-                    json!({"messages":[{"type":"assistant","text":"First response."}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null})
+                    json!({"messages":[{"type":"assistant","text":"First response."}],"backgroundTasks":[],"start":0,"total":1,"hasUnansweredProposal":false,"activeQuestionIndex":null})
                 ),
                 (
                     StatusCode::OK,
                     Some("application/json".to_string()),
-                    json!({"messages":[{"type":"assistant","text":"First response."}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null})
+                    json!({"messages":[{"type":"assistant","text":"First response."}],"backgroundTasks":[],"start":0,"total":1,"hasUnansweredProposal":false,"activeQuestionIndex":null})
                 ),
                 (
                     StatusCode::OK,
                     Some("application/json".to_string()),
-                    json!({"messages":[{"type":"assistant","text":"Other response."}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null})
+                    json!({"messages":[{"type":"assistant","text":"Other response."}],"backgroundTasks":[],"start":0,"total":1,"hasUnansweredProposal":false,"activeQuestionIndex":null})
                 ),
             ),
         );
@@ -1857,7 +1725,6 @@ mod tests {
             |_| Ok(Some(stored_session())),
             |_| Ok(None),
             RouteLoaders::new(
-                |_| Ok(Vec::new()),
                 |_| Ok(Vec::new()),
                 |_| Ok(Vec::new()),
                 |_, _| Ok(()),
@@ -1895,22 +1762,22 @@ mod tests {
                 (
                     StatusCode::OK,
                     Some("application/json".to_string()),
-                    json!({"messages":[{"type":"proposal","seq":1,"title":"Sample proposal","summary":null,"options":[{"label":"Option A","description":null,"pros":[],"cons":[],"recommended":false},{"label":"Option B","description":null,"pros":[],"cons":[],"recommended":false}],"answer":null,"resolved":false,"resolution":null,"comment":null}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":true,"activeQuestionIndex":null})
+                    json!({"messages":[{"type":"proposal","seq":1,"title":"Sample proposal","summary":null,"options":[{"label":"Option A","description":null,"pros":[],"cons":[],"recommended":false},{"label":"Option B","description":null,"pros":[],"cons":[],"recommended":false}],"answer":null,"resolved":false,"resolution":null,"comment":null}],"backgroundTasks":[],"start":0,"total":1,"hasUnansweredProposal":true,"activeQuestionIndex":null})
                 ),
                 (
                     StatusCode::OK,
                     Some("application/json".to_string()),
-                    json!({"messages":[{"type":"proposal","seq":1,"title":"Updated proposal","summary":null,"options":[{"label":"Updated A","description":null,"pros":[],"cons":[],"recommended":false},{"label":"Updated B","description":null,"pros":[],"cons":[],"recommended":false}],"answer":null,"resolved":false,"resolution":null,"comment":null}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":true,"activeQuestionIndex":null})
+                    json!({"messages":[{"type":"proposal","seq":1,"title":"Updated proposal","summary":null,"options":[{"label":"Updated A","description":null,"pros":[],"cons":[],"recommended":false},{"label":"Updated B","description":null,"pros":[],"cons":[],"recommended":false}],"answer":null,"resolved":false,"resolution":null,"comment":null}],"backgroundTasks":[],"start":0,"total":1,"hasUnansweredProposal":true,"activeQuestionIndex":null})
                 ),
                 (
                     StatusCode::OK,
                     Some("application/json".to_string()),
-                    json!({"messages":[{"type":"proposal","seq":1,"title":"Sample proposal","summary":null,"options":[{"label":"Option A","description":null,"pros":[],"cons":[],"recommended":false},{"label":"Option B","description":null,"pros":[],"cons":[],"recommended":false}],"answer":{"choice":0,"comment":"Keep option A."},"resolved":true,"resolution":null,"comment":null}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null})
+                    json!({"messages":[{"type":"proposal","seq":1,"title":"Sample proposal","summary":null,"options":[{"label":"Option A","description":null,"pros":[],"cons":[],"recommended":false},{"label":"Option B","description":null,"pros":[],"cons":[],"recommended":false}],"answer":{"choice":0,"comment":"Keep option A."},"resolved":true,"resolution":null,"comment":null}],"backgroundTasks":[],"start":0,"total":1,"hasUnansweredProposal":false,"activeQuestionIndex":null})
                 ),
                 (
                     StatusCode::OK,
                     Some("application/json".to_string()),
-                    json!({"messages":[{"type":"proposal","seq":1,"title":"Sample proposal","summary":null,"options":[{"label":"Option A","description":null,"pros":[],"cons":[],"recommended":false},{"label":"Option B","description":null,"pros":[],"cons":[],"recommended":false}],"answer":null,"resolved":true,"resolution":"withdrawn","comment":"The decision changed."}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null})
+                    json!({"messages":[{"type":"proposal","seq":1,"title":"Sample proposal","summary":null,"options":[{"label":"Option A","description":null,"pros":[],"cons":[],"recommended":false},{"label":"Option B","description":null,"pros":[],"cons":[],"recommended":false}],"answer":null,"resolved":true,"resolution":"withdrawn","comment":"The decision changed."}],"backgroundTasks":[],"start":0,"total":1,"hasUnansweredProposal":false,"activeQuestionIndex":null})
                 ),
             ),
         );
@@ -1930,10 +1797,9 @@ mod tests {
         let queued = saved_prompt(7, "Continue the fixture build.");
         let deleted_ids = Arc::new(Mutex::new(Vec::new()));
         let delete_log = Arc::clone(&deleted_ids);
-        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
+        let router = routes_with_queued_prompts_and_peer_out_messages(
             move |id| Ok((id == "fixture-session").then(|| session.clone())),
             |_| Ok(None),
-            |_| Ok(Vec::new()),
             move |_| Ok(vec![queued.clone()]),
             |_| Ok(Vec::new()),
             move |_, ids| {
@@ -1955,12 +1821,12 @@ mod tests {
                 (
                     StatusCode::OK,
                     Some("application/json".to_string()),
-                    json!({"messages":[],"backgroundTasks":[],"start":0,"total":0,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null})
+                    json!({"messages":[],"backgroundTasks":[],"start":0,"total":0,"hasUnansweredProposal":false,"activeQuestionIndex":null})
                 ),
                 (
                     StatusCode::OK,
                     Some("application/json".to_string()),
-                    json!({"messages":[],"backgroundTasks":[],"start":0,"total":0,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null})
+                    json!({"messages":[],"backgroundTasks":[],"start":0,"total":0,"hasUnansweredProposal":false,"activeQuestionIndex":null})
                 ),
                 vec![vec![7], vec![7]],
             ),
@@ -1994,7 +1860,6 @@ mod tests {
 
         let proposals = vec![proposal];
         let loaders = RouteLoaders::new(
-            |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_, _| Ok(()),
@@ -2080,7 +1945,6 @@ mod tests {
         let loaders = RouteLoaders::new(
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
-            |_| Ok(Vec::new()),
             |_, _| Ok(()),
             |_| Ok(Vec::new()),
         )
@@ -2129,7 +1993,6 @@ mod tests {
                         "backgroundTasks": [],
                         "start": 0,
                         "total": 2,
-                        "decisions": [],
                         "hasUnansweredProposal": false,
                         "activeQuestionIndex": null,
                     }),
@@ -2161,7 +2024,6 @@ mod tests {
                         "backgroundTasks": [],
                         "start": 0,
                         "total": 2,
-                        "decisions": [],
                         "hasUnansweredProposal": false,
                         "activeQuestionIndex": null,
                     }),
@@ -2268,208 +2130,6 @@ mod tests {
         (status, content_type, serde_json::from_str(&body).unwrap())
     }
 
-    fn fixture_decision(seq: i64) -> AgentDecision {
-        AgentDecision {
-            session_id: "fixture-session".to_string(),
-            seq,
-            title: format!("Fixture decision {seq}"),
-            why: "The fixture keeps the example isolated.".to_string(),
-            considered: Vec::new(),
-            easy_to_change: "Change the fixture value.".to_string(),
-            created_at: "2026-11-11T00:00:00Z".to_string(),
-            review: None,
-            reviewed_at: None,
-        }
-    }
-
-    fn fixture_decision_json(seq: i64) -> serde_json::Value {
-        json!({
-            "type": "decision",
-            "seq": seq,
-            "title": format!("Fixture decision {seq}"),
-            "why": "The fixture keeps the example isolated.",
-            "considered": [],
-            "easyToChange": "Change the fixture value.",
-            "review": null,
-            "createdAt": "2026-11-11T00:00:00Z",
-        })
-    }
-
-    fn ranged_response(start: usize, message_seqs: &[i64]) -> serde_json::Value {
-        let messages = message_seqs
-            .iter()
-            .map(|seq| fixture_decision_json(*seq))
-            .collect::<Vec<_>>();
-        json!({
-            "messages": messages,
-            "backgroundTasks": [],
-            "start": start,
-            "total": 4,
-            "decisions": (1..=4).map(fixture_decision_json).collect::<Vec<_>>(),
-            "hasUnansweredProposal": false,
-            "activeQuestionIndex": null,
-        })
-    }
-
-    #[tokio::test]
-    async fn messages_route_returns_requested_ranges_with_full_conversation_metadata() {
-        let session = Session {
-            engine: Engine::Codex,
-            ..stored_session()
-        };
-        let decisions = (1..=4).map(fixture_decision).collect::<Vec<_>>();
-        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
-            move |_| Ok(Some(session.clone())),
-            |_| Ok(None),
-            move |_| Ok(decisions.clone()),
-            |_| Ok(Vec::new()),
-            |_| Ok(Vec::new()),
-            |_, _| Ok(()),
-        );
-        let mut responses = Vec::new();
-        for query in ["", "?limit=2", "?before=2&limit=2", "?from=2"] {
-            let response = router
-                .clone()
-                .oneshot(
-                    Request::builder()
-                        .uri(format!("/sessions/fixture-session/messages{query}"))
-                        .body(Body::empty())
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-            responses.push(response_json_snapshot(response).await);
-        }
-
-        assert_eq!(
-            responses,
-            vec![
-                (
-                    StatusCode::OK,
-                    Some("application/json".to_string()),
-                    ranged_response(0, &[1, 2, 3, 4]),
-                ),
-                (
-                    StatusCode::OK,
-                    Some("application/json".to_string()),
-                    ranged_response(2, &[3, 4]),
-                ),
-                (
-                    StatusCode::OK,
-                    Some("application/json".to_string()),
-                    ranged_response(0, &[1, 2]),
-                ),
-                (
-                    StatusCode::OK,
-                    Some("application/json".to_string()),
-                    ranged_response(2, &[3, 4]),
-                ),
-            ],
-        );
-    }
-
-    #[tokio::test]
-    async fn messages_route_reuses_stable_range_digest_and_falls_back_when_changed() {
-        let session = Session {
-            engine: Engine::Codex,
-            ..stored_session()
-        };
-        let original_decisions = (1..=22).map(fixture_decision).collect::<Vec<_>>();
-        let mut changed_decisions = original_decisions.clone();
-        changed_decisions[0].title = "Updated fixture decision".to_string();
-        let request_count = Arc::new(AtomicUsize::new(0));
-        let request_count_for_loader = Arc::clone(&request_count);
-        let decisions_for_loader = [
-            original_decisions.clone(),
-            original_decisions.clone(),
-            changed_decisions.clone(),
-        ];
-        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
-            move |_| Ok(Some(session.clone())),
-            |_| Ok(None),
-            move |_| {
-                let index = request_count_for_loader.fetch_add(1, Ordering::SeqCst);
-                Ok(decisions_for_loader[index.min(2)].clone())
-            },
-            |_| Ok(Vec::new()),
-            |_| Ok(Vec::new()),
-            |_, _| Ok(()),
-        );
-        let first_response = router
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/sessions/fixture-session/messages?limit=100")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let mut responses = vec![response_json_snapshot(first_response).await];
-        let (stable_start, stable_end, stable_digest) = {
-            let first_body = &responses[0].2;
-            (
-                first_body["stableStart"].as_u64().unwrap(),
-                first_body["stableEnd"].as_u64().unwrap(),
-                first_body["stableDigest"].as_str().unwrap().to_string(),
-            )
-        };
-        for _ in 0..2 {
-            let query = format!(
-                "?from=0&stableStart={stable_start}&stableEnd={stable_end}&stableDigest={stable_digest}"
-            );
-            let response = router
-                .clone()
-                .oneshot(
-                    Request::builder()
-                        .uri(format!("/sessions/fixture-session/messages{query}"))
-                        .body(Body::empty())
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-            responses.push(response_json_snapshot(response).await);
-        }
-
-        let original_json = (1..=22).map(fixture_decision_json).collect::<Vec<_>>();
-        let mut changed_json = original_json.clone();
-        changed_json[0]["title"] = json!("Updated fixture decision");
-        for (_, _, body) in &mut responses {
-            body["stableDigest"] = json!("fixture-digest");
-        }
-        let response =
-            |start: usize, messages: Vec<serde_json::Value>, decisions: Vec<serde_json::Value>| {
-                (
-                    StatusCode::OK,
-                    Some("application/json".to_string()),
-                    json!({
-                        "messages": messages,
-                        "backgroundTasks": [],
-                        "start": start,
-                        "total": 22,
-                        "decisions": decisions,
-                        "hasUnansweredProposal": false,
-                        "activeQuestionIndex": null,
-                        "stableStart": 0,
-                        "stableEnd": 2,
-                        "stableDigest": "fixture-digest",
-                    }),
-                )
-            };
-        assert_eq!(
-            responses,
-            vec![
-                response(0, original_json.clone(), original_json.clone(),),
-                response(
-                    2,
-                    (3..=22).map(fixture_decision_json).collect::<Vec<_>>(),
-                    original_json,
-                ),
-                response(0, changed_json.clone(), changed_json),
-            ],
-        );
-    }
-
     #[rstest]
     #[case::before_requires_limit("/sessions/fixture-session/messages?before=2")]
     #[case::from_rejects_limit("/sessions/fixture-session/messages?from=2&limit=1")]
@@ -2485,10 +2145,9 @@ mod tests {
     #[tokio::test]
     async fn messages_route_rejects_incompatible_range_parameters(#[case] uri: &str) {
         let session = stored_session();
-        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
+        let router = routes_with_queued_prompts_and_peer_out_messages(
             move |_| Ok(Some(session.clone())),
             |_| Ok(None),
-            |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_, _| Ok(()),
@@ -2501,386 +2160,6 @@ mod tests {
         assert_eq!(
             response_snapshot(response).await,
             (StatusCode::BAD_REQUEST, None, String::new()),
-        );
-    }
-    #[tokio::test]
-    async fn claude_message_route_places_database_decisions_in_the_transcript() {
-        let directory = tempfile::tempdir().unwrap();
-        let transcript_path = directory.path().join("transcript.jsonl");
-        std::fs::write(
-            &transcript_path,
-            indoc::indoc! {r#"
-                {"type":"assistant","timestamp":"2026-11-11T10:00:00Z","message":{"content":[{"type":"text","text":"Before the decision."}]}}
-                {"type":"assistant","timestamp":"2026-11-11T11:00:00Z","message":{"content":[{"type":"tool_use","id":"fixture-decision-call","name":"Bash","input":{"command":"a agent decision add 'Choose the fixture path'"}}]}}
-                {"type":"user","timestamp":"2026-11-11T12:00:00Z","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-decision-call","content":"Recorded decision 5"}]}}
-                {"type":"assistant","timestamp":"2026-11-11T13:00:00Z","message":{"content":[{"type":"text","text":"After the decision."}]}}
-            "#},
-        )
-        .unwrap();
-        let mut session = stored_session();
-        session.transcript_path = Some(transcript_path);
-        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
-            move |_| Ok(Some(session.clone())),
-            |_| Ok(None),
-            |_| {
-                Ok(vec![AgentDecision {
-                    session_id: "fixture-session".to_string(),
-                    seq: 5,
-                    title: "Choose the fixture path".to_string(),
-                    why: "The fixture remains reversible.".to_string(),
-                    considered: vec!["Choose the other fixture path".to_string()],
-                    easy_to_change: "Change one fixture value.".to_string(),
-                    created_at: "2026-11-11T12:30:00Z".to_string(),
-                    review: Some("ok".to_string()),
-                    reviewed_at: None,
-                }])
-            },
-            |_| Ok(Vec::new()),
-            |_| Ok(Vec::new()),
-            |_, _| Ok(()),
-        );
-        let response = router
-            .oneshot(
-                Request::builder()
-                    .uri("/sessions/fixture-session/messages")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(
-            response_snapshot(response).await,
-            (
-                StatusCode::OK,
-                Some("application/json".to_string()),
-                r#"{"messages":[{"type":"assistant","text":"Before the decision."},{"type":"tool_summary","summary":"Bash ×1","operations":[{"tool":"Bash","target":"a agent decision add 'Choose the fixture path'","failed":false}]},{"type":"decision","seq":5,"title":"Choose the fixture path","why":"The fixture remains reversible.","considered":["Choose the other fixture path"],"easyToChange":"Change one fixture value.","review":"ok","createdAt":"2026-11-11T12:30:00Z"},{"type":"assistant","text":"After the decision."}],"backgroundTasks":[],"start":0,"total":4,"decisions":[{"type":"decision","seq":5,"title":"Choose the fixture path","why":"The fixture remains reversible.","considered":["Choose the other fixture path"],"easyToChange":"Change one fixture value.","review":"ok","createdAt":"2026-11-11T12:30:00Z"}],"hasUnansweredProposal":false,"activeQuestionIndex":null}"#.to_string(),
-            ),
-        );
-    }
-
-    #[tokio::test]
-    async fn claude_message_route_places_decisions_and_proposals_by_creation_time() {
-        let directory = tempfile::tempdir().unwrap();
-        let transcript_path = directory.path().join("transcript.jsonl");
-        std::fs::write(
-            &transcript_path,
-            indoc::indoc! {r#"
-                {"type":"assistant","timestamp":"2026-06-01T11:58:00Z","message":{"content":[{"type":"text","text":"Before the records."}]}}
-                {"type":"assistant","timestamp":"2026-06-01T11:59:30Z","message":{"content":[{"type":"tool_use","id":"fixture-decision-call","name":"Bash","input":{"command":"a agent decision add 'Choose the fixture path'"}}]}}
-                {"type":"user","timestamp":"2026-06-01T12:00:00Z","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-decision-call","content":"Recorded decision 5"}]}}
-                {"type":"assistant","timestamp":"2026-06-01T12:00:30Z","message":{"content":[{"type":"text","text":"Between the records."}]}}
-                {"type":"assistant","timestamp":"2026-06-01T12:01:00Z","message":{"content":[{"type":"tool_use","id":"fixture-proposal-call","name":"Bash","input":{"command":"a agent proposal add '<fixture-json>'"}}]}}
-                {"type":"user","timestamp":"2026-06-01T12:02:00Z","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-proposal-call","content":"Recorded proposal 7"}]}}
-                {"type":"assistant","timestamp":"2026-06-01T12:03:00Z","message":{"content":[{"type":"text","text":"After the records."}]}}
-            "#},
-        )
-        .unwrap();
-
-        let mut session = stored_session();
-        session.transcript_path = Some(transcript_path);
-        let decision = AgentDecision {
-            session_id: "fixture-session".to_string(),
-            seq: 5,
-            title: "Choose the fixture path".to_string(),
-            why: "The fixture remains reversible.".to_string(),
-            considered: vec!["Choose the other fixture path".to_string()],
-            easy_to_change: "Change one fixture value.".to_string(),
-            created_at: "2026-06-01T11:59:00Z".to_string(),
-            review: Some("accepted".to_string()),
-            reviewed_at: Some("2026-06-01T12:04:00Z".to_string()),
-        };
-        let proposal = AgentProposal {
-            session_id: "fixture-session".to_string(),
-            seq: 7,
-            body: r#"{"title":"Choose a fixture option","summary":null,"options":[{"label":"Option A","description":null,"pros":[],"cons":[],"recommended":false},{"label":"Option B","description":null,"pros":[],"cons":[],"recommended":false}]}"#.to_string(),
-            created_at: chrono::DateTime::parse_from_rfc3339("2026-06-01T12:00:45Z")
-                .unwrap()
-                .with_timezone(&chrono::Utc),
-            answer: None,
-            resolved_at: None,
-            resolution: None,
-            comment: None,
-        };
-        let router = routes_with_proposals_and_peer_out_messages(
-            move |_| Ok(Some(session.clone())),
-            |_| Ok(None),
-            RouteLoaders::new(
-                move |_| Ok(vec![decision.clone()]),
-                |_| Ok(Vec::new()),
-                |_| Ok(Vec::new()),
-                |_, _| Ok(()),
-                move |_| Ok(vec![proposal.clone()]),
-            ),
-        );
-        let response = router
-            .oneshot(
-                Request::builder()
-                    .uri("/sessions/fixture-session/messages")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let (status, content_type, body) = response_snapshot(response).await;
-
-        assert_eq!(
-            (
-                status,
-                content_type,
-                serde_json::from_str::<serde_json::Value>(&body).unwrap(),
-            ),
-            (
-                StatusCode::OK,
-                Some("application/json".to_string()),
-                json!({
-                    "messages": [
-                        {"type": "assistant", "text": "Before the records."},
-                        {
-                            "type": "decision",
-                            "seq": 5,
-                            "title": "Choose the fixture path",
-                            "why": "The fixture remains reversible.",
-                            "considered": ["Choose the other fixture path"],
-                            "easyToChange": "Change one fixture value.",
-                            "review": "accepted",
-                            "createdAt": "2026-06-01T11:59:00Z",
-                        },
-                        {
-                            "type": "tool_summary",
-                            "summary": "Bash ×1",
-                            "operations": [{
-                                "tool": "Bash",
-                                "target": "a agent decision add 'Choose the fixture path'",
-                                "failed": false,
-                            }],
-                        },
-                        {"type": "assistant", "text": "Between the records."},
-                        {
-                            "type": "tool_summary",
-                            "summary": "Bash ×1",
-                            "operations": [{
-                                "tool": "Bash",
-                                "target": "a agent proposal add '<fixture-json>'",
-                                "failed": false,
-                            }],
-                        },
-                        {"type": "assistant", "text": "After the records."},
-                        {
-                            "type": "proposal",
-                            "seq": 7,
-                            "title": "Choose a fixture option",
-                            "summary": null,
-                            "options": [
-                                {
-                                    "label": "Option A",
-                                    "description": null,
-                                    "pros": [],
-                                    "cons": [],
-                                    "recommended": false,
-                                },
-                                {
-                                    "label": "Option B",
-                                    "description": null,
-                                    "pros": [],
-                                    "cons": [],
-                                    "recommended": false,
-                                },
-                            ],
-                            "answer": null,
-                            "resolved": false,
-                            "resolution": null,
-                            "comment": null,
-                        },
-                    ],
-                    "backgroundTasks": [],
-                    "start": 0,
-                    "total": 7,
-                    "decisions": [{
-                        "type": "decision",
-                        "seq": 5,
-                        "title": "Choose the fixture path",
-                        "why": "The fixture remains reversible.",
-                        "considered": ["Choose the other fixture path"],
-                        "easyToChange": "Change one fixture value.",
-                        "review": "accepted",
-                        "createdAt": "2026-06-01T11:59:00Z",
-                    }],
-                    "hasUnansweredProposal": true,
-                    "activeQuestionIndex": null,
-                }),
-            ),
-        );
-    }
-
-    #[tokio::test]
-    async fn claude_message_route_keeps_combined_tools_and_places_database_peer_messages() {
-        let directory = tempfile::tempdir().unwrap();
-        let transcript_path = directory.path().join("transcript.jsonl");
-        let transcript = indoc::indoc! {r#"
-            {"type":"assistant","timestamp":"2026-06-01T12:00:00Z","message":{"content":[{"type":"tool_use","id":"fixture-combined-call","name":"Bash","input":{"command":"a agent decision add 'Choose the fixture path' && a agent peer notify -m \"Requested fixture body.\" fixture-target-id"}}]}}
-            {"type":"user","timestamp":"2026-06-01T12:00:04Z","sourceToolAssistantUUID":"fixture-assistant-call","toolUseResult":{},"message":{"content":[{"type":"tool_result","tool_use_id":"fixture-combined-call","content":"Decision recorded for this session.\nSession-local sequence: 5\nInjected into the running turn of Codex session fixture-target-id."}]}}
-        "#};
-        std::fs::write(&transcript_path, transcript).unwrap();
-
-        let mut session = stored_session();
-        session.transcript_path = Some(transcript_path);
-        let sent_at = chrono::DateTime::parse_from_rfc3339("2026-06-01T12:00:03Z")
-            .unwrap()
-            .with_timezone(&chrono::Utc);
-        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
-            move |_| Ok(Some(session.clone())),
-            |_| Ok(None),
-            |_| {
-                Ok(vec![AgentDecision {
-                    session_id: "fixture-session".to_string(),
-                    seq: 5,
-                    title: "Choose the fixture path".to_string(),
-                    why: "The fixture remains reversible.".to_string(),
-                    considered: vec!["Choose the other fixture path".to_string()],
-                    easy_to_change: "Change one fixture value.".to_string(),
-                    created_at: "2026-06-01T11:59:00Z".to_string(),
-                    review: Some("accepted".to_string()),
-                    reviewed_at: Some("2026-06-01T12:04:00Z".to_string()),
-                }])
-            },
-            |_| Ok(Vec::new()),
-            move |_| {
-                Ok(vec![WatchWebPeerOutMessage {
-                    id: 1,
-                    from_session_id: "fixture-session".to_string(),
-                    to_session_id: "fixture-target-id".to_string(),
-                    content: "Expanded fixture body.".to_string(),
-                    sent_at,
-                    failed: false,
-                }])
-            },
-            |_, _| Ok(()),
-        );
-        let response = router
-            .oneshot(
-                Request::builder()
-                    .uri("/sessions/fixture-session/messages")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let (status, content_type, body) = response_snapshot(response).await;
-
-        assert_eq!(
-            (
-                status,
-                content_type,
-                serde_json::from_str::<serde_json::Value>(&body).unwrap(),
-            ),
-            (
-                StatusCode::OK,
-                Some("application/json".to_string()),
-                json!({
-                    "messages": [
-                        {
-                            "type": "decision",
-                            "seq": 5,
-                            "title": "Choose the fixture path",
-                            "why": "The fixture remains reversible.",
-                            "considered": ["Choose the other fixture path"],
-                            "easyToChange": "Change one fixture value.",
-                            "review": "accepted",
-                            "createdAt": "2026-06-01T11:59:00Z",
-                        },
-                        {
-                            "type": "peer",
-                            "direction": "to",
-                            "session_id": "fixture-target-id",
-                            "content": [{
-                                "type": "text",
-                                "text": "Expanded fixture body.",
-                            }],
-                            "timestamp": "2026-06-01T12:00:03+00:00",
-                        },
-                        {
-                            "type": "tool_summary",
-                            "summary": "Bash ×1",
-                            "operations": [{
-                                "tool": "Bash",
-                                "target": "a agent decision add 'Choose the fixture path' && a agent peer notify -m \"Requested fixture body.\" fixture-target-id",
-                                "failed": false,
-                            }],
-                        },
-                    ],
-                    "backgroundTasks": [],
-                    "start": 0,
-                    "total": 3,
-                    "decisions": [{
-                        "type": "decision",
-                        "seq": 5,
-                        "title": "Choose the fixture path",
-                        "why": "The fixture remains reversible.",
-                        "considered": ["Choose the other fixture path"],
-                        "easyToChange": "Change one fixture value.",
-                        "review": "accepted",
-                        "createdAt": "2026-06-01T11:59:00Z",
-                    }],
-                    "hasUnansweredProposal": false,
-                    "activeQuestionIndex": null,
-                }),
-            ),
-        );
-    }
-
-    #[tokio::test]
-    async fn codex_message_route_places_database_decisions_by_creation_time() {
-        let directory = tempfile::tempdir().unwrap();
-        let transcript_path = directory.path().join("transcript.jsonl");
-        std::fs::write(
-            &transcript_path,
-            indoc::indoc! {r#"
-                {"type":"response_item","timestamp":"2026-11-11T11:00:00Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Before the decision."}]}}
-                {"type":"response_item","timestamp":"2026-11-11T13:00:00Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"After the decision."}]}}
-            "#},
-        )
-        .unwrap();
-        let mut session = stored_session();
-        session.engine = Engine::Codex;
-        session.transcript_path = Some(transcript_path);
-        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
-            move |_| Ok(Some(session.clone())),
-            |_| Ok(None),
-            |_| {
-                Ok(vec![AgentDecision {
-                    session_id: "fixture-session".to_string(),
-                    seq: 1,
-                    title: "Choose the fixture path".to_string(),
-                    why: "The fixture remains reversible.".to_string(),
-                    considered: vec!["Choose the other fixture path".to_string()],
-                    easy_to_change: "Change one fixture value.".to_string(),
-                    created_at: "2026-11-11T12:00:00Z".to_string(),
-                    review: Some("accepted".to_string()),
-                    reviewed_at: Some("2026-11-11T12:01:00Z".to_string()),
-                }])
-            },
-            |_| Ok(Vec::new()),
-            |_| Ok(Vec::new()),
-            |_, _| Ok(()),
-        );
-        let response = router
-            .oneshot(
-                Request::builder()
-                    .uri("/sessions/fixture-session/messages")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(
-            response_snapshot(response).await,
-            (
-                StatusCode::OK,
-                Some("application/json".to_string()),
-                r#"{"messages":[{"type":"assistant","text":"Before the decision."},{"type":"decision","seq":1,"title":"Choose the fixture path","why":"The fixture remains reversible.","considered":["Choose the other fixture path"],"easyToChange":"Change one fixture value.","review":"accepted","createdAt":"2026-11-11T12:00:00Z"},{"type":"assistant","text":"After the decision."}],"backgroundTasks":[],"start":0,"total":3,"decisions":[{"type":"decision","seq":1,"title":"Choose the fixture path","why":"The fixture remains reversible.","considered":["Choose the other fixture path"],"easyToChange":"Change one fixture value.","review":"accepted","createdAt":"2026-11-11T12:00:00Z"}],"hasUnansweredProposal":false,"activeQuestionIndex":null}"#.to_string(),
-            ),
         );
     }
 
@@ -3113,7 +2392,6 @@ mod tests {
         let loaders = RouteLoaders::new(
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
-            |_| Ok(Vec::new()),
             |_, _| Ok(()),
             |_| Ok(Vec::new()),
         )
@@ -3260,7 +2538,6 @@ mod tests {
         let loaders = RouteLoaders::new(
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
-            |_| Ok(Vec::new()),
             |_, _| Ok(()),
             |_| Ok(Vec::new()),
         )
@@ -3378,7 +2655,6 @@ mod tests {
         let loaders = RouteLoaders::new(
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
-            |_| Ok(Vec::new()),
             |_, _| Ok(()),
             |_| Ok(Vec::new()),
         )
@@ -3432,7 +2708,7 @@ mod tests {
         sender.session_id = "fixture-parent-id".to_string();
         sender.label = Some("Fixture parent".to_string());
 
-        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
+        let router = routes_with_queued_prompts_and_peer_out_messages(
             move |id| {
                 Ok(match id {
                     "fixture-child-id" => Some(child.clone()),
@@ -3441,7 +2717,6 @@ mod tests {
                 })
             },
             |_| Ok(None),
-            |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_, _| Ok(()),
@@ -3460,7 +2735,7 @@ mod tests {
             (
                 StatusCode::OK,
                 Some("application/json".to_string()),
-                r#"{"messages":[{"type":"peer","direction":"from","session_id":"fixture-parent-id","session_title":"Fixture parent","content":[{"type":"text","text":"Synthetic peer request."}]}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null}"#
+                r#"{"messages":[{"type":"peer","direction":"from","session_id":"fixture-parent-id","session_title":"Fixture parent","content":[{"type":"text","text":"Synthetic peer request."}]}],"backgroundTasks":[],"start":0,"total":1,"hasUnansweredProposal":false,"activeQuestionIndex":null}"#
                     .to_string(),
             )
         );
@@ -3490,7 +2765,7 @@ mod tests {
         sender.label = Some("Fixture sender".to_string());
         let sender_is_available = Arc::new(AtomicBool::new(false));
         let sender_availability = Arc::clone(&sender_is_available);
-        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
+        let router = routes_with_queued_prompts_and_peer_out_messages(
             move |id| {
                 Ok(match id {
                     "fixture-session" => Some(child.clone()),
@@ -3501,7 +2776,6 @@ mod tests {
                 })
             },
             |_| Ok(None),
-            |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_, _| Ok(()),
@@ -3527,7 +2801,6 @@ mod tests {
                         "backgroundTasks": [],
                         "start": 0,
                         "total": 1,
-                        "decisions": [],
                         "hasUnansweredProposal": false,
                         "activeQuestionIndex": null,
                     }),
@@ -3546,7 +2819,6 @@ mod tests {
                         "backgroundTasks": [],
                         "start": 0,
                         "total": 1,
-                        "decisions": [],
                         "hasUnansweredProposal": false,
                         "activeQuestionIndex": null,
                     }),
@@ -3574,10 +2846,9 @@ mod tests {
 
         let mut session = stored_session();
         session.transcript_path = Some(transcript_path);
-        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
+        let router = routes_with_queued_prompts_and_peer_out_messages(
             move |id| Ok((id == "fixture-session").then(|| session.clone())),
             |_| Ok(None),
-            |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_, _| Ok(()),
@@ -3598,7 +2869,6 @@ mod tests {
                     "backgroundTasks": [],
                     "start": 0,
                     "total": 1,
-                    "decisions": [],
                     "hasUnansweredProposal": false,
                     "activeQuestionIndex": null,
                 }),
@@ -3624,10 +2894,9 @@ mod tests {
         let sent_at = chrono::DateTime::parse_from_rfc3339("2026-06-01T12:00:01Z")
             .unwrap()
             .with_timezone(&chrono::Utc);
-        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
+        let router = routes_with_queued_prompts_and_peer_out_messages(
             move |id| Ok((id == "fixture-session").then(|| session.clone())),
             |_| Ok(None),
-            |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             move |from| {
                 Ok(if from == "fixture-session" {
@@ -3692,7 +2961,6 @@ mod tests {
                     "backgroundTasks": [],
                     "start": 0,
                     "total": 2,
-                    "decisions": [],
                     "hasUnansweredProposal": false,
                     "activeQuestionIndex": null,
                 }),
@@ -3716,10 +2984,9 @@ mod tests {
         let sent_at = chrono::DateTime::parse_from_rfc3339("2026-06-01T12:00:01Z")
             .unwrap()
             .with_timezone(&chrono::Utc);
-        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
+        let router = routes_with_queued_prompts_and_peer_out_messages(
             move |id| Ok((id == "fixture-session").then(|| session.clone())),
             |_| Ok(None),
-            |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             move |_| {
                 Ok(vec![WatchWebPeerOutMessage {
@@ -3769,7 +3036,6 @@ mod tests {
                     "backgroundTasks": [],
                     "start": 0,
                     "total": 3,
-                    "decisions": [],
                     "hasUnansweredProposal": false,
                     "activeQuestionIndex": null,
                 }),
@@ -3784,10 +3050,9 @@ mod tests {
         session.current_tool = Some("AskUserQuestion".to_string());
         session.current_tool_name = Some("AskUserQuestion".to_string());
         session.transcript_path = Some(transcript_path);
-        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
+        let router = routes_with_queued_prompts_and_peer_out_messages(
             move |id| Ok((id == "fixture-session").then(|| session.clone())),
             |_| Ok(None),
-            |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_, _| Ok(()),
@@ -3807,7 +3072,7 @@ mod tests {
             (
                 StatusCode::OK,
                 Some("application/json".to_string()),
-                r#"{"messages":[{"type":"question","questions":[{"header":"Summary","question":"Should the summary be brief?","choices":[{"label":"Yes","description":"Keep it concise."},{"label":"No"}],"multi_select":true,"answer":null}]}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":0}"#
+                r#"{"messages":[{"type":"question","questions":[{"header":"Summary","question":"Should the summary be brief?","choices":[{"label":"Yes","description":"Keep it concise."},{"label":"No"}],"multi_select":true,"answer":null}]}],"backgroundTasks":[],"start":0,"total":1,"hasUnansweredProposal":false,"activeQuestionIndex":0}"#
                     .to_string(),
             )
         );
@@ -3825,10 +3090,9 @@ mod tests {
 
         let mut session = stored_session();
         session.transcript_path = Some(transcript_path);
-        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
+        let router = routes_with_queued_prompts_and_peer_out_messages(
             move |_| Ok(Some(session.clone())),
             |_| Ok(None),
-            |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_, _| Ok(()),
@@ -3848,7 +3112,7 @@ mod tests {
             (
                 StatusCode::OK,
                 Some("application/json".to_string()),
-                r#"{"messages":[{"type":"queued_user","content":[{"type":"text","text":"Continue the fixture build."}],"timestamp":"2026-06-01T12:00:00+00:00"}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null}"#.to_string(),
+                r#"{"messages":[{"type":"queued_user","content":[{"type":"text","text":"Continue the fixture build."}],"timestamp":"2026-06-01T12:00:00+00:00"}],"backgroundTasks":[],"start":0,"total":1,"hasUnansweredProposal":false,"activeQuestionIndex":null}"#.to_string(),
             ),
         );
     }
@@ -3878,10 +3142,9 @@ mod tests {
         ]));
         let queue_loader = Arc::clone(&queued_prompts);
         let queue_updater = Arc::clone(&queued_prompts);
-        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
+        let router = routes_with_queued_prompts_and_peer_out_messages(
             move |id| Ok((id == "fixture-session").then(|| session.clone())),
             |_| Ok(None),
-            |_| Ok(Vec::new()),
             move |_| Ok(queue_loader.lock().unwrap().clone()),
             |_| Ok(Vec::new()),
             move |_, ids| {
@@ -3918,7 +3181,6 @@ mod tests {
                 "backgroundTasks": [],
                 "start": 0,
                 "total": 1,
-                "decisions": [],
                 "hasUnansweredProposal": false,
                 "activeQuestionIndex": null,
             }),
@@ -3939,10 +3201,9 @@ mod tests {
         let queued = saved_prompt(7, "Continue the fixture build.");
         let deleted_ids = Arc::new(Mutex::new(Vec::new()));
         let delete_log = Arc::clone(&deleted_ids);
-        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
+        let router = routes_with_queued_prompts_and_peer_out_messages(
             move |_| Ok(Some(session.clone())),
             |_| Ok(Some("⟦armyknife-user:fixture-marker-cobalt⟧".to_string())),
-            |_| Ok(Vec::new()),
             move |_| Ok(vec![queued.clone()]),
             |_| Ok(Vec::new()),
             move |_, ids| {
@@ -3969,7 +3230,7 @@ mod tests {
                 (
                     StatusCode::OK,
                     Some("application/json".to_string()),
-                r#"{"messages":[{"type":"queued_user","content":[{"type":"text","text":"Continue the fixture build."}],"queuedPromptId":"fixture-message-7","timestamp":"2026-01-01T00:00:00+00:00"}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null}"#.to_string(),
+                r#"{"messages":[{"type":"queued_user","content":[{"type":"text","text":"Continue the fixture build."}],"queuedPromptId":"fixture-message-7","timestamp":"2026-01-01T00:00:00+00:00"}],"backgroundTasks":[],"start":0,"total":1,"hasUnansweredProposal":false,"activeQuestionIndex":null}"#.to_string(),
                 ),
                 Vec::<i64>::new(),
             ),
@@ -3990,10 +3251,9 @@ mod tests {
         let queued = saved_prompt(7, "Delivered fixture request.");
         let marked_ids = Arc::new(Mutex::new(Vec::new()));
         let mark_log = Arc::clone(&marked_ids);
-        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
+        let router = routes_with_queued_prompts_and_peer_out_messages(
             move |_| Ok(Some(session.clone())),
             |_| Ok(Some("⟦armyknife-user:fixture-marker-cobalt⟧".to_string())),
-            |_| Ok(Vec::new()),
             move |_| Ok(vec![queued.clone()]),
             |_| Ok(Vec::new()),
             move |_, ids| {
@@ -4020,7 +3280,7 @@ mod tests {
                 (
                     StatusCode::OK,
                     Some("application/json".to_string()),
-                r#"{"messages":[{"type":"user","text":"Delivered fixture request.","queuedPromptId":"fixture-message-7","timestamp":"2026-01-01T00:00:01+00:00"}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null}"#.to_string(),
+                r#"{"messages":[{"type":"user","text":"Delivered fixture request.","queuedPromptId":"fixture-message-7","timestamp":"2026-01-01T00:00:01+00:00"}],"backgroundTasks":[],"start":0,"total":1,"hasUnansweredProposal":false,"activeQuestionIndex":null}"#.to_string(),
                 ),
                 vec![7],
             ),
@@ -4117,17 +3377,6 @@ mod tests {
         let old_created_at = chrono::DateTime::parse_from_rfc3339("2025-12-31T23:59:00Z")
             .unwrap()
             .with_timezone(&chrono::Utc);
-        let pending_decision = AgentDecision {
-            session_id: "fixture-session".to_string(),
-            seq: 1,
-            title: "Old pending decision".to_string(),
-            why: "The fixture keeps this decision pending.".to_string(),
-            considered: Vec::new(),
-            easy_to_change: "Change one fixture value.".to_string(),
-            created_at: old_created_at.to_rfc3339(),
-            review: None,
-            reviewed_at: None,
-        };
         let pending_proposal = AgentProposal {
             session_id: "fixture-session".to_string(),
             seq: 1,
@@ -4167,12 +3416,10 @@ mod tests {
             let mut session = base_session.clone();
             session.transcript_path = Some(transcript_path.to_path_buf());
             let queued = queued.clone();
-            let pending_decision = pending_decision.clone();
             let pending_proposal = pending_proposal.clone();
             let pending_todo = pending_todo.clone();
             let pending_denial = pending_denial.clone();
             let loaders = RouteLoaders::new(
-                move |_| Ok(vec![pending_decision.clone()]),
                 move |_| Ok(vec![queued.clone()]),
                 |_| Ok(Vec::new()),
                 move |_, ids| {
@@ -4934,10 +4181,9 @@ mod tests {
 
         let mut session = stored_session();
         session.transcript_path = Some(transcript_path.clone());
-        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
+        let router = routes_with_queued_prompts_and_peer_out_messages(
             move |_| Ok(Some(session.clone())),
             |_| Ok(None),
-            |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_, _| Ok(()),
@@ -4979,10 +4225,9 @@ mod tests {
         let queued = saved_prompt(8, "Codex delivered request.");
         let marked_ids = Arc::new(Mutex::new(Vec::new()));
         let mark_log = Arc::clone(&marked_ids);
-        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
+        let router = routes_with_queued_prompts_and_peer_out_messages(
             move |_| Ok(Some(session.clone())),
             |_| Ok(None),
-            |_| Ok(Vec::new()),
             move |_| Ok(vec![queued.clone()]),
             |_| Ok(Vec::new()),
             move |_, ids| {
@@ -5009,7 +4254,7 @@ mod tests {
                 (
                     StatusCode::OK,
                     Some("application/json".to_string()),
-                    r#"{"messages":[{"type":"user","text":"Codex delivered request.","queuedPromptId":"fixture-message-8","timestamp":"2026-01-01T00:00:01+00:00"}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null}"#.to_string(),
+                    r#"{"messages":[{"type":"user","text":"Codex delivered request.","queuedPromptId":"fixture-message-8","timestamp":"2026-01-01T00:00:01+00:00"}],"backgroundTasks":[],"start":0,"total":1,"hasUnansweredProposal":false,"activeQuestionIndex":null}"#.to_string(),
                 ),
                 vec![8],
             ),
@@ -5021,7 +4266,6 @@ mod tests {
         let mut session = stored_session();
         session.engine = Engine::Codex;
         let loaders = RouteLoaders::new(
-            |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_, _| Ok(()),
@@ -5058,7 +4302,6 @@ mod tests {
                 }],
                 "start": 0,
                 "total": 0,
-                "decisions": [],
                 "hasUnansweredProposal": false,
                 "activeQuestionIndex": null,
             }),
@@ -5119,10 +4362,9 @@ mod tests {
 
         let mut session = stored_session();
         session.transcript_path = Some(transcript_path);
-        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
+        let router = routes_with_queued_prompts_and_peer_out_messages(
             move |_| Ok(Some(session.clone())),
             |_| Ok(None),
-            |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_, _| Ok(()),
@@ -5153,7 +4395,6 @@ mod tests {
                 }],
                 "start": 0,
                 "total": 2,
-                "decisions": [],
                 "hasUnansweredProposal": false,
                 "activeQuestionIndex": null,
             }),
@@ -5182,7 +4423,6 @@ mod tests {
         session.engine = Engine::Codex;
         session.transcript_path = None;
         let loaders = RouteLoaders::new_with_background_task_output_event_stream(
-            |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_, _| Ok(()),
@@ -5390,10 +4630,9 @@ mod tests {
         let mut session = stored_session();
         session.engine = Engine::Codex;
         session.transcript_path = Some(transcript_path);
-        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
+        let router = routes_with_queued_prompts_and_peer_out_messages(
             move |_| Ok(Some(session.clone())),
             |_| Ok(None),
-            |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_, _| Ok(()),
@@ -5412,7 +4651,7 @@ mod tests {
             (
                 StatusCode::OK,
                 Some("application/json".to_string()),
-                r#"{"messages":[{"type":"tool_in_progress","tool":"exec","target":"cargo check"}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null}"#.to_string(),
+                r#"{"messages":[{"type":"tool_in_progress","tool":"exec","target":"cargo check"}],"backgroundTasks":[],"start":0,"total":1,"hasUnansweredProposal":false,"activeQuestionIndex":null}"#.to_string(),
             )
         );
     }
@@ -5444,7 +4683,6 @@ mod tests {
             None
         };
         let loaders = RouteLoaders::new(
-            |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_, _| Ok(()),
@@ -5488,7 +4726,6 @@ mod tests {
                     "backgroundTasks": [],
                     "start": 0,
                     "total": 0,
-                    "decisions": [],
                     "hasUnansweredProposal": false,
                     "activeQuestionIndex": null,
                     "vibeMode": vibe_mode,
@@ -5508,7 +4745,6 @@ mod tests {
         let mut parent = stored_session();
         parent.session_id = "fixture-parent".to_string();
         let loaders = RouteLoaders::new(
-            |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_, _| Ok(()),
@@ -5548,7 +4784,6 @@ mod tests {
                     "backgroundTasks": [],
                     "start": 0,
                     "total": 0,
-                    "decisions": [],
                     "hasUnansweredProposal": false,
                     "activeQuestionIndex": null,
                     "vibeMode": { "mode": "disabled" },

@@ -153,10 +153,6 @@ export function InboxView({
     (session) =>
       session.category === 'done' && (session.todoLaterCount ?? 0) === 0,
   )
-  const unreviewedDoneCount = done.reduce(
-    (count, session) => count + (session.unreviewedDecisionCount ?? 0),
-    0,
-  )
   const connected = connectionError === null
   const lastUpdatedTime = formatMobileConnectionTime(lastUpdatedAt)
   const later = sortInboxSessions(
@@ -484,18 +480,9 @@ export function InboxView({
             <span>Done</span>
             <span className="mobile-collapse-count">{done.length}</span>
             <MobileTodoLaterCount count={doneTodoLaterCount} />
-            {unreviewedDoneCount > 0 ? (
-              <span className="mobile-done-review-count">
-                ◇ {String(unreviewedDoneCount)} to review
-                <span className="mobile-collapse-chevron" aria-hidden="true">
-                  {doneExpanded ? '⌄' : '›'}
-                </span>
-              </span>
-            ) : (
-              <span className="mobile-collapse-chevron" aria-hidden="true">
-                {doneExpanded ? '⌄' : '›'}
-              </span>
-            )}
+            <span className="mobile-collapse-chevron" aria-hidden="true">
+              {doneExpanded ? '⌄' : '›'}
+            </span>
           </Button>
           <Button
             type="button"

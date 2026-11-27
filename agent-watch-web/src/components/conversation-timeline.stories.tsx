@@ -132,9 +132,6 @@ function ConversationTimelineStory({
           actions={sessionActions}
           actionsReady
           isMobile={isMobile}
-          selected={false}
-          decisionPosition={undefined}
-          onSelectDecision={() => undefined}
           message={message}
           pendingAction={null}
           openInTerminalStatus={null}

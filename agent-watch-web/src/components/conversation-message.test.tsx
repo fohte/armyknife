@@ -18,9 +18,6 @@ function renderConversationCardMarkup(
       actions={null}
       actionsReady={true}
       isMobile={false}
-      selected={false}
-      decisionPosition={undefined}
-      onSelectDecision={() => undefined}
       message={message}
       {...(includeImageSources
         ? { imageSources: { [localImagePath]: servedImageSource } }
@@ -120,9 +117,6 @@ it('renders narration as muted conversation text', () => {
         actions: null,
         actionsReady: true,
         isMobile: false,
-        selected: false,
-        decisionPosition: undefined,
-        onSelectDecision: () => undefined,
         message: {
           type: 'narration',
           text: 'I will inspect the fictional request before answering.',
@@ -148,9 +142,6 @@ it('renders narration links and code blocks with assistant message controls', ()
         actions: null,
         actionsReady: true,
         isMobile: false,
-        selected: false,
-        decisionPosition: undefined,
-        onSelectDecision: () => undefined,
         message: {
           type: 'narration',
           text: '[the guide](https://example.com/guide)\n\n```sh\n! printf sample\n```',
@@ -181,9 +172,6 @@ it('renders standalone thinking as a collapsible thought group', () => {
         actions: null,
         actionsReady: true,
         isMobile: false,
-        selected: false,
-        decisionPosition: undefined,
-        onSelectDecision: () => undefined,
         message: {
           type: 'thinking',
           text: 'Review the fictional request.',

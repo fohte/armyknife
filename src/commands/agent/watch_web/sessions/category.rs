@@ -2,8 +2,8 @@ use chrono::{DateTime, Utc};
 
 use crate::commands::agent::store;
 use crate::commands::agent::types::{Session, SessionStatus};
-use crate::commands::agent::user_turn::{UserTurnKind, user_turns};
-use crate::shared::config::{AgentConfig, AgentStatusState};
+use crate::commands::agent::user_turn::UserTurnKind;
+use crate::shared::config::AgentStatusState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -26,32 +26,6 @@ pub(super) enum SessionKind {
     Stopped,
     Proposal,
     Todo,
-}
-
-pub(super) fn decision_category_is_done(
-    session: &Session,
-    agent_config: &AgentConfig,
-    has_running_background_task: bool,
-    state: Option<&store::WatchWebSessionState>,
-    now: DateTime<Utc>,
-) -> bool {
-    let turn = user_turns(std::iter::once(session), agent_config)
-        .into_iter()
-        .next()
-        .map(|turn| turn.kind);
-    let agent_status_state = session
-        .agent_status
-        .as_ref()
-        .map(|status| agent_config.status_state(&status.kind));
-    category_for_with_later(
-        session,
-        turn,
-        false,
-        has_running_background_task,
-        agent_status_state,
-        state,
-        now,
-    ) == SessionCategory::Done
 }
 
 pub(super) fn category_for_with_later(
@@ -259,7 +233,8 @@ pub(super) fn kind_for_with_todo(
 mod tests {
     use super::*;
     use crate::commands::agent::types::{AgentStatus, Engine, TmuxInfo};
-    use crate::shared::config::AgentStatusConfig;
+    use crate::commands::agent::user_turn::user_turns;
+    use crate::shared::config::{AgentConfig, AgentStatusConfig};
     use chrono::TimeZone;
     use rstest::rstest;
     use std::path::PathBuf;
@@ -514,7 +489,6 @@ mod tests {
             (expected_turn, expected_category, expected_kind),
         );
     }
-
     #[test]
     fn running_session_returns_to_in_progress_while_waiting_status_is_set() {
         let mut session = session(SessionStatus::Running);
@@ -597,39 +571,6 @@ mod tests {
                 Utc.timestamp_opt(2_000, 0).unwrap(),
             ),
             SessionCategory::Later,
-        );
-    }
-
-    #[rstest]
-    #[case::done(AgentStatusState::Done, false, true)]
-    #[case::waiting(AgentStatusState::Waiting, false, false)]
-    #[case::user(AgentStatusState::User, false, false)]
-    #[case::done_with_background_task(AgentStatusState::Done, true, false)]
-    fn decision_routing_uses_stopped_status_and_background_task_state(
-        #[case] state: AgentStatusState,
-        #[case] has_running_background_task: bool,
-        #[case] expected_is_done: bool,
-    ) {
-        let status_kind = "fixture_status";
-        let mut session = session(SessionStatus::Stopped);
-        session.agent_status = Some(AgentStatus {
-            kind: status_kind.to_string(),
-            note: "Waiting for external work.".to_string(),
-        });
-        let mut agent_config = AgentConfig::default();
-        agent_config
-            .statuses
-            .insert(status_kind.to_string(), AgentStatusConfig { state });
-
-        assert_eq!(
-            decision_category_is_done(
-                &session,
-                &agent_config,
-                has_running_background_task,
-                None,
-                Utc::now(),
-            ),
-            expected_is_done,
         );
     }
 }

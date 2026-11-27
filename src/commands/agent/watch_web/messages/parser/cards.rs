@@ -5,11 +5,10 @@ use chrono::{DateTime, Utc};
 use super::super::proposals::ProposalItem;
 use super::super::{ChatItem, PeerDirection, UserContentPart};
 use super::ToolSummary;
-use crate::commands::agent::store::{AgentDecision, AgentTodo, WatchWebPeerOutMessage};
+use crate::commands::agent::store::{AgentTodo, WatchWebPeerOutMessage};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(in crate::commands::agent::watch_web::messages) enum CardKind {
-    Decision,
     Proposal,
     Todo,
     PeerOut,
@@ -154,27 +153,12 @@ impl CardTimeline {
 }
 
 pub(in crate::commands::agent::watch_web::messages) fn cards_from_sources(
-    decisions: &[AgentDecision],
     proposals: &[ProposalItem],
     todos: &[AgentTodo],
     peer_out_messages: &[WatchWebPeerOutMessage],
     additional_cards: &[TimedCard],
 ) -> Vec<TimedCard> {
-    let mut cards = decisions
-        .iter()
-        .map(|decision| {
-            let created_at = DateTime::parse_from_rfc3339(&decision.created_at)
-                .ok()
-                .map(|value| value.with_timezone(&Utc));
-            TimedCard::new(
-                CardKind::Decision,
-                created_at,
-                decision.seq,
-                false,
-                ChatItem::from(decision.clone()),
-            )
-        })
-        .collect::<Vec<_>>();
+    let mut cards = Vec::new();
     cards.extend(proposals.iter().map(|proposal| {
         let resolved = matches!(&proposal.item, ChatItem::Proposal { resolved: true, .. });
         TimedCard::new(
@@ -234,7 +218,7 @@ mod tests {
 
     use super::*;
     use crate::commands::agent::proposal::{ProposalAnswer, ProposalOption};
-    use crate::commands::agent::store::{AgentDecision, PermissionRequestData, TodoResolution};
+    use crate::commands::agent::store::{PermissionRequestData, TodoResolution};
     use crate::commands::agent::watch_web::messages::parser::claude::{
         ParserAdditions, parse_with_queued_prompts_and_peer_out_messages_and_proposals,
     };
@@ -401,17 +385,6 @@ mod tests {
 
     #[test]
     fn claude_and_codex_place_every_card_kind_with_the_same_timeline() {
-        let decisions = [AgentDecision {
-            session_id: "fixture-session".to_string(),
-            seq: 1,
-            title: "A pending decision".to_string(),
-            why: "The example should remain adjustable.".to_string(),
-            considered: Vec::new(),
-            easy_to_change: "Adjust the example.".to_string(),
-            created_at: "2026-06-01T12:01:30Z".to_string(),
-            review: None,
-            reviewed_at: None,
-        }];
         let proposals = [
             ProposalItem {
                 seq: 1,
@@ -562,13 +535,7 @@ mod tests {
                 },
             ),
         ];
-        let cards = cards_from_sources(
-            &decisions,
-            &proposals,
-            &todos,
-            &peer_out_messages,
-            &additional_cards,
-        );
+        let cards = cards_from_sources(&proposals, &todos, &peer_out_messages, &additional_cards);
         let permission = PermissionRequestData {
             tool_name: Some("Bash".to_string()),
             tool_input: serde_json::json!({"command": "a sample command"}),
@@ -593,7 +560,6 @@ mod tests {
                     parent: None,
                     pending_tool: Some(&permission),
                     user_marker: None,
-                    decisions: &decisions,
                     queued_prompts: &[],
                     peer_out_messages: &peer_out_messages,
                     proposals: &proposals,
@@ -612,15 +578,6 @@ mod tests {
         let expected = vec![
             ChatItem::Assistant {
                 text: "before".to_string(),
-            },
-            ChatItem::Decision {
-                seq: 1,
-                title: "A pending decision".to_string(),
-                why: "The example should remain adjustable.".to_string(),
-                considered: Vec::new(),
-                easy_to_change: "Adjust the example.".to_string(),
-                review: None,
-                created_at: "2026-06-01T12:01:30Z".to_string(),
             },
             proposals[0].item.clone(),
             ChatItem::Todo {

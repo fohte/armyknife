@@ -331,7 +331,6 @@ fn render_parser(
         IncrementalTranscriptParser::Claude(parser) => render_claude_parser(parser, input),
         IncrementalTranscriptParser::Codex(parser) => {
             let placement_cards = parser::cards::cards_from_sources(
-                input.additions.decisions,
                 input.additions.proposals,
                 input.additions.todos,
                 input.additions.peer_out_messages,
@@ -466,7 +465,6 @@ mod tests {
                     parent: None,
                     pending_tool: None,
                     user_marker: (engine == Engine::Claude).then_some(session_marker),
-                    decisions: &[],
                     queued_prompts: prompts,
                     peer_out_messages: &[],
                     proposals: &[],
@@ -555,7 +553,6 @@ mod tests {
                     parent: None,
                     pending_tool: None,
                     user_marker: None,
-                    decisions: &[],
                     queued_prompts: &[],
                     peer_out_messages: &[],
                     proposals: &[],

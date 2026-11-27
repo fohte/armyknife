@@ -32,15 +32,6 @@ impl ApiError {
         }
     }
 
-    pub(super) fn decision_not_found() -> Self {
-        Self {
-            status: StatusCode::NOT_FOUND,
-            message: "decision not found".to_string(),
-            code: None,
-            checks: None,
-        }
-    }
-
     pub(super) fn conflict(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::CONFLICT,

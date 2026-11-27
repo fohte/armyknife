@@ -159,7 +159,6 @@ fn load_conversation_with_tail_window_from(
     } else {
         None
     };
-    let decisions = (loaders.decisions)(session_id)?;
     let queued_prompts = (loaders.queued_prompts)(session_id)?;
     let peer_out_messages = (loaders.peer_out_messages)(session_id)?;
     let proposals = (loaders.proposals)(session_id)?;
@@ -198,7 +197,6 @@ fn load_conversation_with_tail_window_from(
         &session,
         parent.clone(),
         user_marker.clone(),
-        decisions.clone(),
         queued_prompts.clone(),
         peer_out_messages.clone(),
         MessageCacheRecords {
@@ -263,7 +261,6 @@ fn load_conversation_with_tail_window_from(
             parent: parent.as_ref(),
             pending_tool,
             user_marker: user_marker.as_deref(),
-            decisions: &decisions,
             queued_prompts: &queued_prompts,
             peer_out_messages: &peer_out_messages,
             proposals: &proposal_items,
@@ -336,7 +333,6 @@ fn load_conversation_with_tail_window_from(
 
     conversation.update_metadata();
     if used_tail_window {
-        conversation.decisions = decisions.iter().cloned().map(ChatItem::from).collect();
         conversation.has_unanswered_proposal = proposals
             .iter()
             .any(|proposal| proposal.answer.is_none() && proposal.resolved_at.is_none());
@@ -506,7 +502,6 @@ mod tests {
         )]);
 
         let loaders = RouteLoaders::new(
-            |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_, _| Ok(()),
