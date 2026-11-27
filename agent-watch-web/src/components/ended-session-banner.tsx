@@ -6,6 +6,20 @@ import type { SessionActions } from '#types'
 
 type ResumeDisabledReason = NonNullable<SessionActions['resumeDisabledReason']>
 
+const RESUME_DISABLED_COPY: Record<
+  ResumeDisabledReason,
+  { hint: string; title: string }
+> = {
+  noTmux: {
+    hint: 'Resume is unavailable because this session has no tmux location',
+    title: 'This session has no tmux location',
+  },
+  workingDirectoryMissing: {
+    hint: 'Resume is unavailable because this session’s working directory does not exist',
+    title: 'This session’s working directory does not exist',
+  },
+}
+
 type EndedSessionBannerProps = {
   endedAt: string | undefined
   isMobile: boolean
@@ -24,11 +38,10 @@ export function EndedSessionBanner({
   onResume,
 }: EndedSessionBannerProps) {
   const endedTime = formatEndedTime(endedAt)
-  const resumeHint = canResume
-    ? 'Resume it to keep talking'
-    : resumeDisabledReason === 'workingDirectoryMissing'
-      ? 'Resume is unavailable because this session’s working directory does not exist'
-      : 'Resume is unavailable because this session has no tmux location'
+  const disabledCopy = canResume
+    ? undefined
+    : RESUME_DISABLED_COPY[resumeDisabledReason ?? 'noTmux']
+  const resumeHint = disabledCopy?.hint ?? 'Resume it to keep talking'
 
   return (
     <div className="conversation-ended" role="status">
@@ -52,13 +65,7 @@ export function EndedSessionBanner({
         className="conversation-ended-resume"
         type="button"
         disabled={isResuming || !canResume}
-        title={
-          canResume
-            ? undefined
-            : resumeDisabledReason === 'workingDirectoryMissing'
-              ? 'This session’s working directory does not exist'
-              : 'This session has no tmux location'
-        }
+        title={disabledCopy?.title}
         onClick={onResume}
       >
         {isResuming ? 'Resuming…' : isMobile ? 'Resume session' : 'Resume'}
