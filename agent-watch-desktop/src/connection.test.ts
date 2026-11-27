@@ -5,13 +5,14 @@ import { createConnectionController } from './connection.js'
 describe('createConnectionController', () => {
   it('retries the failed session URL after the server responds', () => {
     const actions: string[] = []
+    const controllerActions = {
+      showWaitingPage: () => actions.push('show-waiting'),
+      replaceWaitingPage: (url: string) => actions.push(`replace:${url}`),
+    }
     const controller = createConnectionController(
       'http://127.0.0.1:4317',
       'http://127.0.0.1:4317/',
-      {
-        showWaitingPage: () => actions.push('show-waiting'),
-        loadWatchPage: (url) => actions.push(`load:${url}`),
-      },
+      controllerActions,
     )
 
     controller.mainFrameDidFail(
@@ -22,7 +23,7 @@ describe('createConnectionController', () => {
 
     expect(actions).toEqual([
       'show-waiting',
-      'load:http://127.0.0.1:4317/?session=session-example',
+      'replace:http://127.0.0.1:4317/?session=session-example',
     ])
   })
 
@@ -39,17 +40,18 @@ describe('createConnectionController', () => {
       failedUrl: 'https://example.test/',
       loadedUrl: undefined,
       serverResponded: true,
-      expected: ['show-waiting', 'load:http://127.0.0.1:4317/'],
+      expected: ['show-waiting', 'replace:http://127.0.0.1:4317/'],
     },
   ])('$name', ({ failedUrl, loadedUrl, serverResponded, expected }) => {
     const actions: string[] = []
+    const controllerActions = {
+      showWaitingPage: () => actions.push('show-waiting'),
+      replaceWaitingPage: (url: string) => actions.push(`replace:${url}`),
+    }
     const controller = createConnectionController(
       'http://127.0.0.1:4317',
       'http://127.0.0.1:4317/',
-      {
-        showWaitingPage: () => actions.push('show-waiting'),
-        loadWatchPage: (url) => actions.push(`load:${url}`),
-      },
+      controllerActions,
     )
 
     if (loadedUrl !== undefined) controller.mainFrameDidLoad(loadedUrl)

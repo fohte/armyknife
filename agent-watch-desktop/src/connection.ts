@@ -2,7 +2,7 @@ import { isAllowedWatchUrl } from './navigation.js'
 
 type ConnectionControllerActions = {
   showWaitingPage: () => void
-  loadWatchPage: (url: string) => void
+  replaceWaitingPage: (url: string) => void
 }
 
 type ConnectionController = {
@@ -40,7 +40,7 @@ export const createConnectionController = (
 
       const url = retryUrl
       state = 'loading'
-      actions.loadWatchPage(url)
+      actions.replaceWaitingPage(url)
     },
   }
 }

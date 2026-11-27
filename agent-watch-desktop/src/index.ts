@@ -80,9 +80,14 @@ const createMainWindow = () => {
         'failed to show waiting page',
       )
     },
-    loadWatchPage: (url) => {
+    replaceWaitingPage: (url) => {
       if (mainWindow === undefined || mainWindow.isDestroyed()) return
-      reportPromise(mainWindow.loadURL(url), 'failed to load watch-web')
+      reportPromise(
+        mainWindow.webContents.executeJavaScript(
+          `window.location.replace(${JSON.stringify(url)})`,
+        ),
+        'failed to replace waiting page with watch-web',
+      )
     },
   })
 
