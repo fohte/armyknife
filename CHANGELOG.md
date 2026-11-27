@@ -1,5 +1,47 @@
 # Changelog
 
+## [0.1.978](https://github.com/fohte/armyknife/compare/v0.1.977...v0.1.978) (2026-11-27)
+
+
+### Features
+
+* **agent:** add the `a agent current` command ([#2387](https://github.com/fohte/armyknife/issues/2387)) ([3b76d4f](https://github.com/fohte/armyknife/commit/3b76d4f5a8e46d4c6ece7947860fe1535c194a05))
+
+## [0.1.977](https://github.com/fohte/armyknife/compare/v0.1.976...v0.1.977) (2026-11-27)
+
+
+### Bug Fixes
+
+* **watch-web:** block Resume for missing worktrees ([#2386](https://github.com/fohte/armyknife/issues/2386)) ([151c863](https://github.com/fohte/armyknife/commit/151c8638aaa925b811d66f47bcf2eb8f77c1de01))
+
+## [0.1.976](https://github.com/fohte/armyknife/compare/v0.1.975...v0.1.976) (2026-11-27)
+
+
+### Bug Fixes
+
+* **human-in-the-loop:** ignore stale markers ([#2382](https://github.com/fohte/armyknife/issues/2382)) ([72d1e77](https://github.com/fohte/armyknife/commit/72d1e77b7459bdf34a70acac05c40a1e7f43e9e7))
+
+## [0.1.975](https://github.com/fohte/armyknife/compare/v0.1.974...v0.1.975) (2026-11-27)
+
+
+### Features
+
+* **agent-watch-web:** let users sort the Inbox ([#2369](https://github.com/fohte/armyknife/issues/2369)) ([088fc39](https://github.com/fohte/armyknife/commit/088fc39af67679fa8b1254a7f28c802a38abb8ec))
+
+## [0.1.974](https://github.com/fohte/armyknife/compare/v0.1.973...v0.1.974) (2026-11-27)
+
+
+### Features
+
+* **agent-watch-web:** collapse Markdown details ([#2380](https://github.com/fohte/armyknife/issues/2380)) ([0191767](https://github.com/fohte/armyknife/commit/019176735a183ef4989aecf66351a6b19364c1ee))
+
+## [0.1.973](https://github.com/fohte/armyknife/compare/v0.1.972...v0.1.973) (2026-11-27)
+
+
+### Performance Improvements
+
+* **agent:** remove periodic executable checks ([#2377](https://github.com/fohte/armyknife/issues/2377)) ([38291cc](https://github.com/fohte/armyknife/commit/38291cc67e9e0e0ee6ea8111cb704e2b9323cec8))
+
 ## [0.1.972](https://github.com/fohte/armyknife/compare/v0.1.971...v0.1.972) (2026-11-27)
 
 

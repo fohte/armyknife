@@ -21,6 +21,7 @@ import type { Session } from '#types'
 import { useAppSessionOperations } from '#use-app-session-operations'
 import { useAppSessionProjection } from '#use-app-session-projection'
 import { useComposerFocus } from '#use-composer-focus'
+import { useInboxSort } from '#use-inbox-sort'
 import { useLaterDeadlineClock } from '#use-later-deadline-clock'
 import { useLaterSessionActions } from '#use-later-session-actions'
 import { useNewSession } from '#use-new-session'
@@ -150,6 +151,12 @@ function AppContent() {
     view,
     setError,
   })
+  const inboxSort = useInboxSort({
+    orderedSessions,
+    navigableSessions,
+    selectedId,
+    setShowAllInProgress,
+  })
   const {
     laterSessionId,
     laterTimes,
@@ -163,7 +170,7 @@ function AppContent() {
   } = useLaterSessionActions({
     isMobile,
     sessions,
-    navigableSessions,
+    navigableSessions: inboxSort.navigableSessions,
     pendingOperations,
     navigate,
     runSessionOperation,
@@ -255,20 +262,18 @@ function AppContent() {
     [recordSessionSnapshot],
   )
 
+  const selectedInProgressIndex = orderedSessions
+    .filter((session) => session.category === 'in_progress')
+    .findIndex((session) => session.id === selectedId)
+  const selectedWaitingIndex = orderedSessions
+    .filter((session) => session.category === 'waiting')
+    .findIndex((session) => session.id === selectedId)
+
   useEffect(() => {
-    const hiddenProgress = orderedSessions.filter(
-      (session) => session.category === 'in_progress',
-    )
-    if (hiddenProgress.slice(2).some((session) => session.id === selectedId)) {
+    if (selectedInProgressIndex >= 2) {
       setShowAllInProgress(true)
     }
 
-    const waiting = orderedSessions.filter(
-      (session) => session.category === 'waiting',
-    )
-    const selectedWaitingIndex = waiting.findIndex(
-      (session) => session.id === selectedId,
-    )
     if (selectedWaitingIndex >= 0) {
       if (isMobile) {
         setWaitingExpanded(true)
@@ -276,7 +281,13 @@ function AppContent() {
         setShowAllWaiting(true)
       }
     }
-  }, [isMobile, orderedSessions, selectedId, setWaitingExpanded])
+  }, [
+    isMobile,
+    selectedId,
+    selectedInProgressIndex,
+    selectedWaitingIndex,
+    setWaitingExpanded,
+  ])
 
   useEffect(() => {
     if (view !== 'inbox') {
@@ -304,7 +315,7 @@ function AppContent() {
     closeLater,
     closeSession: requestCloseSession,
     submitLater,
-    navigableSessions,
+    navigableSessions: inboxSort.navigableSessions,
     openLater,
     selectedId,
     view,
@@ -345,7 +356,7 @@ function AppContent() {
     useSessionMobileNavigation({
       isMobile,
       conversationOpen: mobileConversationOpen,
-      navigableSessions,
+      navigableSessions: inboxSort.navigableSessions,
       selectedId,
       selectedSessionExists: selectedSession !== undefined,
       sessionsLoaded: loaded,
@@ -444,6 +455,8 @@ function AppContent() {
           loaded,
           error,
           inboxFilterQuery,
+          inboxSort: inboxSort.sort,
+          inboxSortStorageAvailable: inboxSort.storageAvailable,
           showAllInProgress,
           showAllWaiting,
           laterExpanded,
@@ -473,6 +486,7 @@ function AppContent() {
         }
         actions={{
           setInboxFilterQuery,
+          setInboxSort: inboxSort.setSort,
           setShowAllInProgress,
           setShowAllWaiting,
           setLaterExpanded,

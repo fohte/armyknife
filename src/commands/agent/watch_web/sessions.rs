@@ -2301,6 +2301,9 @@ mod tests {
         std::fs::write(&queued_review_document_path, "queued fixture").unwrap();
         let _review_lock =
             crate::shared::human_in_the_loop::LockGuard::acquire(&review_document_path).unwrap();
+        let _queued_review_lock =
+            crate::shared::human_in_the_loop::LockGuard::acquire(&queued_review_document_path)
+                .unwrap();
         source.sessions[0].pending_human_review_ids.insert(format!(
             "fixture-review\0v2\0{}\0{}\0",
             42,

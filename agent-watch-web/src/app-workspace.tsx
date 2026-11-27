@@ -14,6 +14,7 @@ import { NewSessionPicker } from '#components/new-session-picker'
 import { ResizableColumns } from '#components/resizable-columns'
 import { SessionCloseConfirmation } from '#components/session-close-confirmation'
 import { UpdateNotice } from '#components/update-notice'
+import type { InboxSort } from '#inbox-sort'
 import type { useSessionHistory } from '#session-history'
 import type { LaterPreset, LaterPresetTimes } from '#session-navigation'
 import type { SessionOperation } from '#session-operations'
@@ -37,6 +38,8 @@ type AppWorkspaceState = {
   loaded: boolean
   error: string | null
   inboxFilterQuery: string
+  inboxSort: InboxSort
+  inboxSortStorageAvailable: boolean
   showAllInProgress: boolean
   showAllWaiting: boolean
   laterExpanded: boolean
@@ -64,6 +67,7 @@ type AppWorkspaceState = {
 
 type AppWorkspaceActions = {
   setInboxFilterQuery: Dispatch<SetStateAction<string>>
+  setInboxSort: (sort: InboxSort) => void
   setShowAllInProgress: Dispatch<SetStateAction<boolean>>
   setShowAllWaiting: Dispatch<SetStateAction<boolean>>
   setLaterExpanded: Dispatch<SetStateAction<boolean>>
@@ -150,6 +154,9 @@ export function AppWorkspace({
     connectionError: state.error,
     lastUpdatedAt: state.sessionsReceivedAt,
     loaded: state.loaded,
+    sort: state.inboxSort,
+    sortStorageAvailable: state.inboxSortStorageAvailable,
+    onSortChange: actions.setInboxSort,
     selectedId: state.selectedId,
     sessions: state.sessions,
     filterQuery: state.inboxFilterQuery,

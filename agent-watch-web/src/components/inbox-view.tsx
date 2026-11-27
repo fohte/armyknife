@@ -5,12 +5,14 @@ import { Filter, X } from 'lucide-react'
 import { type ReactNode, useCallback, useState } from 'react'
 
 import { InboxFilterBar } from '#components/inbox-filter-bar'
+import { InboxSessionList } from '#components/inbox-session-list'
+import { InboxSortControl } from '#components/inbox-sort-control'
 import { InboxViewDialogLayers } from '#components/inbox-view-dialog-layers'
 import { MobileNavigationActions } from '#components/mobile-navigation-actions'
 import { MobileTodoLaterCount } from '#components/mobile-todo-later-count'
 import { filterInboxSessions, parseInboxFilterQuery } from '#inbox-filter'
-import { InboxSessionListItem } from '#inbox-session-list-item'
 import { renderInboxSessionSection } from '#inbox-session-section'
+import { type InboxSort, sortInboxSessions } from '#inbox-sort'
 import { sumTodoLaterCount } from '#inbox-todo-later-count'
 import { formatMobileConnectionTime, nextReturnLabel } from '#inbox-view-utils'
 import type { SavedInboxView } from '#saved-inbox-views'
@@ -18,6 +20,9 @@ import type { Session } from '#types'
 import { useInboxFilterShortcut } from '#use-inbox-filter-shortcut'
 
 type InboxViewProps = {
+  sort?: InboxSort
+  sortStorageAvailable?: boolean
+  onSortChange?: (sort: InboxSort) => void
   sessions: readonly Session[]
   selectedId: string | null
   loaded: boolean
@@ -67,6 +72,9 @@ type InboxViewProps = {
 }
 
 export function InboxView({
+  sort: inboxSort = 'priority',
+  sortStorageAvailable = true,
+  onSortChange = () => undefined,
   sessions,
   selectedId,
   loaded,
@@ -110,6 +118,7 @@ export function InboxView({
   onNewSession = () => undefined,
   mobileUpdateNotice,
 }: InboxViewProps) {
+  const [sortMenuOpen, setSortMenuOpen] = useState(false)
   const [localFilterQuery, setLocalFilterQuery] = useState('')
   const [localDialogOpen, setLocalDialogOpen] = useState(false)
   const [draftQuery, setDraftQuery] = useState(controlledFilterQuery ?? '')
@@ -123,17 +132,22 @@ export function InboxView({
   const allNeedsActionCount = sessions.filter(
     (session) => session.category === 'needs_action',
   ).length
-  const needsAction = filteredSessions.filter(
-    (session) => session.category === 'needs_action',
+  const needsAction = sortInboxSessions(
+    filteredSessions.filter((session) => session.category === 'needs_action'),
+    inboxSort,
   )
-  const inProgress = filteredSessions.filter(
-    (session) => session.category === 'in_progress',
+  const inProgress = sortInboxSessions(
+    filteredSessions.filter((session) => session.category === 'in_progress'),
+    inboxSort,
   )
   const waiting = filteredSessions.filter(
     (session) => session.category === 'waiting',
   )
   const todoLaterCount = sumTodoLaterCount(inProgress)
-  const done = filteredSessions.filter((session) => session.category === 'done')
+  const done = sortInboxSessions(
+    filteredSessions.filter((session) => session.category === 'done'),
+    inboxSort,
+  )
   const allDone = sessions.filter(
     (session) =>
       session.category === 'done' && (session.todoLaterCount ?? 0) === 0,
@@ -144,8 +158,9 @@ export function InboxView({
   )
   const connected = connectionError === null
   const lastUpdatedTime = formatMobileConnectionTime(lastUpdatedAt)
-  const later = filteredSessions.filter(
-    (session) => session.category === 'later',
+  const later = sortInboxSessions(
+    filteredSessions.filter((session) => session.category === 'later'),
+    inboxSort,
   )
   const laterTodoLaterCount = sumTodoLaterCount(later)
   const doneTodoLaterCount = sumTodoLaterCount(done)
@@ -220,7 +235,14 @@ export function InboxView({
       {isMobile ? mobileUpdateNotice : null}
       <header className="view-header">
         <h1 id="inbox-title">Inbox</h1>
-        <span className="sort-description">Sorted by tq priority</span>
+        <InboxSortControl
+          sort={inboxSort}
+          storageAvailable={sortStorageAvailable}
+          isMobile={isMobile}
+          open={sortMenuOpen}
+          onOpenChange={setSortMenuOpen}
+          onSortChange={onSortChange}
+        />
       </header>
       <InboxFilterBar
         filters={filters}
@@ -329,6 +351,7 @@ export function InboxView({
           onLater,
           onCloseSession,
           onOpenActions: setActionSheetSession,
+          groupByProject: inboxSort === 'project',
         })}
         <Button
           type="button"
@@ -359,20 +382,17 @@ export function InboxView({
           ) : null}
         </Button>
         {laterExpanded && later.length > 0 ? (
-          <ul className="session-list later-session-list">
-            {later.map((session) => (
-              <InboxSessionListItem
-                key={session.id}
-                session={session}
-                selectedId={selectedId}
-                onSelect={onSelect}
-                isMobile={isMobile}
-                onLater={onLater}
-                onCloseSession={onCloseSession}
-                onOpenActions={setActionSheetSession}
-              />
-            ))}
-          </ul>
+          <InboxSessionList
+            sessions={later}
+            selectedId={selectedId}
+            onSelect={onSelect}
+            isMobile={isMobile}
+            groupByProject={inboxSort === 'project'}
+            className="later-session-list"
+            onLater={onLater}
+            onCloseSession={onCloseSession}
+            onOpenActions={setActionSheetSession}
+          />
         ) : null}
         {isMobile && waiting.length > 0 ? (
           <Button
@@ -439,6 +459,7 @@ export function InboxView({
           onLater,
           onCloseSession,
           onOpenActions: setActionSheetSession,
+          groupByProject: inboxSort === 'project',
         })}
         {hiddenInProgressCount > 0 && !isMobile ? (
           <Button
@@ -501,6 +522,7 @@ export function InboxView({
             onCloseDone(allDone)
           },
           closeAllDisabled: allDone.length === 0,
+          groupByProject: inboxSort === 'project',
         })}
       </div>
       <footer className="inbox-footer" aria-label="Keyboard shortcuts">
