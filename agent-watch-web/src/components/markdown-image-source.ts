@@ -69,6 +69,7 @@ export function isUnmappedLocalImagePath(src: string): boolean {
     src.startsWith('/') &&
     src.slice(1).includes('/') &&
     !src.startsWith('//') &&
+    !src.startsWith('/assets/') &&
     !src.startsWith('/api/images/') &&
     !src.startsWith('/api/sessions/')
   )

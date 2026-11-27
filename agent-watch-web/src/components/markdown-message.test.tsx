@@ -79,6 +79,12 @@ it('keeps standalone root-relative image URLs', () => {
   )
 })
 
+it('keeps nested root-relative asset URLs', () => {
+  expect(renderMessage('![Sample](/assets/diagram.png)')).toBe(
+    '<div class="markdown-message"><p><button class="image-lightbox-trigger" type="button" aria-label="Enlarge Sample"><img class="chat-user-image" src="/assets/diagram.png" alt="Sample" loading="lazy" decoding="async"/></button></p></div>',
+  )
+})
+
 it('uses the server source for a copied assistant image', () => {
   expect(
     renderMessage('![](/tmp/fixture.png)', undefined, {
