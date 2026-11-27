@@ -60,14 +60,10 @@ impl ActionRuntime for LiveActionRuntime {
         )
     }
 
-    fn capture_pane(&self, session_id: &str, tmux_info: &TmuxInfo) -> Result<String> {
-        crate::infra::tmux::capture_pane_for_session_for_socket_result(
+    fn capture_pane(&self, tmux_info: &TmuxInfo) -> Result<String> {
+        crate::infra::tmux::capture_pane_for_socket_result(
             tmux_info.socket_path.as_deref(),
-            &tmux_info.session_name,
-            session_id,
             &tmux_info.pane_id,
-            crate::commands::agent::types::TMUX_SESSION_OPTION,
-            crate::commands::agent::types::TMUX_SESSION_OPTION_LEGACY,
         )
         .map_err(anyhow::Error::from)
     }

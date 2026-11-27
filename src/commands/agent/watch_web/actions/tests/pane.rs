@@ -32,7 +32,6 @@ async fn pane_endpoint_returns_the_plain_capture_and_timestamp(action_context: A
             },
             "calls": [{
                 "kind": "pane-snapshot",
-                "sessionId": "fixture-session",
                 "paneId": "%4",
                 "socketPath": "/tmp/example-tmux.sock",
             }],
@@ -106,7 +105,6 @@ async fn pane_endpoint_returns_tmux_capture_errors(
             "body": { "error": error },
             "calls": [{
                 "kind": "pane-snapshot",
-                "sessionId": "fixture-session",
                 "paneId": "%4",
                 "socketPath": "/tmp/example-tmux.sock",
             }],
