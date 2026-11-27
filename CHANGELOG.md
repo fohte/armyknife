@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.975](https://github.com/fohte/armyknife/compare/v0.1.974...v0.1.975) (2026-11-27)
+
+
+### Features
+
+* **agent-watch-web:** let users sort the Inbox ([#2369](https://github.com/fohte/armyknife/issues/2369)) ([088fc39](https://github.com/fohte/armyknife/commit/088fc39af67679fa8b1254a7f28c802a38abb8ec))
+
 ## [0.1.974](https://github.com/fohte/armyknife/compare/v0.1.973...v0.1.974) (2026-11-27)
 
 
