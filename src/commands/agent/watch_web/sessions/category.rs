@@ -10,6 +10,7 @@ use crate::shared::config::AgentStatusState;
 pub(super) enum SessionCategory {
     NeedsAction,
     Later,
+    Waiting,
     InProgress,
     Done,
 }
@@ -151,6 +152,9 @@ pub(super) fn category_for(
     } else if session.status == SessionStatus::Stopped {
         match agent_status_state {
             Some(AgentStatusState::User) => SessionCategory::NeedsAction,
+            Some(AgentStatusState::Waiting) if !has_running_background_task => {
+                SessionCategory::Waiting
+            }
             Some(AgentStatusState::Waiting) => SessionCategory::InProgress,
             Some(AgentStatusState::Done) if !has_running_background_task => SessionCategory::Done,
             Some(AgentStatusState::Done) | None if has_running_background_task => {
@@ -421,8 +425,16 @@ mod tests {
         AgentStatusState::Waiting,
         None,
         false,
-        SessionCategory::InProgress,
+        SessionCategory::Waiting,
         Some(SessionKind::Stopped)
+    )]
+    #[case::configured_waiting_with_background_task(
+        "fixture_waiting_status",
+        AgentStatusState::Waiting,
+        None,
+        true,
+        SessionCategory::InProgress,
+        None
     )]
     #[case::configured_done(
         "fixture_done_status",
@@ -475,6 +487,90 @@ mod tests {
                 ),
             ),
             (expected_turn, expected_category, expected_kind),
+        );
+    }
+    #[test]
+    fn running_session_returns_to_in_progress_while_waiting_status_is_set() {
+        let mut session = session(SessionStatus::Running);
+        session.agent_status = Some(AgentStatus {
+            kind: "fixture_waiting_status".to_string(),
+            note: "Waiting for a task result.".to_string(),
+        });
+
+        assert_eq!(
+            category_for(&session, None, false, Some(AgentStatusState::Waiting)),
+            SessionCategory::InProgress,
+        );
+    }
+
+    #[rstest]
+    #[case::unanswered_todo(
+        true,
+        false,
+        (SessionCategory::NeedsAction, SessionCategory::Waiting)
+    )]
+    #[case::unanswered_proposal(
+        false,
+        true,
+        (SessionCategory::NeedsAction, SessionCategory::NeedsAction)
+    )]
+    fn waiting_status_with_unanswered_items_needs_action(
+        #[case] has_unanswered_todo: bool,
+        #[case] needs_action: bool,
+        #[case] expected: (SessionCategory, SessionCategory),
+    ) {
+        let mut session = session(SessionStatus::Stopped);
+        session.agent_status = Some(AgentStatus {
+            kind: "fixture_waiting_status".to_string(),
+            note: "Waiting for external work.".to_string(),
+        });
+
+        assert_eq!(
+            categories_for_with_todo_later(
+                &session,
+                TodoLaterCategoryContext {
+                    turn: None,
+                    needs_action,
+                    has_unanswered_todo,
+                    has_folded_todo: false,
+                    has_running_background_task: false,
+                    agent_status_state: Some(AgentStatusState::Waiting),
+                    state: None,
+                    now: Utc.timestamp_opt(2_000, 0).unwrap(),
+                },
+            ),
+            expected,
+        );
+    }
+
+    #[test]
+    fn active_later_state_keeps_precedence_over_waiting_status() {
+        let mut session = session(SessionStatus::Stopped);
+        session.agent_status = Some(AgentStatus {
+            kind: "fixture_waiting_status".to_string(),
+            note: "Waiting for a task result.".to_string(),
+        });
+        let state = store::WatchWebSessionState {
+            session_id: session.session_id.clone(),
+            later_until: Some(Utc.timestamp_opt(3_000, 0).unwrap()),
+            activity_snapshot: None,
+            until_activity: false,
+            is_today: false,
+            is_compacting: false,
+            primary_task_id: None,
+        };
+
+        assert_eq!(
+            category_for_with_later(
+                &session,
+                None,
+                false,
+                false,
+                Some(AgentStatusState::Waiting),
+                Some(&state),
+                Utc.timestamp_opt(2_000, 0).unwrap(),
+            ),
+            SessionCategory::Later,
         );
     }
 }

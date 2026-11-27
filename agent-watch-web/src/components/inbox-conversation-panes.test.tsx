@@ -99,6 +99,8 @@ function renderInboxPanes(
     lastUpdatedAt: 0,
     showAllInProgress: false,
     onShowMore: () => undefined,
+    showAllWaiting: false,
+    onShowMoreWaiting: () => undefined,
     onSelect: () => undefined,
     laterExpanded: false,
     onToggleLater: () => undefined,
@@ -108,6 +110,8 @@ function renderInboxPanes(
     onSelectToday: () => undefined,
     inProgressExpanded: false,
     onToggleInProgress: () => undefined,
+    waitingExpanded: true,
+    onToggleWaiting: () => undefined,
     doneExpanded: false,
     onToggleDone: () => undefined,
   }

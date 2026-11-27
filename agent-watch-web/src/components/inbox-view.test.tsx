@@ -94,19 +94,18 @@ const sessions: Session[] = [
   },
 ]
 
-function renderInbox(props: Partial<ComponentProps<typeof InboxView>> = {}) {
-  root = createRoot(container)
-  act(() => {
-    root?.render(<InboxViewHarness props={props} />)
-  })
-}
-
-function InboxViewHarness({
+function InboxHarness({
   props,
 }: {
   props: Partial<ComponentProps<typeof InboxView>>
 }) {
   const [sortState, setSortState] = useState(() => readInboxSort())
+  const [showAllWaiting, setShowAllWaiting] = useState(
+    props.showAllWaiting ?? false,
+  )
+  const [waitingExpanded, setWaitingExpanded] = useState(
+    props.waitingExpanded ?? true,
+  )
   const handleSortChange = (sort: InboxSort) => {
     const storageAvailable = writeInboxSort(undefined, sort)
     setSortState({ sort, storageAvailable })
@@ -136,6 +135,14 @@ function InboxViewHarness({
       onToggleDone={() => undefined}
       onCloseDone={() => undefined}
       {...props}
+      showAllWaiting={showAllWaiting}
+      onShowMoreWaiting={() => {
+        setShowAllWaiting(true)
+      }}
+      waitingExpanded={waitingExpanded}
+      onToggleWaiting={() => {
+        setWaitingExpanded((expanded) => !expanded)
+      }}
       sort={props.sort ?? sortState.sort}
       sortStorageAvailable={
         props.sortStorageAvailable ?? sortState.storageAvailable
@@ -143,6 +150,36 @@ function InboxViewHarness({
       onSortChange={handleSortChange}
     />
   )
+}
+
+function renderInbox(props: Partial<ComponentProps<typeof InboxView>> = {}) {
+  root = createRoot(container)
+  act(() => {
+    root?.render(<InboxHarness props={props} />)
+  })
+}
+
+function waitingSession(
+  id: string,
+  title = 'Wait for the integration check',
+): Session {
+  return {
+    id,
+    category: 'waiting',
+    isPaused: false,
+    kind: null,
+    title,
+    preview: null,
+    waitingReason: 'Waiting for CI to finish',
+    elapsedSeconds: 30,
+    unread: false,
+    task: null,
+    repo: 'sample-org/service',
+    project: 'web-app',
+    parent: null,
+    ancestorSessionIds: [],
+    pullRequest: null,
+  }
 }
 
 function sectionSnapshot() {
@@ -326,6 +363,167 @@ it('filters each inbox section and updates the visible counts', () => {
     ],
     resultCount: '1 of 2',
   })
+})
+
+it('shows waiting sessions in their own inbox section with the status note', () => {
+  renderInbox({ sessions: [waitingSession('sample-waiting')] })
+
+  const snapshot = () => ({
+    heading: container.querySelector('.waiting-section .section-heading')
+      ?.textContent,
+    title: container.querySelector('.waiting-section .session-title')
+      ?.textContent,
+    reason: container.querySelector('.waiting-section .session-preview')
+      ?.textContent,
+    statusLabel: container
+      .querySelector('.waiting-section .session-row-status')
+      ?.getAttribute('aria-label'),
+  })
+
+  expect(snapshot()).toEqual({
+    heading: 'Waiting1',
+    title: 'Wait for the integration check',
+    reason: 'Waiting for CI to finish',
+    statusLabel: 'Waiting',
+  })
+})
+
+it('sorts Waiting rows with the selected Inbox sort', () => {
+  renderInbox({
+    sessions: [
+      { ...waitingSession('waiting-zeta', 'Zeta waiting'), project: 'zeta' },
+      { ...waitingSession('waiting-beta', 'Beta waiting'), project: 'beta' },
+      { ...waitingSession('waiting-alpha', 'Alpha waiting'), project: 'alpha' },
+    ],
+    sort: 'project',
+    showAllWaiting: true,
+  })
+
+  expect(
+    Array.from(
+      container.querySelectorAll('.waiting-section .session-title'),
+      (title) => title.textContent,
+    ),
+  ).toEqual(['Alpha waiting', 'Beta waiting', 'Zeta waiting'])
+})
+
+it('shows the Waiting count and sessions in the iPhone inbox', () => {
+  renderInbox({
+    sessions: [waitingSession('sample-waiting-phone')],
+    isMobile: true,
+  })
+
+  const snapshot = () => ({
+    toggle: container.querySelector('.mobile-waiting-row')?.textContent,
+    expanded: container
+      .querySelector('.mobile-waiting-row')
+      ?.getAttribute('aria-expanded'),
+    title: container.querySelector('.waiting-section .session-title')
+      ?.textContent,
+    reason: container.querySelector('.waiting-section .session-preview')
+      ?.textContent,
+  })
+
+  expect(snapshot()).toEqual({
+    toggle: 'Waiting1⌄',
+    expanded: 'true',
+    title: 'Wait for the integration check',
+    reason: 'Waiting for CI to finish',
+  })
+})
+
+it('expands and collapses waiting sessions from the iPhone inbox control', () => {
+  renderInbox({
+    sessions: [
+      waitingSession('waiting-one', 'First waiting session'),
+      waitingSession('waiting-two', 'Second waiting session'),
+    ],
+    isMobile: true,
+  })
+
+  const snapshot = () => ({
+    expanded: container
+      .querySelector('.mobile-waiting-row')
+      ?.getAttribute('aria-expanded'),
+    visibleTitles: Array.from(
+      container.querySelectorAll('.waiting-section .session-title'),
+      (title) => title.textContent,
+    ),
+  })
+
+  const states = [snapshot()]
+
+  const toggle = container.querySelector<HTMLButtonElement>(
+    '.mobile-waiting-row',
+  )
+  if (toggle === null) throw new Error('Waiting toggle was not rendered')
+  act(() => {
+    toggle.click()
+  })
+
+  states.push(snapshot())
+
+  act(() => {
+    toggle.click()
+  })
+
+  states.push(snapshot())
+
+  expect(states).toEqual([
+    {
+      expanded: 'true',
+      visibleTitles: ['First waiting session', 'Second waiting session'],
+    },
+    { expanded: 'false', visibleTitles: [] },
+    {
+      expanded: 'true',
+      visibleTitles: ['First waiting session', 'Second waiting session'],
+    },
+  ])
+})
+
+it('shows more waiting sessions from the desktop show-more button', () => {
+  renderInbox({
+    sessions: [
+      waitingSession('waiting-one', 'First waiting session'),
+      waitingSession('waiting-two', 'Second waiting session'),
+      waitingSession('waiting-three', 'Third waiting session'),
+    ],
+  })
+
+  const snapshot = () => ({
+    visibleTitles: Array.from(
+      container.querySelectorAll('.waiting-section .session-title'),
+      (title) => title.textContent,
+    ),
+    showMore: container.querySelector('.show-more-button')?.textContent,
+  })
+
+  const states = [snapshot()]
+
+  const showMore =
+    container.querySelector<HTMLButtonElement>('.show-more-button')
+  if (showMore === null) throw new Error('Show more button was not rendered')
+  act(() => {
+    showMore.click()
+  })
+
+  states.push(snapshot())
+
+  expect(states).toEqual([
+    {
+      visibleTitles: ['First waiting session', 'Second waiting session'],
+      showMore: '1 more ▸',
+    },
+    {
+      visibleTitles: [
+        'First waiting session',
+        'Second waiting session',
+        'Third waiting session',
+      ],
+      showMore: undefined,
+    },
+  ])
 })
 
 it('keeps Inbox categories and groups their sessions by project when selected', () => {

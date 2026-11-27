@@ -906,6 +906,8 @@ function renderInboxPanes(
     lastUpdatedAt: 0,
     showAllInProgress: false,
     onShowMore: () => undefined,
+    showAllWaiting: false,
+    onShowMoreWaiting: () => undefined,
     onSelect: () => undefined,
     laterExpanded: false,
     onToggleLater: () => undefined,
@@ -915,6 +917,8 @@ function renderInboxPanes(
     onSelectToday: () => undefined,
     inProgressExpanded: false,
     onToggleInProgress: () => undefined,
+    waitingExpanded: true,
+    onToggleWaiting: () => undefined,
     doneExpanded: false,
     onToggleDone: () => undefined,
   }
@@ -4677,16 +4681,16 @@ it('shows the agent status reason while the stopped session is waiting', () => {
       ?.textContent,
     detail: container.querySelector('.conversation-status-band-inline-detail')
       ?.textContent,
-    waitingDotVisible:
+    waitingHourglassVisible:
       container.querySelector(
-        '.conversation-status-band--waiting .conversation-status-band-dot',
+        '.conversation-status-band--waiting .conversation-status-band-hourglass',
       ) !== null,
   })
 
   expect(snapshot()).toEqual({
     status: 'Waiting',
     detail: 'waiting for an external build',
-    waitingDotVisible: true,
+    waitingHourglassVisible: true,
   })
 })
 
@@ -5004,9 +5008,9 @@ it('keeps background tasks visible while the session waits for input', () => {
   const snapshot = () => ({
     status: container.querySelector('.conversation-status-band-label')
       ?.textContent,
-    waitingDotVisible:
+    waitingHourglassVisible:
       container.querySelector(
-        '.conversation-status-band--waiting .conversation-status-band-dot',
+        '.conversation-status-band--waiting .conversation-status-band-hourglass',
       ) !== null,
     backgroundTasks: container.querySelector(
       '.conversation-status-band-inline-detail',
@@ -5016,7 +5020,7 @@ it('keeps background tasks visible while the session waits for input', () => {
 
   expect(snapshot()).toEqual({
     status: 'Waiting',
-    waitingDotVisible: true,
+    waitingHourglassVisible: true,
     backgroundTasks: 'Background tasks (1)',
     expanded: 'false',
   })

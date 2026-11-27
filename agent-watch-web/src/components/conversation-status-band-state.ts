@@ -85,7 +85,8 @@ export function getConversationStatusBandState({
   const isWaitingForBackgroundTasks = session.waitingForBackgroundTasks === true
   const isWaitingForUser = session.category === 'needs_action'
   const isWaitingForExternalWork =
-    session.category === 'in_progress' && session.activityStatus === 'waiting'
+    (session.category === 'waiting' || session.category === 'in_progress') &&
+    session.activityStatus === 'waiting'
   const isWorking =
     session.category === 'in_progress' &&
     !isWaitingForBackgroundTasks &&

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { AppWorkspace } from '#app-workspace'
 import {
@@ -67,6 +67,8 @@ function AppContent() {
     isMobile,
     inProgressExpanded,
     setInProgressExpanded,
+    waitingExpanded,
+    setWaitingExpanded,
     doneExpanded,
     setDoneExpanded,
   } = useMobileLayout()
@@ -113,6 +115,7 @@ function AppContent() {
     boolean | null
   >(null)
   const [showAllInProgress, setShowAllInProgress] = useState(false)
+  const [showAllWaiting, setShowAllWaiting] = useState(false)
   const [laterExpanded, setLaterExpanded] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [availableVersion, setAvailableVersion] = useState<string | null>(null)
@@ -153,6 +156,18 @@ function AppContent() {
     navigableSessions,
     selectedId,
     setShowAllInProgress,
+    setShowAllWaiting,
+  })
+  const lastScrollContext = useRef<{
+    selectedId: string | null
+    sort: typeof inboxSort.sort
+    filterQuery: string
+    rowVisible: boolean
+  }>({
+    selectedId: null,
+    sort: inboxSort.sort,
+    filterQuery: inboxFilterQuery,
+    rowVisible: false,
   })
   const {
     laterSessionId,
@@ -243,6 +258,7 @@ function AppContent() {
               (session) =>
                 session.category === 'needs_action' ||
                 session.category === 'later' ||
+                session.category === 'waiting' ||
                 session.category === 'in_progress' ||
                 session.category === 'done',
             ),
@@ -258,17 +274,61 @@ function AppContent() {
     [recordSessionSnapshot],
   )
 
+  const selectedWaitingIndex = inboxSort.navigableSessions
+    .filter((session) => session.category === 'waiting')
+    .findIndex((session) => session.id === selectedId)
+
   useEffect(() => {
-    if (view !== 'inbox') {
+    if (isMobile && selectedWaitingIndex >= 0) {
+      setWaitingExpanded(true)
+    }
+  }, [isMobile, selectedId, selectedWaitingIndex, setWaitingExpanded])
+
+  useEffect(() => {
+    if (view !== 'inbox' || selectedId === null) {
+      lastScrollContext.current = {
+        selectedId: null,
+        sort: inboxSort.sort,
+        filterQuery: inboxFilterQuery,
+        rowVisible: false,
+      }
       return
     }
 
-    document
-      .querySelector<HTMLButtonElement>(
-        '[data-session-row][aria-current="true"]',
-      )
-      ?.scrollIntoView({ block: 'nearest' })
-  }, [selectedId, showAllInProgress, view])
+    const selectedRow = document.querySelector<HTMLButtonElement>(
+      '[data-session-row][aria-current="true"]',
+    )
+    const previousContext = lastScrollContext.current
+    const selectionChanged = previousContext.selectedId !== selectedId
+    const inboxQueryChanged =
+      previousContext.sort !== inboxSort.sort ||
+      previousContext.filterQuery !== inboxFilterQuery
+    const becameVisible = selectedRow !== null && !previousContext.rowVisible
+
+    if (
+      selectedRow !== null &&
+      (selectionChanged || inboxQueryChanged || becameVisible)
+    ) {
+      selectedRow.scrollIntoView({ block: 'nearest' })
+    }
+    lastScrollContext.current = {
+      selectedId,
+      sort: inboxSort.sort,
+      filterQuery: inboxFilterQuery,
+      rowVisible: selectedRow !== null,
+    }
+  }, [
+    inboxSort.navigableSessions,
+    inboxSort.sort,
+    inboxFilterQuery,
+    inProgressExpanded,
+    mobileConversationOpen,
+    selectedId,
+    showAllInProgress,
+    showAllWaiting,
+    view,
+    waitingExpanded,
+  ])
 
   useSessionKeyboardNavigation({
     isMobile,
@@ -420,8 +480,10 @@ function AppContent() {
           inboxSort: inboxSort.sort,
           inboxSortStorageAvailable: inboxSort.storageAvailable,
           showAllInProgress,
+          showAllWaiting,
           laterExpanded,
           inProgressExpanded,
+          waitingExpanded,
           doneExpanded,
           statusPanelOpen,
           pendingLaunchId,
@@ -448,8 +510,10 @@ function AppContent() {
           setInboxFilterQuery,
           setInboxSort: inboxSort.setSort,
           setShowAllInProgress,
+          setShowAllWaiting,
           setLaterExpanded,
           setInProgressExpanded,
+          setWaitingExpanded,
           setDoneExpanded,
           setMobileNavOpen,
           setStatusPanelOpen,

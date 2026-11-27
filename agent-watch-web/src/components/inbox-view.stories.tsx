@@ -214,6 +214,8 @@ const meta = {
     lastUpdatedAt: new Date(2026, 0, 1, 22, 0).getTime(),
     showAllInProgress: false,
     onShowMore: () => undefined,
+    showAllWaiting: false,
+    onShowMoreWaiting: () => undefined,
     onSelect: () => undefined,
     laterExpanded: false,
     onToggleLater: () => undefined,
@@ -225,6 +227,8 @@ const meta = {
     isMobile: false,
     inProgressExpanded: false,
     onToggleInProgress: () => undefined,
+    waitingExpanded: true,
+    onToggleWaiting: () => undefined,
     doneExpanded: false,
     onToggleDone: () => undefined,
     onCloseDone: () => undefined,
@@ -396,6 +400,56 @@ export const InboxIsLoading: Story = {
 export const InboxShowsAllActiveSessions: Story = {
   name: 'The inbox reveals every active session when expanded',
   args: { showAllInProgress: true },
+}
+
+const waitingSession = sampleSession(
+  'sample-waiting',
+  'waiting',
+  'Wait for the integration check',
+  { waitingReason: 'Waiting for CI to finish' },
+)
+const waitingSessions = [
+  waitingSession,
+  sampleSession('sample-waiting-secondary', 'waiting', 'Wait for the review', {
+    waitingReason: 'Waiting for a reviewer response',
+  }),
+  sampleSession(
+    'sample-waiting-tertiary',
+    'waiting',
+    'Wait for the deployment',
+    { waitingReason: 'Waiting for the release window' },
+  ),
+]
+
+export const InboxShowsWaitingSessions: Story = {
+  name: 'The Waiting section shows why each session is paused',
+  args: { sessions: [waitingSession] },
+}
+
+export const IPhoneInboxShowsWaitingSessions: Story = {
+  name: 'The iPhone shows a collapsible Waiting section',
+  args: { sessions: [waitingSession], isMobile: true },
+  decorators: [iPhoneViewportDecorator],
+}
+
+export const DesktopShowsEveryWaitingSession: Story = {
+  name: 'The desktop inbox shows every Waiting session when expanded',
+  args: { sessions: waitingSessions, showAllWaiting: true },
+}
+
+export const DesktopShowsMoreWaitingSessions: Story = {
+  name: 'The desktop inbox offers more when Waiting has hidden sessions',
+  args: { sessions: waitingSessions, showAllWaiting: false },
+}
+
+export const IPhoneShowsCollapsedWaitingSessions: Story = {
+  name: 'The iPhone inbox keeps Waiting sessions collapsed',
+  args: {
+    sessions: waitingSessions,
+    isMobile: true,
+    waitingExpanded: false,
+  },
+  decorators: [iPhoneViewportDecorator],
 }
 
 export const InboxHasNoSessions: Story = {

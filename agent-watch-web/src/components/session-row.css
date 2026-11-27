@@ -52,6 +52,15 @@
   color: var(--aw-color-working);
 }
 
+.session-row-status.category-waiting {
+  color: #a1a1aa;
+}
+
+.session-row-status.category-waiting svg {
+  width: 14px;
+  height: 14px;
+}
+
 .session-row-status.category-done,
 .session-row-status.category-later {
   color: var(--aw-text-muted);

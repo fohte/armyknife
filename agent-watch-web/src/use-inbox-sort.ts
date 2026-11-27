@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   type InboxSort,
   isSelectedSessionBeyondVisibleInProgress,
+  isSelectedSessionBeyondVisibleWaiting,
   readInboxSort,
   sortInboxSessionsByCategory,
   writeInboxSort,
@@ -15,6 +16,7 @@ type UseInboxSortOptions = {
   navigableSessions: readonly Session[]
   selectedId: string | null
   setShowAllInProgress: Dispatch<SetStateAction<boolean>>
+  setShowAllWaiting: Dispatch<SetStateAction<boolean>>
 }
 
 export function useInboxSort({
@@ -22,6 +24,7 @@ export function useInboxSort({
   navigableSessions,
   selectedId,
   setShowAllInProgress,
+  setShowAllWaiting,
 }: UseInboxSortOptions) {
   const [sortState, setSortState] = useState(readInboxSort)
   const sortedNavigableSessions = useMemo(
@@ -43,7 +46,22 @@ export function useInboxSort({
     ) {
       setShowAllInProgress(true)
     }
-  }, [orderedSessions, selectedId, setShowAllInProgress, sortState.sort])
+    if (
+      isSelectedSessionBeyondVisibleWaiting(
+        orderedSessions,
+        selectedId,
+        sortState.sort,
+      )
+    ) {
+      setShowAllWaiting(true)
+    }
+  }, [
+    orderedSessions,
+    selectedId,
+    setShowAllInProgress,
+    setShowAllWaiting,
+    sortState.sort,
+  ])
 
   return {
     sort: sortState.sort,

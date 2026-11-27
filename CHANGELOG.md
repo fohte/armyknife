@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.989](https://github.com/fohte/armyknife/compare/v0.1.988...v0.1.989) (2026-11-27)
+
+
+### Features
+
+* **agent-watch-web:** separate waiting sessions ([#2404](https://github.com/fohte/armyknife/issues/2404)) ([f065c16](https://github.com/fohte/armyknife/commit/f065c161976eac2b55f32872f9b88e6553d128ca))
+
 ## [0.1.988](https://github.com/fohte/armyknife/compare/v0.1.987...v0.1.988) (2026-11-27)
 
 

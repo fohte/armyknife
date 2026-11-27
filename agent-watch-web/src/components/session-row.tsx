@@ -4,6 +4,7 @@ import {
   Bug,
   Code2,
   Ellipsis,
+  Hourglass,
   Palette,
   Search,
   UsersRound,
@@ -49,6 +50,7 @@ type SessionRowProps = {
   session: SessionRowData
   density?: 'full' | 'compact' | 'compact-phone'
   isMobile?: boolean
+  showWaitingReason?: boolean
 }
 
 function RepositoryLabel({ repository }: { repository: string }) {
@@ -306,6 +308,9 @@ function taskReference(task: SessionTask) {
 }
 
 function statusIcon(session: SessionRowData) {
+  if (session.category === 'waiting') {
+    return <Hourglass aria-hidden="true" size={14} />
+  }
   if (session.category === 'in_progress') {
     return <span className="session-row-working-dot" />
   }
@@ -326,6 +331,7 @@ export function SessionRow({
   session,
   density = 'full',
   isMobile = false,
+  showWaitingReason = false,
 }: SessionRowProps) {
   const role = rolePresentation(session.workType)
   const RoleIcon = role.Icon
@@ -348,9 +354,19 @@ export function SessionRow({
           )
           .join(' · ')
       : null
-  const rowPreview = [critReviewReason ?? session.preview, todoLaterPreview]
+  const rowPreview = [
+    critReviewReason ??
+      (session.category === 'waiting' &&
+      (density === 'full' || showWaitingReason)
+        ? session.waitingReason
+        : null) ??
+      session.preview,
+    todoLaterPreview,
+  ]
     .filter((part) => part !== null && part.length > 0)
     .join(' · ')
+  const showPreview =
+    density === 'full' || (session.category === 'waiting' && showWaitingReason)
 
   return (
     <div
@@ -363,11 +379,19 @@ export function SessionRow({
         aria-label={
           session.category === 'in_progress'
             ? 'Working'
-            : session.category === 'done'
-              ? 'Done'
-              : (session.kind ?? 'Stopped')
+            : session.category === 'waiting'
+              ? 'Waiting'
+              : session.category === 'done'
+                ? 'Done'
+                : (session.kind ?? 'Stopped')
         }
-        title={session.category === 'in_progress' ? 'Working' : undefined}
+        title={
+          session.category === 'in_progress'
+            ? 'Working'
+            : session.category === 'waiting'
+              ? 'Waiting'
+              : undefined
+        }
       >
         {statusIcon(session)}
       </span>
@@ -384,7 +408,7 @@ export function SessionRow({
           )}
           <SessionAge elapsedSeconds={session.elapsedSeconds} />
         </span>
-        {density === 'full' && rowPreview.length > 0 ? (
+        {showPreview && rowPreview.length > 0 ? (
           <span className="session-preview">{rowPreview}</span>
         ) : null}
         <span className="session-meta-line">
