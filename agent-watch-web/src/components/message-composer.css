@@ -2,63 +2,12 @@
   position: relative;
   width: min(712px, calc(100% - 48px));
   margin: 12px auto 6px;
-  border: 1px solid var(--aw-border-control);
-  border-radius: var(--aw-radius);
-  background: var(--aw-bg-surface);
-}
-
-.conversation-composer textarea {
-  box-sizing: border-box;
-  display: block;
-  width: 100%;
-  min-height: 54px;
-  max-height: 50dvh;
-  overflow-y: auto;
-  resize: none;
-  padding: 12px 14px 4px;
-  border: 0;
-  outline: none;
-  background: transparent;
-  color: var(--aw-text-primary);
-  font: inherit;
-  font-size: 14px;
-  line-height: 1.6;
-}
-
-.conversation-composer textarea::placeholder {
-  color: var(--aw-text-muted);
-}
-
-.composer-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 6px 8px 8px 14px;
-  color: var(--aw-text-muted);
-  font-size: 11.5px;
-}
-
-.composer-footer [data-slot='button'] {
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  background: #fafafa;
-  color: var(--aw-bg-surface);
 }
 
 .conversation-composer[data-mobile='true'] {
   box-sizing: border-box;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 44px;
-  align-items: flex-end;
-  gap: 8px;
   width: 100%;
   margin: 0;
-  padding: 10px 12px 6px;
-  border: 0;
-  border-top: 1px solid var(--aw-border);
-  border-radius: var(--aw-radius);
-  background: var(--aw-bg-surface);
 }
 
 .conversation-composer[data-mobile='true']:not(:has(+ .session-usage-row)) {
@@ -70,51 +19,28 @@
   max-height: min(40dvh, 280px);
 }
 
-.conversation-composer[data-mobile='true'] textarea {
-  grid-column: 1;
-  grid-row: 1;
-  min-height: 44px;
-  padding: 10px 12px;
-  border: 1px solid var(--aw-border-control);
-  background: var(--aw-bg-app);
-  font-size: 16px;
+.composer-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
-.conversation-composer[data-mobile='true']:has(.mobile-interrupt-button) {
-  grid-template-columns: minmax(0, 1fr) 44px 44px;
-}
-
-.conversation-composer[data-mobile='true'] .attachment-preview-list {
-  grid-column: 1 / -1;
-  grid-row: 2;
-}
-
-.conversation-composer[data-mobile='true'] .composer-footer {
-  display: contents;
-}
-
-.conversation-composer[data-mobile='true']
-  .composer-footer
-  button[aria-label='Send message'] {
-  grid-column: -2 / -1;
-  grid-row: 1;
-  width: 44px;
-  height: 44px;
-  min-height: 44px;
-  opacity: 1;
-}
-
-.conversation-composer[data-mobile='true']
-  .composer-footer
-  .mobile-interrupt-button {
-  grid-column: -3 / -2;
-  grid-row: 1;
-  width: 44px;
-  height: 44px;
-  min-height: 44px;
+.mobile-interrupt-button[data-slot='button'] {
+  width: 36px;
+  height: 36px;
+  min-height: 36px;
   padding: 0;
   border: 0;
   background: transparent;
-  box-shadow: none;
   color: var(--aw-text-muted);
+}
+
+.composer-shell[data-mobile='true']
+  .mobile-interrupt-button[data-slot='button'] {
+  width: 44px;
+  height: 44px;
+  min-height: 44px;
 }

@@ -307,6 +307,43 @@ it('passes pasted files to the attachment handler and prevents text insertion', 
   })
 })
 
+it('opens a multi-file picker and sends selected files to the attachment handler', () => {
+  const onPasteFiles = vi.fn()
+  renderFreshComposer({ onPasteFiles })
+  const fileInput = requireElement(
+    container.querySelector<HTMLInputElement>('.composer-file-input'),
+  )
+  const pickerClick = vi.spyOn(fileInput, 'click').mockImplementation(() => {})
+  const files = [
+    new File(['first image'], 'first.png', { type: 'image/png' }),
+    new File(['second image'], 'second.png', { type: 'image/png' }),
+  ]
+  Object.defineProperty(fileInput, 'files', {
+    configurable: true,
+    value: files,
+  })
+
+  act(() => {
+    requireElement(
+      container.querySelector<HTMLButtonElement>(
+        '[aria-label="Add attachment"]',
+      ),
+    ).click()
+    fileInput.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+
+  const snapshot = () => ({
+    pickerClicks: pickerClick.mock.calls,
+    multiple: fileInput.multiple,
+    selectedFiles: onPasteFiles.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    pickerClicks: [[]],
+    multiple: true,
+    selectedFiles: [[files]],
+  })
+})
+
 it('removes an attachment when its remove button is clicked', () => {
   const onRemoveAttachment = vi.fn()
   act(() => {
@@ -377,9 +414,8 @@ it('shows the size of a non-image attachment', () => {
   })
 
   const snapshot = () => ({
-    name: container.querySelector('.attachment-preview-item span')?.textContent,
-    size: container.querySelector('.attachment-preview-item small')
-      ?.textContent,
+    name: container.querySelector('.composer-attachment-name')?.textContent,
+    size: container.querySelector('.composer-attachment-size')?.textContent,
   })
   expect(snapshot()).toEqual({
     name: 'design-mock.html',
@@ -417,7 +453,7 @@ it('shows the byte size of a small non-image attachment', () => {
   })
 
   const snapshot = () =>
-    container.querySelector('.attachment-preview-item small')?.textContent
+    container.querySelector('.composer-attachment-size')?.textContent
   expect(snapshot()).toEqual('512 B')
 })
 

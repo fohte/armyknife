@@ -1,15 +1,15 @@
 import '#components/message-composer.css'
 
 import { Button } from '@fohte/ui/button'
-import { ArrowUp, CircleStop } from 'lucide-react'
+import { CircleStop } from 'lucide-react'
 import type { ClipboardEvent, KeyboardEvent, SubmitEvent } from 'react'
 import { useLayoutEffect, useRef } from 'react'
 
 import {
   type AttachmentPreview,
-  AttachmentPreviewList,
   handleAttachmentPaste,
 } from '#components/attachment-preview-list'
+import { Composer } from '#components/composer'
 import {
   skillCompletionTextareaAttributes,
   SkillSuggestionList,
@@ -67,6 +67,7 @@ export function MessageComposer({
   onSend,
   onInterrupt,
 }: MessageComposerProps) {
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const isComposingRef = useRef(false)
   const discardCompositionDraftRef = useRef(false)
   const discardNextCompositionChangeRef = useRef<string | null>(null)
@@ -138,6 +139,26 @@ export function MessageComposer({
     handleAttachmentPaste(event, onPasteFiles)
   }
 
+  const statusText = isSending
+    ? 'Sending…'
+    : isProcessingAttachments
+      ? 'Preparing attachments…'
+      : isInterrupting
+        ? 'Interrupting…'
+        : undefined
+  const sendState = disabled
+    ? 'off'
+    : (draft.trim() === '' && attachments.length === 0) ||
+        isSending ||
+        isProcessingAttachments
+      ? 'dim'
+      : 'on'
+  const keyHints = isMobile
+    ? undefined
+    : canInterrupt
+      ? '↵ Send · ⇧↵ / ⌥↵ New line · Esc Interrupt · ⌥↑ / ⌥↓ My messages'
+      : '↵ Send · ⇧↵ / ⌥↵ New line · ⌥↑ / ⌥↓ My messages'
+
   return (
     <form
       className="conversation-composer"
@@ -146,97 +167,79 @@ export function MessageComposer({
       data-mobile={isMobile ? 'true' : undefined}
       onSubmit={handleSubmit}
     >
-      <textarea
-        ref={skillCompletion.textareaRef}
-        aria-label="Message"
-        placeholder={placeholder}
-        value={draft}
-        onChange={skillCompletion.handleChange}
-        onCompositionStart={() => {
-          isComposingRef.current = true
-          discardNextCompositionChangeRef.current = null
-        }}
-        onCompositionEnd={() => {
-          isComposingRef.current = false
-          discardCompositionDraftRef.current = false
-        }}
-        onSelect={skillCompletion.handleSelect}
-        onKeyDown={skillCompletion.handleKeyDown}
-        onPaste={handlePaste}
-        disabled={disabled}
-        rows={isMobile ? 1 : 2}
-        {...skillCompletionTextareaAttributes({
-          isOpen: skillCompletion.isOpen,
-          id: skillCompletion.suggestionsId,
-          selectedIndex: skillCompletion.selectedSkillIndex,
-        })}
-      />
-      {skillCompletion.isOpen ? (
-        <SkillSuggestionList
-          ref={skillCompletion.suggestionsRef}
-          id={skillCompletion.suggestionsId}
-          completion={skillCompletion.completion}
-          skills={skillCompletion.matchingSkills}
-          selectedIndex={skillCompletion.selectedSkillIndex}
-          onSelect={skillCompletion.selectSkill}
-        />
-      ) : null}
-      <AttachmentPreviewList
+      <Composer
         attachments={attachments}
-        onRemove={onRemoveAttachment}
-      />
-      <div className="composer-footer">
-        {!isMobile ? (
-          <>
-            <span
-              role={
-                isSending || isProcessingAttachments || isInterrupting
-                  ? 'status'
-                  : undefined
-              }
+        onRemoveAttachment={onRemoveAttachment}
+        onAddAttachments={() => fileInputRef.current?.click()}
+        sendState={sendState}
+        keyHints={keyHints}
+        statusText={statusText ?? ''}
+        isMobile={isMobile}
+        isBusy={isProcessingAttachments}
+        trailingAction={
+          isMobile && canInterrupt ? (
+            <Button
+              className="mobile-interrupt-button"
+              type="button"
+              variant="plain"
+              aria-label={isInterrupting ? 'Interrupting…' : 'Interrupt'}
+              aria-busy={isInterrupting}
+              disabled={isInterrupting}
+              onClick={onInterrupt}
             >
-              {isSending
-                ? 'Sending…'
-                : isProcessingAttachments
-                  ? 'Preparing attachments…'
-                  : isInterrupting
-                    ? 'Interrupting…'
-                    : canInterrupt
-                      ? '↵ Send · ⇧↵ / ⌥↵ New line · Esc Interrupt'
-                      : '↵ Send · ⇧↵ / ⌥↵ New line'}
-            </span>
-            <span>⌥↑ / ⌥↓ My messages</span>
-          </>
-        ) : isProcessingAttachments ? (
-          <span role="status">Preparing attachments…</span>
+              <CircleStop aria-hidden="true" size={18} />
+            </Button>
+          ) : null
+        }
+      >
+        <textarea
+          ref={skillCompletion.textareaRef}
+          aria-label="Message"
+          placeholder={placeholder}
+          value={draft}
+          onChange={skillCompletion.handleChange}
+          onCompositionStart={() => {
+            isComposingRef.current = true
+            discardNextCompositionChangeRef.current = null
+          }}
+          onCompositionEnd={() => {
+            isComposingRef.current = false
+            discardCompositionDraftRef.current = false
+          }}
+          onSelect={skillCompletion.handleSelect}
+          onKeyDown={skillCompletion.handleKeyDown}
+          onPaste={handlePaste}
+          disabled={disabled}
+          rows={isMobile ? 1 : 2}
+          {...skillCompletionTextareaAttributes({
+            isOpen: skillCompletion.isOpen,
+            id: skillCompletion.suggestionsId,
+            selectedIndex: skillCompletion.selectedSkillIndex,
+          })}
+        />
+        {skillCompletion.isOpen ? (
+          <SkillSuggestionList
+            ref={skillCompletion.suggestionsRef}
+            id={skillCompletion.suggestionsId}
+            completion={skillCompletion.completion}
+            skills={skillCompletion.matchingSkills}
+            selectedIndex={skillCompletion.selectedSkillIndex}
+            onSelect={skillCompletion.selectSkill}
+          />
         ) : null}
-        {isMobile && canInterrupt ? (
-          <Button
-            className="mobile-interrupt-button"
-            type="button"
-            variant="plain"
-            aria-label={isInterrupting ? 'Interrupting…' : 'Interrupt'}
-            aria-busy={isInterrupting}
-            disabled={isInterrupting}
-            onClick={onInterrupt}
-          >
-            <CircleStop aria-hidden="true" size={18} />
-          </Button>
-        ) : null}
-        <Button
-          type="submit"
-          variant="plain"
-          aria-label="Send message"
-          disabled={
-            (draft.trim() === '' && attachments.length === 0) ||
-            disabled ||
-            isSending ||
-            isProcessingAttachments
-          }
-        >
-          <ArrowUp aria-hidden="true" size={14} />
-        </Button>
-      </div>
+      </Composer>
+      <input
+        ref={fileInputRef}
+        className="composer-file-input"
+        type="file"
+        multiple
+        aria-label="Add attachments"
+        onChange={(event) => {
+          const files = Array.from(event.currentTarget.files ?? [])
+          if (files.length > 0) onPasteFiles(files)
+          event.currentTarget.value = ''
+        }}
+      />
     </form>
   )
 }
