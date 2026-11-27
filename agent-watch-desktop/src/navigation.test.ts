@@ -21,6 +21,13 @@ describe('classifyNavigation', () => {
     {
       name: 'opens HTTP links externally',
       currentUrl: 'http://127.0.0.1:4317/',
+      targetUrl: 'http://example.test/pull/123',
+      opensWindow: false,
+      expected: 'open-external',
+    },
+    {
+      name: 'opens HTTPS links externally',
+      currentUrl: 'http://127.0.0.1:4317/',
       targetUrl: 'https://example.test/pull/123',
       opensWindow: false,
       expected: 'open-external',

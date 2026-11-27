@@ -3,6 +3,7 @@ import { ResultAsync } from 'neverthrow'
 
 import { resolveWatchTarget } from './config.js'
 import type { WatchTarget } from './config.js'
+import { applyConnectionProbe } from './connection.js'
 import { installApplicationMenu } from './menu.js'
 import { classifyNavigation, isAllowedWatchUrl } from './navigation.js'
 
@@ -74,19 +75,18 @@ const refreshConnection = async () => {
     return
   }
 
-  const isAvailable = await ResultAsync.fromPromise(
+  const serverResponded = await ResultAsync.fromPromise(
     net.fetch(watchTarget.url, { signal: AbortSignal.timeout(2000) }),
     () => false,
   ).match(
-    (response) => response.ok,
+    () => true,
     () => false,
   )
 
-  if (isAvailable && isWaiting) {
-    loadWatchPage()
-  } else if (!isAvailable && !isWaiting) {
-    showWaitingPage()
-  }
+  applyConnectionProbe(isWaiting, serverResponded, {
+    loadWatchPage,
+    showWaitingPage,
+  })
 }
 
 const createMainWindow = () => {
