@@ -375,6 +375,21 @@ it.each(statusCases)(
   },
 )
 
+it('shows an active tool while the session is working and marked as compacting', () => {
+  expect(
+    getConversationStatusBandState({
+      session: {
+        ...session,
+        activityStatus: 'working',
+        isCompacting: true,
+      },
+      messages: [],
+      backgroundTasks: [],
+      activeTool: { tool: 'Bash', target: 'cargo test --package sample' },
+    }),
+  ).toEqual({ kind: 'working', detail: null })
+})
+
 it('keeps Crit review primary while background tasks continue', () => {
   expect(
     getConversationStatusBandState({

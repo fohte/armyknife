@@ -1085,7 +1085,11 @@ fn process_hook_event_impl_with_env_and_unreported_stop(
     if session.engine == Engine::Claude && input.agent_id.is_none() {
         let compacting = match event {
             HookEvent::PreCompact => Some(true),
-            HookEvent::Stop | HookEvent::StopFailure => Some(false),
+            HookEvent::PreToolUse
+            | HookEvent::PostToolUse
+            | HookEvent::PermissionRequest
+            | HookEvent::Stop
+            | HookEvent::StopFailure => Some(false),
             HookEvent::SessionStart
                 if matches!(input.source.as_deref(), Some("compact" | "resume")) =>
             {
@@ -3242,13 +3246,16 @@ mod tests {
     }
 
     #[rstest]
+    #[case::pre_tool_use(HookEvent::PreToolUse, None, false)]
+    #[case::post_tool_use(HookEvent::PostToolUse, None, false)]
+    #[case::permission_request(HookEvent::PermissionRequest, None, false)]
     #[case::stop(HookEvent::Stop, None, false)]
     #[case::stop_failure(HookEvent::StopFailure, None, false)]
     #[case::session_end(HookEvent::SessionEnd, None, false)]
     #[case::compaction_start(HookEvent::SessionStart, Some("compact"), false)]
     #[case::resume(HookEvent::SessionStart, Some("resume"), false)]
     #[case::startup_preserves_marker(HookEvent::SessionStart, Some("startup"), true)]
-    fn compaction_state_clears_only_for_expected_lifecycle_events(
+    fn compaction_state_clears_after_main_thread_tool_and_lifecycle_events(
         #[case] event: HookEvent,
         #[case] source: Option<&str>,
         #[case] expected: bool,
@@ -3277,6 +3284,37 @@ mod tests {
                 .first()
                 .map(|state| state.is_compacting),
             Some(expected),
+        );
+    }
+
+    #[test]
+    fn subagent_tool_event_does_not_clear_main_thread_compaction_state() {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir creation should succeed");
+        let sessions_dir = temp_dir.path();
+        process_hook_event_without_instruction(
+            HookEvent::PreCompact,
+            create_test_input(None),
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("pre-compact hook should succeed");
+
+        let mut input = create_test_input(None);
+        input.agent_id = Some("fixture-agent".to_string());
+        process_hook_event_without_instruction(
+            HookEvent::PreToolUse,
+            input,
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("subagent tool hook should succeed");
+
+        assert_eq!(
+            store::watch_web_session_states_from(sessions_dir)
+                .expect("watch-web state should load")
+                .first()
+                .map(|state| state.is_compacting),
+            Some(true),
         );
     }
 
