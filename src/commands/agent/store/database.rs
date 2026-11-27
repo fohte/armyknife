@@ -92,7 +92,7 @@ pub(crate) use web_state::WatchWebSessionState;
 pub(crate) use web_state::set_watch_web_compacting;
 pub(super) use web_state::{
     clear_watch_web_later, set_watch_web_later, set_watch_web_primary_task, set_watch_web_today,
-    watch_web_session_states, watch_web_user_marker,
+    watch_web_session_start_generation, watch_web_session_states, watch_web_user_marker,
 };
 
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -302,6 +302,11 @@ impl SessionLock {
 
     pub(crate) fn queue_watch_web_compacting(&self, is_compacting: bool) {
         self.pending_compacting.set(Some(is_compacting));
+    }
+
+    pub(crate) fn record_watch_web_session_start(&self) -> Result<()> {
+        self.ensure_transaction()?;
+        web_state::record_watch_web_session_start_in_transaction(&self.connection, &self.session_id)
     }
 
     pub(crate) fn save(&self, session: &Session) -> Result<()> {
