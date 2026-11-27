@@ -14,6 +14,8 @@ use super::{EnrichmentUpdates, SERVER_INSTANCE_ID, SERVER_VERSION};
 use crate::commands::agent::store;
 
 const WATCHER_DEBOUNCE: Duration = Duration::from_millis(150);
+const REVISION_RETRY_INITIAL_DELAY: Duration = Duration::from_millis(200);
+const REVISION_RETRY_MAX_DELAY: Duration = Duration::from_secs(5);
 const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(15);
 
 #[derive(Clone)]
@@ -146,18 +148,37 @@ async fn run_revision_monitor(
     read_revision: RevisionReader,
     mut session_store_events: broadcast::Receiver<()>,
 ) {
+    let mut event_channel_open = true;
     loop {
         while *subscriber_receiver.borrow() == 0 {
-            if subscriber_receiver.changed().await.is_err() {
+            if event_channel_open {
+                tokio::select! {
+                    changed = subscriber_receiver.changed() => {
+                        if changed.is_err() {
+                            return;
+                        }
+                    }
+                    signal = session_store_events.recv() => {
+                        if matches!(signal, Err(broadcast::error::RecvError::Closed)) {
+                            event_channel_open = false;
+                        }
+                    }
+                }
+            } else if subscriber_receiver.changed().await.is_err() {
                 return;
             }
         }
 
-        if *subscriber_receiver.borrow() > 0 {
-            publish_revision(&revision_sender, &read_revision).await;
+        if !publish_revision_until_success(
+            &mut subscriber_receiver,
+            &revision_sender,
+            &read_revision,
+        )
+        .await
+        {
+            continue;
         }
 
-        let mut event_channel_open = true;
         loop {
             if *subscriber_receiver.borrow() == 0 {
                 break;
@@ -169,8 +190,16 @@ async fn run_revision_monitor(
                     }
                     if *subscriber_receiver.borrow() == 0 {
                         break;
-                    } else if revision_sender.borrow().is_none() {
-                        publish_revision(&revision_sender, &read_revision).await;
+                    }
+                    if revision_sender.borrow().is_none()
+                        && !publish_revision_until_success(
+                            &mut subscriber_receiver,
+                            &revision_sender,
+                            &read_revision,
+                        )
+                        .await
+                    {
+                        break;
                     }
                 }
                 signal = session_store_events.recv(), if event_channel_open => {
@@ -183,7 +212,12 @@ async fn run_revision_monitor(
                             Ok(()) | Err(broadcast::error::TryRecvError::Lagged(_))
                         ) {}
                         if *subscriber_receiver.borrow() > 0 {
-                            publish_revision(&revision_sender, &read_revision).await;
+                            let _ = publish_revision_until_success(
+                                &mut subscriber_receiver,
+                                &revision_sender,
+                                &read_revision,
+                            )
+                            .await;
                         }
                     }
                 }
@@ -195,13 +229,44 @@ async fn run_revision_monitor(
 async fn publish_revision(
     revision_sender: &watch::Sender<Option<i64>>,
     read_revision: &RevisionReader,
-) {
+) -> bool {
     let read_revision = Arc::clone(read_revision);
     let Ok(Some(revision)) = tokio::task::spawn_blocking(move || read_revision()).await else {
-        return;
+        return false;
     };
     if *revision_sender.borrow() != Some(revision) {
         revision_sender.send_replace(Some(revision));
+    }
+    true
+}
+
+async fn publish_revision_until_success(
+    subscriber_receiver: &mut watch::Receiver<usize>,
+    revision_sender: &watch::Sender<Option<i64>>,
+    read_revision: &RevisionReader,
+) -> bool {
+    let mut retry_delay = REVISION_RETRY_INITIAL_DELAY;
+    loop {
+        if *subscriber_receiver.borrow() == 0 {
+            return false;
+        }
+        if publish_revision(revision_sender, read_revision).await {
+            return true;
+        }
+
+        let sleep = time::sleep(retry_delay);
+        tokio::pin!(sleep);
+        loop {
+            tokio::select! {
+                () = &mut sleep => break,
+                changed = subscriber_receiver.changed() => {
+                    if changed.is_err() || *subscriber_receiver.borrow() == 0 {
+                        return false;
+                    }
+                }
+            }
+        }
+        retry_delay = retry_delay.saturating_mul(2).min(REVISION_RETRY_MAX_DELAY);
     }
 }
 
@@ -339,6 +404,7 @@ mod tests {
     use futures_util::StreamExt;
     use indoc::indoc;
     use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
+    use std::sync::{Mutex, mpsc};
 
     #[tokio::test]
     async fn sends_the_server_instance_before_session_revisions() {
@@ -401,7 +467,8 @@ mod tests {
             },
             event_receiver,
         );
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        event_sender.send(()).unwrap();
+        tokio::time::sleep(WATCHER_DEBOUNCE + Duration::from_millis(50)).await;
         let reads_without_subscribers = read_count.load(Ordering::SeqCst);
         let (first_enrichment_sender, first_enrichment_updates) = watch::channel(());
         let (_second_enrichment_sender, second_enrichment_updates) = watch::channel(());
@@ -436,6 +503,8 @@ mod tests {
 
         drop(first);
         drop(second);
+        event_sender.send(()).unwrap();
+        tokio::time::sleep(WATCHER_DEBOUNCE + Duration::from_millis(50)).await;
         let idle_read_count = read_count.load(Ordering::SeqCst);
 
         revision.store(9, Ordering::SeqCst);
@@ -476,6 +545,140 @@ mod tests {
                 2,
                 2,
                 sessions_event(9),
+                3,
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn retries_failed_revision_reads_until_a_revision_is_published() {
+        let read_count = Arc::new(AtomicUsize::new(0));
+        let (_event_sender, event_receiver) = broadcast::channel(1);
+        let monitor = RevisionMonitor::new(
+            {
+                let read_count = Arc::clone(&read_count);
+                move || {
+                    let attempt = read_count.fetch_add(1, Ordering::SeqCst);
+                    (attempt > 0).then_some(21)
+                }
+            },
+            event_receiver,
+        );
+        let mut stream = Sse::new(test_revision_stream(
+            monitor.subscribe(),
+            watch::channel(()).1,
+        ))
+        .into_response()
+        .into_body()
+        .into_data_stream();
+
+        let published_event = next_chunk(&mut stream).await;
+        let reads_at_publish = read_count.load(Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        let reads_after_success = read_count.load(Ordering::SeqCst);
+
+        assert_eq!(
+            (published_event, reads_at_publish, reads_after_success),
+            (sessions_event(21), 2, 2),
+        );
+    }
+
+    #[tokio::test]
+    async fn rereads_and_publishes_after_lagged_store_events() {
+        let revision = Arc::new(AtomicI64::new(21));
+        let read_count = Arc::new(AtomicUsize::new(0));
+        let (event_sender, event_receiver) = broadcast::channel(1);
+        let monitor = RevisionMonitor::new(
+            {
+                let revision = Arc::clone(&revision);
+                let read_count = Arc::clone(&read_count);
+                move || {
+                    read_count.fetch_add(1, Ordering::SeqCst);
+                    Some(revision.load(Ordering::SeqCst))
+                }
+            },
+            event_receiver,
+        );
+        let mut stream = Sse::new(test_revision_stream(
+            monitor.subscribe(),
+            watch::channel(()).1,
+        ))
+        .into_response()
+        .into_body()
+        .into_data_stream();
+        let initial_event = next_chunk(&mut stream).await;
+
+        revision.store(22, Ordering::SeqCst);
+        for _ in 0..3 {
+            event_sender.send(()).unwrap();
+        }
+        let updated_event = next_chunk(&mut stream).await;
+        let read_count = read_count.load(Ordering::SeqCst);
+
+        assert_eq!(
+            (initial_event, updated_event, read_count),
+            (sessions_event(21), sessions_event(22), 2),
+        );
+    }
+
+    #[tokio::test]
+    async fn publishes_store_events_received_during_a_revision_snapshot() {
+        let revision = Arc::new(AtomicI64::new(31));
+        let read_count = Arc::new(AtomicUsize::new(0));
+        let (snapshot_started_sender, snapshot_started_receiver) = mpsc::channel();
+        let (snapshot_continue_sender, snapshot_continue_receiver) = mpsc::channel();
+        let snapshot_continue_receiver = Arc::new(Mutex::new(snapshot_continue_receiver));
+        let (event_sender, event_receiver) = broadcast::channel(4);
+        let monitor = RevisionMonitor::new(
+            {
+                let revision = Arc::clone(&revision);
+                let read_count = Arc::clone(&read_count);
+                let snapshot_continue_receiver = Arc::clone(&snapshot_continue_receiver);
+                move || {
+                    let attempt = read_count.fetch_add(1, Ordering::SeqCst) + 1;
+                    let snapshot = revision.load(Ordering::SeqCst);
+                    if attempt == 2 {
+                        snapshot_started_sender.send(()).unwrap();
+                        snapshot_continue_receiver.lock().unwrap().recv().unwrap();
+                    }
+                    Some(snapshot)
+                }
+            },
+            event_receiver,
+        );
+        let mut stream = Sse::new(test_revision_stream(
+            monitor.subscribe(),
+            watch::channel(()).1,
+        ))
+        .into_response()
+        .into_body()
+        .into_data_stream();
+        let initial_event = next_chunk(&mut stream).await;
+
+        revision.store(32, Ordering::SeqCst);
+        event_sender.send(()).unwrap();
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            tokio::task::spawn_blocking(move || snapshot_started_receiver.recv()),
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+        revision.store(33, Ordering::SeqCst);
+        event_sender.send(()).unwrap();
+        snapshot_continue_sender.send(()).unwrap();
+
+        let first_update = next_chunk(&mut stream).await;
+        let second_update = next_chunk(&mut stream).await;
+        let read_count = read_count.load(Ordering::SeqCst);
+
+        assert_eq!(
+            (initial_event, first_update, second_update, read_count),
+            (
+                sessions_event(31),
+                sessions_event(32),
+                sessions_event(33),
                 3,
             ),
         );

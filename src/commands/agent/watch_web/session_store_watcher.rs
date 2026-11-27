@@ -59,35 +59,21 @@ mod tests {
     }
 
     #[rstest]
-    fn forwards_database_change_events_to_subscribers(
+    #[case::database_change(Ok(notify::Event {
+        kind: notify::EventKind::Modify(notify::event::ModifyKind::Data(
+            notify::event::DataChange::Any,
+        )),
+        paths: vec![PathBuf::from("/fixture-store/sessions.db")],
+        attrs: Default::default(),
+    }))]
+    #[case::watcher_error(Err(notify::Error::generic("fixture watcher error")))]
+    fn forwards_store_changes_and_watcher_errors_as_refresh_signals(
         events_channel: (broadcast::Sender<()>, broadcast::Receiver<()>),
-    ) {
-        let (event_sender, mut event_receiver) = events_channel;
-        let event = notify::Event {
-            kind: notify::EventKind::Modify(notify::event::ModifyKind::Data(
-                notify::event::DataChange::Any,
-            )),
-            paths: vec![PathBuf::from("/fixture-store/sessions.db")],
-            attrs: Default::default(),
-        };
-
-        forward_session_store_event(Ok(event), &event_sender);
-        let received = event_receiver.try_recv().is_ok();
-        let expected = true;
-
-        assert_eq!(received, expected);
-    }
-
-    #[rstest]
-    fn forwards_watcher_errors_as_refresh_signals(
-        events_channel: (broadcast::Sender<()>, broadcast::Receiver<()>),
+        #[case] event: notify::Result<notify::Event>,
     ) {
         let (event_sender, mut event_receiver) = events_channel;
 
-        forward_session_store_event(
-            Err(notify::Error::generic("fixture watcher error")),
-            &event_sender,
-        );
+        forward_session_store_event(event, &event_sender);
         let received = event_receiver.try_recv().is_ok();
         let expected = true;
 
