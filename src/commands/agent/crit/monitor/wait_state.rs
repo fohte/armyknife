@@ -12,44 +12,66 @@ use crate::infra::process;
 const CRIT_CLIENT_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A review is waited on when a client announced by `client-started` is alive or lsof sees one.
+/// A client only lsof sees is recorded as a pid file, which is what makes the monitor wait for
+/// its exit.
 pub(super) fn crit_client_waiting(
     port: u16,
     daemon_pid: u32,
+    recorded_client_alive: Result<bool>,
     run_with_timeout: impl FnOnce(
         std::process::Command,
         Duration,
     ) -> std::io::Result<std::process::Output>,
 ) -> Result<bool> {
-    client_waiting_from(super::clients::has_live_client(port), || {
-        crit_client_waiting_on_port(port, daemon_pid, run_with_timeout)
-    })
+    client_waiting_from(
+        recorded_client_alive,
+        || crit_client_pids_on_port(port, daemon_pid, run_with_timeout),
+        |pid| {
+            if let Err(error) = super::clients::record_client_if_monitored(port, pid) {
+                tracing::warn!(
+                    event = "agent.crit.monitor.client_record_failed",
+                    port,
+                    client_pid = pid,
+                    error = %error,
+                );
+            }
+        },
+    )
 }
 
 fn client_waiting_from(
-    announced: Result<bool>,
-    lsof_waiting: impl FnOnce() -> Result<bool>,
+    recorded_client_alive: Result<bool>,
+    lsof_clients: impl FnOnce() -> Result<Vec<u32>>,
+    mut record: impl FnMut(u32),
 ) -> Result<bool> {
-    // A live announced client settles the answer without paying for lsof.
-    if matches!(announced, Ok(true)) {
+    // A live recorded client settles the answer without paying for lsof.
+    if matches!(recorded_client_alive, Ok(true)) {
         return Ok(true);
     }
+    let found = lsof_clients()?;
+    // The monitor sleeps until a watched pid exits or the clients directory changes, and this
+    // may run in another process (`crit add`), so a client only lsof saw is recorded as a pid
+    // file to be waited for; otherwise its exit would leave the review shown as waited on.
+    for pid in &found {
+        record(*pid);
+    }
     // An unreadable pid directory stays unknown unless lsof finds a client.
-    Ok(lsof_waiting()? || announced?)
+    Ok(!found.is_empty() || recorded_client_alive?)
 }
 
-fn crit_client_waiting_on_port(
+fn crit_client_pids_on_port(
     port: u16,
     daemon_pid: u32,
     run_with_timeout: impl FnOnce(
         std::process::Command,
         Duration,
     ) -> std::io::Result<std::process::Output>,
-) -> Result<bool> {
+) -> Result<Vec<u32>> {
     let output = run_with_timeout(crit_client_lsof_command(port), CRIT_CLIENT_CHECK_TIMEOUT)
         .context("failed to inspect crit client connections")?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    crit_client_waiting_from_lsof_result(
+    crit_client_pids_from_lsof_result(
         output.status.success(),
         output.status.code(),
         &stdout,
@@ -60,7 +82,7 @@ fn crit_client_waiting_on_port(
 
 fn crit_client_lsof_command(port: u16) -> std::process::Command {
     let mut command = ExternalTool::Lsof.command();
-    // `-a -c crit` keeps lsof from inspecting every process's fds on each poll.
+    // `-a -c crit` keeps lsof from inspecting every process's fds on each run.
     command.args([
         "-nP",
         "-a",
@@ -73,24 +95,25 @@ fn crit_client_lsof_command(port: u16) -> std::process::Command {
     command
 }
 
-fn crit_client_waiting_from_lsof_result(
+fn crit_client_pids_from_lsof_result(
     status_success: bool,
     exit_code: Option<i32>,
     stdout: &str,
     stderr: &str,
     daemon_pid: u32,
-) -> Result<bool> {
+) -> Result<Vec<u32>> {
     if !status_success {
         // lsof exits 1 with no output when no socket matches, so no client is waiting.
         if exit_code == Some(1) && stdout.is_empty() && stderr.is_empty() {
-            return Ok(false);
+            return Ok(Vec::new());
         }
         bail!("lsof failed to inspect crit client connections: {stderr}");
     }
-    has_crit_client(stdout, daemon_pid)
+    crit_client_pids(stdout, daemon_pid)
 }
 
-fn has_crit_client(output: &str, daemon_pid: u32) -> Result<bool> {
+fn crit_client_pids(output: &str, daemon_pid: u32) -> Result<Vec<u32>> {
+    let mut pids = Vec::new();
     let mut current_pid = None;
     let mut current_command = None;
     for field in output.lines() {
@@ -98,7 +121,7 @@ fn has_crit_client(output: &str, daemon_pid: u32) -> Result<bool> {
             if let Some(pid) = current_pid {
                 anyhow::ensure!(current_command.is_some(), "lsof omitted a process command");
                 if pid != daemon_pid && current_command == Some("crit") {
-                    return Ok(true);
+                    pids.push(pid);
                 }
             }
             current_pid = Some(
@@ -116,9 +139,11 @@ fn has_crit_client(output: &str, daemon_pid: u32) -> Result<bool> {
     }
     if let Some(pid) = current_pid {
         anyhow::ensure!(current_command.is_some(), "lsof omitted a process command");
-        return Ok(pid != daemon_pid && current_command == Some("crit"));
+        if pid != daemon_pid && current_command == Some("crit") {
+            pids.push(pid);
+        }
     }
-    Ok(false)
+    Ok(pids)
 }
 
 pub(super) fn set_crit_wait_state(port: u16, waiting: Option<bool>) -> Result<()> {
@@ -136,7 +161,14 @@ pub(super) fn reconcile_registered_session(
         port,
         status,
         super::status::crit_status,
-        |port, daemon_pid| crit_client_waiting(port, daemon_pid, process::run_with_timeout),
+        |port, daemon_pid| {
+            crit_client_waiting(
+                port,
+                daemon_pid,
+                super::clients::has_live_client(port),
+                process::run_with_timeout,
+            )
+        },
     )
 }
 
@@ -170,20 +202,6 @@ fn reconcile_registered_session_with(
     };
 
     set_crit_wait_state_for_session(sessions_dir, session_id, port, waiting)
-}
-
-pub(super) fn set_crit_wait_state_if_changed(
-    previous_waiting: &mut Option<Option<bool>>,
-    waiting: Option<bool>,
-    update: impl FnOnce(Option<bool>) -> Result<()>,
-) -> Result<()> {
-    if *previous_waiting == Some(waiting) {
-        return Ok(());
-    }
-
-    update(waiting)?;
-    *previous_waiting = Some(waiting);
-    Ok(())
 }
 
 fn set_crit_wait_state_in(sessions_dir: &Path, port: u16, waiting: Option<bool>) -> Result<()> {
@@ -249,7 +267,7 @@ mod tests {
     #[test]
     fn crit_client_lsof_command_uses_supported_arguments() {
         let args = std::cell::RefCell::new(Vec::new());
-        let result = crit_client_waiting_on_port(43127, 101, |command, _| {
+        let result = crit_client_pids_on_port(43127, 101, |command, _| {
             *args.borrow_mut() = command
                 .get_args()
                 .map(|argument| argument.to_string_lossy().into_owned())
@@ -277,19 +295,40 @@ mod tests {
     }
 
     #[rstest]
-    #[case::announced_client_skips_lsof(Ok(true), Ok(false), Ok(true), 0)]
-    #[case::lsof_client_without_announcement(Ok(false), Ok(true), Ok(true), 1)]
-    #[case::no_client_anywhere(Ok(false), Ok(false), Ok(false), 1)]
-    #[case::unreadable_directory_and_lsof_miss(Err("unreadable"), Ok(false), Err("unreadable"), 1)]
-    #[case::unreadable_directory_and_lsof_hit(Err("unreadable"), Ok(true), Ok(true), 1)]
-    #[case::lsof_failure(Ok(false), Err("lsof failed"), Err("lsof failed"), 1)]
+    #[case::announced_client_skips_lsof(Ok(true), Ok(vec![]), Ok(true), 0, vec![])]
+    #[case::lsof_client_without_announcement(Ok(false), Ok(vec![202]), Ok(true), 1, vec![202])]
+    #[case::every_lsof_client_is_recorded(
+        Ok(false),
+        Ok(vec![202, 303]),
+        Ok(true),
+        1,
+        vec![202, 303]
+    )]
+    #[case::no_client_anywhere(Ok(false), Ok(vec![]), Ok(false), 1, vec![])]
+    #[case::unreadable_directory_and_lsof_miss(
+        Err("unreadable"),
+        Ok(vec![]),
+        Err("unreadable"),
+        1,
+        vec![]
+    )]
+    #[case::unreadable_directory_and_lsof_hit(
+        Err("unreadable"),
+        Ok(vec![202]),
+        Ok(true),
+        1,
+        vec![202]
+    )]
+    #[case::lsof_failure(Ok(false), Err("lsof failed"), Err("lsof failed"), 1, vec![])]
     fn client_waiting_combines_announced_clients_and_lsof(
         #[case] announced: std::result::Result<bool, &str>,
-        #[case] lsof: std::result::Result<bool, &str>,
+        #[case] lsof: std::result::Result<Vec<u32>, &str>,
         #[case] expected: std::result::Result<bool, &str>,
         #[case] expected_lsof_calls: usize,
+        #[case] expected_recorded: Vec<u32>,
     ) {
         let lsof_calls = std::cell::Cell::new(0);
+        let mut recorded = Vec::new();
 
         let actual = client_waiting_from(
             announced.map_err(|error| anyhow::anyhow!("{error}")),
@@ -297,12 +336,17 @@ mod tests {
                 lsof_calls.set(lsof_calls.get() + 1);
                 lsof.map_err(|error| anyhow::anyhow!("{error}"))
             },
+            |pid| recorded.push(pid),
         )
         .map_err(|error| error.to_string());
 
         assert_eq!(
-            (actual, lsof_calls.get()),
-            (expected.map_err(str::to_string), expected_lsof_calls),
+            (actual, lsof_calls.get(), recorded),
+            (
+                expected.map_err(str::to_string),
+                expected_lsof_calls,
+                expected_recorded
+            ),
         );
     }
 
@@ -312,23 +356,31 @@ mod tests {
         ccrit
         p202
         ccrit
-    "}, 101, true)]
+    "}, 101, vec![202])]
+    #[case::several_clients(indoc! {"
+        p202
+        ccrit
+        p101
+        ccrit
+        p303
+        ccrit
+    "}, 101, vec![202, 303])]
     #[case::daemon_only(indoc! {"
         p101
         ccrit
-    "}, 101, false)]
+    "}, 101, vec![])]
     #[case::browser_only(indoc! {"
         p202
         cterminal-browser
-    "}, 101, false)]
-    #[case::no_connections("", 101, false)]
+    "}, 101, vec![])]
+    #[case::no_connections("", 101, vec![])]
     fn crit_client_detection_ignores_the_daemon_and_other_processes(
         #[case] lsof_output: &str,
         #[case] daemon_pid: u32,
-        #[case] expected: bool,
+        #[case] expected: Vec<u32>,
     ) {
         assert_eq!(
-            has_crit_client(lsof_output, daemon_pid).expect("fixture output should parse"),
+            crit_client_pids(lsof_output, daemon_pid).expect("fixture output should parse"),
             expected,
         );
     }
@@ -336,7 +388,7 @@ mod tests {
     #[test]
     fn crit_client_detection_rejects_unparseable_lsof_output() {
         assert!(
-            has_crit_client(
+            crit_client_pids(
                 indoc! {"
                     pnot-a-pid
                     ccrit
@@ -354,65 +406,20 @@ mod tests {
         #[case] status_success: bool,
         #[case] exit_code: Option<i32>,
     ) {
-        let actual = crit_client_waiting_from_lsof_result(status_success, exit_code, "", "", 101)
-            .map(|waiting| (true, waiting))
-            .unwrap_or((false, false));
+        let actual = crit_client_pids_from_lsof_result(status_success, exit_code, "", "", 101)
+            .map_err(|_| "lsof error");
 
-        assert_eq!(actual, (true, false));
+        assert_eq!(actual, Ok(Vec::new()));
     }
 
     #[rstest]
     #[case::diagnostics("", "lsof could not inspect a socket")]
     #[case::partial_output("partial lsof output", "")]
     fn lsof_errors_or_partial_results_remain_unknown(#[case] stdout: &str, #[case] stderr: &str) {
-        let actual = crit_client_waiting_from_lsof_result(false, Some(1), stdout, stderr, 101)
+        let actual = crit_client_pids_from_lsof_result(false, Some(1), stdout, stderr, 101)
             .map_err(|_| "lsof error");
 
         assert_eq!(actual, Err("lsof error"));
-    }
-
-    #[test]
-    fn crit_wait_state_updates_only_on_first_observation_or_change() -> Result<()> {
-        let mut previous_waiting = None;
-        let mut updates = Vec::new();
-        for waiting in [None, None, Some(false), Some(false), Some(true), Some(true)] {
-            set_crit_wait_state_if_changed(&mut previous_waiting, waiting, |waiting| {
-                updates.push(waiting);
-                Ok(())
-            })?;
-        }
-
-        assert_eq!(
-            (updates, previous_waiting),
-            (vec![None, Some(false), Some(true)], Some(Some(true))),
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn failed_crit_wait_state_update_retries_the_same_observation() {
-        let mut previous_waiting = None;
-        let mut calls = 0;
-        let first = set_crit_wait_state_if_changed(&mut previous_waiting, Some(false), |_| {
-            calls += 1;
-            bail!("temporary storage failure")
-        });
-        let failed_state = previous_waiting;
-        let second = set_crit_wait_state_if_changed(&mut previous_waiting, Some(false), |_| {
-            calls += 1;
-            Ok(())
-        });
-
-        assert_eq!(
-            (
-                first.is_err(),
-                failed_state,
-                second.is_ok(),
-                calls,
-                previous_waiting,
-            ),
-            (true, None, true, 2, Some(Some(false))),
-        );
     }
 
     #[test]

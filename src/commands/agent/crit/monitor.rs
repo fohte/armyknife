@@ -29,13 +29,12 @@ use crate::shared::log::short_run_id;
 pub use self::client_started::ClientStartedArgs;
 pub(super) use self::client_started::run as run_client_started;
 pub(super) use self::start::{ensure_started, ensure_started_with_status};
-use self::wait_state::{crit_client_waiting, set_crit_wait_state, set_crit_wait_state_if_changed};
+use self::wait_state::{crit_client_waiting, set_crit_wait_state};
 
 pub(super) fn prepare_registration(port: u16, url: &str) -> (String, Option<serde_json::Value>) {
     registration::prepare_registration(port, url)
 }
 
-const MONITOR_POLL_INTERVAL: Duration = Duration::from_secs(5);
 const STARTING_MARKER_TTL: Duration = Duration::from_secs(15);
 const CLEANUP_RETRIES: usize = 3;
 const CLEANUP_RETRY_DELAY: Duration = Duration::from_millis(500);
@@ -88,40 +87,48 @@ pub(super) fn run(args: &MonitorArgs) -> Result<()> {
     write_marker_owner(&marker, &args.reservation)?;
     tracing::info!(event = "agent.crit.monitor.start", daemon_pid = args.pid);
     let mut watched_pid = args.pid;
-    let mut previous_waiting = None;
+    let mut exited_clients = Vec::new();
     let mut clients_watch = clients::ClientsWatch::new(args.port)?;
     loop {
         while process::is_process_alive(watched_pid) {
-            if clients_watch.changed() {
-                previous_waiting = None;
-            }
-            let waiting =
-                match crit_client_waiting(args.port, watched_pid, process::run_with_timeout) {
-                    Ok(waiting) => Some(waiting),
-                    Err(error) => {
-                        tracing::warn!(
-                            event = "agent.crit.monitor.client_check_failed",
-                            port = args.port,
-                            error = %error,
-                        );
-                        None
-                    }
-                };
-            if let Err(error) =
-                set_crit_wait_state_if_changed(&mut previous_waiting, waiting, |waiting| {
-                    set_crit_wait_state(args.port, waiting)
-                })
-            {
+            // Re-evaluated on every wake (daemon or client exit, clients directory change); lsof
+            // runs only when no client with a pid file (announced or found by lsof) is alive. One
+            // that never announced itself is first seen only if a wake finds it connected.
+            let waiting = match crit_client_waiting(
+                args.port,
+                watched_pid,
+                clients_watch.scan(&exited_clients),
+                process::run_with_timeout,
+            ) {
+                Ok(waiting) => Some(waiting),
+                Err(error) => {
+                    tracing::warn!(
+                        event = "agent.crit.monitor.client_check_failed",
+                        port = args.port,
+                        error = %error,
+                    );
+                    None
+                }
+            };
+            // Written on every wake: `client-started` sets the session state itself, so what
+            // this monitor wrote last is not necessarily what is stored.
+            if let Err(error) = set_crit_wait_state(args.port, waiting) {
                 tracing::warn!(
                     event = "agent.crit.monitor.wait_state_update_failed",
                     port = args.port,
                     error = %error,
                 );
             }
-            // Break on the exit event instead of re-checking `is_process_alive`, which
-            // still reports an unreaped zombie daemon as alive and would spin this loop.
-            if process::wait_for_any_exit(&[watched_pid], Some(MONITOR_POLL_INTERVAL)) {
-                break;
+            match clients_watch.wait(watched_pid) {
+                process::Wake::Exited(pids) => {
+                    exited_clients = pids;
+                    // Break on the exit event instead of re-checking `is_process_alive`, which
+                    // still reports an unreaped zombie daemon as alive and would spin this loop.
+                    if exited_clients.contains(&watched_pid) {
+                        break;
+                    }
+                }
+                process::Wake::DirChanged | process::Wake::TimedOut => exited_clients.clear(),
             }
         }
 

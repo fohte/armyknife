@@ -19,8 +19,10 @@ pub struct ClientStartedArgs {
 pub(in crate::commands::agent::crit) fn run(args: &ClientStartedArgs) -> Result<()> {
     let port = parse_port(&args.url)?;
     ensure_started(port, None)?;
-    clients::record_client_if_monitored(port, args.pid)?;
+    // Before the record: once the pid file exists the monitor owns the state and may already
+    // have written that the client is gone, which a later write here would overwrite.
     set_crit_wait_state(port, Some(true))?;
+    clients::record_client_if_monitored(port, args.pid)?;
     tracing::info!(
         event = "agent.crit.client_started",
         port,

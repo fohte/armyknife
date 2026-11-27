@@ -21,7 +21,7 @@ mod snapshot;
 
 use snapshot::list_process_cwds;
 
-pub(crate) use exit_wait::wait_for_any_exit;
+pub(crate) use exit_wait::{Wake, dir_entry_names, wait_for_exit_or_dir_change};
 pub(crate) use identity::{process_start_time, process_start_time_matches};
 
 pub(crate) use output_tail::{
