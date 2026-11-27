@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.983](https://github.com/fohte/armyknife/compare/v0.1.982...v0.1.983) (2026-11-27)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show card images ([#2392](https://github.com/fohte/armyknife/issues/2392)) ([0305e8f](https://github.com/fohte/armyknife/commit/0305e8f520fd71c6b3f05838e91a6a7fde6d2da1))
+
 ## [0.1.982](https://github.com/fohte/armyknife/compare/v0.1.981...v0.1.982) (2026-11-27)
 
 
