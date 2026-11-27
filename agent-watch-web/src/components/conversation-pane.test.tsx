@@ -632,6 +632,34 @@ it('disables Resume when the session has no tmux location', () => {
   })
 })
 
+it('explains why Resume is disabled when the working directory is missing', () => {
+  renderView(
+    () => Promise.resolve(true),
+    endedSession,
+    () => undefined,
+    [],
+    {
+      ...endedActions,
+      resume: false,
+      resumeDisabledReason: 'workingDirectoryMissing',
+    },
+  )
+
+  const resumeButton = requireElement(
+    container.querySelector<HTMLButtonElement>('.conversation-ended-resume'),
+  )
+  const actual = () => ({
+    label: resumeButton.textContent,
+    disabled: resumeButton.disabled,
+    title: resumeButton.title,
+  })
+  expect(actual()).toEqual({
+    label: 'Resume',
+    disabled: true,
+    title: 'This session’s working directory does not exist',
+  })
+})
+
 type SettleResumeRequest = (
   resolve: (success: boolean) => void,
   reject: (reason: Error) => void,
