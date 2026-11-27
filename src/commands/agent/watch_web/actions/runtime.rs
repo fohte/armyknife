@@ -60,8 +60,8 @@ impl ActionRuntime for LiveActionRuntime {
         )
     }
 
-    fn capture_pane_with_escapes(&self, tmux_info: &TmuxInfo) -> Result<String> {
-        crate::infra::tmux::capture_pane_with_escapes_for_socket_result(
+    fn capture_pane(&self, tmux_info: &TmuxInfo) -> Result<String> {
+        crate::infra::tmux::capture_pane_for_socket_result(
             tmux_info.socket_path.as_deref(),
             &tmux_info.pane_id,
         )

@@ -8,9 +8,9 @@ use super::{ActionContext, action_context, response_snapshot, session};
 
 #[rstest]
 #[tokio::test]
-async fn pane_endpoint_returns_the_ansi_styled_capture(action_context: ActionContext) {
+async fn pane_endpoint_returns_the_plain_capture_and_timestamp(action_context: ActionContext) {
     action_context.save_session(&session("fixture-session"));
-    let snapshot = ["", "", "\u{1b}[31mfixture output\u{1b}[0m", ""].join("\n");
+    let snapshot = ["", "", "fixture output", ""].join("\n");
     action_context.set_pane_snapshot(&snapshot);
 
     let response = action_context
@@ -19,16 +19,41 @@ async fn pane_endpoint_returns_the_ansi_styled_capture(action_context: ActionCon
         .await
         .unwrap();
 
+    let mut actual = response_snapshot(response, &action_context).await;
+    normalize_captured_at(&mut actual);
+
     assert_eq!(
-        response_snapshot(response, &action_context).await,
+        actual,
         json!({
             "status": StatusCode::OK.as_u16(),
-            "body": { "content": snapshot },
+            "body": {
+                "content": snapshot,
+                "capturedAt": "2000-01-02T03:04:05Z",
+            },
             "calls": [{
                 "kind": "pane-snapshot",
                 "paneId": "%4",
                 "socketPath": "/tmp/example-tmux.sock",
             }],
+        }),
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn pane_endpoint_returns_not_found_for_a_missing_session(action_context: ActionContext) {
+    let response = action_context
+        .router()
+        .oneshot(get("/sessions/missing-session/pane"))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response_snapshot(response, &action_context).await,
+        json!({
+            "status": StatusCode::NOT_FOUND.as_u16(),
+            "body": { "error": "session not found" },
+            "calls": [],
         }),
     );
 }
@@ -93,4 +118,12 @@ fn get(uri: &str) -> Request<Body> {
         .uri(uri)
         .body(Body::empty())
         .unwrap()
+}
+
+fn normalize_captured_at(snapshot: &mut serde_json::Value) {
+    let captured_at = snapshot["body"]["capturedAt"]
+        .as_str()
+        .expect("capturedAt is a string");
+    chrono::DateTime::parse_from_rfc3339(captured_at).expect("capturedAt uses RFC 3339");
+    snapshot["body"]["capturedAt"] = json!("2000-01-02T03:04:05Z");
 }

@@ -192,7 +192,7 @@ trait ActionRuntime: Send + Sync {
         mode: super::rewind::RewindMode,
     ) -> Result<String>;
     fn pane_current_command(&self, tmux_info: &TmuxInfo) -> Option<String>;
-    fn capture_pane_with_escapes(&self, tmux_info: &TmuxInfo) -> Result<String>;
+    fn capture_pane(&self, tmux_info: &TmuxInfo) -> Result<String>;
     fn send_claude_escape_if_agent_is_running(
         &self,
         tmux_info: &TmuxInfo,
@@ -676,7 +676,7 @@ mod tests {
             self.pane_command.lock().unwrap().clone()
         }
 
-        fn capture_pane_with_escapes(&self, tmux_info: &TmuxInfo) -> Result<String> {
+        fn capture_pane(&self, tmux_info: &TmuxInfo) -> Result<String> {
             self.calls.lock().unwrap().push(json!({
                 "kind": "pane-snapshot",
                 "paneId": tmux_info.pane_id,
