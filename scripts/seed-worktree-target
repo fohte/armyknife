@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+if [ "$(uname -s)" != "Darwin" ]; then
+  exit 0
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+WORKTREE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
+TARGET_ROOT="$WORKTREE_ROOT/target"
+TARGET_DEBUG="$TARGET_ROOT/debug"
+
+if [ -e "$TARGET_DEBUG" ] || [ -L "$TARGET_DEBUG" ]; then
+  exit 0
+fi
+
+if ! WORKTREES="$(git -C "$WORKTREE_ROOT" worktree list --porcelain)"; then
+  printf 'Could not list Git worktrees; skipping Cargo target seed.\n' >&2
+  exit 1
+fi
+
+NEWEST_SOURCE_ROOT=""
+NEWEST_SOURCE_MTIME=0
+
+while IFS= read -r line; do
+  case "$line" in
+    'worktree '*)
+      SOURCE_ROOT="${line#worktree }"
+      SOURCE_BINARY="$SOURCE_ROOT/target/debug/a"
+      if [ "$SOURCE_ROOT" = "$WORKTREE_ROOT" ] || [ ! -f "$SOURCE_BINARY" ]; then
+        continue
+      fi
+
+      if ! SOURCE_MTIME="$(/usr/bin/stat -f '%m' "$SOURCE_BINARY")"; then
+        printf 'Could not inspect %s; skipping Cargo target seed.\n' "$SOURCE_BINARY" >&2
+        exit 1
+      fi
+
+      if ((SOURCE_MTIME > NEWEST_SOURCE_MTIME)); then
+        NEWEST_SOURCE_ROOT="$SOURCE_ROOT"
+        NEWEST_SOURCE_MTIME="$SOURCE_MTIME"
+      fi
+      ;;
+  esac
+done <<< "$WORKTREES"
+
+if [ -z "$NEWEST_SOURCE_ROOT" ]; then
+  exit 0
+fi
+
+if ! mkdir -p "$TARGET_ROOT"; then
+  printf 'Could not create %s; skipping Cargo target seed.\n' "$TARGET_ROOT" >&2
+  exit 1
+fi
+
+if ! STAGING_ROOT="$(mktemp -d "$WORKTREE_ROOT/.debug-seed.XXXXXX")"; then
+  printf 'Could not create a staging directory in %s; skipping Cargo target seed.\n' "$WORKTREE_ROOT" >&2
+  exit 1
+fi
+
+cleanup_staging() {
+  local staging_path="${STAGING_ROOT#"$WORKTREE_ROOT"/}"
+  git -C "$WORKTREE_ROOT" clean -fd -- "$staging_path"
+}
+
+if ! /bin/cp -c -pR "$NEWEST_SOURCE_ROOT/target/debug" "$STAGING_ROOT/debug"; then
+  printf 'Could not APFS-clone %s/target/debug; skipping Cargo target seed.\n' "$NEWEST_SOURCE_ROOT" >&2
+  cleanup_staging
+  exit 1
+fi
+
+if [ -e "$TARGET_DEBUG" ] || [ -L "$TARGET_DEBUG" ]; then
+  cleanup_staging
+  exit 0
+fi
+
+if ! mv "$STAGING_ROOT/debug" "$TARGET_DEBUG"; then
+  printf 'Could not install the seeded Cargo target at %s; skipping Cargo target seed.\n' "$TARGET_DEBUG" >&2
+  cleanup_staging
+  exit 1
+fi
+
+# Clean from its final location so Cargo records the same target path used by later builds.
+if ! (cd "$WORKTREE_ROOT" && CARGO_TARGET_DIR="$TARGET_ROOT" cargo clean --workspace); then
+  printf 'Could not remove cloned workspace outputs; skipping Cargo target seed.\n' >&2
+  find "$TARGET_DEBUG" -depth -delete
+  cleanup_staging
+  exit 1
+fi
+
+cleanup_staging
