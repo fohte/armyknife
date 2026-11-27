@@ -3572,11 +3572,7 @@ it('shows a launch failure and allows another attempt', async () => {
   vi.stubGlobal('fetch', fetcher)
   renderApp()
   publishSessions({ revision: 1, sessions: [] })
-  clickButton('[aria-label="New session"]')
-  await waitForDirectoryResults()
-  clickButton('.new-session-directory-button')
-  clickButton('[aria-label="Select directory /Users/example/work/service"]')
-  await clickButtonAndFlush('.new-session-start')
+  await startNewSessionFromForm()
 
   const snapshot = () => ({
     error: container.querySelector('.new-session-launch-status')?.textContent,
