@@ -1105,6 +1105,26 @@ fn parallel_tool_result_after_an_assistant_followup_is_applied_at_every_split_po
 }
 
 #[test]
+fn human_origin_user_and_followup_append_without_restart() {
+    let transcript = format!(
+        "{}{}",
+        ROOT_AND_CURRENT,
+        indoc! {r#"
+            {"type":"user","uuid":"fixture-human-request","parentUuid":"fixture-current","origin":{"kind":"human"},"message":{"content":"A human follow-up request."}}
+            {"type":"assistant","uuid":"fixture-human-response","parentUuid":"fixture-human-request","message":{"content":[{"type":"text","text":"A fixture response."}]}}
+        "#},
+    );
+    let expected = parse_all(transcript.as_bytes(), empty_additions());
+
+    assert_incremental_matches_full_parse_at_every_split_point(
+        &transcript,
+        &expected,
+        Some(IncrementalAppend::Applied),
+        "human-origin user message and assistant follow-up",
+    );
+}
+
+#[test]
 fn parallel_tool_result_after_an_active_followup_matches_a_full_parse_at_every_split_point() {
     let transcript = format!(
         "{}{}",
