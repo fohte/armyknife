@@ -543,6 +543,7 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | ----------------------------------------------------------------------------------------------------- | ------- | ------------------------------------------------------------------------------------------- |
 | `new [--worktree[=<branch>]] [options]`                                                               |         | Start a Claude Code session, optionally in a new or existing linked worktree                |
 | `codex [<args>...]`                                                                                   |         | Start Codex and bind its thread ID to the current tmux pane                                 |
+| `current`                                                                                             |         | Print the current Claude Code or Codex engine as JSON, or exit 1 otherwise                  |
 | `close [target] [--child] [--force] [--skip-hooks] [--keep-worktree]`                                 | `c`     | Close an agent session and optionally keep its linked worktree                              |
 | `clean [--dry-run] [--all] [--force]`                                                                 |         | Delete merged or closed worktrees                                                           |
 | `hook <event>`                                                                                        |         | Record coding agent hook events                                                             |
