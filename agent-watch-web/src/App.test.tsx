@@ -6258,6 +6258,10 @@ it('advances elapsed time for all rows with one shared timer', async () => {
       session('session-b', 'Working session', 'in_progress', 30),
     ],
   })
+  await act(async () => {
+    await document.fonts.ready
+    await vi.advanceTimersByTimeAsync(32)
+  })
   const before = Array.from(
     container.querySelectorAll<HTMLElement>('.session-age'),
     (element) => element.textContent,
@@ -6304,7 +6308,7 @@ it('advances elapsed time for all rows with one shared timer', async () => {
   )
 
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(1_000)
+    await vi.advanceTimersByTimeAsync(1_968)
   })
 
   const snapshot = () => ({
