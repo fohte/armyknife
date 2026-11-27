@@ -49,6 +49,7 @@ mod session_start;
 mod side_effects;
 mod stop;
 mod title_generation;
+mod tmux_cleanup_hooks;
 mod unreported_stop;
 mod vibe;
 mod work_type;
@@ -138,6 +139,17 @@ pub fn run(args: &HookArgs) -> Result<()> {
     };
 
     input.engine = args.engine;
+    if event == HookEvent::SessionStart
+        && tmux::in_tmux()
+        && let Err(error) = tmux_cleanup_hooks::configure(tmux::run_tmux)
+    {
+        tracing::warn!(
+            event = "agent.hook.tmux_cleanup_hooks.failed",
+            error = %error,
+            "failed to configure tmux cleanup hooks"
+        );
+    }
+
     let session_id = input.session_id.clone();
     let agent_id = input.agent_id.clone();
     let tool_name = input.tool_name.clone();
