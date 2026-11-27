@@ -131,3 +131,38 @@ export const IPhoneComposer: Story = {
     ),
   ],
 }
+
+export const IPhoneComposerWithManyAttachments: Story = {
+  name: 'The iPhone composer keeps sending available with many attachments',
+  args: {
+    attachments: Array.from({ length: 16 }, (_, index) => ({
+      id: `attachment-${String(index + 1)}`,
+      name: `image-${String(index + 1)}.png`,
+      size: 42_000,
+      previewUrl: imagePreview,
+    })),
+    children: (
+      <textarea aria-label="Message" value="Review these images." readOnly />
+    ),
+    isMobile: true,
+    onRemoveAttachment: () => undefined,
+    sendState: 'on',
+  },
+  decorators: [
+    (Story) => (
+      <div
+        style={{
+          width: 'min(390px, 100%)',
+          height: 320,
+          display: 'flex',
+          flexDirection: 'column',
+          justifyContent: 'flex-end',
+          padding: 12,
+          background: '#0a0a0a',
+        }}
+      >
+        <Story />
+      </div>
+    ),
+  ],
+}

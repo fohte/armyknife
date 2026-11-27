@@ -40,17 +40,29 @@
   flex-wrap: wrap;
   gap: 12px;
   margin: 0;
-  padding: 10px 12px 0;
+  padding: 5px 12px;
   list-style: none;
 }
 
 .composer-attachment {
   position: relative;
+  flex: none;
+  width: 69px;
+  height: 69px;
+  margin-inline-end: -5px;
+  margin-block-end: -5px;
+}
+
+.composer-attachment-preview {
+  position: absolute;
+  bottom: 0;
+  left: 0;
   display: grid;
   width: 64px;
   height: 64px;
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
   place-items: center;
-  overflow: visible;
+  overflow: hidden;
   border-radius: var(--aw-radius);
   background: var(--aw-bg-app);
 }
@@ -94,8 +106,8 @@
   z-index: 1;
   display: grid;
   place-items: center;
-  top: -5px;
-  right: -5px;
+  top: 0;
+  right: 0;
   width: 24px;
   height: 24px;
   min-height: 24px;
@@ -192,15 +204,30 @@
 }
 
 .composer-shell[data-mobile='true'] .composer-box {
+  display: flex;
+  max-height: min(55dvh, 240px);
+  flex-direction: column;
   border-radius: var(--aw-radius);
 }
 
 .composer-shell[data-mobile='true'] .composer-attachments {
+  min-height: 0;
+  flex: 0 1 auto;
   gap: 12px;
-  padding: 10px 10px 0;
+  max-height: min(30dvh, 144px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 10px 15px 15px 10px;
 }
 
 .composer-shell[data-mobile='true'] .composer-attachment {
+  width: 87px;
+  height: 87px;
+  margin-inline-end: -15px;
+  margin-block-end: -15px;
+}
+
+.composer-shell[data-mobile='true'] .composer-attachment-preview {
   width: 72px;
   height: 72px;
 }
@@ -210,8 +237,8 @@
   width: 44px;
   height: 44px;
   min-height: 44px;
-  top: -15px;
-  right: -15px;
+  top: 0;
+  right: 0;
 }
 
 .composer-shell[data-mobile='true'] .composer-attachment-remove-face {
@@ -220,12 +247,22 @@
 }
 
 .composer-shell[data-mobile='true'] .composer-input-slot textarea {
+  flex: 1 1 auto;
   min-height: 44px;
+  max-height: min(30dvh, 144px);
   padding: 8px 12px 4px;
   font-size: 16px;
 }
 
+.composer-shell[data-mobile='true'] .composer-input-slot {
+  display: flex;
+  min-height: 44px;
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
 .composer-shell[data-mobile='true'] .composer-footer {
+  flex: none;
   gap: 8px;
   padding: 4px 8px 8px;
 }

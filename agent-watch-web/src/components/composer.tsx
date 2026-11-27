@@ -44,23 +44,25 @@ export function Composer({
           <ul className="composer-attachments" aria-label="Attachments">
             {attachments.map((attachment) => (
               <li className="composer-attachment" key={attachment.id}>
-                {attachment.previewUrl === null ? (
-                  <>
-                    <span className="composer-attachment-name">
-                      {attachment.name}
-                    </span>
-                    <small className="composer-attachment-size">
-                      {formatFileSize(attachment.size)}
-                    </small>
-                  </>
-                ) : (
-                  <ImageLightbox
-                    src={attachment.previewUrl}
-                    alt={attachment.name}
-                    imageClassName="composer-attachment-image"
-                    triggerClassName="composer-attachment-image-trigger"
-                  />
-                )}
+                <div className="composer-attachment-preview">
+                  {attachment.previewUrl === null ? (
+                    <>
+                      <span className="composer-attachment-name">
+                        {attachment.name}
+                      </span>
+                      <small className="composer-attachment-size">
+                        {formatFileSize(attachment.size)}
+                      </small>
+                    </>
+                  ) : (
+                    <ImageLightbox
+                      src={attachment.previewUrl}
+                      alt={attachment.name}
+                      imageClassName="composer-attachment-image"
+                      triggerClassName="composer-attachment-image-trigger"
+                    />
+                  )}
+                </div>
                 {onRemoveAttachment === undefined ? null : (
                   <Button
                     className="composer-attachment-remove"
