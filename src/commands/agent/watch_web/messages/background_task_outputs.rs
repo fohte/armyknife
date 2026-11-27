@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
-use std::future;
+use std::future::{self, Future};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::{Mutex, OnceLock};
 use std::time::SystemTime;
 
@@ -16,7 +17,7 @@ use axum::response::{IntoResponse, Response};
 use futures_util::StreamExt;
 use futures_util::stream::{self, Stream};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 use super::{BackgroundTaskKind, MessagesRouteState};
 use crate::commands::agent::types::{Engine, Session};
@@ -42,6 +43,7 @@ pub(super) async fn get_background_task_output_events(
     State((load_session, _, loaders)): State<MessagesRouteState>,
     AxumPath((session_id, task_id)): AxumPath<(String, String)>,
 ) -> Response {
+    let shutdown_signal = loaders.shutdown_signal.clone();
     let create_event_stream = loaders.background_task_output_event_stream.clone();
     let (output_path, output_events) = match tokio::task::spawn_blocking(
         move || -> Result<Option<(PathBuf, super::routes::BackgroundTaskOutputEventStream)>> {
@@ -58,7 +60,7 @@ pub(super) async fn get_background_task_output_events(
     .await
     {
         Ok(Ok(Some((path, events)))) => (path, events),
-        Ok(Ok(None)) => return output_unavailable_event_response(),
+        Ok(Ok(None)) => return output_unavailable_event_response(shutdown_signal),
         Ok(Err(error)) => {
             tracing::warn!(%error, "failed to prepare background task output event stream");
             return output_unavailable_response(StatusCode::INTERNAL_SERVER_ERROR);
@@ -72,15 +74,15 @@ pub(super) async fn get_background_task_output_events(
     let changes = output_events.map(|_| ());
     let events = output_updates(output_path, changes)
         .map(|output| Ok::<Event, std::convert::Infallible>(output_event(output)));
-    output_event_stream_response(events)
+    output_event_stream_response(stop_on_shutdown(events, shutdown_signal))
 }
 
-fn output_unavailable_event_response() -> Response {
+fn output_unavailable_event_response(shutdown_signal: Option<watch::Receiver<bool>>) -> Response {
     let events = stream::once(future::ready(Ok::<_, std::convert::Infallible>(
         output_event(OUTPUT_UNAVAILABLE.to_owned()),
     )))
     .chain(stream::pending());
-    output_event_stream_response(events)
+    output_event_stream_response(stop_on_shutdown(events, shutdown_signal))
 }
 
 fn output_event(output: String) -> Event {
@@ -100,6 +102,32 @@ fn output_event_stream_response(
         .headers_mut()
         .insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     response
+}
+
+fn stop_on_shutdown<S>(
+    events: S,
+    shutdown_signal: Option<watch::Receiver<bool>>,
+) -> impl Stream<Item = S::Item> + Send + 'static
+where
+    S: Stream + Send + 'static,
+{
+    events.take_until(shutdown_future(shutdown_signal))
+}
+
+fn shutdown_future(
+    shutdown_signal: Option<watch::Receiver<bool>>,
+) -> Pin<Box<dyn Future<Output = ()> + Send>> {
+    match shutdown_signal {
+        Some(mut signal) => Box::pin(async move {
+            loop {
+                let is_shutdown = *signal.borrow();
+                if is_shutdown || signal.changed().await.is_err() {
+                    return;
+                }
+            }
+        }),
+        None => Box::pin(future::pending()),
+    }
 }
 
 fn output_unavailable_response(status: StatusCode) -> Response {
@@ -356,13 +384,15 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use futures_util::StreamExt;
+    use futures_util::stream;
     use notify::event::{AccessKind, AccessMode, ModifyKind};
     use notify::{Event, EventKind};
     use rstest::rstest;
+    use tokio::sync::watch;
 
     use super::{
         MAX_OUTPUT_BYTES, canonical_output_path, forward_matching_output_event, output_updates,
-        read_output_tail, watch_output_events_with,
+        read_output_tail, stop_on_shutdown, watch_output_events_with,
     };
 
     #[tokio::test]
@@ -427,6 +457,23 @@ mod tests {
         assert_eq!(
             (access_was_forwarded, forwarded_modification),
             (false, Some((modification, vec![watched_path])),),
+        );
+    }
+
+    #[tokio::test]
+    async fn background_task_output_stream_ends_when_shutdown_is_signaled() {
+        let (shutdown_sender, shutdown_receiver) = watch::channel(false);
+        let events =
+            stream::once(std::future::ready("initial output".to_owned())).chain(stream::pending());
+        let mut events = Box::pin(stop_on_shutdown(events, Some(shutdown_receiver)));
+
+        let initial_output = events.next().await;
+        shutdown_sender.send_replace(true);
+        let after_shutdown = events.next().await;
+
+        assert_eq!(
+            (initial_output, after_shutdown),
+            (Some("initial output".to_owned()), None),
         );
     }
 

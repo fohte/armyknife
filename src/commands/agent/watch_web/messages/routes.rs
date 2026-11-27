@@ -16,6 +16,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use futures_util::Stream;
 use serde::{Deserialize, Serialize};
+use tokio::sync::watch;
 
 use crate::commands::agent::store::{
     AgentDecision, AgentFile, AgentProposal, AgentTodo, PermissionDeniedOperation,
@@ -103,6 +104,7 @@ pub(in crate::commands::agent::watch_web) struct RouteLoaders {
     pub(super) agent_file_storage_root: AgentFileStorageRootLoader,
     pub(super) background_tasks: BackgroundTaskLoader,
     pub(super) background_task_output_event_stream: BackgroundTaskOutputEventStreamFactory,
+    pub(super) shutdown_signal: Option<watch::Receiver<bool>>,
     session_list: SessionListLoader,
     skill_listing_cache: SkillListingCache,
     vibe_config: Option<VibeConfigLoader>,
@@ -163,6 +165,7 @@ impl RouteLoaders {
             agent_file_storage_root: Arc::new(|| None),
             background_tasks: Arc::new(|_| Ok(Vec::new())),
             background_task_output_event_stream: Arc::new(create_event_stream),
+            shutdown_signal: None,
             session_list: Arc::new(|| Ok(Vec::new())),
             skill_listing_cache: Arc::new(Mutex::new(HashMap::new())),
             vibe_config: None,
@@ -170,6 +173,14 @@ impl RouteLoaders {
             message_cache: MessageCache::default(),
             question_preview_cache: question_preview::QuestionPreviewCache::default(),
         }
+    }
+
+    pub(in crate::commands::agent::watch_web) fn with_shutdown_signal(
+        mut self,
+        shutdown_signal: watch::Receiver<bool>,
+    ) -> Self {
+        self.shutdown_signal = Some(shutdown_signal);
+        self
     }
 
     pub(in crate::commands::agent::watch_web) fn with_todo_loader(

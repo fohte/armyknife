@@ -338,6 +338,7 @@ fn app_with_assets_and_queued_prompt_loaders_and_restart_signal(
     restart_signal: watch::Receiver<bool>,
 ) -> Router {
     let enrichment_updates = EnrichmentUpdates::new();
+    let output_shutdown_signal = restart_signal.clone();
     let api = Router::new()
         .merge(actions::router(loaders.clone()))
         .merge(session_state::router())
@@ -353,7 +354,7 @@ fn app_with_assets_and_queued_prompt_loaders_and_restart_signal(
         .merge(messages::routes_with_proposals_and_peer_out_messages(
             load_session,
             load_user_marker,
-            loaders,
+            loaders.with_shutdown_signal(output_shutdown_signal),
         ))
         .merge(review_document::router())
         .merge(file_attachments::routes())
