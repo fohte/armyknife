@@ -245,7 +245,7 @@ foo
 Body
 </details>`),
   ).toBe(
-    '<div class="markdown-message">&lt;details&gt;<p>foo</p>&lt;summary&gt;Summary&lt;/summary&gt;<p>Body</p>&lt;/details&gt;</div>',
+    '<div class="markdown-message">&lt;details&gt;\nfoo\n&lt;summary&gt;Summary&lt;/summary&gt;<p>Body</p>&lt;/details&gt;</div>',
   )
 })
 

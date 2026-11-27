@@ -9,20 +9,29 @@ import {
   type ReferenceDefinitionSource,
 } from '#components/remark-markdown-details/source'
 
-const controlTag =
-  /^(<details(?:\s+open(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?)?\s*>|<\/details\s*>|<summary\s*>|<\/summary\s*>)/i
-const inlineSummary = /^\s*<summary\s*>([\s\S]*?)<\/summary\s*>/i
+const htmlCandidateStart = /^\s*<\/?(?:details|summary)\b/i
+const htmlLexemePattern =
+  /<!--[\s\S]*?(?:-->|$)|<(script|style|pre|textarea)\b[\s\S]*?(?:<\/\1\s*>|$)|<\/?(?:details|summary)\b(?:[^>"']|"[^"]*"|'[^']*')*>/gi
+const detailsOpenPattern =
+  /^<details(?:\s+open(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?)?\s*>$/i
+const detailsClosePattern = /^<\/details\s*>$/i
+const summaryOpenPattern = /^<summary\s*>$/i
+const summaryClosePattern = /^<\/summary\s*>$/i
 const maxDetailsNesting = 32
 
 type Processor = { parse: (value: string) => unknown }
 type Kind =
   | 'details-open'
+  | 'details-raw-open'
   | 'details-close'
   | 'summary-open'
   | 'summary-close'
   | 'summary-text'
 type Marker = { kind: Kind; value: string; node: MarkdownNode; offset: number }
-type Unit = { node: MarkdownNode } | { marker: Marker }
+type HtmlGroup = { node: MarkdownNode }
+type Unit =
+  | { node: MarkdownNode; group?: HtmlGroup }
+  | { marker: Marker; group?: HtmlGroup }
 type Pair = { close: number; summaryOpen: number; summaryClose: number }
 
 function isRoot(value: unknown): value is MarkdownRoot {
@@ -41,8 +50,9 @@ function marker(
   value: string,
   node: MarkdownNode,
   offset: number,
+  group?: HtmlGroup,
 ): Unit {
-  return { marker: { kind, value, node, offset } }
+  return { marker: { kind, value, node, offset }, ...(group ? { group } : {}) }
 }
 
 function section(
@@ -61,63 +71,60 @@ function splitHtml(
   parse: MarkdownParser,
   references: readonly ReferenceDefinitionSource[],
 ): Unit[] | null {
-  if (node.type !== 'html' || node.value === undefined) return null
-  const leading = node.value.length - node.value.trimStart().length
-  const raw = node.value.slice(leading)
-  const base = (node.position?.start.offset ?? 0) + leading
+  if (
+    node.type !== 'html' ||
+    node.value === undefined ||
+    !htmlCandidateStart.test(node.value)
+  ) {
+    return null
+  }
+  const group = { node }
+  const base = node.position?.start.offset ?? 0
   const units: Unit[] = []
-  let consumed = 0
-  const add = (kind: Kind, value: string, at: number) => {
-    units.push(marker(kind, value, node, base + at))
-  }
-
-  const tag = controlTag.exec(raw)?.[0]
-  if (tag === undefined) return null
-  const kind: Kind = /^<details/i.test(tag)
-    ? 'details-open'
-    : /^<\/details/i.test(tag)
-      ? 'details-close'
-      : /^<summary/i.test(tag)
-        ? 'summary-open'
-        : 'summary-close'
-  add(kind, tag, 0)
-  consumed = tag.length
-
-  if (kind === 'details-open') {
-    const inline = inlineSummary.exec(raw.slice(consumed))
-    if (inline !== null) {
-      const start = consumed + inline[0].length - inline[0].trimStart().length
-      add('summary-open', '<summary>', start)
-      add('summary-text', inline[1] ?? '', start + '<summary>'.length)
-      add(
-        'summary-close',
-        '</summary>',
-        start + inline[0].length - '</summary>'.length,
-      )
-      consumed += inline[0].length
-    }
-  } else if (kind === 'summary-open') {
-    const inner = /^[\s\S]*?<\/summary\s*>/i.exec(raw.slice(consumed))
-    if (inner !== null) {
-      const endTag = /<\/summary\s*>$/i.exec(inner[0])?.[0] ?? '</summary>'
-      add('summary-text', inner[0].slice(0, -endTag.length), consumed)
-      add('summary-close', endTag, consumed + inner[0].length - endTag.length)
-      consumed += inner[0].length
+  const pattern = new RegExp(htmlLexemePattern.source, 'gi')
+  let cursor = 0
+  let inSummary = false
+  const appendText = (end: number) => {
+    const text = node.value?.slice(cursor, end) ?? ''
+    if (text !== '') {
+      if (inSummary) {
+        units.push(marker('summary-text', text, node, base + cursor, group))
+      } else {
+        for (const parsed of section(text, base + cursor, parse, references)) {
+          units.push({ node: parsed, group })
+        }
+      }
     }
   }
 
-  for (const unit of unitsFrom(
-    section(
-      node.value.slice(leading + consumed),
-      base + consumed,
-      parse,
-      references,
-    ),
-    parse,
-    references,
-  )) {
-    units.push(unit)
+  for (const match of node.value.matchAll(pattern)) {
+    const at = match.index
+    const value = match[0]
+    appendText(at)
+    if (/^<!--|^<(?:script|style|pre|textarea)\b/i.test(value)) {
+      units.push({ node: { ...node, value }, group })
+    } else {
+      const kind: Kind | null = detailsOpenPattern.test(value)
+        ? 'details-open'
+        : detailsClosePattern.test(value)
+          ? 'details-close'
+          : summaryOpenPattern.test(value)
+            ? 'summary-open'
+            : summaryClosePattern.test(value)
+              ? 'summary-close'
+              : /^<details\b/i.test(value)
+                ? 'details-raw-open'
+                : null
+      if (kind === null) units.push({ node: { ...node, value }, group })
+      else {
+        units.push(marker(kind, value, node, base + at, group))
+        if (kind === 'summary-open') inSummary = true
+        if (kind === 'summary-close') inSummary = false
+      }
+    }
+    cursor = at + value.length
   }
+  appendText(node.value.length)
   return units
 }
 
@@ -136,7 +143,12 @@ function unitsFrom(
 }
 
 function pairDetails(units: Unit[]): Map<number, Pair> {
-  type Frame = { open: number; summaryOpen?: number; summaryClose?: number }
+  type Frame = {
+    open: number
+    render: boolean
+    summaryOpen?: number
+    summaryClose?: number
+  }
   const pairs = new Map<number, Pair>()
   const stack: Frame[] = []
   const pending = new Set<Frame>()
@@ -152,18 +164,22 @@ function pairDetails(units: Unit[]): Map<number, Pair> {
     const { kind } = unit.marker
     if (kind === 'details-open') {
       invalidatePending()
-      const frame = { open: index }
+      const frame = { open: index, render: true }
       stack.push(frame)
       pending.add(frame)
+    } else if (kind === 'details-raw-open') {
+      invalidatePending()
+      stack.push({ open: index, render: false })
     } else if (kind === 'summary-open') {
       const frame = stack.at(-1)
-      if (frame !== undefined && pending.delete(frame))
+      if (frame?.render === true && pending.delete(frame))
         frame.summaryOpen = index
       else invalidatePending()
     } else if (kind === 'summary-close') {
       const frame = stack.at(-1)
       if (
-        frame?.summaryOpen !== undefined &&
+        frame?.render === true &&
+        frame.summaryOpen !== undefined &&
         frame.summaryClose === undefined
       ) {
         frame.summaryClose = index
@@ -172,7 +188,11 @@ function pairDetails(units: Unit[]): Map<number, Pair> {
       const frame = stack.pop()
       if (frame === undefined) continue
       pending.delete(frame)
-      if (frame.summaryOpen !== undefined && frame.summaryClose !== undefined) {
+      if (
+        frame.render &&
+        frame.summaryOpen !== undefined &&
+        frame.summaryClose !== undefined
+      ) {
         pairs.set(frame.open, {
           close: index,
           summaryOpen: frame.summaryOpen,
@@ -246,16 +266,23 @@ function renderUnits(
   const result: MarkdownNode[] = []
   const frames: Array<{
     close: number
+    group?: HtmlGroup
     node: MarkdownNode
     parent: MarkdownNode[]
   }> = []
+  const activeGroups = new Map<HtmlGroup, number>()
   let output = result
 
   for (let index = 0; index < units.length; index += 1) {
     const unit = units[index]
     if (unit === undefined) continue
-    if ('marker' in unit && unit.marker.kind === 'details-open') {
-      const pair = pairs.get(index)
+    if (
+      'marker' in unit &&
+      (unit.marker.kind === 'details-open' ||
+        unit.marker.kind === 'details-raw-open')
+    ) {
+      const pair =
+        unit.marker.kind === 'details-open' ? pairs.get(index) : undefined
       if (pair !== undefined) {
         if (depth + frames.length >= maxDetailsNesting) {
           for (let raw = index; raw <= pair.close; raw += 1) {
@@ -284,9 +311,22 @@ function renderUnits(
               : {}),
           },
         }
-        frames.push({ close: pair.close, node, parent: output })
+        frames.push({
+          close: pair.close,
+          group: unit.group,
+          node,
+          parent: output,
+        })
+        if (unit.group !== undefined) {
+          activeGroups.set(unit.group, (activeGroups.get(unit.group) ?? 0) + 1)
+        }
         output = children
         index = pair.summaryClose
+        continue
+      }
+      if (unit.group !== undefined && !activeGroups.has(unit.group)) {
+        output.push(unit.group.node)
+        while (units[index + 1]?.group === unit.group) index += 1
         continue
       }
     }
@@ -298,6 +338,11 @@ function renderUnits(
     ) {
       const frame = frames.pop()
       if (frame !== undefined) {
+        if (frame.group !== undefined) {
+          const count = activeGroups.get(frame.group) ?? 0
+          if (count <= 1) activeGroups.delete(frame.group)
+          else activeGroups.set(frame.group, count - 1)
+        }
         output = frame.parent
         output.push(frame.node)
       }
