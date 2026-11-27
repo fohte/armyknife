@@ -161,7 +161,7 @@ pub async fn run(args: &WatchWebArgs) -> Result<()> {
     let is_agent_session = own_session_id.is_some();
     let sessions_dir = store::sessions_dir()?;
     std::fs::create_dir_all(&sessions_dir)?;
-    let session_store_watcher = SessionStoreWatcher::start(&sessions_dir)?;
+    let session_store_watcher = SessionStoreWatcher::start_or_warn(&sessions_dir);
 
     let executable = std::env::current_exe()?;
     let mut executable_identity = restart::ExecutableIdentity::read(&executable)?;
@@ -183,7 +183,8 @@ pub async fn run(args: &WatchWebArgs) -> Result<()> {
         let (restart_sender, restart_receiver) = watch::channel(false);
         let mut shutdown_receiver = restart_sender.subscribe();
         let relay_sessions_dir = sessions_dir.clone();
-        let session_store_events = session_store_watcher.subscribe();
+        let session_store_events =
+            SessionStoreWatcher::subscribe_or_closed(session_store_watcher.as_ref());
         let watch_web_server = async move {
             let (relay_shutdown_sender, relay_shutdown_receiver) = watch::channel(false);
             // Relay registrations are shared, so a development process must not reconcile them.

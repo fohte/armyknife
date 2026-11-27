@@ -26,8 +26,40 @@ impl SessionStoreWatcher {
         })
     }
 
+    pub(super) fn start_or_warn(sessions_dir: &Path) -> Option<Self> {
+        Self::start_or_warn_with(sessions_dir, Self::start)
+    }
+
+    fn start_or_warn_with(
+        sessions_dir: &Path,
+        start: impl FnOnce(&Path) -> notify::Result<Self>,
+    ) -> Option<Self> {
+        match start(sessions_dir) {
+            Ok(watcher) => Some(watcher),
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    "failed to start session store watcher; revisions will refresh on connection"
+                );
+                None
+            }
+        }
+    }
+
     pub(super) fn subscribe(&self) -> broadcast::Receiver<()> {
         self.events.subscribe()
+    }
+
+    pub(super) fn subscribe_or_closed(watcher: Option<&Self>) -> broadcast::Receiver<()> {
+        watcher
+            .map(Self::subscribe)
+            .unwrap_or_else(Self::closed_receiver)
+    }
+
+    fn closed_receiver() -> broadcast::Receiver<()> {
+        let (sender, receiver) = broadcast::channel(1);
+        drop(sender);
+        receiver
     }
 }
 
@@ -78,5 +110,14 @@ mod tests {
         let expected = true;
 
         assert_eq!(received, expected);
+    }
+
+    #[test]
+    fn keeps_watcher_unavailable_when_start_fails() {
+        let watcher = SessionStoreWatcher::start_or_warn_with(Path::new("/fixture-store"), |_| {
+            Err(notify::Error::generic("fixture watcher error"))
+        });
+
+        assert!(watcher.is_none());
     }
 }
