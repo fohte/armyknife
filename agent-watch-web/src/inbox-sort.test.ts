@@ -2,6 +2,7 @@ import { expect, it } from 'vitest'
 
 import {
   isSelectedSessionBeyondVisibleInProgress,
+  isSelectedSessionBeyondVisibleWaiting,
   readInboxSort,
   sortInboxSessions,
   sortInboxSessionsByCategory,
@@ -206,6 +207,7 @@ it.each([
     expected: [
       'sample-needs-action-new',
       'sample-needs-action-old',
+      'sample-waiting',
       'sample-progress-new',
       'sample-progress-old',
     ],
@@ -215,6 +217,7 @@ it.each([
     expected: [
       'sample-needs-action-old',
       'sample-needs-action-new',
+      'sample-waiting',
       'sample-progress-new',
       'sample-progress-old',
     ],
@@ -240,6 +243,10 @@ it.each([
           '2030-01-01T10:00:00.000Z',
         ),
         category: 'needs_action',
+      },
+      {
+        ...session('sample-waiting', 'beta', null, '2030-01-01T12:00:00.000Z'),
+        category: 'waiting',
       },
       {
         ...session(
@@ -325,6 +332,56 @@ it.each([
         selectedId,
         sort,
       ),
+    ).toEqual(expected)
+  },
+)
+
+it.each([
+  {
+    sort: 'updated' as const,
+    selectedId: 'sample-waiting-zeta',
+    expected: true,
+  },
+  {
+    sort: 'project' as const,
+    selectedId: 'sample-waiting-zeta',
+    expected: true,
+  },
+])(
+  'detects a selected Waiting row below the visible first two for $sort',
+  ({ sort, selectedId, expected }) => {
+    const waitingSessions: Session[] = [
+      {
+        ...session(
+          'sample-waiting-zeta',
+          'zeta',
+          null,
+          '2030-01-01T10:00:00.000Z',
+        ),
+        category: 'waiting',
+      },
+      {
+        ...session(
+          'sample-waiting-beta',
+          'beta',
+          null,
+          '2030-01-01T12:00:00.000Z',
+        ),
+        category: 'waiting',
+      },
+      {
+        ...session(
+          'sample-waiting-alpha',
+          'alpha',
+          null,
+          '2030-01-01T11:00:00.000Z',
+        ),
+        category: 'waiting',
+      },
+    ]
+
+    expect(
+      isSelectedSessionBeyondVisibleWaiting(waitingSessions, selectedId, sort),
     ).toEqual(expected)
   },
 )

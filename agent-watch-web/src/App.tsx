@@ -156,6 +156,7 @@ function AppContent() {
     navigableSessions,
     selectedId,
     setShowAllInProgress,
+    setShowAllWaiting,
   })
   const {
     laterSessionId,
@@ -262,32 +263,15 @@ function AppContent() {
     [recordSessionSnapshot],
   )
 
-  const selectedInProgressIndex = orderedSessions
-    .filter((session) => session.category === 'in_progress')
-    .findIndex((session) => session.id === selectedId)
-  const selectedWaitingIndex = orderedSessions
+  const selectedWaitingIndex = inboxSort.navigableSessions
     .filter((session) => session.category === 'waiting')
     .findIndex((session) => session.id === selectedId)
 
   useEffect(() => {
-    if (selectedInProgressIndex >= 2) {
-      setShowAllInProgress(true)
+    if (isMobile && selectedWaitingIndex >= 0) {
+      setWaitingExpanded(true)
     }
-
-    if (selectedWaitingIndex >= 0) {
-      if (isMobile) {
-        setWaitingExpanded(true)
-      } else if (selectedWaitingIndex >= 2) {
-        setShowAllWaiting(true)
-      }
-    }
-  }, [
-    isMobile,
-    selectedId,
-    selectedInProgressIndex,
-    selectedWaitingIndex,
-    setWaitingExpanded,
-  ])
+  }, [isMobile, selectedId, selectedWaitingIndex, setWaitingExpanded])
 
   useEffect(() => {
     if (view !== 'inbox') {

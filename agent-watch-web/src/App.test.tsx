@@ -1203,6 +1203,112 @@ it('persists the selected Inbox sort and moves with the visible project order', 
   })
 })
 
+it('moves to Waiting with j and k under a non-priority Inbox sort', () => {
+  window.localStorage.setItem('agent-watch-web:inbox-sort', 'project')
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session(
+        'session-needs-action',
+        'Zeta request',
+        'needs_action',
+        8,
+        'zeta',
+      ),
+      session('session-waiting-zeta', 'Zeta waiting', 'waiting', 8, 'zeta'),
+      session('session-waiting-beta', 'Beta waiting', 'waiting', 8, 'beta'),
+      session('session-waiting-alpha', 'Alpha waiting', 'waiting', 8, 'alpha'),
+    ],
+  })
+
+  const needsActionRow = Array.from(
+    container.querySelectorAll<HTMLButtonElement>('[data-session-row]'),
+  ).find((row) => row.innerText.includes('Zeta request'))
+  if (needsActionRow === undefined) {
+    throw new Error('Expected the Needs action row')
+  }
+  act(() => {
+    needsActionRow.click()
+  })
+  act(() => {
+    dispatchKey(window, 'j')
+  })
+  const firstWaitingTitle = readSelectedTitle()
+  act(() => {
+    dispatchKey(window, 'j')
+  })
+  const secondWaitingTitle = readSelectedTitle()
+  act(() => {
+    dispatchKey(window, 'k')
+  })
+
+  const snapshot = () => ({
+    firstWaitingTitle,
+    secondWaitingTitle,
+    previousWaitingTitle: readSelectedTitle(),
+  })
+  expect(snapshot()).toEqual({
+    firstWaitingTitle: 'Alpha waiting',
+    secondWaitingTitle: 'Beta waiting',
+    previousWaitingTitle: 'Alpha waiting',
+  })
+})
+
+it('keeps visible In progress rows collapsed under a non-priority Inbox sort', () => {
+  window.localStorage.setItem('agent-watch-web:inbox-sort', 'project')
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session(
+        'session-progress-zeta',
+        'Zeta progress',
+        'in_progress',
+        8,
+        'zeta',
+      ),
+      session(
+        'session-progress-beta',
+        'Beta progress',
+        'in_progress',
+        8,
+        'beta',
+      ),
+      session(
+        'session-progress-alpha',
+        'Alpha progress',
+        'in_progress',
+        8,
+        'alpha',
+      ),
+    ],
+  })
+
+  const alphaRow = Array.from(
+    container.querySelectorAll<HTMLButtonElement>('[data-session-row]'),
+  ).find((row) => row.innerText.includes('Alpha progress'))
+  if (alphaRow === undefined) throw new Error('Expected the Alpha progress row')
+  act(() => {
+    alphaRow.click()
+  })
+
+  const snapshot = () => ({
+    selectedTitle: readSelectedTitle(),
+    visibleTitles: Array.from(
+      container.querySelectorAll('.in-progress-section .session-title'),
+      (title) => title.textContent,
+    ),
+    showMore: container.querySelector('.in-progress-section .show-more-button')
+      ?.textContent,
+  })
+  expect(snapshot()).toEqual({
+    selectedTitle: 'Alpha progress',
+    visibleTitles: ['Alpha progress', 'Beta progress'],
+    showMore: '1 more ▸',
+  })
+})
+
 it('restores the Board from its URL and browser history', async () => {
   window.history.replaceState(null, '', '/?view=board')
   renderApp()

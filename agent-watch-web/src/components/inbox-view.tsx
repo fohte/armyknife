@@ -140,8 +140,9 @@ export function InboxView({
     filteredSessions.filter((session) => session.category === 'in_progress'),
     inboxSort,
   )
-  const waiting = filteredSessions.filter(
-    (session) => session.category === 'waiting',
+  const waiting = sortInboxSessions(
+    filteredSessions.filter((session) => session.category === 'waiting'),
+    inboxSort,
   )
   const todoLaterCount = sumTodoLaterCount(inProgress)
   const done = sortInboxSessions(

@@ -388,6 +388,24 @@ it('shows waiting sessions in their own inbox section with the status note', () 
   })
 })
 
+it('sorts Waiting rows with the selected Inbox sort', () => {
+  renderInbox({
+    sessions: [
+      { ...waitingSession('waiting-zeta', 'Zeta waiting'), project: 'zeta' },
+      { ...waitingSession('waiting-beta', 'Beta waiting'), project: 'beta' },
+      { ...waitingSession('waiting-alpha', 'Alpha waiting'), project: 'alpha' },
+    ],
+    sort: 'project',
+  })
+
+  expect(
+    Array.from(
+      container.querySelectorAll('.waiting-section .session-title'),
+      (title) => title.textContent,
+    ),
+  ).toEqual(['Alpha waiting', 'Beta waiting', 'Zeta waiting'])
+})
+
 it('shows the Waiting count and sessions in the iPhone inbox', () => {
   renderInbox({
     sessions: [waitingSession('sample-waiting-phone')],

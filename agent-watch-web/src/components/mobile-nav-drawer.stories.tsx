@@ -95,6 +95,6 @@ export const LongNavigation: Story = {
 }
 
 export const WaitingSession: Story = {
-  name: 'The drawer marks a waiting session with its reason',
+  name: 'The drawer lists a waiting session',
   args: { children: createNavigation(1, true) },
 }
