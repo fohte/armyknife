@@ -82,6 +82,7 @@ const appTestFiles = [
   'src/components/pull-request-list-panel.test.tsx',
   'src/components/inbox-view.test.tsx',
   'src/components/inbox-view.browser.test.tsx',
+  'src/components/inbox-sort-control.browser.test.tsx',
   'src/components/session-status-panel.test.tsx',
   'src/components/use-focus-trap.browser.test.tsx',
   'src/components/review-document-panel.test.tsx',

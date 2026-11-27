@@ -1,6 +1,6 @@
 import { Button } from '@fohte/ui/button'
 
-import { InboxSessionListItem } from '#inbox-session-list-item'
+import { InboxSessionList } from '#components/inbox-session-list'
 import type { Session } from '#types'
 
 export function renderInboxSessionSection({
@@ -16,6 +16,7 @@ export function renderInboxSessionSection({
   className = '',
   onCloseAll,
   closeAllDisabled,
+  groupByProject = false,
 }: {
   title: string
   sessions: readonly Session[]
@@ -26,6 +27,7 @@ export function renderInboxSessionSection({
   className?: string
   onCloseAll?: () => void
   closeAllDisabled?: boolean
+  groupByProject?: boolean
   onLater?: ((id: string) => void) | undefined
   onCloseSession?: ((id: string) => void) | undefined
   onOpenActions?: ((session: Session) => void) | undefined
@@ -48,20 +50,16 @@ export function renderInboxSessionSection({
         ) : null}
       </h2>
       {sessions.length > 0 ? (
-        <ul className="session-list">
-          {sessions.map((session) => (
-            <InboxSessionListItem
-              key={session.id}
-              session={session}
-              selectedId={selectedId}
-              onSelect={onSelect}
-              isMobile={isMobile}
-              onLater={onLater}
-              onCloseSession={onCloseSession}
-              onOpenActions={onOpenActions}
-            />
-          ))}
-        </ul>
+        <InboxSessionList
+          sessions={sessions}
+          selectedId={selectedId}
+          onSelect={onSelect}
+          isMobile={isMobile}
+          groupByProject={groupByProject}
+          onLater={onLater}
+          onCloseSession={onCloseSession}
+          onOpenActions={onOpenActions}
+        />
       ) : null}
     </section>
   )
