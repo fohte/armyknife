@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.964](https://github.com/fohte/armyknife/compare/v0.1.963...v0.1.964) (2026-11-27)
+
+
+### Features
+
+* **agent:** add crit client-started subcommand ([#2355](https://github.com/fohte/armyknife/issues/2355)) ([e6dd1d9](https://github.com/fohte/armyknife/commit/e6dd1d9914008a56a19d34671e8e775a9b9639e1))
+
 ## [0.1.963](https://github.com/fohte/armyknife/compare/v0.1.962...v0.1.963) (2026-11-27)
 
 
