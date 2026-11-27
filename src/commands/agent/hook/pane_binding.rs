@@ -65,9 +65,8 @@ fn resolve_with(
     if let Some((pane, pane_pid)) = get_pane_info(pid) {
         let has_parent_agent = match parent_agent_resolution {
             ParentAgentResolution::Check => has_parent_agent(pid, pane_pid),
-            // Missing state must fail closed because nested hooks can share their
-            // parent's session ID.
-            ParentAgentResolution::Cached(state) => state,
+            ParentAgentResolution::Cached(Some(state)) => Some(state),
+            ParentAgentResolution::Cached(None) => has_parent_agent(pid, pane_pid),
         };
         return Resolution {
             pane_info: (!has_parent_agent.unwrap_or(true)).then_some(pane),
@@ -81,7 +80,9 @@ fn resolve_with(
             has_parent_agent: match parent_agent_resolution {
                 ParentAgentResolution::Check if pane_info.is_some() => Some(false),
                 ParentAgentResolution::Check => None,
-                ParentAgentResolution::Cached(state) => state,
+                ParentAgentResolution::Cached(Some(state)) => Some(state),
+                ParentAgentResolution::Cached(None) if pane_info.is_some() => Some(false),
+                ParentAgentResolution::Cached(None) => None,
             },
             pane_info,
         };
@@ -246,24 +247,38 @@ mod tests {
     }
 
     #[rstest]
-    #[case::direct_agent(Some(false), Some(pane_info()), Some(false))]
-    #[case::nested_agent(Some(true), None, Some(true))]
-    #[case::legacy_session_without_cached_state(None, None, None)]
-    fn non_session_start_uses_cached_state_without_walking_ancestry(
+    #[case::cached_direct_agent(Some(false), Some(true), Some(pane_info()), Some(false), false)]
+    #[case::cached_nested_agent(Some(true), Some(false), None, Some(true), false)]
+    #[case::legacy_direct_agent_is_reclassified(
+        None,
+        Some(false),
+        Some(pane_info()),
+        Some(false),
+        true
+    )]
+    #[case::legacy_nested_agent_is_not_bound(None, Some(true), None, Some(true), true)]
+    #[case::unavailable_classification_stays_unbound(None, None, None, None, true)]
+    fn non_session_start_reuses_known_state_and_reclassifies_unknown_state(
         #[case] cached_has_parent_agent: Option<bool>,
+        #[case] checked_has_parent_agent: Option<bool>,
         #[case] expected_pane: Option<PaneInfo>,
         #[case] expected_state: Option<bool>,
+        #[case] expected_ancestry_check: bool,
     ) {
         let mut ancestry_was_checked = false;
+        let mut pane_lookup_count = 0;
         let result = resolve_with(
             Engine::Claude,
             "session-example",
             123,
             ParentAgentResolution::Cached(cached_has_parent_agent),
-            |_| Some((pane_info(), 100)),
+            |_| {
+                pane_lookup_count += 1;
+                Some((pane_info(), 100))
+            },
             |_, _| {
                 ancestry_was_checked = true;
-                Some(false)
+                checked_has_parent_agent
             },
             |_| None,
         );
@@ -273,8 +288,9 @@ mod tests {
                 result.pane_info,
                 result.has_parent_agent,
                 ancestry_was_checked,
+                pane_lookup_count,
             ),
-            (expected_pane, expected_state, false),
+            (expected_pane, expected_state, expected_ancestry_check, 1,),
         );
     }
 
@@ -293,7 +309,7 @@ mod tests {
             ),
             Resolution {
                 pane_info: Some(expected),
-                has_parent_agent: None,
+                has_parent_agent: Some(false),
             },
         );
     }

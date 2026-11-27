@@ -8,11 +8,13 @@ use super::{open_connection, validate_session_id};
 pub(super) fn has_parent_agent_process_from_connection(
     connection: &Connection,
     session_id: &str,
+    agent_id: Option<&str>,
 ) -> Result<Option<bool>> {
     let state = connection
         .query_row(
-            "SELECT has_parent_agent FROM agent_session_pane_binding_state WHERE session_id = ?1",
-            [session_id],
+            "SELECT has_parent_agent FROM agent_session_pane_binding_state
+             WHERE session_id = ?1 AND agent_id = ?2",
+            params![session_id, agent_id.unwrap_or_default()],
             |row| row.get::<_, Option<bool>>(0),
         )
         .optional()?;
@@ -22,15 +24,16 @@ pub(super) fn has_parent_agent_process_from_connection(
 pub(crate) fn set_has_parent_agent_process(
     sessions_dir: &Path,
     session_id: &str,
+    agent_id: Option<&str>,
     has_parent_agent: Option<bool>,
 ) -> Result<()> {
     validate_session_id(session_id)?;
     let connection = open_connection(sessions_dir)?;
     connection.execute(
-        "INSERT INTO agent_session_pane_binding_state (session_id, has_parent_agent)
-         VALUES (?1, ?2)
-         ON CONFLICT(session_id) DO UPDATE SET has_parent_agent = excluded.has_parent_agent",
-        params![session_id, has_parent_agent],
+        "INSERT INTO agent_session_pane_binding_state (session_id, agent_id, has_parent_agent)
+         VALUES (?1, ?2, ?3)
+         ON CONFLICT(session_id, agent_id) DO UPDATE SET has_parent_agent = excluded.has_parent_agent",
+        params![session_id, agent_id.unwrap_or_default(), has_parent_agent],
     )?;
     Ok(())
 }
@@ -50,11 +53,11 @@ mod tests {
     #[case::direct_agent(Some(false))]
     #[case::nested_agent(Some(true))]
     #[case::unavailable(None)]
-    fn parent_agent_state_persists_per_session(
+    fn parent_agent_state_persists_per_agent(
         sessions_dir: tempfile::TempDir,
         #[case] state: Option<bool>,
     ) -> Result<()> {
-        set_has_parent_agent_process(sessions_dir.path(), "fixture-session-cedar", state)?;
+        set_has_parent_agent_process(sessions_dir.path(), "fixture-session-cedar", None, state)?;
         let connection = open_connection(sessions_dir.path())?;
         let state_exists = connection.query_row(
             "SELECT EXISTS(SELECT 1 FROM agent_session_pane_binding_state WHERE session_id = ?1)",
@@ -64,7 +67,11 @@ mod tests {
 
         assert_eq!(
             (
-                has_parent_agent_process_from_connection(&connection, "fixture-session-cedar")?,
+                has_parent_agent_process_from_connection(
+                    &connection,
+                    "fixture-session-cedar",
+                    None,
+                )?,
                 state_exists,
             ),
             (state, true),
@@ -82,7 +89,11 @@ mod tests {
         )?;
         assert_eq!(
             (
-                has_parent_agent_process_from_connection(&connection, "fixture-session-cedar")?,
+                has_parent_agent_process_from_connection(
+                    &connection,
+                    "fixture-session-cedar",
+                    None,
+                )?,
                 state_exists,
             ),
             (None, false),
@@ -94,13 +105,64 @@ mod tests {
     fn parent_agent_state_is_replaced_after_a_later_session_start(
         sessions_dir: tempfile::TempDir,
     ) -> Result<()> {
-        set_has_parent_agent_process(sessions_dir.path(), "fixture-session-cedar", Some(false))?;
-        set_has_parent_agent_process(sessions_dir.path(), "fixture-session-cedar", Some(true))?;
+        set_has_parent_agent_process(
+            sessions_dir.path(),
+            "fixture-session-cedar",
+            None,
+            Some(false),
+        )?;
+        set_has_parent_agent_process(
+            sessions_dir.path(),
+            "fixture-session-cedar",
+            None,
+            Some(true),
+        )?;
         let connection = open_connection(sessions_dir.path())?;
 
         assert_eq!(
-            has_parent_agent_process_from_connection(&connection, "fixture-session-cedar")?,
+            has_parent_agent_process_from_connection(&connection, "fixture-session-cedar", None,)?,
             Some(true),
+        );
+        Ok(())
+    }
+
+    #[rstest]
+    fn parent_agent_state_is_scoped_to_the_subagent_id(
+        sessions_dir: tempfile::TempDir,
+    ) -> Result<()> {
+        set_has_parent_agent_process(
+            sessions_dir.path(),
+            "fixture-session-cedar",
+            None,
+            Some(false),
+        )?;
+        set_has_parent_agent_process(
+            sessions_dir.path(),
+            "fixture-session-cedar",
+            Some("fixture-agent-cobalt"),
+            Some(true),
+        )?;
+        let connection = open_connection(sessions_dir.path())?;
+
+        assert_eq!(
+            (
+                has_parent_agent_process_from_connection(
+                    &connection,
+                    "fixture-session-cedar",
+                    None,
+                )?,
+                has_parent_agent_process_from_connection(
+                    &connection,
+                    "fixture-session-cedar",
+                    Some("fixture-agent-cobalt"),
+                )?,
+                has_parent_agent_process_from_connection(
+                    &connection,
+                    "fixture-session-cedar",
+                    Some("fixture-agent-amber"),
+                )?,
+            ),
+            (Some(false), Some(true), None),
         );
         Ok(())
     }

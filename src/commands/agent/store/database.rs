@@ -167,6 +167,7 @@ pub(crate) fn load_session(sessions_dir: &Path, session_id: &str) -> Result<Opti
 pub(crate) fn load_hook_session_state(
     sessions_dir: &Path,
     session_id: &str,
+    agent_id: Option<&str>,
 ) -> Result<(Option<Session>, Option<bool>)> {
     validate_session_id(session_id)?;
     if !sessions_dir.exists() {
@@ -179,6 +180,7 @@ pub(crate) fn load_hook_session_state(
         agent_session_pane_binding::has_parent_agent_process_from_connection(
             &connection,
             session_id,
+            agent_id,
         )?,
     ))
 }
