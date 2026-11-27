@@ -21,16 +21,14 @@ pub(super) fn is_active_branch_continuation(state: &ClaudeParserState, record: &
     let Some(parent_uuid) = parent_uuid else {
         return state.latest_uuid.is_none();
     };
-    let parent_is_active = state
+    let parent_membership = state
         .transcript_nodes
         .get(&parent_uuid)
-        .is_some_and(|node| {
-            matches!(
-                node.membership,
-                BranchMembership::Active | BranchMembership::ReachesActive
-            )
-        });
-    if !parent_is_active {
+        .map(|node| node.membership);
+    if !matches!(
+        parent_membership,
+        Some(BranchMembership::Active | BranchMembership::ReachesActive)
+    ) {
         return false;
     }
     let parent_is_latest = state.latest_uuid.as_deref() == Some(parent_uuid.as_str());
@@ -46,23 +44,11 @@ pub(super) fn is_active_branch_continuation(state: &ClaudeParserState, record: &
             });
     let supported_parallel_result_parent =
         is_tool_result_only && state.is_supported_parallel_tool_result_append(&parent_uuid);
-    let assistant_continues_tool_result_parent = record.get("type").and_then(Value::as_str)
+    let parent_is_active = parent_membership == Some(BranchMembership::Active);
+    let parent_is_latest_inert_attachment = record.get("type").and_then(Value::as_str)
         == Some("assistant")
-        && state.tool_result_parent.as_deref() == Some(parent_uuid.as_str())
-        && state.latest_uuid.as_deref().is_some_and(|uuid| {
-            state.is_valid_tool_result_uuid(uuid)
-                && state
-                    .transcript_nodes
-                    .get(uuid)
-                    .and_then(|node| node.parent_uuid.as_deref())
-                    .and_then(|parent_uuid| state.transcript_nodes.get(parent_uuid))
-                    .is_some_and(|parent| parent.has_tool_use)
-        });
-    if !parent_is_latest
-        && !parent_is_latest_record
-        && !parent_is_latest_inert_attachment
-        && !supported_parallel_result_parent
-        && !assistant_continues_tool_result_parent
+        && parent_is_latest_inert_attachment;
+    if !parent_is_active && !supported_parallel_result_parent && !parent_is_latest_inert_attachment
     {
         return false;
     }
@@ -102,8 +88,7 @@ pub(super) fn is_active_branch_continuation(state: &ClaudeParserState, record: &
         return parent_is_latest_record
             || parent_is_latest
             || parent_is_latest_inert_attachment
-            || state.latest_uuid.as_deref() == Some(parent_uuid.as_str())
-            || assistant_continues_tool_result_parent;
+            || state.latest_uuid.as_deref() == Some(parent_uuid.as_str());
     }
     parent_is_latest_record
 }

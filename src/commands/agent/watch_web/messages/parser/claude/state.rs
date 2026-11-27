@@ -162,6 +162,7 @@ impl ClaudeParserState {
             side_branch_continuation,
             task_notification.is_some(),
         );
+        self.observe_tool_result_owner_uuids(&record, uuid, pending_tool_result_on_active_branch);
 
         if is_tool_result_only {
             self.tool_result_parent = parent_uuid;

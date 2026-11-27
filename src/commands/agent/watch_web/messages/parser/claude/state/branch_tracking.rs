@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use serde_json::Value;
 
@@ -13,6 +13,7 @@ pub(super) struct ClaudeBranchTracking {
     valid_tool_result_uuids: HashSet<String>,
     side_branch_assistant_uuids: HashSet<String>,
     compact_boundary_branch_uuids: HashSet<String>,
+    tool_result_owner_uuids: HashMap<String, HashSet<String>>,
 }
 
 impl ClaudeBranchTracking {
@@ -97,6 +98,19 @@ impl ClaudeBranchTracking {
 
     pub(super) fn is_side_branch_tool_use_assistant_uuid(&self, uuid: &str) -> bool {
         self.side_branch_tool_use_assistant_uuids.contains(uuid)
+    }
+
+    pub(super) fn observe_tool_result_owner_uuids(
+        &mut self,
+        uuid: &str,
+        owner_uuids: HashSet<String>,
+    ) {
+        self.tool_result_owner_uuids
+            .insert(uuid.to_owned(), owner_uuids);
+    }
+
+    pub(super) fn tool_result_owner_uuids(&self, uuid: &str) -> Option<&HashSet<String>> {
+        self.tool_result_owner_uuids.get(uuid)
     }
 
     fn reset_side_branch_continuations(&mut self) {

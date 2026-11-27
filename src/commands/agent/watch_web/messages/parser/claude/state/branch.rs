@@ -162,6 +162,7 @@ impl ClaudeParserState {
                                     parent_uuid,
                                     source_assistant_uuid,
                                     self,
+                                    false,
                                 )
                         }) || self.question_uses.get(id).is_some_and(|assistant_uuid| {
                             tool_owner_matches(
@@ -169,10 +170,56 @@ impl ClaudeParserState {
                                 parent_uuid,
                                 source_assistant_uuid,
                                 self,
+                                true,
                             )
                         })
                     })
             })
+    }
+
+    pub(super) fn result_owner_uuids(&self, record: &Value) -> HashSet<String> {
+        let mut owner_uuids = HashSet::new();
+        if let Some(owner_uuid) = record
+            .get("sourceToolAssistantUUID")
+            .and_then(Value::as_str)
+        {
+            owner_uuids.insert(owner_uuid.to_owned());
+        }
+        let Some(message) = record.get("message") else {
+            return owner_uuids;
+        };
+        for block in tool_result_blocks(message) {
+            let Some(tool_use_id) = block.get("tool_use_id").and_then(Value::as_str) else {
+                continue;
+            };
+            if let Some(owner_uuid) = self
+                .tool_uses
+                .iter()
+                .find(|tool_use| tool_use.id == tool_use_id)
+                .and_then(|tool_use| tool_use.assistant_uuid.as_deref())
+                .or_else(|| {
+                    self.question_uses
+                        .get(tool_use_id)
+                        .and_then(Option::as_deref)
+                })
+            {
+                owner_uuids.insert(owner_uuid.to_owned());
+            }
+        }
+        owner_uuids
+    }
+
+    pub(super) fn observe_tool_result_owner_uuids(
+        &mut self,
+        record: &Value,
+        uuid: Option<&str>,
+        pending_tool_result_on_active_branch: bool,
+    ) {
+        if pending_tool_result_on_active_branch && let Some(uuid) = uuid {
+            let owner_uuids = self.result_owner_uuids(record);
+            self.branch_tracking
+                .observe_tool_result_owner_uuids(uuid, owner_uuids);
+        }
     }
 
     pub(in crate::commands::agent::watch_web::messages::parser::claude) fn is_supported_parallel_tool_result_append(
@@ -229,7 +276,6 @@ impl ClaudeParserState {
             return false;
         };
         latest.is_assistant
-            && !latest.has_tool_use
             && latest.parent_uuid.as_deref().is_some_and(|sibling_uuid| {
                 sibling_uuid != parent_uuid
                     && self.branch_tracking.is_valid_tool_result_uuid(sibling_uuid)
@@ -264,6 +310,14 @@ impl ClaudeParserState {
                 BranchMembership::Active | BranchMembership::ReachesActive
             ) {
                 continue;
+            }
+            // A pending sibling call is expected while its owner is the active tip.
+            if node.has_tool_use
+                && node.parent_uuid.as_deref() == Some(parent_uuid)
+                && self.latest_uuid.as_deref() != Some(parent_uuid)
+                && self.latest_uuid.as_deref() != Some(uuid.as_str())
+            {
+                return true;
             }
             let is_tool_result = self.branch_tracking.is_valid_tool_result_uuid(&uuid);
             let is_side_branch_assistant =
@@ -397,17 +451,30 @@ fn tool_owner_matches(
     parent_uuid: Option<&str>,
     source_assistant_uuid: Option<&str>,
     state: &ClaudeParserState,
+    allow_result_parent_from_another_owner: bool,
 ) -> bool {
+    if let Some(parent_uuid) = parent_uuid.filter(|uuid| {
+        state.branch_tracking.is_valid_tool_result_uuid(uuid)
+            && state.transcript_nodes.get(*uuid).is_some_and(|node| {
+                node.membership == super::super::transcript_branch::BranchMembership::Active
+            })
+    }) {
+        if allow_result_parent_from_another_owner {
+            return true;
+        }
+        let Some(owner_uuid) = tool_assistant_uuid.or(source_assistant_uuid) else {
+            return false;
+        };
+        return state
+            .branch_tracking
+            .tool_result_owner_uuids(parent_uuid)
+            .is_some_and(|owner_uuids| owner_uuids.contains(owner_uuid));
+    }
+
     tool_assistant_uuid.is_none_or(|tool_assistant_uuid| {
         (parent_uuid.is_none() && source_assistant_uuid.is_none())
             || parent_uuid == Some(tool_assistant_uuid)
             || source_assistant_uuid == Some(tool_assistant_uuid)
-            || parent_uuid.is_some_and(|parent_uuid| {
-                state.branch_tracking.is_valid_tool_result_uuid(parent_uuid)
-                    && state.transcript_nodes.get(parent_uuid).is_some_and(|node| {
-                        node.membership == super::super::transcript_branch::BranchMembership::Active
-                    })
-            })
     })
 }
 

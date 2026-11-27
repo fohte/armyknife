@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader, Cursor, Read, Seek, SeekFrom};
 
 use chrono::{DateTime, TimeZone, Utc};
@@ -338,6 +337,26 @@ fn incremental_result(
     )
 }
 
+fn incremental_three_chunk_result(
+    first: &[u8],
+    second: &[u8],
+    third: &[u8],
+) -> Option<super::ParsedTranscript> {
+    let mut parser = incremental_parser(first);
+    for chunk in [second, third] {
+        if parser.append_bytes(chunk, fixed_time()).unwrap() == IncrementalAppend::RestartRequired {
+            return None;
+        }
+    }
+    Some(parser.render_with(fixed_time(), empty_additions()).unwrap())
+}
+
+fn incremental_applied_result(prefix: &[u8], suffix: &[u8]) -> Option<super::ParsedTranscript> {
+    let mut parser = incremental_parser(prefix);
+    (parser.append_bytes(suffix, fixed_time()).unwrap() == IncrementalAppend::Applied)
+        .then(|| parser.render_with(fixed_time(), empty_additions()).unwrap())
+}
+
 fn assert_incremental_matches_full_parse_at_every_split_point(
     transcript: &str,
     expected: &super::ParsedTranscript,
@@ -370,15 +389,14 @@ struct TranscriptFixtureRng(u64);
 
 impl TranscriptFixtureRng {
     fn next(&mut self) -> u64 {
-        self.0 = self
-            .0
-            .wrapping_mul(6_364_136_223_846_793_005)
-            .wrapping_add(1_442_695_040_888_963_407);
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
         self.0
     }
 
     fn index(&mut self, length: usize) -> usize {
-        (self.next() as usize) % length
+        (self.next() % length as u64) as usize
     }
 }
 
@@ -388,104 +406,143 @@ struct FixtureToolUse {
     owner_uuid: String,
 }
 
-fn generated_short_transcript(seed: u64) -> Vec<serde_json::Value> {
-    let mut rng = TranscriptFixtureRng(seed);
-    let record_count = 3 + rng.index(6);
+fn generated_transcript(seed: u64) -> Vec<serde_json::Value> {
+    let mut rng = TranscriptFixtureRng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+    for _ in 0..4 {
+        rng.next();
+    }
+    let record_count = 3 + rng.index(8);
     let mut records = Vec::with_capacity(record_count);
     let mut known_uuids = Vec::<String>::new();
-    let mut tool_uses = Vec::<FixtureToolUse>::new();
-    let mut result_uuids_by_owner = HashMap::<String, Vec<String>>::new();
+    let mut result_uuids = Vec::<String>::new();
+    let mut pending_tool_uses = Vec::<FixtureToolUse>::new();
+    let mut completed_tool_uses = Vec::<FixtureToolUse>::new();
+
     for index in 0..record_count {
         let uuid = format!("fixture-{seed}-record-{index}");
-        let parent_uuid =
+        let latest_parent = known_uuids.last().cloned();
+        let arbitrary_parent =
             (!known_uuids.is_empty()).then(|| known_uuids[rng.index(known_uuids.len())].clone());
-        let choice = rng.index(100);
-        let kind = match (tool_uses.is_empty(), choice) {
-            (false, 0..=39) => 0,
-            (false, 40..=59) | (true, 45..=67) => 1,
-            (false, 60..=74) | (true, 68..=84) => 2,
-            (false, 75..=89) | (true, 0..=44 | 85..=94) => 3,
-            _ => 4,
+        let parent_uuid = if rng.index(10) < 6 {
+            latest_parent.clone()
+        } else {
+            arbitrary_parent.clone()
         };
-        match kind {
-            0 => {
-                let tool_use_index = rng.index(tool_uses.len());
-                let tool_use = tool_uses.remove(tool_use_index);
-                let prior_results = result_uuids_by_owner
-                    .get(&tool_use.owner_uuid)
-                    .map(Vec::as_slice)
-                    .unwrap_or_default();
-                let parent_uuid = if !prior_results.is_empty() && rng.index(2) == 0 {
-                    Some(prior_results[rng.index(prior_results.len())].clone())
-                } else if rng.index(5) == 0 {
-                    parent_uuid
-                } else {
-                    Some(tool_use.owner_uuid.clone())
-                };
-                records.push(serde_json::json!({
-                    "type": "user",
-                    "uuid": uuid.clone(),
-                    "parentUuid": parent_uuid,
-                    "message": {"content": [{
-                        "type": "tool_result",
-                        "tool_use_id": tool_use.id,
-                        "content": "Fixture output.",
-                    }]},
-                }));
-                result_uuids_by_owner
-                    .entry(tool_use.owner_uuid)
-                    .or_default()
-                    .push(uuid.clone());
-                known_uuids.push(uuid);
-            }
-            1 => {
-                records.push(serde_json::json!({
-                    "type": "user",
-                    "uuid": uuid.clone(),
-                    "parentUuid": parent_uuid,
-                    "message": {"content": if index == 0 { "Run a fixture request." } else { "A later fixture request." }},
-                }));
-                known_uuids.push(uuid);
-            }
-            2 => {
-                records.push(serde_json::json!({
-                    "type": "assistant",
-                    "uuid": uuid.clone(),
-                    "parentUuid": parent_uuid,
-                    "message": {"content": [{"type": "text", "text": "A fixture response."}]},
-                }));
-                known_uuids.push(uuid);
-            }
-            3 => {
-                let tool_count = 1 + rng.index(2);
-                let mut content = Vec::with_capacity(tool_count);
-                for tool_index in 0..tool_count {
-                    let id = format!("fixture-{seed}-tool-{index}-{tool_index}");
-                    content.push(serde_json::json!({
-                        "type": "tool_use",
-                        "id": id,
-                        "name": "Read",
-                        "input": {"file_path": format!("/fixture/generated-{index}-{tool_index}.md")},
-                    }));
-                    tool_uses.push(FixtureToolUse {
-                        id: format!("fixture-{seed}-tool-{index}-{tool_index}"),
-                        owner_uuid: uuid.clone(),
-                    });
+        let kind = rng.index(100);
+
+        if kind < 30 && (!pending_tool_uses.is_empty() || !completed_tool_uses.is_empty()) {
+            let tool_use = if !pending_tool_uses.is_empty() && rng.index(8) != 0 {
+                pending_tool_uses.remove(rng.index(pending_tool_uses.len()))
+            } else if !completed_tool_uses.is_empty() {
+                completed_tool_uses[rng.index(completed_tool_uses.len())].clone()
+            } else {
+                pending_tool_uses.remove(rng.index(pending_tool_uses.len()))
+            };
+            let parent_uuid = match rng.index(6) {
+                0 | 1 => Some(tool_use.owner_uuid.clone()),
+                2 if !result_uuids.is_empty() => {
+                    Some(result_uuids[rng.index(result_uuids.len())].clone())
                 }
-                records.push(serde_json::json!({
-                    "type": "assistant",
-                    "uuid": uuid.clone(),
-                    "parentUuid": parent_uuid,
-                    "message": {"content": content},
+                3 => latest_parent.clone(),
+                4 => arbitrary_parent.clone(),
+                _ => Some(tool_use.owner_uuid.clone()),
+            };
+            let mut content = vec![serde_json::json!({
+                "type": "tool_result",
+                "tool_use_id": tool_use.id.clone(),
+                "content": "Fixture output.",
+            })];
+            if !pending_tool_uses.is_empty() && rng.index(5) == 0 {
+                let second_tool_use = pending_tool_uses.remove(rng.index(pending_tool_uses.len()));
+                content.push(serde_json::json!({
+                    "type": "tool_result",
+                    "tool_use_id": second_tool_use.id.clone(),
+                    "content": "Second fixture output.",
                 }));
-                known_uuids.push(uuid);
+                completed_tool_uses.push(second_tool_use);
             }
-            _ => records.push(serde_json::json!({
+            let mut record = serde_json::json!({
                 "type": "user",
+                "uuid": uuid.clone(),
+                "parentUuid": parent_uuid,
+                "message": {"content": content},
+            });
+            if rng.index(4) == 0 {
+                record["sourceToolAssistantUUID"] = serde_json::json!(tool_use.owner_uuid.clone());
+            }
+            records.push(record);
+            completed_tool_uses.push(tool_use);
+            result_uuids.push(uuid.clone());
+            known_uuids.push(uuid);
+        } else if kind < 52 {
+            let tool_count = 1 + rng.index(3);
+            let mut content = Vec::with_capacity(tool_count + 1);
+            if rng.index(3) == 0 {
+                content.push(serde_json::json!({
+                    "type": "text",
+                    "text": format!("Fixture context {index}."),
+                }));
+            }
+            for tool_index in 0..tool_count {
+                let id = format!("fixture-{seed}-tool-{index}-{tool_index}");
+                content.push(serde_json::json!({
+                    "type": "tool_use",
+                    "id": id,
+                    "name": "Read",
+                    "input": {"file_path": format!("/fixture/generated-{index}-{tool_index}.md")},
+                }));
+                pending_tool_uses.push(FixtureToolUse {
+                    id: format!("fixture-{seed}-tool-{index}-{tool_index}"),
+                    owner_uuid: uuid.clone(),
+                });
+            }
+            records.push(serde_json::json!({
+                "type": "assistant",
+                "uuid": uuid.clone(),
+                "parentUuid": parent_uuid,
+                "message": {"content": content},
+            }));
+            known_uuids.push(uuid);
+        } else if kind < 67 {
+            records.push(serde_json::json!({
+                "type": "assistant",
+                "uuid": uuid.clone(),
+                "parentUuid": parent_uuid,
+                "message": {"content": [{"type": "text", "text": format!("Fixture response {index}.")}]},
+            }));
+            known_uuids.push(uuid);
+        } else if kind < 79 {
+            records.push(serde_json::json!({
+                "type": "user",
+                "uuid": uuid.clone(),
+                "parentUuid": parent_uuid,
+                "message": {"content": format!("Fixture request {index}.")},
+            }));
+            known_uuids.push(uuid);
+        } else if kind < 89 {
+            records.push(serde_json::json!({
+                "type": "user",
+                "parentUuid": if rng.index(2) == 0 { latest_parent.clone() } else { arbitrary_parent.clone() },
+                "origin": {"kind": "task-notification"},
+                "message": {"content": format!("<task-notification><task-id>fixture-task-{}</task-id><status>completed</status></task-notification>", rng.index(2))},
+            }));
+        } else if kind < 94 {
+            records.push(serde_json::json!({
+                "type": "user",
+                "uuid": uuid.clone(),
                 "parentUuid": parent_uuid,
                 "origin": {"kind": "task-notification"},
                 "message": {"content": "<task-notification><task-id>fixture-task</task-id><status>completed</status></task-notification>"},
-            })),
+            }));
+            known_uuids.push(uuid);
+        } else {
+            records.push(serde_json::json!({
+                "type": "attachment",
+                "uuid": uuid.clone(),
+                "parentUuid": parent_uuid,
+                "attachment": {"type": "hook_success", "hookName": "PostToolUse"},
+            }));
+            known_uuids.push(uuid);
         }
     }
 
@@ -504,22 +561,41 @@ fn serialize_fixture_transcript(records: &[serde_json::Value]) -> String {
     transcript
 }
 
-fn assert_incremental_matches_full_parse_at_every_record_boundary(
-    records: &[serde_json::Value],
-    expected: &super::ParsedTranscript,
+fn fixture_record_boundaries(records: &[serde_json::Value]) -> Vec<usize> {
+    let mut boundaries = vec![0];
+    for record in records {
+        let next = boundaries.last().copied().unwrap_or_default() + record.to_string().len() + 1;
+        boundaries.push(next);
+    }
+    boundaries
+}
+
+fn assert_append_matches_full_parse_at_record_boundary(
+    prefix: &str,
+    suffix: &str,
+    expected_append: Option<IncrementalAppend>,
     context: &str,
 ) {
-    let transcript = serialize_fixture_transcript(records);
-    for split in 0..=records.len() {
-        let prefix = serialize_fixture_transcript(&records[..split]);
-        let suffix = serialize_fixture_transcript(&records[split..]);
-        let (_, actual) = incremental_result(prefix.as_bytes(), suffix.as_bytes());
+    let transcript = format!("{prefix}{suffix}");
+    let expected = parse_all(transcript.as_bytes(), empty_additions());
+    let actual = incremental_result(prefix.as_bytes(), suffix.as_bytes());
+    if let Some(expected_append) = expected_append {
         assert_eq!(
-            actual,
-            expected.clone(),
-            "{context}: transcript split after record {split}\n{transcript}",
+            actual.0, expected_append,
+            "{context}: append at the record boundary",
         );
     }
+    assert_eq!(
+        actual.1,
+        expected.clone(),
+        "{context}: append at the record boundary",
+    );
+    assert_incremental_matches_full_parse_at_every_split_point(
+        &transcript,
+        &expected,
+        None,
+        context,
+    );
 }
 
 const PARALLEL_TOOLS_WITH_SYSTEM_AFTER_RESULT: &str = indoc! {r#"
@@ -535,6 +611,18 @@ const PARALLEL_TOOL_RESULT_BRANCH_PREFIX: &str = indoc! {r#"
     {"type":"assistant","uuid":"fixture-second-call","parentUuid":"fixture-first-call","timestamp":"2026-01-01T00:00:03Z","message":{"content":[{"type":"tool_use","id":"fixture-call-b","name":"Read","input":{"file_path":"/fixture/b"}}]}}
     {"type":"user","uuid":"fixture-result-a","parentUuid":"fixture-first-call","timestamp":"2026-01-01T00:00:04Z","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-call-a","content":"first result"}]}}
     {"type":"assistant","uuid":"fixture-followup","parentUuid":"fixture-result-a","timestamp":"2026-01-01T00:00:05Z","message":{"content":[{"type":"text","text":"The first tool result is ready."}]}}
+"#};
+
+const PARALLEL_TOOL_USE_RESULT_BRANCH_PREFIX: &str = indoc! {r#"
+    {"type":"user","uuid":"fixture-root","parentUuid":null,"timestamp":"2026-01-01T00:00:01Z","message":{"content":"Run two fixture tools."}}
+    {"type":"assistant","uuid":"fixture-first-call","parentUuid":"fixture-root","timestamp":"2026-01-01T00:00:02Z","message":{"content":[{"type":"tool_use","id":"fixture-call-a","name":"Read","input":{"file_path":"/fixture/a"}}]}}
+    {"type":"assistant","uuid":"fixture-second-call","parentUuid":"fixture-first-call","timestamp":"2026-01-01T00:00:03Z","message":{"content":[{"type":"tool_use","id":"fixture-call-b","name":"Read","input":{"file_path":"/fixture/b"}}]}}
+    {"type":"user","uuid":"fixture-result-a","parentUuid":"fixture-first-call","timestamp":"2026-01-01T00:00:04Z","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-call-a","content":"first result"}]}}
+    {"type":"assistant","uuid":"fixture-next-call","parentUuid":"fixture-result-a","timestamp":"2026-01-01T00:00:05Z","message":{"content":[{"type":"tool_use","id":"fixture-call-c","name":"Read","input":{"file_path":"/fixture/c"}}]}}
+"#};
+
+const PARALLEL_TOOL_USE_RESULT_BRANCH_SUFFIX: &str = indoc! {r#"
+    {"type":"user","uuid":"fixture-result-b","parentUuid":"fixture-second-call","timestamp":"2026-01-01T00:00:06Z","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-call-b","content":"second result"}]}}
 "#};
 
 const PARALLEL_TOOL_RESULT_BRANCH_SUFFIX: &str = indoc! {r#"
@@ -696,7 +784,7 @@ const INITIAL_PENDING_SIBLING_TRANSCRIPT: &str = indoc! {r#"
         {"type":"user","uuid":"result-b","parentUuid":"parallel-calls","timestamp":"2026-01-01T00:00:03Z","message":{"content":[{"type":"tool_result","tool_use_id":"call-b","content":"second result"}]}}
         {"type":"assistant","uuid":"parallel-answer","parentUuid":"parallel-calls","timestamp":"2026-01-01T00:00:04Z","message":{"content":[{"type":"text","text":"Parallel work is complete."}]}}
     "#},
-    IncrementalAppend::Applied,
+    IncrementalAppend::RestartRequired,
 )]
 #[case::user_message_branching_from_an_active_ancestor_restarts(
     indoc! {r#"
@@ -801,7 +889,7 @@ fn appended_transcript_matches_a_full_parse(
 fn parallel_tool_result_matches_a_full_parse_at_every_split_point() {
     let transcript = format!(
         "{}{}",
-        PARALLEL_TOOL_RESULT_BRANCH_PREFIX, PARALLEL_TOOL_RESULT_BRANCH_SUFFIX
+        PARALLEL_TOOL_USE_RESULT_BRANCH_PREFIX, PARALLEL_TOOL_USE_RESULT_BRANCH_SUFFIX
     );
     let expected = parse_all(transcript.as_bytes(), empty_additions());
 
@@ -1087,18 +1175,154 @@ fn assistant_after_a_task_notification_and_its_followup_restarts_an_old_side_bra
 }
 
 #[test]
-fn generated_short_transcripts_match_full_parse_at_every_split_point() {
-    for seed in 0..20_000 {
-        let actual_seed = seed + 4_107;
-        let records = generated_short_transcript(actual_seed);
+fn generated_transcripts_match_full_parse_at_record_byte_and_three_chunk_splits() {
+    for sample_index in 0..7_500 {
+        let seed = sample_index * 7;
+        let records = generated_transcript(seed);
         let transcript = serialize_fixture_transcript(&records);
-        let expected = parse_all(transcript.as_bytes(), empty_additions());
-        let context = format!("generated transcript seed {actual_seed}");
+        let bytes = transcript.as_bytes();
+        let expected = parse_all(bytes, empty_additions());
+        let boundaries = fixture_record_boundaries(&records);
 
-        assert_incremental_matches_full_parse_at_every_record_boundary(
-            &records, &expected, &context,
-        );
+        for (record_split, &split) in boundaries.iter().enumerate() {
+            if let Some(actual) = incremental_applied_result(&bytes[..split], &bytes[split..]) {
+                assert_eq!(
+                    actual,
+                    expected.clone(),
+                    "seed {seed}: record-boundary split after record {record_split}\n{transcript}",
+                );
+            }
+        }
+
+        if sample_index % 100 == 0 {
+            for split in 0..=bytes.len() {
+                if !transcript.is_char_boundary(split) {
+                    continue;
+                }
+                if let Some(actual) = incremental_applied_result(&bytes[..split], &bytes[split..]) {
+                    assert_eq!(
+                        actual,
+                        expected.clone(),
+                        "seed {seed}: byte split at offset {split}\n{transcript}",
+                    );
+                }
+            }
+        }
+
+        if sample_index % 10 == 0 {
+            for first_split in 0..boundaries.len().saturating_sub(2) {
+                for second_split in first_split + 1..boundaries.len() - 1 {
+                    let first = boundaries[first_split];
+                    let second = boundaries[second_split];
+                    let Some(actual) = incremental_three_chunk_result(
+                        &bytes[..first],
+                        &bytes[first..second],
+                        &bytes[second..],
+                    ) else {
+                        continue;
+                    };
+                    assert_eq!(
+                        actual,
+                        expected.clone(),
+                        "seed {seed}: three-chunk split after records {first_split} and {second_split}\n{transcript}",
+                    );
+                }
+            }
+        }
     }
+}
+
+#[rstest]
+#[case::late_result_after_a_pending_tool_use_child(
+    indoc! {r#"
+        {"type":"assistant","uuid":"fixture-owner-a","parentUuid":null,"message":{"content":[{"type":"tool_use","id":"fixture-call-a","name":"Read","input":{"file_path":"/fixture/a.md"}}]}}
+        {"type":"user","uuid":"fixture-result-a","parentUuid":"fixture-owner-a","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-call-a","content":"first result"}]}}
+        {"type":"assistant","uuid":"fixture-owner-b","parentUuid":"fixture-owner-a","message":{"content":[{"type":"tool_use","id":"fixture-call-b","name":"Read","input":{"file_path":"/fixture/b.md"}}]}}
+        {"type":"assistant","uuid":"fixture-child-call","parentUuid":"fixture-owner-b","message":{"content":[{"type":"tool_use","id":"fixture-call-c","name":"Read","input":{"file_path":"/fixture/c.md"}}]}}
+        {"type":"assistant","uuid":"fixture-followup","parentUuid":"fixture-result-a","message":{"content":[{"type":"text","text":"The first result is ready."}]}}
+    "#},
+    indoc! {r#"
+        {"type":"user","uuid":"fixture-result-b","parentUuid":"fixture-owner-b","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-call-b","content":"second result"}]}}
+    "#},
+    "late result after pending tool-use child",
+    Some(IncrementalAppend::RestartRequired),
+)]
+#[case::result_sibling_after_a_result_followup(
+    indoc! {r#"
+        {"type":"assistant","uuid":"fixture-owner","parentUuid":null,"message":{"content":[{"type":"tool_use","id":"fixture-call-a","name":"Read","input":{"file_path":"/fixture/a.md"}},{"type":"tool_use","id":"fixture-call-b","name":"Read","input":{"file_path":"/fixture/b.md"}}]}}
+        {"type":"user","uuid":"fixture-result-a","parentUuid":"fixture-owner","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-call-a","content":"first result"}]}}
+        {"type":"assistant","uuid":"fixture-followup","parentUuid":"fixture-result-a","message":{"content":[{"type":"text","text":"The first result is ready."}]}}
+    "#},
+    indoc! {r#"
+        {"type":"user","uuid":"fixture-result-b","parentUuid":"fixture-result-a","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-call-b","content":"second result"}]}}
+    "#},
+    "result sibling after a result follow-up",
+    Some(IncrementalAppend::RestartRequired),
+)]
+#[case::text_branch_followed_by_another_owner_result(
+    indoc! {r#"
+        {"type":"assistant","uuid":"fixture-owner","parentUuid":null,"message":{"content":[{"type":"tool_use","id":"fixture-call-a","name":"Read","input":{"file_path":"/fixture/a.md"}},{"type":"tool_use","id":"fixture-call-b","name":"Read","input":{"file_path":"/fixture/b.md"}}]}}
+        {"type":"user","uuid":"fixture-result-b","parentUuid":"fixture-owner","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-call-b","content":"second result"}]}}
+        {"type":"assistant","uuid":"fixture-followup-one","parentUuid":"fixture-result-b","message":{"content":[{"type":"text","text":"First follow-up."}]}}
+        {"type":"assistant","uuid":"fixture-followup-two","parentUuid":"fixture-followup-one","message":{"content":[{"type":"text","text":"Second follow-up."}]}}
+    "#},
+    indoc! {r#"
+        {"type":"user","uuid":"fixture-result-a","parentUuid":"fixture-owner","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-call-a","content":"first result"}]}}
+    "#},
+    "late result after a text branch",
+    Some(IncrementalAppend::RestartRequired),
+)]
+#[case::result_chain_crosses_a_task_notification_boundary(
+    indoc! {r#"
+        {"type":"assistant","uuid":"fixture-owner","parentUuid":null,"message":{"content":[{"type":"tool_use","id":"fixture-call-a","name":"Read","input":{"file_path":"/fixture/a.md"}},{"type":"tool_use","id":"fixture-call-b","name":"Read","input":{"file_path":"/fixture/b.md"}}]}}
+        {"type":"user","parentUuid":"fixture-owner","origin":{"kind":"task-notification"},"message":{"content":"<task-notification><task-id>fixture-task</task-id><status>completed</status></task-notification>"}}
+        {"type":"assistant","uuid":"fixture-followup-call","parentUuid":"fixture-owner","message":{"content":[{"type":"tool_use","id":"fixture-call-c","name":"Read","input":{"file_path":"/fixture/c.md"}}]}}
+        {"type":"user","uuid":"fixture-prompt","parentUuid":"fixture-followup-call","message":{"content":"A later fixture request."}}
+        {"type":"assistant","uuid":"fixture-prompt-followup","parentUuid":"fixture-prompt","message":{"content":[{"type":"text","text":"The later request is being handled."}]}}
+        {"type":"user","uuid":"fixture-followup-result","parentUuid":"fixture-followup-call","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-call-c","content":"third result"}]}}
+        {"type":"user","uuid":"fixture-original-result","parentUuid":"fixture-owner","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-call-a","content":"first result"}]}}
+    "#},
+    indoc! {r#"
+        {"type":"user","parentUuid":"fixture-original-result","origin":{"kind":"task-notification"},"message":{"content":"<task-notification><task-id>fixture-task</task-id><status>completed</status></task-notification>"}}
+    "#},
+    "late result after notification boundary",
+    None,
+)]
+#[case::hook_attachment_keeps_a_rewound_prompt_out_of_an_append(
+    indoc! {r#"
+        {"type":"user","uuid":"fixture-prompt-one","parentUuid":"fixture-old-root","message":{"content":"First fixture request."}}
+        {"type":"user","uuid":"fixture-prompt-two","parentUuid":"fixture-prompt-one","message":{"content":"Second fixture request."}}
+        {"type":"assistant","uuid":"fixture-tool-call","parentUuid":"fixture-prompt-two","message":{"content":[{"type":"tool_use","id":"fixture-call","name":"Read","input":{"file_path":"/fixture/request.md"}}]}}
+        {"type":"assistant","uuid":"fixture-tool-followup","parentUuid":"fixture-tool-call","message":{"content":[{"type":"text","text":"The tool call is continuing."}]}}
+        {"type":"attachment","uuid":"fixture-hook","parentUuid":"fixture-prompt-one","attachment":{"type":"hook_success","hookName":"PostToolUse"}}
+    "#},
+    indoc! {r#"
+        {"type":"assistant","uuid":"fixture-late-followup","parentUuid":"fixture-tool-followup","message":{"content":[{"type":"text","text":"The earlier branch continued."}]}}
+    "#},
+    "assistant continuation after a rewinding hook attachment",
+    Some(IncrementalAppend::RestartRequired),
+)]
+#[case::result_chain_crosses_tool_owners(
+    indoc! {r#"
+        {"type":"assistant","uuid":"fixture-owner-a","parentUuid":null,"message":{"content":[{"type":"tool_use","id":"fixture-call-a","name":"Read","input":{"file_path":"/fixture/a.md"}}]}}
+        {"type":"assistant","uuid":"fixture-owner-b","parentUuid":"fixture-owner-a","message":{"content":[{"type":"tool_use","id":"fixture-call-b","name":"Read","input":{"file_path":"/fixture/b.md"}},{"type":"tool_use","id":"fixture-call-c","name":"Read","input":{"file_path":"/fixture/c.md"}}]}}
+        {"type":"user","uuid":"fixture-result-a","parentUuid":"fixture-owner-a","sourceToolAssistantUUID":"fixture-owner-a","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-call-a","content":"first result"}]}}
+        {"type":"user","uuid":"fixture-result-b","parentUuid":"fixture-result-a","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-call-b","content":"second result"}]}}
+        {"type":"assistant","uuid":"fixture-followup","parentUuid":"fixture-result-a","message":{"content":[{"type":"text","text":"The first result is ready."}]}}
+    "#},
+    indoc! {r#"
+        {"type":"user","uuid":"fixture-result-c","parentUuid":"fixture-owner-b","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-call-c","content":"third result"}]}}
+    "#},
+    "result chain crosses tool owners",
+    None,
+)]
+fn branch_ambiguities_match_full_parse_across_all_byte_splits(
+    #[case] prefix: &str,
+    #[case] suffix: &str,
+    #[case] context: &str,
+    #[case] expected_append: Option<IncrementalAppend>,
+) {
+    assert_append_matches_full_parse_at_record_boundary(prefix, suffix, expected_append, context);
 }
 
 #[test]
