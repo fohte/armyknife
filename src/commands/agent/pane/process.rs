@@ -2,6 +2,7 @@
 //! (Claude Code or Codex) process running.
 
 use std::collections::HashSet;
+use std::path::Path;
 
 use crate::commands::agent::types::Engine;
 use crate::infra::process::{ProcessInfo, ProcessSnapshot};
@@ -58,11 +59,7 @@ fn has_parent_agent_process_with(
             );
             return None;
         };
-        if current_pid != pid
-            && [Engine::Claude, Engine::Codex]
-                .into_iter()
-                .any(|engine| info.comm == engine.process_name())
-        {
+        if current_pid != pid && is_agent_argv0(&info.argv0) {
             agent_ancestor_count += 1;
         }
         if info.parent_pid <= 1 || info.parent_pid == current_pid {
@@ -72,6 +69,15 @@ fn has_parent_agent_process_with(
     }
 
     Some(agent_ancestor_count > 1)
+}
+
+fn is_agent_argv0(argv0: &str) -> bool {
+    let Some(process_name) = Path::new(argv0).file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    [Engine::Claude, Engine::Codex]
+        .into_iter()
+        .any(|engine| process_name == engine.process_name())
 }
 
 #[cfg(test)]
@@ -100,6 +106,28 @@ mod tests {
             100 1 init
             200 100 claude
             300 200 codex
+            400 300 hook
+        "},
+        400,
+        Some(true),
+    )]
+    #[case::nested_under_claude_argv0_path(
+        indoc! {"
+            1 0 init
+            100 1 init
+            200 100 claude
+            300 200 /agent/bin/claude
+            400 300 hook
+        "},
+        400,
+        Some(true),
+    )]
+    #[case::nested_under_codex_argv0_path(
+        indoc! {"
+            1 0 init
+            100 1 init
+            200 100 claude
+            300 200 /agent/bin/codex
             400 300 hook
         "},
         400,
@@ -159,8 +187,8 @@ mod tests {
                 let mut columns = line.split_whitespace();
                 let pid = columns.next()?.parse::<u32>().ok()?;
                 let parent_pid = columns.next()?.parse::<u32>().ok()?;
-                let comm = columns.next()?.to_string();
-                Some((pid, ProcessInfo { parent_pid, comm }))
+                let argv0 = columns.next()?.to_string();
+                Some((pid, ProcessInfo { parent_pid, argv0 }))
             })
             .collect()
     }
