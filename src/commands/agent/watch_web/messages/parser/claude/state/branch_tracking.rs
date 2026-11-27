@@ -11,7 +11,6 @@ pub(super) struct ClaudeBranchTracking {
     tool_use_assistant_uuids: HashSet<String>,
     side_branch_tool_use_assistant_uuids: HashSet<String>,
     valid_tool_result_uuids: HashSet<String>,
-    tool_result_lineage_uuids: HashSet<String>,
     side_branch_assistant_uuids: HashSet<String>,
     compact_boundary_branch_uuids: HashSet<String>,
 }
@@ -57,11 +56,6 @@ impl ClaudeBranchTracking {
             return;
         };
 
-        let continues_tool_result_lineage = record.get("type").and_then(Value::as_str)
-            != Some("user")
-            && parent_uuid
-                .is_some_and(|parent_uuid| self.tool_result_lineage_uuids.contains(parent_uuid));
-
         if has_tool_use_block(record) {
             self.tool_use_assistant_uuids.insert(uuid.to_owned());
             self.side_branch_tool_use_assistant_uuids
@@ -69,10 +63,6 @@ impl ClaudeBranchTracking {
         }
         if pending_tool_result_on_active_branch {
             self.valid_tool_result_uuids.insert(uuid.to_owned());
-            self.tool_result_lineage_uuids.insert(uuid.to_owned());
-        }
-        if continues_tool_result_lineage {
-            self.tool_result_lineage_uuids.insert(uuid.to_owned());
         }
         if side_branch_continuation
             && record.get("type").and_then(Value::as_str) == Some("assistant")
@@ -109,35 +99,15 @@ impl ClaudeBranchTracking {
         self.side_branch_tool_use_assistant_uuids.contains(uuid)
     }
 
-    pub(super) fn is_retained_side_branch_tip_uuid(&self, uuid: &str) -> bool {
-        self.side_branch_assistant_uuids.contains(uuid)
-            || self.tool_result_lineage_uuids.contains(uuid)
-    }
-
     fn reset_side_branch_continuations(&mut self) {
         // Tool ownership remains historical for result matching; only branch continuation expires.
         self.side_branch_tool_use_assistant_uuids.clear();
         self.valid_tool_result_uuids.clear();
-        self.tool_result_lineage_uuids.clear();
         self.side_branch_assistant_uuids.clear();
     }
 }
 
 impl ClaudeParserState {
-    pub(in crate::commands::agent::watch_web::messages::parser::claude) fn is_side_branch_assistant_uuid(
-        &self,
-        uuid: &str,
-    ) -> bool {
-        self.branch_tracking.is_side_branch_assistant_uuid(uuid)
-    }
-
-    pub(in crate::commands::agent::watch_web::messages::parser::claude) fn is_retained_side_branch_tip_uuid(
-        &self,
-        uuid: &str,
-    ) -> bool {
-        self.branch_tracking.is_retained_side_branch_tip_uuid(uuid)
-    }
-
     pub(in crate::commands::agent::watch_web::messages::parser::claude) fn is_valid_tool_result_uuid(
         &self,
         uuid: &str,

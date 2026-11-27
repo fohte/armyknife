@@ -33,9 +33,36 @@ pub(super) fn is_active_branch_continuation(state: &ClaudeParserState, record: &
     if !parent_is_active {
         return false;
     }
-    if state.latest_uuid.as_deref() != Some(parent_uuid.as_str())
-        && state.latest_record_uuid.as_deref() != Some(parent_uuid.as_str())
-        && state.requires_reparse_for_processed_branch_records(&parent_uuid)
+    let parent_is_latest = state.latest_uuid.as_deref() == Some(parent_uuid.as_str());
+    let parent_is_latest_record = state.latest_record_uuid.as_deref() == Some(parent_uuid.as_str());
+    let parent_is_latest_inert_attachment =
+        state
+            .transcript_nodes
+            .get(&parent_uuid)
+            .is_some_and(|node| {
+                node.is_inert_attachment
+                    && (state.latest_uuid.as_deref() == node.parent_uuid.as_deref()
+                        || state.latest_record_uuid.as_deref() == node.parent_uuid.as_deref())
+            });
+    let supported_parallel_result_parent =
+        is_tool_result_only && state.is_supported_parallel_tool_result_append(&parent_uuid);
+    let assistant_continues_tool_result_parent = record.get("type").and_then(Value::as_str)
+        == Some("assistant")
+        && state.tool_result_parent.as_deref() == Some(parent_uuid.as_str())
+        && state.latest_uuid.as_deref().is_some_and(|uuid| {
+            state.is_valid_tool_result_uuid(uuid)
+                && state
+                    .transcript_nodes
+                    .get(uuid)
+                    .and_then(|node| node.parent_uuid.as_deref())
+                    .and_then(|parent_uuid| state.transcript_nodes.get(parent_uuid))
+                    .is_some_and(|parent| parent.has_tool_use)
+        });
+    if !parent_is_latest
+        && !parent_is_latest_record
+        && !parent_is_latest_inert_attachment
+        && !supported_parallel_result_parent
+        && !assistant_continues_tool_result_parent
     {
         return false;
     }
@@ -52,17 +79,12 @@ pub(super) fn is_active_branch_continuation(state: &ClaudeParserState, record: &
             .latest_uuid
             .as_deref()
             .is_some_and(|uuid| state.is_valid_tool_result_uuid(uuid));
-        let continues_another_result_branch = state.is_valid_tool_result_uuid(&parent_uuid)
-            && state.latest_uuid.as_deref() != Some(parent_uuid.as_str());
-        let replaces_a_result_branch = parent_reaches_active
-            && state.latest_uuid.as_deref() != Some(parent_uuid.as_str())
-            && latest_tip_is_tool_result;
-        let supported_parallel_result_parent =
-            state.is_supported_parallel_tool_result_append(&parent_uuid);
+        let continues_another_result_branch =
+            state.is_valid_tool_result_uuid(&parent_uuid) && !parent_is_latest;
+        let replaces_a_result_branch =
+            parent_reaches_active && !parent_is_latest && latest_tip_is_tool_result;
         if continues_another_result_branch
             || replaces_a_result_branch
-            || (state.latest_uuid.as_deref() != Some(parent_uuid.as_str())
-                && !supported_parallel_result_parent)
             || state.has_unprocessed_assistant_after_sibling_tool_result(&parent_uuid)
             || state.has_unstable_retained_descendant(&parent_uuid)
         {
@@ -73,23 +95,15 @@ pub(super) fn is_active_branch_continuation(state: &ClaudeParserState, record: &
                 || supported_parallel_result_parent)
             && state.has_pending_tool_result_for_parent(record, Some(parent_uuid.as_str()));
     }
-    let parent_is_latest = state.latest_record_uuid.as_deref() == Some(parent_uuid.as_str());
     if is_task_notification {
-        return parent_is_latest;
+        return parent_is_latest_record;
     }
     if record.get("type").and_then(Value::as_str) == Some("assistant") {
-        return parent_is_latest
+        return parent_is_latest_record
+            || parent_is_latest
+            || parent_is_latest_inert_attachment
             || state.latest_uuid.as_deref() == Some(parent_uuid.as_str())
-            || (state.tool_result_parent.as_deref() == Some(parent_uuid.as_str())
-                && state
-                    .latest_uuid
-                    .as_deref()
-                    .is_some_and(|uuid| state.is_valid_tool_result_uuid(uuid)))
-            || (state.is_side_branch_assistant_uuid(&parent_uuid)
-                && state
-                    .latest_uuid
-                    .as_deref()
-                    .is_some_and(|uuid| state.is_retained_side_branch_tip_uuid(uuid)));
+            || assistant_continues_tool_result_parent;
     }
-    parent_is_latest
+    parent_is_latest_record
 }

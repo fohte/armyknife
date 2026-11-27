@@ -513,18 +513,12 @@ fn assert_incremental_matches_full_parse_at_every_record_boundary(
     for split in 0..=records.len() {
         let prefix = serialize_fixture_transcript(&records[..split]);
         let suffix = serialize_fixture_transcript(&records[split..]);
-        let mut parser = incremental_parser(prefix.as_bytes());
-        if parser
-            .append_bytes(suffix.as_bytes(), fixed_time())
-            .unwrap()
-            == IncrementalAppend::Applied
-        {
-            assert_eq!(
-                parser.render_with(fixed_time(), empty_additions()).unwrap(),
-                expected.clone(),
-                "{context}: transcript split after record {split}\n{transcript}",
-            );
-        }
+        let (_, actual) = incremental_result(prefix.as_bytes(), suffix.as_bytes());
+        assert_eq!(
+            actual,
+            expected.clone(),
+            "{context}: transcript split after record {split}\n{transcript}",
+        );
     }
 }
 
@@ -865,7 +859,7 @@ fn parallel_tool_result_after_an_active_followup_matches_a_full_parse_at_every_s
     assert_incremental_matches_full_parse_at_every_split_point(
         &transcript,
         &expected,
-        Some(IncrementalAppend::Applied),
+        None,
         "parallel tool result after a follow-up",
     );
 }
@@ -1190,7 +1184,7 @@ fn old_tool_use_owner_does_not_keep_a_sibling_assistant_active_after_a_prompt() 
 }
 
 #[test]
-fn assistant_continues_from_a_side_branch_assistant_after_another_branch_updates_the_tip() {
+fn assistant_from_a_side_branch_restarts_after_another_branch_updates_the_tip() {
     let prefix = indoc! {r#"
         {"type":"user","uuid":"fixture-root","parentUuid":null,"message":{"content":"Run two fixture tools."}}
         {"type":"assistant","uuid":"fixture-main-call","parentUuid":"fixture-root","message":{"content":[{"type":"tool_use","id":"fixture-main-use","name":"Read","input":{"file_path":"/fixture/main.md"}}]}}
@@ -1201,14 +1195,12 @@ fn assistant_continues_from_a_side_branch_assistant_after_another_branch_updates
     let suffix = indoc! {r#"
         {"type":"assistant","uuid":"fixture-side-followup","parentUuid":"fixture-side-call","message":{"content":[{"type":"text","text":"The side branch continued."}]}}
     "#};
-    let mut transcript = prefix.as_bytes().to_vec();
-    transcript.extend_from_slice(suffix.as_bytes());
-
+    let transcript = format!("{prefix}{suffix}");
     assert_eq!(
         incremental_result(prefix.as_bytes(), suffix.as_bytes()),
         (
-            IncrementalAppend::Applied,
-            parse_all(&transcript, empty_additions())
+            IncrementalAppend::RestartRequired,
+            parse_all(transcript.as_bytes(), empty_additions())
         ),
     );
 }

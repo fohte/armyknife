@@ -22,8 +22,6 @@ use super::user_input::{content_blocks, is_tool_result_only_user_record, user_co
 mod branch;
 mod branch_tracking;
 
-pub(super) use branch::is_queued_peer_delivery_record;
-
 pub(super) fn is_attachment_record(record: &Value) -> bool {
     record.get("type").and_then(Value::as_str) == Some("attachment")
 }
@@ -151,13 +149,10 @@ impl ClaudeParserState {
             return;
         }
 
-        if let Some(uuid) = uuid
-            && let Some(node) = self.transcript_nodes.get_mut(uuid)
-        {
-            node.processed = true;
-            node.was_valid_tool_result |=
-                is_tool_result_only && pending_tool_result_on_active_branch;
-        }
+        self.mark_record_processed(
+            uuid,
+            is_tool_result_only && pending_tool_result_on_active_branch,
+        );
 
         self.branch_tracking.observe_active_record(
             &record,
