@@ -164,11 +164,6 @@
   line-height: 1;
 }
 
-.sort-description {
-  color: var(--aw-text-secondary);
-  font-size: 11.5px;
-}
-
 .inbox-scroll-area {
   flex: 1;
   min-height: 0;

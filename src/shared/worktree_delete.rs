@@ -3,7 +3,7 @@ use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
 use crate::infra::git::{
-    GitRepo, MergeStatus, get_main_branch_for_repo, get_merge_status_for_repo, get_repo_root,
+    GitRepo, MergeStatus, get_default_branch_for_repo, get_merge_status_for_repo, get_repo_root,
 };
 use crate::shared::cleanup;
 use crate::shared::env_var::EnvVars;
@@ -322,7 +322,7 @@ pub(crate) async fn get_merge_status_for_branch_from_local_refs(
     close_status_for_branch_from_local_refs_with(
         status,
         branch.to_string(),
-        move || get_main_branch_for_repo(&repo_for_default_branch).ok(),
+        move || get_default_branch_for_repo(&repo_for_default_branch).ok(),
         move |ancestor, descendant| repo_for_ancestry.is_ancestor(ancestor, descendant),
     )
     .await
@@ -335,7 +335,7 @@ fn close_status_for_branch(repo: &GitRepo, branch: &str, status: MergeStatus) ->
 
     let refreshed = repo.fetch_origin_prune().is_ok();
     let default_branch = refreshed
-        .then(|| get_main_branch_for_repo(repo).ok())
+        .then(|| get_default_branch_for_repo(repo).ok())
         .flatten();
     close_status_for_branch_with(
         status,
@@ -384,7 +384,7 @@ fn close_status_for_branch_with(
 fn branch_has_no_unique_commits(repo: &GitRepo, branch: &str) -> bool {
     let refreshed = repo.fetch_origin_prune().is_ok();
     let default_branch = refreshed
-        .then(|| get_main_branch_for_repo(repo).ok())
+        .then(|| get_default_branch_for_repo(repo).ok())
         .flatten();
     branch_has_no_unique_commits_with(branch, default_branch.as_deref(), |ancestor, descendant| {
         repo.is_ancestor(ancestor, descendant)

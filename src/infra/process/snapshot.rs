@@ -123,6 +123,23 @@ impl ProcessSnapshot {
         result
     }
 
+    /// Returns the nearest recognized agent ancestor of `pid`.
+    pub(crate) fn agent_ancestor_engine(&self, pid: u32) -> Option<&'static str> {
+        let mut current = pid;
+        let mut visited = HashSet::from([pid]);
+        while let Some(&parent) = self.parents.get(&current) {
+            if !visited.insert(parent) {
+                break;
+            }
+            match self.comm_basename(parent) {
+                Some("claude") => return Some("claude-code"),
+                Some("codex") => return Some("codex"),
+                _ => current = parent,
+            }
+        }
+        None
+    }
+
     /// Returns caller-pane descendants that should not block worktree removal.
     ///
     /// The caller-to-pane ancestry needs known cwd values outside the worktree.
@@ -354,6 +371,62 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(args, ["-A", "-ww", "-o", "pid=,args="]);
+    }
+
+    #[rstest]
+    #[case::claude_code(
+        indoc! {"
+            10 1 launchd
+            20 10 claude
+            30 20 a
+        "},
+        30,
+        Some("claude-code"),
+    )]
+    #[case::codex_app_server(
+        indoc! {"
+            10 1 launchd
+            20 10 codex
+            30 20 a
+        "},
+        30,
+        Some("codex"),
+    )]
+    #[case::codex_exec(
+        indoc! {"
+            10 1 launchd
+            20 10 /opt/tools/codex
+            30 20 a
+        "},
+        30,
+        Some("codex"),
+    )]
+    #[case::nearest_agent_ancestor(
+        indoc! {"
+            10 1 launchd
+            20 10 claude
+            30 20 codex
+            40 30 a
+        "},
+        40,
+        Some("codex"),
+    )]
+    #[case::unrelated_process(
+        indoc! {"
+            10 1 launchd
+            20 10 zsh
+            30 20 a
+        "},
+        30,
+        None,
+    )]
+    fn agent_ancestor_engine_cases(
+        #[case] processes: &str,
+        #[case] pid: u32,
+        #[case] expected: Option<&str>,
+    ) {
+        let snapshot = ProcessSnapshot::from_ps_output(processes);
+        assert_eq!(snapshot.agent_ancestor_engine(pid), expected);
     }
 
     #[rstest]

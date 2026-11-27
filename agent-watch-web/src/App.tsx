@@ -21,6 +21,7 @@ import type { Session } from '#types'
 import { useAppSessionOperations } from '#use-app-session-operations'
 import { useAppSessionProjection } from '#use-app-session-projection'
 import { useComposerFocus } from '#use-composer-focus'
+import { useInboxSort } from '#use-inbox-sort'
 import { useLaterDeadlineClock } from '#use-later-deadline-clock'
 import { useLaterSessionActions } from '#use-later-session-actions'
 import { useNewSession } from '#use-new-session'
@@ -147,6 +148,12 @@ function AppContent() {
     view,
     setError,
   })
+  const inboxSort = useInboxSort({
+    orderedSessions,
+    navigableSessions,
+    selectedId,
+    setShowAllInProgress,
+  })
   const {
     laterSessionId,
     laterTimes,
@@ -160,7 +167,7 @@ function AppContent() {
   } = useLaterSessionActions({
     isMobile,
     sessions,
-    navigableSessions,
+    navigableSessions: inboxSort.navigableSessions,
     pendingOperations,
     navigate,
     runSessionOperation,
@@ -252,15 +259,6 @@ function AppContent() {
   )
 
   useEffect(() => {
-    const hiddenProgress = orderedSessions.filter(
-      (session) => session.category === 'in_progress',
-    )
-    if (hiddenProgress.slice(2).some((session) => session.id === selectedId)) {
-      setShowAllInProgress(true)
-    }
-  }, [orderedSessions, selectedId])
-
-  useEffect(() => {
     if (view !== 'inbox') {
       return
     }
@@ -279,7 +277,7 @@ function AppContent() {
     closeLater,
     closeSession: requestCloseSession,
     submitLater,
-    navigableSessions,
+    navigableSessions: inboxSort.navigableSessions,
     openLater,
     selectedId,
     view,
@@ -320,7 +318,7 @@ function AppContent() {
     useSessionMobileNavigation({
       isMobile,
       conversationOpen: mobileConversationOpen,
-      navigableSessions,
+      navigableSessions: inboxSort.navigableSessions,
       selectedId,
       selectedSessionExists: selectedSession !== undefined,
       sessionsLoaded: loaded,
@@ -378,13 +376,27 @@ function AppContent() {
     )
     if (launchedSession === undefined) return
     setPendingLaunchId(null)
+    const shouldOpenLaunchedSession =
+      newSessionMode === 'palette' ||
+      (newSessionMode === 'form' && view === 'inbox')
+    if (!shouldOpenLaunchedSession) {
+      if (newSessionMode === 'form') {
+        newSession.reset()
+        navigate((current) => ({ ...current, newSessionMode: null }), 'replace')
+      }
+      return
+    }
     setCommandPaletteOpen(false)
     openSessionInInbox(launchedSession.id, 'replace')
   }, [
+    navigate,
+    newSessionMode,
+    newSession.reset,
     openSessionInInbox,
     pendingLaunchId,
     sessionsWithElapsedTime,
     setCommandPaletteOpen,
+    view,
   ])
   return (
     <SessionElapsedStartedAtProvider value={sessionsReceivedAt}>
@@ -405,6 +417,8 @@ function AppContent() {
           loaded,
           error,
           inboxFilterQuery,
+          inboxSort: inboxSort.sort,
+          inboxSortStorageAvailable: inboxSort.storageAvailable,
           showAllInProgress,
           laterExpanded,
           inProgressExpanded,
@@ -432,6 +446,7 @@ function AppContent() {
         }
         actions={{
           setInboxFilterQuery,
+          setInboxSort: inboxSort.setSort,
           setShowAllInProgress,
           setLaterExpanded,
           setInProgressExpanded,

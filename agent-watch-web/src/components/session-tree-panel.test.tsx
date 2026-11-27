@@ -163,7 +163,7 @@ it('shows every tree session with the shared row and keeps ended sessions visibl
       engine: row.querySelector('.session-engine')?.textContent ?? null,
       selected: row.getAttribute('aria-selected'),
       task: row.querySelector('.session-task')?.textContent ?? null,
-      repo: row.querySelector('.session-repo')?.textContent ?? null,
+      repo: row.querySelector('.session-repo-label')?.textContent ?? null,
       vibeMode:
         row.querySelector('.vibe-indicator')?.getAttribute('aria-label') ??
         null,

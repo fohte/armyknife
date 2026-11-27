@@ -8,6 +8,10 @@ export type MarkdownNode = {
   type: string
   url?: string
   value?: string
+  data?: {
+    hName?: string
+    hProperties?: Record<string, boolean | string>
+  }
 }
 
 export type MarkdownRoot = MarkdownNode & {

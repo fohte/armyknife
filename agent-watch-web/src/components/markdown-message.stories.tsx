@@ -57,6 +57,34 @@ export const RawHtmlStaysText: Story = {
   },
 }
 
+export const CollapsedDetails: Story = {
+  name: 'A details section keeps its long summary visible while collapsed',
+  args: {
+    children: `<details>
+<summary>This longer summary wraps onto another line without being shortened</summary>
+
+The details body keeps the same left edge as the surrounding message.
+
+<details>
+<summary>Nested details use the same disclosure control</summary>
+
+Nested content appears below its summary.
+</details>
+</details>`,
+  },
+}
+
+export const ExpandedDetails: Story = {
+  name: 'An open attribute shows the details body initially',
+  args: {
+    children: `<details open>
+<summary>Additional information</summary>
+
+The body starts expanded and can be collapsed from its summary row.
+</details>`,
+  },
+}
+
 const linkedSession: SessionLinkTarget = {
   id: '11111111-1111-4111-8111-111111111111',
   repo: 'example/toolkit',

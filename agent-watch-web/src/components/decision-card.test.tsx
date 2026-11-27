@@ -144,6 +144,23 @@ it('renders decision details as markdown with linked session IDs', () => {
   })
 })
 
+it('shows unavailable for an unmapped local image in a decision detail', () => {
+  renderCard({
+    decision: {
+      ...decision,
+      why: '![](/Users/guest/diagram.png)',
+    },
+    expanded: true,
+  })
+
+  expect(
+    requireElement(container.querySelector('.decision-card-detail-field'))
+      .innerHTML,
+  ).toBe(
+    '<span>Why · </span><div class="markdown-message"><p><span class="markdown-image-unavailable">表示できません: /Users/guest/diagram.png</span></p></div>',
+  )
+})
+
 it('separates alternatives in an expanded panel decision', () => {
   renderCard({ variant: 'panel', expanded: true })
 

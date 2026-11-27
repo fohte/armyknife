@@ -159,11 +159,13 @@ mod tests {
     use crate::shared::human_in_the_loop::PR_DRAFT_REVIEW_MARKER;
     use chrono::{DateTime, TimeZone, Utc};
     use rstest::rstest;
+    use tempfile::TempDir;
 
     use super::*;
     use crate::commands::agent::types::{AgentStatus, Engine};
     use crate::shared::config::AgentStatusConfig;
     use crate::shared::config::test_support::agent_config;
+    use crate::shared::human_in_the_loop::LockGuard;
 
     fn session(session_id: &str, updated_at: DateTime<Utc>) -> Session {
         Session {
@@ -265,6 +267,10 @@ mod tests {
     #[case::ask(UserTurnKind::Ask)]
     fn automatic_user_turn_markers_are_detected(#[case] expected: UserTurnKind) {
         let mut session = session("waiting", timestamp(1));
+        let review_dir = TempDir::new().expect("review fixture directory should be created");
+        let review_document_path = review_dir.path().join("fixture-document.md");
+        let _review_lock = LockGuard::acquire(&review_document_path)
+            .expect("review document lock should be active");
         match expected {
             UserTurnKind::Crit => {
                 session
@@ -275,9 +281,16 @@ mod tests {
                     .insert("review-task".to_string());
             }
             UserTurnKind::Body => {
-                session
-                    .pending_human_review_ids
-                    .insert("review-marker\0/fixture/document.md".to_string());
+                session.pending_human_review_ids.insert(
+                    [
+                        "review-marker".to_string(),
+                        "v2".to_string(),
+                        "123".to_string(),
+                        review_document_path.display().to_string(),
+                        "queue".to_string(),
+                    ]
+                    .join("\0"),
+                );
                 session
                     .pending_bg_task_ids
                     .insert("review-task".to_string());
@@ -327,22 +340,28 @@ mod tests {
         );
     }
 
-    #[test]
-    fn stale_pr_draft_marker_does_not_create_a_body_turn() {
+    #[rstest]
+    #[case::v2("v2")]
+    #[case::legacy("legacy")]
+    fn stale_pr_draft_marker_does_not_create_a_body_turn(#[case] format: &str) {
         let mut session = session("waiting", timestamp(1));
         session.status = SessionStatus::WaitingInput;
-        session.pending_human_review_ids.insert(
-            [
+        let temp_dir = TempDir::new().expect("review fixture directory should be created");
+        let review_path = temp_dir.path().join("fixture-draft.md");
+        let review_path = review_path.display().to_string();
+        let marker = match format {
+            "v2" => [
                 "pr-draft-review:example-review",
-                "v3",
+                "v2",
                 "123",
-                "/fixture/draft.md",
-                "",
-                "4294967295",
-                "missing-process-start",
+                review_path.as_str(),
+                "queue",
             ]
             .join("\0"),
-        );
+            "legacy" => format!("pr-draft-review:example-review\0{review_path}"),
+            _ => unreachable!("test case uses a known marker format"),
+        };
+        session.pending_human_review_ids.insert(marker);
 
         assert_eq!(
             next_user_turn(&[session], &AgentConfig::default()).map(|turn| turn.kind),

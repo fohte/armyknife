@@ -1,0 +1,187 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+if [ "$(uname -s)" != "Darwin" ]; then
+  exit 0
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+WORKTREE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
+TARGET_ROOT="$WORKTREE_ROOT/target"
+TARGET_DEBUG="$TARGET_ROOT/debug"
+STAGING_ROOT=""
+OWNER_MARKER_NAME=""
+SEED_COMPLETE=0
+
+find_owner_marker() {
+  local search_root="$1"
+  local direct_marker="$search_root/$OWNER_MARKER_NAME"
+
+  if [ -f "$direct_marker" ]; then
+    printf '%s\n' "$direct_marker"
+    return 0
+  fi
+
+  find "$search_root" -type f -name "$OWNER_MARKER_NAME" -print -quit
+}
+
+cleanup() {
+  local status=$?
+  local owner_marker_path=""
+  local owner_install_root=""
+  trap - EXIT HUP INT TERM
+
+  if [ -n "$OWNER_MARKER_NAME" ] && [ -d "$TARGET_DEBUG" ] && [ ! -e "$STAGING_ROOT/debug" ]; then
+    owner_marker_path="$(find_owner_marker "$TARGET_DEBUG" || true)"
+  fi
+
+  if [ -n "$owner_marker_path" ]; then
+    if [ "$SEED_COMPLETE" -eq 0 ]; then
+      owner_install_root="$(dirname "$owner_marker_path")"
+      if [ "$owner_install_root" = "$TARGET_DEBUG" ]; then
+        find "$TARGET_DEBUG" -depth -delete || true
+      else
+        find "$owner_install_root" -depth -delete || true
+      fi
+    else
+      find "$owner_marker_path" -depth -delete || true
+    fi
+  fi
+
+  if [ -n "$STAGING_ROOT" ] && [ -e "$STAGING_ROOT" ]; then
+    find "$STAGING_ROOT" -depth -delete || true
+  fi
+
+  exit "$status"
+}
+
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+if [ -e "$TARGET_DEBUG" ] || [ -L "$TARGET_DEBUG" ]; then
+  exit 0
+fi
+
+if ! WORKTREES="$(git -C "$WORKTREE_ROOT" worktree list --porcelain)"; then
+  printf 'Could not list Git worktrees; skipping Cargo target seed.\n' >&2
+  exit 1
+fi
+
+NEWEST_SOURCE_ROOT=""
+NEWEST_SOURCE_MTIME=0
+
+while IFS= read -r line; do
+  case "$line" in
+    'worktree '*)
+      SOURCE_ROOT="${line#worktree }"
+      SOURCE_BINARY="$SOURCE_ROOT/target/debug/a"
+      if [ "$SOURCE_ROOT" = "$WORKTREE_ROOT" ] || [ -L "$SOURCE_ROOT/target/debug" ] || [ ! -f "$SOURCE_BINARY" ]; then
+        continue
+      fi
+
+      if ! SOURCE_MTIME="$(/usr/bin/stat -f '%m' "$SOURCE_BINARY")"; then
+        printf 'Could not inspect %s; skipping Cargo target seed.\n' "$SOURCE_BINARY" >&2
+        exit 1
+      fi
+
+      if ((SOURCE_MTIME > NEWEST_SOURCE_MTIME)); then
+        NEWEST_SOURCE_ROOT="$SOURCE_ROOT"
+        NEWEST_SOURCE_MTIME="$SOURCE_MTIME"
+      fi
+      ;;
+  esac
+done <<< "$WORKTREES"
+
+if [ -z "$NEWEST_SOURCE_ROOT" ]; then
+  exit 0
+fi
+
+SOURCE_DEBUG="$NEWEST_SOURCE_ROOT/target/debug"
+TARGET_VOLUME_PATH="$TARGET_ROOT"
+if [ ! -d "$TARGET_VOLUME_PATH" ]; then
+  TARGET_VOLUME_PATH="$WORKTREE_ROOT"
+fi
+
+if ! SOURCE_DEVICE_ID="$(/usr/bin/stat -f '%d' "$SOURCE_DEBUG")" ||
+  ! TARGET_DEVICE_ID="$(/usr/bin/stat -f '%d' "$TARGET_VOLUME_PATH")"; then
+  printf 'Could not inspect clone source and target filesystems; skipping Cargo target seed.\n' >&2
+  exit 1
+fi
+
+if [ "$SOURCE_DEVICE_ID" != "$TARGET_DEVICE_ID" ]; then
+  printf 'Clone source and target are not on the same APFS volume; skipping Cargo target seed.\n' >&2
+  exit 0
+fi
+
+# cp -c silently falls back to a full copy across volumes or on non-APFS filesystems.
+if ! SOURCE_DEVICE="$(df -P "$SOURCE_DEBUG" | awk 'NR == 2 { print $1 }')" ||
+  [ -z "$SOURCE_DEVICE" ] ||
+  ! SOURCE_FILESYSTEM="$(mount | awk -v device="$SOURCE_DEVICE" '$1 == device { sub(/^.*[(]/, ""); sub(/,.*/, ""); print; exit }')"; then
+  printf 'Could not identify the clone source filesystem; skipping Cargo target seed.\n' >&2
+  exit 1
+fi
+
+if [ "$SOURCE_FILESYSTEM" != "apfs" ]; then
+  printf 'Clone source is not on APFS; skipping Cargo target seed.\n' >&2
+  exit 0
+fi
+
+if ! mkdir -p "$TARGET_ROOT"; then
+  printf 'Could not create %s; skipping Cargo target seed.\n' "$TARGET_ROOT" >&2
+  exit 1
+fi
+
+if ! STAGING_ROOT="$(mktemp -d "$TARGET_ROOT/.debug-seed.XXXXXX")"; then
+  printf 'Could not create a staging directory in %s; skipping Cargo target seed.\n' "$TARGET_ROOT" >&2
+  exit 1
+fi
+
+if ! /bin/cp -c -pR "$SOURCE_DEBUG" "$STAGING_ROOT/debug"; then
+  printf 'Could not APFS-clone %s/target/debug; skipping Cargo target seed.\n' "$NEWEST_SOURCE_ROOT" >&2
+  exit 1
+fi
+
+if [ -e "$TARGET_DEBUG" ] || [ -L "$TARGET_DEBUG" ]; then
+  exit 0
+fi
+
+OWNER_MARKER_NAME=".worktree-seed-incomplete-${STAGING_ROOT##*/}"
+if ! : > "$STAGING_ROOT/debug/$OWNER_MARKER_NAME"; then
+  printf 'Could not mark the staged Cargo target; skipping Cargo target seed.\n' >&2
+  exit 1
+fi
+
+if ! /bin/mv -n "$STAGING_ROOT/debug" "$TARGET_DEBUG"; then
+  printf 'Could not install the seeded Cargo target at %s; skipping Cargo target seed.\n' "$TARGET_DEBUG" >&2
+  exit 1
+fi
+
+if [ -e "$STAGING_ROOT/debug" ] || [ -L "$STAGING_ROOT/debug" ]; then
+  exit 0
+fi
+
+OWNER_MARKER_PATH="$(find_owner_marker "$TARGET_DEBUG")"
+if [ -z "$OWNER_MARKER_PATH" ]; then
+  printf 'Could not locate the installed Cargo target marker.\n' >&2
+  exit 1
+fi
+
+if [ "$OWNER_MARKER_PATH" != "$TARGET_DEBUG/$OWNER_MARKER_NAME" ]; then
+  exit 0
+fi
+
+# Clean from its final location so Cargo records the same target path used by later builds.
+if ! (cd "$WORKTREE_ROOT" && CARGO_TARGET_DIR="$TARGET_ROOT" cargo clean --workspace); then
+  printf 'Could not remove cloned workspace outputs; skipping Cargo target seed.\n' >&2
+  exit 1
+fi
+
+SEED_COMPLETE=1
+if ! find "$OWNER_MARKER_PATH" -depth -delete; then
+  printf 'Could not remove the Cargo target seed marker.\n' >&2
+  exit 1
+fi
+OWNER_MARKER_NAME=""
