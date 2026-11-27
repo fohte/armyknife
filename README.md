@@ -1347,6 +1347,22 @@ cd ..
 cargo build
 ```
 
+### Agent Watch desktop app
+
+On macOS, build and install the unsigned `Agent Watch.app` from the repository:
+
+```sh
+cd agent-watch-desktop
+ni
+./scripts/install
+```
+
+Run the same install command after pulling updates to replace the app in `/Applications`. The installer stages the new app before replacing the existing one and restores the previous app if the replacement fails. If Agent Watch is running during an update, macOS displays a notification asking you to reopen it.
+
+The app opens the watch-web server at `http://127.0.0.1:4317`; it does not start or stop the server. If the server is unavailable, the app shows the command to start it and reconnects automatically. The app is unsigned, so macOS may ask you to confirm the first launch.
+
+For development, set `AGENT_WATCH_URL` to an `http://localhost` or `http://127.0.0.1` URL with the development server's port, then run `nr start` from `agent-watch-desktop`.
+
 ### `a agent clean`
 
 Delete merged or closed worktrees in the current repository. Without `--force`, worktrees with uncommitted changes or untracked files are marked `KEEP`. Without `--force`, candidates are also skipped and reported as cleanup failures if process inspection fails or if it finds a non-shell process whose current working directory is inside the worktree and which has no `codex app-server` ancestor with a `--managed-daemon` argument, except for shell-launched `sqlite3` processes whose arguments start with `-batch -noheader` (the invocation form used by zsh-histdb). The process guard excludes caller-pane descendants when every process from the caller to that pane has a known cwd outside the worktree and no caller ancestor has a known cwd inside; missing cwd data above the pane does not prevent exclusion. Unrelated processes and processes in other panes still prevent cleanup. After successful deletion without `--force`, cleanup sends SIGTERM only to process groups captured for matching descendants whose current working directory was inside the worktree; groups shared with the app-server or caller are excluded. Pass `--all` to scan repositories under `agent.worktree.repos_root`. The `ACTION` column and `--dry-run` show candidates based on checks before cleanup; process inspection runs during cleanup and may still skip a `DELETE` candidate. `KEEP` marks worktrees already known to be ineligible. Confirmation must be entered through terminal stdin; piped input is not accepted. To remove a single worktree, use `a agent close <worktree>`.

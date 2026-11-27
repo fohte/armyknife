@@ -1,0 +1,49 @@
+#!/bin/bash
+set -euo pipefail
+
+package_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+app_name='Agent Watch.app'
+destination="/Applications/$app_name"
+stage="/Applications/.Agent Watch.stage.$$.app"
+backup="/Applications/.Agent Watch.backup.$$.app"
+
+restore_on_failure() {
+  if [[ -d "$backup" && ! -e "$destination" ]]; then
+    sudo mv "$backup" "$destination"
+  fi
+  if [[ -e "$stage" ]]; then
+    sudo rm -rf "$stage"
+  fi
+}
+trap restore_on_failure EXIT
+
+cd "$package_dir"
+nr package
+
+built_app=''
+for candidate in "$package_dir"/release/mac*/"$app_name"; do
+  if [[ -d "$candidate" ]]; then
+    built_app="$candidate"
+    break
+  fi
+done
+if [[ -z "$built_app" ]]; then
+  echo "ビルドした $app_name が release/ に見つかりません" >&2
+  exit 1
+fi
+
+sudo ditto "$built_app" "$stage"
+if [[ -e "$destination" ]]; then
+  sudo mv "$destination" "$backup"
+fi
+sudo mv "$stage" "$destination"
+if [[ -e "$backup" ]]; then
+  sudo rm -rf "$backup"
+fi
+trap - EXIT
+
+if pgrep -x 'Agent Watch' > /dev/null; then
+  osascript -e 'display notification "新しいバージョンをインストールしました。Agent Watch を終了して開き直してください。" with title "Agent Watch"' || true
+fi
+
+echo "Installed $destination"
