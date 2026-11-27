@@ -168,6 +168,7 @@ fn forward_matching_output_event(
         {
             return;
         }
+        Ok(event) if event.kind.is_access() => return,
         Err(error) => {
             tracing::warn!(%error, path = %watched_path.display(), "background task output watcher failed");
         }
@@ -355,11 +356,13 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use futures_util::StreamExt;
+    use notify::event::{AccessKind, AccessMode, ModifyKind};
     use notify::{Event, EventKind};
+    use rstest::rstest;
 
     use super::{
-        MAX_OUTPUT_BYTES, canonical_output_path, output_updates, read_output_tail,
-        watch_output_events_with,
+        MAX_OUTPUT_BYTES, canonical_output_path, forward_matching_output_event, output_updates,
+        read_output_tail, watch_output_events_with,
     };
 
     #[tokio::test]
@@ -388,6 +391,42 @@ mod tests {
         assert_eq!(
             (initial_output, updated_output),
             ("initial output".to_owned(), "updated output".to_owned()),
+        );
+    }
+
+    #[rstest]
+    #[case::open(AccessKind::Open(AccessMode::Read))]
+    #[case::close(AccessKind::Close(AccessMode::Read))]
+    fn background_task_output_access_events_do_not_trigger_rereads(
+        #[case] access_kind: AccessKind,
+    ) {
+        let directory = tempfile::tempdir().unwrap();
+        let watched_path = directory.path().join("output.log");
+        fs::write(&watched_path, "initial output").unwrap();
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+
+        forward_matching_output_event(
+            &sender,
+            &watched_path,
+            Ok(Event::new(EventKind::Access(access_kind)).add_path(watched_path.clone())),
+        );
+        let access_was_forwarded = receiver.try_recv().is_ok();
+
+        let modification = EventKind::Modify(ModifyKind::Any);
+        forward_matching_output_event(
+            &sender,
+            &watched_path,
+            Ok(Event::new(modification).add_path(watched_path.clone())),
+        );
+        let forwarded_modification = receiver
+            .try_recv()
+            .ok()
+            .and_then(Result::ok)
+            .map(|event| (event.kind, event.paths));
+
+        assert_eq!(
+            (access_was_forwarded, forwarded_modification),
+            (false, Some((modification, vec![watched_path])),),
         );
     }
 
