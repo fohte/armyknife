@@ -47,8 +47,8 @@ pub(super) fn remove_clients(port: u16) {
     }
 }
 
-/// What the monitor blocks on between events: the daemon, the live announced clients, and the
-/// clients directory itself.
+/// What the monitor blocks on between events: the daemon, the live clients with a pid file
+/// (announced or found by lsof), and the clients directory itself.
 ///
 /// `client-started` writes the session wait state itself, so the monitor has to look again when
 /// a client is announced, not only when one exits.

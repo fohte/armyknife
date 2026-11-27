@@ -12,6 +12,8 @@ use crate::infra::process;
 const CRIT_CLIENT_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A review is waited on when a client announced by `client-started` is alive or lsof sees one.
+/// A client only lsof sees is recorded as a pid file, which is what makes the monitor wait for
+/// its exit.
 pub(super) fn crit_client_waiting(
     port: u16,
     daemon_pid: u32,
