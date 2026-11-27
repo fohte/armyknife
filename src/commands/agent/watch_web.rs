@@ -18,6 +18,7 @@ mod rewind;
 mod security;
 mod session_enrichment;
 mod session_state;
+mod session_store_watcher;
 mod sessions;
 mod stale_session_cleanup;
 mod usage;
@@ -45,6 +46,7 @@ use super::error::CcError;
 use crate::commands::agent::store;
 use crate::commands::agent::types::Session;
 use crate::shared::env_var::EnvVars;
+use session_store_watcher::SessionStoreWatcher;
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct WatchWebArgs {
@@ -157,6 +159,9 @@ pub async fn run(args: &WatchWebArgs) -> Result<()> {
     let own_session_id = EnvVars::load().own_session_id();
     ensure_port_allowed(args.port, own_session_id.as_deref())?;
     let is_agent_session = own_session_id.is_some();
+    let sessions_dir = store::sessions_dir()?;
+    std::fs::create_dir_all(&sessions_dir)?;
+    let session_store_watcher = SessionStoreWatcher::start(&sessions_dir)?;
 
     let executable = std::env::current_exe()?;
     let mut executable_identity = restart::ExecutableIdentity::read(&executable)?;
@@ -174,11 +179,11 @@ pub async fn run(args: &WatchWebArgs) -> Result<()> {
 
     let mut listener = listener;
     let mut restart_retry_interval = restart::POLL_INTERVAL;
-    let sessions_dir = store::sessions_dir()?;
     loop {
         let (restart_sender, restart_receiver) = watch::channel(false);
         let mut shutdown_receiver = restart_sender.subscribe();
         let relay_sessions_dir = sessions_dir.clone();
+        let session_store_events = session_store_watcher.subscribe();
         let watch_web_server = async move {
             let (relay_shutdown_sender, relay_shutdown_receiver) = watch::channel(false);
             // Relay registrations are shared, so a development process must not reconcile them.
@@ -189,7 +194,7 @@ pub async fn run(args: &WatchWebArgs) -> Result<()> {
             .await;
             let cleanup_task = stale_session_cleanup::start(relay_shutdown_receiver);
             let shutdown_signal_sender = relay_shutdown_sender.clone();
-            let result = axum::serve(listener, app(restart_receiver))
+            let result = axum::serve(listener, app(restart_receiver, session_store_events))
                 .with_graceful_shutdown(async move {
                     tokio::select! {
                         _ = shutdown_receiver.changed() => {}
@@ -256,7 +261,10 @@ async fn process_shutdown_signal() {
     }
 }
 
-fn app(restart_signal: watch::Receiver<bool>) -> Router {
+fn app(
+    restart_signal: watch::Receiver<bool>,
+    session_store_events: tokio::sync::broadcast::Receiver<()>,
+) -> Router {
     app_with_assets_and_queued_prompt_loaders_and_restart_signal(
         &assets::DIST,
         store::load_session,
@@ -286,6 +294,7 @@ fn app(restart_signal: watch::Receiver<bool>) -> Router {
             crate::commands::agent::vibe::repo_identity_for_path,
         ),
         restart_signal,
+        session_store_events,
     )
 }
 
@@ -327,6 +336,7 @@ fn app_with_assets_and_loader_and_restart_signal(
             |_| Ok(Vec::new()),
         ),
         restart_signal,
+        tokio::sync::broadcast::channel(1).1,
     )
 }
 
@@ -336,6 +346,7 @@ fn app_with_assets_and_queued_prompt_loaders_and_restart_signal(
     load_user_marker: impl Fn(&str) -> anyhow::Result<Option<String>> + Send + Sync + 'static,
     loaders: messages::RouteLoaders,
     restart_signal: watch::Receiver<bool>,
+    session_store_events: tokio::sync::broadcast::Receiver<()>,
 ) -> Router {
     let enrichment_updates = EnrichmentUpdates::new();
     let api = Router::new()
@@ -349,7 +360,11 @@ fn app_with_assets_and_queued_prompt_loaders_and_restart_signal(
         .merge(freeze_profiler::router())
         .merge(directories::router())
         .merge(model_options::router())
-        .merge(events::router(enrichment_updates, restart_signal))
+        .merge(events::router(
+            enrichment_updates,
+            restart_signal,
+            session_store_events,
+        ))
         .merge(messages::routes_with_proposals_and_peer_out_messages(
             load_session,
             load_user_marker,
@@ -663,10 +678,13 @@ mod tests {
         #[case] expected_content_type: Option<&str>,
         #[case] expected_body: &str,
     ) {
-        let response = app(watch::channel(false).1)
-            .oneshot(request(method, uri, host, origin))
-            .await
-            .unwrap();
+        let response = app(
+            watch::channel(false).1,
+            tokio::sync::broadcast::channel(1).1,
+        )
+        .oneshot(request(method, uri, host, origin))
+        .await
+        .unwrap();
 
         assert_eq!(
             response_snapshot(response).await,
@@ -869,19 +887,22 @@ mod tests {
 
     #[tokio::test]
     async fn matching_origin_reaches_the_action_route() {
-        let response = app(watch::channel(false).1)
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/sessions/not-found/answer")
-                    .header(HOST, "localhost")
-                    .header(ORIGIN, "http://localhost")
-                    .header(CONTENT_TYPE, "application/json")
-                    .body(Body::from(r#"{"skip":"invalid"}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let response = app(
+            watch::channel(false).1,
+            tokio::sync::broadcast::channel(1).1,
+        )
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/sessions/not-found/answer")
+                .header(HOST, "localhost")
+                .header(ORIGIN, "http://localhost")
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"skip":"invalid"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(
             response_snapshot(response).await,
