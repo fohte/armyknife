@@ -157,8 +157,7 @@ mod tests {
     }
 
     impl Holdable {
-        // `sh` is the POSIX-guaranteed primitive here: only a real process can
-        // exercise the OS exit notification, and there is no logic to mock.
+        // Spawns a real process: only an actual exit can trigger the OS exit notification under test.
         fn spawn() -> Self {
             let mut child: Child = Command::new("sh")
                 .args(["-c", "read _"])
