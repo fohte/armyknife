@@ -2,21 +2,29 @@ import type {
   MarkdownNode,
   MarkdownRoot,
 } from '#components/markdown-message-types'
+import { findDetailsClose } from '#components/remark-markdown-details/scanner'
+import type {
+  MarkdownParser,
+  ReferenceDefinitionSource,
+} from '#components/remark-markdown-details/source'
+import {
+  getReferenceDefinitionSources,
+  parseMarkdownSection,
+  shiftMarkdownNodeOffsets,
+  trimBlankLines,
+} from '#components/remark-markdown-details/source'
 
 const detailsOpenTagPattern =
   /^<details(?:\s+open(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?)?\s*>/i
-const detailsClosePattern = /^<\/details\s*>$/i
 const summaryOpenPattern = /^<summary\s*>$/i
 const summaryClosePattern = /^<\/summary\s*>$/i
 const inlineSummaryPrefixPattern = /^<summary\s*>(.*?)<\/summary\s*>/i
-const codeFencePattern = /^ {0,3}(`{3,}|~{3,})/
 // The body parser reruns for each wrapper, so bound its work on nested input.
 const maxDetailsNesting = 32
 
 type MarkdownProcessor = {
   parse: (value: string) => unknown
 }
-type MarkdownParser = (value: string) => MarkdownRoot
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
@@ -79,89 +87,28 @@ function lineOffset(lines: readonly string[], index: number) {
     .reduce((offset, line) => offset + line.length + 1, 0)
 }
 
-function shiftNodeOffsets(nodes: MarkdownNode[], offset: number) {
-  for (const node of nodes) {
-    if (node.position !== undefined) {
-      const start = node.position.start.offset
-      const end = node.position.end.offset
-      node.position = {
-        start: {
-          ...node.position.start,
-          ...(start === undefined ? {} : { offset: start + offset }),
-        },
-        end: {
-          ...node.position.end,
-          ...(end === undefined ? {} : { offset: end + offset }),
-        },
-      }
-    }
-    if (node.children !== undefined) shiftNodeOffsets(node.children, offset)
-  }
-}
-
-function isOpeningTag(line: string, tagName: string) {
-  return new RegExp(`^<${tagName}(?:\\s[^>]*)?>$`, 'i').test(line.trim())
-}
-
-function findDetailsClose(lines: readonly string[], start: number) {
-  let depth = 0
-  let fence: { marker: '`' | '~'; length: number } | null = null
-  let rawTag: 'script' | 'style' | null = null
-
-  for (let index = start; index < lines.length; index += 1) {
-    const rawLine = lineAt(lines, index)
-    const line = rawLine.trim()
-    const isIndentedCode = /^(?: {4,}|\t)/.test(rawLine)
-    if (fence !== null) {
-      const closingFence = new RegExp(
-        `^${fence.marker}{${String(fence.length)},}\\s*$`,
-      )
-      if (closingFence.test(line)) fence = null
-      continue
-    }
-
-    const fenceMatch = codeFencePattern.exec(rawLine)
-    const fenceText = fenceMatch?.[1]
-    if (fenceText !== undefined) {
-      const marker = fenceText.startsWith('`') ? '`' : '~'
-      fence = { marker, length: fenceText.length }
-      continue
-    }
-
-    if (rawTag !== null) {
-      if (new RegExp(`</${rawTag}\\s*>`, 'i').test(line)) rawTag = null
-      continue
-    }
-
-    if (isOpeningTag(line, 'script')) {
-      rawTag = 'script'
-      continue
-    }
-    if (isOpeningTag(line, 'style')) {
-      rawTag = 'style'
-      continue
-    }
-
-    if (!isIndentedCode) {
-      if (detailsOpenTagPattern.test(line)) {
-        depth += 1
-      }
-      if (detailsClosePattern.test(line)) {
-        depth -= 1
-        if (depth === 0) return index
-      }
-    }
-  }
-
-  return null
-}
-
-function parseSummary(source: string, parse: MarkdownParser) {
-  const tree = parse(source)
-  const paragraph = tree.children.find((node) => node.type === 'paragraph')
+function parseSummary(
+  source: string,
+  parse: MarkdownParser,
+  referenceDefinitions: readonly ReferenceDefinitionSource[],
+  sourceOffset: number,
+) {
+  const { tree } = parseMarkdownSection(
+    source,
+    parse,
+    referenceDefinitions,
+    sourceOffset,
+  )
+  const paragraphs = tree.children.filter((node) => node.type === 'paragraph')
+  const children = paragraphs.flatMap((paragraph, index) =>
+    index === 0
+      ? (paragraph.children ?? [])
+      : [{ type: 'break' }, ...(paragraph.children ?? [])],
+  )
   return {
     type: 'summary',
-    children: paragraph?.children ?? [{ type: 'text', value: source }],
+    children:
+      children.length === 0 ? [{ type: 'text', value: source }] : children,
     data: {
       hName: 'span',
       hProperties: { className: 'markdown-details-summary-content' },
@@ -187,6 +134,8 @@ function parseDetailsSource(
   source: string,
   parse: MarkdownParser,
   nestingLevel: number,
+  referenceDefinitions: readonly ReferenceDefinitionSource[],
+  sourceOffset: number,
 ) {
   const lines = source.split('\n')
   const firstLine = lines.findIndex((line) => line.trim() !== '')
@@ -203,8 +152,9 @@ function parseDetailsSource(
     openingRemainder.length - openingRemainderContent.length
   const inlineOpeningSummary = parseInlineSummary(openingRemainderContent)
 
-  const closeLine = findDetailsClose(lines, firstLine)
-  if (closeLine === null) return null
+  const close = findDetailsClose(lines, firstLine)
+  if (close === null) return null
+  const closeLine = close.line
 
   let summaryStart = firstLine + 1
   while (
@@ -269,19 +219,42 @@ function parseDetailsSource(
     bodyStart = lineOffset(lines, summaryEnd + 1)
   }
 
-  const rawBody = source.slice(bodyStart, lineOffset(lines, closeLine))
-  const bodyLeadingWhitespace = rawBody.length - rawBody.trimStart().length
-  const bodySource = rawBody.trim()
-  const bodyTree = parse(bodySource)
-  const body = transformNodes(
-    bodyTree.children,
-    parse,
+  const bodyOffset = lineOffset(lines, closeLine) + close.start
+  const rawBody = source.slice(bodyStart, bodyOffset)
+  const trimmedBody = trimBlankLines(rawBody)
+  const bodySource = trimmedBody.source
+  const bodySourceOffset = sourceOffset + bodyStart + trimmedBody.offset
+  const parsedBody = parseMarkdownSection(
     bodySource,
-    nestingLevel + 1,
+    parse,
+    referenceDefinitions,
+    bodySourceOffset,
   )
-  shiftNodeOffsets(body, bodyLeadingWhitespace + bodyStart)
-  const summary = parseSummary(summaryText, parse)
-  shiftNodeOffsets(summary.children, summaryOffset)
+  const bodyReferenceDefinitions = [
+    ...referenceDefinitions,
+    ...getReferenceDefinitionSources(parsedBody.tree.children, bodySource).map(
+      (definition) => ({
+        ...definition,
+        offset: definition.offset + bodySourceOffset,
+      }),
+    ),
+  ].sort((left, right) => left.offset - right.offset)
+  const body = transformNodes(
+    parsedBody.tree.children,
+    parse,
+    parsedBody.source,
+    nestingLevel + 1,
+    bodyReferenceDefinitions,
+    bodySourceOffset,
+  )
+  shiftMarkdownNodeOffsets(body, trimmedBody.offset + bodyStart)
+  const summary = parseSummary(
+    summaryText,
+    parse,
+    bodyReferenceDefinitions,
+    sourceOffset + summaryOffset,
+  )
+  shiftMarkdownNodeOffsets(summary.children, summaryOffset)
   const openAttribute = /^<details\s+open(?:\s*=|\s*>)/i.test(openTag)
 
   return {
@@ -299,6 +272,8 @@ function transformNodes(
   parse: MarkdownParser,
   source: string,
   nestingLevel = 0,
+  referenceDefinitions: readonly ReferenceDefinitionSource[] = [],
+  sourceOffset = 0,
 ) {
   const result: MarkdownNode[] = []
   for (let index = 0; index < nodes.length; index += 1) {
@@ -317,31 +292,75 @@ function transformNodes(
       }
 
       const suffixLines = source.slice(start).split('\n')
-      const closeLine = findDetailsClose(suffixLines, 0)
+      const close = findDetailsClose(suffixLines, 0)
+      const detailsLength =
+        close === null ? null : lineOffset(suffixLines, close.line) + close.end
       const detailsSource =
-        closeLine === null
+        detailsLength === null
           ? null
-          : suffixLines.slice(0, closeLine + 1).join('\n')
+          : source.slice(start, start + detailsLength)
       const details =
         detailsSource === null
           ? null
-          : parseDetailsSource(detailsSource, parse, nestingLevel)
+          : parseDetailsSource(
+              detailsSource,
+              parse,
+              nestingLevel,
+              referenceDefinitions,
+              sourceOffset + start,
+            )
       if (details !== null) {
-        shiftNodeOffsets([details], start)
+        shiftMarkdownNodeOffsets([details], start)
         result.push(details)
-        const end = start + (detailsSource?.length ?? 0)
-        while (
-          index + 1 < nodes.length &&
-          (nodes[index + 1]?.position?.start.offset ?? end) < end
-        ) {
-          index += 1
+        const detailsEnd = start + (detailsSource?.length ?? 0)
+        let nodeEnd = Math.max(
+          detailsEnd,
+          node.position?.end.offset ?? detailsEnd,
+        )
+        let consumedIndex = index + 1
+        while (consumedIndex < nodes.length) {
+          const consumedNode = nodes[consumedIndex]
+          const consumedStart = consumedNode?.position?.start.offset
+          if (consumedStart === undefined || consumedStart >= nodeEnd) break
+          nodeEnd = Math.max(
+            nodeEnd,
+            consumedNode.position?.end.offset ?? nodeEnd,
+          )
+          consumedIndex += 1
         }
+        const unconsumedSource = source.slice(detailsEnd, nodeEnd)
+        if (unconsumedSource.length > 0) {
+          const parsedSuffix = parseMarkdownSection(
+            unconsumedSource,
+            parse,
+            referenceDefinitions,
+            sourceOffset + detailsEnd,
+          )
+          const suffixNodes = transformNodes(
+            parsedSuffix.tree.children,
+            parse,
+            parsedSuffix.source,
+            nestingLevel,
+            referenceDefinitions,
+            sourceOffset + detailsEnd,
+          )
+          shiftMarkdownNodeOffsets(suffixNodes, detailsEnd)
+          result.push(...suffixNodes)
+        }
+        index = consumedIndex - 1
         continue
       }
     }
 
     if (node.children !== undefined) {
-      node.children = transformNodes(node.children, parse, source, nestingLevel)
+      node.children = transformNodes(
+        node.children,
+        parse,
+        source,
+        nestingLevel,
+        referenceDefinitions,
+        sourceOffset,
+      )
     }
     result.push(node)
   }
@@ -358,6 +377,17 @@ export function remarkMarkdownDetails(this: MarkdownProcessor) {
       typeof file.value === 'string'
         ? file.value
         : new TextDecoder().decode(file.value)
-    tree.children = transformNodes(tree.children, parse, source)
+    const referenceDefinitions = getReferenceDefinitionSources(
+      tree.children,
+      source,
+    )
+    tree.children = transformNodes(
+      tree.children,
+      parse,
+      source,
+      0,
+      referenceDefinitions,
+      0,
+    )
   }
 }

@@ -195,6 +195,16 @@ it('renders an inline summary on the details opening line', () => {
   )
 })
 
+it('renders nested details with both opening tags on the same line', () => {
+  expect(
+    renderMessage(`<details open><summary>Outer</summary><details open><summary>Inner</summary>
+Inner body
+</details></details>`),
+  ).toBe(
+    '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Outer</span></button><div class="markdown-details-body"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Inner</span></button><div class="markdown-details-body"><p>Inner body</p></div></div></div></div></div>',
+  )
+})
+
 it('preserves a heading immediately after a details block', () => {
   expect(
     renderMessage(`<details>
@@ -205,6 +215,17 @@ Hidden context
 ## Next heading`),
   ).toBe(
     '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="false" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Context</span></button></div><h2>Next heading</h2></div>',
+  )
+})
+
+it('preserves text after an inline details closing tag', () => {
+  expect(
+    renderMessage(`<details open>
+<summary>Context</summary>
+Hidden context
+</details>Visible text`),
+  ).toBe(
+    '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Context</span></button><div class="markdown-details-body"><p>Hidden context</p></div></div><p>Visible text</p></div>',
   )
 })
 
@@ -234,6 +255,53 @@ See the [guide][shared-guide].
 [shared-guide]: https://example.com/guide`),
   ).toBe(
     '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">References</span></button><div class="markdown-details-body"><p>See the <a href="https://example.com/guide" target="_blank" rel="noopener noreferrer">guide</a>.</p></div></div></div>',
+  )
+})
+
+it('preserves the source order of duplicate reference definitions', () => {
+  expect(
+    renderMessage(`[shared-guide]: https://example.com/outside
+
+<details open>
+<summary>References</summary>
+
+See the [guide][shared-guide].
+[shared-guide]: https://example.com/inside
+</details>`),
+  ).toBe(
+    '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">References</span></button><div class="markdown-details-body"><p>See the <a href="https://example.com/outside" target="_blank" rel="noopener noreferrer">guide</a>.</p></div></div></div>',
+  )
+})
+
+it('resolves a details summary reference defined in its body', () => {
+  expect(
+    renderMessage(`<details open>
+<summary>See the [guide][shared-guide]</summary>
+
+[shared-guide]: https://example.com/summary
+
+Body
+</details>`),
+  ).toBe(
+    '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">See the <a href="https://example.com/summary" target="_blank" rel="noopener noreferrer">guide</a></span></button><div class="markdown-details-body"><p>Body</p></div></div></div>',
+  )
+})
+
+it('resolves references from an outer details body inside nested details', () => {
+  expect(
+    renderMessage(`<details open>
+<summary>Outer</summary>
+
+[shared-guide]: https://example.com/nested
+
+<details open>
+<summary>Inner</summary>
+
+See the [guide][shared-guide].
+</details>
+</details>`),
+  ).toBe(
+    '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Outer</span></button><div class="markdown-details-body"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Inner</span></button><div class="markdown-details-body"><p>See the <a href="https://example.com/nested" target="_blank" rel="noopener noreferrer">guide</a>.</p></div></div></div></div></div>',
   )
 })
 
@@ -307,6 +375,145 @@ Still inside.
 
   expect(html).toBe(
     '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Code samples</span></button><div class="markdown-details-body"><div class="syntax-code-block-container"><div class="syntax-code-block-toolbar"><span class="syntax-code-block-language">text</span><button class="syntax-code-block-copy-button" type="button" aria-label="Copy code" title="Copy code">Copy</button></div><pre class="syntax-code-block" data-language="text"><code class="language-text">&lt;/details&gt;\n</code></pre></div><div class="syntax-code-block-container"><div class="syntax-code-block-toolbar"><span class="syntax-code-block-language">text</span><button class="syntax-code-block-copy-button" type="button" aria-label="Copy code" title="Copy code">Copy</button></div><pre class="syntax-code-block" data-language="text"><code class="language-text">&lt;/details&gt;\nStill indented.\n</code></pre></div><p>Still inside.</p></div></div></div>',
+  )
+})
+
+it('keeps an inline-code closing tag inside the details body', () => {
+  expect(
+    renderMessage(
+      '<details open><summary>Code</summary>\n\n`</details>`\nBody\n</details>',
+    ),
+  ).toBe(
+    '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Code</span></button><div class="markdown-details-body"><p><code>&lt;/details&gt;</code></p><p>Body</p></div></div></div>',
+  )
+})
+
+it('keeps multiline inline-code closing tags inside the details body', () => {
+  expect(
+    renderMessage(
+      '<details open><summary>Code</summary>\n`\n</details>\n`\n\nBody\n</details>',
+    ),
+  ).toBe(
+    '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Code</span></button><div class="markdown-details-body"><p><code>&lt;/details&gt;</code></p><p>Body</p></div></div></div>',
+  )
+})
+
+it.each([
+  {
+    name: 'script',
+    source: `<script>const value = '</details>';</script>`,
+  },
+  {
+    name: 'style',
+    source: `<style>.example { content: '</details>'; }</style>`,
+  },
+])('keeps closing details tags inside inline $name raw text', ({ source }) => {
+  expect(
+    renderMessage(`<details>
+<summary>Example</summary>
+${source}
+Hidden body content
+</details>`),
+  ).toBe(
+    '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="false" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Example</span></button></div></div>',
+  )
+})
+
+it.each([
+  {
+    name: 'a fence with a four-space-indented marker',
+    markdown: `<details>
+<summary>Example</summary>
+
+~~~
+    ~~~
+</details>
+~~~
+
+Hidden body content
+</details>`,
+  },
+  {
+    name: 'a fence inside a blockquote',
+    markdown: `<details>
+<summary>Example</summary>
+
+> ~~~
+> </details>
+> ~~~
+
+Hidden body content
+</details>`,
+  },
+  {
+    name: 'a fence in a blockquote with a literal quote prefix',
+    markdown: `<details>
+<summary>Example</summary>
+
+> ~~~
+> > </details>
+> ~~~
+
+Hidden body content
+</details>`,
+  },
+  {
+    name: 'a fence marker inside an HTML comment',
+    markdown: `<details>
+<summary>Example</summary>
+
+<!--
+~~~
+-->
+</details>`,
+  },
+  {
+    name: 'a fence marker inside a multiline inline comment',
+    markdown: `<details>
+<summary>Example</summary>
+
+Text <!--
+~~~
+-->
+</details>`,
+  },
+  {
+    name: 'a backtick inside a multiline HTML comment',
+    markdown: `<details>
+<summary>Example</summary>
+
+<!--
+
+\`
+-->
+\`
+</details>`,
+  },
+  {
+    name: 'a fence marker inside multiline script raw text',
+    markdown: `<details>
+<summary>Example</summary>
+
+<script>
+~~~
+</script>
+</details>`,
+  },
+  {
+    name: 'a fence inside a blockquote list item',
+    markdown: `<details>
+<summary>Example</summary>
+
+> - ~~~
+>   </details>
+>   ~~~
+
+Hidden body content
+</details>`,
+  },
+])('keeps a fake closing tag inside $name', ({ markdown }) => {
+  expect(renderMessage(markdown)).toBe(
+    '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="false" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Example</span></button></div></div>',
   )
 })
 
