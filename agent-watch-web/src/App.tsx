@@ -236,6 +236,7 @@ function AppContent() {
               (session) =>
                 session.category === 'needs_action' ||
                 session.category === 'later' ||
+                session.category === 'waiting' ||
                 session.category === 'in_progress' ||
                 session.category === 'done',
             ),

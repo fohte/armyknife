@@ -400,6 +400,24 @@ export const InboxShowsAllActiveSessions: Story = {
   args: { showAllInProgress: true },
 }
 
+const waitingSession = sampleSession(
+  'sample-waiting',
+  'waiting',
+  'Wait for the integration check',
+  { waitingReason: 'Waiting for CI to finish' },
+)
+
+export const InboxShowsWaitingSessions: Story = {
+  name: 'The Waiting section shows why each session is paused',
+  args: { sessions: [waitingSession] },
+}
+
+export const IPhoneInboxShowsWaitingSessions: Story = {
+  name: 'The iPhone shows a collapsible Waiting section',
+  args: { sessions: [waitingSession], isMobile: true },
+  decorators: [iPhoneViewportDecorator],
+}
+
 export const InboxHasNoSessions: Story = {
   name: 'The inbox shows an empty state when there are no sessions',
   args: { sessions: [], loaded: true, selectedId: null },

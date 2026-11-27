@@ -345,6 +345,36 @@ it('uses the shared compact row without a starred marker', () => {
   })
 })
 
+it('shows the Waiting status for a starred session in navigation', () => {
+  renderNav([], {
+    todaySessions: [
+      {
+        ...baseTodaySession,
+        id: 'waiting-session',
+        category: 'waiting',
+        kind: null,
+        waitingReason: 'Waiting for the checks to finish',
+      },
+    ],
+  })
+
+  const row = container.querySelector('.today-nav .session-row-content')
+  const status = row?.querySelector('.session-row-status')
+  const snapshot = () => ({
+    title: row?.querySelector('.session-title')?.textContent,
+    status: status?.getAttribute('aria-label'),
+    icon: status?.querySelector('svg')?.classList.contains('lucide-hourglass'),
+    reason: row?.querySelector('.session-preview')?.textContent,
+  })
+
+  expect(snapshot()).toEqual({
+    title: 'Review the retry policy',
+    status: 'Waiting',
+    icon: true,
+    reason: 'Waiting for the checks to finish',
+  })
+})
+
 it('shows only the ten most recently prompted sessions in newest-first order', () => {
   const promptedSessions = Array.from({ length: 12 }, (_, index) => ({
     ...baseTodaySession,

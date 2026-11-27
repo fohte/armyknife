@@ -1,5 +1,5 @@
 type SessionCategory =
-  'needs_action' | 'later' | 'in_progress' | 'done' | (string & {})
+  'needs_action' | 'later' | 'waiting' | 'in_progress' | 'done' | (string & {})
 
 type SessionKind =
   | 'Question'

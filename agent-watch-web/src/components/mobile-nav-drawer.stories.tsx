@@ -4,18 +4,19 @@ import { AgentWatchNav } from '#components/agent-watch-nav'
 import { MobileNavDrawer } from '#components/mobile-nav-drawer'
 import type { Session } from '#types'
 
-function createNavigation(sessionCount: number) {
+function createNavigation(sessionCount: number, waiting = false) {
   const sessions: Session[] = Array.from(
     { length: sessionCount },
     (_, index) => ({
       id: `sample-session-${String(index + 1)}`,
       engine: 'codex',
       workType: 'PM',
-      category: 'needs_action',
+      category: waiting ? 'waiting' : 'needs_action',
       isPaused: false,
-      kind: 'Question',
+      kind: waiting ? null : 'Question',
       title: `Review sample change ${String(index + 1)}`,
-      preview: null,
+      preview: waiting ? null : 'Choose an example option.',
+      waitingReason: waiting ? 'Waiting for the checks to finish' : null,
       elapsedSeconds: 30,
       unread: false,
       task: null,
@@ -91,4 +92,9 @@ export const LongNavigation: Story = {
   args: {
     children: createNavigation(30),
   },
+}
+
+export const WaitingSession: Story = {
+  name: 'The drawer marks a waiting session with its reason',
+  args: { children: createNavigation(1, true) },
 }

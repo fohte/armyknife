@@ -150,6 +150,31 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+it('shows the waiting reason on compact rows with a gray hourglass', () => {
+  renderRow('compact', {
+    ...session,
+    category: 'waiting',
+    kind: null,
+    waitingReason: 'Waiting for the checks to finish',
+  })
+
+  const icon = container.querySelector<HTMLElement>('.session-row-status')
+
+  const snapshot = () => ({
+    label: icon?.getAttribute('aria-label'),
+    title: icon?.getAttribute('title'),
+    icon: icon?.querySelector('svg')?.classList.contains('lucide-hourglass'),
+    preview: container.querySelector('.session-preview')?.textContent ?? null,
+  })
+
+  expect(snapshot()).toEqual({
+    label: 'Waiting',
+    title: 'Waiting',
+    icon: true,
+    preview: 'Waiting for the checks to finish',
+  })
+})
+
 it('shows the full Inbox row with role, engine, task and repository', () => {
   renderRow('full')
 

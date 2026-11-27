@@ -46,6 +46,7 @@ it('sorts projects by action count, activity, then name', () => {
       sessions: [sessions[2], sessions[3]],
       repos: ['example/alpha'],
       needsActionCount: 2,
+      waitingCount: 0,
       inProgressCount: 0,
       quiet: false,
       status: 'Review',
@@ -55,6 +56,7 @@ it('sorts projects by action count, activity, then name', () => {
       sessions: [sessions[4]],
       repos: ['example/charlie'],
       needsActionCount: 1,
+      waitingCount: 0,
       inProgressCount: 0,
       quiet: false,
       status: 'Review',
@@ -64,6 +66,7 @@ it('sorts projects by action count, activity, then name', () => {
       sessions: [sessions[1], sessions[5]],
       repos: ['example/beta'],
       needsActionCount: 0,
+      waitingCount: 0,
       inProgressCount: 2,
       quiet: false,
       status: 'Working',
@@ -73,6 +76,7 @@ it('sorts projects by action count, activity, then name', () => {
       sessions: [sessions[0]],
       repos: ['example/zeta'],
       needsActionCount: 0,
+      waitingCount: 0,
       inProgressCount: 0,
       quiet: true,
       status: 'Idle',
@@ -95,6 +99,7 @@ it('hides only quiet projects when the quiet filter is enabled', () => {
       sessions: [sessions[0]],
       repos: ['example/alpha'],
       needsActionCount: 1,
+      waitingCount: 0,
       inProgressCount: 0,
       quiet: false,
       status: 'Review',
@@ -104,6 +109,7 @@ it('hides only quiet projects when the quiet filter is enabled', () => {
       sessions: [sessions[1]],
       repos: ['example/beta'],
       needsActionCount: 0,
+      waitingCount: 0,
       inProgressCount: 1,
       quiet: false,
       status: 'Working',
@@ -113,6 +119,7 @@ it('hides only quiet projects when the quiet filter is enabled', () => {
       sessions: [sessions[2]],
       repos: ['example/gamma'],
       needsActionCount: 0,
+      waitingCount: 0,
       inProgressCount: 0,
       quiet: true,
       status: 'Idle',
@@ -122,14 +129,48 @@ it('hides only quiet projects when the quiet filter is enabled', () => {
   expect(buildBoardProjects(sessions)).toEqual(expected)
 })
 
-it('groups configured work types by label and includes every matching session', () => {
+it('keeps a waiting-only project active and orders it after working projects', () => {
+  const sessions = [
+    session('waiting', 'beta', 'waiting'),
+    session('working', 'alpha', 'in_progress'),
+  ] as const
+
+  expect(buildBoardProjects(sessions)).toEqual([
+    {
+      name: 'alpha',
+      sessions: [sessions[1]],
+      repos: ['example/alpha'],
+      needsActionCount: 0,
+      waitingCount: 0,
+      inProgressCount: 1,
+      quiet: false,
+      status: 'Working',
+    },
+    {
+      name: 'beta',
+      sessions: [sessions[0]],
+      repos: ['example/beta'],
+      needsActionCount: 0,
+      waitingCount: 1,
+      inProgressCount: 0,
+      quiet: false,
+      status: 'Waiting',
+    },
+  ])
+})
+
+it('groups work types by label and orders Waiting before In progress', () => {
   const sessions = [
     {
       ...session('guide-active', 'sample project', 'in_progress'),
       workType: 'release-guide',
     },
     {
-      ...session('guide-waiting', 'sample project', 'needs_action'),
+      ...session('guide-waiting', 'sample project', 'waiting'),
+      workType: 'release-guide',
+    },
+    {
+      ...session('guide-needs-action', 'sample project', 'needs_action'),
       workType: 'release-guide',
     },
     {
@@ -151,7 +192,7 @@ it('groups configured work types by label and includes every matching session', 
   ).toEqual([
     {
       label: 'Guides',
-      sessions: [sessions[1], sessions[2], sessions[0]],
+      sessions: [sessions[2], sessions[3], sessions[1], sessions[0]],
     },
   ])
 })

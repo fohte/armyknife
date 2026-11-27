@@ -255,6 +255,20 @@ export const WorkIsInProgress: Story = {
   },
 }
 
+export const WorkIsWaitingForExternalWork: Story = {
+  name: 'A waiting session shows the reason it is paused',
+  args: {
+    density: 'compact',
+    session: {
+      ...session,
+      category: 'waiting',
+      kind: null,
+      waitingReason: 'Waiting for the checks to finish',
+      unread: false,
+    },
+  },
+}
+
 export const WorkIsDone: Story = {
   name: 'A completed session shows its merged pull request',
   args: {

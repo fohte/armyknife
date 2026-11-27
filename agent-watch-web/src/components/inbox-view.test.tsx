@@ -124,6 +124,26 @@ function renderInbox(props: Partial<ComponentProps<typeof InboxView>> = {}) {
   })
 }
 
+function waitingSession(id: string): Session {
+  return {
+    id,
+    category: 'waiting',
+    isPaused: false,
+    kind: null,
+    title: 'Wait for the integration check',
+    preview: null,
+    waitingReason: 'Waiting for CI to finish',
+    elapsedSeconds: 30,
+    unread: false,
+    task: null,
+    repo: 'sample-org/service',
+    project: 'web-app',
+    parent: null,
+    ancestorSessionIds: [],
+    pullRequest: null,
+  }
+}
+
 function sectionSnapshot() {
   return {
     headings: Array.from(container.querySelectorAll('.section-heading')).map(
@@ -303,6 +323,54 @@ it('filters each inbox section and updates the visible counts', () => {
       'Document request limits',
     ],
     resultCount: '1 of 2',
+  })
+})
+
+it('shows waiting sessions in their own inbox section with the status note', () => {
+  renderInbox({ sessions: [waitingSession('sample-waiting')] })
+
+  const snapshot = () => ({
+    heading: container.querySelector('.waiting-section .section-heading')
+      ?.textContent,
+    title: container.querySelector('.waiting-section .session-title')
+      ?.textContent,
+    reason: container.querySelector('.waiting-section .session-preview')
+      ?.textContent,
+    statusLabel: container
+      .querySelector('.waiting-section .session-row-status')
+      ?.getAttribute('aria-label'),
+  })
+
+  expect(snapshot()).toEqual({
+    heading: 'Waiting1',
+    title: 'Wait for the integration check',
+    reason: 'Waiting for CI to finish',
+    statusLabel: 'Waiting',
+  })
+})
+
+it('shows the Waiting count and sessions in the iPhone inbox', () => {
+  renderInbox({
+    sessions: [waitingSession('sample-waiting-phone')],
+    isMobile: true,
+  })
+
+  const snapshot = () => ({
+    toggle: container.querySelector('.mobile-waiting-row')?.textContent,
+    expanded: container
+      .querySelector('.mobile-waiting-row')
+      ?.getAttribute('aria-expanded'),
+    title: container.querySelector('.waiting-section .session-title')
+      ?.textContent,
+    reason: container.querySelector('.waiting-section .session-preview')
+      ?.textContent,
+  })
+
+  expect(snapshot()).toEqual({
+    toggle: 'Waiting1⌄',
+    expanded: 'true',
+    title: 'Wait for the integration check',
+    reason: 'Waiting for CI to finish',
   })
 })
 

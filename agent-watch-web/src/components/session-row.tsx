@@ -4,6 +4,7 @@ import {
   Bug,
   Code2,
   Ellipsis,
+  Hourglass,
   Palette,
   Search,
   UsersRound,
@@ -111,6 +112,9 @@ function taskReference(task: SessionTask) {
 }
 
 function statusIcon(session: SessionRowData) {
+  if (session.category === 'waiting') {
+    return <Hourglass aria-hidden="true" size={14} />
+  }
   if (session.category === 'in_progress') {
     return <span className="session-row-working-dot" />
   }
@@ -160,7 +164,10 @@ export function SessionRow({
           .join(' · ')
       : null
   const rowPreview = [
-    critReviewReason ?? decisionPreview ?? session.preview,
+    critReviewReason ??
+      (session.category === 'waiting' ? session.waitingReason : null) ??
+      decisionPreview ??
+      session.preview,
     todoLaterPreview,
   ]
     .filter((part) => part !== null && part.length > 0)
@@ -177,11 +184,19 @@ export function SessionRow({
         aria-label={
           session.category === 'in_progress'
             ? 'Working'
-            : session.category === 'done'
-              ? 'Done'
-              : (session.kind ?? 'Stopped')
+            : session.category === 'waiting'
+              ? 'Waiting'
+              : session.category === 'done'
+                ? 'Done'
+                : (session.kind ?? 'Stopped')
         }
-        title={session.category === 'in_progress' ? 'Working' : undefined}
+        title={
+          session.category === 'in_progress'
+            ? 'Working'
+            : session.category === 'waiting'
+              ? 'Waiting'
+              : undefined
+        }
       >
         {statusIcon(session)}
       </span>
@@ -197,7 +212,8 @@ export function SessionRow({
           )}
           <SessionAge elapsedSeconds={session.elapsedSeconds} />
         </span>
-        {density === 'full' && rowPreview.length > 0 ? (
+        {(density === 'full' || session.category === 'waiting') &&
+        rowPreview.length > 0 ? (
           <span
             className={`session-preview${decisionPreview === null ? '' : ' is-decision-preview'}`}
           >

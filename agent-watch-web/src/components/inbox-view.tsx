@@ -104,6 +104,8 @@ export function InboxView({
 }: InboxViewProps) {
   const [localFilterQuery, setLocalFilterQuery] = useState('')
   const [localDialogOpen, setLocalDialogOpen] = useState(false)
+  const [waitingExpanded, setWaitingExpanded] = useState(true)
+  const [showAllWaiting, setShowAllWaiting] = useState(false)
   const [draftQuery, setDraftQuery] = useState(controlledFilterQuery ?? '')
   const [actionSheetSession, setActionSheetSession] = useState<Session | null>(
     null,
@@ -120,6 +122,9 @@ export function InboxView({
   )
   const inProgress = filteredSessions.filter(
     (session) => session.category === 'in_progress',
+  )
+  const waiting = filteredSessions.filter(
+    (session) => session.category === 'waiting',
   )
   const todoLaterCount = sumTodoLaterCount(inProgress)
   const done = filteredSessions.filter((session) => session.category === 'done')
@@ -173,6 +178,14 @@ export function InboxView({
       ? inProgress
       : inProgress.slice(0, 2)
   const hiddenInProgressCount = inProgress.length - visibleInProgress.length
+  const visibleWaiting = isMobile
+    ? waitingExpanded
+      ? waiting
+      : []
+    : showAllWaiting
+      ? waiting
+      : waiting.slice(0, 2)
+  const hiddenWaitingCount = waiting.length - visibleWaiting.length
 
   return (
     <section className="inbox-view" aria-labelledby="inbox-title">
@@ -354,6 +367,50 @@ export function InboxView({
               />
             ))}
           </ul>
+        ) : null}
+        {isMobile && waiting.length > 0 ? (
+          <Button
+            type="button"
+            variant="plain"
+            className="mobile-collapse-row mobile-waiting-row cursor-pointer"
+            aria-expanded={waitingExpanded}
+            onClick={() => {
+              setWaitingExpanded((expanded) => !expanded)
+            }}
+          >
+            <span>Waiting</span>
+            <span className="mobile-collapse-count">{waiting.length}</span>
+            <span className="mobile-collapse-chevron" aria-hidden="true">
+              {waitingExpanded ? '⌄' : '›'}
+            </span>
+          </Button>
+        ) : null}
+        {waiting.length > 0
+          ? renderInboxSessionSection({
+              title: 'Waiting',
+              className: 'waiting-section',
+              sessions: visibleWaiting,
+              count: waiting.length,
+              selectedId,
+              onSelect,
+              isMobile,
+              onLater,
+              onCloseSession,
+              onOpenActions: setActionSheetSession,
+            })
+          : null}
+        {hiddenWaitingCount > 0 && !isMobile ? (
+          <Button
+            className="show-more-button cursor-pointer"
+            type="button"
+            variant="plain"
+            aria-expanded={showAllWaiting}
+            onClick={() => {
+              setShowAllWaiting(true)
+            }}
+          >
+            {hiddenWaitingCount} more ▸
+          </Button>
         ) : null}
         <Button
           type="button"
