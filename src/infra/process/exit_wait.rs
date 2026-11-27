@@ -147,8 +147,7 @@ fn wait_with_kqueue(
         &new_kevent(
             dir_handle.as_raw_fd() as libc::uintptr_t,
             libc::EVFILT_VNODE,
-            // EV_CLEAR re-arms the watch after each delivery instead of dropping it.
-            libc::EV_ADD | libc::EV_CLEAR,
+            libc::EV_ADD,
             libc::NOTE_WRITE | libc::NOTE_DELETE | libc::NOTE_RENAME | libc::NOTE_REVOKE,
         ),
     )?;
