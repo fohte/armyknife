@@ -596,6 +596,12 @@ pub fn send_sigterm_to_pane(pane_id: &str) {
 /// Searches for a pane whose pane_pid matches the given PID or any of its ancestor PIDs.
 /// Returns None if not running in tmux or if no matching pane is found.
 pub fn get_pane_info_by_pid(pid: u32) -> Option<PaneInfo> {
+    get_pane_info_and_pid_by_pid(pid).map(|(pane_info, _)| pane_info)
+}
+
+/// Gets tmux pane information and its process ID for a given process ID.
+/// Searches for a pane whose pane_pid matches the given PID or any of its ancestor PIDs.
+pub(crate) fn get_pane_info_and_pid_by_pid(pid: u32) -> Option<(PaneInfo, u32)> {
     let output = run_tmux_output(&[
         "list-panes",
         "-a",
@@ -617,9 +623,10 @@ pub fn get_pane_info_by_pid(pid: u32) -> Option<PaneInfo> {
     for _ in 0..MAX_DEPTH {
         if pane_pids.contains(&current_pid) {
             // Found a matching pane, parse the full info
-            return output
+            let pane_info = output
                 .lines()
-                .find_map(|line| parse_pane_line_by_pid(line, current_pid));
+                .find_map(|line| parse_pane_line_by_pid(line, current_pid))?;
+            return Some((pane_info, current_pid));
         }
 
         // Get parent PID

@@ -32,14 +32,15 @@ pub fn pane_has_live_agent_process(
         .is_some()
 }
 
-/// Returns whether another agent process is above the current agent in the
-/// hook's ancestry. Returns `None` if any ancestor cannot be inspected.
-pub(crate) fn has_parent_agent_process(pid: u32) -> Option<bool> {
-    has_parent_agent_process_with(pid, crate::infra::process::get_process_info)
+/// Returns whether another agent process is between the hook and its pane process.
+/// Stops at the pane because argv access can be restricted for its ancestors.
+pub(crate) fn has_parent_agent_process(pid: u32, pane_pid: u32) -> Option<bool> {
+    has_parent_agent_process_with(pid, pane_pid, crate::infra::process::get_process_info)
 }
 
 fn has_parent_agent_process_with(
     pid: u32,
+    pane_pid: u32,
     mut get_process_info: impl FnMut(u32) -> Option<ProcessInfo>,
 ) -> Option<bool> {
     let mut current_pid = pid;
@@ -62,7 +63,7 @@ fn has_parent_agent_process_with(
         if current_pid != pid && is_agent_argv0(&info.argv0) {
             agent_ancestor_count += 1;
         }
-        if info.parent_pid <= 1 || info.parent_pid == current_pid {
+        if current_pid == pane_pid || info.parent_pid <= 1 || info.parent_pid == current_pid {
             break;
         }
         current_pid = info.parent_pid;
@@ -176,8 +177,22 @@ mod tests {
     ) {
         let processes = parse_process_table(process_table);
         assert_eq!(
-            has_parent_agent_process_with(pid, |pid| processes.get(&pid).cloned()),
+            has_parent_agent_process_with(pid, 100, |pid| processes.get(&pid).cloned()),
             expected,
+        );
+    }
+
+    #[test]
+    fn has_parent_agent_process_stops_at_pane_pid() {
+        let processes = parse_process_table(indoc! {"
+            200 100 zsh
+            300 200 codex
+            400 300 hook
+        "});
+
+        assert_eq!(
+            has_parent_agent_process_with(400, 200, |pid| processes.get(&pid).cloned()),
+            Some(false),
         );
     }
 
