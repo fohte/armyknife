@@ -1,5 +1,6 @@
 import { err, errAsync, ok, Result, ResultAsync } from 'neverthrow'
 
+import { createEventSourceReconnectScheduler } from '#session-feed/reconnect'
 import { isPullRequest, isSessionTask } from '#session-record-validation'
 import {
   isPageVisible,
@@ -17,7 +18,6 @@ type SessionEventSource = {
 }
 
 const EVENT_SOURCE_CLOSED = 2
-const MAX_RECONNECT_DELAY_MS = 60_000
 
 type SessionFeedDependencies = {
   fetcher?: typeof fetch
@@ -302,8 +302,6 @@ export function startSessionFeed(
   let requestError = false
   let streamError = false
   let currentSessions: CurrentSessions | null = null
-  let reconnectTimer: ReturnType<typeof setTimeout> | null = null
-  let reconnectDelayMs = Math.min(reconnectRetryDelayMs, MAX_RECONNECT_DELAY_MS)
   let eventSource: SessionEventSource | null = null
 
   const reportStatus = () => {
@@ -313,26 +311,6 @@ export function startSessionFeed(
       onError('Connection lost. Reconnecting…')
     } else {
       onError(null)
-    }
-  }
-
-  const clearReconnectTimer = () => {
-    if (reconnectTimer !== null) {
-      clearTimeout(reconnectTimer)
-      reconnectTimer = null
-    }
-  }
-
-  const scheduleEventSourceReconnect = () => {
-    if (reconnectTimer === null) {
-      reconnectTimer = setTimeout(() => {
-        reconnectTimer = null
-        reconnectDelayMs = Math.min(
-          reconnectDelayMs * 2,
-          MAX_RECONNECT_DELAY_MS,
-        )
-        startEventSource()
-      }, reconnectDelayMs)
     }
   }
 
@@ -420,7 +398,7 @@ export function startSessionFeed(
     reportStatus()
     if (eventSource?.readyState === EVENT_SOURCE_CLOSED) {
       stopEventSource()
-      scheduleEventSourceReconnect()
+      reconnectScheduler.schedule()
     }
   }
   const onServerVersion: EventListener = (event) => {
@@ -442,8 +420,7 @@ export function startSessionFeed(
       return
     }
     streamError = false
-    reconnectDelayMs = Math.min(reconnectRetryDelayMs, MAX_RECONNECT_DELAY_MS)
-    clearReconnectTimer()
+    reconnectScheduler.reset()
     reportStatus()
     refresh()
   }
@@ -458,6 +435,11 @@ export function startSessionFeed(
     eventSource.addEventListener('error', onConnectionError)
     eventSource.addEventListener('open', onConnectionOpen)
   }
+
+  const reconnectScheduler = createEventSourceReconnectScheduler(
+    reconnectRetryDelayMs,
+    startEventSource,
+  )
 
   const stopEventSource = () => {
     if (eventSource === null) {
@@ -479,7 +461,7 @@ export function startSessionFeed(
     visible = nextVisible
     if (!visible) {
       refreshQueued = false
-      clearReconnectTimer()
+      reconnectScheduler.clear()
       requestError = false
       streamError = false
       reportStatus()
@@ -501,7 +483,7 @@ export function startSessionFeed(
 
   return () => {
     active = false
-    clearReconnectTimer()
+    reconnectScheduler.clear()
     unsubscribeVisibility()
     stopEventSource()
   }
