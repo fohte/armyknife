@@ -10,7 +10,8 @@ use super::{ActionContext, action_context, response_snapshot, session};
 #[tokio::test]
 async fn pane_endpoint_returns_the_ansi_styled_capture(action_context: ActionContext) {
     action_context.save_session(&session("fixture-session"));
-    action_context.set_pane_snapshot("\u{1b}[31mfixture output\u{1b}[0m");
+    let snapshot = ["", "", "\u{1b}[31mfixture output\u{1b}[0m", ""].join("\n");
+    action_context.set_pane_snapshot(&snapshot);
 
     let response = action_context
         .router()
@@ -22,7 +23,7 @@ async fn pane_endpoint_returns_the_ansi_styled_capture(action_context: ActionCon
         response_snapshot(response, &action_context).await,
         json!({
             "status": StatusCode::OK.as_u16(),
-            "body": { "content": "\u{1b}[31mfixture output\u{1b}[0m" },
+            "body": { "content": snapshot },
             "calls": [{
                 "kind": "pane-snapshot",
                 "paneId": "%4",

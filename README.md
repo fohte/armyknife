@@ -1265,6 +1265,7 @@ Files sent by an agent are served by `GET /api/sessions/{id}/files/{file_id}` on
 - `GET /api/skill-suggestions?engine=claude&directory=/workspace/example` returns the skill listing from the most recent matching session, preferring the selected directory. Omit `directory` to use the most recent listing for that engine.
 
 - `GET /api/sessions/{id}/actions`
+- `GET /api/sessions/{id}/pane` returns the current pane screen as `{"content":"..."}` with ANSI escape sequences preserved, or `409` when no tmux pane is recorded and `502` when capture fails.
 - `GET /api/sessions/{id}/tree` returns the ancestor-rooted session tree, excluding ended sessions.
 - `POST /api/sessions/{id}/pull-requests/{number}/merge` with `{"owner":"sample-owner","repo":"sample-repo","expectedHeadSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}` merges the PR identified by the route number and request repository when its head SHA still matches. The watch-web header and PR list use this route for a selected PR. It returns `merged`, `alreadyMerged`, or `enqueued`; the merge flow runs `pre-pr-merge` and closes the head worktree after a completed merge.
 - `GET /api/sessions/{id}/background-tasks/{task_id}/output` for the running task's output tail
