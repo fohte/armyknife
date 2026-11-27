@@ -132,8 +132,12 @@ fn scan_in(dir: &Path, is_process_alive: impl Fn(u32) -> bool) -> Result<(Vec<St
             live.push(pid);
             return true;
         }
-        let _ = fs::remove_file(dir.join(name));
-        false
+        // An entry that stays on disk must stay listed: dropping it would make every later wait
+        // see a change and return at once.
+        match fs::remove_file(dir.join(name)) {
+            Ok(()) => false,
+            Err(error) => error.kind() != std::io::ErrorKind::NotFound,
+        }
     });
     Ok((names, live))
 }
@@ -189,6 +193,20 @@ mod tests {
                 expected_live.to_vec(),
                 expected_names.iter().map(|name| name.to_string()).collect(),
             ),
+        );
+        Ok(())
+    }
+
+    #[rstest]
+    fn an_entry_that_cannot_be_removed_stays_listed(dir: TempDir) -> Result<()> {
+        // A directory named like a pid cannot be removed with `remove_file`.
+        fs::create_dir(dir.path().join("303"))?;
+
+        let (names, live) = scan_in(dir.path(), |_| false)?;
+
+        assert_eq!(
+            (names, live, file_names(dir.path())),
+            (vec!["303".to_string()], Vec::new(), vec!["303".to_string()]),
         );
         Ok(())
     }
