@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::{Result, bail};
 use chrono::{DateTime, Utc};
-use rusqlite::params;
+use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
 
 use super::open_connection;
 
@@ -26,8 +26,9 @@ pub(crate) fn insert_watch_web_peer_out_message(
 ) -> Result<i64> {
     super::validate_session_id(from_session_id)?;
     super::validate_session_id(to_session_id)?;
-    let connection = open_connection(sessions_dir)?;
-    connection.execute(
+    let mut connection = open_connection(sessions_dir)?;
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    transaction.execute(
         "INSERT INTO watch_web_peer_out_message
             (from_session_id, to_session_id, content, sent_at, failed)
          VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -39,7 +40,10 @@ pub(crate) fn insert_watch_web_peer_out_message(
             failed
         ],
     )?;
-    Ok(connection.last_insert_rowid())
+    let id = transaction.last_insert_rowid();
+    bump_peer_sender_revision(&transaction, from_session_id)?;
+    transaction.commit()?;
+    Ok(id)
 }
 
 pub(crate) fn mark_watch_web_peer_out_message_delivered(
@@ -47,8 +51,17 @@ pub(crate) fn mark_watch_web_peer_out_message_delivered(
     id: i64,
     sent_at: DateTime<Utc>,
 ) -> Result<()> {
-    let connection = open_connection(sessions_dir)?;
-    let updated_rows = connection.execute(
+    let mut connection = open_connection(sessions_dir)?;
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let from_session_id = transaction
+        .query_row(
+            "SELECT from_session_id FROM watch_web_peer_out_message WHERE id = ?1",
+            [id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .ok_or_else(|| anyhow::anyhow!("peer message {id} does not exist"))?;
+    let updated_rows = transaction.execute(
         "UPDATE watch_web_peer_out_message
          SET sent_at = ?1, failed = 0
          WHERE id = ?2",
@@ -56,6 +69,22 @@ pub(crate) fn mark_watch_web_peer_out_message_delivered(
     )?;
     if updated_rows == 0 {
         bail!("peer message {id} does not exist");
+    }
+    bump_peer_sender_revision(&transaction, &from_session_id)?;
+    transaction.commit()?;
+    Ok(())
+}
+
+fn bump_peer_sender_revision(transaction: &Transaction<'_>, session_id: &str) -> Result<()> {
+    let session_exists = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sessions WHERE session_id = ?1)",
+        [session_id],
+        |row| row.get::<_, bool>(0),
+    )?;
+    if session_exists {
+        super::bump_session_revision(transaction, session_id)?;
+    } else {
+        super::increment_revision(transaction)?;
     }
     Ok(())
 }
@@ -107,6 +136,10 @@ mod tests {
     use rstest::{fixture, rstest};
     use tempfile::TempDir;
 
+    use crate::commands::agent::store::database::{
+        session_revisions_by_session, session_store_revision,
+    };
+
     use super::{
         WatchWebPeerOutMessage, insert_watch_web_peer_out_message,
         mark_watch_web_peer_out_message_delivered, watch_web_peer_out_messages,
@@ -114,7 +147,30 @@ mod tests {
 
     #[fixture]
     fn sessions_dir() -> TempDir {
-        tempfile::tempdir().expect("temporary sessions directory should be created")
+        let sessions_dir =
+            tempfile::tempdir().expect("temporary sessions directory should be created");
+        let connection = super::super::open_connection(sessions_dir.path())
+            .expect("temporary sessions database should be created");
+        for session_id in ["fixture-sender", "fixture-other-sender"] {
+            let data = serde_json::json!({
+                "session_id": session_id,
+                "cwd": "/fixture/worktree",
+                "transcript_path": null,
+                "tmux_info": null,
+                "status": "stopped",
+                "created_at": "2026-06-01T10:00:00Z",
+                "updated_at": "2026-06-01T10:00:00Z",
+                "last_message": null,
+            })
+            .to_string();
+            connection
+                .execute(
+                    "INSERT INTO sessions (session_id, data, rev) VALUES (?1, ?2, 0)",
+                    [session_id, data.as_str()],
+                )
+                .expect("fixture session should be inserted");
+        }
+        sessions_dir
     }
 
     #[rstest]
@@ -152,25 +208,36 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            watch_web_peer_out_messages(sessions_dir.path(), "fixture-sender").unwrap(),
-            vec![
-                WatchWebPeerOutMessage {
-                    id: earlier_id,
-                    from_session_id: "fixture-sender".to_string(),
-                    to_session_id: "fixture-other-recipient".to_string(),
-                    content: "Earlier delivered message".to_string(),
-                    sent_at: earlier_sent_at,
-                    failed: false,
-                },
-                WatchWebPeerOutMessage {
-                    id: later_id,
-                    from_session_id: "fixture-sender".to_string(),
-                    to_session_id: "fixture-recipient".to_string(),
-                    content: "Delivered after expansion".to_string(),
-                    sent_at: later_sent_at,
-                    failed: false,
-                },
-            ],
+            (
+                watch_web_peer_out_messages(sessions_dir.path(), "fixture-sender").unwrap(),
+                session_revisions_by_session(sessions_dir.path()).unwrap(),
+                session_store_revision(sessions_dir.path()).unwrap(),
+            ),
+            (
+                vec![
+                    WatchWebPeerOutMessage {
+                        id: earlier_id,
+                        from_session_id: "fixture-sender".to_string(),
+                        to_session_id: "fixture-other-recipient".to_string(),
+                        content: "Earlier delivered message".to_string(),
+                        sent_at: earlier_sent_at,
+                        failed: false,
+                    },
+                    WatchWebPeerOutMessage {
+                        id: later_id,
+                        from_session_id: "fixture-sender".to_string(),
+                        to_session_id: "fixture-recipient".to_string(),
+                        content: "Delivered after expansion".to_string(),
+                        sent_at: later_sent_at,
+                        failed: false,
+                    },
+                ],
+                std::collections::HashMap::from([
+                    ("fixture-sender".to_string(), 2),
+                    ("fixture-other-sender".to_string(), 3),
+                ]),
+                3,
+            ),
         );
     }
 
@@ -217,15 +284,67 @@ mod tests {
         mark_watch_web_peer_out_message_delivered(sessions_dir.path(), id, sent_at).unwrap();
 
         assert_eq!(
-            watch_web_peer_out_messages(sessions_dir.path(), "fixture-sender").unwrap(),
-            vec![WatchWebPeerOutMessage {
-                id,
-                from_session_id: "fixture-sender".to_string(),
-                to_session_id: "fixture-recipient".to_string(),
-                content: "A fictional peer message.".to_string(),
-                sent_at,
-                failed: false,
-            }],
+            (
+                watch_web_peer_out_messages(sessions_dir.path(), "fixture-sender").unwrap(),
+                session_revisions_by_session(sessions_dir.path()).unwrap(),
+                session_store_revision(sessions_dir.path()).unwrap(),
+            ),
+            (
+                vec![WatchWebPeerOutMessage {
+                    id,
+                    from_session_id: "fixture-sender".to_string(),
+                    to_session_id: "fixture-recipient".to_string(),
+                    content: "A fictional peer message.".to_string(),
+                    sent_at,
+                    failed: false,
+                }],
+                std::collections::HashMap::from([
+                    ("fixture-sender".to_string(), 2),
+                    ("fixture-other-sender".to_string(), 0),
+                ]),
+                2,
+            ),
+        );
+    }
+
+    #[rstest]
+    fn records_peer_messages_when_sender_session_is_not_stored(sessions_dir: TempDir) {
+        let failed_at = chrono::Utc.with_ymd_and_hms(2026, 6, 1, 12, 29, 0).unwrap();
+        let sent_at = chrono::Utc.with_ymd_and_hms(2026, 6, 1, 12, 30, 0).unwrap();
+        let id = insert_watch_web_peer_out_message(
+            sessions_dir.path(),
+            "fixture-untracked-sender",
+            "fixture-recipient",
+            "A fictional peer message.",
+            failed_at,
+            true,
+        )
+        .unwrap();
+
+        mark_watch_web_peer_out_message_delivered(sessions_dir.path(), id, sent_at).unwrap();
+
+        assert_eq!(
+            (
+                watch_web_peer_out_messages(sessions_dir.path(), "fixture-untracked-sender")
+                    .unwrap(),
+                session_revisions_by_session(sessions_dir.path()).unwrap(),
+                session_store_revision(sessions_dir.path()).unwrap(),
+            ),
+            (
+                vec![WatchWebPeerOutMessage {
+                    id,
+                    from_session_id: "fixture-untracked-sender".to_string(),
+                    to_session_id: "fixture-recipient".to_string(),
+                    content: "A fictional peer message.".to_string(),
+                    sent_at,
+                    failed: false,
+                }],
+                std::collections::HashMap::from([
+                    ("fixture-sender".to_string(), 0),
+                    ("fixture-other-sender".to_string(), 0),
+                ]),
+                2,
+            ),
         );
     }
 }

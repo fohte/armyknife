@@ -8,7 +8,7 @@ strip = "symbols"
 
 [package]
 name = "armyknife"
-version = "0.1.875"
+version = "0.1.974"
 edition = "2024"
 build = "build.rs"
 authors = ["Hayato Kawai <fohte.hk@gmail.com>"]
@@ -34,52 +34,53 @@ anyhow = "=1.0.104"
 axum = { version = "=0.8.9", default-features = false, features = ["http1", "json", "query", "tokio", "ws"] }
 base64 = "=0.23.1"
 chrono = { version = "=0.4.45", features = ["serde"] }
-clap = { version = "=4.6.6", features = ["derive"] }
-clap_complete = "=4.6.9"
+clap = { version = "=4.6.8", features = ["derive"] }
+clap_complete = "=4.6.12"
 futures-util = "=0.3.34"
 reqwest = { version = "=0.13.5", default-features = false, features = ["rustls", "json", "query", "stream"] }
 percent-encoding = "=2.3.2"
-tokio = { version = "=1.52.3", features = ["rt-multi-thread", "macros", "net", "signal", "time"] }
-tokio-tungstenite = { version = "=0.29.0", default-features = false, features = ["connect"] }
-tower-http = { version = "=0.6.11", features = ["compression-gzip"] }
-indoc = "=2.0.7"
-lazy-regex = "=3.6.0"
-libc = "=0.2.189"
+tokio = { version = "=1.54.1", features = ["rt-multi-thread", "macros", "net", "signal", "time"] }
+tokio-tungstenite = { version = "=0.30.0", default-features = false, features = ["connect"] }
+tower-http = { version = "=0.7.1", features = ["compression-gzip"] }
+indoc = "=2.0.8"
+lazy-regex = "=3.6.2"
+libc = "=0.2.191"
 memchr = "=2.8.3"
-regex = "=1.12.4"
+regex = "=1.13.1"
 rusqlite = { version = "=0.40.2", features = ["bundled"] }
-zstd = "=0.13.3"
+zstd = "=0.14.4"
 rusqlite_migration = "=2.6.0"
 self_update = { version = "=0.44.0", features = ["reqwest", "rustls", "compression-flate2"], default-features = false }
-schemars = { version = "=1.2.2", optional = true }
+schemars = { version = "=1.2.3", optional = true }
 serde = { version = "=1.0.229", features = ["derive"] }
-serde_json = "=1.0.151"
+serde_json = "=1.0.154"
 serde_yaml = "=0.9.34"
-sha2 = "=0.11.0"
+sha2 = "=0.11.1"
 shlex = "=2.0.1"
-similar = "=3.1.1"
+similar = "=3.2.1"
 tempfile = "=3.27.0"
-termimad = "=0.34.1"
-toml_edit = "=0.25.15"
+termimad = "=0.35.5"
+toml_edit = "=0.25.19"
 thiserror = "=2.0.21"
-unicode-width = "=0.2.2"
+unicode-width = "=0.2.3"
 indicatif = "=0.18.6"
 include_dir = "=0.7.4"
 mime_guess = "=2.0.5"
 ratatui = { version = "=0.30.2", default-features = false, features = ["crossterm"] }
 crossterm = "=0.29.0"
-notify = "=8.2.0"
+notify = "=8.2.2"
 tracing = "=0.1.44"
 tracing-subscriber = { version = "=0.3.23", features = ["json", "env-filter"] }
 tracing-appender = "=0.2.5"
 tungstenite = { version = "=0.30.0", default-features = false, features = ["handshake"] }
-uuid = { version = "=1.23.5", features = ["v4"] }
+uuid = { version = "=1.29.3", features = ["v4"] }
 
 [dev-dependencies]
-rstest = "=0.26.1"
+rstest = "=0.28.0"
 temp-env = "=0.3.6"
+tokio = { version = "=1.54.1", features = ["test-util"] }
 tower = { version = "=0.5.3", features = ["util"] }
-flate2 = "=1.1.10"
+flate2 = "=1.1.11"
 wiremock = "=0.6.5"
 
 [lints.clippy]

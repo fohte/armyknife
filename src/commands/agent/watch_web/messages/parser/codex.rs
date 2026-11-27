@@ -63,11 +63,6 @@ enum CodexEffect {
         timestamp: Option<DateTime<Utc>>,
         rewind_id: Option<String>,
     },
-    ArmyknifeEvent {
-        text: CodexText,
-        timestamp: Option<DateTime<Utc>>,
-        queued_prompt_id: Option<String>,
-    },
     Thinking {
         text: CodexText,
     },
@@ -340,31 +335,11 @@ impl CodexParserState {
                 match item.get("type").and_then(Value::as_str) {
                     Some("UserMessage") => {
                         if let Some(text) = item.get("content").and_then(value_text) {
-                            let queued_prompt_id =
-                                super::super::queued_prompt::id_from_content(&text)
-                                    .map(str::to_owned);
-                            let content_without_id =
-                                super::super::queued_prompt::strip_id_marker(&text);
-                            if let Some((tag, body)) =
-                                super::super::tagged_message::tagged_body(&content_without_id)
-                                && let Some(event_text) = super::super::action_event::event_text(
-                                    tag,
-                                    body,
-                                    queued_prompt_id.as_deref(),
-                                )
-                            {
-                                effects.push(CodexEffect::ArmyknifeEvent {
-                                    text: CodexText::new(event_text)?,
-                                    timestamp,
-                                    queued_prompt_id,
-                                });
-                            } else {
-                                effects.push(CodexEffect::UserMessage {
-                                    text: CodexText::new(text)?,
-                                    timestamp,
-                                    rewind_id: self.current_turn_id.clone(),
-                                });
-                            }
+                            effects.push(CodexEffect::UserMessage {
+                                text: CodexText::new(text)?,
+                                timestamp,
+                                rewind_id: self.current_turn_id.clone(),
+                            });
                         }
                     }
                     Some("CommandExecution") | Some("commandExecution") => {
@@ -437,23 +412,6 @@ impl CodexParserState {
                             *timestamp,
                             rewind_id.clone(),
                         );
-                    }
-                    CodexEffect::ArmyknifeEvent {
-                        text,
-                        timestamp,
-                        queued_prompt_id,
-                    } => {
-                        tools.flush_into(&mut items);
-                        let mut text = classifier::one_line(&text.decode()?);
-                        if let Some(message_id) = queued_prompt_id {
-                            text = super::super::queued_prompt::add_id_marker(&text, message_id);
-                        }
-                        items.push(ChatItem::Event {
-                            kind: EventKind::Armyknife,
-                            text,
-                            failed: false,
-                            timestamp: timestamp.map(|timestamp| timestamp.to_rfc3339()),
-                        });
                     }
                     CodexEffect::Thinking { text } => {
                         tools.record_thinking(text.decode()?, None);
@@ -643,8 +601,8 @@ mod tests {
     use super::super::cards::cards_from_sources;
     use super::{CodexParserState, parse, parse_with_skills};
     use crate::commands::agent::store::{
-        AgentTodo, PermissionRequestData, TodoResolution, WatchWebQueuedAttachment,
-        WatchWebQueuedPrompt,
+        AgentTodo, PermissionRequestData, TodoResolution, WatchWebActionEventKind,
+        WatchWebQueuedAttachment, WatchWebQueuedPrompt,
     };
     use crate::commands::agent::watch_web::messages::{
         ChatItem, EventKind, ParentSession, PeerDirection, SkillSuggestion, ToolGroupItem,
@@ -1289,7 +1247,10 @@ mod tests {
     #[rstest]
     #[case::completion("armyknife-todo-completed", "Fixture action text.")]
     #[case::rejection("armyknife-todo-rejected", "Fixture rejection text.")]
-    fn renders_tagged_todo_messages_as_armyknife_events(#[case] tag: &str, #[case] body: &str) {
+    fn keeps_unrecorded_tagged_todo_messages_as_user_content(
+        #[case] tag: &str,
+        #[case] body: &str,
+    ) {
         let queued_prompt_marker =
             "<!-- armyknife-queued-prompt-id:armyknife-action:fixture-message-gold -->";
         let content = format!("<{tag}>{body}</{tag}>\n{queued_prompt_marker}");
@@ -1305,11 +1266,12 @@ mod tests {
 
         assert_eq!(
             parse(Cursor::new(transcript), None).unwrap(),
-            vec![ChatItem::Event {
-                kind: EventKind::Armyknife,
-                text: format!("{body}\n{queued_prompt_marker}"),
-                failed: false,
+            vec![ChatItem::User {
+                rewind_id: None,
+                text: format!("<{tag}>{body}</{tag}>\n{queued_prompt_marker}"),
+                queued_prompt_id: None,
                 timestamp: Some("2026-06-01T12:05:00+00:00".to_string()),
+                from: None,
             }],
         );
     }
@@ -1372,6 +1334,7 @@ mod tests {
             id: 9,
             message_id: Some(message_id.to_owned()),
             content: content.to_owned(),
+            action_event_kind: None,
             attachments: Vec::<WatchWebQueuedAttachment>::new(),
             resolved: false,
             sent_at: Utc::now(),
@@ -1399,16 +1362,25 @@ mod tests {
     #[case::enabled(
         "armyknife-vibe-mode-on",
         "watch-web からユーザーが vibe mode を on にしました。",
+        WatchWebActionEventKind::VibeModeOn,
         "Vibe mode turned on"
     )]
     #[case::disabled(
         "armyknife-vibe-mode-off",
         "watch-web からユーザーが vibe mode を off にしました。祖先セッションから引き継いでいる場合、vibe mode は引き続き有効です。",
+        WatchWebActionEventKind::VibeModeOff,
         "Vibe mode turned off"
     )]
-    fn renders_vibe_mode_changes_as_armyknife_events(
+    #[case::recorded_kind_wins_over_the_transcript_tag(
+        "armyknife-todo-completed",
+        "This tag differs from the recorded event kind.",
+        WatchWebActionEventKind::VibeModeOn,
+        "Vibe mode turned on"
+    )]
+    fn renders_the_recorded_action_kind_as_an_armyknife_event(
         #[case] tag: &str,
         #[case] body: &str,
+        #[case] action_event_kind: WatchWebActionEventKind,
         #[case] expected_text: &str,
     ) {
         let message_id = "armyknife-action:fixture-message-cyan";
@@ -1422,7 +1394,8 @@ mod tests {
         let queued_prompts = [WatchWebQueuedPrompt {
             id: 7,
             message_id: Some(message_id.to_owned()),
-            content: user_message.clone(),
+            content: expected_text.to_owned(),
+            action_event_kind: Some(action_event_kind),
             attachments: Vec::<WatchWebQueuedAttachment>::new(),
             resolved: false,
             sent_at: Utc::now(),

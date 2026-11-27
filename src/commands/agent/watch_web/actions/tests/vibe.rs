@@ -1,4 +1,5 @@
 use axum::http::StatusCode;
+use chrono::{TimeZone, Utc};
 use indoc::indoc;
 use rstest::rstest;
 use serde_json::json;
@@ -9,7 +10,8 @@ use tower::ServiceExt;
 use super::{
     ActionContext, action_context, normalized_queued_prompts, post, response_snapshot, session,
 };
-use crate::commands::agent::types::SessionStatus;
+use crate::commands::agent::store::{WatchWebActionEventKind, WatchWebQueuedPrompt};
+use crate::commands::agent::types::{Engine, SessionStatus};
 use crate::commands::agent::{store, vibe};
 use crate::shared::config::Config;
 
@@ -35,10 +37,19 @@ async fn enabling_vibe_updates_session_and_sends_a_queued_prompt(action_context:
         ))
         .await
         .unwrap();
+    let queued_prompts = store::watch_web_queued_prompts_from(
+        &action_context.temp_dir.path().join("sessions"),
+        "fixture-session",
+    )
+    .unwrap();
     let actual = (
         response_snapshot(response, &action_context).await,
         action_context.load_session("fixture-session").vibe_enabled,
         normalized_queued_prompts(&action_context, "fixture-session", None),
+        queued_prompts
+            .iter()
+            .map(|prompt| prompt.action_event_kind)
+            .collect::<Vec<_>>(),
     );
 
     assert_eq!(
@@ -60,9 +71,99 @@ async fn enabling_vibe_updates_session_and_sends_a_queued_prompt(action_context:
             true,
             json!([{
                 "id": "<prompt-id>",
-                "content": "<armyknife-vibe-mode-on>watch-web からユーザーが vibe mode を on にしました。</armyknife-vibe-mode-on>",
+                "content": "Vibe mode turned on",
                 "sentAt": "<sent-at>",
             }]),
+            vec![Some(WatchWebActionEventKind::VibeModeOn)],
+        ),
+    );
+}
+
+#[rstest]
+#[case::enabling(
+    true,
+    WatchWebActionEventKind::VibeModeOn,
+    "Vibe mode turned on",
+    "<armyknife-vibe-mode-on>watch-web からユーザーが vibe mode を on にしました。</armyknife-vibe-mode-on>"
+)]
+#[case::disabling(
+    false,
+    WatchWebActionEventKind::VibeModeOff,
+    "Vibe mode turned off",
+    "<armyknife-vibe-mode-off>watch-web からユーザーが vibe mode を off にしました。祖先セッションから引き継いでいる場合、vibe mode は引き続き有効です。</armyknife-vibe-mode-off>"
+)]
+#[tokio::test]
+async fn codex_vibe_notifications_record_the_kind_and_normalized_event_text(
+    action_context: ActionContext,
+    #[case] enabled: bool,
+    #[case] action_event_kind: WatchWebActionEventKind,
+    #[case] expected_event_text: &str,
+    #[case] expected_wire_content: &str,
+) {
+    let mut target = session("fixture-session");
+    target.engine = Engine::Codex;
+    if !enabled {
+        let mut parent = session("fixture-parent");
+        parent.vibe_enabled = true;
+        action_context.save_session(&parent);
+        target.launched_with_vibe = true;
+        target.ancestor_session_ids = vec![parent.session_id];
+    }
+    action_context.save_session(&target);
+
+    let response = action_context
+        .router_with_vibe_config(allowed_config)
+        .oneshot(post(
+            "/sessions/fixture-session/vibe",
+            json!({ "enabled": enabled }),
+        ))
+        .await
+        .unwrap();
+    let mut prompts = store::watch_web_queued_prompts_from(
+        &action_context.temp_dir.path().join("sessions"),
+        "fixture-session",
+    )
+    .unwrap();
+    for prompt in &mut prompts {
+        prompt.message_id = Some("<prompt-id>".to_owned());
+        prompt.sent_at = Utc.with_ymd_and_hms(2026, 3, 14, 9, 26, 53).unwrap();
+    }
+    let expected_vibe_mode = if enabled {
+        json!({ "mode": "enabled" })
+    } else {
+        json!({ "mode": "inherited", "ancestorSessionId": "fixture-parent" })
+    };
+
+    assert_eq!(
+        (
+            response_snapshot(response, &action_context).await,
+            action_context.load_session("fixture-session").vibe_enabled,
+            prompts,
+        ),
+        (
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": {
+                    "ok": true,
+                    "queuedPromptId": "<message-id>",
+                    "vibeMode": expected_vibe_mode,
+                },
+                "calls": [{
+                    "kind": "message",
+                    "sessionId": "fixture-session",
+                    "content": expected_wire_content,
+                }],
+            }),
+            enabled,
+            vec![WatchWebQueuedPrompt {
+                id: 1,
+                message_id: Some("<prompt-id>".to_owned()),
+                content: expected_event_text.to_owned(),
+                action_event_kind: Some(action_event_kind),
+                attachments: Vec::new(),
+                resolved: false,
+                sent_at: Utc.with_ymd_and_hms(2026, 3, 14, 9, 26, 53).unwrap(),
+            }],
         ),
     );
 }
@@ -446,7 +547,7 @@ async fn disabling_vibe_reports_inherited_ancestor_state(action_context: ActionC
             false,
             json!([{
                 "id": "<prompt-id>",
-                "content": "<armyknife-vibe-mode-off>watch-web からユーザーが vibe mode を off にしました。祖先セッションから引き継いでいる場合、vibe mode は引き続き有効です。</armyknife-vibe-mode-off>",
+                "content": "Vibe mode turned off",
                 "sentAt": "<sent-at>",
             }]),
         ),

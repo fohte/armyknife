@@ -2,6 +2,7 @@ import { expect, it } from 'vitest'
 
 import {
   isConversationResponse,
+  isReviewDocumentResponse,
   isSessionTreeResponse,
 } from '#components/conversation-pane-response'
 
@@ -38,6 +39,45 @@ const groupedToolSummary = (items: unknown[]) => ({
   items,
 })
 
+it.each([
+  {
+    name: 'accepts related issue titles',
+    response: {
+      id: 'fixture-review',
+      revision: 'fixture-revision',
+      frontmatter: { parentIssue: 'sample-owner/sample-repo#42' },
+      body: 'Sample issue body.',
+      relatedIssueTitles: {
+        'sample-owner/sample-repo#42': 'Sample parent title',
+      },
+    },
+    expected: true,
+  },
+  {
+    name: 'accepts an older response without related issue titles',
+    response: {
+      id: 'fixture-review',
+      revision: 'fixture-revision',
+      frontmatter: { parentIssue: 'sample-owner/sample-repo#42' },
+      body: 'Sample issue body.',
+    },
+    expected: true,
+  },
+  {
+    name: 'rejects a non-string related issue title',
+    response: {
+      id: 'fixture-review',
+      revision: 'fixture-revision',
+      frontmatter: { parentIssue: 'sample-owner/sample-repo#42' },
+      body: 'Sample issue body.',
+      relatedIssueTitles: { 'sample-owner/sample-repo#42': 42 },
+    },
+    expected: false,
+  },
+])('validates review-document $name', ({ response, expected }) => {
+  expect(isReviewDocumentResponse(response)).toEqual(expected)
+})
+
 it('accepts a compact boundary event from the conversation API', () => {
   expect(
     isConversationResponse({
@@ -58,6 +98,34 @@ it('accepts a compact boundary event from the conversation API', () => {
     }),
   ).toBe(true)
 })
+
+it.each([
+  {
+    name: 'string IDs',
+    confirmedQueuedPromptIds: ['fixture-message-id'],
+    expected: true,
+  },
+  {
+    name: 'non-string IDs',
+    confirmedQueuedPromptIds: [42],
+    expected: false,
+  },
+])(
+  'validates $name for confirmed queued prompts',
+  ({ confirmedQueuedPromptIds, expected }) => {
+    expect(
+      isConversationResponse({
+        ...response({
+          type: 'event',
+          kind: 'system',
+          text: 'A system event',
+          failed: false,
+        }),
+        confirmedQueuedPromptIds,
+      }),
+    ).toEqual(expected)
+  },
+)
 
 it.each([
   {

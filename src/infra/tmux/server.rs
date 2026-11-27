@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
+use std::path::Path;
 
 use super::{Result, TmuxError};
 
@@ -358,9 +359,23 @@ pub fn get_pane_current_command_for_socket(
 pub fn respawn_pane_for_socket(
     socket_path: Option<&str>,
     pane_id: &str,
+    cwd: &Path,
     command: &str,
 ) -> Result<()> {
-    run_tmux_for_socket(socket_path, &["respawn-pane", "-k", "-t", pane_id, command])
+    run_tmux_for_socket(socket_path, &respawn_pane_args(pane_id, cwd, command))
+}
+
+fn respawn_pane_args(pane_id: &str, cwd: &Path, command: &str) -> Vec<OsString> {
+    [
+        OsString::from("respawn-pane"),
+        OsString::from("-k"),
+        OsString::from("-c"),
+        cwd.as_os_str().to_os_string(),
+        OsString::from("-t"),
+        OsString::from(pane_id),
+        OsString::from(command),
+    ]
+    .into()
 }
 
 #[cfg(test)]
@@ -382,6 +397,22 @@ mod tests {
         assert_eq!(
             socket_selector_args(socket_path),
             expected.into_iter().map(OsString::from).collect::<Vec<_>>(),
+        );
+    }
+
+    #[test]
+    fn respawn_pane_uses_the_recorded_working_directory() {
+        assert_eq!(
+            respawn_pane_args("%fixture", Path::new("/fixture/worktree"), "a agent resume"),
+            vec![
+                "respawn-pane",
+                "-k",
+                "-c",
+                "/fixture/worktree",
+                "-t",
+                "%fixture",
+                "a agent resume",
+            ],
         );
     }
 

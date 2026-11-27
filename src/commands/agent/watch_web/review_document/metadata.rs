@@ -40,17 +40,21 @@ pub(super) enum ReviewDocumentKind {
 #[serde(rename_all = "camelCase")]
 pub(super) struct ReviewDocumentTarget {
     #[serde(skip_serializing_if = "Option::is_none")]
-    repository: Option<String>,
+    pub(super) path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    branch: Option<String>,
+    pub(super) repository: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    issue_number: Option<i64>,
+    pub(super) branch: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pull_request_number: Option<u64>,
+    pub(super) issue_number: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    title: Option<String>,
+    pub(super) pull_request_number: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    thread_count: Option<usize>,
+    pub(super) pull_request_lookup_unavailable: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) thread_count: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -59,6 +63,8 @@ pub(super) struct ReviewDocumentSummary {
     pub(super) id: String,
     pub(super) kind: ReviewDocumentKind,
     pub(super) target: ReviewDocumentTarget,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) started_at: Option<u64>,
     pub(super) is_editor: bool,
     pub(super) can_save: bool,
     pub(super) can_finish: bool,
@@ -67,24 +73,30 @@ pub(super) struct ReviewDocumentSummary {
 pub(super) fn summarize(
     roots: &ReviewDocumentRoots,
     marker: &ReviewDocumentMarker,
+    session_cwd: &Path,
     is_editor: bool,
     can_save: bool,
     can_finish: bool,
 ) -> ReviewDocumentSummary {
-    let (kind, target) = classify(&marker.path, roots);
+    let (kind, target) = classify(&marker.path, roots, session_cwd);
     ReviewDocumentSummary {
         id: marker.id.clone(),
         kind,
         target,
+        started_at: (marker.started_at / 1_000_000)
+            .try_into()
+            .ok()
+            .filter(|started_at| *started_at > 0),
         is_editor,
         can_save,
         can_finish,
     }
 }
 
-fn classify(
+pub(super) fn classify(
     path: &Path,
     roots: &ReviewDocumentRoots,
+    session_cwd: &Path,
 ) -> (ReviewDocumentKind, ReviewDocumentTarget) {
     let path = canonicalize_or_original(path);
     let pr_draft_root = canonicalize_or_original(&roots.pr_draft);
@@ -108,7 +120,7 @@ fn classify(
         );
     }
 
-    classify_cached(&path, &issue_agent_root, &pr_review_root)
+    classify_cached(&path, &issue_agent_root, &pr_review_root, session_cwd)
 }
 
 fn canonicalize_or_original(path: &Path) -> PathBuf {
@@ -119,6 +131,7 @@ fn classify_cached(
     path: &Path,
     issue_agent_dir: &Path,
     pr_review_dir: &Path,
+    session_cwd: &Path,
 ) -> (ReviewDocumentKind, ReviewDocumentTarget) {
     if let Ok(relative) = path.strip_prefix(issue_agent_dir) {
         let components = relative
@@ -214,7 +227,23 @@ fn classify_cached(
         }
     }
 
-    (ReviewDocumentKind::Draft, ReviewDocumentTarget::default())
+    (
+        ReviewDocumentKind::Draft,
+        ReviewDocumentTarget {
+            path: relative_draft_path(path, session_cwd),
+            ..ReviewDocumentTarget::default()
+        },
+    )
+}
+
+fn relative_draft_path(path: &Path, session_cwd: &Path) -> Option<String> {
+    let session_cwd = canonicalize_or_original(session_cwd);
+    path.strip_prefix(session_cwd)
+        .ok()
+        .filter(|relative| !relative.as_os_str().is_empty())
+        .or_else(|| path.file_name().map(Path::new))
+        .and_then(|relative| relative.to_str())
+        .map(str::to_owned)
 }
 
 fn issue_title_for_comment(path: &Path) -> Option<String> {

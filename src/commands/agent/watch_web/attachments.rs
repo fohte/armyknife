@@ -259,31 +259,6 @@ pub(super) fn append_paths_to_message(content: String, attachment_paths: &[PathB
     }
 }
 
-pub(super) fn strip_attachment_paths(content: &str) -> &str {
-    let Some((message_with_separator, paths_with_separator)) =
-        content.rsplit_once(ATTACHMENT_PATHS_HEADING)
-    else {
-        return content;
-    };
-    let Some(message) = message_with_separator
-        .strip_suffix('\n')
-        .and_then(|message| message.strip_suffix('\n'))
-    else {
-        return content;
-    };
-    let Some(paths) = paths_with_separator.strip_prefix('\n') else {
-        return content;
-    };
-    let mut lines = paths.lines();
-    if lines.next().is_some_and(|line| line.starts_with("- "))
-        && lines.all(|line| line.starts_with("- "))
-    {
-        message
-    } else {
-        content
-    }
-}
-
 pub(super) fn append_image_previews_to_comment(
     comment: Option<String>,
     attachments: &[SavedAttachment],

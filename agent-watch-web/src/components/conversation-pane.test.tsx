@@ -13,6 +13,11 @@ import { renderConversationMessage } from '#components/conversation-message'
 import { ConversationMessageRow } from '#components/conversation-message-row'
 import { ConversationPane } from '#components/conversation-pane'
 import { ConversationPaneView } from '#components/conversation-pane-view'
+import {
+  clearOffscreenConversationScrollCompensation,
+  type ConversationAnchorSpacing,
+  readConversationChildLayout,
+} from '#components/conversation-scroll-anchor'
 import { InboxConversationPanes } from '#components/inbox-conversation-panes'
 import { MarkdownSessionLinksProvider } from '#components/markdown-message'
 import { formatMessageTime } from '#components/message-time'
@@ -278,6 +283,83 @@ function requireElement<T extends Element>(element: T | null): T {
   return element
 }
 
+function stubResizeObserver() {
+  const observers: Array<{
+    callback: ResizeObserverCallback
+    targets: Set<Element>
+    instance: ResizeObserver
+  }> = []
+  class ControlledResizeObserver implements ResizeObserver {
+    private readonly record: (typeof observers)[number]
+
+    constructor(callback: ResizeObserverCallback) {
+      this.record = { callback, targets: new Set(), instance: this }
+      observers.push(this.record)
+    }
+
+    observe(target: Element) {
+      this.record.targets.add(target)
+    }
+
+    unobserve(target: Element) {
+      this.record.targets.delete(target)
+    }
+
+    disconnect() {
+      this.record.targets.clear()
+    }
+  }
+  vi.stubGlobal('ResizeObserver', ControlledResizeObserver)
+
+  return (target: Element, height = target.getBoundingClientRect().height) => {
+    const bounds = target.getBoundingClientRect()
+    const size = { inlineSize: bounds.width, blockSize: height }
+    for (const observer of observers) {
+      if (!observer.targets.has(target)) continue
+      observer.callback(
+        [
+          {
+            target,
+            contentRect: new DOMRectReadOnly(
+              bounds.x,
+              bounds.y,
+              bounds.width,
+              height,
+            ),
+            borderBoxSize: [size],
+            contentBoxSize: [size],
+            devicePixelContentBoxSize: [size],
+          },
+        ],
+        observer.instance,
+      )
+    }
+  }
+}
+
+function mockScrollDimensions(
+  scroll: HTMLDivElement,
+  initialHeight: number,
+  clientHeight: number,
+) {
+  let height = initialHeight
+  Object.defineProperties(scroll, {
+    scrollHeight: { configurable: true, get: () => height },
+    clientHeight: { configurable: true, value: clientHeight },
+    scrollTop: { configurable: true, writable: true, value: 0 },
+  })
+  return (nextHeight: number) => {
+    height = nextHeight
+  }
+}
+
+function scrollToPosition(scroll: HTMLDivElement, scrollTop: number) {
+  act(() => {
+    scroll.scrollTop = scrollTop
+    scroll.dispatchEvent(new Event('scroll'))
+  })
+}
+
 async function waitForState(condition: () => boolean) {
   const deadline = Date.now() + 1000
   await act(async () => {
@@ -349,6 +431,7 @@ function renderView(
     messageId: string,
     mode: RewindMode,
     draft: string,
+    timelineIndex?: number,
   ) => Promise<boolean>,
 ) {
   renderedSessionIds.add(viewSession.id)
@@ -390,6 +473,17 @@ function renderView(
       </SessionLinkContextHarness>,
     )
   })
+}
+
+function getCompactingStatusSnapshot() {
+  return {
+    workingStatus: container.querySelector('.conversation-status-band-label')
+      ?.textContent,
+    detail:
+      container.querySelector('.conversation-status-band-inline-detail')
+        ?.textContent ?? null,
+    inProgressItems: container.querySelectorAll('.tool-in-progress').length,
+  }
 }
 
 it('keeps the phone composer reachable when several merge rows fill the viewport', () => {
@@ -1357,12 +1451,14 @@ it('provides session links to cards through the conversation pane context', asyn
 })
 
 it('posts a message when randomUUID is unavailable', async () => {
+  const messagesRequestPaths: string[] = []
   vi.stubGlobal('crypto', {
     getRandomValues: (bytes: Uint8Array) => bytes.fill(0),
   })
   const fetcher = vi.fn<typeof fetch>((input, init) => {
     const url = requestUrl(input)
     if (url.includes('/messages?')) {
+      messagesRequestPaths.push(url)
       return Promise.resolve(jsonResponse(messagesResponse([])))
     }
     if (url.endsWith('/messages?from=0')) {
@@ -1411,6 +1507,10 @@ it('posts a message when randomUUID is unavailable', async () => {
         requestUrl(input).endsWith('/messages') && init?.method === 'POST',
     ),
   )
+  const confirmationRequestWasSent = await waitForState(() =>
+    messagesRequestPaths.some((url) => url.includes('pendingPromptIds=')),
+  )
+  const getRequestPaths = messagesRequestPaths.slice()
   const postRequest = fetcher.mock.calls
     .filter(
       ([input, init]) =>
@@ -1423,12 +1523,19 @@ it('posts a message when randomUUID is unavailable', async () => {
   const snapshot = () => ({
     composerReady,
     requestWasSent,
+    confirmationRequestWasSent,
+    getRequestPaths,
     postRequest,
     alert: container.querySelector('[role="alert"]')?.textContent ?? null,
   })
   expect(snapshot()).toEqual({
     composerReady: true,
     requestWasSent: true,
+    confirmationRequestWasSent: true,
+    getRequestPaths: [
+      '/api/sessions/sample-session/messages?limit=100',
+      '/api/sessions/sample-session/messages?from=0&pendingPromptIds=00000000-0000-4000-8000-000000000000',
+    ],
     postRequest: [
       {
         url: '/api/sessions/sample-session/messages',
@@ -1561,6 +1668,18 @@ stderr:
         : null,
     )
     const messageFetchCountBeforeCommand = messageFetchCount
+    const conversationTimelineOrder = () =>
+      Array.from(
+        container.querySelectorAll(
+          '.conversation-scroll .chat-todo-card, .conversation-scroll .async-action-item--line, .conversation-scroll .chat-user-group[data-command-result="true"]',
+        ),
+        (element) =>
+          element.matches('.chat-todo-card')
+            ? 'todo'
+            : element.matches('.async-action-item--line')
+              ? 'command'
+              : 'output',
+      )
     await act(async () => userEvent.click(runButton))
     const dialog = requireElement(
       (await waitForState(() =>
@@ -1585,6 +1704,7 @@ stderr:
       dialogOpen: document.body.querySelector('[role="dialog"]') !== null,
       toast: document.body.querySelector('.async-action-toast-stack')
         ?.textContent,
+      timelineOrder: conversationTimelineOrder(),
       conversationLine: normalizeAsyncActionLineTime(
         container.querySelector('.async-action-item--line')?.textContent,
       ),
@@ -1605,6 +1725,7 @@ stderr:
       button: runButton.textContent,
       toast: document.body.querySelector('.async-action-toast-stack')
         ?.textContent,
+      timelineOrder: conversationTimelineOrder(),
       conversationLine: normalizeAsyncActionLineTime(
         container.querySelector('.async-action-item--line')?.textContent,
       ),
@@ -1649,6 +1770,7 @@ stderr:
       runningState: {
         dialogOpen: false,
         toast: 'Running commandprintf safe',
+        timelineOrder: ['todo', 'command'],
         conversationLine: 'Running command… · <time>',
       },
       commandCompleted: true,
@@ -1656,6 +1778,7 @@ stderr:
       finalState: {
         button: buttonLabel,
         toast,
+        timelineOrder: ['todo', 'command', 'output'],
         conversationLine,
         conversationLineButtons: 0,
       },
@@ -4154,15 +4277,10 @@ it('refreshes peer session labels when the linked session title changes', () => 
 })
 
 it('renders file attachments returned by the messages endpoint', async () => {
-  const jsonResponse = (body: unknown) =>
-    new Response(JSON.stringify(body), {
-      headers: { 'Content-Type': 'application/json' },
-    })
-  const fetcher = vi
-    .fn<typeof fetch>()
-    .mockResolvedValueOnce(
-      jsonResponse(
-        messagesResponse([
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const response = requestUrl(input).endsWith('/actions')
+      ? actions
+      : messagesResponse([
           {
             type: 'user_with_content',
             content: [
@@ -4170,10 +4288,9 @@ it('renders file attachments returned by the messages endpoint', async () => {
               { type: 'file', name: 'sample-layout.html' },
             ],
           },
-        ]),
-      ),
-    )
-    .mockResolvedValueOnce(jsonResponse(actions))
+        ])
+    return Promise.resolve(jsonResponse(response))
+  })
   vi.stubGlobal('fetch', fetcher)
   root = createRoot(container)
   act(() => {
@@ -4301,7 +4418,7 @@ it('posts a proposal answer to its sequence route and refreshes the conversation
     post: {
       url: '/api/sessions/sample-session/proposals/3/answer',
       method: 'POST',
-      body: '{"choice":1,"comment":null,"attachments":[{"name":"screen.png","mimeType":"image/png","size":5,"data":"aW1hZ2U="}]}',
+      body: '{"choice":1,"comment":null,"expectedBody":{"title":"When should the setting take effect?","summary":"Choose how the change is introduced.","options":[{"label":"Use the existing flow","description":"Explain the change before applying it.","pros":["Small change"],"cons":["Adds one step"],"recommended":true},{"label":"Show the choice earlier","description":null,"pros":[],"cons":[],"recommended":false}]},"attachments":[{"name":"screen.png","mimeType":"image/png","size":5,"data":"aW1hZ2U="}]}',
     },
     placeholder: 'Message session',
     status: 'Proposal · chose Show the choice earlier',
@@ -4408,7 +4525,7 @@ it('posts a todo rejection to its resolution route with the comment', async () =
     {
       url: '/api/sessions/sample-session/todos/4/resolve',
       method: 'POST',
-      body: '{"resolution":"rejected","comment":"The page is readable.","attachments":[{"name":"screen.png","mimeType":"image/png","size":5,"data":"aW1hZ2U="}]}',
+      body: '{"resolution":"rejected","comment":"The page is readable.","expectedTitle":"Check the page on a phone","expectedDetail":"Confirm the action remains visible.","attachments":[{"name":"screen.png","mimeType":"image/png","size":5,"data":"aW1hZ2U="}]}',
     },
   ])
 })
@@ -4694,17 +4811,36 @@ it('shows the compacting status and summary instead of stale tool details', () =
     ],
   )
 
-  const getSnapshot = () => ({
-    workingStatus: container.querySelector('.conversation-status-band-label')
-      ?.textContent,
-    detail:
-      container.querySelector('.conversation-status-band-inline-detail')
-        ?.textContent ?? null,
-    inProgressItems: container.querySelectorAll('.tool-in-progress').length,
-  })
-  expect(getSnapshot()).toEqual({
+  expect(getCompactingStatusSnapshot()).toEqual({
     workingStatus: 'Compacting…',
     detail: '古い会話を要約しています',
+    inProgressItems: 0,
+  })
+})
+
+it('shows an active tool while a working session is marked as compacting', () => {
+  renderView(
+    vi.fn().mockResolvedValue(true),
+    {
+      ...session,
+      category: 'in_progress',
+      activityStatus: 'working',
+      isCompacting: true,
+      elapsedSeconds: 92,
+    },
+    undefined,
+    [
+      {
+        type: 'tool_in_progress',
+        tool: 'exec',
+        target: 'cargo check --package fixture',
+      },
+    ],
+  )
+
+  expect(getCompactingStatusSnapshot()).toEqual({
+    workingStatus: 'Working · 1m 32s',
+    detail: 'Bash  cargo check --package fixture',
     inProgressItems: 0,
   })
 })
@@ -5048,6 +5184,64 @@ it('shows running tasks in the desktop status panel and counts them in the heade
     backgroundTaskCount: 'Background tasks (2)',
     legacyTaskList: false,
   })
+})
+
+it('updates running task elapsed time from the loaded conversation timestamp', async () => {
+  vi.useFakeTimers()
+  vi.setSystemTime(new Date('2026-11-10T00:00:00.000Z'))
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.endsWith('/messages?limit=100')) {
+      return Promise.resolve(
+        jsonResponse(
+          messagesResponse(
+            [],
+            [
+              {
+                id: 'fixture-background-task',
+                description: 'Build the sample bundle',
+                elapsedSeconds: 61,
+                kind: 'background_task',
+              },
+            ],
+          ),
+        ),
+      )
+    }
+    if (url.endsWith('/actions')) {
+      return Promise.resolve(jsonResponse(actions))
+    }
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={{ ...session, category: 'needs_action' }}
+        shouldSkipSessionTreeFetch
+        initialSessionTree={[]}
+        refreshKey={0}
+        sessionTreeRefreshKey={0}
+        onSelectSession={() => undefined}
+        statusPanelOpen
+      />,
+    )
+  })
+  await act(async () => {
+    for (let index = 0; index < 6; index += 1) await Promise.resolve()
+  })
+  const before = container.querySelector('.running-task-elapsed')?.textContent
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1_000)
+  })
+
+  const snapshot = () => ({
+    before,
+    after: container.querySelector('.running-task-elapsed')?.textContent,
+  })
+  expect(snapshot()).toEqual({ before: '1m 1s', after: '1m 2s' })
 })
 
 it('keeps the Decisions tab active when running tasks appear', async () => {
@@ -6232,6 +6426,33 @@ it('opens and closes the existing status panel over the mobile conversation', as
     review: null,
     createdAt: '2026-11-11T03:25:59Z',
   }
+  const pullRequests = [
+    {
+      number: 42,
+      state: 'Open' as const,
+      owner: 'example-org',
+      repo: 'example-service',
+      title: 'Allow a bounded retry policy',
+      headSha: 'fixture-retry-head',
+      ciState: 'Successful' as const,
+      isCurrentBranch: true,
+    },
+    {
+      number: 43,
+      state: 'Open' as const,
+      owner: 'example-org',
+      repo: 'example-infra',
+      title: 'Record retry outcomes',
+      headSha: 'fixture-metrics-head',
+      ciState: 'Failed' as const,
+      isCurrentBranch: false,
+    },
+  ]
+  const sessionWithPullRequests: Session = {
+    ...session,
+    pullRequest: pullRequests[0] ?? null,
+    pullRequests,
+  }
   vi.stubGlobal(
     'fetch',
     vi
@@ -6243,7 +6464,7 @@ it('opens and closes the existing status panel over the mobile conversation', as
     const [statusPanelOpen, setStatusPanelOpen] = useState(false)
     return (
       <ConversationPane
-        session={session}
+        session={sessionWithPullRequests}
         refreshKey={0}
         sessionTreeRefreshKey={0}
         onSelectSession={() => undefined}
@@ -6285,6 +6506,41 @@ it('opens and closes the existing status panel over the mobile conversation', as
     backButtonFocused:
       document.activeElement ===
       container.querySelector('.session-status-panel-back'),
+    pullRequestTabs: Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '.mobile-session-status-overlay [role="tab"]',
+      ),
+      (tab) => tab.textContent,
+    ),
+    pullRequestRows: Array.from(
+      container.querySelectorAll<HTMLElement>(
+        '.mobile-session-status-overlay .session-pr-list--panel .session-pr-row',
+      ),
+      (row) => ({
+        title: row.querySelector('.session-pr-row-title')?.textContent ?? null,
+        action: row.querySelector('.pr-merge-entry')?.textContent ?? null,
+      }),
+    ),
+  }
+  act(() => {
+    requireElement(
+      container.querySelector<HTMLButtonElement>(
+        '.mobile-session-status-overlay #session-status-tab-pull-requests',
+      ),
+    ).click()
+  })
+  const pullRequestTab = {
+    selectedTab: container.querySelector('[role="tab"][aria-selected="true"]')
+      ?.textContent,
+    pullRequestRows: Array.from(
+      container.querySelectorAll<HTMLElement>(
+        '.mobile-session-status-overlay .session-pr-list--panel .session-pr-row',
+      ),
+      (row) => ({
+        title: row.querySelector('.session-pr-row-title')?.textContent ?? null,
+        action: row.querySelector('.pr-merge-entry')?.textContent ?? null,
+      }),
+    ),
   }
   act(() => {
     requireElement(
@@ -6299,7 +6555,7 @@ it('opens and closes the existing status panel over the mobile conversation', as
     focusRestored: document.activeElement === toggle,
   }
 
-  const snapshot = () => ({ opened, closed })
+  const snapshot = () => ({ opened, pullRequestTab, closed })
   expect(snapshot()).toEqual({
     opened: {
       overlay: true,
@@ -6307,8 +6563,98 @@ it('opens and closes the existing status panel over the mobile conversation', as
       selectedTab: 'Decisions1',
       decisionHeading: 'Decisions in this session',
       backButtonFocused: false,
+      pullRequestTabs: ['PRs2', 'Decisions1'],
+      pullRequestRows: [],
+    },
+    pullRequestTab: {
+      selectedTab: 'PRs2',
+      pullRequestRows: [
+        { title: '#42 Allow a bounded retry policy', action: 'Merge' },
+        { title: '#43 Record retry outcomes', action: 'CI failing' },
+      ],
     },
     closed: { overlay: false, conversation: true, focusRestored: true },
+  })
+})
+
+it('marks phone navigation after an Activity action fails', async () => {
+  function FailureHarness() {
+    const startAsyncAction = useAsyncActionStarter(() => undefined)
+    return (
+      <>
+        <button
+          className="create-failed-activity-action"
+          type="button"
+          onClick={() => {
+            startAsyncAction({
+              kind: 'command',
+              sessionId: session.id,
+              sessionTitle: session.title,
+              command: 'run fixture action',
+              run: () =>
+                Promise.resolve({
+                  status: 'commandFailed',
+                  exitCode: 1,
+                  error: 'The fixture action failed.',
+                }),
+            })
+          }}
+        >
+          Create failed Activity action
+        </button>
+        <ConversationPaneView
+          session={session}
+          messages={[]}
+          start={0}
+          actions={actions}
+          loading={false}
+          error={null}
+          onAction={() => Promise.resolve(true)}
+          onSelectSession={() => undefined}
+          isMobile
+        />
+      </>
+    )
+  }
+
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <AsyncActionFeedbackProvider>
+        <FailureHarness />
+      </AsyncActionFeedbackProvider>,
+    )
+  })
+  const createFailedAction = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      '.create-failed-activity-action',
+    ),
+  )
+  await act(async () => userEvent.click(createFailedAction))
+  expect(
+    await waitForState(
+      () =>
+        container
+          .querySelector<HTMLButtonElement>('.mobile-conversation-nav-toggle')
+          ?.getAttribute('aria-label') ===
+        'Open navigation, Activity has failed actions',
+    ),
+  ).toBe(true)
+
+  const navigationButton = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      '.mobile-conversation-nav-toggle',
+    ),
+  )
+  const snapshot = () => ({
+    label: navigationButton.getAttribute('aria-label'),
+    failureMark:
+      navigationButton.querySelector('.mobile-conversation-nav-failure') !==
+      null,
+  })
+  expect(snapshot()).toEqual({
+    label: 'Open navigation, Activity has failed actions',
+    failureMark: true,
   })
 })
 
@@ -6629,7 +6975,7 @@ it('opens the Review tab from the draft review band in one click', async () => {
         ]),
       )
     }
-    if (url.endsWith('/review-document')) {
+    if (url.endsWith('/review-documents/fixture-review-document')) {
       return Promise.resolve(
         jsonResponse({
           id: 'fixture-review-document',
@@ -6687,7 +7033,7 @@ it('opens the Review tab from the draft review band in one click', async () => {
   const reviewTab = await waitForState(
     () =>
       container.querySelector('[role="tab"][aria-selected="true"]')
-        ?.textContent === 'Review',
+        ?.textContent === 'Review1',
   )
 
   const snapshot = () => ({
@@ -6699,9 +7045,523 @@ it('opens the Review tab from the draft review band in one click', async () => {
   })
   expect(snapshot()).toEqual({
     reviewTab: true,
-    selectedTab: 'Review',
+    selectedTab: 'Review1',
     reviewAction: 'Open drafts →',
   })
+})
+
+it('keeps a review action result at the conversation boundary where it started', async () => {
+  const firstMessage: ChatItem = {
+    type: 'assistant',
+    text: 'The draft is ready for review.',
+  }
+  const existingToolSummary: ChatItem = {
+    type: 'tool_summary',
+    summary: 'Shell ×1',
+    operations: [{ tool: 'exec', target: 'node fixture.js', failed: false }],
+  }
+  const initialMessages: ChatItem[] = [
+    firstMessage,
+    existingToolSummary,
+    {
+      type: 'tool_in_progress',
+      tool: 'exec',
+      target: 'node fixture.js',
+    },
+  ]
+  const messagesAfterToolCompletes: ChatItem[] = [
+    firstMessage,
+    {
+      type: 'tool_summary',
+      summary: 'Shell ×2',
+      operations: [
+        { tool: 'exec', target: 'node fixture.js', failed: false },
+        { tool: 'exec', target: 'node fixture.js', failed: false },
+      ],
+    },
+  ]
+  const laterMessage: ChatItem = {
+    type: 'assistant',
+    text: 'The issue check is complete.',
+  }
+  let showLaterMessage = false
+  let completeReviewAction: ((response: Response) => void) | undefined
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.includes('/messages?')) {
+      return Promise.resolve(
+        jsonResponse(
+          messagesResponse(
+            showLaterMessage
+              ? [...messagesAfterToolCompletes, laterMessage]
+              : initialMessages,
+          ),
+        ),
+      )
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    if (url.endsWith('/review-documents')) {
+      return Promise.resolve(
+        jsonResponse([
+          {
+            id: 'fixture-review-document',
+            kind: 'issue_comment',
+            target: { issueNumber: 51 },
+            isEditor: true,
+            canSave: true,
+            canFinish: true,
+          },
+        ]),
+      )
+    }
+    if (url.endsWith('/review-documents/fixture-review-document')) {
+      return Promise.resolve(
+        jsonResponse({
+          id: 'fixture-review-document',
+          revision: 'fixture-revision',
+          frontmatter: {},
+          body: 'Fixture issue comment',
+        }),
+      )
+    }
+    if (url.endsWith('/review-document/action')) {
+      return new Promise((resolve) => {
+        completeReviewAction = resolve
+      })
+    }
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  function StatusPanelHarness() {
+    const [refreshKey, setRefreshKey] = useState(0)
+    return (
+      <>
+        <button
+          type="button"
+          onClick={() => {
+            showLaterMessage = true
+            setRefreshKey((current) => current + 1)
+          }}
+        >
+          Refresh conversation
+        </button>
+        <ConversationPane
+          session={{
+            ...session,
+            category: 'in_progress',
+            kind: 'Review',
+            reviewDocumentId: 'fixture-review-document',
+            reviewDocumentCount: 1,
+            webUis: [],
+          }}
+          refreshKey={refreshKey}
+          sessionTreeRefreshKey={0}
+          onSelectSession={() => undefined}
+          statusPanelOpen
+        />
+      </>
+    )
+  }
+
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <AsyncActionFeedbackProvider>
+        <StatusPanelHarness />
+      </AsyncActionFeedbackProvider>,
+    )
+  })
+  expect(
+    await waitForState(() =>
+      [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')].some(
+        (button) => button.textContent === 'Review1',
+      ),
+    ),
+  ).toBe(true)
+  await act(async () => {
+    await userEvent.click(
+      requireElement(
+        [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find(
+          (button) => button.textContent === 'Review1',
+        ) ?? null,
+      ),
+    )
+  })
+  expect(
+    await waitForState(() =>
+      [...container.querySelectorAll<HTMLButtonElement>('button')].some(
+        (button) => button.textContent === 'Post comment',
+      ),
+    ),
+  ).toBe(true)
+  await act(async () => {
+    await userEvent.click(
+      requireElement(
+        [...container.querySelectorAll<HTMLButtonElement>('button')].find(
+          (button) => button.textContent === 'Post comment',
+        ) ?? null,
+      ),
+    )
+  })
+  expect(
+    await waitForState(
+      () =>
+        container.querySelector('.async-action-item--line')?.textContent ===
+        'Post comment in progress',
+    ),
+  ).toBe(true)
+
+  await act(async () => {
+    await userEvent.click(
+      requireElement(
+        [...container.querySelectorAll<HTMLButtonElement>('button')].find(
+          (button) => button.textContent === 'Refresh conversation',
+        ) ?? null,
+      ),
+    )
+  })
+  expect(
+    await waitForState(() =>
+      [...container.querySelectorAll('.chat-assistant-message')].some(
+        (message) => message.textContent === laterMessage.text,
+      ),
+    ),
+  ).toBe(true)
+  await act(async () => {
+    completeReviewAction?.(
+      jsonResponse({ success: true, revision: 'next-revision' }),
+    )
+    await Promise.resolve()
+  })
+  expect(
+    await waitForState(
+      () =>
+        normalizeAsyncActionLineTime(
+          container.querySelector('.async-action-item--line')?.textContent,
+        ) === 'Post comment completed · <time>',
+    ),
+  ).toBe(true)
+
+  const snapshot = () =>
+    Array.from(
+      container.querySelectorAll(
+        '.conversation-scroll .chat-assistant-message, .conversation-scroll .chat-tool-summary, .conversation-scroll .async-action-item--line',
+      ),
+      (element) =>
+        element.matches('.chat-tool-summary')
+          ? 'tool summary'
+          : normalizeAsyncActionLineTime(element.textContent),
+    )
+  expect(snapshot()).toEqual([
+    'The draft is ready for review.',
+    'tool summary',
+    'Post comment completed · <time>',
+    'The issue check is complete.',
+  ])
+})
+
+it('returns from DraftFocus with the Back to conversation button', async () => {
+  const reviewDocuments = [
+    {
+      id: 'fixture-focus-document',
+      kind: 'issue_comment' as const,
+      target: {
+        repository: 'example/web-app',
+        issueNumber: 412,
+        title: 'Delivery checks fail on the fourth attempt',
+      },
+      isEditor: true,
+      canSave: true,
+      canFinish: true,
+    },
+  ]
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.endsWith('/messages?limit=100')) {
+      return Promise.resolve(jsonResponse(messagesResponse([])))
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    if (url.endsWith('/review-documents')) {
+      return Promise.resolve(jsonResponse(reviewDocuments))
+    }
+    if (url.endsWith('/review-documents/fixture-focus-document')) {
+      return Promise.resolve(
+        jsonResponse({
+          id: 'fixture-focus-document',
+          revision: 'fixture-focus-revision',
+          frontmatter: { priority: 'normal' },
+          body: 'Readable fixture draft',
+        }),
+      )
+    }
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  function FocusConversationHarness() {
+    const [statusPanelOpen, setStatusPanelOpen] = useState(false)
+    return (
+      <ConversationPane
+        session={{
+          ...session,
+          kind: 'Review',
+          reviewDocumentId: 'fixture-focus-document',
+          reviewDocumentCount: 1,
+          webUis: [],
+        }}
+        shouldSkipSessionTreeFetch
+        initialSessionTree={[]}
+        refreshKey={0}
+        sessionTreeRefreshKey={0}
+        onSelectSession={() => undefined}
+        statusPanelOpen={statusPanelOpen}
+        onToggleStatusPanel={() => {
+          setStatusPanelOpen((open) => !open)
+        }}
+        onCloseStatusPanel={() => {
+          setStatusPanelOpen(false)
+        }}
+      />
+    )
+  }
+
+  root = createRoot(container)
+  act(() => root?.render(<FocusConversationHarness />))
+  const reviewActionReady = await waitForState(
+    () =>
+      container.querySelector<HTMLButtonElement>(
+        '.conversation-status-band-review',
+      ) !== null,
+  )
+  expect(reviewActionReady).toBe(true)
+  await act(async () => {
+    await userEvent.click(
+      requireElement(
+        container.querySelector<HTMLButtonElement>(
+          '.conversation-status-band-review',
+        ),
+      ),
+    )
+  })
+  const reviewLoaded = await waitForState(
+    () =>
+      container.querySelector('.review-document-issue-comment-body')
+        ?.textContent === 'Readable fixture draft',
+  )
+  expect(reviewLoaded).toBe(true)
+  await act(async () => {
+    await userEvent.click(
+      requireElement(
+        container.querySelector<HTMLButtonElement>(
+          '.review-document-full-width[aria-label="Open draft full width"]',
+        ),
+      ),
+    )
+  })
+  const fullFocusReady = await waitForState(
+    () => container.querySelector('.review-document-focus') !== null,
+  )
+  expect(fullFocusReady).toBe(true)
+  await act(async () => {
+    await userEvent.click(
+      requireElement(
+        container.querySelector<HTMLButtonElement>(
+          '.review-document-focus-back[aria-label="Back to conversation"]',
+        ),
+      ),
+    )
+  })
+
+  const snapshot = () => ({
+    focusCount: container.querySelectorAll('.review-document-focus').length,
+    reviewPanelCount: container.querySelectorAll('.review-document-panel')
+      .length,
+    statusPanelCount: container.querySelectorAll('.session-status-panel')
+      .length,
+  })
+  expect(snapshot()).toEqual({
+    focusCount: 0,
+    reviewPanelCount: 1,
+    statusPanelCount: 1,
+  })
+})
+
+it('opens DraftFocus and exits Review after a draft load failure', async () => {
+  const reviewDocuments = [
+    {
+      id: 'fixture-review-a',
+      kind: 'issue_comment' as const,
+      target: {
+        repository: 'example/web-app',
+        issueNumber: 412,
+        title: 'Delivery checks fail on the fourth attempt',
+      },
+      isEditor: true,
+      canSave: true,
+      canFinish: true,
+    },
+    {
+      id: 'fixture-review-b',
+      kind: 'pr_draft' as const,
+      target: { repository: 'example/web-app', branch: 'feature/retry-limit' },
+      isEditor: true,
+      canSave: true,
+      canFinish: true,
+    },
+  ]
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.endsWith('/messages?limit=100')) {
+      return Promise.resolve(jsonResponse(messagesResponse([])))
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    if (url.endsWith('/review-documents')) {
+      return Promise.resolve(jsonResponse(reviewDocuments))
+    }
+    if (url.endsWith('/review-documents/fixture-review-a')) {
+      return Promise.resolve(
+        jsonResponse({
+          id: 'fixture-review-a',
+          revision: 'fixture-revision-a',
+          frontmatter: { priority: 'normal' },
+          body: 'Readable fixture draft',
+        }),
+      )
+    }
+    if (url.endsWith('/review-documents/fixture-review-b')) {
+      return Promise.resolve(jsonResponse({}, 503))
+    }
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  function ReviewConversationHarness() {
+    const [statusPanelOpen, setStatusPanelOpen] = useState(false)
+    return (
+      <ConversationPane
+        session={{
+          ...session,
+          kind: 'Review',
+          reviewDocumentId: 'fixture-review-a',
+          reviewDocumentCount: 2,
+          webUis: [],
+        }}
+        shouldSkipSessionTreeFetch
+        initialSessionTree={[]}
+        refreshKey={0}
+        sessionTreeRefreshKey={0}
+        onSelectSession={() => undefined}
+        statusPanelOpen={statusPanelOpen}
+        onToggleStatusPanel={() => {
+          setStatusPanelOpen((open) => !open)
+        }}
+        onCloseStatusPanel={() => {
+          setStatusPanelOpen(false)
+        }}
+      />
+    )
+  }
+
+  root = createRoot(container)
+  act(() => root?.render(<ReviewConversationHarness />))
+  const reviewActionReady = await waitForState(
+    () =>
+      container.querySelector<HTMLButtonElement>(
+        '.conversation-status-band-review',
+      ) !== null,
+  )
+  expect(reviewActionReady).toBe(true)
+  await act(async () => {
+    await userEvent.click(
+      requireElement(
+        container.querySelector<HTMLButtonElement>(
+          '.conversation-status-band-review',
+        ),
+      ),
+    )
+  })
+  const reviewLoaded = await waitForState(
+    () =>
+      container.querySelector('.review-document-issue-comment-body')
+        ?.textContent === 'Readable fixture draft',
+  )
+  expect(reviewLoaded).toBe(true)
+  await act(async () => {
+    await userEvent.click(
+      requireElement(
+        container.querySelector<HTMLButtonElement>(
+          '.review-document-full-width[aria-label="Open draft full width"]',
+        ),
+      ),
+    )
+  })
+  const fullFocusReady = await waitForState(
+    () => container.querySelector('.review-document-focus') !== null,
+  )
+  expect(fullFocusReady).toBe(true)
+  const focusSnapshot = () => ({
+    sessionTitle: container.querySelector('.review-document-focus-session')
+      ?.textContent,
+    draftTitle: container.querySelector('.review-document-focus-header strong')
+      ?.textContent,
+    columns: Array.from(
+      container.querySelectorAll('.review-document-focus-column h2'),
+      (heading) => heading.textContent,
+    ),
+    markdown: container.querySelector('.review-document-focus-markdown pre')
+      ?.textContent,
+    preview: container.querySelector(
+      '.review-document-focus-preview .review-document-body',
+    )?.textContent,
+    statusPanelCount: container.querySelectorAll('.session-status-panel')
+      .length,
+    metadataCount: container.querySelectorAll('.review-document-frontmatter')
+      .length,
+    actionCount: container.querySelectorAll('.review-document-actions').length,
+  })
+  expect(focusSnapshot()).toEqual({
+    sessionTitle: 'Choose a retry policy',
+    draftTitle: 'Draft',
+    columns: ['MARKDOWN', 'PREVIEW'],
+    markdown: 'Readable fixture draft',
+    preview: 'Readable fixture draft',
+    statusPanelCount: 0,
+    metadataCount: 0,
+    actionCount: 0,
+  })
+  await act(async () => {
+    await userEvent.keyboard('{Escape}')
+  })
+  const reviewRestored = await waitForState(
+    () => container.querySelector('.review-document-panel') !== null,
+  )
+  expect(reviewRestored).toBe(true)
+  const queuedDraftTab = requireElement(
+    container.querySelectorAll<HTMLButtonElement>('.review-document-tab')[1] ??
+      null,
+  )
+  await act(async () => userEvent.click(queuedDraftTab))
+  const draftErrorShown = await waitForState(
+    () => container.querySelector('[role="alert"]') !== null,
+  )
+  expect(draftErrorShown).toBe(true)
+  const failureSnapshot = () => ({
+    alert: container.querySelector('[role="alert"]')?.textContent,
+  })
+  expect(failureSnapshot()).toEqual({
+    alert: 'Could not load the draft: Request failed (503)Retry draft',
+  })
+  const closeReviewPanel = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      '.session-status-panel-close[aria-label="Close session status panel"]',
+    ),
+  )
+  await act(async () => userEvent.click(closeReviewPanel))
+  const reviewClosed = await waitForState(
+    () => container.querySelector('.session-status-panel') === null,
+  )
+  expect(reviewClosed).toBe(true)
 })
 
 it('directs Codex questions and permissions to the terminal', () => {
@@ -6793,7 +7653,13 @@ it('directs Codex questions and permissions to the terminal', () => {
 })
 
 it('keeps the message draft when sending fails', async () => {
-  const onAction = vi.fn(() => Promise.resolve(false))
+  let completeSend: ((succeeded: boolean) => void) | undefined
+  const onAction = vi.fn(
+    () =>
+      new Promise<boolean>((resolve) => {
+        completeSend = resolve
+      }),
+  )
   renderView(onAction)
   const textarea = requireElement(
     container.querySelector<HTMLTextAreaElement>('textarea'),
@@ -6802,7 +7668,48 @@ it('keeps the message draft when sending fails', async () => {
   act(() => {
     dispatchKey(textarea, 'Enter')
   })
+  const draftWhileSending = textarea.value
   await act(async () => {
+    completeSend?.(false)
+    await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    draftWhileSending,
+    draft: textarea.value,
+    storedDraft: window.localStorage.getItem(
+      'agent-watch-web:composer-draft:sample-session',
+    ),
+    actions: onAction.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    draftWhileSending: '',
+    draft: 'Retain this draft',
+    storedDraft: 'Retain this draft',
+    actions: [['messages', { content: 'Retain this draft' }]],
+  })
+})
+
+it('keeps text entered during a failed send', async () => {
+  let completeSend: ((succeeded: boolean) => void) | undefined
+  const onAction = vi.fn(
+    () =>
+      new Promise<boolean>((resolve) => {
+        completeSend = resolve
+      }),
+  )
+  renderView(onAction)
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  setTextareaValue(textarea, 'Original request')
+  act(() => {
+    dispatchKey(textarea, 'Enter')
+  })
+  setTextareaValue(textarea, 'New request')
+
+  await act(async () => {
+    completeSend?.(false)
     await Promise.resolve()
   })
 
@@ -6814,9 +7721,105 @@ it('keeps the message draft when sending fails', async () => {
     actions: onAction.mock.calls,
   })
   expect(snapshot()).toEqual({
-    draft: 'Retain this draft',
-    storedDraft: 'Retain this draft',
-    actions: [['messages', { content: 'Retain this draft' }]],
+    draft: 'New request',
+    storedDraft: 'New request',
+    actions: [['messages', { content: 'Original request' }]],
+  })
+})
+
+it('does not restore a sent draft after the user clears a newer draft', async () => {
+  let completeSend: ((succeeded: boolean) => void) | undefined
+  const onAction = vi.fn(
+    () =>
+      new Promise<boolean>((resolve) => {
+        completeSend = resolve
+      }),
+  )
+  renderView(onAction)
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  setTextareaValue(textarea, 'Original request')
+  act(() => {
+    dispatchKey(textarea, 'Enter')
+  })
+  setTextareaValue(textarea, 'New request')
+  setTextareaValue(textarea, '')
+
+  await act(async () => {
+    completeSend?.(false)
+    await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    draft: textarea.value,
+    storedDraft: window.localStorage.getItem(
+      'agent-watch-web:composer-draft:sample-session',
+    ),
+    actions: onAction.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    draft: '',
+    storedDraft: null,
+    actions: [['messages', { content: 'Original request' }]],
+  })
+})
+
+it('clears an IME composition restored after submitting from the send button', async () => {
+  let completeSend: ((succeeded: boolean) => void) | undefined
+  const onAction = vi.fn(
+    () =>
+      new Promise<boolean>((resolve) => {
+        completeSend = resolve
+      }),
+  )
+  renderView(onAction)
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  const sentDraft = 'Composed request'
+  setTextareaValue(textarea, sentDraft)
+  act(() => {
+    textarea.dispatchEvent(
+      new CompositionEvent('compositionstart', { bubbles: true }),
+    )
+  })
+  const sendButton = requireElement(
+    container.querySelector<HTMLButtonElement>('[aria-label="Send message"]'),
+  )
+
+  act(() => {
+    sendButton.click()
+  })
+  const draftWhileSending = textarea.value
+  act(() => {
+    setTextareaValue(textarea, 'Intermediate composition')
+    textarea.dispatchEvent(
+      new CompositionEvent('compositionend', {
+        bubbles: true,
+        data: sentDraft,
+      }),
+    )
+    setTextareaValue(textarea, sentDraft)
+  })
+  await act(async () => {
+    completeSend?.(true)
+    await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    draftWhileSending,
+    draft: textarea.value,
+    storedDraft: window.localStorage.getItem(
+      'agent-watch-web:composer-draft:sample-session',
+    ),
+    actions: onAction.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    draftWhileSending: '',
+    draft: '',
+    storedDraft: null,
+    actions: [['messages', { content: sentDraft }]],
   })
 })
 
@@ -6829,6 +7832,7 @@ it('opens the forked session with the selected message when storage rejects its 
     text: 'Revisit this request.',
     rewindId: 'fixture-user-message',
   }
+  let completeRewind: ((response: Response) => void) | undefined
   const originalSetItem = Storage.prototype.setItem.bind(window.localStorage)
   vi.spyOn(Storage.prototype, 'setItem').mockImplementation((key, value) => {
     if (key === `agent-watch-web:composer-draft:${forkedSession.id}`) {
@@ -6851,7 +7855,9 @@ it('opens the forked session with the selected message when storage rejects its 
       return Promise.resolve(jsonResponse({ ...actions, rewind: true }))
     }
     if (url.endsWith('/rewind')) {
-      return Promise.resolve(jsonResponse({ sessionId: forkedSession.id }))
+      return new Promise((resolve) => {
+        completeRewind = resolve
+      })
     }
     return Promise.resolve(jsonResponse({}))
   })
@@ -6875,7 +7881,11 @@ it('opens the forked session with the selected message when storage rejects its 
 
   root = createRoot(container)
   act(() => {
-    root?.render(<RewindHarness />)
+    root?.render(
+      <AsyncActionFeedbackProvider>
+        <RewindHarness />
+      </AsyncActionFeedbackProvider>,
+    )
   })
   expect(
     await waitForState(
@@ -6889,6 +7899,17 @@ it('opens the forked session with the selected message when storage rejects its 
     container
       .querySelector<HTMLButtonElement>('.chat-rewind-menu button')
       ?.click()
+  })
+  expect(
+    await waitForState(
+      () =>
+        container.querySelector('.async-action-toast-stack')?.textContent ===
+        'Rewinding sessionChoose a retry policy',
+    ),
+  ).toBe(true)
+  await act(async () => {
+    completeRewind?.(jsonResponse({ sessionId: forkedSession.id }))
+    await Promise.resolve()
   })
   expect(
     await waitForState(
@@ -6913,6 +7934,7 @@ it('opens the forked session with the selected message when storage rejects its 
       `agent-watch-web:composer-draft:${forkedSession.id}`,
     ),
     composer: container.querySelector<HTMLTextAreaElement>('textarea')?.value,
+    feedback: container.querySelector('.async-action-toast-stack')?.textContent,
   })
   expect(snapshot()).toEqual({
     selectedSessions: [['fixture-fork-session']],
@@ -6927,6 +7949,143 @@ it('opens the forked session with the selected message when storage rejects its 
     ],
     draft: null,
     composer: 'Revisit this request.',
+    feedback: 'Rewound sessionChoose a retry policy',
+  })
+})
+
+it('shows rewind request errors without switching sessions or offering Retry', async () => {
+  const originalSession = { ...session, engine: 'claude' as const }
+  const forkedSession = { ...originalSession, id: 'fixture-fork-session' }
+  const selectedSessions = vi.fn()
+  const earlierMessage: ChatItem = {
+    type: 'assistant',
+    text: 'The request context is ready.',
+  }
+  const selectedMessage: ChatItem = {
+    type: 'user',
+    text: 'Revisit this request.',
+    rewindId: 'fixture-user-message',
+  }
+  const laterMessage: ChatItem = {
+    type: 'assistant',
+    text: 'I will continue with the follow-up.',
+  }
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.endsWith('/messages?limit=100')) {
+      return Promise.resolve(
+        jsonResponse(
+          messagesResponse([earlierMessage, selectedMessage, laterMessage]),
+        ),
+      )
+    }
+    if (url.endsWith('/actions')) {
+      return Promise.resolve(jsonResponse({ ...actions, rewind: true }))
+    }
+    if (url.endsWith('/rewind')) {
+      return Promise.resolve(
+        jsonResponse({ error: 'The rewind could not be completed.' }, 500),
+      )
+    }
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  function RewindHarness() {
+    const [currentSession, setCurrentSession] = useState(originalSession)
+    return (
+      <ConversationPane
+        key={currentSession.id}
+        session={currentSession}
+        refreshKey={0}
+        sessionTreeRefreshKey={0}
+        onSelectSession={(id) => {
+          selectedSessions(id)
+          setCurrentSession(forkedSession)
+        }}
+      />
+    )
+  }
+
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <AsyncActionFeedbackProvider>
+        <RewindHarness />
+      </AsyncActionFeedbackProvider>,
+    )
+  })
+  expect(
+    await waitForState(
+      () => container.querySelector('.chat-rewind-menu summary') !== null,
+    ),
+  ).toBe(true)
+  act(() => {
+    container.querySelector<HTMLElement>('.chat-rewind-menu summary')?.click()
+  })
+  await act(async () => {
+    container
+      .querySelector<HTMLButtonElement>('.chat-rewind-menu button')
+      ?.click()
+    await Promise.resolve()
+  })
+  expect(
+    await waitForState(
+      () =>
+        container.querySelector('.async-action-toast-stack')?.textContent ===
+        'Rewind failedChoose a retry policyThe rewind could not be completed.',
+    ),
+  ).toBe(true)
+
+  const snapshot = () => ({
+    selectedSessions: selectedSessions.mock.calls,
+    rewindRequests: fetcher.mock.calls
+      .filter(([, init]) => init?.method === 'POST')
+      .map(([input, init]) => ({
+        url: requestUrl(input),
+        body:
+          typeof init?.body === 'string'
+            ? (JSON.parse(init.body) as unknown)
+            : null,
+      })),
+    retryButtons: Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '.async-action-toast-stack .async-action-controls button',
+      ),
+      (button) => button.textContent,
+    ),
+    timelineOrder: Array.from(
+      container.querySelectorAll(
+        '.conversation-scroll .chat-assistant-message, .conversation-scroll .chat-user-group, .conversation-scroll .async-action-item--line',
+      ),
+      (element) =>
+        element.matches('.async-action-item--line')
+          ? 'rewind'
+          : element.matches('.chat-user-group')
+            ? 'selected request'
+            : element.textContent,
+    ),
+    composer: container.querySelector<HTMLTextAreaElement>('textarea')?.value,
+  })
+  expect(snapshot()).toEqual({
+    selectedSessions: [],
+    rewindRequests: [
+      {
+        url: '/api/sessions/sample-session/rewind',
+        body: {
+          messageId: 'fixture-user-message',
+          mode: 'conversation_and_code',
+        },
+      },
+    ],
+    retryButtons: [],
+    timelineOrder: [
+      'The request context is ready.',
+      'rewind',
+      'selected request',
+      'I will continue with the follow-up.',
+    ],
+    composer: '',
   })
 })
 
@@ -7135,7 +8294,7 @@ it('attaches dropped files through the composer and sends their data', async () 
     actionCalls: onAction.mock.calls,
   })
   expect(snapshot()).toEqual({
-    targetVisibleDuringDrag: 'Drop files to attach',
+    targetVisibleDuringDrag: 'Drop images to attach',
     targetAfterDrop: null,
     dropPrevented: true,
     attachmentNames: [],
@@ -7266,7 +8425,7 @@ it('hides the drop target when a file drag leaves the conversation', () => {
       container.querySelector('.conversation-drop-target')?.textContent ?? null,
   })
   expect(snapshot()).toEqual({
-    targetAfterEnter: 'Drop files to attach',
+    targetAfterEnter: 'Drop images to attach',
     targetAfterLeave: null,
   })
 })
@@ -7949,7 +9108,7 @@ it('blocks duplicate sends and shows their pending status', async () => {
       actionCalls: [['messages', { content: 'Send once' }]],
       buttonDisabled: true,
       defaultPrevented: [true, true],
-      draft: 'Send once',
+      draft: '',
       status: 'Sending…',
     },
     afterSend: {
@@ -7971,16 +9130,15 @@ it('follows new messages at the bottom without moving a reader who scrolled up',
   const scroll = requireElement(
     container.querySelector<HTMLDivElement>('.conversation-scroll'),
   )
-  let height = 300
-  Object.defineProperties(scroll, {
-    scrollHeight: { configurable: true, get: () => height },
-    clientHeight: { configurable: true, value: 100 },
-    scrollTop: { configurable: true, writable: true, value: 0 },
-  })
+  const setHeight = mockScrollDimensions(scroll, 300, 100)
   renderView(onAction, session, undefined, [firstMessage])
+  scrollToPosition(scroll, 200)
   const initialBottom = scroll.scrollTop
 
-  height = 500
+  act(() => {
+    scroll.dispatchEvent(new Event('wheel'))
+  })
+  setHeight(500)
   renderView(onAction, session, undefined, [
     firstMessage,
     { type: 'assistant', text: 'Second message' },
@@ -7991,7 +9149,7 @@ it('follows new messages at the bottom without moving a reader who scrolled up',
     scroll.scrollTop = 40
     scroll.dispatchEvent(new Event('scroll'))
   })
-  height = 600
+  setHeight(600)
   renderView(onAction, session, undefined, [
     firstMessage,
     { type: 'assistant', text: 'Second message' },
@@ -8003,7 +9161,7 @@ it('follows new messages at the bottom without moving a reader who scrolled up',
     scroll.scrollTop = 500
     scroll.dispatchEvent(new Event('scroll'))
   })
-  height = 700
+  setHeight(700)
   renderView(onAction, session, undefined, [
     firstMessage,
     { type: 'assistant', text: 'Second message' },
@@ -8022,6 +9180,742 @@ it('follows new messages at the bottom without moving a reader who scrolled up',
     afterNewMessage: 400,
     whileReadingEarlierMessages: 40,
     afterReturningToBottom: 600,
+  })
+})
+
+it('keeps the answered proposal in place as the conversation continues', () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  const firstMessage: ChatItem = {
+    type: 'assistant',
+    text: 'Earlier message',
+  }
+  const latestMessage: ChatItem = {
+    type: 'assistant',
+    text: 'Latest message',
+  }
+  const pendingProposal: ChatItem = {
+    type: 'proposal',
+    seq: 1,
+    title: 'Choose a response',
+    summary: null,
+    options: [
+      {
+        label: 'Option A',
+        description: null,
+        pros: [],
+        cons: [],
+        recommended: false,
+      },
+    ],
+    answer: null,
+    resolved: false,
+    resolution: null,
+    comment: null,
+  }
+  const resolvedProposal: ChatItem = {
+    ...pendingProposal,
+    answer: { choice: 0, comment: null },
+    resolved: true,
+  }
+  renderView(onAction, session, undefined, [
+    firstMessage,
+    latestMessage,
+    pendingProposal,
+  ])
+  const scroll = requireElement(
+    container.querySelector<HTMLDivElement>('.conversation-scroll'),
+  )
+  const setHeight = mockScrollDimensions(scroll, 300, 100)
+  renderView(onAction, session, undefined, [
+    firstMessage,
+    latestMessage,
+    pendingProposal,
+  ])
+  scrollToPosition(scroll, 100)
+  const proposalRow = requireElement(
+    scroll.querySelector<HTMLElement>('.chat-proposal-card'),
+  )
+
+  setHeight(500)
+  renderView(onAction, session, undefined, [
+    firstMessage,
+    latestMessage,
+    resolvedProposal,
+    { type: 'assistant', text: 'The answer is being used' },
+  ])
+
+  const snapshot = () => ({
+    scrollTop: scroll.scrollTop,
+    proposalPosition: Array.from(scroll.children).indexOf(proposalRow),
+    proposalPreserved:
+      scroll.querySelector('.chat-proposal-card') === proposalRow,
+  })
+  expect(snapshot()).toEqual({
+    scrollTop: 100,
+    proposalPosition: 2,
+    proposalPreserved: true,
+  })
+})
+
+it('follows the bottom when an uncached conversation with a pending card loads', async () => {
+  const pendingProposal: ChatItem = {
+    ...proposal,
+    seq: 64,
+    title: 'Choose a recovery strategy',
+    summary: 'Review the available recovery steps.',
+  }
+  const firstPageMessages: ChatItem[] = [
+    ...Array.from({ length: 12 }, () => ({
+      type: 'assistant' as const,
+      text: 'Earlier history fills the conversation. '.repeat(10),
+    })),
+    pendingProposal,
+  ]
+  let resolveMessages: ((response: Response) => void) | undefined
+  const firstPageResponse = new Promise<Response>((resolve) => {
+    resolveMessages = resolve
+  })
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.endsWith('/messages?limit=100')) {
+      return firstPageResponse
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        shouldSkipSessionTreeFetch
+        initialSessionTree={[]}
+        refreshKey={0}
+        sessionTreeRefreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+  await waitForState(() => resolveMessages !== undefined)
+  const scroll = requireElement(
+    container.querySelector<HTMLDivElement>('.conversation-scroll'),
+  )
+  const setHeight = mockScrollDimensions(scroll, 100, 100)
+  setHeight(500)
+
+  await act(async () => {
+    resolveMessages?.(
+      jsonResponse(
+        messagesResponse(firstPageMessages, [], {
+          start: 0,
+          total: firstPageMessages.length,
+          epoch: 'fixture-epoch-amber',
+        }),
+      ),
+    )
+    await firstPageResponse
+  })
+  await waitForState(
+    () => container.querySelector('.chat-proposal-card') !== null,
+  )
+
+  const snapshot = () => ({ scrollTop: scroll.scrollTop })
+  expect(snapshot()).toEqual({ scrollTop: 400 })
+})
+
+it('keeps a full-height resolved todo at the bottom without spacer padding', () => {
+  const earlierContext: ChatItem = {
+    type: 'assistant',
+    text: 'Earlier timeline context. '.repeat(40),
+  }
+  const pendingTodo: ChatItem = {
+    type: 'todo',
+    seq: 64,
+    title: 'Review the recovery plan',
+    detail: 'Review the recovery steps before proceeding. '.repeat(40),
+    completed: false,
+    resolution: null,
+    comment: null,
+  }
+  const messages = [earlierContext, pendingTodo]
+  renderConversationMessages(messages, 5)
+  const scroll = requireElement(
+    container.querySelector<HTMLDivElement>('.conversation-scroll'),
+  )
+  scroll.style.height = '360px'
+  scroll.style.flex = 'none'
+  renderConversationMessages(messages.slice(), 5)
+  act(() => {
+    requireElement(
+      scroll.querySelector<HTMLButtonElement>('.collapsible-text__toggle'),
+    ).click()
+  })
+  scrollToPosition(scroll, scroll.scrollHeight - scroll.clientHeight)
+  const pendingCardRect = requireElement(
+    scroll.querySelector<HTMLElement>('.chat-todo-card'),
+  ).getBoundingClientRect()
+  const earlierContextVisible = (() => {
+    const rect = requireElement(
+      scroll.querySelector<HTMLElement>('.chat-assistant-message'),
+    ).getBoundingClientRect()
+    const bounds = scroll.getBoundingClientRect()
+    return rect.top < bounds.bottom && rect.bottom > bounds.top
+  })()
+  const initialState = {
+    todoFillsViewport: pendingCardRect.height >= scroll.clientHeight,
+    todoVisible:
+      pendingCardRect.top < scroll.getBoundingClientRect().bottom &&
+      pendingCardRect.bottom > scroll.getBoundingClientRect().top,
+    earlierContextVisible,
+    atBottom:
+      scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight <= 24,
+  }
+
+  const resolvedTodo: ChatItem = {
+    ...pendingTodo,
+    completed: true,
+    resolution: 'completed',
+  }
+  renderConversationMessages([earlierContext, resolvedTodo], 5)
+
+  const card = requireElement(
+    scroll.querySelector<HTMLElement>('.chat-todo-card'),
+  )
+  const bounds = scroll.getBoundingClientRect()
+  const paddingBottom = Number.parseFloat(
+    window.getComputedStyle(scroll).paddingBottom,
+  )
+  const rowGap = Number.parseFloat(window.getComputedStyle(scroll).rowGap)
+  const snapshot = () => ({
+    cardVisible:
+      card.getBoundingClientRect().top < bounds.bottom &&
+      card.getBoundingClientRect().bottom > bounds.top,
+    blankSpaceAfterCard: Math.round(
+      bounds.bottom -
+        paddingBottom -
+        rowGap -
+        card.getBoundingClientRect().bottom,
+    ),
+    hasExtraPadding:
+      scroll.style.getPropertyValue(
+        '--conversation-anchor-extra-padding-bottom',
+      ) !== '',
+  })
+  const result = () => ({ initialState, afterResolution: snapshot() })
+  const expected = {
+    initialState: {
+      todoFillsViewport: true,
+      todoVisible: true,
+      earlierContextVisible: false,
+      atBottom: true,
+    },
+    afterResolution: {
+      cardVisible: true,
+      blankSpaceAfterCard: 0,
+      hasExtraPadding: false,
+    },
+  }
+  expect(result()).toEqual(expected)
+})
+
+it('preserves visible rows when clearing compensation above the scroll limit', () => {
+  const scroll = document.createElement('div')
+  scroll.style.cssText =
+    'display: flex; flex-direction: column; height: 200px; width: 400px; overflow-y: auto'
+  const children = Array.from({ length: 10 }, (_, index) => {
+    const child = document.createElement('div')
+    child.style.cssText =
+      'box-sizing: border-box; flex: 0 0 100px; height: 100px'
+    child.textContent = `Timeline row ${String(index)}`
+    scroll.append(child)
+    return child
+  })
+  const compensatedChild = children[1]
+  if (compensatedChild === undefined) throw new Error('Expected a timeline row')
+  compensatedChild.style.marginBlockStart = '120px'
+  const anchorOffsets = new Map<HTMLElement, ConversationAnchorSpacing>([
+    [
+      compensatedChild,
+      {
+        offset: 120,
+        baseMarginBlockStart: 0,
+        originalMarginBlockStart: '',
+      },
+    ],
+  ])
+  container.append(scroll)
+
+  scroll.scrollTop = scroll.scrollHeight - scroll.clientHeight - 30
+  const bounds = scroll.getBoundingClientRect()
+  const visibleBefore = children.flatMap((child) => {
+    const rect = child.getBoundingClientRect()
+    return rect.top < bounds.bottom && rect.bottom > bounds.top
+      ? [{ element: child, top: rect.top }]
+      : []
+  })
+  const compensationOffscreenBefore =
+    compensatedChild.getBoundingClientRect().bottom <= bounds.top
+  const distanceFromScrollLimit =
+    scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight
+  clearOffscreenConversationScrollCompensation(
+    scroll,
+    readConversationChildLayout(scroll),
+    anchorOffsets,
+    0,
+    new Set(),
+    false,
+    (element, scrollTop) => {
+      element.scrollTop = scrollTop
+    },
+  )
+  const visibleAfter = new Map(
+    children.flatMap((child) => {
+      const rect = child.getBoundingClientRect()
+      return rect.top < bounds.bottom && rect.bottom > bounds.top
+        ? [[child, rect.top] as const]
+        : []
+    }),
+  )
+
+  const actual = () => ({
+    compensationOffscreenBefore,
+    distanceFromScrollLimit,
+    compensationCleared:
+      compensatedChild.style.marginBlockStart === '' &&
+      anchorOffsets.size === 0,
+    visibleRowsBefore: visibleBefore.map(({ element }) =>
+      children.indexOf(element),
+    ),
+    visibleRowsStillVisible: visibleBefore.map(({ element }) =>
+      visibleAfter.has(element),
+    ),
+    visibleRowTopDeltas: visibleBefore.map(({ element, top }) =>
+      Math.round((visibleAfter.get(element) ?? top) - top),
+    ),
+  })
+  const expected = {
+    compensationOffscreenBefore: true,
+    distanceFromScrollLimit: 30,
+    compensationCleared: true,
+    visibleRowsBefore: [7, 8, 9],
+    visibleRowsStillVisible: [true, true, true],
+    visibleRowTopDeltas: [0, 0, 0],
+  }
+  expect(actual()).toEqual(expected)
+})
+
+it('keeps following when a hidden active tool becomes visible', () => {
+  const hiddenTool: ChatItem = {
+    type: 'tool_in_progress',
+    tool: 'exec',
+    target: 'Run the build command.',
+  }
+  const visibleTool: ChatItem = {
+    type: 'tool_summary',
+    summary: '1 action',
+    operations: [
+      { tool: 'exec', target: 'Run the build command.', failed: false },
+    ],
+  }
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction, { ...session, category: 'in_progress' }, undefined, [
+    hiddenTool,
+  ])
+  const scroll = requireElement(
+    container.querySelector<HTMLDivElement>('.conversation-scroll'),
+  )
+  const setHeight = mockScrollDimensions(scroll, 300, 100)
+  renderView(onAction, { ...session, category: 'in_progress' }, undefined, [
+    hiddenTool,
+  ])
+  scrollToPosition(scroll, 200)
+
+  setHeight(500)
+  renderView(onAction, { ...session, category: 'needs_action' }, undefined, [
+    visibleTool,
+  ])
+  const afterToolBecomesVisible = scroll.scrollTop
+
+  setHeight(600)
+  renderView(onAction, { ...session, category: 'needs_action' }, undefined, [
+    visibleTool,
+    { type: 'assistant', text: 'The next step is ready.' },
+  ])
+
+  const snapshot = () => ({
+    afterToolBecomesVisible,
+    afterNewMessage: scroll.scrollTop,
+  })
+  expect(snapshot()).toEqual({
+    afterToolBecomesVisible: 400,
+    afterNewMessage: 500,
+  })
+})
+
+it('keeps an expanded to-do in view when a new message arrives', () => {
+  const notifyResize = stubResizeObserver()
+  const todo: ChatItem = {
+    type: 'todo',
+    seq: 12,
+    title: 'Review the deployment sequence',
+    detail: Array.from(
+      { length: 16 },
+      () => 'Check the deployment sequence before moving to the next step.',
+    ).join('\n\n'),
+    completed: false,
+    resolution: null,
+    comment: null,
+  }
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction, session, undefined, [todo])
+  const scroll = requireElement(
+    container.querySelector<HTMLDivElement>('.conversation-scroll'),
+  )
+  const setHeight = mockScrollDimensions(scroll, 300, 100)
+  renderView(onAction, session, undefined, [todo])
+  scrollToPosition(scroll, 200)
+  const initialBottom = scroll.scrollTop
+  const messageElement = requireElement(scroll.lastElementChild)
+  act(() => {
+    notifyResize(messageElement)
+  })
+
+  const expandButton = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      '.collapsible-text__toggle[aria-expanded="false"]',
+    ),
+  )
+  act(() => {
+    expandButton.click()
+  })
+  setHeight(600)
+  act(() => {
+    notifyResize(
+      messageElement,
+      messageElement.getBoundingClientRect().height + 10,
+    )
+  })
+  const afterExpanding = scroll.scrollTop
+
+  setHeight(800)
+  renderView(onAction, session, undefined, [
+    todo,
+    { type: 'assistant', text: 'The next step is ready.' },
+  ])
+
+  const snapshot = () => ({
+    initialBottom,
+    afterExpanding,
+    afterNewMessage: scroll.scrollTop,
+  })
+  expect(snapshot()).toEqual({
+    initialBottom: 200,
+    afterExpanding: 200,
+    afterNewMessage: 200,
+  })
+})
+
+it.each([
+  {
+    card: 'to-do',
+    original: {
+      type: 'todo',
+      seq: 12,
+      title: 'Review the deployment sequence',
+      detail: null,
+      completed: false,
+      resolution: null,
+      comment: null,
+    } satisfies ChatItem,
+    updated: {
+      type: 'todo',
+      seq: 12,
+      title: 'Review the deployment sequence',
+      detail: null,
+      folded: true,
+      completed: false,
+      resolution: null,
+      comment: null,
+    } satisfies ChatItem,
+  },
+  {
+    card: 'to-do',
+    original: {
+      type: 'todo',
+      seq: 12,
+      title: 'Review the deployment sequence',
+      detail: null,
+      completed: false,
+      resolution: null,
+      comment: null,
+    } satisfies ChatItem,
+    updated: {
+      type: 'todo',
+      seq: 12,
+      title: 'Review the deployment sequence',
+      detail: null,
+      completed: true,
+      resolution: 'completed',
+      comment: null,
+    } satisfies ChatItem,
+  },
+  {
+    card: 'proposal',
+    original: proposal,
+    updated: {
+      ...proposal,
+      answer: { choice: 0, comment: null },
+      resolved: true,
+    },
+  },
+])(
+  'keeps the scroll position when a $card is updated',
+  ({ original, updated }) => {
+    const onAction = vi.fn(() => Promise.resolve(true))
+    renderView(onAction, session, undefined, [original])
+    const scroll = requireElement(
+      container.querySelector<HTMLDivElement>('.conversation-scroll'),
+    )
+    const setHeight = mockScrollDimensions(scroll, 300, 100)
+    renderView(onAction, session, undefined, [original])
+    scrollToPosition(scroll, 200)
+    act(() => {
+      requireElement(scroll.firstElementChild).dispatchEvent(
+        new Event('click', { bubbles: true }),
+      )
+    })
+
+    setHeight(500)
+    renderView(onAction, session, undefined, [updated])
+
+    const snapshot = () => ({ scrollTop: scroll.scrollTop })
+    expect(snapshot()).toEqual({ scrollTop: 200 })
+  },
+)
+
+it('keeps following the bottom when a message grows after it is added', async () => {
+  const notifyResize = stubResizeObserver()
+  const onAction = vi.fn(() => Promise.resolve(true))
+  const firstMessage: ChatItem = { type: 'assistant', text: 'First message' }
+  renderView(onAction, session, undefined, [firstMessage])
+  const scroll = requireElement(
+    container.querySelector<HTMLDivElement>('.conversation-scroll'),
+  )
+  const setHeight = mockScrollDimensions(scroll, 300, 100)
+  renderView(onAction, session, undefined, [firstMessage])
+  scrollToPosition(scroll, 200)
+
+  setHeight(500)
+  renderView(onAction, session, undefined, [
+    firstMessage,
+    { type: 'assistant', text: 'A message with an image' },
+  ])
+  await act(async () => {
+    await Promise.resolve()
+  })
+  const afterNewMessage = scroll.scrollTop
+  const lastMessage = requireElement(scroll.lastElementChild)
+  setHeight(700)
+  act(() => {
+    notifyResize(lastMessage, lastMessage.getBoundingClientRect().height + 10)
+  })
+
+  const snapshot = () => ({
+    afterNewMessage,
+    afterMessageGrowth: scroll.scrollTop,
+  })
+  expect(snapshot()).toEqual({
+    afterNewMessage: 400,
+    afterMessageGrowth: 600,
+  })
+})
+
+it('keeps a native comment resize in place while the pointer is down', () => {
+  const notifyResize = stubResizeObserver()
+  const todo: ChatItem = {
+    type: 'todo',
+    seq: 21,
+    title: 'Review the release checklist',
+    detail: null,
+    completed: false,
+    resolution: null,
+    comment: null,
+  }
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction, session, undefined, [todo])
+  const scroll = requireElement(
+    container.querySelector<HTMLDivElement>('.conversation-scroll'),
+  )
+  const setHeight = mockScrollDimensions(scroll, 300, 100)
+  renderView(onAction, session, undefined, [todo])
+  scrollToPosition(scroll, 200)
+  const messageElement = requireElement(scroll.lastElementChild)
+  act(() => {
+    notifyResize(messageElement)
+  })
+
+  const comment = requireElement(
+    container.querySelector<HTMLTextAreaElement>('.chat-todo-comment'),
+  )
+  act(() => {
+    comment.dispatchEvent(new Event('pointerdown', { bubbles: true }))
+  })
+  setHeight(320)
+  comment.style.height = '60px'
+  act(() => {
+    notifyResize(
+      messageElement,
+      messageElement.getBoundingClientRect().height + 10,
+    )
+  })
+  setHeight(360)
+  comment.style.height = '80px'
+  act(() => {
+    notifyResize(
+      messageElement,
+      messageElement.getBoundingClientRect().height + 20,
+    )
+  })
+  act(() => {
+    window.dispatchEvent(new Event('pointerup'))
+  })
+  setHeight(380)
+  comment.style.height = '90px'
+  act(() => {
+    notifyResize(
+      messageElement,
+      messageElement.getBoundingClientRect().height + 30,
+    )
+  })
+
+  const snapshot = () => ({ scrollTop: scroll.scrollTop })
+  expect(snapshot()).toEqual({ scrollTop: 200 })
+})
+
+it('keeps following after a textarea text-selection gesture', () => {
+  const todo: ChatItem = {
+    type: 'todo',
+    seq: 22,
+    title: 'Review the release checklist',
+    detail: null,
+    completed: false,
+    resolution: null,
+    comment: null,
+  }
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction, session, undefined, [todo])
+  const scroll = requireElement(
+    container.querySelector<HTMLDivElement>('.conversation-scroll'),
+  )
+  const setHeight = mockScrollDimensions(scroll, 300, 100)
+  renderView(onAction, session, undefined, [todo])
+  scrollToPosition(scroll, 200)
+
+  const comment = requireElement(
+    container.querySelector<HTMLTextAreaElement>('.chat-todo-comment'),
+  )
+  act(() => {
+    comment.dispatchEvent(new Event('pointerdown', { bubbles: true }))
+  })
+  setHeight(500)
+  renderView(onAction, session, undefined, [
+    todo,
+    { type: 'assistant', text: 'The next step is ready.' },
+  ])
+  act(() => {
+    window.dispatchEvent(new Event('pointerup'))
+  })
+
+  const snapshot = () => ({ scrollTop: scroll.scrollTop })
+  expect(snapshot()).toEqual({ scrollTop: 400 })
+})
+
+it('keeps a reader in place when an observed message grows', () => {
+  const notifyResize = stubResizeObserver()
+  const onAction = vi.fn(() => Promise.resolve(true))
+  const message: ChatItem = { type: 'assistant', text: 'A long message' }
+  renderView(onAction, session, undefined, [message])
+  const scroll = requireElement(
+    container.querySelector<HTMLDivElement>('.conversation-scroll'),
+  )
+  const setHeight = mockScrollDimensions(scroll, 300, 100)
+  renderView(onAction, session, undefined, [message])
+  scrollToPosition(scroll, 40)
+  const lastMessage = requireElement(scroll.lastElementChild)
+  act(() => {
+    notifyResize(lastMessage)
+  })
+
+  setHeight(450)
+  act(() => {
+    notifyResize(lastMessage, lastMessage.getBoundingClientRect().height + 10)
+  })
+
+  const snapshot = () => ({ scrollTop: scroll.scrollTop })
+  expect(snapshot()).toEqual({ scrollTop: 40 })
+})
+
+it('keeps an attached proposal in place when a new message arrives', async () => {
+  const notifyResize = stubResizeObserver()
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction, session, undefined, [proposal])
+  const scroll = requireElement(
+    container.querySelector<HTMLDivElement>('.conversation-scroll'),
+  )
+  const setHeight = mockScrollDimensions(scroll, 300, 100)
+  renderView(onAction, session, undefined, [proposal])
+  scrollToPosition(scroll, 200)
+  const lastMessage = requireElement(scroll.lastElementChild)
+  act(() => {
+    notifyResize(lastMessage)
+  })
+
+  const comment = requireElement(
+    container.querySelector<HTMLTextAreaElement>('.chat-proposal-comment'),
+  )
+  const dropEvent = new Event('drop', { bubbles: true, cancelable: true })
+  Object.defineProperty(dropEvent, 'dataTransfer', {
+    value: {
+      types: ['Files'],
+      files: [new File(['payload'], 'fixture-attachment.bin')],
+      dropEffect: 'none',
+    },
+  })
+  act(() => {
+    comment.dispatchEvent(dropEvent)
+  })
+  expect(
+    await waitForState(
+      () =>
+        container.querySelector(
+          '.chat-proposal-card .attachment-preview-item span',
+        )?.textContent === 'fixture-attachment.bin',
+    ),
+  ).toBe(true)
+
+  setHeight(600)
+  act(() => {
+    notifyResize(lastMessage, lastMessage.getBoundingClientRect().height + 10)
+  })
+  const afterAttachment = scroll.scrollTop
+  setHeight(800)
+  renderView(onAction, session, undefined, [
+    proposal,
+    { type: 'assistant', text: 'The next step is ready.' },
+  ])
+
+  const snapshot = () => ({
+    attachmentName: container.querySelector(
+      '.chat-proposal-card .attachment-preview-item span',
+    )?.textContent,
+    afterAttachment,
+    afterNewMessage: scroll.scrollTop,
+  })
+  expect(snapshot()).toEqual({
+    attachmentName: 'fixture-attachment.bin',
+    afterAttachment: 200,
+    afterNewMessage: 200,
   })
 })
 
@@ -8119,6 +10013,784 @@ it.each([
     buttonStates,
   ])
   expect(actual).toBe(expected)
+})
+
+it('keeps a message send error through refreshes until a send succeeds', async () => {
+  let refreshConversation: () => void = () => undefined
+  let sendCount = 0
+  const fetcher = vi.fn<typeof fetch>((input, init) => {
+    const url = requestUrl(input)
+    if (init?.method === 'POST' && url.endsWith('/messages')) {
+      sendCount += 1
+      return Promise.resolve(
+        sendCount === 1
+          ? jsonResponse({ error: 'The message could not be sent.' }, 503)
+          : jsonResponse({ queuedPromptId: 'fixture-queued-prompt' }),
+      )
+    }
+    if (url.includes('/messages?')) {
+      return Promise.resolve(jsonResponse(messagesResponse([permission])))
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    return Promise.resolve(jsonResponse({}))
+  })
+  const messageRefreshCount = () =>
+    fetcher.mock.calls.filter(
+      ([input, init]) =>
+        init?.method !== 'POST' && requestUrl(input).includes('/messages?'),
+    ).length
+  vi.stubGlobal('fetch', fetcher)
+
+  function ConversationHarness() {
+    const [refreshKey, setRefreshKey] = useState(0)
+    refreshConversation = () => {
+      setRefreshKey((current) => current + 1)
+    }
+    return (
+      <ConversationPane
+        session={session}
+        shouldSkipSessionTreeFetch
+        initialSessionTree={[]}
+        refreshKey={refreshKey}
+        sessionTreeRefreshKey={0}
+        onSelectSession={() => undefined}
+      />
+    )
+  }
+
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <SessionConversationCacheProvider>
+        <ConversationHarness />
+      </SessionConversationCacheProvider>,
+    )
+  })
+  await waitForState(
+    () =>
+      container.querySelector<HTMLTextAreaElement>('textarea')?.disabled ===
+      false,
+  )
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  setTextareaValue(textarea, 'Retain this prompt')
+  await act(async () => {
+    dispatchKey(textarea, 'Enter')
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  await waitForState(
+    () =>
+      container.querySelector('[role="alert"]')?.textContent ===
+      'The message could not be sent.',
+  )
+  const afterFailedSend = {
+    alert: container.querySelector('[role="alert"]')?.textContent ?? null,
+    draft: textarea.value,
+  }
+
+  await act(async () => {
+    await userEvent.click(
+      requireElement(
+        container.querySelector<HTMLButtonElement>(
+          '.permission-actions button',
+        ),
+      ),
+    )
+  })
+  const unrelatedActionRefreshCompleted = await waitForState(
+    () => messageRefreshCount() === 2,
+  )
+  const afterUnrelatedAction = {
+    completed: unrelatedActionRefreshCompleted,
+    alert: container.querySelector('[role="alert"]')?.textContent ?? null,
+    draft: textarea.value,
+  }
+
+  const refreshCountBeforeExplicitRefresh = messageRefreshCount()
+  await act(async () => {
+    refreshConversation()
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  const explicitRefreshCompleted = await waitForState(
+    () => messageRefreshCount() > refreshCountBeforeExplicitRefresh,
+  )
+  const afterRefresh = {
+    completed: explicitRefreshCompleted,
+    alert: container.querySelector('[role="alert"]')?.textContent ?? null,
+    draft: textarea.value,
+  }
+
+  await act(async () => {
+    dispatchKey(textarea, 'Enter')
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  await waitForState(
+    () => sendCount === 2 && container.querySelector('[role="alert"]') === null,
+  )
+
+  const snapshot = () => ({
+    afterFailedSend,
+    afterUnrelatedAction,
+    afterRefresh,
+    afterSuccessfulSend: {
+      alert: container.querySelector('[role="alert"]')?.textContent ?? null,
+      draft: textarea.value,
+    },
+  })
+  expect(snapshot()).toEqual({
+    afterFailedSend: {
+      alert: 'The message could not be sent.',
+      draft: 'Retain this prompt',
+    },
+    afterUnrelatedAction: {
+      completed: true,
+      alert: 'The message could not be sent.',
+      draft: 'Retain this prompt',
+    },
+    afterRefresh: {
+      completed: true,
+      alert: 'The message could not be sent.',
+      draft: 'Retain this prompt',
+    },
+    afterSuccessfulSend: { alert: null, draft: '' },
+  })
+})
+
+it('shows permission errors alongside a retained message send error', async () => {
+  let sendCount = 0
+  let permissionRequestCount = 0
+  const fetcher = vi.fn<typeof fetch>((input, init) => {
+    const url = requestUrl(input)
+    if (init?.method === 'POST' && url.endsWith('/messages')) {
+      sendCount += 1
+      return Promise.resolve(
+        sendCount === 1
+          ? jsonResponse({ error: 'The message could not be sent.' }, 503)
+          : jsonResponse({ queuedPromptId: 'fixture-queued-prompt' }),
+      )
+    }
+    if (init?.method === 'POST' && url.endsWith('/permission/approve')) {
+      permissionRequestCount += 1
+      return Promise.resolve(
+        permissionRequestCount === 1
+          ? jsonResponse(
+              { error: 'The permission could not be approved.' },
+              503,
+            )
+          : jsonResponse({}),
+      )
+    }
+    if (url.includes('/messages?')) {
+      return Promise.resolve(jsonResponse(messagesResponse([permission])))
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <SessionConversationCacheProvider>
+        <ConversationPane
+          session={session}
+          shouldSkipSessionTreeFetch
+          initialSessionTree={[]}
+          refreshKey={0}
+          sessionTreeRefreshKey={0}
+          onSelectSession={() => undefined}
+        />
+      </SessionConversationCacheProvider>,
+    )
+  })
+  await waitForState(
+    () =>
+      container.querySelector<HTMLTextAreaElement>('textarea')?.disabled ===
+      false,
+  )
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  setTextareaValue(textarea, 'Retain this prompt')
+  await act(async () => {
+    dispatchKey(textarea, 'Enter')
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  await waitForState(
+    () =>
+      container.querySelector('[role="alert"]')?.textContent ===
+      'The message could not be sent.',
+  )
+
+  const approveButton = () =>
+    requireElement(
+      container.querySelector<HTMLButtonElement>(
+        '.chat-permission-card .permission-actions button',
+      ),
+    )
+  await act(async () => userEvent.click(approveButton()))
+  await waitForState(
+    () =>
+      permissionRequestCount === 1 &&
+      container.querySelector('[role="alert"]')?.textContent ===
+        'The permission could not be approved.',
+  )
+  const afterFailedApproval =
+    container.querySelector('[role="alert"]')?.textContent ?? null
+
+  await act(async () => userEvent.click(approveButton()))
+  await waitForState(
+    () =>
+      permissionRequestCount === 2 &&
+      container.querySelector('[role="alert"]')?.textContent ===
+        'The message could not be sent.',
+  )
+  const afterSuccessfulApproval =
+    container.querySelector('[role="alert"]')?.textContent ?? null
+
+  await act(async () => {
+    dispatchKey(textarea, 'Enter')
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  const successfulSendCompleted = await waitForState(
+    () => sendCount === 2 && container.querySelector('[role="alert"]') === null,
+  )
+
+  const snapshot = () => ({
+    afterFailedApproval,
+    afterSuccessfulApproval,
+    successfulSendCompleted,
+  })
+  expect(snapshot()).toEqual({
+    afterFailedApproval: 'The permission could not be approved.',
+    afterSuccessfulApproval: 'The message could not be sent.',
+    successfulSendCompleted: true,
+  })
+})
+
+it('shows an attachment size warning over a retained message send error', async () => {
+  let sendCount = 0
+  const attachmentSession = { ...session, id: crypto.randomUUID() }
+  renderedSessionIds.add(attachmentSession.id)
+  const fetcher = vi.fn<typeof fetch>((input, init) => {
+    const url = requestUrl(input)
+    if (init?.method === 'POST' && url.endsWith('/messages')) {
+      sendCount += 1
+      return Promise.resolve(
+        jsonResponse({ error: 'The message could not be sent.' }, 503),
+      )
+    }
+    if (url.includes('/messages?')) {
+      return Promise.resolve(jsonResponse(messagesResponse([])))
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <SessionConversationCacheProvider>
+        <ConversationPane
+          session={attachmentSession}
+          shouldSkipSessionTreeFetch
+          initialSessionTree={[]}
+          refreshKey={0}
+          sessionTreeRefreshKey={0}
+          onSelectSession={() => undefined}
+        />
+      </SessionConversationCacheProvider>,
+    )
+  })
+  await waitForState(
+    () =>
+      container.querySelector<HTMLTextAreaElement>('textarea')?.disabled ===
+      false,
+  )
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  setTextareaValue(textarea, 'Retain this prompt')
+  await act(async () => {
+    dispatchKey(textarea, 'Enter')
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  await waitForState(
+    () =>
+      container.querySelector('[role="alert"]')?.textContent ===
+      'The message could not be sent.',
+  )
+
+  const firstFile = new File(['first'], 'first.bin', {
+    type: 'application/octet-stream',
+  })
+  const limitCrossingFile = new File(['second'], 'limit-crossing.bin', {
+    type: 'application/octet-stream',
+  })
+  Object.defineProperty(firstFile, 'size', { value: 30 * 1024 * 1024 })
+  Object.defineProperty(limitCrossingFile, 'size', { value: 21 * 1024 * 1024 })
+  const pasteEvent = new Event('paste', { bubbles: true, cancelable: true })
+  Object.defineProperty(pasteEvent, 'clipboardData', {
+    value: { files: [firstFile, limitCrossingFile] },
+  })
+  act(() => {
+    void textarea.dispatchEvent(pasteEvent)
+  })
+  const limitWarning =
+    'limit-crossing.bin would exceed the 50 MiB attachment limit'
+  const warningDisplayed = await waitForState(
+    () =>
+      container.querySelectorAll('.attachment-preview-item').length === 2 &&
+      container.querySelector('[role="alert"]')?.textContent === limitWarning,
+  )
+
+  await act(async () => {
+    await userEvent.click(
+      requireElement(
+        container.querySelector<HTMLButtonElement>(
+          '[aria-label="Remove limit-crossing.bin"]',
+        ),
+      ),
+    )
+  })
+  const retainedErrorRestored = await waitForState(
+    () =>
+      container.querySelectorAll('.attachment-preview-item').length === 1 &&
+      container.querySelector('[role="alert"]')?.textContent ===
+        'The message could not be sent.',
+  )
+
+  await act(async () => {
+    dispatchKey(textarea, 'Enter')
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    warningDisplayed,
+    retainedErrorRestored,
+    alert: container.querySelector('[role="alert"]')?.textContent ?? null,
+    sendCount,
+  })
+  expect(snapshot()).toEqual({
+    warningDisplayed: true,
+    retainedErrorRestored: true,
+    alert: 'The message could not be sent.',
+    sendCount: 1,
+  })
+})
+
+it('keeps a retained message error visible after an empty attachment error', async () => {
+  let sendCount = 0
+  let encodingFailureCount = 0
+  const attachmentSession = { ...session, id: crypto.randomUUID() }
+  renderedSessionIds.add(attachmentSession.id)
+  const fetcher = vi.fn<typeof fetch>((input, init) => {
+    const url = requestUrl(input)
+    if (init?.method === 'POST' && url.endsWith('/messages')) {
+      sendCount += 1
+      return Promise.resolve(
+        jsonResponse({ error: 'The message could not be sent.' }, 503),
+      )
+    }
+    if (url.includes('/messages?')) {
+      return Promise.resolve(jsonResponse(messagesResponse([])))
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <SessionConversationCacheProvider>
+        <ConversationPane
+          session={attachmentSession}
+          shouldSkipSessionTreeFetch
+          initialSessionTree={[]}
+          refreshKey={0}
+          sessionTreeRefreshKey={0}
+          onSelectSession={() => undefined}
+        />
+      </SessionConversationCacheProvider>,
+    )
+  })
+  await waitForState(
+    () =>
+      container.querySelector<HTMLTextAreaElement>('textarea')?.disabled ===
+      false,
+  )
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  setTextareaValue(textarea, 'Retain this prompt')
+  await act(async () => {
+    dispatchKey(textarea, 'Enter')
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  await waitForState(
+    () =>
+      container.querySelector('[role="alert"]')?.textContent ===
+      'The message could not be sent.',
+  )
+
+  const brokenFile = new File(['payload'], 'broken.bin', {
+    type: 'application/octet-stream',
+  })
+  vi.spyOn(Blob.prototype, 'arrayBuffer').mockImplementation(() => {
+    encodingFailureCount += 1
+    return Promise.reject(new Error(''))
+  })
+  const pasteEvent = new Event('paste', { bubbles: true, cancelable: true })
+  Object.defineProperty(pasteEvent, 'clipboardData', {
+    value: { files: [brokenFile] },
+  })
+  act(() => {
+    void textarea.dispatchEvent(pasteEvent)
+  })
+  await waitForState(
+    () => container.querySelector('.attachment-preview-item') !== null,
+  )
+  await waitForState(
+    () =>
+      container
+        .querySelector('.conversation-composer')
+        ?.getAttribute('aria-busy') === 'false',
+  )
+
+  await act(async () => {
+    dispatchKey(textarea, 'Enter')
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  const retainedErrorAfterEncodingFailure = await waitForState(
+    () =>
+      encodingFailureCount > 0 &&
+      container.querySelector('[role="alert"]')?.textContent ===
+        'The message could not be sent.',
+  )
+
+  const snapshot = () => ({
+    retainedErrorAfterEncodingFailure,
+    alert: container.querySelector('[role="alert"]')?.textContent ?? null,
+    encodingFailed: encodingFailureCount > 0,
+    sendCount,
+  })
+  expect(snapshot()).toEqual({
+    retainedErrorAfterEncodingFailure: true,
+    alert: 'The message could not be sent.',
+    encodingFailed: true,
+    sendCount: 1,
+  })
+})
+
+it('keeps a permission error until the same request succeeds', async () => {
+  let permissionRequestCount = 0
+  const fetcher = vi.fn<typeof fetch>((input, init) => {
+    const url = requestUrl(input)
+    if (init?.method === 'POST' && url.endsWith('/permission/approve')) {
+      permissionRequestCount += 1
+      return Promise.resolve(
+        permissionRequestCount === 1
+          ? jsonResponse(
+              { error: 'The permission could not be approved.' },
+              503,
+            )
+          : jsonResponse({}),
+      )
+    }
+    if (url.includes('/messages?')) {
+      return Promise.resolve(
+        jsonResponse(messagesResponse([permission, otherPermission])),
+      )
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <SessionConversationCacheProvider>
+        <ConversationPane
+          session={session}
+          shouldSkipSessionTreeFetch
+          initialSessionTree={[]}
+          refreshKey={0}
+          sessionTreeRefreshKey={0}
+          onSelectSession={() => undefined}
+        />
+      </SessionConversationCacheProvider>,
+    )
+  })
+  await waitForState(
+    () =>
+      container.querySelectorAll<HTMLButtonElement>(
+        '.chat-permission-card .permission-actions button',
+      ).length === 4 &&
+      Array.from(
+        container.querySelectorAll<HTMLButtonElement>(
+          '.chat-permission-card .permission-actions button',
+        ),
+      ).every((button) => !button.disabled),
+  )
+  const approveButtons = () =>
+    container.querySelectorAll<HTMLButtonElement>(
+      '.chat-permission-card .permission-actions button',
+    )
+  await act(async () => {
+    await userEvent.click(requireElement(approveButtons().item(0)))
+  })
+  await waitForState(
+    () =>
+      container.querySelector('[role="alert"]')?.textContent ===
+      'The permission could not be approved.',
+  )
+  const afterFailedRequest =
+    container.querySelector('[role="alert"]')?.textContent ?? null
+
+  await act(async () => {
+    await userEvent.click(requireElement(approveButtons().item(2)))
+  })
+  const unrelatedRequestCompleted = await waitForState(
+    () =>
+      permissionRequestCount === 2 &&
+      fetcher.mock.calls.filter(
+        ([input, init]) =>
+          init?.method !== 'POST' && requestUrl(input).includes('/messages?'),
+      ).length === 2,
+  )
+  const afterDifferentRequestSucceeded = {
+    completed: unrelatedRequestCompleted,
+    alert: container.querySelector('[role="alert"]')?.textContent ?? null,
+  }
+
+  await act(async () => {
+    await userEvent.click(requireElement(approveButtons().item(0)))
+  })
+  const sameRequestCompleted = await waitForState(
+    () =>
+      permissionRequestCount === 3 &&
+      container.querySelector('[role="alert"]') === null,
+  )
+
+  const snapshot = () => ({
+    afterFailedRequest,
+    afterDifferentRequestSucceeded,
+    afterSameRequestSucceeded: sameRequestCompleted,
+  })
+  expect(snapshot()).toEqual({
+    afterFailedRequest: 'The permission could not be approved.',
+    afterDifferentRequestSucceeded: {
+      completed: true,
+      alert: 'The permission could not be approved.',
+    },
+    afterSameRequestSucceeded: true,
+  })
+})
+
+it('clears a proposal error after an edited answer succeeds', async () => {
+  let answerCount = 0
+  const answerComments: string[] = []
+  const fetcher = vi.fn<typeof fetch>((input, init) => {
+    const url = requestUrl(input)
+    if (init?.method === 'POST' && url.endsWith('/proposals/3/answer')) {
+      answerCount += 1
+      if (typeof init.body === 'string') {
+        const body: unknown = JSON.parse(init.body)
+        if (typeof body === 'object' && body !== null) {
+          const comment = 'comment' in body ? body.comment : undefined
+          if (typeof comment === 'string') answerComments.push(comment)
+        }
+      }
+      return Promise.resolve(
+        answerCount === 1
+          ? jsonResponse(
+              { error: 'The proposal answer could not be saved.' },
+              503,
+            )
+          : jsonResponse({}),
+      )
+    }
+    if (url.includes('/messages?')) {
+      return Promise.resolve(jsonResponse(messagesResponse([proposal])))
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <SessionConversationCacheProvider>
+        <ConversationPane
+          session={session}
+          shouldSkipSessionTreeFetch
+          initialSessionTree={[]}
+          refreshKey={0}
+          sessionTreeRefreshKey={0}
+          onSelectSession={() => undefined}
+        />
+      </SessionConversationCacheProvider>,
+    )
+  })
+  await waitForState(
+    () => container.querySelector('.chat-proposal-comment') !== null,
+  )
+  const comment = requireElement(
+    container.querySelector<HTMLTextAreaElement>('.chat-proposal-comment'),
+  )
+  setTextareaValue(comment, 'First answer')
+  act(() => {
+    requireElement(
+      container.querySelector<HTMLInputElement>('.chat-proposal-option input'),
+    ).click()
+  })
+  const submit = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      '.chat-proposal-actions .aw-button--primary',
+    ),
+  )
+  await act(async () => {
+    await userEvent.click(submit)
+  })
+  await waitForState(
+    () =>
+      container.querySelector('[role="alert"]')?.textContent ===
+      'The proposal answer could not be saved.',
+  )
+  const afterFailedAnswer =
+    container.querySelector('[role="alert"]')?.textContent ?? null
+
+  const updatedComment = requireElement(
+    container.querySelector<HTMLTextAreaElement>('.chat-proposal-comment'),
+  )
+  setTextareaValue(updatedComment, 'Revised answer')
+  const updatedSubmit = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      '.chat-proposal-actions .aw-button--primary',
+    ),
+  )
+  await act(async () => userEvent.click(updatedSubmit))
+  const editedAnswerCompleted = await waitForState(
+    () =>
+      answerCount === 2 && container.querySelector('[role="alert"]') === null,
+  )
+
+  const snapshot = () => ({
+    afterFailedAnswer,
+    editedAnswerCompleted,
+    submittedComments: answerComments,
+  })
+  expect(snapshot()).toEqual({
+    afterFailedAnswer: 'The proposal answer could not be saved.',
+    editedAnswerCompleted: true,
+    submittedComments: ['First answer', 'Revised answer'],
+  })
+})
+
+it('clears a todo error after a retry with an edited comment succeeds', async () => {
+  const todo: ChatItem = {
+    type: 'todo',
+    seq: 4,
+    title: 'Check a status panel',
+    detail: 'Confirm the panel closes after resolution.',
+    completed: false,
+    resolution: null,
+    comment: null,
+  }
+  let resolutionCount = 0
+  const submittedComments: string[] = []
+  const fetcher = vi.fn<typeof fetch>((input, init) => {
+    const url = requestUrl(input)
+    if (init?.method === 'POST' && url.endsWith('/todos/4/resolve')) {
+      resolutionCount += 1
+      if (typeof init.body === 'string') {
+        const body: unknown = JSON.parse(init.body)
+        if (typeof body === 'object' && body !== null && 'comment' in body) {
+          const comment = body.comment
+          if (typeof comment === 'string') submittedComments.push(comment)
+        }
+      }
+      return Promise.resolve(
+        resolutionCount === 1
+          ? jsonResponse({ error: 'The todo could not be resolved.' }, 503)
+          : jsonResponse({}),
+      )
+    }
+    if (url.includes('/messages?')) {
+      return Promise.resolve(jsonResponse(messagesResponse([todo])))
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <SessionConversationCacheProvider>
+        <ConversationPane
+          session={session}
+          shouldSkipSessionTreeFetch
+          initialSessionTree={[]}
+          refreshKey={0}
+          sessionTreeRefreshKey={0}
+          onSelectSession={() => undefined}
+        />
+      </SessionConversationCacheProvider>,
+    )
+  })
+  await waitForState(
+    () => container.querySelector('.chat-todo-comment') !== null,
+  )
+  const comment = requireElement(
+    container.querySelector<HTMLTextAreaElement>('.chat-todo-comment'),
+  )
+  setTextareaValue(comment, 'First resolution')
+  const markDone = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      '.chat-todo-footer .aw-button--primary',
+    ),
+  )
+  await act(async () => userEvent.click(markDone))
+  await waitForState(
+    () =>
+      container.querySelector('[role="alert"]')?.textContent ===
+      'The todo could not be resolved.',
+  )
+  const afterFailedResolution =
+    container.querySelector('[role="alert"]')?.textContent ?? null
+
+  const updatedComment = requireElement(
+    container.querySelector<HTMLTextAreaElement>('.chat-todo-comment'),
+  )
+  setTextareaValue(updatedComment, 'Revised resolution')
+  const updatedMarkDone = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      '.chat-todo-footer .aw-button--primary',
+    ),
+  )
+  await act(async () => userEvent.click(updatedMarkDone))
+  const editedResolutionCompleted = await waitForState(
+    () =>
+      resolutionCount === 2 &&
+      container.querySelector('[role="alert"]') === null,
+  )
+
+  const snapshot = () => ({
+    afterFailedResolution,
+    editedResolutionCompleted,
+    submittedComments,
+  })
+  expect(snapshot()).toEqual({
+    afterFailedResolution: 'The todo could not be resolved.',
+    editedResolutionCompleted: true,
+    submittedComments: ['First resolution', 'Revised resolution'],
+  })
 })
 
 it.each([
@@ -9905,6 +12577,161 @@ it('keeps a merge result after the messages present when an older page is prepen
   })
 })
 
+it('coalesces refresh-key changes while keeping the in-flight response', async () => {
+  const messageResponses: Array<(response: Response) => void> = []
+  let refreshKey = 0
+  let actionsRequestCount = 0
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.includes('/messages?')) {
+      return new Promise<Response>((resolve) => {
+        messageResponses.push(resolve)
+      })
+    }
+    if (url.endsWith('/actions')) {
+      actionsRequestCount += 1
+      return Promise.resolve(jsonResponse(actions))
+    }
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  const renderConversation = () => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        shouldSkipSessionTreeFetch
+        initialSessionTree={[]}
+        refreshKey={refreshKey}
+        sessionTreeRefreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  }
+  const visibleMessages = () =>
+    Array.from(
+      container.querySelectorAll('.chat-assistant-message'),
+      (element) => element.textContent,
+    )
+
+  act(renderConversation)
+  await waitForState(() => messageResponses.length === 1)
+  refreshKey = 1
+  act(renderConversation)
+  refreshKey = 2
+  act(renderConversation)
+  const requestsBeforeResponse = messageResponses.length
+  const actionsRequestsBeforeResponse = actionsRequestCount
+  const resolveFirstResponse = messageResponses[0]
+  if (resolveFirstResponse === undefined)
+    throw new Error('Expected the initial message response')
+  await act(async () => {
+    resolveFirstResponse(
+      jsonResponse(
+        messagesResponse([{ type: 'assistant', text: 'Initial message.' }], []),
+      ),
+    )
+    await Promise.resolve()
+  })
+  await waitForState(() => messageResponses.length === 2)
+
+  const snapshot = () => ({
+    requestUrls: fetcher.mock.calls
+      .map(([url]) => requestUrl(url))
+      .filter((url) => url.includes('/messages?')),
+    requestsBeforeResponse,
+    requestsAfterResponse: messageResponses.length,
+    actionsRequestsBeforeResponse,
+    actionsRequestCount,
+    visibleMessages: visibleMessages(),
+    loadingStatus:
+      container.querySelector('.conversation-status')?.textContent ?? null,
+  })
+  expect(snapshot()).toEqual({
+    requestUrls: [
+      '/api/sessions/sample-session/messages?limit=100',
+      '/api/sessions/sample-session/messages?from=0',
+    ],
+    requestsBeforeResponse: 1,
+    requestsAfterResponse: 2,
+    actionsRequestsBeforeResponse: 3,
+    actionsRequestCount: 4,
+    visibleMessages: ['Initial message.'],
+    loadingStatus: null,
+  })
+})
+
+it('discards a message response after switching away and back to its session', async () => {
+  const messageResponses: Array<(response: Response) => void> = []
+  let selectedSession = session
+  const otherSession = { ...session, id: 'other-session' }
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.includes('/messages?')) {
+      return new Promise<Response>((resolve) => {
+        messageResponses.push(resolve)
+      })
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  const renderConversation = () => {
+    root?.render(
+      <ConversationPane
+        session={selectedSession}
+        shouldSkipSessionTreeFetch
+        initialSessionTree={[]}
+        refreshKey={0}
+        sessionTreeRefreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  }
+  const resolveMessageResponse = async (index: number, text: string) => {
+    const resolve = messageResponses[index]
+    if (resolve === undefined) throw new Error('Expected a message response')
+    await act(async () => {
+      resolve(jsonResponse(messagesResponse([{ type: 'assistant', text }], [])))
+      await Promise.resolve()
+    })
+  }
+  const visibleMessages = () =>
+    Array.from(
+      container.querySelectorAll('.chat-assistant-message'),
+      (element) => element.textContent,
+    )
+
+  act(renderConversation)
+  await waitForState(() => messageResponses.length === 1)
+  selectedSession = otherSession
+  act(renderConversation)
+  selectedSession = session
+  act(renderConversation)
+  await resolveMessageResponse(0, 'Previous visit message.')
+  await waitForState(() => messageResponses.length === 2)
+  const afterPreviousVisitResponse = visibleMessages()
+  await resolveMessageResponse(1, 'Current session message.')
+  await waitForState(() => visibleMessages()[0] === 'Current session message.')
+
+  const snapshot = () => ({
+    requestUrls: fetcher.mock.calls
+      .map(([url]) => requestUrl(url))
+      .filter((url) => url.includes('/messages?')),
+    afterPreviousVisitResponse,
+    visibleMessages: visibleMessages(),
+  })
+  expect(snapshot()).toEqual({
+    requestUrls: [
+      '/api/sessions/sample-session/messages?limit=100',
+      '/api/sessions/sample-session/messages?limit=100',
+    ],
+    afterPreviousVisitResponse: [],
+    visibleMessages: ['Current session message.'],
+  })
+})
+
 it('keeps the current page when older history ends and clears its scroll anchor', async () => {
   const resetMessages: ChatItem[] = [
     { type: 'assistant', text: 'Reset fixture response.' },
@@ -11289,6 +14116,618 @@ it('keeps a question answer draft when a preceding conversation row arrives', ()
     'Use the bounded option',
   )
 })
+
+it.each([
+  {
+    cardType: 'proposal',
+    atBottom: false,
+    nearBottom: false,
+    resolution: 'completed',
+    resolvedSeq: 62,
+    cleanupTrigger: 'response',
+  },
+  {
+    cardType: 'proposal',
+    atBottom: true,
+    nearBottom: false,
+    resolution: 'completed',
+    resolvedSeq: 62,
+    cleanupTrigger: 'response',
+  },
+  {
+    cardType: 'todo',
+    atBottom: false,
+    nearBottom: false,
+    resolution: 'completed',
+    resolvedSeq: 62,
+    cleanupTrigger: 'response',
+  },
+  {
+    cardType: 'todo',
+    atBottom: true,
+    nearBottom: false,
+    resolution: 'completed',
+    resolvedSeq: 62,
+    cleanupTrigger: 'response',
+  },
+  {
+    cardType: 'todo',
+    atBottom: false,
+    nearBottom: false,
+    resolution: 'rejected',
+    resolvedSeq: 62,
+    cleanupTrigger: 'response',
+  },
+  {
+    cardType: 'todo',
+    atBottom: true,
+    nearBottom: false,
+    resolution: 'rejected',
+    resolvedSeq: 62,
+    cleanupTrigger: 'response',
+  },
+  {
+    cardType: 'proposal',
+    atBottom: true,
+    nearBottom: false,
+    resolution: 'completed',
+    resolvedSeq: 63,
+    cleanupTrigger: 'response',
+  },
+  {
+    cardType: 'todo',
+    atBottom: true,
+    nearBottom: false,
+    resolution: 'completed',
+    resolvedSeq: 63,
+    cleanupTrigger: 'response',
+  },
+  {
+    cardType: 'todo',
+    atBottom: true,
+    nearBottom: false,
+    resolution: 'rejected',
+    resolvedSeq: 63,
+    cleanupTrigger: 'response',
+  },
+  {
+    cardType: 'todo',
+    atBottom: false,
+    nearBottom: false,
+    resolution: 'completed',
+    resolvedSeq: 62,
+    cleanupTrigger: 'scroll',
+  },
+  {
+    cardType: 'todo',
+    atBottom: false,
+    nearBottom: false,
+    resolution: 'completed',
+    resolvedSeq: 62,
+    cleanupTrigger: 'response',
+    viewportHeight: 560,
+    requiresOffscreenCleanup: true,
+  },
+  {
+    cardType: 'todo',
+    atBottom: true,
+    nearBottom: false,
+    resolution: 'completed',
+    resolvedSeq: 63,
+    cleanupTrigger: 'scroll',
+    resolutionScrollDistance: 10,
+    requiresBottomPaddingCleanup: true,
+  },
+  {
+    cardType: 'todo',
+    atBottom: false,
+    nearBottom: true,
+    resolution: 'completed',
+    resolvedSeq: 62,
+    cleanupTrigger: 'response',
+  },
+] as const)(
+  'keeps the remaining $cardType cards in place when resolving card $resolvedSeq as $resolution atBottom=$atBottom nearBottom=$nearBottom cleanup=$cleanupTrigger viewportHeight=$viewportHeight',
+  ({
+    cardType,
+    atBottom,
+    nearBottom,
+    resolution,
+    resolvedSeq,
+    cleanupTrigger,
+    viewportHeight,
+    resolutionScrollDistance: requestedResolutionScrollDistance,
+    requiresOffscreenCleanup,
+    requiresBottomPaddingCleanup,
+  }) => {
+    container.style.cssText = 'width: 900px; height: 700px'
+    const detail =
+      'Review the selected configuration before continuing. '.repeat(10)
+    const conversationStart = 5
+    const messages: ChatItem[] = [
+      { type: 'assistant', text: 'Earlier context. '.repeat(35) },
+      ...[1, 2, 3].map((index) =>
+        cardType === 'proposal'
+          ? {
+              ...proposal,
+              seq: 60 + index,
+              title: `Choose setting ${String(index)}`,
+              summary: detail,
+            }
+          : {
+              type: 'todo' as const,
+              seq: 60 + index,
+              title: `Review setting ${String(index)}`,
+              detail,
+              completed: false,
+              resolution: null,
+              comment: null,
+            },
+      ),
+    ]
+    renderConversationMessages(messages, conversationStart)
+
+    const scroll = requireElement(
+      container.querySelector<HTMLDivElement>('.conversation-scroll'),
+    )
+    scroll.style.height = `${String(viewportHeight ?? 360)}px`
+    scroll.style.flex = 'none'
+    renderConversationMessages(messages.slice(), conversationStart)
+
+    const moveScrollWithoutDispatch = (scrollTop: number) => {
+      act(() => {
+        scroll.scrollTop = scrollTop
+      })
+    }
+    const dispatchScroll = () => {
+      void act(() => scroll.dispatchEvent(new Event('scroll')))
+    }
+    const setScrollPosition = (scrollTop: number) => {
+      moveScrollWithoutDispatch(scrollTop)
+      dispatchScroll()
+    }
+    const dispatchUserScrollInput = () => {
+      void act(() =>
+        scroll.dispatchEvent(
+          new WheelEvent('wheel', { bubbles: true, deltaY: -1 }),
+        ),
+      )
+    }
+    const bottom = scroll.scrollHeight - scroll.clientHeight
+    const scrollPosition = nearBottom
+      ? Math.max(0, bottom - 40)
+      : Math.min(180, bottom)
+    setScrollPosition(atBottom ? bottom : scrollPosition)
+    const getPendingCards = () =>
+      Array.from(
+        scroll.querySelectorAll<HTMLElement>(
+          '.chat-proposal-card, .chat-todo-card',
+        ),
+      )
+        .map((element) => {
+          const rect = element.getBoundingClientRect()
+          return {
+            element,
+            title: element.querySelector('h3')?.textContent,
+            top: Math.round(rect.top),
+            height: rect.height,
+          }
+        })
+        .filter(
+          ({ title }) =>
+            title?.startsWith(
+              cardType === 'proposal' ? 'Choose setting' : 'Review setting',
+            ) === true,
+        )
+    const before = getPendingCards().filter(
+      ({ title }) =>
+        title !==
+        `${cardType === 'proposal' ? 'Choose' : 'Review'} setting ${String(resolvedSeq - 60)}`,
+    )
+    const atBottomNow = () =>
+      scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight <= 24
+    const wasAtBottom = atBottomNow()
+    const scrollBounds = scroll.getBoundingClientRect()
+    const intersectsViewport = (top: number, height: number) =>
+      top < scrollBounds.bottom && top + height > scrollBounds.top
+    const initiallyVisible = before.map(({ top, height }) =>
+      intersectsViewport(top, height),
+    )
+    const getOverlappingChildren = () => {
+      const children = Array.from(scroll.children).filter(
+        (child): child is HTMLElement => child instanceof HTMLElement,
+      )
+      const overlappingChildren: string[] = []
+      const describeChild = (child: HTMLElement) =>
+        child.querySelector('h3')?.textContent ?? child.textContent.slice(0, 40)
+      for (const [leftIndex, left] of children.entries()) {
+        const leftRect = left.getBoundingClientRect()
+        for (const [rightIndex, right] of children.entries()) {
+          if (rightIndex <= leftIndex) continue
+          const rightRect = right.getBoundingClientRect()
+          if (
+            leftRect.left < rightRect.right &&
+            rightRect.left < leftRect.right &&
+            leftRect.top < rightRect.bottom &&
+            rightRect.top < leftRect.bottom
+          ) {
+            overlappingChildren.push(
+              `${describeChild(left)}:${String(Math.round(leftRect.top))} overlaps ${describeChild(right)}:${String(Math.round(rightRect.top))}`,
+            )
+          }
+        }
+      }
+      return overlappingChildren
+    }
+    const getScrollCompensation = () => ({
+      hasChildMarginBlockStart: Array.from(scroll.children).some(
+        (child) =>
+          child instanceof HTMLElement && child.style.marginBlockStart !== '',
+      ),
+      hasExtraPaddingBottom:
+        scroll.style.getPropertyValue(
+          '--conversation-anchor-extra-padding-bottom',
+        ) !== '',
+    })
+    const isResolvedMessage = (
+      message: ChatItem,
+    ): message is Extract<ChatItem, { type: 'proposal' | 'todo' }> =>
+      (message.type === 'proposal' || message.type === 'todo') &&
+      message.type === cardType &&
+      message.seq === resolvedSeq
+    const resolved = messages.find(isResolvedMessage)
+    if (resolved === undefined) throw new Error('Expected the card to resolve')
+    const settled: ChatItem =
+      resolved.type === 'proposal'
+        ? { ...resolved, answer: { choice: 0, comment: null } }
+        : {
+            ...resolved,
+            completed: true,
+            resolution,
+          }
+    const isCard = (
+      message: ChatItem,
+    ): message is Extract<ChatItem, { type: 'proposal' | 'todo' }> =>
+      message.type === 'proposal' || message.type === 'todo'
+    const remainingCards = messages.filter(
+      (message): message is Extract<ChatItem, { type: 'proposal' | 'todo' }> =>
+        isCard(message) && !isResolvedMessage(message),
+    )
+    const surroundingMessages = messages.filter((message) => !isCard(message))
+    const originalRemainingTops = before.map(({ top }) => top)
+    const stages: number[][] = []
+    const stageVisibility: boolean[][] = []
+    const bottomStates: boolean[] = []
+    const compensationStates: ReturnType<typeof getScrollCompensation>[] = []
+    const recordRemainingTops = () => {
+      const rects = before.map(({ element }) => element.getBoundingClientRect())
+      stages.push(rects.map(({ top }) => Math.round(top)))
+      stageVisibility.push(
+        rects.map(({ top, height }) => intersectsViewport(top, height)),
+      )
+      bottomStates.push(atBottomNow())
+      compensationStates.push(getScrollCompensation())
+    }
+    const optimisticMessages = messages.map((message) =>
+      isResolvedMessage(message) ? settled : message,
+    )
+    renderConversationMessages(optimisticMessages, conversationStart)
+    recordRemainingTops()
+    const afterOptimisticUpdate = getOverlappingChildren()
+    renderConversationMessages(
+      [...surroundingMessages, settled, ...remainingCards],
+      conversationStart,
+    )
+    recordRemainingTops()
+    const afterServerResponse = getOverlappingChildren()
+    let userScrollPreservedReadingPosition: boolean | null = null
+    let compensationAfterResolutionScroll: ReturnType<
+      typeof getScrollCompensation
+    > | null = null
+    const isScrollCleanup = ['scroll'].includes(cleanupTrigger)
+    const extraPaddingAfterServerResponse =
+      Number.parseFloat(
+        scroll.style.getPropertyValue(
+          '--conversation-anchor-extra-padding-bottom',
+        ),
+      ) || 0
+    const requestedScrollDistance =
+      requestedResolutionScrollDistance ??
+      (atBottom && isScrollCleanup && extraPaddingAfterServerResponse > 0
+        ? extraPaddingAfterServerResponse + 32
+        : atBottom
+          ? 40
+          : 20)
+    const resolutionScrollDistance = Math.min(
+      requestedScrollDistance,
+      scroll.scrollTop,
+    )
+    if (isScrollCleanup) {
+      const anchorTitle = before[0]?.title
+      const getAnchorTop = () =>
+        getPendingCards()
+          .find(({ title }) => title === anchorTitle)
+          ?.element.getBoundingClientRect().top
+      if (atBottom && requestedResolutionScrollDistance !== undefined) {
+        moveScrollWithoutDispatch(scroll.scrollHeight - scroll.clientHeight)
+      }
+      const anchorTopBeforeUserScroll = getAnchorTop()
+      const previousScrollTop = scroll.scrollTop
+      dispatchUserScrollInput()
+      setScrollPosition(previousScrollTop - resolutionScrollDistance)
+      compensationAfterResolutionScroll = getScrollCompensation()
+      const anchorTopAfterUserScroll = getAnchorTop()
+      userScrollPreservedReadingPosition =
+        anchorTopBeforeUserScroll !== undefined &&
+        anchorTopAfterUserScroll !== undefined &&
+        Math.abs(
+          anchorTopAfterUserScroll -
+            anchorTopBeforeUserScroll -
+            resolutionScrollDistance,
+        ) <= 0.5
+    }
+    const notification: ChatItem = {
+      type: 'assistant',
+      text: 'The selection was recorded.',
+    }
+    const updatedMessages = [
+      ...surroundingMessages,
+      settled,
+      notification,
+      ...remainingCards,
+    ]
+    renderConversationMessages(updatedMessages, conversationStart)
+    recordRemainingTops()
+    const afterNotification = getOverlappingChildren()
+    const nextResponse: ChatItem = {
+      type: 'assistant',
+      text: 'The next step is ready.',
+    }
+    const withNextResponse = [
+      ...surroundingMessages,
+      settled,
+      notification,
+      nextResponse,
+      ...remainingCards,
+    ]
+    renderConversationMessages(withNextResponse, conversationStart)
+    recordRemainingTops()
+    const afterNextResponse = getOverlappingChildren()
+    const olderContext: ChatItem = {
+      type: 'assistant',
+      text: 'Earlier context has loaded.',
+    }
+    renderConversationMessages(
+      [olderContext, ...withNextResponse],
+      conversationStart - 1,
+    )
+    recordRemainingTops()
+    const afterDeltaLoad = getOverlappingChildren()
+    const remainedAtBottomAfterStages = atBottomNow()
+    const compensationBeforeOffscreenScroll = getScrollCompensation()
+    const visibleCompensatedCardBeforeOffscreenScroll = before.some(
+      ({ element }) => {
+        const rect = element.getBoundingClientRect()
+        const marginBlockStart =
+          Number.parseFloat(element.style.marginBlockStart) || 0
+        const compensationTop = rect.top - marginBlockStart
+        return (
+          element.style.marginBlockStart !== '' &&
+          intersectsViewport(compensationTop, marginBlockStart)
+        )
+      },
+    )
+
+    const getVisibleChildren = () =>
+      Array.from(scroll.children).flatMap((child, index) => {
+        if (!(child instanceof HTMLElement)) return []
+        const rect = child.getBoundingClientRect()
+        if (!intersectsViewport(rect.top, rect.height)) return []
+        return [
+          {
+            element: child,
+            index,
+            label:
+              child.querySelector('h3')?.textContent ??
+              child.textContent.slice(0, 40),
+            top: Math.round(rect.top),
+          },
+        ]
+      })
+    const offscreenCleanupSteps: {
+      visibleChildrenBefore: { index: number; label: string }[]
+      visibleChildrenStillVisible: boolean[]
+      visibleTopDeltas: (number | null)[]
+    }[] = []
+    for (let attempt = 0; attempt <= scroll.children.length; attempt += 1) {
+      const compensation = getScrollCompensation()
+      if (
+        !compensation.hasChildMarginBlockStart &&
+        !compensation.hasExtraPaddingBottom
+      ) {
+        break
+      }
+      const maxScrollTop = scroll.scrollHeight - scroll.clientHeight
+      const marginChildren = Array.from(scroll.children).filter(
+        (child): child is HTMLElement =>
+          child instanceof HTMLElement && child.style.marginBlockStart !== '',
+      )
+      const extraPaddingBottom =
+        Number.parseFloat(
+          scroll.style.getPropertyValue(
+            '--conversation-anchor-extra-padding-bottom',
+          ),
+        ) || 0
+      const marginScrollTargets = marginChildren.flatMap((child) => {
+        const { top, height } = child.getBoundingClientRect()
+        const compensation =
+          Number.parseFloat(child.style.marginBlockStart) || 0
+        return [
+          scroll.scrollTop + top - compensation - scrollBounds.bottom - 1,
+          scroll.scrollTop + top + height - scrollBounds.top + 1,
+        ]
+      })
+      const maxBeforeBottom = Math.max(0, maxScrollTop - 32)
+      const feasibleMarginTarget = marginScrollTargets
+        .filter((target) => target >= 0 && target <= maxBeforeBottom)
+        .sort(
+          (left, right) =>
+            Math.abs(left - scroll.scrollTop) -
+            Math.abs(right - scroll.scrollTop),
+        )[0]
+      const targetScrollTop =
+        marginChildren.length > 0
+          ? (feasibleMarginTarget ?? maxBeforeBottom)
+          : Math.max(0, maxScrollTop - extraPaddingBottom - 32)
+      dispatchUserScrollInput()
+      moveScrollWithoutDispatch(targetScrollTop)
+      const visibleBeforeCleanup = getVisibleChildren()
+      dispatchScroll()
+      const visibleAfterCleanup = getVisibleChildren()
+      const visibleAfterByElement = new Map(
+        visibleAfterCleanup.map((child) => [child.element, child]),
+      )
+      offscreenCleanupSteps.push({
+        visibleChildrenBefore: visibleBeforeCleanup.map(({ index, label }) => ({
+          index,
+          label,
+        })),
+        visibleChildrenStillVisible: visibleBeforeCleanup.map((child) =>
+          visibleAfterByElement.has(child.element),
+        ),
+        visibleTopDeltas: visibleBeforeCleanup.map((child) => {
+          const after = visibleAfterByElement.get(child.element)
+          return after === undefined ? null : after.top - child.top
+        }),
+      })
+    }
+    const afterUserScroll = getOverlappingChildren()
+    const compensationAfterOffscreenScroll = getScrollCompensation()
+    const expectedBottomAfterResolutionScroll =
+      wasAtBottom && (!isScrollCleanup || resolutionScrollDistance <= 24)
+    const result = () => ({
+      remainingCardCount: before.length,
+      remainedAtBottom: remainedAtBottomAfterStages,
+      bottomStates,
+      userScrollPreservedReadingPosition,
+      stageTopDeltas: stages.map((stage) =>
+        stage.map((top, cardIndex) => {
+          if (initiallyVisible[cardIndex] !== true) return null
+          return top - (originalRemainingTops[cardIndex] ?? 0)
+        }),
+      ),
+      stageVisibleStates: stageVisibility.map((stage) =>
+        stage.map((visible, cardIndex) =>
+          initiallyVisible[cardIndex] === true ? visible : null,
+        ),
+      ),
+      offscreenCleanup: {
+        requiredCleanupAssertions:
+          requiresOffscreenCleanup === true
+            ? {
+                compensationPresentBeforeScroll:
+                  compensationBeforeOffscreenScroll.hasChildMarginBlockStart ||
+                  compensationBeforeOffscreenScroll.hasExtraPaddingBottom,
+                compensationRangeVisible:
+                  visibleCompensatedCardBeforeOffscreenScroll,
+                visibleChildrenObserved: offscreenCleanupSteps.some(
+                  ({ visibleChildrenBefore }) =>
+                    visibleChildrenBefore.length > 0,
+                ),
+              }
+            : null,
+        requiredBottomPaddingCleanup:
+          requiresBottomPaddingCleanup === true
+            ? {
+                paddingPresentAfterServerResponse:
+                  compensationStates[1]?.hasExtraPaddingBottom === true,
+                paddingRemovedAfterUserScroll:
+                  compensationAfterResolutionScroll?.hasExtraPaddingBottom ===
+                  resolutionScrollDistance > 24,
+                positionPreserved: userScrollPreservedReadingPosition === true,
+              }
+            : null,
+        visibleChildStates: offscreenCleanupSteps.map((step) => ({
+          visibleChildrenBefore: step.visibleChildrenBefore,
+          visibleChildrenStillVisible: step.visibleChildrenStillVisible,
+          visibleTopDeltas: step.visibleTopDeltas,
+        })),
+        compensation: compensationAfterOffscreenScroll,
+      },
+      layoutIntegrity: [
+        afterOptimisticUpdate,
+        afterServerResponse,
+        afterNotification,
+        afterNextResponse,
+        afterDeltaLoad,
+        afterUserScroll,
+      ],
+    })
+    const expectedResult = () => ({
+      remainingCardCount: 2,
+      remainedAtBottom: expectedBottomAfterResolutionScroll,
+      bottomStates: [
+        wasAtBottom,
+        wasAtBottom,
+        ...Array.from({ length: 3 }, () => expectedBottomAfterResolutionScroll),
+      ],
+      userScrollPreservedReadingPosition: isScrollCleanup ? true : null,
+      stageTopDeltas: Array.from({ length: 5 }, (_, stageIndex) =>
+        originalRemainingTops.map((_, cardIndex) => {
+          if (initiallyVisible[cardIndex] !== true) return null
+          const expectedScrollDelta =
+            isScrollCleanup && stageIndex >= 2
+              ? Math.round(resolutionScrollDistance)
+              : 0
+          return expectedScrollDelta
+        }),
+      ),
+      stageVisibleStates: Array.from({ length: 5 }, (_, stageIndex) =>
+        originalRemainingTops.map((_, cardIndex) => {
+          if (initiallyVisible[cardIndex] !== true) return null
+          const expectedScrollDelta =
+            isScrollCleanup && stageIndex >= 2
+              ? Math.round(resolutionScrollDistance)
+              : 0
+          const expectedTop =
+            (originalRemainingTops[cardIndex] ?? 0) + expectedScrollDelta
+          return intersectsViewport(expectedTop, before[cardIndex]?.height ?? 0)
+        }),
+      ),
+      offscreenCleanup: {
+        requiredCleanupAssertions:
+          requiresOffscreenCleanup === true
+            ? {
+                compensationPresentBeforeScroll: true,
+                compensationRangeVisible: true,
+                visibleChildrenObserved: true,
+              }
+            : null,
+        requiredBottomPaddingCleanup:
+          requiresBottomPaddingCleanup === true
+            ? {
+                paddingPresentAfterServerResponse: true,
+                paddingRemovedAfterUserScroll: resolutionScrollDistance > 24,
+                positionPreserved: true,
+              }
+            : null,
+        visibleChildStates: offscreenCleanupSteps.map((step) => ({
+          visibleChildrenBefore: step.visibleChildrenBefore,
+          visibleChildrenStillVisible: step.visibleChildrenBefore.map(
+            () => true,
+          ),
+          visibleTopDeltas: step.visibleChildrenBefore.map(() => 0),
+        })),
+        compensation: {
+          hasChildMarginBlockStart: false,
+          hasExtraPaddingBottom: false,
+        },
+      },
+      layoutIntegrity: Array.from({ length: 6 }, () => []),
+    })
+    expect(result()).toEqual(expectedResult())
+  },
+)
 
 it.each([
   { formFactor: 'desktop', isMobile: false },

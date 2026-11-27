@@ -32,6 +32,8 @@ import type {
   SessionLinkTarget,
 } from '#types'
 
+const EMPTY_IMAGE_SOURCES: Readonly<Record<string, string | null>> = {}
+
 export type ConversationMessageRowProps = {
   actions: SessionActions | null
   actionsReady: boolean
@@ -40,6 +42,7 @@ export type ConversationMessageRowProps = {
   decisionPosition: string | undefined
   onSelectDecision: (seq: number) => void
   message: ChatItem
+  imageSources?: Readonly<Record<string, string | null>>
   pendingAction: PendingPermissionActionState
   openInTerminalStatus: OpenInTerminalStatus
   onAction: (
@@ -56,6 +59,7 @@ export type ConversationMessageRowProps = {
     messageId: string,
     mode: RewindMode,
     draft: string,
+    timelineIndex?: number,
   ) => Promise<boolean>
   sessionEngine: Session['engine']
   sessionId?: string
@@ -71,6 +75,7 @@ export function renderConversationMessage({
   decisionPosition,
   onSelectDecision,
   message,
+  imageSources,
   conversationIndex,
   pendingAction,
   openInTerminalStatus,
@@ -144,6 +149,10 @@ export function renderConversationMessage({
     )
   }
   if (message.type === 'assistant' || message.type === 'narration') {
+    const effectiveImageSources =
+      message.type === 'assistant'
+        ? (imageSources ?? EMPTY_IMAGE_SOURCES)
+        : imageSources
     const className =
       message.type === 'narration'
         ? 'chat-assistant-message chat-narration-message'
@@ -151,6 +160,9 @@ export function renderConversationMessage({
     return (
       <article className={className}>
         <MarkdownMessage
+          {...(effectiveImageSources === undefined
+            ? {}
+            : { imageSources: effectiveImageSources })}
           {...(sessionId === undefined ? {} : { sessionId })}
           {...(onCommandExecuted === undefined ? {} : { onCommandExecuted })}
           {...(onCommandStarted === undefined ? {} : { onCommandStarted })}
@@ -264,6 +276,11 @@ export function renderConversationMessage({
           onAction(`proposals/${String(message.seq)}/answer`, {
             choice: answer.choice,
             comment: answer.comment,
+            expectedBody: {
+              title: message.title,
+              summary: message.summary,
+              options: message.options,
+            },
             ...(attachments === undefined ? {} : { attachments }),
           })
         }
@@ -285,6 +302,8 @@ export function renderConversationMessage({
           onAction(`todos/${String(message.seq)}/resolve`, {
             resolution,
             comment,
+            expectedTitle: message.title,
+            expectedDetail: message.detail,
             ...(attachments === undefined ? {} : { attachments }),
           })
         }

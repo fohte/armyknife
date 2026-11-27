@@ -41,8 +41,11 @@ use self::category::{
 mod sorting;
 use self::sorting::sort_session_views;
 mod project;
+#[cfg(test)]
+use self::project::RepoNameCache;
 use self::project::{
-    resolve_parent_project, resolve_project, resolve_repo, resolve_repos_for_sessions,
+    repo_name_cache, resolve_parent_project, resolve_project, resolve_repo,
+    resolve_repos_for_sessions,
 };
 mod vibe;
 use self::vibe::{VibeAncestorLoader, states_for_sessions};
@@ -217,6 +220,9 @@ struct SessionView {
     review_document_id: Option<String>,
     #[serde(skip_serializing_if = "is_zero")]
     review_document_count: usize,
+    // Side-table writes can change `/messages` without changing serialized session fields.
+    #[serde(skip)]
+    rev: i64,
 }
 
 impl std::ops::Deref for SessionView {
@@ -250,6 +256,8 @@ pub(super) struct SessionSnapshot {
     title_by_id: HashMap<String, String>,
     repo_by_id: HashMap<String, String>,
     decision_counts: HashMap<String, store::AgentDecisionCounts>,
+    session_revisions: HashMap<String, i64>,
+    agent_response_timestamps: HashMap<String, DateTime<Utc>>,
     unanswered_proposal_titles: HashMap<String, String>,
     unanswered_todo_titles: HashMap<String, String>,
     folded_todo_summaries: HashMap<String, FoldedTodoSummary>,
@@ -485,6 +493,8 @@ async fn list_sessions<S: SessionSource>(
     let vibe_modes =
         session_vibe_modes(&snapshot, &response_sessions, &snapshot.repo_by_id).await?;
     let now = source.now();
+    let agent_response_timestamps = snapshot.agent_response_timestamps;
+    let session_revisions = snapshot.session_revisions;
     let state_by_id = snapshot
         .web_states
         .into_iter()
@@ -623,8 +633,14 @@ async fn list_sessions<S: SessionSource>(
                 .or_else(|| todo_title.cloned())
                 .or_else(|| folded_todo_summary.and_then(|summary| summary.first_title.clone()))
                 .or_else(|| session.last_message.clone());
+            let last_conversation_activity_at = std::iter::once(&session.created_at)
+                .chain(session.last_prompted_at.iter())
+                .chain(agent_response_timestamps.get(&session.session_id))
+                .max()
+                .copied()
+                .unwrap_or(session.created_at);
             let elapsed_seconds = now
-                .signed_duration_since(session.updated_at)
+                .signed_duration_since(last_conversation_activity_at)
                 .num_seconds()
                 .max(0) as u64;
             let decision_count = snapshot
@@ -714,6 +730,10 @@ async fn list_sessions<S: SessionSource>(
                 review_document_count: review_document_states
                     .get(&session.session_id)
                     .map_or(0, |state| state.count),
+                rev: session_revisions
+                    .get(&session.session_id)
+                    .copied()
+                    .unwrap_or_default(),
             }
         })
         .collect::<Vec<_>>();
@@ -764,10 +784,13 @@ fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
         .iter()
         .map(|session| (session.session_id.clone(), title_display_name(session)))
         .collect();
-    let repo_by_id = resolve_repos_for_sessions(&sessions, &all_sessions, resolve_repo);
+    let repo_by_id =
+        resolve_repos_for_sessions(&sessions, &all_sessions, repo_name_cache(), resolve_repo);
     let sessions_dir = store::sessions_dir()?;
     let vibe_sessions_dir = sessions_dir.clone();
+    let agent_response_timestamps = store::agent_response_timestamps_from(&sessions_dir)?;
     let decision_counts = store::agent_decision_counts_by_session_from(&sessions_dir)?;
+    let session_revisions = store::session_revisions_by_session_from(&sessions_dir)?;
     let mut unanswered_proposal_titles = HashMap::new();
     let visible_session_ids = all_sessions
         .iter()
@@ -796,6 +819,8 @@ fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
         title_by_id,
         repo_by_id,
         decision_counts,
+        session_revisions,
+        agent_response_timestamps,
         unanswered_proposal_titles,
         unanswered_todo_titles,
         folded_todo_summaries,
@@ -908,6 +933,9 @@ mod tests {
         task_projects: HashMap<String, String>,
         pull_requests: HashMap<String, Vec<SessionPullRequestInfo>>,
         decision_counts: HashMap<String, store::AgentDecisionCounts>,
+        session_revisions: HashMap<String, i64>,
+        session_store_dir: Option<PathBuf>,
+        agent_response_timestamps: HashMap<String, DateTime<Utc>>,
         work_type_nav_labels: HashMap<String, String>,
         agent_statuses: HashMap<String, AgentStatusConfig>,
         message_loaders: super::super::messages::RouteLoaders,
@@ -920,8 +948,15 @@ mod tests {
 
     impl SessionSource for TestSessionSource {
         async fn load_snapshot(&self) -> anyhow::Result<SessionSnapshot> {
+            let (revision, session_revisions) = match self.session_store_dir.as_deref() {
+                Some(sessions_dir) => (
+                    store::session_store_revision_from(sessions_dir)?,
+                    store::session_revisions_by_session_from(sessions_dir)?,
+                ),
+                None => (self.revision, self.session_revisions.clone()),
+            };
             Ok(SessionSnapshot {
-                revision: self.revision,
+                revision,
                 sessions: self.sessions.clone(),
                 all_sessions: self.all_sessions.clone(),
                 closed_session_ids: self.closed_session_ids.clone(),
@@ -929,6 +964,8 @@ mod tests {
                 title_by_id: self.title_by_id.clone(),
                 repo_by_id: self.repo_by_id.clone(),
                 decision_counts: self.decision_counts.clone(),
+                session_revisions,
+                agent_response_timestamps: self.agent_response_timestamps.clone(),
                 unanswered_proposal_titles: self.unanswered_proposal_titles.clone(),
                 unanswered_todo_titles: self.unanswered_todo_titles.clone(),
                 folded_todo_summaries: self.folded_todo_summaries.clone(),
@@ -977,6 +1014,7 @@ mod tests {
                 priorities: self.task_priorities.clone(),
                 priority_order: self.task_priority_order.clone(),
                 task_projects: self.task_projects.clone(),
+                project_names: HashMap::new(),
                 github_links: HashMap::new(),
             }
         }
@@ -1030,13 +1068,9 @@ mod tests {
                 snapshot
                     .all_sessions
                     .retain(|session| session.session_id != "removed-session");
-                if let Some(session) = snapshot
-                    .sessions
-                    .iter_mut()
-                    .find(|session| session.session_id == "child-session")
-                {
-                    session.last_message = Some("updated session preview".to_string());
-                }
+                snapshot
+                    .session_revisions
+                    .insert("child-session".to_string(), 1);
             }
             Ok(snapshot)
         }
@@ -1203,6 +1237,9 @@ mod tests {
                     unreviewed: 2,
                 },
             )]),
+            session_revisions: HashMap::new(),
+            session_store_dir: None,
+            agent_response_timestamps: HashMap::new(),
             work_type_nav_labels: HashMap::new(),
             agent_statuses: HashMap::new(),
             message_loaders: super::super::messages::RouteLoaders::new(
@@ -1299,6 +1336,60 @@ mod tests {
             vibe_mode["ancestorSessionId"] = serde_json::json!(ancestor_session_id);
         }
         expected["sessions"][0]["vibeMode"] = vibe_mode;
+
+        assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
+    }
+
+    #[rstest]
+    #[case::user_prompt_is_latest(Some(990), Some(950), 110)]
+    #[case::agent_response_is_latest(Some(900), Some(970), 130)]
+    #[case::created_at_fallback(None, None, 400)]
+    #[case::rewind_creation_beats_inherited_prompt(Some(600), None, 400)]
+    #[tokio::test]
+    async fn sessions_route_elapsed_uses_latest_conversation_activity(
+        mut source: TestSessionSource,
+        #[case] prompted_at: Option<i64>,
+        #[case] responded_at: Option<i64>,
+        #[case] elapsed_seconds: u64,
+    ) {
+        source.sessions[0].status = SessionStatus::Running;
+        source.sessions[0].created_at = Utc.timestamp_opt(700, 0).unwrap();
+        source.sessions[0].updated_at = Utc.timestamp_opt(1_080, 0).unwrap();
+        source.sessions[0].last_prompted_at =
+            prompted_at.map(|timestamp| Utc.timestamp_opt(timestamp, 0).unwrap());
+        source.all_sessions[0] = source.sessions[0].clone();
+        source.web_states[0].later_until = None;
+        source.web_states[0].is_today = false;
+        if let Some(responded_at) = responded_at {
+            source.agent_response_timestamps.insert(
+                "child-session".to_string(),
+                Utc.timestamp_opt(responded_at, 0).unwrap(),
+            );
+        }
+        let mut expected = expected_response(
+            "in_progress",
+            None,
+            false,
+            ExpectedSessionDetails {
+                kind: None,
+                category_when_not_later: "in_progress",
+                is_paused: false,
+                unread: false,
+                crit_url: None,
+            },
+            ExpectedSessionResponse {
+                engine: "claude",
+                work_type: None,
+                work_type_nav_labels: serde_json::json!({}),
+                updated_at: "1970-01-01T00:18:00Z",
+                elapsed_seconds,
+                can_open_in_terminal: true,
+            },
+        );
+        if let Some(prompted_at) = prompted_at {
+            expected["sessions"][0]["lastPromptedAt"] =
+                serde_json::to_value(Utc.timestamp_opt(prompted_at, 0).unwrap()).unwrap();
+        }
 
         assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
     }
@@ -1444,6 +1535,23 @@ mod tests {
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let value = serde_json::from_slice::<serde_json::Value>(&body).unwrap();
         (status, value)
+    }
+
+    async fn session_delta(
+        router: &Router,
+        token: &str,
+    ) -> (StatusCode, String, Vec<String>, serde_json::Value) {
+        let (status, mut response) =
+            sessions_request(router, &format!("/api/sessions?since={token}")).await;
+        let next_token = response["token"].as_str().unwrap().to_string();
+        let updated_session_ids = response["updatedSessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|session| session["id"].as_str().unwrap().to_string())
+            .collect();
+        response.as_object_mut().unwrap().remove("token");
+        (status, next_token, updated_session_ids, response)
     }
 
     async fn session_tree_response(
@@ -1717,7 +1825,7 @@ mod tests {
     }
 
     #[test]
-    fn repo_lookup_uses_active_sessions_and_ancestors_once_per_worktree() {
+    fn repo_lookup_deduplicates_worktrees_and_reuses_the_cache_across_snapshots() {
         let mut active = session(SessionStatus::Running);
         active.session_id = "active-session".to_string();
         active.ancestor_session_ids = vec!["parent-session".to_string()];
@@ -1732,14 +1840,31 @@ mod tests {
 
         let all_sessions = vec![active.clone(), parent, unrelated];
         let mut resolved_cwds = Vec::new();
-        let repos = resolve_repos_for_sessions(&[active.clone()], &all_sessions, |cwd| {
-            resolved_cwds.push(cwd.to_path_buf());
-            "example-org/sample-repo".to_string()
-        });
+        let repo_cache = RepoNameCache::default();
+        let repos =
+            resolve_repos_for_sessions(&[active.clone()], &all_sessions, &repo_cache, |cwd| {
+                resolved_cwds.push(cwd.to_path_buf());
+                "example-org/sample-repo".to_string()
+            });
+        let cached_repos =
+            resolve_repos_for_sessions(&[active.clone()], &all_sessions, &repo_cache, |cwd| {
+                resolved_cwds.push(cwd.to_path_buf());
+                "example-org/second-repo".to_string()
+            });
 
         assert_eq!(
-            (repos, resolved_cwds),
+            (repos, cached_repos, resolved_cwds),
             (
+                HashMap::from([
+                    (
+                        "active-session".to_string(),
+                        "example-org/sample-repo".to_string(),
+                    ),
+                    (
+                        "parent-session".to_string(),
+                        "example-org/sample-repo".to_string(),
+                    ),
+                ]),
                 HashMap::from([
                     (
                         "active-session".to_string(),
@@ -2010,7 +2135,8 @@ mod tests {
         let (_transcript_dir, transcript_path) = write_transcript(&[first_record]);
         source.sessions[0].transcript_path = Some(transcript_path.clone());
 
-        let first_response = sessions_response(source.clone()).await;
+        let router = Router::new().nest("/api", router_with_source(source));
+        let (first_status, first_response) = sessions_request(&router, "/api/sessions").await;
         let mut transcript = std::fs::read(&transcript_path).unwrap();
         transcript.extend(
             serde_json::to_vec(&serde_json::json!({
@@ -2026,16 +2152,32 @@ mod tests {
         );
         transcript.push(b'\n');
         std::fs::write(&transcript_path, transcript).unwrap();
-        let second_response = sessions_response(source).await;
-
-        let first_expected = question_inbox_response("Question", Some("Which initial layout?"));
-        let second_expected = question_inbox_response("Question", Some("Which updated layout?"));
+        let token = first_response["token"].as_str().unwrap();
+        let (second_status, _, updated_session_ids, second_response) =
+            session_delta(&router, token).await;
+        let mut expected_session = first_response["sessions"][0].clone();
+        expected_session["preview"] = serde_json::json!("Which updated layout?");
 
         assert_eq!(
-            (first_response, second_response),
             (
-                (StatusCode::OK, first_expected),
-                (StatusCode::OK, second_expected),
+                first_status,
+                first_response["sessions"][0]["preview"].clone(),
+                second_status,
+                updated_session_ids,
+                second_response,
+            ),
+            (
+                StatusCode::OK,
+                serde_json::json!("Which initial layout?"),
+                StatusCode::OK,
+                vec!["child-session".to_string()],
+                serde_json::json!({
+                    "mode": "delta",
+                    "revision": 7,
+                    "updatedSessions": [expected_session],
+                    "removedSessionIds": [],
+                    "sessionOrder": ["child-session"],
+                }),
             ),
         );
     }
@@ -2131,6 +2273,8 @@ mod tests {
         source.web_states[0].later_until = None;
         source.web_states[0].is_today = false;
         source.sessions[0].status = SessionStatus::WaitingInput;
+        source.sessions[0].created_at =
+            Utc.timestamp_opt(700, 0).single().expect("valid timestamp");
         source.sessions[0].last_prompted_at =
             Some(Utc.timestamp_opt(900, 0).single().expect("valid timestamp"));
         source.sessions[0].crit_urls = vec!["http://127.0.0.1:6000".to_string()];
@@ -2187,7 +2331,7 @@ mod tests {
                 work_type: Some("release-guide"),
                 work_type_nav_labels: serde_json::json!({"release-guide": "Guides"}),
                 updated_at: "1970-01-01T00:16:40Z",
-                elapsed_seconds: 100,
+                elapsed_seconds: 200,
                 can_open_in_terminal: true,
             },
         );
@@ -2396,7 +2540,6 @@ mod tests {
             .find(|session| session["id"] == "child-session")
             .unwrap()
             .clone();
-        updated_child["preview"] = serde_json::json!("updated session preview");
         updated_child["elapsedSeconds"] = serde_json::json!(102);
         let mut fallback_child = updated_child.clone();
         fallback_child["elapsedSeconds"] = serde_json::json!(104);
@@ -2464,6 +2607,187 @@ mod tests {
                 }),
             ),
         );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn session_scoped_message_store_changes_update_only_the_affected_session(
+        mut source: TestSessionSource,
+    ) {
+        let sessions_dir = tempfile::tempdir().unwrap();
+        let mut sibling = source.sessions[0].clone();
+        sibling.session_id = "sibling-session".to_string();
+        source.sessions.push(sibling.clone());
+        source.all_sessions.push(sibling);
+        store::save_session_to(sessions_dir.path(), &source.sessions[0]).unwrap();
+        store::save_session_to(sessions_dir.path(), &source.sessions[1]).unwrap();
+        let initial_revision = store::session_store_revision_from(sessions_dir.path()).unwrap();
+        source.session_store_dir = Some(sessions_dir.path().to_path_buf());
+
+        let router = Router::new().nest("/api", router_with_source(source));
+        let (full_status, full) = sessions_request(&router, "/api/sessions").await;
+        let mut token = full["token"].as_str().unwrap().to_string();
+        let mut deltas = Vec::new();
+
+        macro_rules! record_delta {
+            () => {{
+                let (status, next_token, _, response) = session_delta(&router, &token).await;
+                token = next_token;
+                deltas.push((status, response));
+            }};
+        }
+
+        let session_id = "child-session";
+        let tool_input = serde_json::json!({"command": "fixture command"});
+        let permission_denial_seq = store::add_permission_denied_from(
+            sessions_dir.path(),
+            session_id,
+            Some("fixture-tool-use"),
+            "Bash",
+            &tool_input,
+            Some("fixture reason"),
+        )
+        .unwrap();
+        record_delta!();
+        store::resolve_permission_denied_from(
+            sessions_dir.path(),
+            session_id,
+            permission_denial_seq,
+            store::PermissionDeniedResolution::Approved,
+        )
+        .unwrap();
+        record_delta!();
+        store::add_permission_denied_from(
+            sessions_dir.path(),
+            session_id,
+            Some("fixture-unclassified-use"),
+            "Bash",
+            &tool_input,
+            None,
+        )
+        .unwrap();
+        record_delta!();
+        store::resolve_matching_unclassified_permission_denials_from(
+            sessions_dir.path(),
+            session_id,
+            "Bash",
+            &tool_input,
+            store::PermissionDeniedResolution::Dismissed,
+        )
+        .unwrap();
+        record_delta!();
+
+        let first_proposal_seq = store::add_agent_proposal_in(
+            sessions_dir.path(),
+            session_id,
+            r#"{"title":"fixture first proposal"}"#,
+        )
+        .unwrap();
+        record_delta!();
+        let second_proposal_seq = store::add_agent_proposal_in(
+            sessions_dir.path(),
+            session_id,
+            r#"{"title":"fixture second proposal"}"#,
+        )
+        .unwrap();
+        record_delta!();
+        store::edit_agent_proposal_from(
+            sessions_dir.path(),
+            session_id,
+            second_proposal_seq,
+            r#"{"title":"fixture edited proposal"}"#,
+        )
+        .unwrap();
+        record_delta!();
+        store::write_agent_proposal_answer_at_from(
+            sessions_dir.path(),
+            session_id,
+            second_proposal_seq,
+            "fixture answer",
+            Utc.timestamp_opt(1_100, 0).unwrap(),
+        )
+        .unwrap();
+        record_delta!();
+        store::resolve_agent_proposal_from(
+            sessions_dir.path(),
+            session_id,
+            first_proposal_seq,
+            Some("fixture comment"),
+        )
+        .unwrap();
+        record_delta!();
+
+        let todo_seq = store::add_agent_todo_in(
+            sessions_dir.path(),
+            session_id,
+            "fixture todo",
+            Some("fixture details"),
+            false,
+        )
+        .unwrap();
+        record_delta!();
+        store::edit_agent_todo_from(
+            sessions_dir.path(),
+            session_id,
+            todo_seq,
+            "fixture edited todo",
+            Some("fixture edited details"),
+            false,
+        )
+        .unwrap();
+        record_delta!();
+        store::set_agent_todo_folded_from(sessions_dir.path(), session_id, todo_seq, true).unwrap();
+        record_delta!();
+        store::resolve_agent_todo_from(
+            sessions_dir.path(),
+            session_id,
+            todo_seq,
+            store::TodoResolution::Completed,
+            Some("fixture completion"),
+        )
+        .unwrap();
+        record_delta!();
+
+        let (unchanged_status, _, _, unchanged_response) = session_delta(&router, &token).await;
+        deltas.push((unchanged_status, unchanged_response));
+
+        let updated_session = full["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|session| session["id"] == session_id)
+            .unwrap()
+            .clone();
+        let session_order = full["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|session| session["id"].clone())
+            .collect::<Vec<_>>();
+        let changed_delta = serde_json::json!({
+            "mode": "delta",
+            "revision": 0,
+            "updatedSessions": [updated_session],
+            "removedSessionIds": [],
+            "sessionOrder": session_order.clone(),
+        });
+        let unchanged_delta = serde_json::json!({
+            "mode": "delta",
+            "revision": initial_revision + 13,
+            "updatedSessions": [],
+            "removedSessionIds": [],
+            "sessionOrder": session_order,
+        });
+        let expected_deltas = (1..=13)
+            .map(|offset| {
+                let mut delta = changed_delta.clone();
+                delta["revision"] = serde_json::json!(initial_revision + offset);
+                (StatusCode::OK, delta)
+            })
+            .chain(std::iter::once((StatusCode::OK, unchanged_delta)))
+            .collect::<Vec<_>>();
+
+        assert_eq!((full_status, deltas), (StatusCode::OK, expected_deltas),);
     }
 
     #[rstest]
@@ -3483,7 +3807,7 @@ mod tests {
                             work_type: None,
                             work_type_nav_labels: serde_json::json!({}),
                             updated_at: "1970-01-01T00:16:41Z",
-                            elapsed_seconds: 99,
+                            elapsed_seconds: 100,
                             can_open_in_terminal: true,
                         },
                     ),

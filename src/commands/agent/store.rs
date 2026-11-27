@@ -18,6 +18,7 @@ mod archive;
 mod database;
 mod peer_out_messages;
 mod queued_prompts;
+mod todos;
 mod usage;
 
 pub(crate) use archive::{ArchiveLogContext, archive_codex_thread_before_delete_with};
@@ -29,11 +30,14 @@ pub(crate) use database::{
     AgentDecision, AgentDecisionCounts, AgentProposal, PermissionDeniedOperation,
     PermissionDeniedResolution, PermissionRequestData, PermissionRequestDecision,
     PermissionRequestResolution, PermissionRequestWait, PermissionRequestWaiter, SessionLock,
-    SessionStoreChanges, WakeLock, WatchWebPeerOutMessage, WatchWebQueuedAttachment,
-    WatchWebQueuedPrompt, WatchWebSessionState, permission_request_data,
+    SessionStoreChanges, WakeLock, WatchWebActionEventKind, WatchWebPeerOutMessage,
+    WatchWebQueuedAttachment, WatchWebQueuedPrompt, WatchWebSessionState, permission_request_data,
     resolve_permission_request, resolve_permission_request_with_answers, serialize_session,
 };
 pub(crate) use database::{AgentTodo, TodoResolution};
+pub(crate) use database::{
+    DeferredStop, clear_deferred_stop, record_deferred_stop, take_mature_deferred_stops,
+};
 pub(crate) use peer_out_messages::insert_watch_web_peer_out_message_from;
 pub(crate) use peer_out_messages::{
     insert_watch_web_peer_out_message, mark_watch_web_peer_out_message_delivered_from,
@@ -45,6 +49,7 @@ pub(crate) use queued_prompts::{
     mark_watch_web_queued_prompts_resolved_from, watch_web_queued_prompt_message_id_exists_from,
     watch_web_queued_prompts_from,
 };
+pub(crate) use todos::{resolve_agent_todo_at, resolve_agent_todo_from_at};
 pub(crate) use usage::{engine_quotas_from, record_usage_from, usage_snapshots_from};
 
 /// Threshold in seconds for sort stability.
@@ -70,6 +75,10 @@ pub fn crit_dir() -> Result<PathBuf> {
     cache::base_dir()
         .map(|d| d.join("cc").join("crit"))
         .ok_or_else(|| CcError::CacheDirNotFound.into())
+}
+
+pub(crate) fn lock_crit_port_from(sessions_dir: &Path, port: u16) -> Result<fs::File> {
+    database::lock_crit_port(sessions_dir, port)
 }
 
 /// Returns the file path for storing the last selected session ID.
@@ -138,6 +147,12 @@ pub(crate) fn load_session_from(sessions_dir: &Path, session_id: &str) -> Result
 /// Allows testing with temporary directories.
 pub(crate) fn save_session_to(sessions_dir: &Path, session: &Session) -> Result<()> {
     database::save_session(sessions_dir, session)
+}
+
+pub(crate) fn agent_response_timestamps_from(
+    sessions_dir: &Path,
+) -> Result<HashMap<String, DateTime<Utc>>> {
+    database::agent_response_timestamps(sessions_dir)
 }
 
 pub(crate) fn mark_pending_initial_prompt(session_id: &str) -> Result<()> {
@@ -490,6 +505,10 @@ pub(crate) fn list_all_sessions_from(sessions_dir: &Path) -> Result<Vec<Session>
     Ok(sessions)
 }
 
+pub(crate) fn all_session_rows_from(sessions_dir: &Path) -> Result<Vec<Session>> {
+    database::all_sessions(sessions_dir)
+}
+
 pub(crate) fn session_store_revision() -> Result<i64> {
     session_store_revision_from(&sessions_dir()?)
 }
@@ -508,6 +527,12 @@ pub(crate) fn closed_session_ids_from(sessions_dir: &Path) -> Result<HashSet<Str
 
 pub(crate) fn session_store_revision_from(sessions_dir: &Path) -> Result<i64> {
     database::session_store_revision(sessions_dir)
+}
+
+pub(crate) fn session_revisions_by_session_from(
+    sessions_dir: &Path,
+) -> Result<HashMap<String, i64>> {
+    database::session_revisions_by_session(sessions_dir)
 }
 
 pub(crate) fn add_permission_denied_from(
@@ -542,6 +567,22 @@ pub(crate) fn resolve_permission_denied_from(
     resolution: PermissionDeniedResolution,
 ) -> Result<bool> {
     database::resolve_permission_denied(sessions_dir, session_id, seq, resolution)
+}
+
+pub(crate) fn resolve_matching_unclassified_permission_denials_from(
+    sessions_dir: &Path,
+    session_id: &str,
+    tool_name: &str,
+    tool_input: &serde_json::Value,
+    resolution: PermissionDeniedResolution,
+) -> Result<usize> {
+    database::resolve_matching_unclassified_permission_denials(
+        sessions_dir,
+        session_id,
+        tool_name,
+        tool_input,
+        resolution,
+    )
 }
 
 pub(crate) fn insert_permission_retry_approval_from(
@@ -591,6 +632,15 @@ pub(crate) fn add_agent_proposal_in(
     database::add_agent_proposal(sessions_dir, session_id, body)
 }
 
+pub(crate) fn edit_agent_proposal_from(
+    sessions_dir: &Path,
+    session_id: &str,
+    seq: i64,
+    body: &str,
+) -> Result<bool> {
+    database::edit_agent_proposal(sessions_dir, session_id, seq, body)
+}
+
 pub(crate) fn unanswered_agent_proposal_bodies(
     session_ids: &[String],
 ) -> Result<Vec<(String, String)>> {
@@ -615,21 +665,23 @@ pub(crate) fn agent_proposals_from(
     database::agent_proposals(sessions_dir, session_id)
 }
 
-pub(crate) fn write_agent_proposal_answer(
+pub(crate) fn write_agent_proposal_answer_at(
     session_id: &str,
     seq: i64,
     answer: &str,
+    resolved_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<bool> {
-    write_agent_proposal_answer_from(&sessions_dir()?, session_id, seq, answer)
+    write_agent_proposal_answer_at_from(&sessions_dir()?, session_id, seq, answer, resolved_at)
 }
 
-pub(crate) fn write_agent_proposal_answer_from(
+pub(crate) fn write_agent_proposal_answer_at_from(
     sessions_dir: &Path,
     session_id: &str,
     seq: i64,
     answer: &str,
+    resolved_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<bool> {
-    database::write_agent_proposal_answer(sessions_dir, session_id, seq, answer)
+    database::write_agent_proposal_answer_at(sessions_dir, session_id, seq, answer, resolved_at)
 }
 
 pub(crate) fn resolve_agent_proposal_from(
@@ -659,20 +711,23 @@ pub(crate) fn add_agent_todo_in(
     database::add_agent_todo(sessions_dir, session_id, title, detail, folded)
 }
 
+pub(crate) fn edit_agent_todo_from(
+    sessions_dir: &Path,
+    session_id: &str,
+    seq: i64,
+    title: &str,
+    detail: Option<&str>,
+    folded: bool,
+) -> Result<bool> {
+    database::edit_agent_todo(sessions_dir, session_id, seq, title, detail, folded)
+}
+
 pub(crate) fn agent_todos_from(sessions_dir: &Path, session_id: &str) -> Result<Vec<AgentTodo>> {
     database::agent_todos(sessions_dir, session_id)
 }
 
 pub(crate) fn agent_todos(session_id: &str) -> Result<Vec<AgentTodo>> {
     agent_todos_from(&sessions_dir()?, session_id)
-}
-
-pub(crate) fn insert_agent_files_from(
-    sessions_dir: &Path,
-    session_id: &str,
-    files: &[AgentFile],
-) -> Result<()> {
-    database::insert_agent_files(sessions_dir, session_id, files)
 }
 
 pub(crate) fn agent_files_from(sessions_dir: &Path, session_id: &str) -> Result<Vec<AgentFile>> {
@@ -726,15 +781,6 @@ pub(crate) fn lock_agent_todo_resolution(
     session_id: &str,
 ) -> Result<std::fs::File> {
     database::lock_agent_todo_resolution(sessions_dir, session_id)
-}
-
-pub(crate) fn resolve_agent_todo(
-    session_id: &str,
-    seq: i64,
-    resolution: TodoResolution,
-    comment: Option<&str>,
-) -> Result<bool> {
-    resolve_agent_todo_from(&sessions_dir()?, session_id, seq, resolution, comment)
 }
 
 pub(crate) fn watch_web_session_states_from(
@@ -936,7 +982,7 @@ mod tests {
     use crate::commands::agent::types::SessionStatus;
     use chrono::{TimeDelta, TimeZone, Utc};
     use rstest::{fixture, rstest};
-    use rusqlite::OptionalExtension;
+    use rusqlite::{Connection, OptionalExtension};
     use std::fs::OpenOptions;
     use tempfile::TempDir;
 
@@ -986,6 +1032,24 @@ mod tests {
             temp_dir,
             sessions_path,
         }
+    }
+
+    fn copy_initialized_database_for_legacy_import(
+        temp_session_dir: &TempSessionDir,
+        copy_name: &str,
+    ) -> PathBuf {
+        let source_path = temp_session_dir.sessions_path.join("sessions.db");
+        let connection = Connection::open(&source_path).expect("source database should open");
+        connection
+            .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+            .expect("source database should checkpoint");
+        drop(connection);
+
+        let sessions_dir = temp_session_dir.temp_dir.path().join(copy_name);
+        fs::create_dir_all(&sessions_dir).expect("copy directory should exist");
+        fs::copy(source_path, sessions_dir.join("sessions.db"))
+            .expect("initialized database should copy");
+        sessions_dir
     }
 
     fn create_test_session(id: &str) -> Session {
@@ -1216,32 +1280,35 @@ mod tests {
         stored.updated_at = newer_at;
         stored.label = Some("stored value".to_string());
         save_session_to(&temp_session_dir.sessions_path, &stored).expect("stored row should save");
+        let older_sessions_dir =
+            copy_initialized_database_for_legacy_import(&temp_session_dir, "older-import");
+        let newer_sessions_dir =
+            copy_initialized_database_for_legacy_import(&temp_session_dir, "newer-import");
 
         let mut legacy = stored.clone();
         legacy.updated_at = older_at;
         legacy.label = Some("older JSON value".to_string());
-        let json_path = temp_session_dir.sessions_path.join("updated-target.json");
+        let older_json_path = older_sessions_dir.join("updated-target.json");
         fs::write(
-            &json_path,
+            &older_json_path,
             serde_json::to_vec(&legacy).expect("legacy session should serialize"),
         )
         .expect("legacy session should write");
-        let after_older_import =
-            load_session_from(&temp_session_dir.sessions_path, "updated-target")
-                .expect("older legacy import should succeed")
-                .expect("stored row should remain");
+        let after_older_import = load_session_from(&older_sessions_dir, "updated-target")
+            .expect("older legacy import should succeed")
+            .expect("stored row should remain");
 
         legacy.updated_at = newer_at + TimeDelta::hours(1);
         legacy.label = Some("newer JSON value".to_string());
+        let newer_json_path = newer_sessions_dir.join("updated-target.json");
         fs::write(
-            &json_path,
+            &newer_json_path,
             serde_json::to_vec(&legacy).expect("newer legacy session should serialize"),
         )
         .expect("newer legacy session should write");
-        let after_newer_import =
-            load_session_from(&temp_session_dir.sessions_path, "updated-target")
-                .expect("newer legacy import should succeed")
-                .expect("newer row should load");
+        let after_newer_import = load_session_from(&newer_sessions_dir, "updated-target")
+            .expect("newer legacy import should succeed")
+            .expect("newer row should load");
 
         assert_eq!(
             (
@@ -1274,23 +1341,24 @@ mod tests {
             .expect("timestamp should be valid");
         stored.ancestor_session_ids = vec!["ancestor-session".to_string()];
         save_session_to(&temp_session_dir.sessions_path, &stored).expect("stored row should save");
+        let sessions_dir =
+            copy_initialized_database_for_legacy_import(&temp_session_dir, "recreated-import");
 
         let mut recreated = stored.clone();
         recreated.created_at += TimeDelta::minutes(1);
         recreated.updated_at += TimeDelta::minutes(1);
         recreated.ancestor_session_ids.clear();
-        let json_path = temp_session_dir.sessions_path.join("recreated-target.json");
+        let json_path = sessions_dir.join("recreated-target.json");
         fs::write(
             &json_path,
             serde_json::to_vec(&recreated).expect("recreated session should serialize"),
         )
         .expect("recreated legacy session should write");
 
-        let imported = load_session_from(&temp_session_dir.sessions_path, "recreated-target")
+        let imported = load_session_from(&sessions_dir, "recreated-target")
             .expect("legacy import should succeed")
             .expect("stored row should remain");
-        let backup_path = temp_session_dir
-            .sessions_path
+        let backup_path = sessions_dir
             .join("legacy-json")
             .join("recreated-target.json");
         let actual = (
@@ -1313,28 +1381,30 @@ mod tests {
 
     #[rstest::rstest]
     fn removes_legacy_backup_after_thirty_days(temp_session_dir: TempSessionDir) {
-        let session = create_test_session("retained-legacy");
-        let json_path = temp_session_dir.sessions_path.join("retained-legacy.json");
-        fs::write(
-            &json_path,
-            serde_json::to_vec(&session).expect("legacy session should serialize"),
+        save_session_to(
+            &temp_session_dir.sessions_path,
+            &create_test_session("retained-legacy"),
         )
-        .expect("legacy session should write");
-        load_session_from(&temp_session_dir.sessions_path, "retained-legacy")
-            .expect("legacy import should succeed");
-        let backup_dir = temp_session_dir.sessions_path.join("legacy-json");
-        let connection =
-            rusqlite::Connection::open(temp_session_dir.sessions_path.join("sessions.db"))
+        .expect("session should save");
+        let source_connection =
+            Connection::open(temp_session_dir.sessions_path.join("sessions.db"))
                 .expect("database should open");
-        connection
+        source_connection
             .execute(
-                "UPDATE session_store_meta SET value = ?1 WHERE key = 'legacy-imported-at'",
+                "INSERT INTO session_store_meta (key, value) VALUES ('legacy-imported-at', ?1)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                 [(Utc::now() - TimeDelta::days(31)).to_rfc3339()],
             )
             .expect("legacy import time should update");
-        drop(connection);
+        drop(source_connection);
+        let sessions_dir =
+            copy_initialized_database_for_legacy_import(&temp_session_dir, "expired-backup");
+        let backup_dir = sessions_dir.join("legacy-json");
+        fs::create_dir_all(&backup_dir).expect("legacy backup directory should exist");
+        fs::write(backup_dir.join("retained-legacy.json"), "fixture backup")
+            .expect("legacy backup should write");
 
-        list_all_sessions_from(&temp_session_dir.sessions_path)
+        list_all_sessions_from(&sessions_dir)
             .expect("opening the database should clean expired backups");
 
         assert!(!backup_dir.exists());
@@ -1344,13 +1414,14 @@ mod tests {
     fn late_legacy_import_refreshes_backup_retention(temp_session_dir: TempSessionDir) {
         let initial = create_test_session("existing-row");
         save_session_to(&temp_session_dir.sessions_path, &initial).expect("row should save");
-        let backup_dir = temp_session_dir.sessions_path.join("legacy-json");
+        let sessions_dir =
+            copy_initialized_database_for_legacy_import(&temp_session_dir, "late-import");
+        let backup_dir = sessions_dir.join("legacy-json");
         fs::create_dir_all(&backup_dir).expect("legacy backup directory should exist");
         let earlier_backup = backup_dir.join("earlier-import.json");
         fs::write(&earlier_backup, "retained backup").expect("earlier backup should write");
         let connection =
-            rusqlite::Connection::open(temp_session_dir.sessions_path.join("sessions.db"))
-                .expect("database should open");
+            Connection::open(sessions_dir.join("sessions.db")).expect("database should open");
         connection
             .execute(
                 "INSERT INTO session_store_meta (key, value) VALUES ('legacy-imported-at', ?1)
@@ -1361,13 +1432,13 @@ mod tests {
         drop(connection);
 
         let late_session = create_test_session("late-import");
-        let late_json = temp_session_dir.sessions_path.join("late-import.json");
+        let late_json = sessions_dir.join("late-import.json");
         fs::write(
             &late_json,
             serde_json::to_vec(&late_session).expect("legacy session should serialize"),
         )
         .expect("late legacy session should write");
-        let loaded = load_session_from(&temp_session_dir.sessions_path, "late-import")
+        let loaded = load_session_from(&sessions_dir, "late-import")
             .expect("late legacy import should succeed")
             .expect("late session should load");
 
@@ -1525,7 +1596,10 @@ mod tests {
 
     #[rstest::rstest]
     fn legacy_import_skips_undecodable_database_rows(undecodable_session: UndecodableSession) {
-        let sessions_dir = &undecodable_session.temp_session_dir.sessions_path;
+        let sessions_dir = copy_initialized_database_for_legacy_import(
+            &undecodable_session.temp_session_dir,
+            "undecodable-import",
+        );
         let legacy_json = sessions_dir.join(format!("{UNDECODABLE_SESSION_ID}.json"));
         fs::write(
             &legacy_json,
@@ -1542,7 +1616,7 @@ mod tests {
         )
         .expect("legacy session should write");
 
-        let connection = database::open_connection(sessions_dir)
+        let connection = database::open_connection(&sessions_dir)
             .expect("database should open when legacy data conflicts with an undecodable row");
         let stored_data = connection
             .query_row(
@@ -2311,9 +2385,26 @@ mod tests {
                 size: b"fixture bytes".len() as i64,
                 created_at: now,
             };
-            insert_agent_files_from(&temp_session_dir.sessions_path, session_id, &[file])
+            Connection::open(temp_session_dir.sessions_path.join("sessions.db"))
+                .expect("session database should open")
+                .execute(
+                    "INSERT INTO agent_file (session_id, id, position, name, caption, mime_type, size, created_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    rusqlite::params![
+                        session_id,
+                        file.id,
+                        file.position,
+                        file.name,
+                        file.caption,
+                        file.mime_type,
+                        file.size,
+                        file.created_at.to_rfc3339(),
+                    ],
+                )
                 .expect("attachment record should be inserted");
 
+            let stored_files = agent_files_from(&temp_session_dir.sessions_path, session_id)
+                .expect("file records should load");
             let removed = archive::cleanup_stale_sessions_in_with_archive_at_and_storage(
                 &temp_session_dir.sessions_path,
                 Some(&storage_root),
@@ -2333,9 +2424,10 @@ mod tests {
                         .expect("session record should resolve")
                         .is_stored(),
                     session_storage.exists(),
+                    stored_files,
                     remaining_files,
                 ),
-                (true, false, false, Vec::new()),
+                (true, false, false, vec![file], Vec::new()),
             );
         }
 

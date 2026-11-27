@@ -70,13 +70,13 @@ export const LikelyToExceedLimit: Story = {
   },
 }
 
-export const WindowHasElapsedLessThanFivePercent: Story = {
-  name: 'No projection appears before 5% of the window has elapsed',
+export const WindowHasJustStarted: Story = {
+  name: 'The projection appears just after the window starts',
   args: {
     usedPercentage: 3,
     window: {
       usedPercentage: 3,
-      resetsAt: nowSeconds + 17_136,
+      resetsAt: nowSeconds + 17_999,
       windowSeconds: 18_000,
     },
   },

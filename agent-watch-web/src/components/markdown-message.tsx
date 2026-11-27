@@ -26,35 +26,28 @@ import {
   MarkdownComponentContext,
   type MarkdownComponentContextValue,
 } from '#components/markdown-component-context'
+import { MarkdownDetails } from '#components/markdown-details'
+import {
+  displayMarkdownImagePath,
+  getMappedImageSource,
+  isUnmappedLocalImagePath,
+} from '#components/markdown-image-source'
+import type {
+  MarkdownFile,
+  MarkdownNode,
+  MarkdownRoot,
+} from '#components/markdown-message-types'
 import { useMarkdownSessionLinks } from '#components/markdown-session-links'
+import { remarkMarkdownDetails } from '#components/remark-markdown-details'
 import { SessionLink } from '#components/session-link'
 import {
   SyntaxCodeBlock,
   type SyntaxCodeBlockLink,
 } from '#components/syntax-code-block'
+import { unwrapTaggedMessage } from '#components/unwrap-tagged-message'
 import type { SessionLinkTarget } from '#types'
 
 export { MarkdownSessionLinksProvider } from '#components/markdown-session-links'
-
-type MarkdownNode = {
-  children?: MarkdownNode[]
-  position?: {
-    start: { offset?: number }
-    end: { offset?: number }
-  }
-  tagName?: string
-  type: string
-  url?: string
-  value?: string
-}
-
-type MarkdownRoot = MarkdownNode & {
-  children: MarkdownNode[]
-}
-
-type MarkdownFile = {
-  value: string | Uint8Array
-}
 
 const CodeBlockContext = createContext(false)
 
@@ -216,6 +209,7 @@ function remarkTrimNonAsciiAutolinks() {
 type MarkdownMessageProps = {
   children: string
   className?: string
+  imageSources?: Readonly<Record<string, string | null>>
   inline?: boolean
   mobile?: boolean
   sessionId?: string
@@ -246,17 +240,6 @@ function blockBangCommands(code: string): string[] {
     const command = line.startsWith('! ') ? line.slice(2).trim() : ''
     return command.length === 0 ? [] : [command]
   })
-}
-
-function unwrapTaggedMessage(value: string): string {
-  const match = value
-    .trim()
-    .match(/^<([A-Za-z_][A-Za-z0-9._:-]*)>\r?\n?([\s\S]*?)\r?\n?<\/\1>$/)
-  const tag = match?.[1]
-  const body = match?.[2]
-  return tag === undefined || body === undefined
-    ? value
-    : `## ${tag}\n\n${body.trim()}`
 }
 
 const MarkdownCode: NonNullable<Components['code']> = ({ node, ...props }) => {
@@ -380,10 +363,26 @@ const MarkdownParagraph: NonNullable<Components['p']> = ({ children }) => (
   <span>{children}</span>
 )
 
-const MarkdownImage: NonNullable<Components['img']> = ({ src, alt, title }) =>
-  src === undefined || src === '' ? null : (
+const MarkdownImage: NonNullable<Components['img']> = ({ src, alt, title }) => {
+  const { imageSources } = useContext(MarkdownComponentContext)
+  if (src === undefined || src === '') return null
+  const mappedImage = getMappedImageSource(src, imageSources)
+  if (
+    mappedImage?.source === null ||
+    (mappedImage === undefined &&
+      imageSources !== undefined &&
+      isUnmappedLocalImagePath(src))
+  ) {
+    return (
+      <span className="markdown-image-unavailable">
+        表示できません: {mappedImage?.path ?? displayMarkdownImagePath(src)}
+      </span>
+    )
+  }
+
+  return (
     <ImageLightbox
-      src={src}
+      src={mappedImage?.source ?? src}
       alt={alt ?? ''}
       {...(title === undefined ? {} : { title })}
       loading="lazy"
@@ -391,10 +390,12 @@ const MarkdownImage: NonNullable<Components['img']> = ({ src, alt, title }) =>
       imageClassName="chat-user-image"
     />
   )
+}
 
 const markdownComponents: Components = {
   a: MarkdownAnchor,
   code: MarkdownCode,
+  details: MarkdownDetails,
   img: MarkdownImage,
   pre: MarkdownPre,
 }
@@ -408,6 +409,7 @@ const inlineMarkdownComponents: Components = {
 export const MarkdownMessage = memo(function MarkdownMessage({
   children,
   className,
+  imageSources,
   inline = false,
   mobile = false,
   sessionId,
@@ -434,6 +436,7 @@ export const MarkdownMessage = memo(function MarkdownMessage({
   const componentContext: MarkdownComponentContextValue = {
     sessionsById,
     webUis: sessionLinks.webUis ?? [],
+    ...(imageSources === undefined ? {} : { imageSources }),
     mobile,
     ...(sessionLinks.onSelectSession === undefined
       ? {}
@@ -463,6 +466,7 @@ export const MarkdownMessage = memo(function MarkdownMessage({
         components={inline ? inlineMarkdownComponents : markdownComponents}
         remarkPlugins={[
           remarkGfm,
+          remarkMarkdownDetails,
           remarkHtmlBreaks,
           () => remarkLinkSessionIds(sessionsById),
           remarkTrimNonAsciiAutolinks,

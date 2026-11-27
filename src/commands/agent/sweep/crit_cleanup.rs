@@ -1,13 +1,12 @@
 use std::collections::HashSet;
-use std::fs;
 use std::net::{SocketAddr, TcpStream};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
-use serde::Deserialize;
+use anyhow::Result;
 
 use super::super::crit;
+use super::super::crit::daemon_registry::{crit_sessions_dir, read_live_crit_ports};
 use super::super::store;
 
 pub(super) fn clear_stale_links(sessions_dir: &Path, dry_run: bool) -> Result<usize> {
@@ -162,54 +161,6 @@ fn is_stale_web_ui(
     }
 }
 
-#[derive(Deserialize)]
-struct CritDaemonSession {
-    pid: u32,
-    port: u16,
-}
-
-fn crit_sessions_dir() -> Result<PathBuf> {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .map(|home| home.join(".crit/sessions"))
-        .context("HOME is not set while locating crit daemon sessions")
-}
-
-fn read_live_crit_ports(
-    sessions_dir: &Path,
-    mut is_process_alive: impl FnMut(u32) -> bool,
-) -> Result<HashSet<u16>> {
-    let entries = match fs::read_dir(sessions_dir) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(HashSet::new()),
-        Err(error) => {
-            return Err(error)
-                .with_context(|| format!("failed to read {}", sessions_dir.display()));
-        }
-    };
-
-    let mut live_ports = HashSet::new();
-    for entry in entries {
-        let entry = entry.with_context(|| format!("failed to read {}", sessions_dir.display()))?;
-        if entry
-            .path()
-            .extension()
-            .is_none_or(|extension| extension != "json")
-        {
-            continue;
-        }
-        let path = entry.path();
-        let contents = fs::read_to_string(&path)
-            .with_context(|| format!("failed to read crit daemon session {}", path.display()))?;
-        let session: CritDaemonSession = serde_json::from_str(&contents)
-            .with_context(|| format!("failed to parse crit daemon session {}", path.display()))?;
-        if is_process_alive(session.pid) {
-            live_ports.insert(session.port);
-        }
-    }
-    Ok(live_ports)
-}
-
 fn local_crit_address(url: &str) -> Option<SocketAddr> {
     let port = crit::crit_port_from_url(url).ok()?;
     let host = reqwest::Url::parse(url).ok()?.host_str()?.to_string();
@@ -286,7 +237,8 @@ mod tests {
     fn write_crit_daemon_session(dir: &Path, name: &str, pid: u32, port: u16) {
         fs::write(
             dir.join(name),
-            serde_json::json!({ "pid": pid, "port": port }).to_string(),
+            serde_json::json!({ "pid": pid, "port": port, "cwd": "/tmp/fixture-worktree" })
+                .to_string(),
         )
         .expect("crit daemon session should be written");
     }

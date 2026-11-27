@@ -3,7 +3,7 @@ import '#components/message-composer.css'
 import { Button } from '@fohte/ui/button'
 import { ArrowUp, CircleStop } from 'lucide-react'
 import type { ClipboardEvent, KeyboardEvent, SubmitEvent } from 'react'
-import { useLayoutEffect } from 'react'
+import { useLayoutEffect, useRef } from 'react'
 
 import {
   type AttachmentPreview,
@@ -67,11 +67,23 @@ export function MessageComposer({
   onSend,
   onInterrupt,
 }: MessageComposerProps) {
+  const isComposingRef = useRef(false)
+  const discardCompositionDraftRef = useRef(false)
+  const discardNextCompositionChangeRef = useRef<string | null>(null)
+  const handleDraftChange = (value: string) => {
+    if (discardCompositionDraftRef.current) return
+    if (discardNextCompositionChangeRef.current !== null) {
+      const discardedDraft = discardNextCompositionChangeRef.current
+      discardNextCompositionChangeRef.current = null
+      if (value === discardedDraft) return
+    }
+    onDraftChange(value)
+  }
   const skillCompletion = useSkillCompletion({
     draft,
     engine,
     skills,
-    onDraftChange,
+    onDraftChange: handleDraftChange,
     onKeyDown,
   })
   useDismissableLayer(skillCompletion.isOpen, skillCompletion.dismiss, [
@@ -115,6 +127,10 @@ export function MessageComposer({
 
   const handleSubmit = (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault()
+    if (isComposingRef.current) {
+      discardCompositionDraftRef.current = true
+      discardNextCompositionChangeRef.current = draft
+    }
     onSend()
   }
 
@@ -136,6 +152,14 @@ export function MessageComposer({
         placeholder={placeholder}
         value={draft}
         onChange={skillCompletion.handleChange}
+        onCompositionStart={() => {
+          isComposingRef.current = true
+          discardNextCompositionChangeRef.current = null
+        }}
+        onCompositionEnd={() => {
+          isComposingRef.current = false
+          discardCompositionDraftRef.current = false
+        }}
         onSelect={skillCompletion.handleSelect}
         onKeyDown={skillCompletion.handleKeyDown}
         onPaste={handlePaste}

@@ -519,11 +519,12 @@ mod tests {
             "{\"title\":\"An answered choice\"}",
         )
         .expect("answered proposal should be recorded");
-        store::write_agent_proposal_answer_from(
+        store::write_agent_proposal_answer_at_from(
             sessions_dir.path(),
             &session.session_id,
             answered_proposal,
             "Selected an option.",
+            chrono::Utc::now(),
         )
         .expect("proposal should be answered");
         store::add_agent_proposal_in(

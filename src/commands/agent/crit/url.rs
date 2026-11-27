@@ -12,7 +12,7 @@ pub(in crate::commands::agent) fn local_crit_ip(host: &str) -> Option<IpAddr> {
         .and_then(|host| host.strip_suffix(']'))
         .unwrap_or(host);
     match host.parse::<IpAddr>().ok()? {
-        IpAddr::V4(address) if address.is_loopback() => Some(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+        IpAddr::V4(address) if address.is_loopback() => Some(IpAddr::V4(address)),
         IpAddr::V6(address) if address.is_loopback() => Some(IpAddr::V6(address)),
         _ => None,
     }
@@ -68,8 +68,19 @@ pub(super) fn parse_port(url: &str) -> Result<u16> {
 
 #[cfg(test)]
 mod tests {
-    use super::add_url;
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+    use super::{add_url, local_crit_ip};
     use rstest::rstest;
+
+    #[rstest]
+    #[case::localhost("localhost", Some(IpAddr::V4(Ipv4Addr::LOCALHOST)))]
+    #[case::alternate_ipv4_loopback("127.0.0.2", Some(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2))))]
+    #[case::ipv6_loopback("::1", Some(IpAddr::V6(Ipv6Addr::LOCALHOST)))]
+    #[case::non_loopback("192.0.2.1", None)]
+    fn resolves_local_crit_ip(#[case] host: &str, #[case] expected: Option<IpAddr>) {
+        assert_eq!(local_crit_ip(host), expected);
+    }
 
     #[rstest]
     #[case::root_url_keeps_same_origin_pathful_url(

@@ -2,10 +2,10 @@ use std::fs::File;
 use std::path::Path;
 
 use super::resolution_lock::lock_resolution_file;
-use super::{increment_revision, open_connection, validate_session_id};
+use super::{bump_session_revision, open_connection, validate_session_id};
 use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, Utc};
-use rusqlite::{TransactionBehavior, params, params_from_iter};
+use rusqlite::{Connection, TransactionBehavior, params, params_from_iter};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,6 +57,17 @@ pub(crate) fn lock_agent_todo_resolution(sessions_dir: &Path, session_id: &str) 
     lock_resolution_file(sessions_dir, "todo-resolution-locks", session_id)
 }
 
+pub(crate) fn has_incomplete_todos(connection: &Connection, session_id: &str) -> Result<bool> {
+    Ok(connection.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM agent_todo
+            WHERE session_id = ?1 AND completed_at IS NULL
+        )",
+        [session_id],
+        |row| row.get(0),
+    )?)
+}
+
 pub(crate) fn add_agent_todo(
     sessions_dir: &Path,
     session_id: &str,
@@ -86,9 +97,32 @@ pub(crate) fn add_agent_todo(
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
         params![session_id, seq, title, detail, now, folded],
     )?;
-    increment_revision(&transaction)?;
+    bump_session_revision(&transaction, session_id)?;
     transaction.commit()?;
     Ok(seq)
+}
+
+pub(crate) fn edit_agent_todo(
+    sessions_dir: &Path,
+    session_id: &str,
+    seq: i64,
+    title: &str,
+    detail: Option<&str>,
+    folded: bool,
+) -> Result<bool> {
+    validate_session_id(session_id)?;
+    let mut connection = open_connection(sessions_dir)?;
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let changed = transaction.execute(
+        "UPDATE agent_todo SET title = ?1, detail = ?2, folded = ?3
+         WHERE session_id = ?4 AND seq = ?5 AND completed_at IS NULL",
+        params![title, detail, folded, session_id, seq],
+    )?;
+    if changed > 0 {
+        bump_session_revision(&transaction, session_id)?;
+    }
+    transaction.commit()?;
+    Ok(changed > 0)
 }
 
 pub(crate) fn agent_todos(sessions_dir: &Path, session_id: &str) -> Result<Vec<AgentTodo>> {
@@ -200,7 +234,7 @@ pub(crate) fn set_agent_todo_folded(
         params![folded, session_id, seq],
     )?;
     if changed > 0 {
-        increment_revision(&transaction)?;
+        bump_session_revision(&transaction, session_id)?;
     }
     transaction.commit()?;
     Ok(pending)
@@ -213,6 +247,24 @@ pub(crate) fn resolve_agent_todo(
     resolution: TodoResolution,
     comment: Option<&str>,
 ) -> Result<bool> {
+    resolve_agent_todo_at(
+        sessions_dir,
+        session_id,
+        seq,
+        resolution,
+        comment,
+        Utc::now(),
+    )
+}
+
+pub(crate) fn resolve_agent_todo_at(
+    sessions_dir: &Path,
+    session_id: &str,
+    seq: i64,
+    resolution: TodoResolution,
+    comment: Option<&str>,
+    completed_at: DateTime<Utc>,
+) -> Result<bool> {
     validate_session_id(session_id)?;
     let mut connection = open_connection(sessions_dir)?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -220,7 +272,7 @@ pub(crate) fn resolve_agent_todo(
         "UPDATE agent_todo SET completed_at = ?1, resolution = ?2, comment = ?3
          WHERE session_id = ?4 AND seq = ?5 AND completed_at IS NULL",
         params![
-            Utc::now().to_rfc3339(),
+            completed_at.to_rfc3339(),
             resolution.as_str(),
             comment,
             session_id,
@@ -228,7 +280,7 @@ pub(crate) fn resolve_agent_todo(
         ],
     )?;
     if changed > 0 {
-        increment_revision(&transaction)?;
+        bump_session_revision(&transaction, session_id)?;
     }
     transaction.commit()?;
     Ok(changed > 0)
@@ -246,7 +298,8 @@ mod tests {
 
     use super::{
         AgentTodo, TodoResolution, add_agent_todo, agent_todos, incomplete_agent_todo_titles,
-        lock_agent_todo_resolution, open_connection, resolve_agent_todo, set_agent_todo_folded,
+        lock_agent_todo_resolution, open_connection, resolve_agent_todo, resolve_agent_todo_at,
+        set_agent_todo_folded,
     };
     use crate::commands::agent::store::session_store_revision_from;
 
@@ -423,6 +476,55 @@ mod tests {
                     ("session-b".to_string(), "Other".to_string(), true),
                 ],
             ),
+        );
+    }
+
+    #[rstest]
+    fn stores_the_completion_time_supplied_by_the_watch_web_action(sessions_dir: TempDir) {
+        create_session(sessions_dir.path(), "session-a");
+        let seq = add_agent_todo(sessions_dir.path(), "session-a", "First", None, false)
+            .expect("todo should save");
+        let completed_at = Utc
+            .with_ymd_and_hms(2026, 1, 2, 3, 4, 5)
+            .single()
+            .expect("fixture time should be valid");
+        resolve_agent_todo_at(
+            sessions_dir.path(),
+            "session-a",
+            seq,
+            TodoResolution::Completed,
+            None,
+            completed_at,
+        )
+        .expect("todo should complete");
+
+        let epoch = Utc
+            .timestamp_opt(0, 0)
+            .single()
+            .expect("epoch should be valid");
+        let todo = agent_todos(sessions_dir.path(), "session-a")
+            .expect("todo should load")
+            .into_iter()
+            .map(|todo| AgentTodo {
+                created_at: epoch,
+                ..todo
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            todo,
+            vec![AgentTodo {
+                session_id: "session-a".to_string(),
+                seq,
+                title: "First".to_string(),
+                detail: None,
+                folded: false,
+                added_folded: false,
+                created_at: epoch,
+                completed_at: Some(completed_at),
+                resolution: Some(TodoResolution::Completed),
+                comment: None,
+            }],
         );
     }
 

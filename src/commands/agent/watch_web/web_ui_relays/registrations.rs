@@ -7,6 +7,8 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use super::RetryBackoff;
+
 use super::{HookRunner, Relay, RelayKey};
 
 const RELAY_REGISTRATIONS_FILE: &str = "web_ui_relays.state";
@@ -78,11 +80,16 @@ pub(super) async fn unexpose_registration(
 pub(super) async fn expose_and_record_registration(
     sessions_dir: &Path,
     hook_runner: Arc<HookRunner>,
+    backoff: &mut RetryBackoff,
     key: &RelayKey,
     relay: &mut Relay,
 ) {
     let should_rollback_on_save_failure = !relay.exposed;
     if !relay.exposed {
+        let registration = RelayRegistration::from_relay(key, relay);
+        if !backoff.should_attempt(&registration, std::time::Instant::now()) {
+            return;
+        }
         match super::invoke_hook(
             hook_runner.clone(),
             "web-ui-expose",
@@ -94,10 +101,12 @@ pub(super) async fn expose_and_record_registration(
         .await
         {
             Ok(exposed_url) => {
+                backoff.remove(&registration);
                 relay.exposed = true;
                 relay.exposed_url = exposed_url.and_then(super::valid_exposed_url);
             }
             Err(error) => {
+                backoff.record_failure(registration, std::time::Instant::now());
                 tracing::warn!(
                     session = %key.session_id,
                     web_ui = %key.name,

@@ -41,6 +41,7 @@ pub(super) fn metadata(session_ids: HashSet<String>) -> SessionTaskMetadata {
         priorities: HashMap::new(),
         priority_order: HashMap::new(),
         task_projects: HashMap::new(),
+        project_names: HashMap::new(),
         github_links: HashMap::new(),
     }
 }
@@ -117,7 +118,15 @@ pub(super) fn session_with_branch_name(session_id: &str, branch: &str) -> Sessio
 }
 
 pub(super) async fn wait_for_refresh(receiver: &mut tokio::sync::watch::Receiver<()>) {
-    tokio::time::timeout(Duration::from_secs(1), receiver.changed())
+    wait_for_refresh_with_timeout(receiver, Duration::from_secs(1)).await;
+}
+
+pub(super) async fn wait_for_refresh_with_timeout(
+    receiver: &mut tokio::sync::watch::Receiver<()>,
+    timeout: Duration,
+) {
+    tokio::task::yield_now().await;
+    tokio::time::timeout(timeout, receiver.changed())
         .await
         .unwrap()
         .unwrap();

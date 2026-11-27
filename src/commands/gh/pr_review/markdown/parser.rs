@@ -285,7 +285,15 @@ fn parse_threads(body: &str) -> Result<Vec<ParsedThread>, PrReviewError> {
     for (index, marker_start) in thread_starts.iter().enumerate() {
         let part_start = marker_start + thread_marker.len();
         let part_end = thread_starts.get(index + 1).copied().unwrap_or(body.len());
-        threads.push(parse_single_thread(&body[part_start..part_end])?);
+        let part = &body[part_start..part_end];
+        let part = if index + 1 < thread_starts.len() {
+            part.strip_suffix("\r\n")
+                .or_else(|| part.strip_suffix('\n'))
+                .unwrap_or(part)
+        } else {
+            part
+        };
+        threads.push(parse_single_thread(part)?);
     }
 
     Ok(threads)
@@ -361,13 +369,17 @@ fn extract_draft_reply(content: &str) -> Option<String> {
     // Find the last occurrence of <!-- /comment -->
     let last_comment_end = content.rfind("<!-- /comment -->")?;
     let after = &content[last_comment_end + "<!-- /comment -->".len()..];
-    let after_last_comment = after.strip_prefix('\n').unwrap_or(after);
+    let after_last_comment = after
+        .strip_prefix("\r\n")
+        .or_else(|| after.strip_prefix('\n'))
+        .unwrap_or(after);
 
-    // Check if there's another thread starting (should not happen within a single thread part)
-    // The draft is everything after the last /comment, trimmed
-    let draft = after_last_comment.trim();
+    let draft = after_last_comment
+        .strip_suffix("\r\n")
+        .or_else(|| after_last_comment.strip_suffix('\n'))
+        .unwrap_or(after_last_comment);
 
-    if draft.is_empty() {
+    if draft.trim().is_empty() {
         None
     } else {
         Some(draft.to_string())
@@ -440,6 +452,47 @@ mod tests {
         assert_eq!(
             thread.draft_reply,
             Some("This is my draft reply.".to_string())
+        );
+    }
+
+    #[rstest]
+    fn test_parse_preserves_trailing_whitespace_in_draft_reply() {
+        let newline = char::from(10).to_string();
+        let reply = ["Keep both lines.", "Second line. "].join(&newline);
+        let content = formatdoc! {r#"
+            ---
+            pr: 42
+            repo: "example/project"
+            pulled_at: "2024-01-15T10:00:00Z"
+            ---
+
+            <!-- thread: RT_abc123 path: src/main.rs:42 -->
+            - [ ] resolve
+            <!-- comment: @reviewer 2024-01-15T10:30:00Z -->
+            Review comment
+            <!-- /comment -->
+            {reply}
+
+        "#};
+
+        assert_eq!(
+            MarkdownParser::parse(&content).unwrap(),
+            ParsedThreadsFile {
+                frontmatter: ThreadsFrontmatter {
+                    pr: 42,
+                    repo: "example/project".to_string(),
+                    pulled_at: "2024-01-15T10:00:00Z".to_string(),
+                    submit: false,
+                },
+                reviews: vec![],
+                threads: vec![ParsedThread {
+                    thread_id: "RT_abc123".to_string(),
+                    path: "src/main.rs".to_string(),
+                    line: Some(42),
+                    resolve: false,
+                    draft_reply: Some(format!("{reply}{newline}")),
+                }],
+            },
         );
     }
 
@@ -964,6 +1017,8 @@ mod tests {
             threads: vec![ReviewThread {
                 id: Some("RT_roundtrip".to_string()),
                 is_resolved: false,
+                diff_side: None,
+                start_diff_side: None,
                 comments: CommentsNode {
                     nodes: vec![Comment {
                         database_id: 1,
@@ -1027,6 +1082,8 @@ mod tests {
             threads: vec![ReviewThread {
                 id: Some("RT_sample".to_string()),
                 is_resolved: false,
+                diff_side: None,
+                start_diff_side: None,
                 comments: CommentsNode {
                     nodes: vec![Comment {
                         database_id: 1,

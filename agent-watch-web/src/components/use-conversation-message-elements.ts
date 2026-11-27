@@ -5,6 +5,7 @@ import type {
   CommandOutputStart,
 } from '#components/command-result-message'
 import { ConversationMessageRow } from '#components/conversation-message-row'
+import { getVisibleConversationMessageEntries } from '#components/conversation-message-timeline'
 import type {
   PendingPermissionActions,
   PendingPermissionActionState,
@@ -21,6 +22,9 @@ import type {
 
 type UseConversationMessageElementsOptions = {
   messages: readonly ChatItem[]
+  messageImageSources?: Readonly<
+    Record<string, Readonly<Record<string, string | null>>>
+  >
   start: number
   decisions?: readonly Extract<ChatItem, { type: 'decision' }>[]
   hasUnansweredProposal?: boolean
@@ -46,6 +50,7 @@ type UseConversationMessageElementsOptions = {
     messageId: string,
     mode: RewindMode,
     draft: string,
+    timelineIndex?: number,
   ) => Promise<boolean>
   pendingActions: PendingPermissionActions
   sessions: readonly SessionLinkTarget[]
@@ -164,6 +169,7 @@ function getConversationMessageIdentity(message: ChatItem): string {
 
 export function useConversationMessageElements({
   messages,
+  messageImageSources,
   start,
   decisions: allDecisions,
   hasUnansweredProposal: proposalPending,
@@ -191,11 +197,10 @@ export function useConversationMessageElements({
     const activeTool = messages.findLast(
       (message) => message.type === 'tool_in_progress',
     )
-    const conversationMessages = messages.flatMap((message, index) =>
-      message.type !== 'tool_in_progress' ||
-      (sessionCategory !== 'in_progress' && !isCompacting)
-        ? [{ message, index }]
-        : [],
+    const conversationMessages = getVisibleConversationMessageEntries(
+      messages,
+      sessionCategory,
+      isCompacting,
     )
     const decisions =
       allDecisions ??
@@ -238,6 +243,12 @@ export function useConversationMessageElements({
               : undefined,
           onSelectDecision,
           message,
+          ...(message.type === 'assistant' &&
+          messageImageSources?.[String(start + index)] !== undefined
+            ? {
+                imageSources: messageImageSources[String(start + index)],
+              }
+            : {}),
           onAction,
           ...(onCommandExecuted === undefined ? {} : { onCommandExecuted }),
           ...(onCommandStarted === undefined ? {} : { onCommandStarted }),
@@ -271,6 +282,7 @@ export function useConversationMessageElements({
     isCompacting,
     isMobile,
     messages,
+    messageImageSources,
     start,
     now,
     onAction,

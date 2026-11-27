@@ -1,22 +1,21 @@
-import {
-  type Dispatch,
-  type SetStateAction,
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-} from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
+import { useOptionalAsyncActionFeedback } from '#async-action-feedback'
 import { getPendingCritReviewUrl } from '#components/conversation-crit-url'
-import {
-  isReviewDocumentResponse,
-  type ReviewDocumentResponse,
-} from '#components/conversation-pane-response'
+import { isReviewDocumentResponse } from '#components/conversation-pane-response'
 import { requestJson } from '#components/conversation-requests'
 import type { Decision } from '#components/decision-card'
 import { DecisionsPanel } from '#components/decisions-panel'
+import {
+  frontmatterForReviewFinish,
+  requestReviewDocumentAction,
+  type ReviewDocumentState,
+  type ReviewDocumentStates,
+} from '#components/review-document-operation'
 import { ReviewDocumentPanel } from '#components/review-document-panel'
+import type { ReviewDocumentSummariesState } from '#components/review-document-summary'
 import { RunningTasksPanel } from '#components/running-tasks-panel'
+import { getSessionPullRequests } from '#components/session-pull-request-utils'
 import type { SessionStatusPanelTab } from '#components/session-status-panel'
 import { SessionTasksPanel } from '#components/session-tasks-panel'
 import { SessionTreePanel } from '#components/session-tree-panel'
@@ -25,7 +24,6 @@ import { WebUiPane } from '#components/web-ui-pane'
 import { webUiTabId } from '#components/web-ui-tab-id'
 import { webUiTargetUrl } from '#components/web-ui-target-url'
 import { useSessionOperations } from '#session-operation-context'
-import { createSessionOperation } from '#session-operations'
 import { getSessionTasks } from '#session-task-utils'
 import {
   needsActionDescendantCount,
@@ -35,6 +33,9 @@ import type { BackgroundTask, ChatItem, Session, SessionTreeNode } from '#types'
 
 type UseConversationStatusPanelOptions = {
   session: Session
+  actionTimelineIndex?: number | undefined
+  reviewDocumentSummaries?: ReviewDocumentSummariesState | null
+  onRetryReviewDocumentSummaries?: () => void
   messages: readonly ChatItem[]
   allDecisions?: readonly Decision[]
   backgroundTasks: readonly BackgroundTask[]
@@ -53,96 +54,9 @@ type UseConversationStatusPanelOptions = {
   onCloseStatusPanel: () => void
 }
 
-type ReviewDocumentState = {
-  sessionId: string
-  reviewDocumentId: string
-  document: ReviewDocumentResponse | null
-  error: string | null
-  loading: boolean
-  saveStatus: 'idle' | 'saving' | 'saved' | 'error' | 'finishing'
-  saveError: string | null
-  unsavedChanges: boolean
-  view: 'edit' | 'preview'
-}
-
-function requestReviewDocumentAction(
-  sessionId: string,
-  document: ReviewDocumentResponse,
-  action: 'save' | 'finish',
-  setState: Dispatch<SetStateAction<ReviewDocumentState | null>>,
-  run: ReturnType<typeof useSessionOperations>['run'],
-) {
-  const savedRevision = (value: unknown) =>
-    typeof value === 'object' &&
-    value !== null &&
-    'revision' in value &&
-    typeof value.revision === 'string'
-      ? value.revision
-      : null
-  const matchesDocument = (
-    current: ReviewDocumentState | null,
-  ): current is ReviewDocumentState =>
-    current !== null &&
-    current.sessionId === sessionId &&
-    current.reviewDocumentId === document.id
-  setState((current) => {
-    if (current === null || !matchesDocument(current)) return current
-    return {
-      ...current,
-      saveStatus: action === 'save' ? 'saving' : 'finishing',
-      saveError: null,
-    }
-  })
-
-  const onSuccess = (result: unknown) => {
-    const revision = savedRevision(result)
-    setState((current) => {
-      if (!matchesDocument(current)) return current
-      return action === 'save'
-        ? {
-            ...current,
-            ...(current.document === null || revision === null
-              ? {}
-              : {
-                  document: { ...current.document, revision },
-                }),
-            saveStatus: 'saved',
-            saveError: null,
-            unsavedChanges: false,
-          }
-        : null
-    })
-  }
-  const onError = (error: Error) => {
-    setState((current) =>
-      matchesDocument(current)
-        ? {
-            ...current,
-            saveStatus: 'error',
-            saveError: error.message,
-          }
-        : current,
-    )
-  }
-  const operation = createSessionOperation(
-    sessionId,
-    `review-document/${action}`,
-    {
-      id: document.id,
-      revision: document.revision,
-      frontmatter: document.frontmatter,
-      body: document.body,
-    },
-  )
-  operation.match((value) => {
-    void run(value).then((result) => {
-      result.match(onSuccess, onError)
-    })
-  }, onError)
-}
-
 export function useConversationStatusPanel({
   session,
+  actionTimelineIndex,
   messages,
   allDecisions,
   backgroundTasks,
@@ -156,9 +70,14 @@ export function useConversationStatusPanel({
   hostname,
   onAction,
   onCloseStatusPanel,
+  reviewDocumentSummaries = null,
+  onRetryReviewDocumentSummaries,
 }: UseConversationStatusPanelOptions) {
   const { run } = useSessionOperations()
+  const actionFeedback = useOptionalAsyncActionFeedback()
   const [activePanelTabId, setActivePanelTabId] = useState<string | null>(null)
+  const [pullRequestListTarget, setPullRequestListTarget] =
+    useState<HTMLDivElement | null>(null)
   const [selectedDecisionSeq, setSelectedDecisionSeq] = useState<number | null>(
     null,
   )
@@ -170,10 +89,41 @@ export function useConversationStatusPanel({
     onDecisionJumpComplete()
     if (isMobile) onCloseStatusPanel()
   }, [isMobile, onCloseStatusPanel, onDecisionJumpComplete])
-  const [reviewDocumentState, setReviewDocumentState] =
-    useState<ReviewDocumentState | null>(null)
-  const reviewDocumentStateRef = useRef<ReviewDocumentState | null>(null)
+  const [reviewDocumentStates, setReviewDocumentStates] =
+    useState<ReviewDocumentStates>({})
+  const [reviewDocumentRetryCounts, setReviewDocumentRetryCounts] = useState<
+    Record<string, number>
+  >({})
+  const requestedReviewDocuments = useRef(new Set<string>())
+  const [selectedReviewDocumentId, setSelectedReviewDocumentId] = useState<
+    string | null
+  >(null)
+  const [isReviewFocusOpen, setReviewFocusOpen] = useState(false)
   const reviewDocumentId = session.reviewDocumentId
+  const reviewDocuments =
+    reviewDocumentSummaries?.status === 'ready'
+      ? reviewDocumentSummaries.summaries
+      : []
+  const selectedSummary =
+    reviewDocuments.find(
+      (summary) => summary.id === selectedReviewDocumentId,
+    ) ??
+    reviewDocuments.find((summary) => summary.id === reviewDocumentId) ??
+    reviewDocuments[0] ??
+    null
+  const selectedDocumentId = selectedSummary?.id ?? null
+  const reviewTabCount = Math.max(
+    session.reviewDocumentCount ?? Number(reviewDocumentId != null),
+    reviewDocuments.length,
+  )
+  const reviewDocumentState =
+    selectedDocumentId === null
+      ? null
+      : (reviewDocumentStates[selectedDocumentId] ?? null)
+  const reviewDocumentRetryCount =
+    selectedDocumentId === null
+      ? 0
+      : (reviewDocumentRetryCounts[selectedDocumentId] ?? 0)
   const decisions =
     allDecisions ??
     messages.filter(
@@ -220,11 +170,13 @@ export function useConversationStatusPanel({
       sessionTree === null ||
       sessionTree.length > 1)
   const sessionTasks = getSessionTasks(session)
+  const pullRequests = getSessionPullRequests(session)
   const availableTabIds = [
     ...(backgroundTasks.length === 0 ? [] : ['running']),
+    ...(isMobile && pullRequests.length > 0 ? ['pull-requests'] : []),
     ...(sessionTasks.length === 0 ? [] : ['tasks']),
     ...(treeAvailable ? ['tree'] : []),
-    ...(reviewDocumentId == null ? [] : ['review-document']),
+    ...(reviewTabCount === 0 ? [] : ['review-document']),
     ...(decisionCount === 0 ? [] : ['decisions']),
     ...webUiTabIds,
   ]
@@ -232,6 +184,7 @@ export function useConversationStatusPanel({
     [...[...webUiTabIds].reverse(), 'review-document', 'running'].find((id) =>
       availableTabIds.includes(id),
     ) ??
+    availableTabIds.find((id) => id !== 'pull-requests') ??
     availableTabIds[0] ??
     null
   const activeTabId =
@@ -239,75 +192,106 @@ export function useConversationStatusPanel({
       ? activePanelTabId
       : defaultPanelTabId
   useEffect(() => {
-    if (reviewDocumentId == null) {
-      reviewDocumentStateRef.current = null
-      setReviewDocumentState(null)
+    if (!statusPanelOpen || isMobile) setReviewFocusOpen(false)
+  }, [isMobile, statusPanelOpen])
+  useEffect(() => {
+    if (selectedDocumentId === null) {
       return
     }
     if (!statusPanelOpen || activeTabId !== 'review-document') {
       return
     }
-    const currentReviewDocument = reviewDocumentStateRef.current
-    if (
-      currentReviewDocument?.sessionId === session.id &&
-      currentReviewDocument.reviewDocumentId === reviewDocumentId &&
-      currentReviewDocument.document !== null
-    ) {
+    const requestKey = `${session.id}:${selectedDocumentId}:${String(reviewDocumentRetryCount)}`
+    if (requestedReviewDocuments.current.has(requestKey)) {
       return
     }
-    let current = true
-    setReviewDocumentState({
-      sessionId: session.id,
-      reviewDocumentId,
-      document: null,
-      error: null,
-      loading: true,
-      saveStatus: 'idle',
-      saveError: null,
-      unsavedChanges: false,
-      view: 'edit',
-    })
+    requestedReviewDocuments.current.add(requestKey)
+    setReviewDocumentStates((states) => ({
+      ...states,
+      [selectedDocumentId]: {
+        sessionId: session.id,
+        reviewDocumentId: selectedDocumentId,
+        document: null,
+        error: null,
+        loading: true,
+        saveStatus: 'idle',
+        saveError: null,
+        unsavedChanges: false,
+        view: 'preview',
+      },
+    }))
     void requestJson(
-      `/api/sessions/${encodeURIComponent(session.id)}/review-document`,
+      `/api/sessions/${encodeURIComponent(session.id)}/review-documents/${encodeURIComponent(selectedDocumentId)}`,
       isReviewDocumentResponse,
     ).match(
       (document) => {
-        if (current) {
-          const nextState: ReviewDocumentState = {
-            sessionId: session.id,
-            reviewDocumentId: document.id,
-            document,
-            error: null,
-            loading: false,
-            saveStatus: 'idle',
-            saveError: null,
-            unsavedChanges: false,
-            view: 'edit',
-          }
-          reviewDocumentStateRef.current = nextState
-          setReviewDocumentState(nextState)
+        const nextState: ReviewDocumentState = {
+          sessionId: session.id,
+          reviewDocumentId: document.id,
+          document,
+          error: null,
+          loading: false,
+          saveStatus: 'idle',
+          saveError: null,
+          unsavedChanges: false,
+          view: 'preview',
         }
+        setReviewDocumentStates((states) => ({
+          ...states,
+          [document.id]: nextState,
+        }))
       },
       (error) => {
-        if (current) {
-          setReviewDocumentState({
+        setReviewDocumentStates((states) => ({
+          ...states,
+          [selectedDocumentId]: {
             sessionId: session.id,
-            reviewDocumentId,
+            reviewDocumentId: selectedDocumentId,
             document: null,
             error: error.message,
             loading: false,
             saveStatus: 'idle',
             saveError: null,
             unsavedChanges: false,
-            view: 'edit',
-          })
-        }
+            view: 'preview',
+          },
+        }))
       },
     )
-    return () => {
-      current = false
-    }
-  }, [activeTabId, session.id, reviewDocumentId, statusPanelOpen])
+  }, [
+    activeTabId,
+    session.id,
+    selectedDocumentId,
+    statusPanelOpen,
+    reviewDocumentRetryCount,
+  ])
+  const retrySelectedReviewDocument = () => {
+    if (selectedDocumentId === null) return
+    setReviewDocumentStates((states) => {
+      const state = states[selectedDocumentId]
+      return state === undefined
+        ? states
+        : {
+            ...states,
+            [selectedDocumentId]: { ...state, error: null, loading: true },
+          }
+    })
+    setReviewDocumentRetryCounts((counts) => ({
+      ...counts,
+      [selectedDocumentId]: (counts[selectedDocumentId] ?? 0) + 1,
+    }))
+  }
+  const updateSelectedReviewDocument = (
+    update: (state: ReviewDocumentState) => ReviewDocumentState,
+  ) => {
+    if (selectedDocumentId === null) return
+    setReviewDocumentStates((states) => {
+      const state = states[selectedDocumentId]
+      return state === undefined
+        ? states
+        : { ...states, [selectedDocumentId]: update(state) }
+    })
+  }
   const tabs: readonly SessionStatusPanelTab[] = [
     ...(availableTabIds.includes('running')
       ? [
@@ -321,6 +305,17 @@ export function useConversationStatusPanel({
                 tasks={backgroundTasks}
               />
             ),
+          },
+        ]
+      : []),
+    ...(availableTabIds.includes('pull-requests')
+      ? [
+          {
+            id: 'pull-requests',
+            label: 'PRs',
+            count: pullRequests.length,
+            showCount: true,
+            content: <div ref={setPullRequestListTarget} />,
           },
         ]
       : []),
@@ -389,61 +384,93 @@ export function useConversationStatusPanel({
           {
             id: 'review-document',
             label: 'Review',
-            count: 0,
+            count: reviewTabCount,
             visible: true,
-            showCount: false,
+            showCount: true,
             content:
-              reviewDocumentState === null ||
-              reviewDocumentState.sessionId !== session.id ||
-              reviewDocumentState.reviewDocumentId !==
-                session.reviewDocumentId ||
-              reviewDocumentState.loading ? (
+              selectedSummary === null ? (
+                reviewDocumentSummaries?.status === 'unavailable' ? (
+                  <div className="session-tree-feedback" role="alert">
+                    Could not load open drafts: {reviewDocumentSummaries.error}
+                    {onRetryReviewDocumentSummaries === undefined ? null : (
+                      <button
+                        type="button"
+                        onClick={onRetryReviewDocumentSummaries}
+                      >
+                        Retry drafts
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <div className="session-tree-feedback" role="status">
+                    {reviewDocumentSummaries === null
+                      ? 'Loading drafts…'
+                      : 'No open drafts.'}
+                  </div>
+                )
+              ) : reviewDocumentState === null ||
+                reviewDocumentState.sessionId !== session.id ||
+                reviewDocumentState.loading ? (
                 <div className="session-tree-feedback" role="status">
-                  Loading review document…
+                  Loading draft…
                 </div>
               ) : reviewDocumentState.error !== null ? (
                 <div className="session-tree-feedback" role="alert">
-                  Could not load the review document:{' '}
-                  {reviewDocumentState.error}
+                  Could not load the draft: {reviewDocumentState.error}
+                  <button type="button" onClick={retrySelectedReviewDocument}>
+                    Retry draft
+                  </button>
                 </div>
               ) : reviewDocumentState.document === null ? null : (
                 <ReviewDocumentPanel
+                  summary={selectedSummary}
+                  summaries={reviewDocuments}
+                  isMobile={isMobile}
+                  canSave={selectedSummary.canSave}
+                  canFinish={selectedSummary.canFinish}
+                  relatedIssueTitles={
+                    reviewDocumentState.document.relatedIssueTitles
+                  }
                   frontmatter={reviewDocumentState.document.frontmatter}
                   body={reviewDocumentState.document.body}
                   status={reviewDocumentState.saveStatus}
+                  pendingAction={reviewDocumentState.pendingAction}
                   unsavedChanges={reviewDocumentState.unsavedChanges}
                   error={reviewDocumentState.saveError}
                   view={reviewDocumentState.view}
+                  onSelectDocument={setSelectedReviewDocumentId}
+                  onOpenFocus={() => {
+                    if (!isMobile) setReviewFocusOpen(true)
+                  }}
                   onFrontmatterChange={(frontmatter) => {
-                    setReviewDocumentState((current) =>
-                      current?.document === null || current === null
-                        ? current
-                        : {
-                            ...current,
-                            document: { ...current.document, frontmatter },
-                            saveStatus: 'idle',
-                            saveError: null,
-                            unsavedChanges: true,
-                          },
-                    )
+                    updateSelectedReviewDocument((current) => ({
+                      ...current,
+                      document:
+                        current.document === null
+                          ? null
+                          : { ...current.document, frontmatter },
+                      saveStatus: 'idle',
+                      saveError: null,
+                      unsavedChanges: true,
+                    }))
                   }}
                   onBodyChange={(body) => {
-                    setReviewDocumentState((current) =>
-                      current?.document === null || current === null
-                        ? current
-                        : {
-                            ...current,
-                            document: { ...current.document, body },
-                            saveStatus: 'idle',
-                            saveError: null,
-                            unsavedChanges: true,
-                          },
-                    )
+                    updateSelectedReviewDocument((current) => ({
+                      ...current,
+                      document:
+                        current.document === null
+                          ? null
+                          : { ...current.document, body },
+                      saveStatus: 'idle',
+                      saveError: null,
+                      unsavedChanges: true,
+                    }))
                   }}
                   onViewChange={(view) => {
-                    setReviewDocumentState((current) =>
-                      current === null ? current : { ...current, view },
-                    )
+                    updateSelectedReviewDocument((current) => ({
+                      ...current,
+                      view,
+                    }))
                   }}
                   onSave={() => {
                     const document = reviewDocumentState.document
@@ -451,9 +478,13 @@ export function useConversationStatusPanel({
                       requestReviewDocumentAction(
                         session.id,
                         document,
+                        selectedSummary,
                         'save',
-                        setReviewDocumentState,
+                        setReviewDocumentStates,
                         run,
+                        session.title,
+                        actionFeedback,
+                        { timelineIndex: actionTimelineIndex },
                       )
                   }}
                   onFinish={() => {
@@ -462,9 +493,57 @@ export function useConversationStatusPanel({
                       requestReviewDocumentAction(
                         session.id,
                         document,
+                        selectedSummary,
                         'finish',
-                        setReviewDocumentState,
+                        setReviewDocumentStates,
                         run,
+                        session.title,
+                        actionFeedback,
+                        {
+                          frontmatter: frontmatterForReviewFinish(
+                            document.frontmatter,
+                            false,
+                            selectedSummary.kind === 'draft' &&
+                              selectedSummary.target.repository !== undefined,
+                          ),
+                          timelineIndex: actionTimelineIndex,
+                        },
+                      )
+                  }}
+                  onApproveForTranslation={() => {
+                    const document = reviewDocumentState.document
+                    if (document !== null)
+                      requestReviewDocumentAction(
+                        session.id,
+                        document,
+                        selectedSummary,
+                        'finish',
+                        setReviewDocumentStates,
+                        run,
+                        session.title,
+                        actionFeedback,
+                        {
+                          frontmatter: frontmatterForReviewFinish(
+                            document.frontmatter,
+                            true,
+                          ),
+                          timelineIndex: actionTimelineIndex,
+                        },
+                      )
+                  }}
+                  onSubmit={(action) => {
+                    const document = reviewDocumentState.document
+                    if (document !== null)
+                      requestReviewDocumentAction(
+                        session.id,
+                        document,
+                        selectedSummary,
+                        action,
+                        setReviewDocumentStates,
+                        run,
+                        session.title,
+                        actionFeedback,
+                        { timelineIndex: actionTimelineIndex },
                       )
                   }}
                 />
@@ -526,10 +605,16 @@ export function useConversationStatusPanel({
     })),
   ]
   useEffect(() => {
-    if (activePanelTabId !== activeTabId) setActivePanelTabId(activeTabId)
+    if (
+      activePanelTabId !== activeTabId &&
+      (activePanelTabId !== null || activeTabId !== 'pull-requests')
+    ) {
+      setActivePanelTabId(activeTabId === 'pull-requests' ? null : activeTabId)
+    }
   }, [activePanelTabId, activeTabId])
   return {
     activeTabId,
+    pullRequestListTarget,
     onOpenCritInFullscreen: () => {
       const critWebUi = webUis.find((webUi) => webUi.name === 'crit')
       if (critWebUi !== undefined) {
@@ -543,6 +628,18 @@ export function useConversationStatusPanel({
     onOpenWebUiInFullscreen,
     fullscreenWebUi,
     mobileWebUi,
+    isReviewFocusOpen,
+    reviewFocusBody:
+      reviewDocumentState === null ||
+      reviewDocumentState.sessionId !== session.id ||
+      reviewDocumentState.loading ||
+      reviewDocumentState.error !== null ||
+      reviewDocumentState.document === null
+        ? null
+        : reviewDocumentState.document.body,
+    onCloseReviewFocus: () => {
+      setReviewFocusOpen(false)
+    },
     onDecisionJumpComplete,
     onDecisionJumpSucceeded,
     onSelectDecision: setSelectedDecisionSeq,

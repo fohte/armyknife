@@ -31,7 +31,7 @@ const CLAUDE_CODE_PROVIDER: &str = "claude_code";
 /// Cloudflare-Access-gated backend over the network, so an unresponsive
 /// backend must not leak a blocking-pool thread and child process on every
 /// session-creation-triggered refetch.
-const TQ_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
+pub(crate) const TQ_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// A tq task's open/closed state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
@@ -108,6 +108,8 @@ pub struct TqTaskSummary {
     pub priority: Option<i32>,
     #[serde(default)]
     pub project_id: Option<String>,
+    #[serde(default)]
+    pub github_links: Vec<TqGithubLink>,
 }
 
 /// Minimal project metadata used to label tasks in agent watch.
@@ -375,7 +377,7 @@ mod tests {
     fn parses_task_priorities_without_requiring_tq_process() {
         let json = indoc! {r#"
             [
-              { "id": "task-one", "number": 1, "title": "First task", "updatedAt": "2026-10-01T00:00:00Z", "priority": 0, "projectId": "project-one" },
+              { "id": "task-one", "number": 1, "title": "First task", "updatedAt": "2026-10-01T00:00:00Z", "priority": 0, "projectId": "project-one", "githubLinks": [{ "id": "link-one", "kind": "pull_request", "owner": "example-owner", "repo": "example-repository", "number": 29 }] },
               { "id": "task-two", "number": 2, "title": "Second task" }
             ]
         "#};
@@ -394,6 +396,16 @@ mod tests {
                     ),
                     priority: Some(0),
                     project_id: Some("project-one".to_string()),
+                    github_links: vec![TqGithubLink {
+                        id: "link-one".to_string(),
+                        kind: Some("pull_request".to_string()),
+                        owner: Some("example-owner".to_string()),
+                        repo: Some("example-repository".to_string()),
+                        number: Some(29),
+                        title: None,
+                        url: None,
+                        state: None,
+                    }],
                 },
                 TqTaskSummary {
                     id: "task-two".to_string(),
@@ -402,6 +414,7 @@ mod tests {
                     updated_at: None,
                     priority: None,
                     project_id: None,
+                    github_links: Vec::new(),
                 },
             ]
         );

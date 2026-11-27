@@ -14,6 +14,7 @@ import { NewSessionPicker } from '#components/new-session-picker'
 import { ResizableColumns } from '#components/resizable-columns'
 import { SessionCloseConfirmation } from '#components/session-close-confirmation'
 import { UpdateNotice } from '#components/update-notice'
+import type { InboxSort } from '#inbox-sort'
 import type { useSessionHistory } from '#session-history'
 import type { LaterPreset, LaterPresetTimes } from '#session-navigation'
 import type { SessionOperation } from '#session-operations'
@@ -37,6 +38,8 @@ type AppWorkspaceState = {
   loaded: boolean
   error: string | null
   inboxFilterQuery: string
+  inboxSort: InboxSort
+  inboxSortStorageAvailable: boolean
   showAllInProgress: boolean
   laterExpanded: boolean
   inProgressExpanded: boolean
@@ -62,6 +65,7 @@ type AppWorkspaceState = {
 
 type AppWorkspaceActions = {
   setInboxFilterQuery: Dispatch<SetStateAction<string>>
+  setInboxSort: (sort: InboxSort) => void
   setShowAllInProgress: Dispatch<SetStateAction<boolean>>
   setLaterExpanded: Dispatch<SetStateAction<boolean>>
   setInProgressExpanded: Dispatch<SetStateAction<boolean>>
@@ -146,6 +150,9 @@ export function AppWorkspace({
     connectionError: state.error,
     lastUpdatedAt: state.sessionsReceivedAt,
     loaded: state.loaded,
+    sort: state.inboxSort,
+    sortStorageAvailable: state.inboxSortStorageAvailable,
+    onSortChange: actions.setInboxSort,
     selectedId: state.selectedId,
     sessions: state.sessions,
     filterQuery: state.inboxFilterQuery,
@@ -208,7 +215,11 @@ export function AppWorkspace({
       sessions={state.sessions}
       workTypeNavGroups={state.workTypeNavGroups}
       onViewChange={(nextView) => {
-        actions.navigate((current) => ({ ...current, view: nextView }))
+        actions.navigate((current) => ({
+          ...current,
+          view: nextView,
+          conversationOpen: state.isMobile ? false : current.conversationOpen,
+        }))
         actions.closeMobileNav()
       }}
       onSelectSavedView={actions.selectSavedViewFromNavigation}
@@ -236,6 +247,10 @@ export function AppWorkspace({
           showMobileConversation={state.showMobileConversation}
           inboxCollapsed={state.inboxCollapsed}
           statusPanelOpen={state.statusPanelOpen}
+          mobileNavOpen={state.mobileNavOpen}
+          onOpenNavigation={() => {
+            actions.setMobileNavOpen(true)
+          }}
           onToggleStatusPanel={actions.toggleStatusPanel}
           onCloseStatusPanel={() => {
             actions.setStatusPanelOpen(false)
@@ -333,12 +348,14 @@ export function AppWorkspace({
             label="Resize navigation and content"
           />
         )}
-        {state.isMobile && !state.showMobileConversation ? (
+        {state.isMobile ? (
           <MobileNavDrawer
             onClose={actions.closeMobileNav}
             open={state.mobileNavOpen}
           >
-            {navigation}
+            {state.showMobileConversation && !state.mobileNavOpen
+              ? null
+              : navigation}
           </MobileNavDrawer>
         ) : null}
         {laterSession !== undefined ? (

@@ -19,6 +19,7 @@ type AsyncActionItemProps = {
   onCloseKeepWorktree?: () => void
   onOpenInTerminal?: () => void
   onShowOutput?: () => void
+  onOpenSession?: () => void
 }
 
 function closeFailureSummary(checks: CloseWorktreeChecks) {
@@ -51,6 +52,21 @@ function copy(action: AsyncAction) {
       : `PR #${String(action.pullRequestNumber)}`
   const labels = (() => {
     switch (action.status) {
+      case 'reviewDocumentActionRunning':
+        return {
+          title: `${action.reviewDocumentAction ?? 'Review action'} in progress`,
+          line: `${action.reviewDocumentAction ?? 'Review action'} in progress`,
+        }
+      case 'reviewDocumentActionSucceeded':
+        return {
+          title: `${action.reviewDocumentAction ?? 'Review action'} completed`,
+          line: `${action.reviewDocumentAction ?? 'Review action'} completed`,
+        }
+      case 'reviewDocumentActionFailed':
+        return {
+          title: `${action.reviewDocumentAction ?? 'Review action'} failed`,
+          line: `${action.reviewDocumentAction ?? 'Review action'} failed`,
+        }
       case 'merging':
         return action.kind === 'merge'
           ? { title: `Merging ${pr}`, line: `Merging ${pr}…` }
@@ -89,6 +105,18 @@ function copy(action: AsyncAction) {
         return action.kind === 'close'
           ? { title: 'Close failed', line: 'Close failed' }
           : { title: '', line: '' }
+      case 'rewinding':
+        return action.kind === 'rewind'
+          ? { title: 'Rewinding session', line: 'Rewinding session…' }
+          : { title: '', line: '' }
+      case 'rewound':
+        return action.kind === 'rewind'
+          ? { title: 'Rewound session', line: 'Rewound session' }
+          : { title: '', line: '' }
+      case 'rewindFailed':
+        return action.kind === 'rewind'
+          ? { title: 'Rewind failed', line: 'Rewind failed' }
+          : { title: '', line: '' }
       case 'runningCommand':
         return { title: 'Running command', line: 'Running command…' }
       case 'ranCommand':
@@ -102,16 +130,31 @@ function copy(action: AsyncAction) {
             }
       case 'commandTimedOut':
         return { title: 'Command timed out', line: 'Command timed out' }
+      case 'launching':
+        return { title: 'Starting session', line: 'Starting session' }
+      case 'launched':
+        return { title: 'Session started', line: 'Session started' }
+      case 'launchFailed':
+        return {
+          title: 'Could not start session',
+          line: 'Could not start session',
+        }
     }
   })()
   const icon =
     action.status === 'merging' ||
     action.status === 'closing' ||
-    action.status === 'runningCommand'
+    action.status === 'rewinding' ||
+    action.status === 'runningCommand' ||
+    action.status === 'reviewDocumentActionRunning' ||
+    action.status === 'launching'
       ? 'running'
       : action.status === 'merged' ||
           action.status === 'closed' ||
-          action.status === 'ranCommand'
+          action.status === 'rewound' ||
+          action.status === 'ranCommand' ||
+          action.status === 'reviewDocumentActionSucceeded' ||
+          action.status === 'launched'
         ? 'success'
         : action.status === 'queued'
           ? 'queued'
@@ -131,6 +174,7 @@ export function AsyncActionItem({
   onCloseKeepWorktree,
   onOpenInTerminal,
   onShowOutput,
+  onOpenSession,
 }: AsyncActionItemProps) {
   const text = copy(action)
   const Icon =
@@ -150,6 +194,7 @@ export function AsyncActionItem({
   const isQueue = text.icon === 'queued'
   const label = form === 'line' ? text.line : text.title
   const hasCloseChecks = action.kind === 'close' && action.checks !== undefined
+  const canRetry = action.kind !== 'rewind' && action.retryable !== false
   const canShowCommandOutput =
     action.kind === 'command' &&
     (action.status === 'commandFailed' || action.status === 'commandTimedOut')
@@ -157,6 +202,7 @@ export function AsyncActionItem({
     action.kind === 'close' && action.checks !== undefined
       ? closeFailureSummary(action.checks)
       : undefined
+  const launchInitialMessage = action.initialMessage?.split(/\r?\n/u)[0]
   return (
     <div
       className={`async-action-item async-action-item--${form} async-action-item--${text.icon}${hasCloseChecks ? ' has-close-worktree' : ''}`}
@@ -176,7 +222,22 @@ export function AsyncActionItem({
       <div className="async-action-item-content">
         <strong>{label}</strong>
         {form !== 'line' && action.kind !== 'command' ? (
-          <span className="async-action-session">{action.sessionTitle}</span>
+          action.kind === 'launch' ? null : (
+            <span className="async-action-session">{action.sessionTitle}</span>
+          )
+        ) : null}
+        {action.kind === 'launch' && form !== 'line' ? (
+          <>
+            {launchInitialMessage !== undefined &&
+            launchInitialMessage.length > 0 ? (
+              <span className="async-action-launch-message">
+                {launchInitialMessage}
+              </span>
+            ) : null}
+            {action.repo !== undefined && action.repo.length > 0 ? (
+              <code className="async-action-launch-repo">{action.repo}</code>
+            ) : null}
+          </>
         ) : null}
         {action.kind === 'command' && form !== 'line' ? (
           <code className="async-action-command">{action.command}</code>
@@ -202,17 +263,24 @@ export function AsyncActionItem({
             </button>
           </div>
         ) : null}
-        {isFailure && !canShowCommandOutput && form === 'toast' ? (
+        {isFailure &&
+        !canShowCommandOutput &&
+        form === 'toast' &&
+        (canRetry || hasCloseChecks) ? (
           <div className="async-action-controls">
             {hasCloseChecks ? (
               <button type="button" onClick={onCloseKeepWorktree}>
                 Close and keep worktree
               </button>
             ) : null}
-            <button type="button" onClick={onRetry}>
-              Retry
-            </button>
-            {action.kind !== 'close' || hasCloseChecks ? (
+            {canRetry ? (
+              <button type="button" onClick={onRetry}>
+                Retry
+              </button>
+            ) : null}
+            {action.kind === 'merge' ||
+            action.kind === 'launch' ||
+            hasCloseChecks ? (
               <button type="button" onClick={onDetails}>
                 Details
               </button>
@@ -226,16 +294,31 @@ export function AsyncActionItem({
             </button>
           </div>
         ) : null}
-        {isFailure && !canShowCommandOutput && form === 'row' ? (
+        {action.kind === 'launch' &&
+        action.status === 'launched' &&
+        form !== 'line' &&
+        onOpenSession !== undefined ? (
+          <div className="async-action-controls">
+            <button type="button" onClick={onOpenSession}>
+              Open
+            </button>
+          </div>
+        ) : null}
+        {isFailure &&
+        !canShowCommandOutput &&
+        form === 'row' &&
+        (canRetry || hasCloseChecks) ? (
           <div className="async-action-controls">
             {hasCloseChecks ? (
               <button type="button" onClick={onCloseKeepWorktree}>
                 Close and keep worktree
               </button>
             ) : null}
-            <button type="button" onClick={onRetry}>
-              Retry
-            </button>
+            {canRetry ? (
+              <button type="button" onClick={onRetry}>
+                Retry
+              </button>
+            ) : null}
             {hasCloseChecks ? (
               <button
                 className="async-action-open-terminal"
@@ -247,20 +330,25 @@ export function AsyncActionItem({
             ) : null}
           </div>
         ) : null}
-        {isFailure && !canShowCommandOutput && form === 'line' ? (
+        {isFailure &&
+        !canShowCommandOutput &&
+        form === 'line' &&
+        (canRetry || hasCloseChecks) ? (
           <div className="async-action-controls">
             {hasCloseChecks ? (
               <button type="button" onClick={onCloseKeepWorktree}>
                 Close and keep worktree
               </button>
             ) : null}
-            <button
-              className="async-action-line-retry"
-              type="button"
-              onClick={onRetry}
-            >
-              Retry
-            </button>
+            {canRetry ? (
+              <button
+                className="async-action-line-retry"
+                type="button"
+                onClick={onRetry}
+              >
+                Retry
+              </button>
+            ) : null}
           </div>
         ) : null}
       </div>

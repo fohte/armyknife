@@ -357,7 +357,7 @@ export function CommandPalette({
                     index === activeActionIndex ? 'true' : 'false'
                   }
                   role="none"
-                  onMouseEnter={() => {
+                  onMouseMove={() => {
                     setActiveActionIndex(index)
                   }}
                 >
@@ -412,7 +412,7 @@ export function CommandPalette({
                       onClick={() => {
                         activate(item)
                       }}
-                      onMouseEnter={() => {
+                      onMouseMove={() => {
                         setActiveIndex(index)
                       }}
                       role="option"

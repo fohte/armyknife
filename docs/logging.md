@@ -110,38 +110,40 @@ Stop hook (parent process):
 
 ### `agent sweep`
 
-| event                                        | meaning                                                                                                                                                                         |
-| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `agent.sweep.start`                          | One sweep pass is starting (`timeout`, `dry_run`, `pause_enabled`)                                                                                                              |
-| `agent.sweep.auto_pause_failed`              | The auto-pause pass failed; the sweep continues to Codex status handling and merged-session close                                                                               |
-| `agent.sweep.codex_status_failed`            | The Codex status pass failed; merged-session close continues, while the summary counters report zero Codex updates                                                              |
-| `agent.sweep.sessions_read_failed`           | Session records could not be read; the full error chain is logged, a warning is printed to stderr, and zero sessions are closed                                                 |
-| `agent.bg_run.registry_read_failed`          | The background-task registry could not be read; the session was treated as pending                                                                                              |
-| `agent.sweep.github_client_unavailable`      | The GitHub client could not be initialized; merged-session cleanup was skipped                                                                                                  |
-| `agent.sweep.pull_requests_fetch_failed`     | The batched pull request lookup failed; merged-session cleanup was skipped                                                                                                      |
-| `agent.sweep.remote_control_check_failed`    | The Claude Code session registry could not be read or parsed; the session was treated as having a Remote Control connection                                                     |
-| `agent.sweep.remote_control_active`          | The timeout elapsed, but the live Claude Code process has a Remote Control connection; it was not signaled                                                                      |
-| `agent.sweep.signaled`                       | Live pid resolved; shutdown requested, status may stay Stopped                                                                                                                  |
-| `agent.sweep.dry_run_signal`                 | Would have signaled if not in `--dry-run`                                                                                                                                       |
-| `agent.sweep.paused`                         | Process exit confirmed; status changed to Paused                                                                                                                                |
-| `agent.sweep.dry_run_pause`                  | Would have confirmed Paused if not in `--dry-run`                                                                                                                               |
-| `agent.sweep.codex_session_status_failed`    | Loading or updating a session's Codex status failed (`operation=load` / `update`, `session`, full `error` chain); the session was skipped and remaining sessions were processed |
-| `agent.sweep.codex_turn_read_failed`         | The latest Codex turn status could not be read; the session was skipped                                                                                                         |
-| `agent.sweep.dry_run_codex_turn_failed`      | The latest Codex turn failed; the session would be marked Failed                                                                                                                |
-| `agent.sweep.codex_turn_failed`              | The latest Codex turn failed; the session status changed to Failed                                                                                                              |
-| `agent.sweep.dry_run_codex_turn_interrupted` | The latest Codex turn was interrupted; the session would be marked Stopped or WaitingInput if a permission request is pending                                                   |
-| `agent.sweep.codex_turn_interrupted`         | The latest Codex turn was interrupted; the session status changed to Stopped or WaitingInput if a permission request is pending                                                 |
-| `agent.sweep.dry_run_close_merged`           | Would have closed a session whose pull request is merged                                                                                                                        |
-| `agent.sweep.merged_session_close_failed`    | The existing close path refused or failed for a merged session                                                                                                                  |
-| `agent.sweep.merge_notification_failed`      | The merged-session close notification could not be sent                                                                                                                         |
-| `notification.merge_icon_failed`             | The optional merge notification icon could not be downloaded or converted                                                                                                       |
-| `agent.sweep.ctrl_d_timeout`                 | Codex remained alive after Ctrl+D; falling back to SIGTERM                                                                                                                      |
-| `agent.sweep.ctrl_d_failed`                  | Sending Ctrl+D through tmux failed; falling back to SIGTERM                                                                                                                     |
-| `agent.sweep.sigterm_failed`                 | SIGTERM to the resolved pid failed (non-ESRCH)                                                                                                                                  |
-| `agent.sweep.redelivery_started`             | A detached redelivery started for a session with a recent undelivered notification; with `dry_run=true` it was only counted                                                     |
-| `agent.sweep.redelivery_scan_failed`         | A session's undelivered notifications could not be read; the session was skipped and remaining sessions were processed                                                          |
-| `agent.sweep.redelivery_failed`              | The undelivered notification pass failed; the summary reports zero redeliveries started                                                                                         |
-| `agent.sweep.summary`                        | End-of-pass counters (`scanned` / `paused` / `codex_failed` / `codex_interrupted` / `redelivery_started` / …)                                                                   |
+| event                                           | meaning                                                                                                                                                                         |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agent.sweep.start`                             | One sweep pass is starting (`timeout`, `dry_run`, `pause_enabled`)                                                                                                              |
+| `agent.sweep.auto_pause_failed`                 | The auto-pause pass failed; the sweep continues to Codex status handling and merged-session close                                                                               |
+| `agent.sweep.codex_status_failed`               | The Codex status pass failed; merged-session close continues, while the summary counters report zero Codex updates                                                              |
+| `agent.sweep.sessions_read_failed`              | Session records could not be read; the full error chain is logged, a warning is printed to stderr, and zero sessions are closed                                                 |
+| `agent.bg_run.registry_read_failed`             | The background-task registry could not be read; the session was treated as pending                                                                                              |
+| `agent.sweep.github_client_unavailable`         | The GitHub client could not be initialized; merged-session cleanup was skipped                                                                                                  |
+| `agent.sweep.pull_requests_fetch_failed`        | The batched pull request lookup failed; merged-session cleanup was skipped                                                                                                      |
+| `agent.sweep.remote_control_check_failed`       | The Claude Code session registry could not be read or parsed; the session was treated as having a Remote Control connection                                                     |
+| `agent.sweep.remote_control_active`             | The timeout elapsed, but the live Claude Code process has a Remote Control connection; it was not signaled                                                                      |
+| `agent.sweep.signaled`                          | Live pid resolved; shutdown requested, status may stay Stopped                                                                                                                  |
+| `agent.sweep.dry_run_signal`                    | Would have signaled if not in `--dry-run`                                                                                                                                       |
+| `agent.sweep.paused`                            | Process exit confirmed; status changed to Paused                                                                                                                                |
+| `agent.sweep.dry_run_pause`                     | Would have confirmed Paused if not in `--dry-run`                                                                                                                               |
+| `agent.sweep.codex_session_status_failed`       | Loading or updating a session's Codex status failed (`operation=load` / `update`, `session`, full `error` chain); the session was skipped and remaining sessions were processed |
+| `agent.sweep.codex_turn_read_failed`            | The latest Codex turn status could not be read; the session was skipped                                                                                                         |
+| `agent.sweep.dry_run_codex_turn_failed`         | The latest Codex turn failed; the session would be marked Failed                                                                                                                |
+| `agent.sweep.codex_turn_failed`                 | The latest Codex turn failed; the session status changed to Failed                                                                                                              |
+| `agent.sweep.dry_run_codex_turn_interrupted`    | The latest Codex turn was interrupted; the session would be marked Stopped or WaitingInput if a permission request is pending                                                   |
+| `agent.sweep.codex_turn_interrupted`            | The latest Codex turn was interrupted; the session status changed to Stopped or WaitingInput if a permission request is pending                                                 |
+| `agent.sweep.dry_run_close_merged`              | Would have closed a session whose pull request is merged                                                                                                                        |
+| `agent.sweep.merged_session_close_failed`       | The existing close path refused or failed for a merged session                                                                                                                  |
+| `agent.sweep.merge_notification_failed`         | The merged-session close notification could not be sent                                                                                                                         |
+| `agent.sweep.deferred_unreported_stop_failed`   | The deferred unreported-stop notification pass failed; the sweep continued and the summary reported zero notifications                                                          |
+| `agent.sweep.deferred_unreported_stop_notified` | The direct parent was notified after a delegated session remained stopped and silent through the quiet period                                                                   |
+| `notification.merge_icon_failed`                | The optional merge notification icon could not be downloaded or converted                                                                                                       |
+| `agent.sweep.ctrl_d_timeout`                    | Codex remained alive after Ctrl+D; falling back to SIGTERM                                                                                                                      |
+| `agent.sweep.ctrl_d_failed`                     | Sending Ctrl+D through tmux failed; falling back to SIGTERM                                                                                                                     |
+| `agent.sweep.sigterm_failed`                    | SIGTERM to the resolved pid failed (non-ESRCH)                                                                                                                                  |
+| `agent.sweep.redelivery_started`                | A detached redelivery started for a session with a recent undelivered notification; with `dry_run=true` it was only counted                                                     |
+| `agent.sweep.redelivery_scan_failed`            | A session's undelivered notifications could not be read; the session was skipped and remaining sessions were processed                                                          |
+| `agent.sweep.redelivery_failed`                 | The undelivered notification pass failed; the summary reports zero redeliveries started                                                                                         |
+| `agent.sweep.summary`                           | End-of-pass counters (`scanned` / `paused` / `codex_failed` / `codex_interrupted` / `redelivery_started` / `deferred_stop_notifications` / …)                                   |
 
 ### `agent peer notify`
 
@@ -167,12 +169,15 @@ Stop hook (parent process):
 | `agent.crit.add.session_record_failed`        | Session review URL could not be recorded                                     |
 | `agent.crit.add.pane_sync_failed`             | The review queue pane options or layout hook could not update                |
 | `agent.crit.add.review_display_failed`        | An unrecorded review could not be displayed                                  |
+| `agent.crit.expiry.shutdown_failed`           | A crit daemon linked only to an expired session could not be stopped         |
 | `agent.crit.registration.status_failed`       | Crit status lookup failed; registration kept the supplied review URL         |
 | `hitl.review_queue.session_not_alive`         | The editor session did not come alive before the queue labels were refreshed |
 | `agent.crit.monitor.start_failed`             | The lifecycle monitor could not be started                                   |
 | `agent.crit.monitor.started`                  | A detached lifecycle monitor was spawned                                     |
 | `agent.crit.monitor.start`                    | The detached monitor began watching a daemon                                 |
+| `agent.crit.client_started`                   | A Crit client announced that it started waiting for a review                 |
 | `agent.crit.monitor.client_check_failed`      | The monitor could not inspect Crit client connections                        |
+| `agent.crit.monitor.client_record_failed`     | A Crit client found by lsof could not be recorded for exit watching          |
 | `agent.crit.monitor.wait_state_update_failed` | The monitor could not update session review-wait state                       |
 | `agent.crit.monitor.replacement_found`        | A replacement daemon is using the same port                                  |
 | `agent.crit.monitor.replacement_check_failed` | The monitor could not check for a replacement daemon                         |

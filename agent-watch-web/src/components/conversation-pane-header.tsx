@@ -1,4 +1,5 @@
 import '#components/conversation-pane-view.css'
+import '#components/mobile-conversation-layout.css'
 
 import { Button } from '@fohte/ui/button'
 import {
@@ -17,9 +18,12 @@ import { MobileConversationActionsMenu } from '#components/mobile-conversation-a
 import { OpenInTerminalAction } from '#components/open-in-terminal-action'
 import { PullRequestMergeConfirmation } from '#components/pull-request-merge-confirmation'
 import { SessionHeading } from '#components/session-heading'
+import { getSessionPullRequests } from '#components/session-pull-request-utils'
 import {
   pullRequestMergeReason,
   SessionPullRequests,
+  SessionPullRequestStatusBadge,
+  sessionPullRequestStatusLabel,
 } from '#components/session-pull-requests'
 import { SessionTaskLinks } from '#components/session-task-links'
 import { StarredSessionToggle } from '#components/starred-session-toggle'
@@ -48,6 +52,9 @@ type ConversationPaneHeaderProps = {
   titleEditing?: boolean
   mobileActionsMenuOpen?: boolean
   pullRequestsOpen?: boolean
+  pullRequestListTarget?: HTMLElement | null
+  activityFailed?: boolean
+  mobileNavOpen?: boolean
   mergeBandTarget?: HTMLElement | null
   onAction: (
     action: string,
@@ -59,6 +66,7 @@ type ConversationPaneHeaderProps = {
   onOpenTasks?: () => void
   onToggleToday?: (isToday: boolean) => void
   onBack?: () => void
+  onOpenNavigation?: () => void
   onLater?: () => void
   onClose?: () => void
 }
@@ -76,6 +84,9 @@ export function ConversationPaneHeader({
   titleEditing = false,
   mobileActionsMenuOpen,
   pullRequestsOpen,
+  pullRequestListTarget = null,
+  activityFailed = false,
+  mobileNavOpen = false,
   mergeBandTarget = null,
   onAction,
   onOpenInTerminal,
@@ -84,6 +95,7 @@ export function ConversationPaneHeader({
   onOpenTasks = () => undefined,
   onToggleToday,
   onBack,
+  onOpenNavigation,
   onLater,
   onClose,
 }: ConversationPaneHeaderProps) {
@@ -95,15 +107,11 @@ export function ConversationPaneHeader({
   const pullRequestListOpen = pullRequestsOpen ?? internalPullRequestListOpen
   const setPullRequestListOpen = (open: boolean) => {
     setInternalPullRequestListOpen(open)
+    if (isMobile && !open && statusPanelOpen) onToggleStatusPanel()
   }
   const [mobileVibeOpen, setMobileVibeOpen] = useState(false)
   const parent = session.parent
-  const pullRequests =
-    session.pullRequests !== undefined && session.pullRequests.length > 0
-      ? session.pullRequests
-      : session.pullRequest === null
-        ? []
-        : [session.pullRequest]
+  const pullRequests = getSessionPullRequests(session)
   const merge = useConversationPaneHeaderMerge({
     session,
     pullRequests,
@@ -134,8 +142,16 @@ export function ConversationPaneHeader({
       },
     ]
   })
+  const hasMergeFailure = mergeRows.some(
+    ({ status }) => status === 'mergeFailed',
+  )
   const mergeStatusFor = (target: (typeof pullRequests)[number]) =>
     merge.mergeStatusFor(target)
+  const pullRequestStatusLabel = sessionPullRequestStatusLabel(
+    pullRequests,
+    mergeStatusFor,
+  )
+  const mobileStatusPanelLabel = `${statusPanelOpen ? 'Close' : 'Open'} session status panel${pullRequestStatusLabel === null ? '' : `. ${pullRequestStatusLabel}`}`
   const mergeErrorFor = (target: (typeof pullRequests)[number]) =>
     merge.mergeActionFor(target)?.error
   const canRetryMerge = (target: (typeof pullRequests)[number]) =>
@@ -240,15 +256,56 @@ export function ConversationPaneHeader({
     <header className="conversation-header">
       {isMobile ? (
         <>
-          <Button
-            className="mobile-conversation-back cursor-pointer"
-            type="button"
-            variant="plain"
-            aria-label="Back to Inbox"
-            onClick={onBack}
-          >
-            <ChevronLeft aria-hidden="true" size={30} strokeWidth={2.5} />
-          </Button>
+          <div className="mobile-conversation-navigation">
+            <Button
+              className="mobile-conversation-back cursor-pointer"
+              type="button"
+              variant="plain"
+              aria-label="Back to Inbox"
+              onClick={onBack}
+            >
+              <ChevronLeft
+                aria-hidden="true"
+                size={30}
+                strokeWidth={2.5}
+                style={{ width: '30px', height: '30px' }}
+              />
+            </Button>
+            <button
+              className="mobile-conversation-nav-toggle cursor-pointer"
+              type="button"
+              aria-label={
+                activityFailed
+                  ? 'Open navigation, Activity has failed actions'
+                  : 'Open navigation'
+              }
+              aria-haspopup="dialog"
+              aria-expanded={mobileNavOpen}
+              onClick={onOpenNavigation}
+            >
+              <svg
+                width="22"
+                height="22"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M4 5h16" />
+                <path d="M4 12h16" />
+                <path d="M4 19h16" />
+              </svg>
+              {activityFailed ? (
+                <span
+                  className="mobile-conversation-nav-failure"
+                  aria-hidden="true"
+                />
+              ) : null}
+            </button>
+          </div>
           <div className="mobile-conversation-title">
             {isToday ? (
               <Star
@@ -265,43 +322,37 @@ export function ConversationPaneHeader({
           </div>
           <div className="mobile-conversation-header-actions">
             <Button
-              className="mobile-conversation-status-toggle"
+              className={`mobile-conversation-status-toggle${hasMergeFailure ? ' is-merge-failed' : ''}`}
               type="button"
               variant="plain"
-              aria-label={
-                statusPanelOpen
-                  ? 'Close session status panel'
-                  : 'Open session status panel'
-              }
+              aria-label={mobileStatusPanelLabel}
               aria-expanded={statusPanelOpen}
               aria-controls="session-status-panel"
-              title={
-                statusPanelOpen
-                  ? 'Close session status panel'
-                  : 'Open session status panel'
-              }
+              title={mobileStatusPanelLabel}
               onClick={() => {
                 onToggleStatusPanel()
               }}
             >
               {statusPanelOpen ? (
-                <PanelRightClose aria-hidden="true" size={18} />
+                <PanelRightClose
+                  aria-hidden="true"
+                  size={18}
+                  style={{ width: '18px', height: '18px' }}
+                />
               ) : (
-                <PanelRightOpen aria-hidden="true" size={18} />
+                <PanelRightOpen
+                  aria-hidden="true"
+                  size={18}
+                  style={{ width: '18px', height: '18px' }}
+                />
               )}
+              {pullRequests.length > 0 ? (
+                <SessionPullRequestStatusBadge
+                  pullRequests={pullRequests}
+                  mergeStatus={mergeStatusFor}
+                />
+              ) : null}
             </Button>
-            <SessionPullRequests
-              pullRequests={pullRequests}
-              repo={session.repo}
-              isMobile
-              open={pullRequestListOpen}
-              mergeStatus={mergeStatusFor}
-              canRetryMerge={canRetryMerge}
-              mergeError={mergeErrorFor}
-              onMerge={merge.openMergeConfirmation}
-              onRetryMerge={retryMerge}
-              onOpenChange={setPullRequestListOpen}
-            />
             <MobileConversationActionsMenu
               sessionId={session.id}
               vibeMode={vibeMode}
@@ -444,6 +495,24 @@ export function ConversationPaneHeader({
           </div>
         </>
       )}
+      {isMobile && pullRequestListTarget !== null && pullRequests.length > 0
+        ? createPortal(
+            <SessionPullRequests
+              pullRequests={pullRequests}
+              repo={session.repo}
+              isMobile
+              presentation="list"
+              open={false}
+              mergeStatus={mergeStatusFor}
+              canRetryMerge={canRetryMerge}
+              mergeError={mergeErrorFor}
+              onMerge={merge.openMergeConfirmation}
+              onRetryMerge={retryMerge}
+              onOpenChange={setPullRequestListOpen}
+            />,
+            pullRequestListTarget,
+          )
+        : null}
       {mergeBand}
       {merge.mergeConfirmationOpen && merge.mergeTarget !== null ? (
         <PullRequestMergeConfirmation

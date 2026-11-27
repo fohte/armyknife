@@ -24,7 +24,7 @@ CREATE TRIGGER agent_file_delete_session
         DELETE FROM agent_file WHERE session_id = OLD.session_id;
     END;";
 
-static MIGRATION_ENTRIES: [M<'static>; 30] = [
+static MIGRATION_ENTRIES: [M<'static>; 33] = [
     M::up(
         "CREATE TABLE sessions (
             session_id TEXT PRIMARY KEY,
@@ -292,6 +292,30 @@ static MIGRATION_ENTRIES: [M<'static>; 30] = [
             AFTER DELETE ON sessions
             BEGIN
                 DELETE FROM agent_session_close WHERE session_id = OLD.session_id;
+            END;",
+    ),
+    M::up("ALTER TABLE watch_web_queued_prompt ADD COLUMN action_event_kind TEXT;"),
+    M::up(
+        "CREATE TABLE agent_session_activity (
+            session_id TEXT PRIMARY KEY,
+            last_responded_at INTEGER NOT NULL
+        );
+        CREATE TRIGGER agent_session_activity_delete_session
+            AFTER DELETE ON sessions
+            BEGIN
+                DELETE FROM agent_session_activity WHERE session_id = OLD.session_id;
+            END;",
+    ),
+    M::up(
+        "CREATE TABLE agent_deferred_unreported_stop (
+            session_id TEXT PRIMARY KEY,
+            parent_session_id TEXT NOT NULL,
+            stopped_at TEXT NOT NULL
+        );
+        CREATE TRIGGER agent_deferred_unreported_stop_delete_session
+            AFTER DELETE ON sessions
+            BEGIN
+                DELETE FROM agent_deferred_unreported_stop WHERE session_id = OLD.session_id;
             END;",
     ),
 ];

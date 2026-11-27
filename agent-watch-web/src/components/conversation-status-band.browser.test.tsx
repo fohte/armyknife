@@ -3,7 +3,10 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { userEvent } from 'vitest/browser'
 
+import { BackgroundTaskElapsedStartedAtProvider } from '#components/background-task-elapsed-context'
 import { ConversationStatusBand } from '#components/conversation-status-band'
+import { RunningTasksPanel } from '#components/running-tasks-panel'
+import { SessionElapsedStartedAtProvider } from '#components/session-elapsed-context'
 
 let container: HTMLDivElement
 let root: Root | null = null
@@ -38,8 +41,139 @@ afterEach(() => {
   if (root !== null) act(() => root?.unmount())
   root = null
   container.remove()
+  vi.useRealTimers()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
+})
+
+it('updates the working elapsed label from the shared clock', async () => {
+  vi.useFakeTimers()
+  vi.setSystemTime(new Date('2026-11-10T00:00:00.000Z'))
+  const startedAt = Date.now()
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <SessionElapsedStartedAtProvider value={startedAt}>
+        <ConversationStatusBand
+          state={{ kind: 'working', detail: null }}
+          elapsedSeconds={92}
+          activeTool={undefined}
+          backgroundTasks={[]}
+        />
+      </SessionElapsedStartedAtProvider>,
+    )
+  })
+  const before =
+    container.querySelector('.conversation-status-band-label')?.textContent ??
+    null
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1_000)
+  })
+
+  const snapshot = () => ({
+    before,
+    after:
+      container.querySelector('.conversation-status-band-label')?.textContent ??
+      null,
+  })
+  expect(snapshot()).toEqual({
+    before: 'Working · 1m 32s',
+    after: 'Working · 1m 33s',
+  })
+})
+
+it('updates background task elapsed labels from the shared clock', async () => {
+  vi.useFakeTimers()
+  vi.setSystemTime(new Date('2026-11-10T00:00:00.000Z'))
+  const startedAt = Date.now()
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <BackgroundTaskElapsedStartedAtProvider value={startedAt}>
+        <ConversationStatusBand
+          state={{ kind: 'background-tasks', detail: null }}
+          elapsedSeconds={0}
+          activeTool={undefined}
+          backgroundTasks={backgroundTasks}
+          defaultExpanded
+        />
+      </BackgroundTaskElapsedStartedAtProvider>,
+    )
+  })
+  const before = Array.from(
+    container.querySelectorAll('.conversation-status-band-expanded p'),
+    (detail) => detail.textContent,
+  )
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1_000)
+  })
+
+  const snapshot = () => ({
+    before,
+    after: Array.from(
+      container.querySelectorAll('.conversation-status-band-expanded p'),
+      (detail) => detail.textContent,
+    ),
+  })
+  expect(snapshot()).toEqual({
+    before: backgroundTaskDetails,
+    after: [
+      'Rebuild the sample index · 2m 9s',
+      'Check the sample bundle · 1m 3s',
+    ],
+  })
+})
+
+it('updates running task elapsed labels from the shared clock', async () => {
+  vi.useFakeTimers()
+  vi.setSystemTime(new Date('2026-11-10T00:00:00.000Z'))
+  const startedAt = Date.now()
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <BackgroundTaskElapsedStartedAtProvider value={startedAt}>
+        <RunningTasksPanel
+          sessionId="fixture-session"
+          tasks={[
+            {
+              id: 'fixture-subagent',
+              description: 'Review the sample change',
+              elapsedSeconds: 31,
+              kind: 'subagent',
+            },
+            {
+              id: 'fixture-background-task',
+              description: 'Build the sample bundle',
+              elapsedSeconds: 61,
+              kind: 'background_task',
+            },
+          ]}
+        />
+      </BackgroundTaskElapsedStartedAtProvider>,
+    )
+  })
+  const before = Array.from(
+    container.querySelectorAll('.running-task-elapsed'),
+    (label) => label.textContent,
+  )
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1_000)
+  })
+
+  const snapshot = () => ({
+    before,
+    after: Array.from(
+      container.querySelectorAll('.running-task-elapsed'),
+      (label) => label.textContent,
+    ),
+  })
+  expect(snapshot()).toEqual({
+    before: ['31s', '1m 1s'],
+    after: ['32s', '1m 2s'],
+  })
 })
 
 it('expands to every background task when the compact row is pressed', async () => {

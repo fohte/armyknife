@@ -1399,6 +1399,7 @@ mod tests {
         temp_env::with_vars(
             [
                 ("ARMYKNIFE_SESSION_ID", None::<&str>),
+                ("CLAUDE_CODE_SESSION_ID", None::<&str>),
                 ("CODEX_SESSION_ID", None::<&str>),
                 ("TQ_SESSION_ID", None::<&str>),
             ],
@@ -1493,6 +1494,7 @@ mod tests {
             [
                 ("CLAUDECODE", claudecode),
                 ("ARMYKNIFE_SESSION_ID", armyknife_session_id),
+                ("CLAUDE_CODE_SESSION_ID", None::<&str>),
                 ("CODEX_SESSION_ID", codex_session_id),
                 ("TMUX", tmux),
                 ("TMUX_PANE", tmux.map(|_| "%1")),
@@ -1513,6 +1515,7 @@ mod tests {
             [
                 ("CLAUDECODE", None::<&str>),
                 ("ARMYKNIFE_SESSION_ID", None::<&str>),
+                ("CLAUDE_CODE_SESSION_ID", None::<&str>),
                 ("CODEX_SESSION_ID", None::<&str>),
                 ("TMUX", None::<&str>),
                 ("TMUX_PANE", None::<&str>),
@@ -1699,6 +1702,7 @@ mod tests {
         let actual = temp_env::with_vars(
             [
                 ("ARMYKNIFE_SESSION_ID", None::<&str>),
+                ("CLAUDE_CODE_SESSION_ID", None::<&str>),
                 ("CODEX_SESSION_ID", None::<&str>),
                 ("CLAUDECODE", None::<&str>),
                 ("TQ_SESSION_ID", None::<&str>),

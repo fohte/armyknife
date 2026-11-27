@@ -32,6 +32,34 @@ const INITIAL_MESSAGE_LIMIT = 100
 const MAX_LOADED_MESSAGES = 300
 const RETAINED_MESSAGE_COUNT = 200
 
+function mergeMessageImageSources(
+  ...maps: readonly (
+    Record<string, Record<string, string | null>> | undefined
+  )[]
+): Record<string, Record<string, string | null>> | undefined {
+  const merged: Record<string, Record<string, string | null>> = {}
+  for (const map of maps) {
+    if (map === undefined) continue
+    for (const [index, sources] of Object.entries(map)) {
+      merged[index] = sources
+    }
+  }
+  return Object.keys(merged).length === 0 ? undefined : merged
+}
+
+function shiftMessageImageSources(
+  sources: Record<string, Record<string, string | null>> | undefined,
+  offset: number,
+): Record<string, Record<string, string | null>> | undefined {
+  if (sources === undefined || offset === 0) return sources
+  return Object.fromEntries(
+    Object.entries(sources).map(([index, source]) => [
+      String(Number(index) + offset),
+      source,
+    ]),
+  )
+}
+
 type UseConversationPaneDataOptions = {
   sessionId: string
   refreshKey: number
@@ -47,8 +75,8 @@ export function useConversationPaneData({
   pendingOperations,
   confirm,
 }: UseConversationPaneDataOptions) {
-  const shiftMergeTimelineIndices =
-    useOptionalAsyncActionFeedback()?.shiftMergeTimelineIndices
+  const shiftActionTimelineIndices =
+    useOptionalAsyncActionFeedback()?.shiftActionTimelineIndices
   const sessionConversationCache = useSessionConversationCache()
   const setCachedConversation = sessionConversationCache?.setCachedConversation
   const [initialCachedConversation] = useState(() =>
@@ -78,6 +106,10 @@ export function useConversationPaneData({
   const currentSessionId = useRef(sessionId)
   currentSessionId.current = sessionId
   const requestGeneration = useRef(0)
+  const messagesRequestInFlight = useRef(false)
+  const refreshQueued = useRef(false)
+  const pendingPromptIdsForNextRefresh = useRef(new Set<string>())
+  const refreshRef = useRef<(() => Promise<void>) | null>(null)
   const actionsRequestGeneration = useRef(0)
   const olderRequestGeneration = useRef(0)
   const messagesError = useRef<string | null>(null)
@@ -177,8 +209,13 @@ export function useConversationPaneData({
   }, [confirmPendingOperations, sessionId])
 
   const refresh = useCallback(async () => {
-    const generation = requestGeneration.current + 1
-    requestGeneration.current = generation
+    if (messagesRequestInFlight.current) {
+      void refreshActions()
+      refreshQueued.current = true
+      return
+    }
+    messagesRequestInFlight.current = true
+    const generation = requestGeneration.current
     const sessionPath = `/api/sessions/${encodeURIComponent(sessionId)}`
     const loadedConversation =
       conversationSessionId.current === sessionId
@@ -195,64 +232,102 @@ export function useConversationPaneData({
       loadedConversation?.epoch === undefined
         ? ''
         : `&epoch=${encodeURIComponent(loadedConversation.epoch)}${loadedConversation.olderCursor == null ? '' : `&olderCursor=${encodeURIComponent(loadedConversation.olderCursor)}`}`
+    const pendingPromptIds = new Set(
+      pendingOperationsRef.current.flatMap((pending) =>
+        pending.status === 'sent' &&
+        pending.operation.type === 'message' &&
+        pending.operation.sessionId === sessionId &&
+        pending.operation.queuedPromptId !== undefined
+          ? [pending.operation.queuedPromptId]
+          : [],
+      ),
+    )
+    for (const messageId of pendingPromptIdsForNextRefresh.current) {
+      pendingPromptIds.add(messageId)
+    }
+    pendingPromptIdsForNextRefresh.current.clear()
+    const pendingPromptIdsQuery =
+      pendingPromptIds.size === 0
+        ? ''
+        : `&pendingPromptIds=${encodeURIComponent([...pendingPromptIds].join(','))}`
     const messagesRequest = requestJson(
       loadedConversation === null
-        ? `${sessionPath}/messages?limit=${String(INITIAL_MESSAGE_LIMIT)}`
-        : `${sessionPath}/messages?from=${String(loadedConversation.start)}${epochQuery}${stableDigestQuery}`,
+        ? `${sessionPath}/messages?limit=${String(INITIAL_MESSAGE_LIMIT)}${pendingPromptIdsQuery}`
+        : `${sessionPath}/messages?from=${String(loadedConversation.start)}${epochQuery}${stableDigestQuery}${pendingPromptIdsQuery}`,
       isConversationResponse,
     )
     void refreshActions()
-    const messagesResult = await messagesRequest
-    if (requestGeneration.current !== generation) return
-    let refreshedConversation: ConversationResponse | null = null
-    if (messagesResult.isOk()) {
-      const alreadyLoaded = conversationSessionId.current === sessionId
-      const previous = alreadyLoaded
-        ? conversationRef.current
-        : EMPTY_CONVERSATION
-      const sameEpoch = previous.epoch === messagesResult.value.epoch
-      const preserveLoadedPrefix =
-        alreadyLoaded &&
-        sameEpoch &&
-        previous.start < messagesResult.value.start
-      const start = preserveLoadedPrefix
-        ? previous.start
-        : messagesResult.value.start
-      const messages = preserveLoadedPrefix
-        ? [
-            ...previous.messages.slice(
-              0,
-              messagesResult.value.start - previous.start,
-            ),
-            ...messagesResult.value.messages,
-          ]
-        : messagesResult.value.messages
-      refreshedConversation = {
-        ...messagesResult.value,
-        start,
-        messages:
-          alreadyLoaded && !sameEpoch
-            ? messagesResult.value.messages
-            : shareUnchangedMessages(
-                previous.messages,
-                messages,
-                previous.start,
-                start,
-              ),
+    try {
+      const messagesResult = await messagesRequest
+      if (
+        requestGeneration.current !== generation ||
+        currentSessionId.current !== sessionId
+      ) {
+        return
       }
-      conversationSessionId.current = sessionId
-      markMessagesLoaded()
-      updateConversation(refreshedConversation)
+      let refreshedConversation: ConversationResponse | null = null
+      if (messagesResult.isOk()) {
+        const alreadyLoaded = conversationSessionId.current === sessionId
+        const previous = alreadyLoaded
+          ? conversationRef.current
+          : EMPTY_CONVERSATION
+        const sameEpoch = previous.epoch === messagesResult.value.epoch
+        const preserveLoadedPrefix =
+          alreadyLoaded &&
+          sameEpoch &&
+          previous.start < messagesResult.value.start
+        const start = preserveLoadedPrefix
+          ? previous.start
+          : messagesResult.value.start
+        const messages = preserveLoadedPrefix
+          ? [
+              ...previous.messages.slice(
+                0,
+                messagesResult.value.start - previous.start,
+              ),
+              ...messagesResult.value.messages,
+            ]
+          : messagesResult.value.messages
+        const messageImageSources = preserveLoadedPrefix
+          ? mergeMessageImageSources(
+              previous.messageImageSources,
+              messagesResult.value.messageImageSources,
+            )
+          : messagesResult.value.messageImageSources
+        refreshedConversation = {
+          ...messagesResult.value,
+          ...(messageImageSources === undefined ? {} : { messageImageSources }),
+          start,
+          messages:
+            alreadyLoaded && !sameEpoch
+              ? messagesResult.value.messages
+              : shareUnchangedMessages(
+                  previous.messages,
+                  messages,
+                  previous.start,
+                  start,
+                ),
+        }
+        conversationSessionId.current = sessionId
+        markMessagesLoaded()
+        updateConversation(refreshedConversation)
+      }
+      messagesError.current = messagesResult.isErr()
+        ? messagesResult.error.message
+        : null
+      setError(messagesError.current ?? actionsError.current)
+      confirmPendingOperations(
+        refreshedConversation ?? conversationRef.current,
+        actionsRef.current,
+      )
+      setLoading(false)
+    } finally {
+      messagesRequestInFlight.current = false
+      if (refreshQueued.current) {
+        refreshQueued.current = false
+        void refreshRef.current?.()
+      }
     }
-    messagesError.current = messagesResult.isErr()
-      ? messagesResult.error.message
-      : null
-    setError(messagesError.current ?? actionsError.current)
-    confirmPendingOperations(
-      refreshedConversation ?? conversationRef.current,
-      actionsRef.current,
-    )
-    setLoading(false)
   }, [
     confirmPendingOperations,
     markMessagesLoaded,
@@ -260,9 +335,17 @@ export function useConversationPaneData({
     sessionId,
     updateConversation,
   ])
+  refreshRef.current = refresh
 
   const refreshForOperation = useCallback(
     async (operation: SessionOperation) => {
+      if (
+        operation.type === 'message' &&
+        operation.sessionId === sessionId &&
+        operation.queuedPromptId !== undefined
+      ) {
+        pendingPromptIdsForNextRefresh.current.add(operation.queuedPromptId)
+      }
       await refresh()
       if (
         isConversationOperationConfirmed(
@@ -337,9 +420,18 @@ export function useConversationPaneData({
           : [...response.messages, ...latest.messages]
         const epochChanged = response.epoch !== latest.epoch
         const start = epochChanged ? 0 : response.start
-        // Epoch changes can renumber retained messages, so rebase their merge results.
+        const messageImageSources = epochReset
+          ? response.messageImageSources
+          : mergeMessageImageSources(
+              response.messageImageSources,
+              shiftMessageImageSources(
+                latest.messageImageSources,
+                start + response.messages.length - latest.start,
+              ),
+            )
+        // Epoch changes can renumber retained messages, so rebase their action results.
         if (!epochReset) {
-          shiftMergeTimelineIndices?.({
+          shiftActionTimelineIndices?.({
             sessionId,
             from: latest.start,
             through: latest.start + latest.messages.length,
@@ -349,6 +441,7 @@ export function useConversationPaneData({
         markMessagesLoaded()
         updateConversation({
           ...response,
+          ...(messageImageSources === undefined ? {} : { messageImageSources }),
           start,
           total: response.total,
           stableStart: undefined,
@@ -379,17 +472,24 @@ export function useConversationPaneData({
     clearErrors,
     markMessagesLoaded,
     sessionId,
-    shiftMergeTimelineIndices,
+    shiftActionTimelineIndices,
     updateConversation,
   ])
 
   useEffect(() => {
     void refresh()
+  }, [refresh, refreshKey])
+
+  useEffect(() => {
     return () => {
       requestGeneration.current += 1
       actionsRequestGeneration.current += 1
+      if (currentSessionId.current === sessionId) {
+        refreshQueued.current = false
+      }
+      pendingPromptIdsForNextRefresh.current.clear()
     }
-  }, [refresh, refreshKey])
+  }, [sessionId])
 
   useEffect(() => {
     if (conversationSessionId.current !== sessionId) {

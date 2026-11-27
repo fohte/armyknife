@@ -1,13 +1,13 @@
-use std::collections::{HashMap, HashSet};
-use std::future::Future;
-
 use crate::commands::agent::types::{Session, SessionPrContext};
 use crate::infra::github::{BranchPrQuery, GitHubClient, PrNumberQuery, PrProgressInfo};
 use crate::infra::tq::TqGithubLink;
+use std::collections::{HashMap, HashSet};
 
 use super::{
-    PullRequestKey, SessionEnrichmentCache, SessionPullRequestInfo, SessionTaskMetadata,
+    CacheOperations, PullRequestKey, SessionEnrichmentCache, SessionPullRequestInfo,
+    SessionTaskMetadata,
     cache::{merge_pull_request_results, prune_pull_request_results},
+    pull_request_can_refresh,
 };
 
 impl SessionEnrichmentCache {
@@ -29,12 +29,49 @@ impl SessionEnrichmentCache {
             .get_or_refresh(
                 "GitHub",
                 query_keys,
+                None,
                 {
                     let sessions = sessions.to_vec();
-                    move |_| fetcher(sessions, number_queries)
+                    move |_, refresh_keys| {
+                        let branch_keys = refresh_keys
+                            .iter()
+                            .filter_map(|key| match key {
+                                PullRequestKey::Branch(key) => Some(key.clone()),
+                                PullRequestKey::Number(_) => None,
+                            })
+                            .collect::<HashSet<_>>();
+                        let number_keys = refresh_keys
+                            .iter()
+                            .filter_map(|key| match key {
+                                PullRequestKey::Branch(_) => None,
+                                PullRequestKey::Number(key) => Some(key.clone()),
+                            })
+                            .collect::<HashSet<_>>();
+                        let sessions = sessions
+                            .into_iter()
+                            .filter(|session| {
+                                session.pr_context.as_ref().is_some_and(|context| {
+                                    branch_keys.contains(&(
+                                        context.owner.clone(),
+                                        context.repo.clone(),
+                                        context.branch.clone(),
+                                    ))
+                                })
+                            })
+                            .collect();
+                        let number_queries = number_queries
+                            .into_iter()
+                            .filter(|query| number_keys.contains(&query.key()))
+                            .collect();
+                        fetcher(sessions, number_queries)
+                    }
                 },
-                merge_pull_request_results,
-                prune_pull_request_results,
+                CacheOperations {
+                    merge: merge_pull_request_results,
+                    prune: prune_pull_request_results,
+                    can_refresh: pull_request_can_refresh,
+                    fetched_keys: |_, refresh_keys| refresh_keys.clone(),
+                },
             )
             .await;
 
@@ -276,67 +313,4 @@ pub(super) async fn fetch_pull_requests(
     );
 
     Ok(prs)
-}
-
-pub(super) async fn fetch_task_github_links<F, Fut>(
-    task_ids: &HashSet<String>,
-    previous: &HashMap<String, Vec<TqGithubLink>>,
-    fetch: F,
-) -> HashMap<String, Vec<TqGithubLink>>
-where
-    F: Fn(String) -> Fut + Sync,
-    Fut: Future<Output = Result<Vec<TqGithubLink>, String>> + Send,
-{
-    let responses = futures_util::future::join_all(task_ids.iter().map(|task_id| {
-        let task_id = task_id.clone();
-        let future = fetch(task_id.clone());
-        async move { (task_id, future.await) }
-    }))
-    .await;
-
-    responses
-        .into_iter()
-        .filter_map(|(task_id, result)| match result {
-            Ok(links) => Some((task_id, links)),
-            Err(error) => {
-                tracing::warn!(%error, task_id, "Failed to fetch agent watch tq task GitHub links; keeping cached values");
-                previous.get(&task_id).cloned().map(|links| (task_id, links))
-            }
-        })
-        .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use std::collections::{HashMap, HashSet};
-
-    use crate::infra::tq::TqGithubLink;
-
-    use super::fetch_task_github_links;
-
-    #[tokio::test]
-    async fn keeps_cached_task_github_links_when_a_refresh_fails() {
-        let task_ids = HashSet::from(["task-example".to_string()]);
-        let previous = HashMap::from([(
-            "task-example".to_string(),
-            vec![TqGithubLink {
-                id: "link-example".to_string(),
-                kind: Some("pull_request".to_string()),
-                owner: Some("example-owner".to_string()),
-                repo: Some("example-repository".to_string()),
-                number: Some(29),
-                title: None,
-                url: None,
-                state: None,
-            }],
-        )]);
-
-        assert_eq!(
-            fetch_task_github_links(&task_ids, &previous, |_| async {
-                Err("temporary lookup failure".to_string())
-            })
-            .await,
-            previous,
-        );
-    }
 }

@@ -20,6 +20,35 @@ pub(crate) fn check_unreported_stop(
 
     let mut connection = open_connection(sessions_dir)?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let has_reported = has_reported_since_last_stop(
+        &transaction,
+        session_id,
+        parent_session_id,
+        session_created_at,
+    )?;
+    let last_message_id = last_message_id_for_stop(&transaction, session_id, parent_session_id)?;
+
+    transaction.execute(
+        "DELETE FROM agent_deferred_unreported_stop WHERE session_id = ?1",
+        [session_id],
+    )?;
+
+    transaction.execute(
+        "INSERT INTO agent_unreported_stop_peer_cursor (session_id, last_message_id)
+         VALUES (?1, ?2)
+         ON CONFLICT(session_id) DO UPDATE SET last_message_id = excluded.last_message_id",
+        params![session_id, last_message_id],
+    )?;
+    transaction.commit()?;
+    Ok(has_reported)
+}
+
+pub(super) fn has_reported_since_last_stop(
+    transaction: &Transaction<'_>,
+    session_id: &str,
+    parent_session_id: &str,
+    session_created_at: DateTime<Utc>,
+) -> Result<bool> {
     let previous_message_id = match transaction
         .query_row(
             "SELECT last_message_id FROM agent_unreported_stop_peer_cursor WHERE session_id = ?1",
@@ -30,7 +59,7 @@ pub(crate) fn check_unreported_stop(
     {
         Some(last_message_id) => last_message_id,
         None => last_message_id_through(
-            &transaction,
+            transaction,
             session_id,
             parent_session_id,
             session_created_at,
@@ -52,21 +81,20 @@ pub(crate) fn check_unreported_stop(
         params![session_id, parent_session_id, report_boundary],
         |row| row.get::<_, bool>(0),
     )?;
-    let last_message_id = transaction.query_row(
+    Ok(has_reported)
+}
+
+fn last_message_id_for_stop(
+    transaction: &Transaction<'_>,
+    session_id: &str,
+    parent_session_id: &str,
+) -> Result<i64> {
+    Ok(transaction.query_row(
         "SELECT COALESCE(MAX(id), 0) FROM watch_web_peer_out_message
          WHERE from_session_id = ?1 AND to_session_id = ?2",
         params![session_id, parent_session_id],
         |row| row.get::<_, i64>(0),
-    )?;
-
-    transaction.execute(
-        "INSERT INTO agent_unreported_stop_peer_cursor (session_id, last_message_id)
-         VALUES (?1, ?2)
-         ON CONFLICT(session_id) DO UPDATE SET last_message_id = excluded.last_message_id",
-        params![session_id, last_message_id],
-    )?;
-    transaction.commit()?;
-    Ok(has_reported)
+    )?)
 }
 
 fn last_message_id_through(
@@ -211,6 +239,20 @@ mod tests {
 
     #[fixture]
     fn sessions_dir() -> TempDir {
-        tempfile::tempdir().unwrap()
+        let sessions_dir = tempfile::tempdir().unwrap();
+        let session: crate::commands::agent::types::Session =
+            serde_json::from_value(serde_json::json!({
+                "session_id": "fixture-delegate",
+                "cwd": "/fixture/worktree",
+                "transcript_path": null,
+                "tmux_info": null,
+                "status": "stopped",
+                "created_at": "2026-06-01T10:00:00Z",
+                "updated_at": "2026-06-01T10:00:00Z",
+                "last_message": null,
+            }))
+            .unwrap();
+        crate::commands::agent::store::save_session_to(sessions_dir.path(), &session).unwrap();
+        sessions_dir
     }
 }

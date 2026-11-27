@@ -96,7 +96,61 @@ afterEach(() => {
   root = null
   container.remove()
   vi.restoreAllMocks()
+  vi.useRealTimers()
   vi.unstubAllGlobals()
+})
+
+it('advances elapsed time without a panel interval', async () => {
+  vi.useFakeTimers()
+  vi.setSystemTime(new Date('2026-11-10T00:00:00.000Z'))
+  const intervalSpy = vi.spyOn(window, 'setInterval')
+  renderTree()
+
+  const before = Array.from(
+    container.querySelectorAll<HTMLElement>('.session-age'),
+    (element) => element.textContent,
+  )
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1_000)
+  })
+  const after = Array.from(
+    container.querySelectorAll<HTMLElement>('.session-age'),
+    (element) => element.textContent,
+  )
+
+  const snapshot = () => ({
+    before,
+    after,
+    intervalCount: intervalSpy.mock.calls.length,
+  })
+  expect(snapshot()).toEqual({
+    before: ['5m', '8s', '1h'],
+    after: ['5m', '9s', '1h'],
+    intervalCount: 1,
+  })
+})
+
+it('clears the shared interval when the tree releases its clock subscription', () => {
+  vi.useFakeTimers()
+  const intervalSpy = vi.spyOn(window, 'setInterval')
+  renderTree()
+  const activeTimersBeforeUnmount = vi.getTimerCount()
+
+  act(() => {
+    root?.unmount()
+  })
+  root = null
+
+  const snapshot = () => ({
+    createdIntervals: intervalSpy.mock.calls.length,
+    activeTimersBeforeUnmount,
+    activeTimersAfterUnmount: vi.getTimerCount(),
+  })
+  expect(snapshot()).toEqual({
+    createdIntervals: 1,
+    activeTimersBeforeUnmount: 1,
+    activeTimersAfterUnmount: 0,
+  })
 })
 
 it('shows every tree session with the shared row and keeps ended sessions visible', () => {
@@ -214,7 +268,7 @@ it.each([
       caretMarginTop: caret === null ? null : getComputedStyle(caret).marginTop,
     })
     expect(snapshot()).toEqual({
-      rowAlignment: 'flex-start',
+      rowAlignment: 'flow-start',
       caretMarginTop: expectedMarginTop,
     })
   },

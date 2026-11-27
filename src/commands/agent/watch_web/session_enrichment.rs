@@ -3,7 +3,7 @@ use std::future::Future;
 use std::hash::Hash;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use super::EnrichmentUpdates;
 use crate::commands::agent::tq_session_tasks::{
@@ -11,15 +11,18 @@ use crate::commands::agent::tq_session_tasks::{
     order_tasks_by_priority, task_priority_metadata,
 };
 use crate::commands::agent::types::Session;
-use crate::infra::github::{PrNumberQuery, PrProgressInfo};
-use crate::infra::tq::{TqClient, TqGithubLink, TqProjectSummary, TqTaskSummary};
+use crate::infra::github::{PrNumberQuery, PrProgressInfo, PrState};
+use crate::infra::tq::{TqClient, TqGithubLink, TqTaskSummary};
+use tokio::time::Instant;
 
 mod cache;
+mod task_projects;
 mod task_pull_requests;
 #[cfg(test)]
 mod test_support;
 
 use cache::{merge_session_task_metadata, prune_session_task_metadata};
+use task_projects::fetch_task_projects;
 
 const CACHE_TTL: Duration = Duration::from_secs(30);
 const CACHE_KEY_RETENTION: Duration = Duration::from_secs(10 * 60);
@@ -87,8 +90,16 @@ impl SessionEnrichmentCache {
         pull_request_fetcher: PullRequestFetcher,
     ) -> Self {
         Self {
-            tq: Arc::new(RefreshingCache::new(updates.clone(), fetch_timeout)),
-            pull_requests: Arc::new(RefreshingCache::new(updates, fetch_timeout)),
+            tq: Arc::new(RefreshingCache::new(
+                updates.clone(),
+                fetch_timeout,
+                CACHE_TTL,
+            )),
+            pull_requests: Arc::new(RefreshingCache::new(
+                updates.clone(),
+                fetch_timeout,
+                CACHE_TTL,
+            )),
             task_fetcher,
             pull_request_fetcher,
         }
@@ -112,9 +123,14 @@ impl SessionEnrichmentCache {
             .get_or_refresh(
                 "tq",
                 session_ids,
-                move |previous| fetcher(fetch_session_ids, previous),
-                merge_session_task_metadata,
-                prune_session_task_metadata,
+                None,
+                move |previous, _| fetcher(fetch_session_ids, previous),
+                CacheOperations {
+                    merge: merge_session_task_metadata,
+                    prune: prune_session_task_metadata,
+                    can_refresh: |_, _| true,
+                    fetched_keys: |requested, _| requested.clone(),
+                },
             )
             .await
     }
@@ -127,6 +143,7 @@ pub(super) struct SessionTaskMetadata {
     pub(super) priorities: HashMap<String, Option<i32>>,
     pub(super) priority_order: HashMap<String, usize>,
     pub(super) task_projects: HashMap<String, String>,
+    pub(super) project_names: HashMap<String, String>,
     pub(super) github_links: HashMap<String, Vec<TqGithubLink>>,
 }
 
@@ -134,6 +151,14 @@ struct RefreshingCache<T, K> {
     state: tokio::sync::Mutex<CacheState<T, K>>,
     updates: EnrichmentUpdates,
     fetch_timeout: Duration,
+    cache_ttl: Duration,
+}
+
+struct CacheOperations<T, K> {
+    merge: fn(&mut T, T, &HashSet<K>),
+    prune: fn(&mut T, &HashSet<K>),
+    can_refresh: fn(&T, &K) -> bool,
+    fetched_keys: fn(&HashSet<K>, &HashSet<K>) -> HashSet<K>,
 }
 
 struct CacheState<T, K> {
@@ -148,7 +173,7 @@ where
     T: Default,
     K: Eq + Hash,
 {
-    fn new(updates: EnrichmentUpdates, fetch_timeout: Duration) -> Self {
+    fn new(updates: EnrichmentUpdates, fetch_timeout: Duration, cache_ttl: Duration) -> Self {
         Self {
             state: tokio::sync::Mutex::new(CacheState {
                 value: T::default(),
@@ -158,6 +183,7 @@ where
             }),
             updates,
             fetch_timeout,
+            cache_ttl,
         }
     }
 }
@@ -171,12 +197,12 @@ where
         self: &Arc<Self>,
         resource: &'static str,
         keys: HashSet<K>,
+        fetch_timeout: Option<Duration>,
         fetch: F,
-        merge: fn(&mut T, T, &HashSet<K>),
-        prune: fn(&mut T, &HashSet<K>),
+        operations: CacheOperations<T, K>,
     ) -> T
     where
-        F: FnOnce(T) -> Fut + Send + 'static,
+        F: FnOnce(T, HashSet<K>) -> Fut + Send + 'static,
         Fut: Future<Output = Result<T, String>> + Send + 'static,
     {
         let mut state = self.state.lock().await;
@@ -194,34 +220,45 @@ where
             state.last_requested.remove(key);
             state.attempted_at.remove(key);
         }
-        prune(&mut state.value, &stale_keys);
+        (operations.prune)(&mut state.value, &stale_keys);
         let cached = state.value.clone();
-        let expired = keys.iter().any(|key| {
-            state
-                .attempted_at
-                .get(key)
-                .is_none_or(|last_attempt| last_attempt.elapsed() >= CACHE_TTL)
-        });
+        let expired_keys = keys
+            .iter()
+            .filter(|key| {
+                (operations.can_refresh)(&state.value, key)
+                    && state
+                        .attempted_at
+                        .get(*key)
+                        .is_none_or(|last_attempt| last_attempt.elapsed() >= self.cache_ttl)
+            })
+            .cloned()
+            .collect::<HashSet<_>>();
 
-        if expired && !state.refresh_in_flight {
+        if !expired_keys.is_empty() && !state.refresh_in_flight {
             state.refresh_in_flight = true;
             let cache = Arc::clone(self);
             let previous = cached.clone();
-            let attempted_keys = keys.clone();
-            let fetch_timeout = self.fetch_timeout;
+            let fetched_keys = (operations.fetched_keys)(&keys, &expired_keys);
+            let expired_keys = expired_keys.clone();
+            let fetch_timeout = fetch_timeout.unwrap_or(self.fetch_timeout);
             tokio::spawn(async move {
-                let result = match tokio::time::timeout(fetch_timeout, fetch(previous)).await {
+                let result = match tokio::time::timeout(
+                    fetch_timeout,
+                    fetch(previous, expired_keys),
+                )
+                .await
+                {
                     Ok(result) => result,
                     Err(_) => Err(format!("lookup exceeded {fetch_timeout:?}")),
                 };
                 let mut state = cache.state.lock().await;
                 let attempted_at = Instant::now();
-                for key in attempted_keys {
-                    state.attempted_at.insert(key, attempted_at);
+                for key in &fetched_keys {
+                    state.attempted_at.insert(key.clone(), attempted_at);
                 }
                 match result {
                     Ok(value) => {
-                        merge(&mut state.value, value, &keys);
+                        (operations.merge)(&mut state.value, value, &fetched_keys);
                     }
                     Err(error) => {
                         tracing::warn!(%error, resource, "Failed to refresh agent watch metadata; keeping cached values");
@@ -258,6 +295,7 @@ async fn fetch_task_metadata(
             priorities: previous.priorities,
             priority_order: previous.priority_order,
             task_projects: previous.task_projects,
+            project_names: previous.project_names,
             github_links: previous.github_links,
         });
     }
@@ -265,33 +303,27 @@ async fn fetch_task_metadata(
     let tasks = match client.list_tasks(&task_ids).await {
         Ok(tasks) => tasks,
         Err(error) => {
-            tracing::warn!(%error, "Failed to fetch agent watch tq task priorities; keeping cached priorities");
+            tracing::warn!(%error, "Failed to fetch agent watch tq task metadata including GitHub links; keeping cached values");
             return Ok(keep_cached_priority_metadata(links, previous));
         }
     };
 
-    let github_links = task_pull_requests::fetch_task_github_links(
-        &task_ids,
-        &previous.github_links,
-        |task_id| async move {
-            TqClient
-                .task_github_links(&task_id)
+    let updated_at = task_update_timestamps(&tasks);
+    let github_links = task_github_links(&tasks);
+
+    let (priorities, priority_order) = task_priority_metadata(tasks.clone());
+    order_tasks_by_priority(&mut links, &priority_order);
+    let (task_projects, project_names) = fetch_task_projects(
+        tasks,
+        previous.project_names,
+        previous.task_projects,
+        || async {
+            client
+                .list_projects()
                 .await
                 .map_err(|error| error.to_string())
         },
     )
-    .await;
-
-    let updated_at = task_update_timestamps(&tasks);
-
-    let (priorities, priority_order) = task_priority_metadata(tasks.clone());
-    order_tasks_by_priority(&mut links, &priority_order);
-    let task_projects = fetch_task_projects(tasks, previous.task_projects, || async {
-        client
-            .list_projects()
-            .await
-            .map_err(|error| error.to_string())
-    })
     .await;
 
     Ok(SessionTaskMetadata {
@@ -300,8 +332,16 @@ async fn fetch_task_metadata(
         priorities,
         priority_order,
         task_projects,
+        project_names,
         github_links,
     })
+}
+
+fn task_github_links(tasks: &[TqTaskSummary]) -> HashMap<String, Vec<TqGithubLink>> {
+    tasks
+        .iter()
+        .map(|task| (task.id.clone(), task.github_links.clone()))
+        .collect()
 }
 
 fn task_update_timestamps(
@@ -324,44 +364,18 @@ fn keep_cached_priority_metadata(
     SessionTaskMetadata { links, ..previous }
 }
 
-async fn fetch_task_projects<F, Fut>(
-    tasks: Vec<TqTaskSummary>,
-    previous: HashMap<String, String>,
-    fetch_projects: F,
-) -> HashMap<String, String>
-where
-    F: FnOnce() -> Fut + Send,
-    Fut: Future<Output = Result<Vec<TqProjectSummary>, String>> + Send,
-{
-    if !tasks.iter().any(|task| task.project_id.is_some()) {
-        return HashMap::new();
-    }
-
-    match fetch_projects().await {
-        Ok(projects) => task_project_names(tasks, projects),
-        Err(error) => {
-            tracing::warn!(%error, "Failed to fetch agent watch tq projects; keeping cached values");
-            previous
-        }
-    }
-}
-
-fn task_project_names(
-    tasks: Vec<TqTaskSummary>,
-    projects: Vec<TqProjectSummary>,
-) -> HashMap<String, String> {
-    let project_names = projects
-        .into_iter()
-        .map(|project| (project.id, project.title))
-        .collect::<HashMap<_, _>>();
-
-    tasks
-        .into_iter()
-        .filter_map(|task| {
-            let project_name = project_names.get(task.project_id.as_deref()?)?;
-            Some((task.id, project_name.clone()))
-        })
-        .collect()
+fn pull_request_can_refresh(
+    cached: &HashMap<PullRequestKey, Option<PrProgressInfo>>,
+    key: &PullRequestKey,
+) -> bool {
+    // Completed PRs stay cached so they do not trigger recurring lookups.
+    !matches!(
+        cached
+            .get(key)
+            .and_then(Option::as_ref)
+            .map(|pr| &pr.pull_request.state),
+        Some(PrState::Merged | PrState::Closed)
+    )
 }
 
 async fn detected_tq_client() -> Result<Option<TqClient>, String> {
@@ -405,6 +419,7 @@ mod tests {
             updated_at: None,
             priority,
             project_id: None,
+            github_links: Vec::new(),
         }
     }
 
@@ -467,7 +482,11 @@ mod tests {
             ]),
             priority_order: HashMap::from([("higher".to_string(), 0), ("lower".to_string(), 1)]),
             task_projects: HashMap::from([("higher".to_string(), "sample project".to_string())]),
-            github_links: HashMap::new(),
+            project_names: HashMap::new(),
+            github_links: HashMap::from([(
+                "higher".to_string(),
+                vec![tq_pr_link("linked-pr", 29)],
+            )]),
         };
         let links = HashMap::from([(
             "session-a".to_string(),
@@ -487,22 +506,6 @@ mod tests {
     }
 
     #[test]
-    fn maps_tq_task_projects_to_project_titles() {
-        let mut task = task("task-a", None);
-        task.project_id = Some("project-a".to_string());
-        let tasks = vec![task];
-        let projects = vec![TqProjectSummary {
-            id: "project-a".to_string(),
-            title: "Example project".to_string(),
-        }];
-
-        assert_eq!(
-            task_project_names(tasks, projects),
-            HashMap::from([("task-a".to_string(), "Example project".to_string())]),
-        );
-    }
-
-    #[test]
     fn maps_tq_task_timestamps_by_task_id() {
         let updated_at = chrono::DateTime::parse_from_rfc3339("2026-10-02T03:04:05Z")
             .expect("valid timestamp")
@@ -514,37 +517,6 @@ mod tests {
             task_update_timestamps(&[updated_task, task("task-b", None)]),
             HashMap::from([("task-a".to_string(), updated_at)]),
         );
-    }
-
-    #[rstest]
-    #[case::project_list_succeeds(
-        Ok(vec![TqProjectSummary {
-            id: "project-a".to_string(),
-            title: "Sample project".to_string(),
-        }]),
-        HashMap::new(),
-        HashMap::from([("task-a".to_string(), "Sample project".to_string())]),
-    )]
-    #[case::project_list_failure_keeps_cached_values(
-        Err("temporary failure".to_string()),
-        HashMap::from([("task-a".to_string(), "Cached project".to_string())]),
-        HashMap::from([("task-a".to_string(), "Cached project".to_string())]),
-    )]
-    #[tokio::test]
-    async fn fetches_project_names_or_keeps_cached_values_on_error(
-        #[case] project_result: std::result::Result<Vec<TqProjectSummary>, String>,
-        #[case] previous: HashMap<String, String>,
-        #[case] expected: HashMap<String, String>,
-    ) {
-        let mut linked_task = task("task-a", None);
-        linked_task.project_id = Some("project-a".to_string());
-
-        let actual = fetch_task_projects(vec![linked_task], previous, move || async move {
-            project_result
-        })
-        .await;
-
-        assert_eq!(actual, expected);
     }
 
     #[tokio::test]
@@ -706,6 +678,44 @@ mod tests {
                 ])),
                 2,
             )
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn refresh_timestamps_cover_every_session_fetched_in_the_batch() {
+        let updates = EnrichmentUpdates::new();
+        let mut receiver = updates.subscribe();
+        let fetches = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded_fetches = Arc::clone(&fetches);
+        let task_fetcher: TaskMetadataFetcher = Arc::new(move |session_ids, _| {
+            let recorded_fetches = Arc::clone(&recorded_fetches);
+            Box::pin(async move {
+                recorded_fetches.lock().unwrap().push(session_ids.clone());
+                Ok(metadata(session_ids))
+            })
+        });
+        let pull_request_fetcher: PullRequestFetcher =
+            Arc::new(|_, _| Box::pin(async { Ok(HashMap::new()) }));
+        let cache = cache_with_fetchers(updates, FETCH_TIMEOUT, task_fetcher, pull_request_fetcher);
+        let session_a = session("session-a", None);
+        let session_b = session("session-b", None);
+
+        let _ = cache.task_metadata(std::slice::from_ref(&session_a)).await;
+        wait_for_refresh(&mut receiver).await;
+        tokio::time::advance(Duration::from_secs(20)).await;
+        let _ = cache
+            .task_metadata(&[session_a.clone(), session_b.clone()])
+            .await;
+        wait_for_refresh(&mut receiver).await;
+        tokio::time::advance(Duration::from_secs(11)).await;
+        let _ = cache.task_metadata(&[session_a, session_b]).await;
+
+        assert_eq!(
+            fetches.lock().unwrap().clone(),
+            vec![
+                HashSet::from(["session-a".to_string()]),
+                HashSet::from(["session-a".to_string(), "session-b".to_string()]),
+            ]
         );
     }
 
@@ -891,19 +901,18 @@ mod tests {
             Some("https://github.com/EXAMPLE-OWNER/EXAMPLE-REPOSITORY/pull/17".to_string());
         let mut task_only_pr = tq_pr_link("linked-task-pr", 29);
         task_only_pr.url = None;
+        let mut list_task = task("task-current", None);
+        list_task.github_links = vec![
+            linked_cwd_pr,
+            tq_pr_link("linked-created-pr", 23),
+            task_only_pr,
+        ];
         let task_metadata = SessionTaskMetadata {
             links: HashMap::from([(
                 current_session.session_id.clone(),
                 vec![linked_task("task-current")],
             )]),
-            github_links: HashMap::from([(
-                "task-current".to_string(),
-                vec![
-                    linked_cwd_pr,
-                    tq_pr_link("linked-created-pr", 23),
-                    task_only_pr,
-                ],
-            )]),
+            github_links: task_github_links(&[list_task]),
             ..SessionTaskMetadata::default()
         };
 

@@ -1,9 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
+use super::{PullRequestKey, SessionTaskMetadata};
 use crate::commands::agent::tq_session_tasks::order_tasks_by_priority;
 use crate::infra::github::PrProgressInfo;
-
-use super::{PullRequestKey, SessionTaskMetadata};
 
 pub(super) fn merge_pull_request_results(
     cached: &mut HashMap<PullRequestKey, Option<PrProgressInfo>>,
@@ -88,6 +87,8 @@ fn merge_refreshed_task_metadata(
     refreshed: &SessionTaskMetadata,
     refreshed_task_ids: &HashSet<String>,
 ) {
+    cached.project_names = refreshed.project_names.clone();
+
     let mut order_by_priority = cached
         .priorities
         .iter()
@@ -119,8 +120,10 @@ fn merge_refreshed_task_metadata(
         } else {
             cached.task_projects.remove(task_id);
         }
-        if let Some(links) = refreshed.github_links.get(task_id) {
-            cached.github_links.insert(task_id.clone(), links.clone());
+        if let Some(github_links) = refreshed.github_links.get(task_id) {
+            cached
+                .github_links
+                .insert(task_id.clone(), github_links.clone());
         } else {
             cached.github_links.remove(task_id);
         }
@@ -166,8 +169,11 @@ mod tests {
     use super::*;
     use crate::commands::agent::types::Session;
     use crate::infra::github::{PrCiState, PrInfo, PrProgressInfo, PrState};
+    use crate::infra::tq::TqGithubLink;
     use rstest::{fixture, rstest};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
     use tokio::sync::watch;
 
     use super::super::super::EnrichmentUpdates;
@@ -226,6 +232,68 @@ mod tests {
                 .insert(task_id, format!("project-{session_id}"));
         }
         result
+    }
+
+    #[test]
+    fn refreshed_task_github_links_replace_cached_values() {
+        let mut cached = SessionTaskMetadata::default();
+        let mut link = TqGithubLink {
+            id: "link-a".to_string(),
+            kind: Some("pull_request".to_string()),
+            owner: Some("example-owner".to_string()),
+            repo: Some("example-repository".to_string()),
+            number: Some(29),
+            title: None,
+            url: None,
+            state: None,
+        };
+        let refreshed = SessionTaskMetadata {
+            links: HashMap::from([("session-a".to_string(), vec![linked_task("task-a")])]),
+            github_links: HashMap::from([("task-a".to_string(), vec![link.clone()])]),
+            ..SessionTaskMetadata::default()
+        };
+
+        merge_session_task_metadata(&mut cached, refreshed, &HashSet::from(["session-a".into()]));
+        let after_link_refresh = cached.github_links.clone();
+        link.number = Some(31);
+        let refreshed = SessionTaskMetadata {
+            links: HashMap::from([("session-a".to_string(), vec![linked_task("task-a")])]),
+            github_links: HashMap::from([("task-a".to_string(), vec![link])]),
+            ..SessionTaskMetadata::default()
+        };
+        merge_session_task_metadata(&mut cached, refreshed, &HashSet::from(["session-a".into()]));
+
+        assert_eq!(
+            (after_link_refresh, cached.github_links),
+            (
+                HashMap::from([(
+                    "task-a".to_string(),
+                    vec![TqGithubLink {
+                        id: "link-a".to_string(),
+                        kind: Some("pull_request".to_string()),
+                        owner: Some("example-owner".to_string()),
+                        repo: Some("example-repository".to_string()),
+                        number: Some(29),
+                        title: None,
+                        url: None,
+                        state: None,
+                    }]
+                )]),
+                HashMap::from([(
+                    "task-a".to_string(),
+                    vec![TqGithubLink {
+                        id: "link-a".to_string(),
+                        kind: Some("pull_request".to_string()),
+                        owner: Some("example-owner".to_string()),
+                        repo: Some("example-repository".to_string()),
+                        number: Some(31),
+                        title: None,
+                        url: None,
+                        state: None,
+                    }]
+                )]),
+            ),
+        );
     }
 
     #[test]
@@ -341,6 +409,7 @@ mod tests {
                         ("deferred".to_string(), 2),
                     ]),
                     task_projects: HashMap::new(),
+                    project_names: HashMap::new(),
                     github_links: HashMap::new(),
                 })
             })
@@ -376,6 +445,7 @@ mod tests {
                     ("deferred".to_string(), 2),
                 ]),
                 task_projects: HashMap::new(),
+                project_names: HashMap::new(),
                 github_links: HashMap::new(),
             },
         );
@@ -470,6 +540,110 @@ mod tests {
         );
     }
 
+    #[rstest]
+    #[case::merged(PrState::Merged)]
+    #[case::closed(PrState::Closed)]
+    #[tokio::test(start_paused = true)]
+    async fn terminal_pull_requests_are_not_refreshed(
+        #[case] state: PrState,
+        updates_and_receiver: (EnrichmentUpdates, watch::Receiver<()>),
+    ) {
+        let (updates, mut receiver) = updates_and_receiver;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let fetch_calls = Arc::clone(&calls);
+        let scopes = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded_scopes = Arc::clone(&scopes);
+        let fetch_state = state.clone();
+        let pull_request_fetcher: PullRequestFetcher = Arc::new(move |sessions, _| {
+            let calls = Arc::clone(&fetch_calls);
+            let recorded_scopes = Arc::clone(&recorded_scopes);
+            let state = fetch_state.clone();
+            Box::pin(async move {
+                let call = calls.fetch_add(1, Ordering::SeqCst);
+                recorded_scopes.lock().unwrap().push(
+                    sessions
+                        .iter()
+                        .filter_map(|session| session.pr_context.as_ref())
+                        .map(|context| context.branch.clone())
+                        .collect::<HashSet<_>>(),
+                );
+                Ok(sessions
+                    .iter()
+                    .filter_map(|session| {
+                        let context = session.pr_context.as_ref()?;
+                        let mut progress =
+                            head_info(17, "Terminal change", "https://example.test/terminal");
+                        progress.pull_request.state = if context.branch == "branch-a" {
+                            state.clone()
+                        } else if call == 0 {
+                            PrState::Open
+                        } else {
+                            PrState::Merged
+                        };
+                        Some((
+                            PullRequestKey::Branch((
+                                context.owner.clone(),
+                                context.repo.clone(),
+                                context.branch.clone(),
+                            )),
+                            Some(progress),
+                        ))
+                    })
+                    .collect())
+            })
+        });
+        let task_fetcher: TaskMetadataFetcher =
+            Arc::new(|_, previous| Box::pin(async move { Ok(previous) }));
+        let cache = cache_with_fetchers(updates, FETCH_TIMEOUT, task_fetcher, pull_request_fetcher);
+        let session_a = session_with_branch_name("session-a", "branch-a");
+        let session_b = session_with_branch_name("session-b", "branch-b");
+        let task_metadata = SessionTaskMetadata::default();
+
+        let _ = cache
+            .pull_requests(&[session_a.clone(), session_b.clone()], &task_metadata)
+            .await;
+        wait_for_refresh(&mut receiver).await;
+        tokio::time::advance(super::super::CACHE_TTL + Duration::from_secs(1)).await;
+        let _ = cache
+            .pull_requests(&[session_a.clone(), session_b.clone()], &task_metadata)
+            .await;
+        wait_for_refresh(&mut receiver).await;
+        let refreshed = cache
+            .pull_requests(&[session_a.clone(), session_b.clone()], &task_metadata)
+            .await;
+        let mut expected_a_progress =
+            head_info(17, "Terminal change", "https://example.test/terminal");
+        expected_a_progress.pull_request.state = state;
+        let mut expected_b_progress =
+            head_info(17, "Terminal change", "https://example.test/terminal");
+        expected_b_progress.pull_request.state = PrState::Merged;
+
+        assert_eq!(
+            (
+                refreshed,
+                calls.load(Ordering::SeqCst),
+                scopes.lock().unwrap().clone(),
+            ),
+            (
+                HashMap::from([
+                    (
+                        "session-a".to_string(),
+                        vec![session_pull_request(&session_a, expected_a_progress)],
+                    ),
+                    (
+                        "session-b".to_string(),
+                        vec![session_pull_request(&session_b, expected_b_progress)],
+                    ),
+                ]),
+                2,
+                vec![
+                    HashSet::from(["branch-a".to_string(), "branch-b".to_string()]),
+                    HashSet::from(["branch-b".to_string()]),
+                ],
+            )
+        );
+    }
+
     #[test]
     fn prunes_stale_session_links_and_unreferenced_task_metadata() {
         let mut cached = metadata(HashSet::from([
@@ -488,6 +662,21 @@ mod tests {
             ("task-session-a".to_string(), "project-a".to_string()),
             ("task-session-b".to_string(), "project-b".to_string()),
         ]);
+        cached
+            .links
+            .get_mut("session-a")
+            .unwrap()
+            .push(linked_task("task-stale"));
+        cached.github_links = HashMap::from([
+            ("task-session-a".to_string(), Vec::new()),
+            ("task-session-b".to_string(), Vec::new()),
+            ("task-stale".to_string(), Vec::new()),
+        ]);
+        cached.priorities.insert("task-stale".to_string(), Some(2));
+        cached.priority_order.insert("task-stale".to_string(), 2);
+        cached
+            .task_projects
+            .insert("task-stale".to_string(), "project-stale".to_string());
         cached
             .links
             .get_mut("session-b")
@@ -516,7 +705,11 @@ mod tests {
                     ("task-session-a".to_string(), "project-a".to_string()),
                     ("task-session-b".to_string(), "project-b".to_string()),
                 ]),
-                github_links: HashMap::new(),
+                project_names: HashMap::new(),
+                github_links: HashMap::from([
+                    ("task-session-a".to_string(), Vec::new()),
+                    ("task-session-b".to_string(), Vec::new()),
+                ]),
             }
         );
     }

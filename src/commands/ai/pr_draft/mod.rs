@@ -4,8 +4,43 @@ mod new;
 mod review;
 mod stack;
 mod submit;
+mod submit_lock;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub(crate) enum ExpectedPullRequestTarget {
+    New,
+    Existing { number: u64 },
+    Unknown,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "The pull request target changed after approval. Send the draft back for review before submitting again."
+)]
+pub(crate) struct ExpectedPullRequestTargetMismatch;
 
 use clap::Subcommand;
+
+pub(crate) async fn submit_draft_for_review(
+    filepath: std::path::PathBuf,
+    session_cwd: &std::path::Path,
+    target_repo_id: &str,
+    expected_pr_target: Option<ExpectedPullRequestTarget>,
+) -> anyhow::Result<String> {
+    submit::run_for_review(
+        &submit::SubmitArgs {
+            filepath: Some(filepath),
+            base: None,
+            draft: false,
+            no_review: false,
+        },
+        session_cwd,
+        target_repo_id,
+        expected_pr_target,
+    )
+    .await
+}
 
 pub(crate) fn draft_dir() -> std::path::PathBuf {
     common::DraftFile::draft_dir()

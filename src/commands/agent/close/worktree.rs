@@ -349,6 +349,7 @@ mod tests {
     use std::path::PathBuf;
     use std::time::Duration;
 
+    use indoc::indoc;
     use rstest::rstest;
 
     use super::super::test_support::{
@@ -515,7 +516,11 @@ mod tests {
         false,
         false,
         Some(
-            "Agent session `session-1` has pending background or agent tasks; wait for them to finish, then retry this command"
+            indoc! {"
+                Agent session `session-1` has pending background or agent tasks:
+                  Background task ID: `task-1`
+                Finish the pending work, then retry this command.
+            "}.trim_end()
         )
     )]
     #[case::pending_agent_task(
@@ -524,7 +529,11 @@ mod tests {
         true,
         false,
         Some(
-            "Agent session `session-1` has pending background or agent tasks; wait for them to finish, then retry this command"
+            indoc! {"
+                Agent session `session-1` has pending background or agent tasks:
+                  Agent task ID: `agent-task-1`
+                Finish the pending work, then retry this command.
+            "}.trim_end()
         )
     )]
     #[case::recent_activity(

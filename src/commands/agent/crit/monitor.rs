@@ -1,5 +1,7 @@
 //! Detached cleanup worker for crit review daemons.
 
+mod client_started;
+mod clients;
 mod registration;
 mod start;
 mod status;
@@ -24,16 +26,15 @@ use crate::infra::process;
 use crate::infra::tmux;
 use crate::shared::log::short_run_id;
 
+pub use self::client_started::ClientStartedArgs;
+pub(super) use self::client_started::run as run_client_started;
 pub(super) use self::start::{ensure_started, ensure_started_with_status};
-use self::wait_state::{
-    crit_client_waiting_on_port, set_crit_wait_state, set_crit_wait_state_if_changed,
-};
+use self::wait_state::{crit_client_waiting, set_crit_wait_state};
 
 pub(super) fn prepare_registration(port: u16, url: &str) -> (String, Option<serde_json::Value>) {
     registration::prepare_registration(port, url)
 }
 
-const MONITOR_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const STARTING_MARKER_TTL: Duration = Duration::from_secs(15);
 const CLEANUP_RETRIES: usize = 3;
 const CLEANUP_RETRY_DELAY: Duration = Duration::from_millis(500);
@@ -86,10 +87,19 @@ pub(super) fn run(args: &MonitorArgs) -> Result<()> {
     write_marker_owner(&marker, &args.reservation)?;
     tracing::info!(event = "agent.crit.monitor.start", daemon_pid = args.pid);
     let mut watched_pid = args.pid;
-    let mut previous_waiting = None;
+    let mut exited_clients = Vec::new();
+    let mut clients_watch = clients::ClientsWatch::new(args.port)?;
     loop {
         while process::is_process_alive(watched_pid) {
-            let waiting = match crit_client_waiting_on_port(args.port, watched_pid) {
+            // Re-evaluated on every wake (daemon or client exit, clients directory change); lsof
+            // runs only when no client with a pid file (announced or found by lsof) is alive. One
+            // that never announced itself is first seen only if a wake finds it connected.
+            let waiting = match crit_client_waiting(
+                args.port,
+                watched_pid,
+                clients_watch.scan(&exited_clients),
+                process::run_with_timeout,
+            ) {
                 Ok(waiting) => Some(waiting),
                 Err(error) => {
                     tracing::warn!(
@@ -100,18 +110,26 @@ pub(super) fn run(args: &MonitorArgs) -> Result<()> {
                     None
                 }
             };
-            if let Err(error) =
-                set_crit_wait_state_if_changed(&mut previous_waiting, waiting, |waiting| {
-                    set_crit_wait_state(args.port, waiting)
-                })
-            {
+            // Written on every wake: `client-started` sets the session state itself, so what
+            // this monitor wrote last is not necessarily what is stored.
+            if let Err(error) = set_crit_wait_state(args.port, waiting) {
                 tracing::warn!(
                     event = "agent.crit.monitor.wait_state_update_failed",
                     port = args.port,
                     error = %error,
                 );
             }
-            thread::sleep(MONITOR_POLL_INTERVAL);
+            match clients_watch.wait(watched_pid) {
+                process::Wake::Exited(pids) => {
+                    exited_clients = pids;
+                    // Break on the exit event instead of re-checking `is_process_alive`, which
+                    // still reports an unreaped zombie daemon as alive and would spin this loop.
+                    if exited_clients.contains(&watched_pid) {
+                        break;
+                    }
+                }
+                process::Wake::DirChanged | process::Wake::TimedOut => exited_clients.clear(),
+            }
         }
 
         match crit_pid_for_port(args.port) {
@@ -147,7 +165,7 @@ pub(super) fn run(args: &MonitorArgs) -> Result<()> {
             error = %error,
         );
     }
-    remove_marker_if_owned(&marker);
+    remove_marker_if_owned(&marker, || clients::remove_clients(args.port));
     tracing::info!(event = "agent.crit.monitor.exit", daemon_pid = watched_pid);
     Ok(())
 }
@@ -156,12 +174,15 @@ fn marker_path(port: u16) -> Result<PathBuf> {
     Ok(store::crit_dir()?.join(format!("{port}.monitor")))
 }
 
-fn claim_marker(path: &Path) -> Result<Option<String>> {
+fn claim_marker(path: &Path, discard_stale_state: impl FnOnce()) -> Result<Option<String>> {
     let _lock = lock_marker(path)?;
     if marker_is_active(path)? {
         return Ok(None);
     }
 
+    // State tied to the marker is written only while it is active, so what is left here belongs
+    // to a monitor that exited without cleaning up (SIGKILL, reboot, failed start).
+    discard_stale_state();
     let reservation = format!("starting:{}:{}", std::process::id(), unix_time_secs());
     fs::write(path, &reservation)?;
     Ok(Some(reservation))
@@ -234,7 +255,9 @@ fn write_marker_owner(path: &Path, reservation: &str) -> Result<()> {
         .with_context(|| format!("failed to update crit monitor marker {}", path.display()))
 }
 
-fn remove_marker_if_owned(path: &Path) {
+/// Runs `on_owned` and removes the marker in one critical section, so state tied to the marker
+/// cannot be recreated by a process that still saw the monitor as alive.
+fn remove_marker_if_owned(path: &Path, on_owned: impl FnOnce()) {
     let Ok(_lock) = lock_marker(path) else {
         return;
     };
@@ -242,6 +265,7 @@ fn remove_marker_if_owned(path: &Path) {
         .ok()
         .and_then(|contents| contents.trim().parse::<u32>().ok());
     if marker_pid == Some(std::process::id()) {
+        on_owned();
         let _ = fs::remove_file(path);
     }
 }
@@ -478,8 +502,57 @@ fn unix_time_secs() -> u64 {
 mod tests {
     use std::cell::Cell;
 
+    use rstest::rstest;
+
     use super::*;
     use crate::commands::agent::types::WebUiRegistration;
+
+    #[rstest]
+    #[case::no_marker(None, true, 1)]
+    #[case::monitor_exited_without_cleanup(Some("0".to_string()), true, 1)]
+    #[case::live_monitor(Some(std::process::id().to_string()), false, 0)]
+    fn stale_marker_state_is_discarded_only_when_the_marker_is_claimed(
+        #[case] marker_contents: Option<String>,
+        #[case] expected_claimed: bool,
+        #[case] expected_discards: usize,
+    ) -> Result<()> {
+        let dir = tempfile::TempDir::new()?;
+        let marker = dir.path().join("43210.monitor");
+        if let Some(contents) = marker_contents {
+            fs::write(&marker, contents)?;
+        }
+        let discards = Cell::new(0);
+
+        let claimed = claim_marker(&marker, || discards.set(discards.get() + 1))?;
+
+        assert_eq!(
+            (claimed.is_some(), discards.get()),
+            (expected_claimed, expected_discards),
+        );
+        Ok(())
+    }
+
+    #[rstest]
+    #[case::owned_marker(std::process::id().to_string(), true, false)]
+    #[case::marker_of_another_monitor("1".to_string(), false, true)]
+    fn marker_state_is_removed_only_by_its_owner(
+        #[case] marker_contents: String,
+        #[case] expected_cleanup: bool,
+        #[case] expected_marker_left: bool,
+    ) -> Result<()> {
+        let dir = tempfile::TempDir::new()?;
+        let marker = dir.path().join("43210.monitor");
+        fs::write(&marker, marker_contents)?;
+        let cleanups = Cell::new(false);
+
+        remove_marker_if_owned(&marker, || cleanups.set(true));
+
+        assert_eq!(
+            (cleanups.get(), marker.exists()),
+            (expected_cleanup, expected_marker_left),
+        );
+        Ok(())
+    }
 
     #[test]
     fn uses_registered_status_snapshot_without_rereading() {

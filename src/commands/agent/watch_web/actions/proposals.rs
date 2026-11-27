@@ -1,6 +1,7 @@
 use anyhow::Context;
 use axum::Json;
 use axum::extract::{Path as RoutePath, State};
+use chrono::Utc;
 use serde::Deserialize;
 
 use super::super::super::{
@@ -9,6 +10,7 @@ use super::super::super::{
     types::{Engine, SessionStatus},
 };
 use super::super::attachments;
+use super::request_fields::deserialize_present;
 use super::{
     ActionState, ApiError, Success, load_session,
     messages::{remove_attachments, watch_web_message_content},
@@ -20,6 +22,12 @@ use super::{
 pub(super) struct AnswerRequest {
     choice: serde_json::Value,
     comment: Option<String>,
+    #[serde(
+        rename = "expectedBody",
+        default,
+        deserialize_with = "deserialize_present"
+    )]
+    expected_body: Option<ProposalBody>,
     #[serde(default)]
     attachments: Vec<attachments::Request>,
 }
@@ -64,6 +72,15 @@ pub(super) async fn answer_proposal(
     let body: ProposalBody = serde_json::from_str(&proposal.body)
         .context("parsing stored proposal body")
         .map_err(ApiError::internal)?;
+    if request
+        .expected_body
+        .as_ref()
+        .is_some_and(|expected_body| &body != expected_body)
+    {
+        return Err(ApiError::conflict(
+            "proposal changed; reload it before answering",
+        ));
+    }
     let choice = if request.choice.is_null() {
         None
     } else {
@@ -114,6 +131,7 @@ pub(super) async fn answer_proposal(
         attachments::append_image_previews_to_comment(request.comment, &saved_attachments);
     let content = attachments::append_paths_to_message(content, &attachment_paths);
     let content = watch_web_message_content(&session, marker.as_deref(), &content);
+    let resolved_at = Utc::now();
     let runtime = state.runtime;
     let send_session = session.clone();
     if let Err(error) = run_blocking(move || runtime.send_message(&send_session, &content)).await {
@@ -130,9 +148,15 @@ pub(super) async fn answer_proposal(
     let configured_sessions_dir = state.sessions_dir;
     let updated = run_blocking(move || match configured_sessions_dir {
         Some(sessions_dir) => {
-            store::write_agent_proposal_answer_from(&sessions_dir, &session_id, seq, &answer)
+            store::write_agent_proposal_answer_at_from(
+                &sessions_dir,
+                &session_id,
+                seq,
+                &answer,
+                resolved_at,
+            )
         }
-        None => store::write_agent_proposal_answer(&session_id, seq, &answer),
+        None => store::write_agent_proposal_answer_at(&session_id, seq, &answer, resolved_at),
     })
     .await
     .map_err(|error| {

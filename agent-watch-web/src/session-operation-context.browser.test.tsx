@@ -458,6 +458,87 @@ it('rolls back the optimistic state and shows an error when the POST fails', asy
   })
 })
 
+it('keeps a sent message pending until the conversation confirms it', async () => {
+  vi.useFakeTimers()
+  vi.stubGlobal(
+    'fetch',
+    vi.fn<typeof fetch>(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveMessagePosts.push(resolve)
+        }),
+    ),
+  )
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <SessionOperationProvider>
+        <MessageOperationHarness />
+      </SessionOperationProvider>,
+    )
+  })
+  const sendButton = container.querySelector<HTMLButtonElement>('button')
+  if (sendButton === null) throw new Error('Expected a send button')
+  act(() => {
+    sendButton.click()
+  })
+
+  const completePost = resolveMessagePosts[0]
+  if (completePost === undefined) throw new Error('Expected the message POST')
+  await act(async () => {
+    completePost(
+      Response.json({ ok: true, queuedPromptId: 'fixture-message-id' }),
+    )
+    await messageRequests[0]
+  })
+  const afterPost = {
+    statuses: container.querySelector('[data-testid="message-statuses"]')
+      ?.textContent,
+    queuedPromptIds: container.querySelector(
+      '[data-testid="queued-prompt-ids"]',
+    )?.textContent,
+  }
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(10_000)
+  })
+  const afterTimeout = {
+    statuses: container.querySelector('[data-testid="message-statuses"]')
+      ?.textContent,
+    queuedPromptIds: container.querySelector(
+      '[data-testid="queued-prompt-ids"]',
+    )?.textContent,
+  }
+
+  const finishRefresh = resolveMessageRefresh
+  if (finishRefresh === null)
+    throw new Error('Expected the conversation refresh')
+  await act(async () => {
+    finishRefresh()
+    await Promise.resolve()
+  })
+  const afterConfirmation = {
+    statuses: container.querySelector('[data-testid="message-statuses"]')
+      ?.textContent,
+    queuedPromptIds: container.querySelector(
+      '[data-testid="queued-prompt-ids"]',
+    )?.textContent,
+  }
+
+  const snapshot = () => ({ afterPost, afterTimeout, afterConfirmation })
+  expect(snapshot()).toEqual({
+    afterPost: {
+      statuses: 'sent',
+      queuedPromptIds: 'fixture-message-id',
+    },
+    afterTimeout: {
+      statuses: 'sent',
+      queuedPromptIds: 'fixture-message-id',
+    },
+    afterConfirmation: { statuses: '', queuedPromptIds: '' },
+  })
+})
+
 it('renumbers later sends when an earlier message POST fails', async () => {
   vi.stubGlobal(
     'fetch',

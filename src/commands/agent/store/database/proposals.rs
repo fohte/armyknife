@@ -2,7 +2,7 @@ use std::fs::File;
 use std::path::Path;
 
 use super::resolution_lock::lock_resolution_file;
-use super::{increment_revision, open_connection, validate_session_id};
+use super::{bump_session_revision, open_connection, validate_session_id};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use rusqlite::{TransactionBehavior, params, params_from_iter};
@@ -55,6 +55,12 @@ pub(crate) fn add_agent_proposal(sessions_dir: &Path, session_id: &str, body: &s
     validate_session_id(session_id)?;
     let mut connection = open_connection(sessions_dir)?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let session_exists: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sessions WHERE session_id = ?1)",
+        [session_id],
+        |row| row.get(0),
+    )?;
+    anyhow::ensure!(session_exists, "session not found: {session_id}");
     let now = Utc::now().to_rfc3339();
     let seq: i64 = transaction.query_row(
         "SELECT COALESCE(MAX(seq), 0) + 1 FROM agent_proposal WHERE session_id = ?1",
@@ -66,9 +72,30 @@ pub(crate) fn add_agent_proposal(sessions_dir: &Path, session_id: &str, body: &s
          VALUES (?1, ?2, ?3, ?4)",
         params![session_id, seq, body, now],
     )?;
-    increment_revision(&transaction)?;
+    bump_session_revision(&transaction, session_id)?;
     transaction.commit()?;
     Ok(seq)
+}
+
+pub(crate) fn edit_agent_proposal(
+    sessions_dir: &Path,
+    session_id: &str,
+    seq: i64,
+    body: &str,
+) -> Result<bool> {
+    validate_session_id(session_id)?;
+    let mut connection = open_connection(sessions_dir)?;
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let changed = transaction.execute(
+        "UPDATE agent_proposal SET body = ?1
+         WHERE session_id = ?2 AND seq = ?3 AND answer IS NULL AND resolved_at IS NULL",
+        params![body, session_id, seq],
+    )?;
+    if changed > 0 {
+        bump_session_revision(&transaction, session_id)?;
+    }
+    transaction.commit()?;
+    Ok(changed > 0)
 }
 
 pub(crate) fn unanswered_agent_proposal_bodies(
@@ -165,28 +192,29 @@ pub(crate) fn resolve_agent_proposal(
         ],
     )?;
     if changed > 0 {
-        increment_revision(&transaction)?;
+        bump_session_revision(&transaction, session_id)?;
     }
     transaction.commit()?;
     Ok(changed > 0)
 }
 
-pub(crate) fn write_agent_proposal_answer(
+pub(crate) fn write_agent_proposal_answer_at(
     sessions_dir: &Path,
     session_id: &str,
     seq: i64,
     answer: &str,
+    resolved_at: DateTime<Utc>,
 ) -> Result<bool> {
     validate_session_id(session_id)?;
     let mut connection = open_connection(sessions_dir)?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let changed = transaction.execute(
-        "UPDATE agent_proposal SET answer = ?1, resolved_at = COALESCE(resolved_at, ?2)
+        "UPDATE agent_proposal SET answer = ?1, resolved_at = ?2
          WHERE session_id = ?3 AND seq = ?4 AND answer IS NULL AND resolved_at IS NULL",
-        params![answer, Utc::now().to_rfc3339(), session_id, seq],
+        params![answer, resolved_at.to_rfc3339(), session_id, seq],
     )?;
     if changed > 0 {
-        increment_revision(&transaction)?;
+        bump_session_revision(&transaction, session_id)?;
     }
     transaction.commit()?;
     Ok(changed > 0)
@@ -201,11 +229,25 @@ mod tests {
 
     use super::{
         AgentProposal, add_agent_proposal, agent_proposals, lock_agent_proposal_resolution,
-        unanswered_agent_proposal_bodies,
+        unanswered_agent_proposal_bodies, write_agent_proposal_answer_at,
     };
     #[fixture]
     fn sessions_dir() -> TempDir {
-        tempfile::tempdir().expect("temporary sessions directory should be created")
+        let sessions_dir =
+            tempfile::tempdir().expect("temporary sessions directory should be created");
+        for session_id in ["session-a", "session-b"] {
+            let session = serde_json::from_value(serde_json::json!({
+                "session_id": session_id,
+                "cwd": "/tmp/fixture-worktree",
+                "status": "running",
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z",
+            }))
+            .expect("test session should deserialize");
+            crate::commands::agent::store::save_session_to(sessions_dir.path(), &session)
+                .expect("test session should save");
+        }
+        sessions_dir
     }
 
     fn normalize_timestamps(mut proposals: Vec<AgentProposal>) -> Vec<AgentProposal> {
@@ -301,6 +343,53 @@ mod tests {
     }
 
     #[rstest]
+    fn rejects_adding_a_proposal_for_an_untracked_session(sessions_dir: TempDir) {
+        let result = add_agent_proposal(sessions_dir.path(), "untracked-session", "body")
+            .map_err(|error| error.to_string());
+        let proposals = agent_proposals(sessions_dir.path(), "untracked-session")
+            .expect("proposals should load");
+
+        assert_eq!(
+            (result, proposals),
+            (
+                Err("session not found: untracked-session".to_string()),
+                Vec::new(),
+            ),
+        );
+    }
+
+    #[rstest]
+    fn records_the_supplied_answer_resolution_time(sessions_dir: TempDir) {
+        add_agent_proposal(sessions_dir.path(), "session-a", "body").expect("proposal should save");
+        let resolved_at = Utc
+            .with_ymd_and_hms(2026, 6, 1, 12, 0, 1)
+            .single()
+            .expect("test timestamp should be valid");
+
+        let updated = write_agent_proposal_answer_at(
+            sessions_dir.path(),
+            "session-a",
+            1,
+            "{\"choice\":0}",
+            resolved_at,
+        )
+        .expect("answer should save");
+        let proposals = agent_proposals(sessions_dir.path(), "session-a")
+            .expect("proposal should load")
+            .into_iter()
+            .map(|proposal| (proposal.seq, proposal.answer, proposal.resolved_at))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            (updated, proposals),
+            (
+                true,
+                vec![(1, Some("{\"choice\":0}".to_string()), Some(resolved_at))],
+            ),
+        );
+    }
+
+    #[rstest]
     fn unanswered_bodies_exclude_resolved_proposals_without_answers(sessions_dir: TempDir) {
         add_agent_proposal(sessions_dir.path(), "session-a", "closed proposal")
             .expect("proposal should save");
@@ -323,20 +412,6 @@ mod tests {
 
     #[rstest]
     fn deleting_a_session_removes_its_proposals(sessions_dir: TempDir) {
-        let session: crate::commands::agent::types::Session =
-            serde_json::from_value(serde_json::json!({
-                "session_id": "session-a",
-                "cwd": "/fixture/worktree",
-                "transcript_path": null,
-                "tmux_info": null,
-                "status": "stopped",
-                "created_at": "2026-03-14T09:26:53Z",
-                "updated_at": "2026-03-14T09:26:53Z",
-                "last_message": null,
-            }))
-            .expect("test session should deserialize");
-        crate::commands::agent::store::save_session_to(sessions_dir.path(), &session)
-            .expect("session should save");
         add_agent_proposal(sessions_dir.path(), "session-a", "body").expect("proposal should save");
 
         crate::commands::agent::store::delete_session_from_with_storage(

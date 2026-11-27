@@ -1,8 +1,10 @@
 import type { Decorator, Meta, StoryObj } from '@storybook/react-vite'
 
 import type { AsyncActionStatus } from '#async-action-feedback'
+import { RunningTasksPanelView } from '#components/running-tasks-panel-view'
 import { SessionPullRequests } from '#components/session-pull-requests'
-import type { PullRequest } from '#types'
+import { SessionStatusPanel } from '#components/session-status-panel'
+import type { BackgroundTask, PullRequest } from '#types'
 
 const currentBranchPullRequest: PullRequest = {
   number: 42,
@@ -89,6 +91,42 @@ const allMergedPullRequests: PullRequest[] = [
   })),
 ]
 
+const phoneTopbarPullRequests: PullRequest[] = [
+  {
+    number: 2050,
+    state: 'Open',
+    owner: 'example',
+    repo: 'service',
+    title: '再送処理を retry() にまとめる',
+    url: 'https://github.com/example/service/pull/2050',
+    headSha: 'sample-phone-pr-head-sha',
+    ciState: 'InProgress',
+    isCurrentBranch: true,
+  },
+  {
+    number: 64,
+    state: 'Open',
+    owner: 'example',
+    repo: 'infra',
+    title: '再送キューの上限を設定に出す',
+    url: 'https://github.com/example/infra/pull/64',
+    headSha: 'sample-phone-pr-head-sha-2',
+    ciState: 'Successful',
+    isCurrentBranch: false,
+  },
+  {
+    number: 2041,
+    state: 'Merged',
+    owner: 'example',
+    repo: 'service',
+    title: '再送のログを整える',
+    url: 'https://github.com/example/service/pull/2041',
+    headSha: 'sample-phone-pr-head-sha-3',
+    ciState: 'Successful',
+    isCurrentBranch: false,
+  },
+]
+
 const meta = {
   component: SessionPullRequests,
   parameters: { layout: 'fullscreen' },
@@ -100,18 +138,21 @@ const meta = {
     onOpenChange: () => undefined,
   },
   decorators: [
-    (Story) => (
-      <div
-        style={{
-          minHeight: 120,
-          padding: 16,
-          background: 'var(--aw-bg-app)',
-          color: 'var(--aw-text-primary)',
-        }}
-      >
+    (Story, context) =>
+      context.args.isMobile && context.args.presentation === 'list' ? (
         <Story />
-      </div>
-    ),
+      ) : (
+        <div
+          style={{
+            minHeight: 120,
+            padding: 16,
+            background: 'var(--aw-bg-app)',
+            color: 'var(--aw-text-primary)',
+          }}
+        >
+          <Story />
+        </div>
+      ),
   ],
 } satisfies Meta<typeof SessionPullRequests>
 
@@ -477,4 +518,132 @@ export const MergeIsQueuedInTheList: Story = {
     mergeStatus: (): AsyncActionStatus => 'queued',
   },
   decorators: [desktopMergeButtonDecorator],
+}
+
+const phoneStatusPanel = (
+  pullRequests: readonly PullRequest[],
+  mergeStatus?: (pullRequest: PullRequest) => AsyncActionStatus | null,
+  hasPullRequests = true,
+) => (
+  <div
+    className="conversation-pane"
+    data-mobile="true"
+    style={{
+      width: 390,
+      height: 844,
+      display: 'flex',
+      background: 'var(--aw-bg-app)',
+      color: 'var(--aw-text-primary)',
+    }}
+  >
+    <SessionStatusPanel
+      size="phone"
+      sessionTitle="Review the delivery retry flow"
+      activeTabId={hasPullRequests ? 'pull-requests' : 'running'}
+      onTabChange={() => undefined}
+      onClose={() => undefined}
+      tabs={[
+        {
+          id: 'running',
+          label: 'Running',
+          count: 2,
+          content: (
+            <RunningTasksPanelView
+              subagents={
+                [
+                  {
+                    id: 'fixture-subagent',
+                    description: 'Review the retry flow',
+                    elapsedSeconds: 42,
+                    kind: 'subagent',
+                    agentType: 'Explore',
+                  },
+                ] satisfies BackgroundTask[]
+              }
+              backgroundTaskRows={[]}
+            />
+          ),
+        },
+        ...(hasPullRequests
+          ? [
+              {
+                id: 'pull-requests',
+                label: 'PRs',
+                count: pullRequests.length,
+                showCount: true,
+                content: (
+                  <SessionPullRequests
+                    pullRequests={pullRequests}
+                    repo="example-org/example-repo"
+                    isMobile
+                    open={false}
+                    presentation="list"
+                    {...(mergeStatus === undefined ? {} : { mergeStatus })}
+                    onMerge={() => undefined}
+                    onOpenChange={() => undefined}
+                  />
+                ),
+              },
+            ]
+          : []),
+        {
+          id: 'tasks',
+          label: 'Tasks',
+          count: 3,
+          showCount: true,
+          content: <div />,
+        },
+      ]}
+    />
+  </div>
+)
+
+export const PhoneStatusPanelShowsPullRequests: Story = {
+  name: 'The phone status panel shows pull requests in the selected PRs tab',
+  parameters: {
+    layout: 'fullscreen',
+    overflowCheck: {
+      ignoreSelectors: ['.session-status-panel-tablist'],
+    },
+  },
+  render: () => phoneStatusPanel(phoneTopbarPullRequests),
+}
+
+export const PhoneStatusPanelHasNoPullRequests: Story = {
+  name: 'The phone status panel omits PRs when the session has none',
+  parameters: { layout: 'fullscreen' },
+  args: {
+    pullRequests: [],
+    repo: 'example-org/example-repo',
+    isMobile: true,
+    open: false,
+    presentation: 'list',
+    onOpenChange: () => undefined,
+  },
+  render: (args) =>
+    phoneStatusPanel(
+      args.pullRequests,
+      args.mergeStatus,
+      args.pullRequests.length > 0,
+    ),
+}
+
+export const PhoneStatusPanelShowsMergeInProgress: Story = {
+  name: 'The phone PRs tab shows a merge in progress',
+  parameters: { layout: 'fullscreen' },
+  args: {
+    pullRequests: [mergeablePullRequest],
+    repo: 'example-org/example-repo',
+    isMobile: true,
+    open: false,
+    presentation: 'list',
+    mergeStatus: () => 'merging',
+    onOpenChange: () => undefined,
+  },
+  render: (args) =>
+    phoneStatusPanel(
+      args.pullRequests,
+      args.mergeStatus,
+      args.pullRequests.length > 0,
+    ),
 }

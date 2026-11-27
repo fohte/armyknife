@@ -10,6 +10,7 @@ afterEach(() => {
 
 class FakeEventSource {
   private listeners = new Map<string, EventListenerOrEventListenerObject>()
+  readyState = 0
   closed = false
 
   addEventListener(type: string, callback: EventListenerOrEventListenerObject) {
@@ -27,6 +28,9 @@ class FakeEventSource {
   }
 
   emit(type: string, data?: string) {
+    if (type === 'open') {
+      this.readyState = 1
+    }
     const event = new Event(type)
     if (data !== undefined) {
       Object.defineProperty(event, 'data', { value: data })
@@ -206,6 +210,54 @@ it('requests deltas and restores the ordered full session response', async () =>
       },
     ],
   })
+})
+
+it('does not mark sessions changed when only the store revision advances', async () => {
+  const source = new FakeEventSource()
+  const firstReceived = deferred<undefined>()
+  const secondReceived = deferred<undefined>()
+  const changedSessionIds: string[][] = []
+  const sessionA = session('session-a', 'First session', 10)
+  const fetcher = vi
+    .fn()
+    .mockResolvedValueOnce(
+      jsonResponse({
+        mode: 'full',
+        token: 'snapshot-1',
+        revision: 1,
+        sessions: [sessionA],
+      }),
+    )
+    .mockResolvedValueOnce(
+      jsonResponse({
+        mode: 'delta',
+        token: 'snapshot-2',
+        revision: 2,
+        updatedSessions: [],
+        removedSessionIds: [],
+        sessionOrder: ['session-a'],
+      }),
+    )
+
+  const stop = startSessionFeed(
+    (_response, changedIds) => {
+      changedSessionIds.push([...changedIds])
+      if (changedSessionIds.length === 1) {
+        firstReceived.resolve(undefined)
+      } else {
+        secondReceived.resolve(undefined)
+      }
+    },
+    () => {},
+    { fetcher, createEventSource: () => source },
+  )
+
+  await firstReceived.promise
+  source.emit('sessions')
+  await secondReceived.promise
+  stop()
+
+  expect(changedSessionIds).toEqual([['session-a'], []])
 })
 
 it('preserves a launch ID from a newly started session in the feed', async () => {
@@ -462,14 +514,15 @@ it.each(invalidSessionCases)(
       },
       (message) => {
         errors.push(message)
-        if (message === 'Unable to load sessions. Retrying…') {
+        if (
+          message === 'Unable to load sessions. Waiting for a stream update…'
+        ) {
           failureReported.resolve(undefined)
         }
       },
       {
         fetcher,
         createEventSource: () => source,
-        requestRetryDelayMs: 5_000,
       },
     )
 
@@ -479,14 +532,15 @@ it.each(invalidSessionCases)(
     const snapshot = () => ({ delivered, errors, closed: source.closed })
     expect(snapshot()).toEqual({
       delivered: false,
-      errors: ['Unable to load sessions. Retrying…'],
+      errors: ['Unable to load sessions. Waiting for a stream update…'],
       closed: true,
     })
   },
 )
 
 it('coalesces session events and refreshes when the stream reconnects', async () => {
-  const source = new FakeEventSource()
+  vi.useFakeTimers()
+  const sources: FakeEventSource[] = []
   const firstRequestStarted = deferred<undefined>()
   const firstResponse = deferred<Response>()
   const updateReceived = deferred<undefined>()
@@ -578,10 +632,18 @@ it('coalesces session events and refreshes when the stream reconnects', async ()
     (message) => errors.push(message),
     {
       fetcher,
-      createEventSource: () => source,
+      createEventSource: () => {
+        const source = new FakeEventSource()
+        sources.push(source)
+        return source
+      },
     },
   )
 
+  const source = sources[0]
+  if (source === undefined) {
+    throw new Error('Initial event source was not created')
+  }
   await firstRequestStarted.promise
   source.emit('sessions')
   firstResponse.resolve(
@@ -615,6 +677,7 @@ it('coalesces session events and refreshes when the stream reconnects', async ()
   await updateReceived.promise
 
   source.emit('error')
+  await vi.advanceTimersByTimeAsync(5_000)
   source.emit('open')
   await reconnectReceived.promise
   stop()
@@ -622,6 +685,7 @@ it('coalesces session events and refreshes when the stream reconnects', async ()
   const snapshot = () => [
     responses,
     errors,
+    sources.length,
     fetcher.mock.calls.length,
     source.closed,
   ]
@@ -719,9 +783,114 @@ it('coalesces session events and refreshes when the stream reconnects', async ()
       },
     ],
     [null, null, 'Connection lost. Reconnecting…', null, null],
+    1,
     3,
     true,
   ])
+})
+
+it('increases reconnect backoff to its cap and resets after open', async () => {
+  vi.useFakeTimers()
+  const sources: FakeEventSource[] = []
+  const responseReceived = Array.from({ length: 3 }, () =>
+    deferred<undefined>(),
+  )
+  const revisions: number[] = []
+  const errors: (string | null)[] = []
+  const fetcher = vi
+    .fn()
+    .mockResolvedValueOnce(jsonResponse({ revision: 1, sessions: [] }))
+    .mockResolvedValueOnce(jsonResponse({ revision: 2, sessions: [] }))
+    .mockResolvedValueOnce(jsonResponse({ revision: 3, sessions: [] }))
+  const stop = startSessionFeed(
+    (response) => {
+      revisions.push(response.revision)
+      responseReceived[revisions.length - 1]?.resolve(undefined)
+    },
+    (message) => errors.push(message),
+    {
+      fetcher,
+      createEventSource: () => {
+        const source = new FakeEventSource()
+        sources.push(source)
+        return source
+      },
+      reconnectRetryDelayMs: 2_000,
+    },
+  )
+
+  await responseReceived[0]?.promise
+  const retryDelays = [2_000, 4_000, 8_000, 16_000, 32_000, 60_000, 60_000]
+  const sourceCountsBeforeReconnect: number[] = []
+  const sourceCountsAfterReconnect: number[] = []
+  for (const [sourceIndex, retryDelay] of retryDelays.entries()) {
+    const closedSource = sources[sourceIndex]
+    if (closedSource === undefined) {
+      throw new Error('Expected event source was not created')
+    }
+    closedSource.readyState = 2
+    closedSource.emit('error')
+    await vi.advanceTimersByTimeAsync(retryDelay - 1)
+    sourceCountsBeforeReconnect.push(sources.length)
+    await vi.advanceTimersByTimeAsync(1)
+    sourceCountsAfterReconnect.push(sources.length)
+  }
+
+  const sourceAfterBackoff = sources[retryDelays.length]
+  if (sourceAfterBackoff === undefined) {
+    throw new Error('Event source was not recreated after backoff')
+  }
+  sourceAfterBackoff.emit('open')
+  await responseReceived[1]?.promise
+
+  sourceAfterBackoff.readyState = 2
+  sourceAfterBackoff.emit('error')
+  await vi.advanceTimersByTimeAsync(1_999)
+  const sourceCountBeforeResetReconnect = sources.length
+  await vi.advanceTimersByTimeAsync(1)
+  const sourceCountAfterResetReconnect = sources.length
+  const sourceAfterReset = sources[retryDelays.length + 1]
+  if (sourceAfterReset === undefined) {
+    throw new Error('Event source was not recreated after reset')
+  }
+  sourceAfterReset.emit('open')
+  await responseReceived[2]?.promise
+  stop()
+
+  const snapshot = () => ({
+    revisions,
+    errors,
+    sourceCountsBeforeReconnect,
+    sourceCountsAfterReconnect,
+    sourceCountBeforeResetReconnect,
+    sourceCountAfterResetReconnect,
+    closed: sources.map((source) => source.closed),
+    requests: fetcher.mock.calls.length,
+  })
+  expect(snapshot()).toEqual({
+    revisions: [1, 2, 3],
+    errors: [
+      null,
+      'Connection lost. Reconnecting…',
+      'Connection lost. Reconnecting…',
+      'Connection lost. Reconnecting…',
+      'Connection lost. Reconnecting…',
+      'Connection lost. Reconnecting…',
+      'Connection lost. Reconnecting…',
+      'Connection lost. Reconnecting…',
+      null,
+      null,
+      'Connection lost. Reconnecting…',
+      null,
+      null,
+    ],
+    sourceCountsBeforeReconnect: [1, 2, 3, 4, 5, 6, 7],
+    sourceCountsAfterReconnect: [2, 3, 4, 5, 6, 7, 8],
+    sourceCountBeforeResetReconnect: 8,
+    sourceCountAfterResetReconnect: 9,
+    closed: [true, true, true, true, true, true, true, true, true],
+    requests: 3,
+  })
 })
 
 it('refreshes sessions without reloading after a server restart', async () => {
@@ -838,7 +1007,8 @@ it.each([
   },
 )
 
-it('retries a failed session request and clears the error after success', async () => {
+it('retries a failed session request on the next stream event', async () => {
+  vi.useFakeTimers()
   const source = new FakeEventSource()
   const failureReported = deferred<undefined>()
   const retryReceived = deferred<undefined>()
@@ -878,18 +1048,19 @@ it('retries a failed session request and clears the error after success', async 
     },
     (message) => {
       errors.push(message)
-      if (message === 'Unable to load sessions. Retrying…') {
+      if (message === 'Unable to load sessions. Waiting for a stream update…') {
         failureReported.resolve(undefined)
       }
     },
     {
       fetcher,
       createEventSource: () => source,
-      requestRetryDelayMs: 5,
     },
   )
 
   await failureReported.promise
+  await vi.advanceTimersByTimeAsync(5_000)
+  source.emit('sessions')
   await retryReceived.promise
   stop()
 
@@ -902,13 +1073,13 @@ it('retries a failed session request and clears the error after success', async 
 
   expect(snapshot()).toEqual([
     [8],
-    ['Unable to load sessions. Retrying…', null],
+    ['Unable to load sessions. Waiting for a stream update…', null],
     2,
     true,
   ])
 })
 
-it('stops stream retries and clears connection errors while hidden', async () => {
+it('cancels a closed stream reconnect when the page becomes hidden', async () => {
   vi.useFakeTimers()
   const source = new FakeEventSource()
   const visibilityTarget = new FakeVisibilityTarget()
@@ -919,19 +1090,20 @@ it('stops stream retries and clears connection errors while hidden', async () =>
     () => {},
     (message) => {
       errors.push(message)
-      if (message === 'Unable to load sessions. Retrying…') {
+      if (message === 'Unable to load sessions. Waiting for a stream update…') {
         failureReported.resolve(undefined)
       }
     },
     {
       fetcher,
       createEventSource: () => source,
-      requestRetryDelayMs: 100,
+      reconnectRetryDelayMs: 100,
       visibilityTarget,
     },
   )
 
   await failureReported.promise
+  source.readyState = 2
   source.emit('error')
   visibilityTarget.setVisibility('hidden')
   await vi.advanceTimersByTimeAsync(500)
@@ -944,8 +1116,8 @@ it('stops stream retries and clears connection errors while hidden', async () =>
   })
   expect(snapshot()).toEqual({
     errors: [
-      'Unable to load sessions. Retrying…',
-      'Unable to load sessions. Retrying…',
+      'Unable to load sessions. Waiting for a stream update…',
+      'Unable to load sessions. Waiting for a stream update…',
       null,
     ],
     requests: 1,

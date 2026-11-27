@@ -1,0 +1,46 @@
+import {
+  isNewIssueDraft,
+  type ReviewDocumentSummary,
+} from '#components/review-document-summary'
+import type { JsonValue } from '#types'
+
+type JsonObject = { [key: string]: JsonValue }
+
+function isJsonObject(value: JsonValue): value is JsonObject {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+export function getReviewDocumentFrontmatterEntries(
+  frontmatter: JsonValue,
+  summary: ReviewDocumentSummary | undefined,
+): [string, JsonValue][] | null {
+  if (!isJsonObject(frontmatter)) return null
+
+  const isIssueDraft = isNewIssueDraft(summary)
+  return Object.entries(frontmatter).filter(([name]) => {
+    if (
+      isIssueDraft &&
+      ['title', 'labels', 'assignees', 'parentIssue', 'subIssues'].includes(
+        name,
+      )
+    ) {
+      return false
+    }
+    if (summary?.kind === 'issue_body' || summary?.kind === 'review_replies') {
+      return (
+        name === 'submit' ||
+        (summary.kind === 'issue_body' && name === 'milestone')
+      )
+    }
+    if (
+      summary?.kind === 'pr_draft' &&
+      (name === 'title' || name === 'steps')
+    ) {
+      return false
+    }
+    if (name === 'submit') {
+      return isIssueDraft
+    }
+    return true
+  })
+}

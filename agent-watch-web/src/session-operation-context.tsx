@@ -170,7 +170,10 @@ function useOperationRunner(): SessionOperationContextValue {
               },
         ),
       )
-      if (requiresStateConfirmation(confirmedOperation)) {
+      if (
+        requiresStateConfirmation(confirmedOperation) &&
+        confirmedOperation.type !== 'message'
+      ) {
         expireUnconfirmedOperation(confirmedOperation, pendingOperationId)
       }
       if (options.refresh !== undefined) {

@@ -1,5 +1,5 @@
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, LazyLock},
 };
 
@@ -138,6 +138,7 @@ pub(super) async fn send_message(
         session,
         marker,
         message_id: Some(message_id),
+        action_event_kind: None,
         queued_content,
         message_content: content,
         queued_attachments,
@@ -163,6 +164,7 @@ pub(super) struct QueuedPromptDelivery {
     pub(super) session: Session,
     pub(super) marker: Option<String>,
     pub(super) message_id: Option<String>,
+    pub(super) action_event_kind: Option<store::WatchWebActionEventKind>,
     pub(super) queued_content: String,
     pub(super) message_content: String,
     pub(super) queued_attachments: Vec<store::WatchWebQueuedAttachment>,
@@ -197,6 +199,7 @@ async fn send_queued_prompt_with_policy(
         session,
         marker,
         message_id,
+        action_event_kind,
         queued_content,
         message_content,
         queued_attachments,
@@ -215,6 +218,7 @@ async fn send_queued_prompt_with_policy(
                 &message_id,
                 &queued_content,
                 &queued_attachments,
+                action_event_kind,
                 sent_at,
             )
         }
@@ -350,13 +354,58 @@ pub(super) fn watch_web_message_content(
     }
 }
 
-pub(super) fn watch_web_action_message_content(
+pub(super) struct ActionEventMessage<'a> {
+    pub(super) marker: Option<&'a str>,
+    pub(super) message_content: &'a str,
+    pub(super) event_text: &'a str,
+    pub(super) attachments: &'a [store::WatchWebQueuedAttachment],
+    pub(super) action_event_kind: store::WatchWebActionEventKind,
+}
+
+pub(super) fn send_action_event_message(
+    sessions_dir: &Path,
     session: &Session,
-    marker: Option<&str>,
-    content: &str,
-) -> String {
-    let content = watch_web_message_content(session, marker, content);
-    queued_prompt::add_id_marker(&content, &action_event::new_action_message_id())
+    message: ActionEventMessage<'_>,
+    deliver: impl FnOnce(&Session, &str) -> Result<()>,
+) -> Result<()> {
+    let message_id = action_event::new_action_message_id();
+    let queued_prompt_id = store::insert_watch_web_queued_prompt_from(
+        sessions_dir,
+        &session.session_id,
+        &message_id,
+        message.event_text,
+        message.attachments,
+        Some(message.action_event_kind),
+        Utc::now(),
+    )?;
+    let content = watch_web_message_content(session, message.marker, message.message_content);
+    let content = queued_prompt::add_id_marker(&content, &message_id);
+    if let Err(error) = deliver(session, &content) {
+        if let Err(cleanup_error) = store::delete_watch_web_queued_prompts_from(
+            sessions_dir,
+            &session.session_id,
+            &[queued_prompt_id],
+        ) {
+            tracing::warn!(
+                session_id = %session.session_id,
+                error = %cleanup_error,
+                "failed to remove unsent watch-web action event"
+            );
+            if let Err(resolve_error) = store::mark_watch_web_queued_prompts_resolved_from(
+                sessions_dir,
+                &session.session_id,
+                &[queued_prompt_id],
+            ) {
+                tracing::warn!(
+                    session_id = %session.session_id,
+                    error = %resolve_error,
+                    "failed to resolve unsent watch-web action event"
+                );
+            }
+        }
+        return Err(error);
+    }
+    Ok(())
 }
 fn send_via_peer_notify(
     session_id: &str,
@@ -369,10 +418,38 @@ fn send_via_peer_notify(
 
 #[cfg(test)]
 mod tests {
-    use rstest::rstest;
+    use chrono::TimeZone;
+    use rstest::{fixture, rstest};
+    use serde_json::json;
+    use tempfile::tempdir;
 
-    use super::{is_valid_message_id, send_via_peer_notify};
+    use super::{
+        ActionEventMessage, is_valid_message_id, send_action_event_message, send_via_peer_notify,
+    };
     use crate::commands::agent::peer::notify;
+    use crate::commands::agent::store::{self, WatchWebActionEventKind};
+    use crate::commands::agent::types::{Engine, Session};
+
+    #[fixture]
+    fn sessions_dir() -> tempfile::TempDir {
+        tempdir().unwrap()
+    }
+
+    #[fixture]
+    fn codex_session() -> Session {
+        serde_json::from_value(json!({
+            "session_id": "fixture-session",
+            "engine": "codex",
+            "cwd": "/fixture/worktree",
+            "transcript_path": null,
+            "tmux_info": null,
+            "status": "running",
+            "created_at": "2026-03-14T09:26:53Z",
+            "updated_at": "2026-03-14T09:26:53Z",
+            "last_message": null,
+        }))
+        .unwrap()
+    }
 
     #[rstest]
     #[case::canonical_uuid("11111111-1111-4111-8111-111111111111", true)]
@@ -403,6 +480,104 @@ mod tests {
                     "sample-session".to_string(),
                     "continue the investigation".to_string(),
                 )],
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::claude(Engine::Claude)]
+    #[case::codex(Engine::Codex)]
+    fn action_delivery_records_its_kind_with_the_transcript_message_id(
+        sessions_dir: tempfile::TempDir,
+        codex_session: Session,
+        #[case] engine: Engine,
+    ) {
+        let mut session = codex_session;
+        session.engine = engine;
+        let message_content = "<armyknife-todo-completed>The user marked the to-do as done: Review the fixture.</armyknife-todo-completed>";
+        let mut delivered_message = None;
+
+        send_action_event_message(
+            sessions_dir.path(),
+            &session,
+            ActionEventMessage {
+                marker: None,
+                message_content,
+                event_text: "The user marked the to-do as done: Review the fixture.",
+                attachments: &[],
+                action_event_kind: WatchWebActionEventKind::TodoCompleted,
+            },
+            |session, content| {
+                delivered_message = Some((session.session_id.clone(), content.to_owned()));
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        let mut prompt =
+            store::watch_web_queued_prompts_from(sessions_dir.path(), &session.session_id)
+                .unwrap()
+                .pop()
+                .unwrap();
+        let message_id = prompt.message_id.clone().unwrap();
+        prompt.message_id = Some("<message-id>".to_owned());
+        prompt.sent_at = chrono::Utc
+            .with_ymd_and_hms(2026, 3, 14, 9, 26, 53)
+            .unwrap();
+        let delivered_message = delivered_message.unwrap();
+
+        assert_eq!(
+            (
+                prompt,
+                delivered_message.0,
+                delivered_message.1.replace(&message_id, "<message-id>"),
+            ),
+            (
+                store::WatchWebQueuedPrompt {
+                    id: 1,
+                    message_id: Some("<message-id>".to_owned()),
+                    content: "The user marked the to-do as done: Review the fixture.".to_owned(),
+                    action_event_kind: Some(WatchWebActionEventKind::TodoCompleted),
+                    attachments: Vec::new(),
+                    resolved: false,
+                    sent_at: chrono::Utc
+                        .with_ymd_and_hms(2026, 3, 14, 9, 26, 53)
+                        .unwrap(),
+                },
+                "fixture-session".to_owned(),
+                "<armyknife-todo-completed>The user marked the to-do as done: Review the fixture.</armyknife-todo-completed>\n<!-- armyknife-queued-prompt-id:<message-id> -->".to_owned(),
+            ),
+        );
+    }
+
+    #[rstest]
+    fn codex_action_delivery_removes_its_record_when_delivery_fails(
+        sessions_dir: tempfile::TempDir,
+        codex_session: Session,
+    ) {
+        let message_content = "<armyknife-todo-rejected>The user rejected the to-do: Review the fixture.</armyknife-todo-rejected>";
+        let error = send_action_event_message(
+            sessions_dir.path(),
+            &codex_session,
+            ActionEventMessage {
+                marker: None,
+                message_content,
+                event_text: "The user rejected the to-do: Review the fixture.",
+                attachments: &[],
+                action_event_kind: WatchWebActionEventKind::TodoRejected,
+            },
+            |_, _| Err(anyhow::anyhow!("delivery failed")),
+        )
+        .unwrap_err();
+        let prompts =
+            store::watch_web_queued_prompts_from(sessions_dir.path(), &codex_session.session_id)
+                .unwrap();
+
+        assert_eq!(
+            (error.to_string(), prompts),
+            (
+                "delivery failed".to_owned(),
+                Vec::<store::WatchWebQueuedPrompt>::new()
             ),
         );
     }

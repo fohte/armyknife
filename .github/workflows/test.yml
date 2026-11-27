@@ -19,6 +19,7 @@ jobs:
     timeout-minutes: 30
     env:
       SCCACHE_GHA_ENABLED: 'true'
+      SCCACHE_SKIP_CACHE_CHECK: 'true'
       RUSTC_WRAPPER: 'sccache'
 
     steps:
@@ -62,7 +63,7 @@ jobs:
 
       - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
         with:
-          version: 2026.9.14
+          version: 2026.11.9
 
       # corepack creates the pnpm executable inside mise's node install bin
       # directory; reshim so the mise shims dir (which is on PATH) picks it up.
@@ -109,7 +110,7 @@ jobs:
 
       - name: Commit formatted files
         if: ${{ !cancelled() && steps.check-auto-format.outputs.skip_commit != 'true' }}
-        uses: suzuki-shunsuke/commit-action@06e3b49d4706498d325d29bd85adc82ecf2f5d8f # v1.0.0
+        uses: suzuki-shunsuke/commit-action@5eaa5ecce3ffe93d09a85b946dc5136e3713b1b7 # v1.1.0
         with:
           commit_message: 'style: auto-format'
           workflow: deny
@@ -128,6 +129,7 @@ jobs:
     timeout-minutes: 30
     env:
       SCCACHE_GHA_ENABLED: 'true'
+      SCCACHE_SKIP_CACHE_CHECK: 'true'
       RUSTC_WRAPPER: 'sccache'
 
     steps:
@@ -142,10 +144,10 @@ jobs:
 
       - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
         with:
-          version: 2026.9.14
+          version: 2026.11.9
 
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172 # v2.87.20
+        uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
         with:
           tool: cargo-llvm-cov
 
@@ -197,7 +199,7 @@ jobs:
           cargo llvm-cov report --lcov --output-path lcov.info
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: lcov.info
@@ -212,7 +214,7 @@ jobs:
 
       - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
         with:
-          version: 2026.9.14
+          version: 2026.11.9
 
       # corepack creates the pnpm executable inside mise's node install bin
       # directory; reshim so the mise shims dir (which is on PATH) picks it up.
@@ -274,6 +276,40 @@ jobs:
         working-directory: agent-watch-web
         run: pnpm run build
 
+  unit-test-agent-watch-desktop:
+    if: "!contains(github.event.head_commit.added, '.github/workflows/bootstrap.yml')"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          version: 2026.11.9
+
+      - run: |
+          corepack enable
+          mise reshim
+
+      - name: Get pnpm store directory
+        id: pnpm-store
+        run: |
+          store_path=$(pnpm store path)
+          echo "path=$store_path" >> "$GITHUB_OUTPUT"
+
+      - name: Cache pnpm store
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: ${{ runner.os }}-pnpm-agent-watch-desktop-${{ hashFiles('agent-watch-desktop/pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-pnpm-agent-watch-desktop-
+
+      - name: Install dependencies (agent-watch-desktop)
+        run: cd "agent-watch-desktop" && pnpm install --frozen-lockfile
+
+      - name: Run type checks and unit tests (agent-watch-desktop)
+        run: cd "agent-watch-desktop" && pnpm test
+
   # Fixed name for branch protection: per-package job names are dynamic, and
   # knip has no `needs`, so this gate (skip == success) stands in for both.
   unit-test:
@@ -282,6 +318,7 @@ jobs:
     needs:
       - unit-test-run
       - unit-test-agent-watch-web
+      - unit-test-agent-watch-desktop
       - knip
     if: failure()
     steps:
@@ -297,7 +334,7 @@ jobs:
 
       - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
         with:
-          version: 2026.9.14
+          version: 2026.11.9
 
       # corepack creates the pnpm executable inside mise's node install bin
       # directory; reshim so the mise shims dir (which is on PATH) picks it up.

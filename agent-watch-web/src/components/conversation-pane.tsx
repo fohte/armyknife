@@ -8,26 +8,28 @@ import {
   useState,
 } from 'react'
 
+import { BackgroundTaskElapsedStartedAtProvider } from '#components/background-task-elapsed-context'
 import { commandResultMatchesCommands } from '#components/command-result-message'
+import { getConversationTimelineEndIndex } from '#components/conversation-message-timeline'
 import { ConversationPaneView } from '#components/conversation-pane-view'
 import { MarkdownSessionLinksProvider } from '#components/markdown-message'
 import type { PendingPermissionActions } from '#components/permission-card'
 import { ResizableColumns } from '#components/resizable-columns'
+import { ReviewDocumentFocus } from '#components/review-document-focus'
 import { SessionStatusPanel } from '#components/session-status-panel'
 import { useConversationPaneActions } from '#components/use-conversation-pane-actions'
 import { useConversationPaneData } from '#components/use-conversation-pane-data'
+import { useConversationPaneOperation } from '#components/use-conversation-pane-operation'
 import { useConversationStatusPanel } from '#components/use-conversation-status-panel'
 import { useEditorReviewDocument } from '#components/use-editor-review-document'
 import {
   type SessionTreeCallbacks,
   useSessionTree,
 } from '#components/use-session-tree'
-import { createQueuedPromptId } from '#queued-prompt-id'
 import { useSessionLinkTargets } from '#session-link-targets'
 import { useSessionOperations } from '#session-operation-context'
 import {
   applyConversationOperation,
-  createSessionOperation,
   type SessionOperation,
 } from '#session-operations'
 import type { SessionTreeViewState } from '#session-tree-model'
@@ -54,6 +56,8 @@ type ConversationPaneProps = {
   onToggleStatusPanel?: () => void
   onCloseStatusPanel?: () => void
   onBack?: () => void
+  onOpenNavigation?: () => void
+  mobileNavOpen?: boolean
   onLater?: () => void
   onClose?: () => void
   onOptimisticSessionOperation?: (operation: SessionOperation) => void
@@ -83,6 +87,8 @@ export function ConversationPane({
   onToggleStatusPanel = () => undefined,
   onCloseStatusPanel = () => undefined,
   onBack = () => undefined,
+  onOpenNavigation,
+  mobileNavOpen = false,
   onLater = () => undefined,
   onClose,
   onOptimisticSessionOperation,
@@ -239,6 +245,7 @@ export function ConversationPane({
 
   const { onRewind } = useConversationPaneActions({
     sessionId: session.id,
+    sessionTitle: session.title,
     run,
     refresh: () => {
       void refresh()
@@ -246,64 +253,16 @@ export function ConversationPane({
     setError: setPaneError,
     onSelectSession,
   })
-  const onAction = useCallback(
-    (action: string, payload?: Record<string, unknown>) => {
-      const messageCountBefore =
-        action === 'messages'
-          ? Math.max(
-              conversationRef.current.total,
-              nextMessageCountBefore.current ?? 0,
-            )
-          : undefined
-      const operationResult = createSessionOperation(
-        session.id,
-        action,
-        action === 'messages'
-          ? {
-              ...payload,
-              _queuedPromptId: createQueuedPromptId(),
-              _messageCountBefore: messageCountBefore,
-            }
-          : payload,
-      )
-      if (operationResult.isErr()) {
-        setError(operationResult.error.message)
-        return Promise.resolve(false)
-      }
-      const operation = operationResult.value
-      if (operation.type === 'message' && messageCountBefore !== undefined) {
-        nextMessageCountBefore.current = messageCountBefore + 1
-      }
-      const dispatchers = [dispatchConversationOperation]
-      if (onOptimisticSessionOperation !== undefined) {
-        dispatchers.push(onOptimisticSessionOperation)
-      }
-      return run(operation, {
-        optimisticDispatchers: dispatchers,
-        refresh: (_result, confirmedOperation) =>
-          refreshForOperation(confirmedOperation),
-      }).then((result) =>
-        result.match(
-          () => {
-            clearErrors()
-            return true
-          },
-          (requestError) => {
-            setError(requestError.message)
-            return false
-          },
-        ),
-      )
-    },
-    [
-      clearErrors,
-      dispatchConversationOperation,
-      onOptimisticSessionOperation,
-      refreshForOperation,
-      run,
-      session.id,
-    ],
-  )
+  const { error: operationError, onAction } = useConversationPaneOperation({
+    sessionId: session.id,
+    conversationRef,
+    nextMessageCountBefore,
+    dispatchConversationOperation,
+    onOptimisticSessionOperation,
+    refreshForOperation,
+    clearErrors,
+    run,
+  })
 
   const pendingPermissionActions =
     pendingOperations.reduce<PendingPermissionActions>(
@@ -349,17 +308,21 @@ export function ConversationPane({
       operation.sessionId === session.id && operation.type === 'interrupt',
   )
   const { messages, backgroundTasks } = displayedConversation
+  const actionTimelineIndex =
+    loading && messages.length === 0
+      ? undefined
+      : getConversationTimelineEndIndex(
+          messages,
+          displayedConversation.start,
+          session.category,
+          session.isCompacting === true,
+        )
   const editorReviewDocument = useEditorReviewDocument(session)
-  const backgroundTaskElapsedOffset =
-    messagesLoadedAt === null
-      ? 0
-      : Math.max(0, Math.floor((Date.now() - messagesLoadedAt) / 1_000))
-  const displayBackgroundTasks = backgroundTasks.map((task) => ({
-    ...task,
-    elapsedSeconds: task.elapsedSeconds + backgroundTaskElapsedOffset,
-  }))
   const {
     activeTabId,
+    isReviewFocusOpen,
+    reviewFocusBody,
+    onCloseReviewFocus,
     onOpenCritInFullscreen,
     onOpenWebUiInFullscreen,
     mobileWebUi,
@@ -370,11 +333,19 @@ export function ConversationPane({
     onTabChange,
     selectedDecisionSeq,
     tabs: panelTabs,
+    pullRequestListTarget,
   } = useConversationStatusPanel({
     session,
+    actionTimelineIndex,
+    reviewDocumentSummaries: editorReviewDocument?.summaries ?? null,
+    ...(editorReviewDocument?.retrySummaries === undefined
+      ? {}
+      : {
+          onRetryReviewDocumentSummaries: editorReviewDocument.retrySummaries,
+        }),
     messages,
     allDecisions: displayedConversation.decisions,
-    backgroundTasks: displayBackgroundTasks,
+    backgroundTasks,
     sessionTree,
     sessionTreeError,
     sessionTreeViewState: initialSessionTreeViewState,
@@ -400,11 +371,15 @@ export function ConversationPane({
   const conversationView = (
     <ConversationPaneView
       session={session}
+      actionTimelineIndex={actionTimelineIndex}
       vibeMode={conversation.vibeMode ?? session.vibeMode}
       sessions={sessions}
       sessionLinkTargets={sessionLinkTargets}
       messages={messages}
-      start={conversation.start}
+      {...(displayedConversation.messageImageSources === undefined
+        ? {}
+        : { messageImageSources: displayedConversation.messageImageSources })}
+      start={displayedConversation.start}
       epoch={conversation.epoch}
       olderCursor={conversation.olderCursor}
       decisions={displayedConversation.decisions}
@@ -412,7 +387,7 @@ export function ConversationPane({
       loadingOlder={loadingOlder}
       onLoadOlder={loadOlder}
       onPruneOldMessages={pruneOldMessages}
-      backgroundTasks={displayBackgroundTasks}
+      backgroundTasks={backgroundTasks}
       skills={conversation.skills ?? []}
       actions={actions}
       actionsReady={actionsReady}
@@ -424,7 +399,7 @@ export function ConversationPane({
       openInTerminalStatus={displayOpenInTerminalStatus}
       interruptPending={interruptPending}
       loading={loading}
-      error={error}
+      error={operationError ?? error}
       onClearError={() => {
         clearErrors()
       }}
@@ -438,7 +413,7 @@ export function ConversationPane({
         onOpenCritInFullscreen()
         if (!statusPanelOpen) onToggleStatusPanel()
       }}
-      editorReviewDocument={editorReviewDocument}
+      editorReviewDocument={editorReviewDocument?.state ?? null}
       onOpenDrafts={() => {
         onTabChange('review-document')
         if (!statusPanelOpen) onToggleStatusPanel()
@@ -456,8 +431,11 @@ export function ConversationPane({
       onToggleStatusPanel={onToggleStatusPanel}
       onSelectDecision={onSelectDecision}
       mobileStatusPanel={statusPanel}
+      pullRequestListTarget={pullRequestListTarget}
+      mobileNavOpen={mobileNavOpen}
       mobileWebUi={mobileWebUi}
       onBack={onBack}
+      {...(onOpenNavigation === undefined ? {} : { onOpenNavigation })}
       onLater={onLater}
       {...(onClose === undefined ? {} : { onClose })}
       isToday={isToday}
@@ -492,7 +470,17 @@ export function ConversationPane({
         if (!isMobile && !statusPanelOpen) onToggleStatusPanel()
       }}
     >
-      {conversationLayout}
+      <BackgroundTaskElapsedStartedAtProvider value={messagesLoadedAt}>
+        {isReviewFocusOpen && reviewFocusBody !== null ? (
+          <ReviewDocumentFocus
+            sessionTitle={session.title}
+            body={reviewFocusBody}
+            onBack={onCloseReviewFocus}
+          />
+        ) : (
+          conversationLayout
+        )}
+      </BackgroundTaskElapsedStartedAtProvider>
     </MarkdownSessionLinksProvider>
   )
 }

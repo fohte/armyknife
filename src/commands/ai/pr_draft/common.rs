@@ -10,7 +10,10 @@ use thiserror::Error;
 use crate::infra::git;
 use crate::infra::github::{self, RepoClient};
 use crate::shared::config::load_config;
-use crate::shared::human_in_the_loop::{ApprovalManager, DocumentSchema, HumanInTheLoopError};
+use crate::shared::human_in_the_loop::{
+    ApprovalManager, DocumentSchema, HumanInTheLoopError, canonical_document_path, document_hash,
+    document_hash_for_content,
+};
 use crate::shared::repo_language::{copier_answers_path_for_current_repo, resolve_repo_language};
 use crate::shared::yaml_frontmatter;
 
@@ -234,7 +237,9 @@ impl DraftFile {
         path: &Path,
         draft_dir: &Path,
     ) -> Option<(String, String, String)> {
-        let relative = path.strip_prefix(draft_dir).ok()?;
+        let path = canonical_document_path(path);
+        let draft_dir = canonical_document_path(draft_dir);
+        let relative = path.strip_prefix(&draft_dir).ok()?;
         let components: Vec<_> = relative.components().collect();
 
         // Need at least 3 components: owner, repo, and at least one branch segment
@@ -257,18 +262,27 @@ impl DraftFile {
     }
 
     pub fn from_path(path: PathBuf) -> Result<Self> {
+        Self::from_path_with_hash(path).map(|(draft, _)| draft)
+    }
+
+    pub(super) fn from_path_with_hash(path: PathBuf) -> Result<(Self, String)> {
         if !path.exists() {
             return Err(PrDraftError::FileNotFound(path).into());
         }
 
-        let content = fs::read_to_string(&path)?;
+        let content = fs::read(&path)?;
+        let content_hash = document_hash_for_content(&content);
+        let content = String::from_utf8(content)?;
         let (frontmatter, body) = parse_frontmatter(&content)?;
 
-        Ok(Self {
-            path,
-            frontmatter,
-            body,
-        })
+        Ok((
+            Self {
+                path,
+                frontmatter,
+                body,
+            },
+            content_hash,
+        ))
     }
 
     fn approval_manager(&self) -> ApprovalManager {
@@ -305,13 +319,28 @@ impl DraftFile {
         Ok(())
     }
 
-    pub fn cleanup(&self) -> Result<()> {
-        if self.path.exists() {
-            fs::remove_file(&self.path)?;
+    pub fn cleanup_if_unchanged(&self, requested_path: &Path, expected_hash: &str) -> Result<bool> {
+        let current_hash = match document_hash(requested_path) {
+            Ok(hash) => hash,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error.into()),
+        };
+        if current_hash != expected_hash {
+            return Ok(false);
+        }
+        match fs::remove_file(requested_path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error.into()),
         }
         self.remove_lock()?;
+        let requested_lock_path = Self::lock_path(requested_path);
+        let canonical_lock_path = Self::lock_path(&self.path);
+        if requested_lock_path != canonical_lock_path && requested_lock_path.exists() {
+            fs::remove_file(requested_lock_path)?;
+        }
         self.remove_approval()?;
-        Ok(())
+        Ok(true)
     }
 
     /// If the on-disk draft has any approval gesture flag (`steps.submit` or
@@ -391,12 +420,28 @@ pub async fn repo_allows_japanese(
     repo: &str,
     is_private: bool,
 ) -> anyhow::Result<bool> {
-    let config = load_config()?;
     let repo_id = format!("{owner}/{repo}");
     let copier_answers_path = copier_answers_path_for_current_repo(Some(&repo_id));
+    repo_allows_japanese_with_copier_answers(
+        owner,
+        repo,
+        is_private,
+        copier_answers_path.as_deref(),
+    )
+    .await
+}
+
+pub(crate) async fn repo_allows_japanese_with_copier_answers(
+    owner: &str,
+    repo: &str,
+    is_private: bool,
+    copier_answers_path: Option<&Path>,
+) -> anyhow::Result<bool> {
+    let config = load_config()?;
+    let repo_id = format!("{owner}/{repo}");
     let language = resolve_repo_language(
         config.get_value("repo.language", Some(&repo_id)),
-        copier_answers_path.as_deref(),
+        copier_answers_path,
         || async { Ok(Some(is_private)) },
     )
     .await?;
@@ -426,6 +471,131 @@ mod tests {
     use super::*;
     use indoc::indoc;
     use rstest::rstest;
+
+    #[cfg(unix)]
+    #[test]
+    fn parse_path_under_accepts_a_canonicalized_path() {
+        let directory = tempfile::tempdir().expect("temporary directory should be created");
+        let real_draft_dir = directory.path().join("drafts");
+        let draft_path = real_draft_dir
+            .join("sample-owner")
+            .join("sample-repository")
+            .join("feature")
+            .join("sample-branch.md");
+        fs::create_dir_all(
+            draft_path
+                .parent()
+                .expect("draft path should have a parent"),
+        )
+        .expect("draft directory should be created");
+        fs::write(&draft_path, "draft").expect("draft should be written");
+        let draft_dir_alias = directory.path().join("drafts-alias");
+        std::os::unix::fs::symlink(&real_draft_dir, &draft_dir_alias)
+            .expect("draft directory alias should be created");
+        let canonicalized_path = fs::canonicalize(&draft_path).expect("path should be resolved");
+
+        assert_eq!(
+            DraftFile::parse_path_under(&canonicalized_path, &draft_dir_alias),
+            Some((
+                "sample-owner".to_string(),
+                "sample-repository".to_string(),
+                "feature/sample-branch".to_string(),
+            )),
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn parse_path_under_accepts_a_missing_document_under_a_symlinked_root() {
+        let directory = tempfile::tempdir().expect("temporary directory should be created");
+        let real_draft_dir = directory.path().join("drafts");
+        let draft_path = real_draft_dir
+            .join("sample-owner")
+            .join("sample-repository")
+            .join("feature")
+            .join("sample-branch.md");
+        fs::create_dir_all(
+            draft_path
+                .parent()
+                .expect("draft path should have a parent"),
+        )
+        .expect("draft directory should be created");
+        let draft_dir_alias = directory.path().join("drafts-alias");
+        std::os::unix::fs::symlink(&real_draft_dir, &draft_dir_alias)
+            .expect("draft directory alias should be created");
+
+        assert_eq!(
+            DraftFile::parse_path_under(&draft_path, &draft_dir_alias),
+            Some((
+                "sample-owner".to_string(),
+                "sample-repository".to_string(),
+                "feature/sample-branch".to_string(),
+            )),
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cleanup_leaves_a_symlink_target_intact() {
+        let directory = tempfile::tempdir().expect("temporary directory should be created");
+        let target_path = directory.path().join("target.md");
+        let symlink_path = directory.path().join("draft.md");
+        fs::write(&target_path, "draft").expect("target draft should be written");
+        std::os::unix::fs::symlink(&target_path, &symlink_path)
+            .expect("draft symlink should be created");
+        let canonical_target = canonical_document_path(&symlink_path);
+        let draft = DraftFile::from_path(canonical_target).expect("draft should be read");
+
+        let expected_hash = document_hash(&symlink_path).expect("draft hash should be computed");
+        let cleaned = draft
+            .cleanup_if_unchanged(&symlink_path, &expected_hash)
+            .expect("draft should be cleaned up");
+
+        assert_eq!(
+            (cleaned, symlink_path.exists(), target_path.exists()),
+            (true, false, true)
+        );
+    }
+
+    #[test]
+    fn from_path_with_hash_binds_the_hash_to_the_parsed_content() {
+        let directory = tempfile::tempdir().expect("temporary directory should be created");
+        let path = directory.path().join("draft.md");
+        let original_content = indoc! {"
+            ---
+            title: 'Original title'
+            steps:
+              submit: false
+            ---
+            Original body.
+        "};
+        let replacement_content = indoc! {"
+            ---
+            title: 'Replacement title'
+            steps:
+              submit: false
+            ---
+            Replacement body.
+        "};
+        fs::write(&path, original_content).expect("original draft should be written");
+
+        let (draft, submitted_hash) = DraftFile::from_path_with_hash(path.clone())
+            .expect("draft and hash should be read together");
+        fs::write(&path, replacement_content).expect("replacement draft should be written");
+
+        assert_eq!(
+            (
+                draft.body,
+                submitted_hash,
+                document_hash(&path).expect("replacement draft hash should be computed"),
+            ),
+            (
+                "Original body.\n".to_owned(),
+                document_hash_for_content(original_content.as_bytes()),
+                document_hash_for_content(replacement_content.as_bytes()),
+            ),
+        );
+    }
 
     #[rstest]
     #[case::repo_and_branch("owner/repo", "feature/x", "owner", "repo", "feature/x")]

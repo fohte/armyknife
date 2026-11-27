@@ -18,6 +18,9 @@ beforeEach(() => {
   act(() => {
     root?.render(
       <InboxView
+        sort="priority"
+        sortStorageAvailable
+        onSortChange={() => undefined}
         sessions={[]}
         selectedId={null}
         loaded

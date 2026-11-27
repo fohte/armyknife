@@ -5,15 +5,33 @@ import { markdown } from '@codemirror/lang-markdown'
 import { defaultHighlightStyle, syntaxHighlighting } from '@codemirror/language'
 import { Compartment, EditorState } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
+import { Maximize2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 
-import { MarkdownMessage } from '#components/markdown-message'
+import { ReviewDocumentNavigation } from '#components/review-document-navigation'
+import { ReviewDocumentActions } from '#components/review-document-panel/actions'
+import { getReviewDocumentFrontmatterEntries } from '#components/review-document-panel-frontmatter'
+import { ReviewDocumentPreview } from '#components/review-document-preview'
+import {
+  isNewIssueDraft,
+  type ReviewDocumentSummary,
+} from '#components/review-document-summary'
+import type { ReviewDocumentAction } from '#session-operation-types'
 import type { JsonValue } from '#types'
 
 type ReviewDocumentPanelProps = {
+  summary?: ReviewDocumentSummary
+  summaries?: readonly ReviewDocumentSummary[]
+  relatedIssueTitles?: Readonly<Record<string, string>> | undefined
+  isMobile?: boolean
+  canSave?: boolean
+  canFinish?: boolean
+  onSelectDocument?: (id: string) => void
+  onOpenFocus?: () => void
   frontmatter: JsonValue
   body: string
-  status?: 'idle' | 'saving' | 'saved' | 'error' | 'finishing'
+  status?: 'idle' | 'saving' | 'saved' | 'error' | 'finishing' | 'submitting'
+  pendingAction?: ReviewDocumentAction | undefined
   unsavedChanges?: boolean
   error?: string | null
   view?: 'edit' | 'preview'
@@ -22,6 +40,8 @@ type ReviewDocumentPanelProps = {
   onViewChange?: (view: 'edit' | 'preview') => void
   onSave?: () => void
   onFinish?: () => void
+  onApproveForTranslation?: () => void
+  onSubmit?: (action: ReviewDocumentAction) => void
 }
 
 type JsonObject = { [key: string]: JsonValue }
@@ -278,135 +298,203 @@ function MarkdownEditor({
 }
 
 export function ReviewDocumentPanel({
+  summary,
+  summaries = [],
+  relatedIssueTitles,
+  isMobile = false,
+  canSave = true,
+  canFinish = true,
+  onSelectDocument = () => undefined,
+  onOpenFocus = () => undefined,
   frontmatter,
   body,
   status = 'idle',
+  pendingAction,
   unsavedChanges = false,
   error = null,
-  view = 'edit',
+  view = 'preview',
   onFrontmatterChange = () => undefined,
   onBodyChange = () => undefined,
   onViewChange = () => undefined,
   onSave = () => undefined,
   onFinish = () => undefined,
+  onApproveForTranslation = onFinish,
+  onSubmit = () => undefined,
 }: ReviewDocumentPanelProps) {
-  const busy = status === 'saving' || status === 'finishing'
+  const busy =
+    status === 'saving' || status === 'finishing' || status === 'submitting'
   const updateFrontmatter = (
     path: readonly JsonPathPart[],
     value: JsonValue,
   ) => {
     onFrontmatterChange(updateAtPath(frontmatter, path, value))
   }
+  const frontmatterEntries = getReviewDocumentFrontmatterEntries(
+    frontmatter,
+    summary,
+  )
+  const isIssueDraft = isNewIssueDraft(summary)
+  const visibleFrontmatterEntries = frontmatterEntries
+  const isIssueBody = summary?.kind === 'issue_body'
+  const isApprovalDocument = isIssueBody || summary?.kind === 'review_replies'
+  const isIssueDocument = isIssueBody || isIssueDraft
+  const showIssueDraftEditor = isIssueDraft && view === 'edit'
+  const showFrontmatterEntries =
+    visibleFrontmatterEntries === null || visibleFrontmatterEntries.length > 0
+  const showFrontmatter =
+    isApprovalDocument || isIssueDraft
+      ? view === 'edit' &&
+        visibleFrontmatterEntries !== null &&
+        visibleFrontmatterEntries.length > 0
+      : frontmatter !== null && showFrontmatterEntries
 
   return (
     <article
-      className="review-document-panel"
+      className={`review-document-panel${isIssueDraft ? ' review-document-panel--issue-draft' : ''}`}
       data-view={view}
       data-status={status}
     >
+      <ReviewDocumentNavigation
+        {...(summary === undefined ? {} : { summary })}
+        summaries={summaries}
+        title={
+          isJsonObject(frontmatter) && typeof frontmatter['title'] === 'string'
+            ? frontmatter['title']
+            : ''
+        }
+        canSave={canSave}
+        busy={busy}
+        onTitleChange={(title) => {
+          if (isJsonObject(frontmatter)) {
+            onFrontmatterChange({ ...frontmatter, title })
+          }
+        }}
+        onSelectDocument={onSelectDocument}
+      />
       <div className="review-document-content">
-        <section
-          className="review-document-frontmatter"
-          aria-label="Document metadata"
-        >
-          <h2>Frontmatter</h2>
-          {isJsonObject(frontmatter) ? (
-            <dl className="review-document-fields">
-              {Object.entries(frontmatter).map(([name, value]) => (
-                <FieldEditor
-                  key={name}
-                  name={name}
-                  path={[name]}
-                  value={value}
-                  disabled={busy}
-                  onChange={updateFrontmatter}
-                />
-              ))}
-            </dl>
-          ) : (
-            <FieldEditor
-              name="Frontmatter"
-              path={[]}
-              value={frontmatter}
-              disabled={busy}
-              onChange={(path, value) => {
-                if (path.length === 0) onFrontmatterChange(value)
-              }}
-            />
-          )}
-        </section>
+        {isIssueDocument && (!isIssueDraft || showIssueDraftEditor) ? (
+          <ReviewDocumentPreview
+            mode="frontmatter"
+            {...(summary === undefined ? {} : { summary })}
+            relatedIssueTitles={relatedIssueTitles}
+            body={body}
+            frontmatter={frontmatter}
+            disabled={!canSave || busy}
+            onFrontmatterChange={onFrontmatterChange}
+          />
+        ) : null}
+        {showFrontmatter ? (
+          <section
+            className="review-document-frontmatter"
+            aria-label="Document metadata"
+          >
+            <h2>Frontmatter</h2>
+            {visibleFrontmatterEntries !== null ? (
+              <dl className="review-document-fields">
+                {visibleFrontmatterEntries.map(([name, value]) => (
+                  <FieldEditor
+                    key={name}
+                    name={name}
+                    path={[name]}
+                    value={value}
+                    disabled={!canSave || busy}
+                    onChange={updateFrontmatter}
+                  />
+                ))}
+              </dl>
+            ) : (
+              <FieldEditor
+                name="Frontmatter"
+                path={[]}
+                value={frontmatter}
+                disabled={!canSave || busy}
+                onChange={(path, value) => {
+                  if (path.length === 0) onFrontmatterChange(value)
+                }}
+              />
+            )}
+          </section>
+        ) : null}
 
         <section
           className="review-document-body-editor"
           aria-label="Document body"
         >
           <div className="review-document-body-heading">
-            <h2>Body</h2>
-            <div className="review-document-view-toggle" aria-label="Body view">
-              <button
-                aria-pressed={view === 'edit'}
-                type="button"
-                onClick={() => {
-                  onViewChange('edit')
-                }}
+            <h2>BODY</h2>
+            <div className="review-document-body-toolbar">
+              {isMobile ? null : (
+                <button
+                  aria-label="Open draft full width"
+                  className="review-document-full-width"
+                  type="button"
+                  onClick={onOpenFocus}
+                >
+                  <Maximize2 aria-hidden="true" size={13} />
+                  <span>Full width</span>
+                </button>
+              )}
+              <div
+                className="review-document-view-toggle"
+                aria-label="Body view"
               >
-                Edit
-              </button>
-              <button
-                aria-pressed={view === 'preview'}
-                type="button"
-                onClick={() => {
-                  onViewChange('preview')
-                }}
-              >
-                Preview
-              </button>
+                <button
+                  aria-pressed={view === 'preview'}
+                  type="button"
+                  onClick={() => {
+                    onViewChange('preview')
+                  }}
+                >
+                  Preview
+                </button>
+                <button
+                  aria-pressed={view === 'edit'}
+                  type="button"
+                  onClick={() => {
+                    onViewChange('edit')
+                  }}
+                >
+                  Edit
+                </button>
+              </div>
             </div>
           </div>
           <div className="review-document-body-columns">
             <div className="review-document-edit-column">
               <MarkdownEditor
                 value={body}
-                disabled={busy}
+                disabled={!canSave || busy}
                 onChange={onBodyChange}
               />
             </div>
             <div className="review-document-preview-column">
-              <MarkdownMessage className="review-document-body">
-                {body}
-              </MarkdownMessage>
+              <ReviewDocumentPreview
+                {...(summary === undefined ? {} : { summary })}
+                body={body}
+                canSave={canSave && !busy}
+                onBodyChange={onBodyChange}
+              />
             </div>
           </div>
         </section>
       </div>
 
-      <footer className="review-document-actions">
-        <span aria-live="polite" className="review-document-status">
-          {status === 'saving'
-            ? 'Saving…'
-            : status === 'saved'
-              ? 'Saved'
-              : status === 'finishing'
-                ? 'Finishing review…'
-                : (error ?? (unsavedChanges ? 'Unsaved changes' : ''))}
-        </span>
-        {error === null ? null : (
-          <span className="review-document-error" role="alert">
-            {error}
-          </span>
-        )}
-        <button disabled={busy} type="button" onClick={onSave}>
-          Save
-        </button>
-        <button
-          className="review-document-finish"
-          disabled={busy}
-          type="button"
-          onClick={onFinish}
-        >
-          Finish review
-        </button>
-      </footer>
+      <ReviewDocumentActions
+        summary={summary}
+        isMobile={isMobile}
+        canSave={canSave}
+        canFinish={canFinish}
+        frontmatter={frontmatter}
+        body={body}
+        status={status}
+        pendingAction={pendingAction}
+        unsavedChanges={unsavedChanges}
+        error={error}
+        onSave={onSave}
+        onFinish={onFinish}
+        onApproveForTranslation={onApproveForTranslation}
+        onSubmit={onSubmit}
+      />
     </article>
   )
 }

@@ -56,7 +56,7 @@ pub enum CcError {
     NoTmuxInfo(String),
 
     #[error(
-        "Neither ARMYKNIFE_SESSION_ID nor CODEX_SESSION_ID is set (not running inside an armyknife-tracked session)"
+        "Neither ARMYKNIFE_SESSION_ID, CLAUDE_CODE_SESSION_ID, nor CODEX_SESSION_ID is set (not running inside an armyknife-tracked session)"
     )]
     SelfSessionUnknown,
 

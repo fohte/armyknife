@@ -60,10 +60,32 @@ function HeaderWithMergeBandTarget(
   props: Parameters<typeof ConversationPaneHeader>[0],
 ) {
   const [target, setTarget] = useState<HTMLDivElement | null>(null)
+  const [pullRequestTarget, setPullRequestTarget] =
+    useState<HTMLDivElement | null>(null)
+  const [statusPanelOpen, setStatusPanelOpen] = useState(props.statusPanelOpen)
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
+  const toggleStatusPanel = () => {
+    props.onToggleStatusPanel()
+    setStatusPanelOpen((open) => !open)
+  }
   return (
     <>
-      <ConversationPaneHeader {...props} mergeBandTarget={target} />
+      <ConversationPaneHeader
+        {...props}
+        statusPanelOpen={statusPanelOpen}
+        mobileNavOpen={mobileNavOpen}
+        onOpenNavigation={() => {
+          props.onOpenNavigation?.()
+          setMobileNavOpen(true)
+        }}
+        onToggleStatusPanel={toggleStatusPanel}
+        mergeBandTarget={target}
+        pullRequestListTarget={props.isMobile ? pullRequestTarget : null}
+      />
       <div ref={setTarget} />
+      {props.isMobile && statusPanelOpen ? (
+        <div ref={setPullRequestTarget} />
+      ) : null}
     </>
   )
 }
@@ -79,6 +101,7 @@ function renderHeader(
     onLater?: () => void
     onClose?: () => void
     onToggleToday?: (isToday: boolean) => void
+    onOpenNavigation?: () => void
     onToggleStatusPanel?: () => void
     mobileActionsMenuOpen?: boolean
     isToday?: boolean
@@ -112,6 +135,9 @@ function renderHeader(
           {...(options.onToggleToday === undefined
             ? {}
             : { onToggleToday: options.onToggleToday })}
+          {...(options.onOpenNavigation === undefined
+            ? {}
+            : { onOpenNavigation: options.onOpenNavigation })}
         />
       </AsyncActionFeedbackProvider>,
     )
@@ -176,6 +202,35 @@ afterEach(() => {
   root = null
   container.remove()
   vi.unstubAllGlobals()
+})
+
+it('opens mobile navigation from the header button', () => {
+  const onOpenNavigation = vi.fn()
+  renderHeader(true, vi.fn().mockResolvedValue(true), session, {
+    onOpenNavigation,
+  })
+  const navigationButton = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Open navigation"]',
+    ),
+  )
+  const snapshot = () => [
+    navigationButton.getAttribute('aria-expanded'),
+    onOpenNavigation.mock.calls.length,
+  ]
+
+  const initial = snapshot()
+
+  act(() => {
+    navigationButton.click()
+  })
+
+  expect(JSON.stringify({ initial, after: snapshot() })).toBe(
+    JSON.stringify({
+      initial: ['false', 0],
+      after: ['true', 1],
+    }),
+  )
 })
 
 it.each([
@@ -640,7 +695,7 @@ it('summarizes every pull request and opens the full list', () => {
   })
 })
 
-it('places the compact mobile pull request button in the header actions', () => {
+it('shows pull request status on the mobile status panel button', () => {
   renderHeader(
     true,
     vi.fn(() => Promise.resolve(true)),
@@ -685,45 +740,32 @@ it('places the compact mobile pull request button in the header actions', () => 
   )
 
   const trigger = requireElement(
-    container.querySelector<HTMLButtonElement>('.session-pr-trigger--mobile'),
+    container.querySelector<HTMLButtonElement>(
+      '.mobile-conversation-status-toggle',
+    ),
   )
-  act(() => {
-    trigger.click()
-  })
 
   const snapshot = () => ({
-    triggerLabel: trigger.getAttribute('aria-label'),
+    label: trigger.getAttribute('aria-label'),
     expanded: trigger.getAttribute('aria-expanded'),
-    iconVisible: trigger.querySelector('.session-pr-icon') !== null,
-    ciIndicator: trigger.querySelector('.session-pr-trigger-ci-dot')?.className,
-    count: container.querySelector('.session-pr-count')?.textContent,
-    inHeaderActions:
-      trigger.closest('.mobile-conversation-header-actions') !== null,
-    dedicatedPrRow:
-      container.querySelector(
-        '.mobile-conversation-context .session-pr-menu',
-      ) !== null,
-    dialogModal: container
-      .querySelector('[role="dialog"]')
-      ?.getAttribute('aria-modal'),
-    footerButtons: Array.from(
-      container.querySelectorAll<HTMLButtonElement>(
-        '.session-pr-list-actions button',
-      ),
-      (button) => button.textContent.trim(),
-    ),
+    statusIcon: trigger.querySelector('svg') !== null,
+    ciIndicator: trigger.querySelector('.session-pr-status-ci-dot')?.className,
+    count: trigger.querySelector('.session-pr-status-count')?.textContent,
+    dedicatedPrButton:
+      container.querySelector('.session-pr-trigger--mobile') !== null,
+    listRows: container.querySelectorAll(
+      '.session-pr-list--panel .session-pr-row',
+    ).length,
   })
   expect(snapshot()).toEqual({
-    triggerLabel:
-      'PR #42: Update the delivery flow, open, CI passed. 1 more PR from this session',
-    expanded: 'true',
-    iconVisible: true,
-    ciIndicator: 'session-pr-trigger-ci-dot is-passed',
+    label:
+      'Open session status panel. PR #42, open, CI passed. 1 more PR from this session',
+    expanded: 'false',
+    statusIcon: true,
+    ciIndicator: 'session-pr-status-ci-dot is-passed',
     count: '2',
-    inHeaderActions: true,
-    dedicatedPrRow: false,
-    dialogModal: 'true',
-    footerButtons: ['Close'],
+    dedicatedPrButton: false,
+    listRows: 0,
   })
 })
 
@@ -922,11 +964,21 @@ it.each([
       },
     )
 
-    act(() => {
-      requireElement(
-        container.querySelector<HTMLButtonElement>('.session-pr-trigger'),
-      ).click()
-    })
+    if (isMobile) {
+      act(() => {
+        requireElement(
+          container.querySelector<HTMLButtonElement>(
+            '.mobile-conversation-status-toggle',
+          ),
+        ).click()
+      })
+    } else {
+      act(() => {
+        requireElement(
+          container.querySelector<HTMLButtonElement>('.session-pr-trigger'),
+        ).click()
+      })
+    }
     const mergeButton = requireElement(
       container.querySelector<HTMLButtonElement>(
         '.session-pr-row button[aria-label^="Merge PR #42"]',
@@ -942,14 +994,16 @@ it.each([
     const snapshot = () => ({
       confirmationLabel: confirmation?.querySelector('h2')?.textContent ?? null,
       confirmedHead: confirmation?.querySelector('code')?.textContent ?? null,
-      listOpen: container
-        .querySelector('.session-pr-trigger')
-        ?.getAttribute('aria-expanded'),
+      listOpen: isMobile
+        ? container.querySelector('.session-pr-list--panel') !== null
+        : container
+            .querySelector('.session-pr-trigger')
+            ?.getAttribute('aria-expanded'),
     })
     expect(snapshot()).toEqual({
       confirmationLabel: 'Merge this pull request?',
       confirmedHead: 'fixture-ready-head',
-      listOpen: 'false',
+      listOpen: isMobile ? false : 'false',
     })
   },
 )
@@ -1291,7 +1345,7 @@ it('keeps pending merge progress scoped to the PR repository identity', async ()
   })
 })
 
-it('shows mobile merge feedback after confirming from the pull request sheet', async () => {
+it('shows mobile merge feedback after confirming from the status panel PR list', async () => {
   const fetchMock = vi.fn<typeof fetch>(() =>
     Promise.resolve(Response.json({ result: 'merged' })),
   )
@@ -1316,13 +1370,18 @@ it('shows mobile merge feedback after confirming from the pull request sheet', a
 
   act(() => {
     requireElement(
-      container.querySelector<HTMLButtonElement>('.session-pr-trigger--mobile'),
+      container.querySelector<HTMLButtonElement>(
+        '.mobile-conversation-status-toggle',
+      ),
     ).click()
   })
+  const mergeButton = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      '.session-pr-list--panel .session-pr-row button[aria-label^="Merge PR #42"]',
+    ),
+  )
   act(() => {
-    requireElement(
-      container.querySelector<HTMLButtonElement>('.merge-band-action'),
-    ).click()
+    mergeButton.click()
   })
   const confirmation = requireElement(
     container.querySelector<HTMLElement>('[role="alertdialog"]'),

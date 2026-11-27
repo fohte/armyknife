@@ -1,9 +1,14 @@
 use clap::Args;
 use std::path::{Path, PathBuf};
 
-use super::common::{DraftFile, PrDraftError, RepoInfo, contains_japanese, repo_allows_japanese};
+use super::common::{
+    DraftFile, PrDraftError, RepoInfo, contains_japanese, repo_allows_japanese,
+    repo_allows_japanese_with_copier_answers,
+};
 use super::hooks::{HookContext, HookRunner, PRE_PR_SUBMIT_HOOK, default_runner, run_pr_hook};
 use super::stack::stack_created_pull_request;
+use super::submit_lock::acquire_submit_lock;
+use super::{ExpectedPullRequestTarget, ExpectedPullRequestTargetMismatch};
 use crate::commands::agent::{ensure_no_review_access, is_vibe_enabled};
 use crate::commands::ai::pr_series::has_managed_section;
 use crate::infra::git::cmd::run_git;
@@ -12,7 +17,10 @@ use crate::infra::github::{
     UpdatePrParams,
 };
 use crate::shared::config::load_config;
-use crate::shared::human_in_the_loop::LockGuard;
+use crate::shared::human_in_the_loop::{
+    LockGuard, ReviewDocumentAction, canonical_document_path, successful_action_result,
+};
+use crate::shared::repo_language::copier_answers_path_for_repo_at;
 
 mod post_submit;
 
@@ -55,25 +63,106 @@ struct PrTarget {
     is_private: bool,
 }
 
+struct ReviewRepositoryLanguageContext {
+    expected_repo_id: String,
+    copier_answers_path: Option<PathBuf>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SubmitLockPolicy {
+    RequireUnlocked,
+    OwnedByReview,
+}
+
+struct SubmitContext<'a, F> {
+    current_repo_identity: F,
+    review_language_context: Option<&'a ReviewRepositoryLanguageContext>,
+    lock_policy: SubmitLockPolicy,
+    expected_pr_target: Option<ExpectedPullRequestTarget>,
+}
+
+fn validate_default_draft_path(
+    canonical_path: &Path,
+    requested_path: &Path,
+    current_repo: &RepoInfo,
+) -> anyhow::Result<()> {
+    let invalid_path =
+        || PrDraftError::CommandFailed(format!("Invalid draft path: {}", requested_path.display()));
+    let Some((owner, repo, branch)) = DraftFile::parse_path(canonical_path) else {
+        return Err(invalid_path().into());
+    };
+    if owner != current_repo.owner || repo != current_repo.repo || branch != current_repo.branch {
+        return Err(invalid_path().into());
+    }
+    Ok(())
+}
+
 pub async fn run(args: &SubmitArgs) -> anyhow::Result<()> {
+    let draft_path = match &args.filepath {
+        Some(path) => path.clone(),
+        None => DraftFile::path_for(&RepoInfo::from_git_only()?),
+    };
+    let action_result_path = canonical_document_path(&draft_path);
+    if let Some(result) =
+        successful_action_result(&action_result_path, ReviewDocumentAction::CreatePr)?
+    {
+        result.print_for_agent();
+        return Ok(());
+    }
+    run_with_review_language_context(args, None, SubmitLockPolicy::RequireUnlocked, None)
+        .await
+        .map(|_| ())
+}
+
+pub(super) async fn run_for_review(
+    args: &SubmitArgs,
+    session_cwd: &Path,
+    expected_repo_id: &str,
+    expected_pr_target: Option<ExpectedPullRequestTarget>,
+) -> anyhow::Result<String> {
+    let context = ReviewRepositoryLanguageContext {
+        expected_repo_id: expected_repo_id.to_owned(),
+        copier_answers_path: copier_answers_path_for_repo_at(session_cwd, expected_repo_id),
+    };
+    run_with_review_language_context(
+        args,
+        Some(context),
+        SubmitLockPolicy::OwnedByReview,
+        expected_pr_target,
+    )
+    .await
+}
+
+async fn run_with_review_language_context(
+    args: &SubmitArgs,
+    review_language_context: Option<ReviewRepositoryLanguageContext>,
+    lock_policy: SubmitLockPolicy,
+    expected_pr_target: Option<ExpectedPullRequestTarget>,
+) -> anyhow::Result<String> {
     let client = GitHubClient::get()?;
     let post_submit_processor = PrSeriesPostSubmitProcessor { github: client };
     let submit_effects = SubmitEffects {
         post_submit_processor: &post_submit_processor,
         record_created_pr_url,
     };
-    run_impl_with_recording(
+    run_impl_with_review_language_context(
         args,
         client,
         default_runner(),
         write_pr_url_config,
-        read_current_repo_identity,
+        SubmitContext {
+            current_repo_identity: read_current_repo_identity,
+            review_language_context: review_language_context.as_ref(),
+            lock_policy,
+            expected_pr_target,
+        },
         &submit_effects,
         |owner, repo| ensure_no_review_access(is_vibe_enabled, load_config, owner, repo),
     )
     .await
 }
 
+#[cfg(test)]
 async fn run_impl_with_recording<P: PostSubmitProcessor, R: Fn(&str)>(
     args: &SubmitArgs,
     gh_client: &(impl PrBodyClient + PrClient + PrStackClient + RepoClient),
@@ -82,49 +171,120 @@ async fn run_impl_with_recording<P: PostSubmitProcessor, R: Fn(&str)>(
     current_repo_identity: impl FnOnce() -> Option<(String, String)>,
     submit_effects: &SubmitEffects<'_, P, R>,
     vibe_access_check: impl FnOnce(&str, &str) -> anyhow::Result<()>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<String> {
+    run_impl_with_review_language_context(
+        args,
+        gh_client,
+        run_hook,
+        write_config,
+        SubmitContext {
+            current_repo_identity,
+            review_language_context: None,
+            lock_policy: SubmitLockPolicy::RequireUnlocked,
+            expected_pr_target: None,
+        },
+        submit_effects,
+        vibe_access_check,
+    )
+    .await
+}
+
+async fn run_impl_with_review_language_context<
+    P: PostSubmitProcessor,
+    R: Fn(&str),
+    F: FnOnce() -> Option<(String, String)>,
+>(
+    args: &SubmitArgs,
+    gh_client: &(impl PrBodyClient + PrClient + PrStackClient + RepoClient),
+    run_hook: HookRunner<'_>,
+    write_config: impl Fn(&str, &str) -> anyhow::Result<()>,
+    context: SubmitContext<'_, F>,
+    submit_effects: &SubmitEffects<'_, P, R>,
+    vibe_access_check: impl FnOnce(&str, &str) -> anyhow::Result<()>,
+) -> anyhow::Result<String> {
     // Get draft path and target repo info
-    let (draft_path, target) = match &args.filepath {
-        Some(path) => {
-            // When filepath is provided, parse it to get owner/repo/branch
-            let (owner, repo, branch) = DraftFile::parse_path(path).ok_or_else(|| {
-                PrDraftError::CommandFailed(format!("Invalid draft path: {}", path.display()))
-            })?;
-            let is_private = gh_client.is_repo_private(&owner, &repo).await?;
-            (
-                path.clone(),
-                PrTarget {
-                    owner,
-                    repo,
-                    branch,
-                    is_private,
-                },
+    let default_repo_info = if args.filepath.is_none() {
+        Some(RepoInfo::from_git_only()?)
+    } else {
+        None
+    };
+    let requested_draft_path = match (&args.filepath, &default_repo_info) {
+        (Some(path), _) => path.clone(),
+        (None, Some(repo_info)) => DraftFile::path_for(repo_info),
+        (None, None) => {
+            return Err(PrDraftError::CommandFailed(
+                "Current repository information is required for the default draft path".to_owned(),
             )
+            .into());
+        }
+    };
+    let draft_path = canonical_document_path(&requested_draft_path);
+    if let Some(repo_info) = &default_repo_info {
+        validate_default_draft_path(&draft_path, &requested_draft_path, repo_info)?;
+    }
+
+    let parsed_draft_path = match &args.filepath {
+        Some(path) => Some(DraftFile::parse_path(&draft_path).ok_or_else(|| {
+            PrDraftError::CommandFailed(format!("Invalid draft path: {}", path.display()))
+        })?),
+        None => None,
+    };
+
+    if let Some(result) = successful_action_result(&draft_path, ReviewDocumentAction::CreatePr)? {
+        if context.lock_policy == SubmitLockPolicy::RequireUnlocked {
+            result.print_for_agent();
+        }
+        return Ok(result.message);
+    }
+
+    if !draft_path.exists() {
+        return Err(PrDraftError::FileNotFound(draft_path).into());
+    }
+
+    let _submit_lock = acquire_submit_lock(&draft_path).await?;
+
+    if let Some(result) = successful_action_result(&draft_path, ReviewDocumentAction::CreatePr)? {
+        if context.lock_policy == SubmitLockPolicy::RequireUnlocked {
+            result.print_for_agent();
+        }
+        return Ok(result.message);
+    }
+
+    let target = match parsed_draft_path {
+        Some((owner, repo, branch)) => {
+            let is_private = gh_client.is_repo_private(&owner, &repo).await?;
+            PrTarget {
+                owner,
+                repo,
+                branch,
+                is_private,
+            }
         }
         None => {
             // Auto-detect from current git repo
             let repo_info = RepoInfo::from_current_dir_async(gh_client).await?;
-            let target = PrTarget {
+            PrTarget {
                 owner: repo_info.owner.clone(),
                 repo: repo_info.repo.clone(),
                 branch: repo_info.branch.clone(),
                 is_private: repo_info.is_private,
-            };
-            (DraftFile::path_for(&repo_info), target)
+            }
         }
     };
     let is_private = target.is_private;
 
     // Check for a live review holder before submitting.
-    let lock_path = LockGuard::lock_path(&draft_path);
-    if LockGuard::is_locked(&draft_path) {
+    let lock_path = LockGuard::lock_path(&requested_draft_path);
+    if context.lock_policy == SubmitLockPolicy::RequireUnlocked
+        && (LockGuard::is_locked(&draft_path) || LockGuard::is_locked(&requested_draft_path))
+    {
         anyhow::bail!(
             "Please close the editor before submitting the PR (lock: {}).",
             lock_path.display()
         );
     }
 
-    let draft = DraftFile::from_path(draft_path.clone())?;
+    let (draft, approved_document_hash) = DraftFile::from_path_with_hash(draft_path.clone())?;
 
     if args.no_review {
         vibe_access_check(&target.owner, &target.repo)?;
@@ -138,7 +298,28 @@ async fn run_impl_with_recording<P: PostSubmitProcessor, R: Fn(&str)>(
     }
 
     // Reject Japanese content when the effective repository language is not Japanese.
-    let allows_japanese = repo_allows_japanese(&target.owner, &target.repo, is_private).await?;
+    let allows_japanese = match context.review_language_context {
+        Some(context) => {
+            let target_repo_id = format!("{}/{}", target.owner, target.repo);
+            if !context
+                .expected_repo_id
+                .eq_ignore_ascii_case(&target_repo_id)
+            {
+                anyhow::bail!(
+                    "The review repository does not match the PR draft target: {}",
+                    context.expected_repo_id
+                );
+            }
+            repo_allows_japanese_with_copier_answers(
+                &target.owner,
+                &target.repo,
+                is_private,
+                context.copier_answers_path.as_deref(),
+            )
+            .await?
+        }
+        None => repo_allows_japanese(&target.owner, &target.repo, is_private).await?,
+    };
     if !allows_japanese {
         if contains_japanese(&draft.frontmatter.title) {
             return Err(PrDraftError::JapaneseInTitle.into());
@@ -149,7 +330,7 @@ async fn run_impl_with_recording<P: PostSubmitProcessor, R: Fn(&str)>(
     }
 
     let target_is_current_repo = if args.filepath.is_some() {
-        current_repo_identity()
+        (context.current_repo_identity)()
             .is_some_and(|(owner, repo)| owner == target.owner && repo == target.repo)
     } else {
         true
@@ -189,6 +370,7 @@ async fn run_impl_with_recording<P: PostSubmitProcessor, R: Fn(&str)>(
         Some(pr_info) if pr_info.state == PrState::Open => Some(pr_info.number),
         _ => None,
     };
+    ensure_expected_pr_target_matches(context.expected_pr_target, update_target)?;
     // Fire pre-pr-submit hook before any network call. The hook script can
     // inspect the title/body and abort submission with a non-zero exit, which
     // lets users enforce custom rules (e.g., forbid cross-org issue links).
@@ -261,8 +443,18 @@ async fn run_impl_with_recording<P: PostSubmitProcessor, R: Fn(&str)>(
         }
     };
 
-    (submit_effects.record_created_pr_url)(&pr_url);
+    crate::shared::human_in_the_loop::save_action_result(
+        &draft_path,
+        &crate::shared::human_in_the_loop::ReviewDocumentActionResult::new(
+            ReviewDocumentAction::CreatePr,
+            true,
+            pr_url.clone(),
+            approved_document_hash.clone(),
+            None,
+        ),
+    )?;
 
+    (submit_effects.record_created_pr_url)(&pr_url);
     if target_is_current_repo {
         let config_key = format!("branch.{}.pr-url", target.branch);
         if let Err(error) = write_config(&config_key, &pr_url) {
@@ -288,9 +480,30 @@ async fn run_impl_with_recording<P: PostSubmitProcessor, R: Fn(&str)>(
         );
     }
 
-    // Cleanup
-    draft.cleanup()?;
+    if !draft.cleanup_if_unchanged(&requested_draft_path, &approved_document_hash)? {
+        eprintln!(
+            "Warning: Draft changed or was removed during submission; preserving its current state: {}",
+            requested_draft_path.display()
+        );
+    }
 
+    Ok(pr_url)
+}
+
+fn ensure_expected_pr_target_matches(
+    expected: Option<ExpectedPullRequestTarget>,
+    actual_open_pr_number: Option<u64>,
+) -> anyhow::Result<()> {
+    let matches = match expected {
+        Some(ExpectedPullRequestTarget::New) => actual_open_pr_number.is_none(),
+        Some(ExpectedPullRequestTarget::Existing { number }) => {
+            actual_open_pr_number == Some(number)
+        }
+        Some(ExpectedPullRequestTarget::Unknown) | None => true,
+    };
+    if !matches {
+        return Err(ExpectedPullRequestTargetMismatch.into());
+    }
     Ok(())
 }
 
@@ -316,6 +529,7 @@ fn read_current_repo_identity() -> Option<(String, String)> {
 mod tests {
     use anyhow::Result;
 
+    use super::super::ExpectedPullRequestTarget;
     use super::*;
     use crate::commands::agent::types::SessionPrContext;
     use crate::commands::ai::pr_series::PrSeriesPlan;
@@ -328,11 +542,315 @@ mod tests {
     };
     use crate::shared::config::Config;
     use crate::shared::env_var::EnvVars;
+    use crate::shared::human_in_the_loop::{
+        ReviewDocumentAction, ReviewDocumentActionResult, document_hash, save_action_result,
+        successful_action_result,
+    };
     use clap::Parser;
     use indoc::indoc;
     use rstest::{fixture, rstest};
     use std::fs;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
+
+    #[tokio::test]
+    async fn submit_reports_a_watch_web_pr_without_submitting_twice() {
+        let directory = tempfile::TempDir::new().expect("fixture directory should be created");
+        let draft_path = directory.path().join("draft.md");
+        fs::write(&draft_path, "Approved fixture draft.").expect("fixture draft should be written");
+        let result = ReviewDocumentActionResult::new(
+            ReviewDocumentAction::CreatePr,
+            true,
+            "https://example.invalid/pull/42".to_owned(),
+            document_hash(&draft_path).expect("document hash should be computed"),
+            None,
+        );
+        save_action_result(&draft_path, &result).expect("action result should be saved");
+
+        let submitted = run(&SubmitArgs {
+            filepath: Some(draft_path.clone()),
+            base: None,
+            draft: false,
+            no_review: false,
+        })
+        .await;
+
+        assert_eq!(
+            (
+                submitted.map_err(|error| error.to_string()),
+                successful_action_result(&draft_path, ReviewDocumentAction::CreatePr)
+                    .expect("successful action result should remain available"),
+            ),
+            (Ok(()), Some(result)),
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_path_does_not_create_a_submit_lock() {
+        let directory = tempfile::tempdir().expect("temporary directory should be created");
+        let draft_path = directory.path().join("sample-draft.md");
+        fs::write(&draft_path, "draft").expect("draft should be written");
+        let mut lock_path = draft_path.as_os_str().to_os_string();
+        lock_path.push(".submit.lock");
+        let args = SubmitArgs {
+            filepath: Some(draft_path),
+            base: None,
+            draft: false,
+            no_review: false,
+        };
+        let client = SubmitClientStub::default();
+
+        let result = run_impl(
+            &args,
+            &client,
+            &noop_hook,
+            noop_config,
+            no_current_repo,
+            &NoopPostSubmitProcessor,
+            no_vibe_access,
+        )
+        .await;
+        let create_calls = client
+            .create_calls
+            .lock()
+            .expect("submit client mutex")
+            .clone();
+
+        assert_eq!(
+            (
+                result.is_err(),
+                PathBuf::from(lock_path).exists(),
+                create_calls
+            ),
+            (true, false, Vec::new())
+        );
+    }
+
+    #[cfg(unix)]
+    #[rstest]
+    #[case::outside_draft_root("outside-owner", "outside-repository", true)]
+    #[case::different_draft_in_root("inside-owner", "inside-repository", false)]
+    fn default_draft_path_rejects_symlinks_to_nonmatching_drafts(
+        #[case] owner: &str,
+        #[case] repo: &str,
+        #[case] target_outside_draft_root: bool,
+    ) {
+        use std::os::unix::fs::symlink;
+
+        let branch = "feature/symlinked-draft";
+        let _draft_directory = TestDraftDirectory::new(owner, repo);
+        let current_repo = RepoInfo {
+            owner: owner.to_owned(),
+            repo: repo.to_owned(),
+            branch: branch.to_owned(),
+            is_private: true,
+        };
+        let requested_path = DraftFile::path_for(&current_repo);
+        fs::create_dir_all(
+            requested_path
+                .parent()
+                .expect("draft path should have a parent"),
+        )
+        .expect("draft directory should be created");
+        let external_directory = target_outside_draft_root
+            .then(|| tempfile::tempdir().expect("external directory should be created"));
+        let target_path = match &external_directory {
+            Some(directory) => directory.path().join("body.md"),
+            None => DraftFile::path_for(&RepoInfo {
+                owner: owner.to_owned(),
+                repo: repo.to_owned(),
+                branch: "feature/another-draft".to_owned(),
+                is_private: true,
+            }),
+        };
+        fs::create_dir_all(
+            target_path
+                .parent()
+                .expect("symlink target should have a parent"),
+        )
+        .expect("symlink target directory should be created");
+        fs::write(&target_path, "Sample external body.")
+            .expect("symlink target draft should be written");
+        symlink(&target_path, &requested_path).expect("draft symlink should be created");
+
+        let validation = validate_default_draft_path(
+            &canonical_document_path(&requested_path),
+            &requested_path,
+            &current_repo,
+        )
+        .map_err(|error| error.to_string());
+        let observed = (
+            validation,
+            fs::read_to_string(&target_path).map_err(|error| error.to_string()),
+            fs::symlink_metadata(&requested_path).is_ok(),
+        );
+
+        assert_eq!(
+            observed,
+            (
+                Err(format!(
+                    "Command failed: Invalid draft path: {}",
+                    requested_path.display()
+                )),
+                Ok("Sample external body.".to_owned()),
+                true,
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::creates_pr("concurrent-create-repository", None, vec![(
+        "concurrent-owner".to_string(),
+        "concurrent-create-repository".to_string(),
+        "Submit a sample change".to_string(),
+        "feature/concurrent-submit".to_string(),
+        None,
+        false,
+    )], Vec::new())]
+    #[case::updates_pr("concurrent-update-repository", Some(23), Vec::new(), vec![23])]
+    #[tokio::test]
+    async fn concurrent_submissions_submit_a_pr_once(
+        #[case] repo: &str,
+        #[case] existing_pr_number: Option<u64>,
+        #[case] expected_create_calls: Vec<CreatePrCall>,
+        #[case] expected_update_calls: Vec<u64>,
+    ) {
+        let _draft_directory = TestDraftDirectory::new("concurrent-owner", repo);
+        let draft_path = create_approved_draft(
+            "concurrent-owner",
+            repo,
+            "feature/concurrent-submit",
+            "Submit a sample change",
+            "Body content",
+        );
+        let args = SubmitArgs {
+            filepath: Some(draft_path),
+            base: None,
+            draft: false,
+            no_review: false,
+        };
+        let client = Arc::new(SubmitClientStub {
+            existing_pr_number,
+            ..SubmitClientStub::default()
+        });
+
+        let (first, second) = tokio::join!(
+            run_impl(
+                &args,
+                &*client,
+                &noop_hook,
+                noop_config,
+                no_current_repo,
+                &NoopPostSubmitProcessor,
+                no_vibe_access,
+            ),
+            run_impl(
+                &args,
+                &*client,
+                &noop_hook,
+                noop_config,
+                no_current_repo,
+                &NoopPostSubmitProcessor,
+                no_vibe_access,
+            ),
+        );
+        let create_calls = client
+            .create_calls
+            .lock()
+            .expect("submit client mutex")
+            .clone();
+        let update_calls = client
+            .update_calls
+            .lock()
+            .expect("submit client mutex")
+            .clone();
+
+        assert_eq!(
+            (
+                first.map_err(|error| error.to_string()),
+                second.map_err(|error| error.to_string()),
+                create_calls,
+                update_calls,
+            ),
+            (Ok(()), Ok(()), expected_create_calls, expected_update_calls,),
+        );
+    }
+
+    #[tokio::test]
+    async fn cleanup_preserves_a_draft_replaced_after_watch_web_success() {
+        let env = setup_test_env("sample-owner", "replacement-repository").await;
+        let branch = "feature/replacement-draft";
+        let draft_path = create_approved_draft(
+            &env.owner,
+            &env.repo,
+            branch,
+            "Ready title",
+            "Original body",
+        );
+        let replacement_content = indoc! {"
+            ---
+            title: 'Replacement title'
+            steps:
+              submit: false
+            ---
+            Replacement body.
+        "};
+        let processor = ReplaceDraftAfterSuccess {
+            draft_path: draft_path.clone(),
+            replacement_content: replacement_content.to_owned(),
+            action_result_was_visible: Mutex::new(false),
+        };
+        let client = SubmitClientStub::default();
+        let args = SubmitArgs {
+            filepath: Some(draft_path.clone()),
+            base: None,
+            draft: false,
+            no_review: false,
+        };
+
+        let result = run_impl(
+            &args,
+            &client,
+            &noop_hook,
+            noop_config,
+            || Some((env.owner.clone(), env.repo.clone())),
+            &processor,
+            no_vibe_access,
+        )
+        .await
+        .map_err(|error| error.to_string());
+        let action_result_was_visible = *processor
+            .action_result_was_visible
+            .lock()
+            .expect("action result observation mutex");
+        let remaining_draft = fs::read_to_string(&draft_path).map_err(|error| error.to_string());
+        let create_calls = client
+            .create_calls
+            .lock()
+            .expect("submit client mutex")
+            .clone();
+
+        assert_eq!(
+            (
+                result,
+                action_result_was_visible,
+                remaining_draft,
+                create_calls,
+            ),
+            (
+                Ok(()),
+                true,
+                Ok(replacement_content.to_owned()),
+                vec![(
+                    env.owner.clone(),
+                    env.repo.clone(),
+                    "Ready title".to_owned(),
+                    branch.to_owned(),
+                    None,
+                    false,
+                )],
+            ),
+        );
+    }
 
     /// Hook stub that always succeeds. Use when the test does not care about
     /// hook invocation.
@@ -441,6 +959,7 @@ mod tests {
             vibe_access_check,
         )
         .await
+        .map(|_| ())
     }
 
     /// Captures every hook invocation so tests can assert on hook name, env,
@@ -495,6 +1014,44 @@ mod tests {
                 }),
                 None => Ok(SubmitSyncOutcome::Synchronized),
             }
+        }
+    }
+
+    struct ReplaceDraftAfterSuccess {
+        draft_path: PathBuf,
+        replacement_content: String,
+        action_result_was_visible: Mutex<bool>,
+    }
+
+    impl PostSubmitProcessor for ReplaceDraftAfterSuccess {
+        fn metadata_for_branch(&self, _branch: &str) -> Option<TqBranchMetadata> {
+            Some(TqBranchMetadata {
+                task_id: "sample-task-id".to_string(),
+                checklist_item_id: "sample-leaf-id".to_string(),
+            })
+        }
+
+        async fn saved_plan(&self, _metadata: &TqBranchMetadata) -> Option<SavedPrSeriesPlan> {
+            None
+        }
+
+        async fn link_and_sync(
+            &self,
+            _metadata: &TqBranchMetadata,
+            _target: &PrTarget,
+            _pr_url: &str,
+            _saved_plan: Option<SavedPrSeriesPlan>,
+        ) -> std::result::Result<SubmitSyncOutcome, SubmitSyncFailure> {
+            *self
+                .action_result_was_visible
+                .lock()
+                .expect("action result observation mutex") =
+                successful_action_result(&self.draft_path, ReviewDocumentAction::CreatePr)
+                    .expect("successful action result should be readable")
+                    .is_some();
+            fs::write(&self.draft_path, &self.replacement_content)
+                .expect("replacement draft should be written");
+            Ok(SubmitSyncOutcome::NoPlan)
         }
     }
 
@@ -661,6 +1218,165 @@ mod tests {
         assert_eq!((result, mutations), (expected_result, expected_mutations));
     }
 
+    #[tokio::test]
+    async fn review_submission_rejects_a_draft_for_a_different_repository() {
+        let _draft_directory = TestDraftDirectory::new("sample-owner", "sample-repository");
+        let draft_path = create_approved_draft(
+            "sample-owner",
+            "sample-repository",
+            "feature/review-context",
+            "Submit a sample change",
+            "Body content",
+        );
+        let args = SubmitArgs {
+            filepath: Some(draft_path),
+            base: None,
+            draft: false,
+            no_review: false,
+        };
+        let context = ReviewRepositoryLanguageContext {
+            expected_repo_id: "other-owner/other-repository".to_string(),
+            copier_answers_path: None,
+        };
+        let client = SubmitClientStub::default();
+        let submit_effects = SubmitEffects {
+            post_submit_processor: &NoopPostSubmitProcessor,
+            record_created_pr_url: noop_record_created_pr_url,
+        };
+
+        let result = super::run_impl_with_review_language_context(
+            &args,
+            &client,
+            &noop_hook,
+            noop_config,
+            SubmitContext {
+                current_repo_identity: no_current_repo,
+                review_language_context: Some(&context),
+                lock_policy: SubmitLockPolicy::RequireUnlocked,
+                expected_pr_target: None,
+            },
+            &submit_effects,
+            no_vibe_access,
+        )
+        .await
+        .map_err(|error| error.to_string());
+        let create_calls = client
+            .create_calls
+            .lock()
+            .expect("submit client mutex")
+            .clone();
+        let update_calls = client
+            .update_calls
+            .lock()
+            .expect("submit client mutex")
+            .clone();
+
+        assert_eq!(
+            (result, create_calls, update_calls),
+            (
+                Err("The review repository does not match the PR draft target: other-owner/other-repository".to_string()),
+                Vec::new(),
+                Vec::new(),
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn review_submission_succeeds_while_the_launcher_lock_is_active() {
+        let _draft_directory =
+            TestDraftDirectory::new("review-lock-owner", "review-lock-repository");
+        let draft_path = create_approved_draft(
+            "review-lock-owner",
+            "review-lock-repository",
+            "feature/review-submit-lock",
+            "Submit a sample change",
+            "Body content",
+        );
+        let launcher_lock =
+            LockGuard::acquire(&draft_path).expect("review launcher lock should be acquired");
+        let lock_was_active = LockGuard::is_locked(&draft_path);
+        let args = SubmitArgs {
+            filepath: Some(draft_path),
+            base: None,
+            draft: false,
+            no_review: false,
+        };
+        let review_context = ReviewRepositoryLanguageContext {
+            expected_repo_id: "review-lock-owner/review-lock-repository".to_string(),
+            copier_answers_path: None,
+        };
+        let client = SubmitClientStub {
+            lock_path_at_create: Some(
+                args.filepath
+                    .as_ref()
+                    .expect("draft path should be explicit")
+                    .clone(),
+            ),
+            ..SubmitClientStub::default()
+        };
+        let submit_effects = SubmitEffects {
+            post_submit_processor: &NoopPostSubmitProcessor,
+            record_created_pr_url: noop_record_created_pr_url,
+        };
+
+        let result = super::run_impl_with_review_language_context(
+            &args,
+            &client,
+            &noop_hook,
+            noop_config,
+            SubmitContext {
+                current_repo_identity: no_current_repo,
+                review_language_context: Some(&review_context),
+                lock_policy: SubmitLockPolicy::OwnedByReview,
+                expected_pr_target: None,
+            },
+            &submit_effects,
+            no_vibe_access,
+        )
+        .await
+        .map_err(|error| error.to_string());
+        let create_calls = client
+            .create_calls
+            .lock()
+            .expect("submit client mutex")
+            .clone();
+        let update_calls = client
+            .update_calls
+            .lock()
+            .expect("submit client mutex")
+            .clone();
+        let lock_states_at_create = client
+            .lock_states_at_create
+            .lock()
+            .expect("lock state mutex")
+            .clone();
+        drop(launcher_lock);
+
+        assert_eq!(
+            (
+                lock_was_active,
+                result,
+                create_calls,
+                update_calls,
+                lock_states_at_create,
+            ),
+            (
+                true,
+                Ok("https://github.com/sample-owner/sample-repository/pull/1".to_string()),
+                vec![(
+                    "review-lock-owner".to_string(),
+                    "review-lock-repository".to_string(),
+                    "Submit a sample change".to_string(),
+                    "feature/review-submit-lock".to_string(),
+                    None,
+                    false,
+                )],
+                Vec::new(),
+                vec![true],
+            ),
+        );
+    }
+
     #[derive(Clone)]
     struct HookCall {
         name: String,
@@ -735,6 +1451,8 @@ mod tests {
         create_calls: Mutex<Vec<CreatePrCall>>,
         update_calls: Mutex<Vec<u64>>,
         existing_pr_number: Option<u64>,
+        lock_path_at_create: Option<PathBuf>,
+        lock_states_at_create: Mutex<Vec<bool>>,
     }
 
     impl RepoClient for SubmitClientStub {
@@ -767,6 +1485,12 @@ mod tests {
                     params.base,
                     params.draft,
                 ));
+            if let Some(lock_path) = &self.lock_path_at_create {
+                self.lock_states_at_create
+                    .lock()
+                    .expect("lock state mutex")
+                    .push(LockGuard::is_locked(lock_path));
+            }
             Ok(CreatedPullRequest {
                 number: 1,
                 url: "https://github.com/sample-owner/sample-repository/pull/1".to_string(),
@@ -790,6 +1514,7 @@ mod tests {
             repo: &str,
             _branch: &str,
         ) -> GitHubResult<Option<crate::infra::github::PrInfo>> {
+            tokio::task::yield_now().await;
             Ok(self
                 .existing_pr_number
                 .map(|number| crate::infra::github::PrInfo {
@@ -1632,6 +2357,160 @@ mod tests {
     }
 
     #[rstest]
+    #[case::closed_existing_pr(
+        None,
+        ExpectedPullRequestTarget::Existing { number: 318 },
+        "target-closed-owner",
+        "target-closed-repository",
+    )]
+    #[case::replacement_pr(
+        Some(642),
+        ExpectedPullRequestTarget::Existing { number: 318 },
+        "target-replacement-owner",
+        "target-replacement-repository",
+    )]
+    #[case::new_pr_now_open(
+        Some(642),
+        ExpectedPullRequestTarget::New,
+        "target-new-owner",
+        "target-new-repository"
+    )]
+    #[tokio::test]
+    async fn does_not_submit_if_the_target_changed_after_approval(
+        #[case] existing_pr_number: Option<u64>,
+        #[case] expected_pr_target: ExpectedPullRequestTarget,
+        #[case] owner: &str,
+        #[case] repo: &str,
+    ) {
+        let _draft_directory = TestDraftDirectory::new(owner, repo);
+        let draft_path = create_approved_draft(
+            owner,
+            repo,
+            "feature/update-target",
+            "Update a sample feature",
+            "Updated sample body",
+        );
+        let args = SubmitArgs {
+            filepath: Some(draft_path),
+            base: None,
+            draft: false,
+            no_review: false,
+        };
+        let client = SubmitClientStub {
+            existing_pr_number,
+            ..SubmitClientStub::default()
+        };
+        let submit_effects = SubmitEffects {
+            post_submit_processor: &NoopPostSubmitProcessor,
+            record_created_pr_url: noop_record_created_pr_url,
+        };
+        let result = super::run_impl_with_review_language_context(
+            &args,
+            &client,
+            &noop_hook,
+            noop_config,
+            SubmitContext {
+                current_repo_identity: no_current_repo,
+                review_language_context: None,
+                lock_policy: SubmitLockPolicy::RequireUnlocked,
+                expected_pr_target: Some(expected_pr_target),
+            },
+            &submit_effects,
+            no_vibe_access,
+        )
+        .await;
+        let observed = (
+            result.map_err(|error| error.to_string()),
+            client
+                .create_calls
+                .lock()
+                .expect("submit client mutex")
+                .clone(),
+            client
+                .update_calls
+                .lock()
+                .expect("submit client mutex")
+                .clone(),
+        );
+
+        assert_eq!(
+            observed,
+            (
+                Err(
+                    "The pull request target changed after approval. Send the draft back for review before submitting again."
+                        .to_owned(),
+                ),
+                Vec::new(),
+                Vec::new(),
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn updates_the_approved_existing_pr_when_the_target_matches() {
+        let _draft_directory =
+            TestDraftDirectory::new("target-match-owner", "target-match-repository");
+        let draft_path = create_approved_draft(
+            "target-match-owner",
+            "target-match-repository",
+            "feature/update-target",
+            "Update a sample feature",
+            "Updated sample body",
+        );
+        let args = SubmitArgs {
+            filepath: Some(draft_path),
+            base: None,
+            draft: false,
+            no_review: false,
+        };
+        let client = SubmitClientStub {
+            existing_pr_number: Some(318),
+            ..SubmitClientStub::default()
+        };
+        let submit_effects = SubmitEffects {
+            post_submit_processor: &NoopPostSubmitProcessor,
+            record_created_pr_url: noop_record_created_pr_url,
+        };
+        let result = super::run_impl_with_review_language_context(
+            &args,
+            &client,
+            &noop_hook,
+            noop_config,
+            SubmitContext {
+                current_repo_identity: no_current_repo,
+                review_language_context: None,
+                lock_policy: SubmitLockPolicy::RequireUnlocked,
+                expected_pr_target: Some(ExpectedPullRequestTarget::Existing { number: 318 }),
+            },
+            &submit_effects,
+            no_vibe_access,
+        )
+        .await;
+        let observed = (
+            result.map_err(|error| error.to_string()),
+            client
+                .create_calls
+                .lock()
+                .expect("submit client mutex")
+                .clone(),
+            client
+                .update_calls
+                .lock()
+                .expect("submit client mutex")
+                .clone(),
+        );
+
+        assert_eq!(
+            observed,
+            (
+                Ok("https://github.com/sample-owner/sample-repository/pull/318".to_owned()),
+                Vec::new(),
+                vec![318],
+            ),
+        );
+    }
+
+    #[rstest]
     #[case::malformed_markers(ExistingPrBody::MalformedMarkers, "repo_submit_preserve_malformed")]
     #[case::body_read_failure(ExistingPrBody::ReadFailure, "repo_submit_preserve_read_failure")]
     #[tokio::test]
@@ -2017,7 +2896,6 @@ mod tests {
             .clone();
         let pr_url =
             format!("https://github.com/sample-owner/sample-repository/pull/{pull_request_number}");
-
         assert_eq!(
             (
                 result.map_err(|error| error.to_string()),
@@ -2026,7 +2904,7 @@ mod tests {
                 (session.pr_context, session.created_pr_urls),
             ),
             (
-                Ok(()),
+                Ok(pr_url.clone()),
                 expected_create_calls,
                 expected_update_calls,
                 (

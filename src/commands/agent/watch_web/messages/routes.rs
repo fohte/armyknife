@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -67,6 +67,20 @@ struct SkillSuggestionsQuery {
 #[derive(Serialize)]
 struct SkillSuggestionsResponse {
     skills: Vec<SkillSuggestion>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MessagesQuery {
+    limit: Option<usize>,
+    before: Option<usize>,
+    from: Option<usize>,
+    stable_start: Option<usize>,
+    stable_end: Option<usize>,
+    stable_digest: Option<String>,
+    epoch: Option<String>,
+    older_cursor: Option<String>,
+    pending_prompt_ids: Option<String>,
 }
 
 #[derive(Clone)]
@@ -292,10 +306,34 @@ async fn get_skill_suggestions(
 async fn get_messages(
     State((load_session, load_user_marker, loaders)): State<MessagesRouteState>,
     AxumPath(session_id): AxumPath<String>,
-    Query(range): Query<MessageRange>,
+    Query(query): Query<MessagesQuery>,
 ) -> Response {
+    let range = MessageRange {
+        limit: query.limit,
+        before: query.before,
+        from: query.from,
+        stable_start: query.stable_start,
+        stable_end: query.stable_end,
+        stable_digest: query.stable_digest,
+        epoch: query.epoch,
+        older_cursor: query.older_cursor,
+    };
     if !range.is_valid() {
         return StatusCode::BAD_REQUEST.into_response();
+    }
+    let mut pending_prompt_ids = Vec::new();
+    let mut seen_prompt_ids = HashSet::new();
+    for message_id in query
+        .pending_prompt_ids
+        .as_deref()
+        .into_iter()
+        .flat_map(|ids| ids.split(','))
+        .filter(|id| !id.is_empty())
+    {
+        let message_id = message_id.to_owned();
+        if seen_prompt_ids.insert(message_id.clone()) {
+            pending_prompt_ids.push(message_id);
+        }
     }
     let tail_window_limit = range.initial_tail_window_limit();
     let requested_epoch = range.requested_epoch().map(str::to_owned);
@@ -368,7 +406,30 @@ async fn get_messages(
                 require_full_history,
             ),
         }?;
-        Ok(conversation.map(|conversation| (conversation, vibe_mode)))
+        let Some(mut conversation) = conversation else {
+            return Ok(None);
+        };
+        if pending_prompt_ids.is_empty() {
+            conversation.confirmed_queued_prompt_ids.clear();
+        } else {
+            let parser_confirmed_ids = conversation
+                .confirmed_queued_prompt_ids
+                .iter()
+                .map(String::as_str)
+                .collect::<HashSet<_>>();
+            let queued_prompts = (loaders.queued_prompts)(&session_id)?;
+            conversation.confirmed_queued_prompt_ids = pending_prompt_ids
+                .into_iter()
+                .filter(|message_id| {
+                    parser_confirmed_ids.contains(message_id.as_str())
+                        || queued_prompts.iter().any(|prompt| {
+                            prompt.resolved
+                                && prompt.message_id.as_deref() == Some(message_id.as_str())
+                        })
+                })
+                .collect();
+        }
+        Ok(Some((conversation, vibe_mode)))
     })
     .await
     {

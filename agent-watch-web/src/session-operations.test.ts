@@ -284,9 +284,52 @@ const requests: {
       seq: 3,
       choice: 0,
       comment: null,
+      expectedBody: {
+        title: 'Choose a format',
+        summary: null,
+        options: [
+          {
+            label: 'Compact',
+            description: null,
+            pros: [],
+            cons: [],
+            recommended: false,
+          },
+          {
+            label: 'Readable',
+            description: null,
+            pros: [],
+            cons: [],
+            recommended: false,
+          },
+        ],
+      },
     },
     path: 'proposals/3/answer',
-    body: { choice: 0, comment: null },
+    body: {
+      choice: 0,
+      comment: null,
+      expectedBody: {
+        title: 'Choose a format',
+        summary: null,
+        options: [
+          {
+            label: 'Compact',
+            description: null,
+            pros: [],
+            cons: [],
+            recommended: false,
+          },
+          {
+            label: 'Readable',
+            description: null,
+            pros: [],
+            cons: [],
+            recommended: false,
+          },
+        ],
+      },
+    },
   },
   {
     name: 'answer proposal with an attachment',
@@ -327,9 +370,16 @@ const requests: {
       seq: 4,
       resolution: 'completed',
       comment: 'Done',
+      expectedTitle: 'Check the page',
+      expectedDetail: null,
     },
     path: 'todos/4/resolve',
-    body: { resolution: 'completed', comment: 'Done' },
+    body: {
+      resolution: 'completed',
+      comment: 'Done',
+      expectedTitle: 'Check the page',
+      expectedDetail: null,
+    },
   },
   {
     name: 'resolve todo with an attachment',
@@ -466,6 +516,50 @@ const requests: {
       revision: 'fixture-revision',
       frontmatter: { title: 'Fixture title' },
       body: 'Fixture body',
+    },
+    response: { success: true, revision: 'next-fixture-revision' },
+  },
+  {
+    name: 'post an approved review comment',
+    operation: {
+      type: 'review_document_action',
+      sessionId: 'test-session',
+      id: 'fixture-review',
+      revision: 'fixture-revision',
+      frontmatter: { submit: false },
+      body: 'Fixture comment',
+      action: 'post_comment',
+    },
+    path: 'review-document/action',
+    body: {
+      id: 'fixture-review',
+      revision: 'fixture-revision',
+      frontmatter: { submit: false },
+      body: 'Fixture comment',
+      action: 'post_comment',
+    },
+    response: { success: true, revision: 'next-fixture-revision' },
+  },
+  {
+    name: 'submit a review document for its displayed PR',
+    operation: {
+      type: 'review_document_action',
+      sessionId: 'test-session',
+      id: 'fixture-review',
+      revision: 'fixture-revision',
+      frontmatter: { steps: { submit: false } },
+      body: 'Fixture PR body',
+      action: 'create_pr',
+      expectedPullRequestTarget: { kind: 'existing', number: 318 },
+    },
+    path: 'review-document/action',
+    body: {
+      id: 'fixture-review',
+      revision: 'fixture-revision',
+      frontmatter: { steps: { submit: false } },
+      body: 'Fixture PR body',
+      action: 'create_pr',
+      expectedPullRequestTarget: { kind: 'existing', number: 318 },
     },
     response: { success: true, revision: 'next-fixture-revision' },
   },
@@ -755,6 +849,48 @@ const operationFactories: [
     },
   ],
   [
+    'post an approved review comment',
+    'review-document/action',
+    {
+      id: 'fixture-review',
+      revision: 'fixture-revision',
+      frontmatter: { submit: false },
+      body: 'Fixture comment',
+      action: 'post_comment',
+    },
+    {
+      type: 'review_document_action',
+      sessionId: session.id,
+      id: 'fixture-review',
+      revision: 'fixture-revision',
+      frontmatter: { submit: false },
+      body: 'Fixture comment',
+      action: 'post_comment',
+    },
+  ],
+  [
+    'submit a review document for its displayed PR',
+    'review-document/action',
+    {
+      id: 'fixture-review',
+      revision: 'fixture-revision',
+      frontmatter: { steps: { submit: false } },
+      body: 'Fixture PR body',
+      action: 'create_pr',
+      expectedPullRequestTarget: { kind: 'existing', number: 318 },
+    },
+    {
+      type: 'review_document_action',
+      sessionId: session.id,
+      id: 'fixture-review',
+      revision: 'fixture-revision',
+      frontmatter: { steps: { submit: false } },
+      body: 'Fixture PR body',
+      action: 'create_pr',
+      expectedPullRequestTarget: { kind: 'existing', number: 318 },
+    },
+  ],
+  [
     'rewind conversation',
     'rewind',
     { messageId: 'fixture-user-message', mode: 'conversation' },
@@ -924,6 +1060,88 @@ it.each(requests.filter(({ response }) => response !== undefined))(
     expect(actual).toEqual(testCase.response)
   },
 )
+
+it('returns a direct review action failure with its updated revision', async () => {
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+    Response.json({
+      success: false,
+      error: 'The example comment could not be posted.',
+      revision: 'fixture-updated-revision',
+    }),
+  )
+  vi.stubGlobal('fetch', fetchMock)
+
+  const result = await submitSessionOperation({
+    type: 'review_document_action',
+    sessionId: session.id,
+    id: 'fixture-review-document',
+    revision: 'fixture-original-revision',
+    frontmatter: { submit: true },
+    body: 'Example comment',
+    action: 'post_comment',
+  })
+  const actual = result.match(
+    (value) => ({ type: 'success' as const, value }),
+    (error) => ({
+      type: 'error' as const,
+      message: error.message,
+      revision:
+        'revision' in error && typeof error.revision === 'string'
+          ? error.revision
+          : null,
+    }),
+  )
+
+  expect(actual).toEqual({
+    type: 'error',
+    message: 'The example comment could not be posted.',
+    revision: 'fixture-updated-revision',
+  })
+})
+
+it('marks a stale PR target failure as non-retryable', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn<typeof fetch>().mockResolvedValue(
+      Response.json({
+        success: false,
+        error:
+          'The pull request target changed after approval. Send the draft back for review before submitting again.',
+        revision: 'fixture-revision',
+        retryable: false,
+      }),
+    ),
+  )
+
+  const result = await submitSessionOperation({
+    type: 'review_document_action',
+    sessionId: session.id,
+    id: 'fixture-review-document',
+    revision: 'fixture-revision',
+    frontmatter: { submit: true },
+    body: 'Example pull request',
+    action: 'create_pr',
+    expectedPullRequestTarget: { kind: 'existing', number: 318 },
+  })
+  const actual = result.match(
+    (value) => ({ type: 'success' as const, value }),
+    (error) => ({
+      type: 'error' as const,
+      message: error.message,
+      retryable:
+        'retryable' in error && typeof error.retryable === 'boolean'
+          ? error.retryable
+          : null,
+    }),
+  )
+
+  expect(actual).toEqual({
+    type: 'error',
+    message:
+      'The pull request target changed after approval. Send the draft back for review before submitting again.',
+    retryable: false,
+  })
+})
 
 const sessionReducerCases: [
   string,
@@ -1445,6 +1663,21 @@ it('reconciles an unresolved queued user by its prompt ID', () => {
   )
   expect(
     isConversationOperationConfirmed(serverConversation, operation, null),
+  ).toBe(true)
+})
+
+it('confirms a cancelled queued user from the server response', () => {
+  const serverConversation: ConversationResponse = {
+    ...conversationWithTrailingItems,
+    confirmedQueuedPromptIds: ['fixture-message-id'],
+  }
+
+  expect(
+    isConversationOperationConfirmed(
+      serverConversation,
+      operationWithReservedMessageId,
+      null,
+    ),
   ).toBe(true)
 })
 

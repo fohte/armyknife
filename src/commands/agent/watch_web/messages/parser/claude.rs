@@ -335,8 +335,8 @@ mod tests {
     }
     use crate::commands::agent::proposal::ProposalOption;
     use crate::commands::agent::store::{
-        AgentDecision, AgentTodo, PermissionRequestData, TodoResolution, WatchWebQueuedAttachment,
-        WatchWebQueuedPrompt,
+        AgentDecision, AgentTodo, PermissionRequestData, TodoResolution, WatchWebActionEventKind,
+        WatchWebQueuedAttachment, WatchWebQueuedPrompt,
     };
     use crate::commands::agent::watch_web::messages::{
         ChatItem, ParentSession, PeerDirection, QuestionChoice, SkillSuggestion, ToolOperation,
@@ -1011,6 +1011,7 @@ mod tests {
                     created_at: DateTime::parse_from_rfc3339("2026-06-01T12:30:00Z")
                         .unwrap()
                         .with_timezone(&Utc),
+                    resolved_at: None,
                     item: proposal.clone(),
                 }],
             )
@@ -1043,7 +1044,7 @@ mod tests {
     }
 
     #[test]
-    fn resolved_proposal_keeps_its_timeline_position_while_pending_proposal_is_pinned() {
+    fn resolved_proposal_uses_its_resolution_time_while_pending_proposal_is_pinned() {
         let transcript = [
             json!({
                 "uuid": "fixture-assistant-before",
@@ -1145,11 +1146,13 @@ mod tests {
                     ProposalItem {
                         seq: 1,
                         created_at: created_at("2026-06-01T12:01:00Z"),
+                        resolved_at: Some(created_at("2026-06-01T12:06:00Z")),
                         item: unplaced_proposal.clone(),
                     },
                     ProposalItem {
                         seq: 2,
                         created_at: created_at("2026-06-01T12:03:30Z"),
+                        resolved_at: None,
                         item: recorded_proposal.clone(),
                     },
                 ],
@@ -1163,7 +1166,6 @@ mod tests {
                     ChatItem::Assistant {
                         text: "before".to_string(),
                     },
-                    unplaced_proposal,
                     ChatItem::Assistant {
                         text: "middle".to_string(),
                     },
@@ -1178,6 +1180,7 @@ mod tests {
                     ChatItem::Assistant {
                         text: "after".to_string(),
                     },
+                    unplaced_proposal,
                     recorded_proposal,
                 ],
                 Vec::new(),
@@ -1217,6 +1220,7 @@ mod tests {
             created_at: DateTime::parse_from_rfc3339("2026-06-01T12:01:00Z")
                 .unwrap()
                 .with_timezone(&Utc),
+            resolved_at: None,
             item: proposal.clone(),
         };
 
@@ -1446,11 +1450,18 @@ mod tests {
         );
     }
 
-    #[test]
-    fn resolves_a_human_origin_vibe_notice_as_an_event() {
+    #[rstest]
+    #[case::tagged_notice(
+        "<armyknife-vibe-mode-on>watch-web からユーザーが vibe mode を on にしました。</armyknife-vibe-mode-on>"
+    )]
+    #[case::slash_command_markup(indoc! {r#"
+        <command-message>synthetic action notice</command-message>
+        <command-name>/vibe-on</command-name>
+        <command-args>fixture-argument</command-args>
+    "#})]
+    fn resolves_a_human_origin_action_from_its_recorded_kind(#[case] queued_content: &str) {
         let user_marker = "⟦armyknife-user:fixture-marker-violet⟧";
         let message_id = "armyknife-action:fixture-message-teal";
-        let queued_content = "<armyknife-vibe-mode-on>watch-web からユーザーが vibe mode を on にしました。</armyknife-vibe-mode-on>";
         let delivered_content = crate::commands::agent::watch_web_user_marker::prefix_message(
             user_marker,
             &super::super::super::queued_prompt::add_id_marker(queued_content, message_id),
@@ -1467,7 +1478,8 @@ mod tests {
         let queued_prompt = WatchWebQueuedPrompt {
             id: 7,
             message_id: Some(message_id.to_owned()),
-            content: queued_content.to_owned(),
+            content: "Vibe mode turned on".to_owned(),
+            action_event_kind: Some(WatchWebActionEventKind::VibeModeOn),
             attachments: Vec::<WatchWebQueuedAttachment>::new(),
             resolved: false,
             sent_at: Utc.timestamp_opt(1_000, 0).unwrap(),
@@ -1530,6 +1542,7 @@ mod tests {
             id: 9,
             message_id: Some(message_id.to_owned()),
             content: queued_content.to_owned(),
+            action_event_kind: None,
             attachments: Vec::<WatchWebQueuedAttachment>::new(),
             resolved: false,
             sent_at: Utc.timestamp_opt(1_000, 0).unwrap(),

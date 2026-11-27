@@ -65,6 +65,7 @@ fn saved_queued_prompt() -> WatchWebQueuedPrompt {
         id: 7,
         message_id: Some("fixture-message-cyan".to_owned()),
         content: "Delivered request.".to_owned(),
+        action_event_kind: None,
         attachments: Vec::new(),
         resolved: false,
         sent_at: fixed_time(),

@@ -1,7 +1,45 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
 
 import { ConversationPaneHeader } from '#components/conversation-pane-header'
-import type { Session, SessionActions } from '#types'
+import type { PullRequest, Session, SessionActions } from '#types'
+
+const phoneTopbarCurrentPullRequest: PullRequest = {
+  number: 2050,
+  state: 'Open',
+  owner: 'example',
+  repo: 'service',
+  title: '再送処理を retry() にまとめる',
+  url: 'https://github.com/example/service/pull/2050',
+  headSha: 'sample-phone-pr-head-sha',
+  ciState: 'InProgress',
+  isCurrentBranch: true,
+}
+
+const phoneTopbarPullRequests: PullRequest[] = [
+  phoneTopbarCurrentPullRequest,
+  {
+    number: 64,
+    state: 'Open',
+    owner: 'example',
+    repo: 'infra',
+    title: '再送キューの上限を設定に出す',
+    url: 'https://github.com/example/infra/pull/64',
+    headSha: 'sample-phone-pr-head-sha-2',
+    ciState: 'Successful',
+    isCurrentBranch: false,
+  },
+  {
+    number: 2041,
+    state: 'Merged',
+    owner: 'example',
+    repo: 'service',
+    title: '再送のログを整える',
+    url: 'https://github.com/example/service/pull/2041',
+    headSha: 'sample-phone-pr-head-sha-3',
+    ciState: 'Successful',
+    isCurrentBranch: false,
+  },
+]
 
 const session: Session = {
   id: 'sample-session',
@@ -21,6 +59,28 @@ const session: Session = {
   pullRequest: null,
 }
 
+const phoneSession: Session = {
+  ...session,
+  vibeMode: { mode: 'enabled' },
+  title: '通知の再送処理を見直して上限を設定ファイルに出す',
+  task: {
+    id: 'sample-task-phone-topbar',
+    number: 2048,
+    title: '通知の信頼性を上げる',
+    priority: null,
+  },
+  tasks: [
+    {
+      id: 'sample-task-phone-topbar',
+      number: 2048,
+      title: '通知の信頼性を上げる',
+      priority: null,
+    },
+  ],
+  pullRequest: phoneTopbarCurrentPullRequest,
+  pullRequests: phoneTopbarPullRequests,
+}
+
 const actions: SessionActions = {
   message: true,
   answerQuestion: false,
@@ -32,6 +92,7 @@ const actions: SessionActions = {
 
 const meta = {
   component: ConversationPaneHeader,
+  parameters: { layout: 'fullscreen' },
   args: {
     session,
     actions,
@@ -53,12 +114,8 @@ const meta = {
         className="conversation-pane"
         data-mobile={context.args.isMobile}
         style={{
-          height: context.args.isMobile
-            ? (context.args.session.pullRequests?.length ?? 0) > 0 ||
-              context.args.session.pullRequest !== null
-              ? 130
-              : 88
-            : 96,
+          width: context.args.isMobile ? 390 : undefined,
+          height: context.args.isMobile ? 88 : 96,
         }}
       >
         <Story />
@@ -134,7 +191,7 @@ export const MobileHeaderShowsTaskAndRepository: Story = {
 }
 
 export const SessionPullRequestCanBeMerged: Story = {
-  name: 'The header shows the PR button for a mergeable pull request',
+  name: 'The desktop header shows its pull request button',
   args: {
     session: {
       ...session,
@@ -205,10 +262,9 @@ export const SessionHasMultiplePullRequests: Story = {
   },
 }
 
-export const MobileHeaderShowsPullRequestSheet: Story = {
-  name: 'The mobile header shows the open pull request sheet below the title',
+export const DesktopHeaderShowsPullRequestPopover: Story = {
+  name: 'The desktop pull request button opens the pull request list',
   args: {
-    isMobile: true,
     pullRequestsOpen: true,
     session: {
       ...session,
@@ -248,6 +304,72 @@ export const MobileHeaderShowsPullRequestSheet: Story = {
           headSha: 'fixture-other-sha',
         },
       ],
+    },
+  },
+}
+
+export const PhoneTitleFitsOnOneLine: Story = {
+  name: 'The phone header shows a short title on one line',
+  args: {
+    isMobile: true,
+    isToday: true,
+    session: { ...phoneSession, title: '通知の再送処理を見直す' },
+  },
+}
+
+export const PhoneTitleTruncatesAfterTwoLines: Story = {
+  name: 'The phone header truncates a long title after two lines',
+  args: {
+    isMobile: true,
+    isToday: true,
+    session: { ...phoneSession },
+  },
+}
+
+export const PhoneHeaderShowsNoPullRequests: Story = {
+  name: 'The phone header has no pull request status badge',
+  args: {
+    isMobile: true,
+    isToday: true,
+    session: {
+      ...phoneSession,
+      vibeMode: {
+        mode: 'inherited',
+        ancestorSessionId: 'sample-parent-session',
+      },
+      pullRequest: null,
+      pullRequests: [],
+    },
+  },
+}
+
+export const PhoneHeaderShowsPullRequestStatus: Story = {
+  name: 'The phone header shows pull request count and CI status',
+  args: {
+    isMobile: true,
+    isToday: true,
+    session: phoneSession,
+  },
+}
+
+export const PhoneNavigationShowsActivityFailure: Story = {
+  name: 'The phone navigation button marks failed Activity actions',
+  args: {
+    isMobile: true,
+    isToday: true,
+    activityFailed: true,
+    session: phoneSession,
+  },
+}
+
+export const PhoneHeaderShowsTheSelectedDesignState: Story = {
+  name: 'The phone header shows a long title, failed Activity, and three pull requests',
+  args: {
+    isMobile: true,
+    isToday: true,
+    activityFailed: true,
+    session: {
+      ...phoneSession,
     },
   },
 }

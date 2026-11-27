@@ -1,12 +1,15 @@
 use clap::Args;
 use std::fs;
+use std::path::Path;
 
 use super::common::{
     DraftFile, PrDraftError, RepoBranchArgs, RepoInfo, generate_frontmatter,
     read_stdin_if_available, repo_allows_japanese,
 };
+use super::submit_lock::acquire_submit_lock;
 use crate::infra::github::{GitHubClient, RepoClient};
 use crate::shared::diff::eprint_diff;
+use crate::shared::human_in_the_loop::{canonical_document_path, clear_action_result};
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct NewArgs {
@@ -34,21 +37,6 @@ async fn run_impl(args: &NewArgs, gh_client: &impl RepoClient) -> anyhow::Result
     )?;
     let draft_path = DraftFile::path_for(&repo_info);
 
-    // Check if the draft file already exists
-    let old_content = if draft_path.exists() {
-        if !args.force {
-            return Err(PrDraftError::FileAlreadyExists(draft_path).into());
-        }
-        Some(fs::read_to_string(&draft_path)?)
-    } else {
-        None
-    };
-
-    // Create parent directories
-    if let Some(parent) = draft_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-
     // Check if the repo is private (defaults to true if network is unavailable)
     let is_private = match gh_client
         .is_repo_private(&repo_info.owner, &repo_info.repo)
@@ -70,6 +58,30 @@ async fn run_impl(args: &NewArgs, gh_client: &impl RepoClient) -> anyhow::Result
     let body = read_stdin_if_available().unwrap_or_default();
     let content = format!("{frontmatter}{body}");
 
+    persist_draft(&draft_path, content, args.force).await
+}
+
+async fn persist_draft(draft_path: &Path, content: String, force: bool) -> anyhow::Result<()> {
+    if let Some(parent) = draft_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let lock_path = canonical_document_path(draft_path);
+    let _submit_lock = acquire_submit_lock(&lock_path).await?;
+
+    persist_draft_locked(draft_path, content, force)
+}
+
+fn persist_draft_locked(draft_path: &Path, content: String, force: bool) -> anyhow::Result<()> {
+    // Check if the draft file already exists
+    let old_content = if draft_path.exists() {
+        if !force {
+            return Err(PrDraftError::FileAlreadyExists(draft_path.to_path_buf()).into());
+        }
+        Some(fs::read_to_string(draft_path)?)
+    } else {
+        None
+    };
+
     // Show warning and diff when overwriting
     if let Some(old) = &old_content {
         eprintln!(
@@ -81,7 +93,8 @@ async fn run_impl(args: &NewArgs, gh_client: &impl RepoClient) -> anyhow::Result
         eprintln!();
     }
 
-    fs::write(&draft_path, content)?;
+    clear_action_result(draft_path)?;
+    fs::write(draft_path, content)?;
 
     println!("{}", draft_path.display());
 
@@ -94,6 +107,10 @@ mod tests {
     use crate::infra::git::test_utils::TempRepo;
     use crate::infra::github::GitHubMockServer;
     use crate::shared::diff::format_diff;
+    use crate::shared::human_in_the_loop::{
+        ReviewDocumentAction, ReviewDocumentActionResult, document_hash, save_action_result,
+        successful_action_result,
+    };
     use indoc::indoc;
     use rstest::rstest;
     use std::fs;
@@ -136,24 +153,9 @@ mod tests {
         args: &NewArgs,
         repo_path: &Path,
         gh_client: &impl RepoClient,
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    ) -> anyhow::Result<()> {
         let repo_info = RepoInfo::from_path(repo_path)?;
         let draft_path = DraftFile::path_for(&repo_info);
-
-        // Check if the draft file already exists
-        let old_content = if draft_path.exists() {
-            if !args.force {
-                return Err(PrDraftError::FileAlreadyExists(draft_path).into());
-            }
-            Some(fs::read_to_string(&draft_path)?)
-        } else {
-            None
-        };
-
-        // Create parent directories
-        if let Some(parent) = draft_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
 
         // Check if the repo is private using mock client
         let is_private = gh_client
@@ -166,22 +168,7 @@ mod tests {
 
         let body = read_stdin_if_available().unwrap_or_default();
         let content = format!("{frontmatter}{body}");
-
-        // Show warning and diff when overwriting
-        if let Some(old) = &old_content {
-            eprintln!(
-                "Warning: Overwriting existing draft file: {}",
-                draft_path.display()
-            );
-            eprintln!();
-            eprint_diff(old, &content);
-            eprintln!();
-        }
-
-        fs::write(&draft_path, content)?;
-
-        println!("{}", draft_path.display());
-
+        persist_draft(&draft_path, content, args.force).await?;
         Ok(())
     }
 
@@ -347,6 +334,51 @@ mod tests {
         let draft_path = DraftFile::path_for(&repo_info);
         let draft = DraftFile::from_path(draft_path).expect("read draft");
         assert_eq!(draft.frontmatter.title, "Second Title");
+    }
+
+    #[tokio::test]
+    async fn new_clears_a_previous_submit_result_when_overwriting_a_draft() {
+        let env = setup_test_env("owner", "repo_overwrite_result", true).await;
+        let client = env.mock.client();
+        let args = NewArgs {
+            title: Some("Same Title".to_string()),
+            force: false,
+            repo_branch: RepoBranchArgs::default(),
+        };
+        run_with_mock(&args, &env.temp_repo.path(), &client)
+            .await
+            .expect("first run should succeed");
+
+        let repo_info = RepoInfo::from_path(&env.temp_repo.path()).unwrap();
+        let draft_path = DraftFile::path_for(&repo_info);
+        save_action_result(
+            &draft_path,
+            &ReviewDocumentActionResult::new(
+                ReviewDocumentAction::CreatePr,
+                true,
+                "https://example.invalid/pull/42".to_string(),
+                document_hash(&draft_path).expect("draft hash should be computed"),
+                None,
+            ),
+        )
+        .expect("previous submit result should be saved");
+
+        run_with_mock(
+            &NewArgs {
+                force: true,
+                ..args
+            },
+            &env.temp_repo.path(),
+            &client,
+        )
+        .await
+        .expect("overwrite should succeed");
+
+        assert_eq!(
+            successful_action_result(&draft_path, ReviewDocumentAction::CreatePr)
+                .expect("submit result should be readable"),
+            None,
+        );
     }
 
     #[tokio::test]

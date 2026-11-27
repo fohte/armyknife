@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use serde::Serialize;
@@ -253,6 +254,10 @@ pub(super) enum EventKind {
 #[serde(rename_all = "camelCase")]
 pub(super) struct ConversationResponse {
     pub(super) messages: Vec<ChatItem>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub(super) message_image_sources: BTreeMap<usize, BTreeMap<String, Option<String>>>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) confirmed_queued_prompt_ids: Vec<String>,
     pub(super) background_tasks: Vec<BackgroundTask>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(super) skills: Vec<SkillSuggestion>,

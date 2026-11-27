@@ -1,18 +1,22 @@
 use std::cell::Cell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, ensure};
+use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 use crate::commands::agent::error::CcError;
 use crate::commands::agent::types::Session;
 
+mod activity;
 mod agent_files;
 mod decisions;
+mod deferred_stops;
 mod initial_prompt;
+mod initialization;
 mod migration;
 mod migrations;
 mod one_time_permissions;
@@ -30,11 +34,15 @@ mod vibe_setting_revision;
 mod wake;
 mod web_state;
 
+pub(crate) use activity::agent_response_timestamps;
 pub(crate) use agent_files::AgentFile;
-pub(crate) use agent_files::{agent_file, agent_files, insert_agent_files};
+pub(crate) use agent_files::{agent_file, agent_files};
 pub(crate) use decisions::{
     AgentDecision, AgentDecisionCounts, agent_decision_counts_by_session, agent_decisions,
     insert_agent_decision, set_agent_decision_review,
+};
+pub(crate) use deferred_stops::{
+    DeferredStop, clear_deferred_stop, record_deferred_stop, take_mature_deferred_stops,
 };
 pub(crate) use initial_prompt::{clear_pending_initial_prompt, mark_pending_initial_prompt};
 pub(crate) use one_time_permissions::{
@@ -48,7 +56,8 @@ pub(crate) use peer_out_messages::{
 };
 pub(crate) use permission_denied::{PermissionDeniedOperation, PermissionDeniedResolution};
 pub(crate) use permission_denied::{
-    add_permission_denied, permission_denied_operations, resolve_permission_denied,
+    add_permission_denied, permission_denied_operations,
+    resolve_matching_unclassified_permission_denials, resolve_permission_denied,
 };
 pub(crate) use permission_requests::{
     PermissionRequestData, PermissionRequestDecision, PermissionRequestResolution,
@@ -57,10 +66,12 @@ pub(crate) use permission_requests::{
 };
 pub(crate) use proposals::{AgentProposal, ProposalResolution};
 pub(crate) use proposals::{
-    add_agent_proposal, agent_proposals, lock_agent_proposal_resolution, resolve_agent_proposal,
-    unanswered_agent_proposal_bodies, write_agent_proposal_answer,
+    add_agent_proposal, agent_proposals, edit_agent_proposal, lock_agent_proposal_resolution,
+    resolve_agent_proposal, unanswered_agent_proposal_bodies, write_agent_proposal_answer_at,
 };
-pub(crate) use queued_prompts::{WatchWebQueuedAttachment, WatchWebQueuedPrompt};
+pub(crate) use queued_prompts::{
+    WatchWebActionEventKind, WatchWebQueuedAttachment, WatchWebQueuedPrompt,
+};
 pub(crate) use queued_prompts::{
     delete_watch_web_queued_prompts, insert_watch_web_queued_prompt,
     mark_watch_web_queued_prompts_resolved, watch_web_queued_prompt_message_id_exists,
@@ -72,8 +83,9 @@ pub(crate) use replacements::{
 pub(crate) use session_closures::{clear_session_closed, closed_session_ids, mark_session_closed};
 pub(crate) use todos::{AgentTodo, TodoResolution};
 pub(crate) use todos::{
-    add_agent_todo, agent_todos, incomplete_agent_todo_titles, lock_agent_todo_resolution,
-    resolve_agent_todo, set_agent_todo_folded,
+    add_agent_todo, agent_todos, edit_agent_todo, has_incomplete_todos,
+    incomplete_agent_todo_titles, lock_agent_todo_resolution, resolve_agent_todo,
+    resolve_agent_todo_at, set_agent_todo_folded,
 };
 pub(crate) use unreported_stop_checks::check_unreported_stop;
 pub(crate) use web_state::WatchWebSessionState;
@@ -84,6 +96,10 @@ pub(super) use web_state::{
 };
 
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+
+pub(super) fn lock_crit_port(sessions_dir: &Path, port: u16) -> Result<fs::File> {
+    resolution_lock::lock_file(sessions_dir, "crit-port-locks", &format!("{port}.lock"))
+}
 
 #[derive(Debug)]
 pub(crate) struct SessionStoreChanges {
@@ -98,6 +114,7 @@ pub(crate) struct SessionLock {
     connection: Connection,
     session_id: String,
     transaction_active: Cell<bool>,
+    pending_compacting: Cell<Option<bool>>,
 }
 
 pub(crate) struct WakeLock {
@@ -131,19 +148,7 @@ fn open_connection_with_options(
         .with_context(|| format!("opening session database {}", database_path.display()))?;
     connection.busy_timeout(busy_timeout)?;
     connection.pragma_update(None, "journal_mode", "WAL")?;
-    migrations::migrate_if_needed(&mut connection)?;
-
-    if import_legacy_data {
-        if let Err(error) = migration::import_legacy_json(&mut connection, sessions_dir) {
-            tracing::warn!(
-                target: "armyknife::commands::agent::store",
-                event = "agent.store.legacy_import_failed",
-                error = %error,
-            );
-        }
-        migration::remove_legacy_lock_files(sessions_dir);
-        migration::cleanup_expired_legacy_json(&connection, sessions_dir)?;
-    }
+    initialization::run(&mut connection, sessions_dir, import_legacy_data)?;
 
     Ok(connection)
 }
@@ -178,6 +183,7 @@ pub(crate) fn lock_session_for_update(
         connection,
         session_id: session_id.to_string(),
         transaction_active: Cell::new(true),
+        pending_compacting: Cell::new(None),
     })
 }
 
@@ -231,6 +237,10 @@ pub(crate) fn lock_session_for_wake(sessions_dir: &Path, session_id: &str) -> Re
 impl SessionLock {
     pub(crate) fn load(&self) -> Result<Option<Session>> {
         read_session_strict(&self.connection, &self.session_id)
+    }
+
+    pub(crate) fn load_skipping_undecodable(&self) -> Result<Option<Session>> {
+        read_session_skipping_undecodable(&self.connection, &self.session_id)
     }
 
     pub(crate) fn has_pending_agent_requests(&self) -> Result<bool> {
@@ -290,6 +300,10 @@ impl SessionLock {
         Ok(())
     }
 
+    pub(crate) fn queue_watch_web_compacting(&self, is_compacting: bool) {
+        self.pending_compacting.set(Some(is_compacting));
+    }
+
     pub(crate) fn save(&self, session: &Session) -> Result<()> {
         ensure!(
             session.session_id == self.session_id,
@@ -297,9 +311,15 @@ impl SessionLock {
         );
         self.ensure_transaction()?;
         write_session(&self.connection, session)?;
+        self.apply_pending_watch_web_compacting()?;
         self.connection.execute_batch("COMMIT")?;
         self.transaction_active.set(false);
         Ok(())
+    }
+
+    pub(crate) fn record_agent_response_at(&self, responded_at: DateTime<Utc>) -> Result<()> {
+        self.ensure_transaction()?;
+        activity::record_agent_response_at(&self.connection, &self.session_id, responded_at)
     }
 
     pub(crate) fn save_vibe_setting(&self, session: &Session) -> Result<String> {
@@ -313,6 +333,7 @@ impl SessionLock {
             .map(|current| current != session.vibe_enabled)
             .unwrap_or(session.vibe_enabled);
         write_session(&self.connection, session)?;
+        self.apply_pending_watch_web_compacting()?;
         if !vibe_setting_changed {
             vibe_setting_revision::rotate(&self.connection, &self.session_id)?;
         }
@@ -335,10 +356,25 @@ impl SessionLock {
         Ok(removed)
     }
 
+    pub(crate) fn has_incomplete_todos(&self) -> Result<bool> {
+        has_incomplete_todos(&self.connection, &self.session_id)
+    }
+
     fn ensure_transaction(&self) -> Result<()> {
         if !self.transaction_active.get() {
             self.connection.execute_batch("BEGIN IMMEDIATE")?;
             self.transaction_active.set(true);
+        }
+        Ok(())
+    }
+
+    fn apply_pending_watch_web_compacting(&self) -> Result<()> {
+        if let Some(is_compacting) = self.pending_compacting.take() {
+            web_state::set_watch_web_compacting_in_transaction(
+                &self.connection,
+                &self.session_id,
+                is_compacting,
+            )?;
         }
         Ok(())
     }
@@ -437,6 +473,17 @@ pub(crate) fn all_sessions(sessions_dir: &Path) -> Result<Vec<Session>> {
 pub(crate) fn session_store_revision(sessions_dir: &Path) -> Result<i64> {
     let connection = open_connection(sessions_dir)?;
     read_revision(&connection)
+}
+
+pub(crate) fn session_revisions_by_session(sessions_dir: &Path) -> Result<HashMap<String, i64>> {
+    if !sessions_dir.exists() {
+        return Ok(HashMap::new());
+    }
+    let connection = open_connection(sessions_dir)?;
+    let mut statement = connection.prepare("SELECT session_id, rev FROM sessions")?;
+    let rows = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+    rows.collect::<rusqlite::Result<HashMap<_, _>>>()
+        .map_err(Into::into)
 }
 
 pub(crate) fn session_changes_since(
@@ -571,6 +618,19 @@ pub(crate) fn increment_revision(connection: &Connection) -> Result<i64> {
     read_revision(connection)
 }
 
+fn bump_session_revision(connection: &Connection, session_id: &str) -> Result<i64> {
+    let revision = increment_revision(connection)?;
+    let updated = connection.execute(
+        "UPDATE sessions SET rev = ?1 WHERE session_id = ?2",
+        params![revision, session_id],
+    )?;
+    ensure!(
+        updated == 1,
+        "session {session_id} disappeared during update"
+    );
+    Ok(revision)
+}
+
 fn read_revision(connection: &Connection) -> Result<i64> {
     Ok(connection.query_row(
         "SELECT CAST(value AS INTEGER) FROM session_store_meta WHERE key = 'revision'",
@@ -582,15 +642,7 @@ fn read_revision(connection: &Connection) -> Result<i64> {
 /// Keeps sessions with incomplete todos available to watch-web.
 /// Returns false when a todo keeps the row available or the row was already absent.
 fn delete_session_row(connection: &Connection, session_id: &str) -> Result<bool> {
-    let has_incomplete_todos: bool = connection.query_row(
-        "SELECT EXISTS(
-            SELECT 1 FROM agent_todo
-            WHERE session_id = ?1 AND completed_at IS NULL
-        )",
-        [session_id],
-        |row| row.get(0),
-    )?;
-    if has_incomplete_todos {
+    if has_incomplete_todos(connection, session_id)? {
         return Ok(false);
     }
 
@@ -631,8 +683,203 @@ pub(crate) fn validate_session_id(session_id: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
     use serde_json::Value;
+
+    #[fixture]
+    fn sessions_dir() -> tempfile::TempDir {
+        tempfile::tempdir().unwrap()
+    }
+
+    fn write_legacy_session(sessions_dir: &Path, session_id: &str) {
+        fs::write(
+            sessions_dir.join(format!("{session_id}.json")),
+            serde_json::json!({
+                "session_id": session_id,
+                "cwd": "/fixture/worktree",
+                "transcript_path": null,
+                "tmux_info": null,
+                "status": "stopped",
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z",
+                "last_message": null,
+            })
+            .to_string(),
+        )
+        .unwrap();
+    }
+
+    fn stored_session_exists(connection: &Connection, session_id: &str) -> bool {
+        connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sessions WHERE session_id = ?1)",
+                [session_id],
+                |row| row.get(0),
+            )
+            .unwrap()
+    }
+
+    #[rstest]
+    fn runs_migrations_once_for_each_sessions_directory(sessions_dir: tempfile::TempDir) {
+        let sessions_dir = sessions_dir.path();
+        drop(open_connection(sessions_dir).unwrap());
+
+        let connection = Connection::open(sessions_dir.join("sessions.db")).unwrap();
+        connection
+            .pragma_update(None, "user_version", migrations::current_version() - 1)
+            .unwrap();
+        drop(connection);
+
+        let connection = open_usage_connection(sessions_dir).unwrap();
+        let user_version: i64 = connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+
+        assert_eq!(user_version, migrations::current_version() - 1);
+    }
+
+    #[rstest]
+    fn retries_migrations_after_a_failed_attempt(sessions_dir: tempfile::TempDir) {
+        let sessions_dir = sessions_dir.path();
+        let connection = Connection::open(sessions_dir.join("sessions.db")).unwrap();
+        connection
+            .execute_batch("CREATE TABLE sessions (session_id TEXT PRIMARY KEY);")
+            .unwrap();
+        drop(connection);
+
+        let first_attempt_failed = open_connection(sessions_dir).is_err();
+        let connection = Connection::open(sessions_dir.join("sessions.db")).unwrap();
+        connection.execute("DROP TABLE sessions", []).unwrap();
+        drop(connection);
+
+        let connection = open_connection(sessions_dir).unwrap();
+        let user_version: i64 = connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+
+        assert_eq!(
+            (first_attempt_failed, user_version),
+            (true, migrations::current_version()),
+        );
+    }
+
+    #[rstest]
+    fn imports_legacy_json_once_for_each_sessions_directory(sessions_dir: tempfile::TempDir) {
+        let sessions_dir = sessions_dir.path();
+        write_legacy_session(sessions_dir, "fixture-first-session");
+
+        let connection = open_connection(sessions_dir).unwrap();
+        let first_session_exists = stored_session_exists(&connection, "fixture-first-session");
+        drop(connection);
+
+        write_legacy_session(sessions_dir, "fixture-later-session");
+        let connection = open_connection(sessions_dir).unwrap();
+        let later_session_exists = stored_session_exists(&connection, "fixture-later-session");
+
+        assert_eq!((first_session_exists, later_session_exists), (true, false));
+    }
+
+    #[rstest]
+    fn retries_legacy_import_after_a_failed_attempt(sessions_dir: tempfile::TempDir) {
+        let sessions_dir = sessions_dir.path();
+        let mut connection = Connection::open(sessions_dir.join("sessions.db")).unwrap();
+        migrations::migrate_if_needed(&mut connection).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TRIGGER fail_fixture_legacy_import
+                 BEFORE INSERT ON sessions
+                 WHEN NEW.session_id = 'fixture-legacy-session'
+                 BEGIN
+                     SELECT RAISE(FAIL, 'fixture import failure');
+                 END;",
+            )
+            .unwrap();
+        drop(connection);
+        write_legacy_session(sessions_dir, "fixture-legacy-session");
+
+        let connection = open_connection(sessions_dir).unwrap();
+        let exists_after_failed_attempt =
+            stored_session_exists(&connection, "fixture-legacy-session");
+        drop(connection);
+
+        let connection = Connection::open(sessions_dir.join("sessions.db")).unwrap();
+        connection
+            .execute_batch("DROP TRIGGER fail_fixture_legacy_import;")
+            .unwrap();
+        drop(connection);
+
+        let connection = open_connection(sessions_dir).unwrap();
+        let exists_after_retry = stored_session_exists(&connection, "fixture-legacy-session");
+
+        assert_eq!(
+            (exists_after_failed_attempt, exists_after_retry),
+            (false, true)
+        );
+    }
+
+    #[rstest]
+    fn retries_expired_legacy_cleanup_after_a_failed_attempt(sessions_dir: tempfile::TempDir) {
+        let sessions_dir = sessions_dir.path();
+        let mut connection = Connection::open(sessions_dir.join("sessions.db")).unwrap();
+        migrations::migrate_if_needed(&mut connection).unwrap();
+        connection
+            .execute(
+                "INSERT INTO session_store_meta (key, value) VALUES ('legacy-imported-at', ?1)",
+                [(Utc::now() - chrono::TimeDelta::days(31)).to_rfc3339()],
+            )
+            .unwrap();
+        drop(connection);
+        let legacy_dir = sessions_dir.join("legacy-json");
+        fs::write(&legacy_dir, "fixture file prevents directory cleanup").unwrap();
+
+        drop(open_connection(sessions_dir).unwrap());
+        let legacy_file_remains = legacy_dir.is_file();
+
+        fs::remove_file(&legacy_dir).unwrap();
+        fs::create_dir(&legacy_dir).unwrap();
+        fs::write(legacy_dir.join("fixture.json"), "fixture backup").unwrap();
+        drop(open_connection(sessions_dir).unwrap());
+
+        assert_eq!((legacy_file_remains, legacy_dir.exists()), (true, false));
+    }
+
+    #[test]
+    fn initializes_each_sessions_directory_once() {
+        let first_sessions_dir = tempfile::tempdir().unwrap();
+        let second_sessions_dir = tempfile::tempdir().unwrap();
+        write_legacy_session(first_sessions_dir.path(), "fixture-first-directory");
+        write_legacy_session(second_sessions_dir.path(), "fixture-second-directory");
+
+        let first_connection = open_connection(first_sessions_dir.path()).unwrap();
+        let second_connection = open_connection(second_sessions_dir.path()).unwrap();
+        let actual = (
+            stored_session_exists(&first_connection, "fixture-first-directory"),
+            stored_session_exists(&second_connection, "fixture-second-directory"),
+        );
+
+        assert_eq!(actual, (true, true));
+    }
+
+    #[rstest]
+    fn imports_legacy_json_after_a_usage_only_first_open(sessions_dir: tempfile::TempDir) {
+        let sessions_dir = sessions_dir.path();
+        write_legacy_session(sessions_dir, "fixture-usage-first-session");
+
+        drop(open_usage_connection(sessions_dir).unwrap());
+        let connection = open_connection(sessions_dir).unwrap();
+        let legacy_backup_exists = sessions_dir
+            .join("legacy-json")
+            .join("fixture-usage-first-session.json")
+            .exists();
+
+        assert_eq!(
+            (
+                stored_session_exists(&connection, "fixture-usage-first-session"),
+                legacy_backup_exists,
+            ),
+            (true, true),
+        );
+    }
 
     #[test]
     fn adds_watch_web_state_without_changing_existing_session_rows() {

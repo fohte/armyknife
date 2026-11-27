@@ -1,5 +1,5 @@
 use std::convert::Infallible;
-use std::future::Future;
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Router;
@@ -7,21 +7,23 @@ use axum::extract::State;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::routing::get;
 use futures_util::stream::{self, Stream, StreamExt};
-use notify::{RecommendedWatcher, RecursiveMode, Watcher};
-use tokio::sync::mpsc::{self, UnboundedReceiver};
+use notify::{RecursiveMode, Watcher};
+use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio::sync::watch;
-use tokio::time::{self, Interval};
+use tokio::time;
 
 use super::{EnrichmentUpdates, SERVER_INSTANCE_ID, SERVER_VERSION};
 use crate::commands::agent::session_store_event::is_session_store_change;
 use crate::commands::agent::store;
 
 const REVISION_POLL_INTERVAL: Duration = Duration::from_secs(2);
+const WATCHER_DEBOUNCE: Duration = Duration::from_millis(150);
 const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(15);
 
 #[derive(Clone)]
 struct EventUpdates {
     enrichment: EnrichmentUpdates,
+    revisions: RevisionMonitor,
     restart: watch::Receiver<bool>,
 }
 
@@ -30,6 +32,7 @@ pub(super) fn router(updates: EnrichmentUpdates, restart: watch::Receiver<bool>)
         .route("/events", get(events))
         .with_state(EventUpdates {
             enrichment: updates,
+            revisions: RevisionMonitor::new(current_revision, create_watcher),
             restart,
         })
 }
@@ -37,16 +40,12 @@ pub(super) fn router(updates: EnrichmentUpdates, restart: watch::Receiver<bool>)
 async fn events(
     State(updates): State<EventUpdates>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    let (signal_tx, signal_rx) = mpsc::unbounded_channel();
-    let watcher = create_watcher(signal_tx).await;
     let stream = event_stream(
         SERVER_INSTANCE_ID.clone(),
         SERVER_VERSION,
-        signal_rx,
+        updates.revisions.subscribe(),
         updates.enrichment.subscribe(),
-        watcher,
         updates.restart,
-        current_revision,
     );
 
     Sse::new(stream).keep_alive(
@@ -56,104 +55,227 @@ async fn events(
     )
 }
 
-fn event_stream<F, Fut>(
+fn event_stream(
     instance_id: String,
     server_version: &'static str,
-    signals: UnboundedReceiver<()>,
+    revisions: RevisionSubscription,
     enrichment_updates: watch::Receiver<()>,
-    watcher: Option<RecommendedWatcher>,
     restart_signal: watch::Receiver<bool>,
-    read_revision: F,
-) -> impl Stream<Item = Result<Event, Infallible>>
-where
-    F: Fn() -> Fut + Send + 'static,
-    Fut: Future<Output = Option<i64>> + Send + 'static,
-{
+) -> impl Stream<Item = Result<Event, Infallible>> {
     stream::once(async move { Ok(Event::default().event("instance").data(instance_id)) })
         .chain(stream::once(async move {
             Ok(Event::default().event("version").data(server_version))
         }))
         .chain(revision_stream(
-            signals,
+            revisions,
             enrichment_updates,
-            watcher,
             restart_signal,
-            read_revision,
         ))
 }
 
-async fn create_watcher(
-    signal_tx: tokio::sync::mpsc::UnboundedSender<()>,
-) -> Option<RecommendedWatcher> {
-    tokio::task::spawn_blocking(move || {
-        let sessions_dir = store::sessions_dir()?;
-        let mut watcher =
-            notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-                if event.is_ok_and(|event| is_session_store_change(&event)) {
-                    let _ = signal_tx.send(());
+type RevisionReader = Arc<dyn Fn() -> Option<i64> + Send + Sync>;
+type WatcherFactory =
+    Arc<dyn Fn(UnboundedSender<()>) -> Option<Box<dyn std::any::Any + Send>> + Send + Sync>;
+
+#[derive(Clone)]
+struct RevisionMonitor {
+    inner: Arc<RevisionMonitorInner>,
+}
+
+struct RevisionMonitorInner {
+    revisions: watch::Sender<Option<i64>>,
+    subscribers: watch::Sender<usize>,
+}
+
+struct RevisionSubscription {
+    revisions: watch::Receiver<Option<i64>>,
+    _guard: RevisionSubscriberGuard,
+}
+
+struct RevisionSubscriberGuard {
+    subscribers: watch::Sender<usize>,
+}
+
+impl Drop for RevisionSubscriberGuard {
+    fn drop(&mut self) {
+        self.subscribers
+            .send_modify(|count| *count = count.saturating_sub(1));
+    }
+}
+
+impl RevisionMonitor {
+    fn new(
+        read_revision: impl Fn() -> Option<i64> + Send + Sync + 'static,
+        create_watcher: impl Fn(UnboundedSender<()>) -> Option<Box<dyn std::any::Any + Send>>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        let (revisions, _) = watch::channel(None);
+        let (subscribers, subscriber_receiver) = watch::channel(0);
+        let read_revision: RevisionReader = Arc::new(read_revision);
+        let create_watcher: WatcherFactory = Arc::new(create_watcher);
+        tokio::spawn(run_revision_monitor(
+            subscriber_receiver,
+            revisions.clone(),
+            Arc::clone(&read_revision),
+            Arc::clone(&create_watcher),
+        ));
+        Self {
+            inner: Arc::new(RevisionMonitorInner {
+                revisions,
+                subscribers,
+            }),
+        }
+    }
+
+    fn subscribe(&self) -> RevisionSubscription {
+        self.inner.subscribers.send_modify(|count| {
+            if *count == 0 {
+                self.inner.revisions.send_replace(None);
+            }
+            *count = count.saturating_add(1);
+        });
+        let revisions = self.inner.revisions.subscribe();
+        RevisionSubscription {
+            revisions,
+            _guard: RevisionSubscriberGuard {
+                subscribers: self.inner.subscribers.clone(),
+            },
+        }
+    }
+}
+
+async fn run_revision_monitor(
+    mut subscriber_receiver: watch::Receiver<usize>,
+    revision_sender: watch::Sender<Option<i64>>,
+    read_revision: RevisionReader,
+    create_watcher: WatcherFactory,
+) {
+    loop {
+        while *subscriber_receiver.borrow() == 0 {
+            if subscriber_receiver.changed().await.is_err() {
+                return;
+            }
+        }
+
+        let (signal_sender, mut signals) = mpsc::unbounded_channel();
+        let create_watcher = Arc::clone(&create_watcher);
+        let watcher = tokio::task::spawn_blocking(move || create_watcher(signal_sender))
+            .await
+            .ok()
+            .flatten();
+        if *subscriber_receiver.borrow() == 0 {
+            continue;
+        }
+        let mut interval = time::interval(REVISION_POLL_INTERVAL);
+        interval.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
+        interval.tick().await;
+        if *subscriber_receiver.borrow() > 0 {
+            publish_revision(&revision_sender, &read_revision).await;
+        }
+
+        let mut watcher_channel_open = true;
+        loop {
+            if *subscriber_receiver.borrow() == 0 {
+                break;
+            }
+            let _keep_watcher_alive = watcher.as_ref();
+            tokio::select! {
+                changed = subscriber_receiver.changed() => {
+                    if changed.is_err() {
+                        return;
+                    }
+                    if *subscriber_receiver.borrow() == 0 {
+                        break;
+                    }
                 }
-            })?;
-        watcher.watch(&sessions_dir, RecursiveMode::NonRecursive)?;
-        Ok::<_, anyhow::Error>(watcher)
+                _ = interval.tick() => {
+                    if *subscriber_receiver.borrow() > 0 {
+                        publish_revision(&revision_sender, &read_revision).await;
+                    }
+                }
+                signal = signals.recv(), if watcher_channel_open => {
+                    if signal.is_none() {
+                        watcher_channel_open = false;
+                    } else {
+                        time::sleep(WATCHER_DEBOUNCE).await;
+                        while signals.try_recv().is_ok() {}
+                        if *subscriber_receiver.borrow() > 0 {
+                            publish_revision(&revision_sender, &read_revision).await;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+async fn publish_revision(
+    revision_sender: &watch::Sender<Option<i64>>,
+    read_revision: &RevisionReader,
+) {
+    let read_revision = Arc::clone(read_revision);
+    let Ok(Some(revision)) = tokio::task::spawn_blocking(move || read_revision()).await else {
+        return;
+    };
+    if *revision_sender.borrow() != Some(revision) {
+        revision_sender.send_replace(Some(revision));
+    }
+}
+
+fn current_revision() -> Option<i64> {
+    store::session_store_revision().ok()
+}
+
+fn create_watcher(signal_tx: UnboundedSender<()>) -> Option<Box<dyn std::any::Any + Send>> {
+    let sessions_dir = store::sessions_dir().ok()?;
+    let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+        if event.is_ok_and(|event| is_session_store_change(&event)) {
+            let _ = signal_tx.send(());
+        }
     })
-    .await
-    .ok()
-    .and_then(Result::ok)
+    .ok()?;
+    watcher
+        .watch(&sessions_dir, RecursiveMode::NonRecursive)
+        .ok()?;
+    Some(Box::new(watcher))
 }
 
-async fn current_revision() -> Option<i64> {
-    tokio::task::spawn_blocking(store::session_store_revision)
-        .await
-        .ok()
-        .and_then(Result::ok)
-}
-
-struct RevisionStreamState<F> {
+struct RevisionStreamState {
     last_revision: Option<i64>,
     initial_event_pending: bool,
     enrichment_update_pending: bool,
-    signals: UnboundedReceiver<()>,
-    watcher: Option<RecommendedWatcher>,
-    watch_channel_open: bool,
+    revisions: watch::Receiver<Option<i64>>,
+    _subscriber_guard: RevisionSubscriberGuard,
+    revision_channel_open: bool,
     enrichment_updates: watch::Receiver<()>,
     enrichment_channel_open: bool,
     restart_signal: watch::Receiver<bool>,
     restart_channel_open: bool,
     restart_event_pending: bool,
     restart_event_sent: bool,
-    interval: Interval,
-    read_revision: F,
 }
 
-fn revision_stream<F, Fut>(
-    signals: UnboundedReceiver<()>,
+fn revision_stream(
+    revisions: RevisionSubscription,
     enrichment_updates: watch::Receiver<()>,
-    watcher: Option<RecommendedWatcher>,
     restart_signal: watch::Receiver<bool>,
-    read_revision: F,
-) -> impl Stream<Item = Result<Event, Infallible>>
-where
-    F: Fn() -> Fut + Send + 'static,
-    Fut: Future<Output = Option<i64>> + Send + 'static,
-{
-    let mut interval = time::interval(REVISION_POLL_INTERVAL);
-    interval.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
+) -> impl Stream<Item = Result<Event, Infallible>> {
     stream::unfold(
         RevisionStreamState {
             last_revision: None,
             initial_event_pending: true,
             enrichment_update_pending: false,
-            signals,
-            watcher,
-            watch_channel_open: true,
+            revisions: revisions.revisions,
+            _subscriber_guard: revisions._guard,
+            revision_channel_open: true,
             enrichment_updates,
             enrichment_channel_open: true,
             restart_signal,
             restart_channel_open: true,
             restart_event_pending: false,
             restart_event_sent: false,
-            interval,
-            read_revision,
         },
         |mut state| async move {
             if *state.restart_signal.borrow() {
@@ -171,28 +293,40 @@ where
                 ));
             }
 
+            if state.initial_event_pending {
+                let initial_revision = *state.revisions.borrow_and_update();
+                if let Some(revision) = initial_revision {
+                    state.initial_event_pending = false;
+                    state.last_revision = Some(revision);
+                    return Some((
+                        Ok(Event::default()
+                            .event("sessions")
+                            .data(revision.to_string())),
+                        state,
+                    ));
+                }
+            }
+
             loop {
-                let _keep_watcher_alive = state.watcher.as_ref();
-                let (enrichment_update, restart_received) = tokio::select! {
-                    _ = state.interval.tick() => (false, false),
-                    signal = state.signals.recv(), if state.watch_channel_open => {
-                        if signal.is_none() {
-                            state.watch_channel_open = false;
+                let (revision_update, enrichment_update, restart_received) = tokio::select! {
+                    update = state.revisions.changed(), if state.revision_channel_open => {
+                        if update.is_err() {
+                            state.revision_channel_open = false;
                         }
-                        (false, false)
+                        (update.is_ok(), false, false)
                     }
                     update = state.enrichment_updates.changed(), if state.enrichment_channel_open => {
                         if update.is_err() {
                             state.enrichment_channel_open = false;
                         }
-                        (update.is_ok(), false)
+                        (false, update.is_ok(), false)
                     }
                     update = state.restart_signal.changed(), if state.restart_channel_open => {
                         if update.is_err() {
                             state.restart_channel_open = false;
-                            (false, false)
+                            (false, false, false)
                         } else {
-                            (false, *state.restart_signal.borrow())
+                            (false, false, *state.restart_signal.borrow())
                         }
                     }
                 };
@@ -202,7 +336,12 @@ where
                 }
                 state.enrichment_update_pending |= enrichment_update;
 
-                let Some(revision) = (state.read_revision)().await else {
+                let revision = if revision_update {
+                    *state.revisions.borrow_and_update()
+                } else {
+                    *state.revisions.borrow()
+                };
+                let Some(revision) = revision else {
                     continue;
                 };
                 let should_emit = state.initial_event_pending
@@ -232,22 +371,19 @@ mod tests {
     use axum::response::IntoResponse;
     use futures_util::StreamExt;
     use indoc::indoc;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicI64, Ordering};
+    use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 
     #[tokio::test]
     async fn sends_the_server_instance_before_session_revisions() {
-        let (_signal_tx, signal_rx) = mpsc::unbounded_channel();
+        let revisions = RevisionMonitor::new(|| Some(12), |_| Some(Box::new(())));
         let (_enrichment_tx, enrichment_rx) = watch::channel(());
         let (_restart_tx, restart_rx) = watch::channel(false);
         let body = Sse::new(event_stream(
             "fixture-server-instance".to_string(),
             "9.8.7",
-            signal_rx,
+            revisions.subscribe(),
             enrichment_rx,
-            None,
             restart_rx,
-            || async { Some(12) },
         ))
         .into_response()
         .into_body();
@@ -282,98 +418,122 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sends_current_revision_on_connect_and_after_store_or_enrichment_changes() {
+    async fn shares_revision_reads_and_events_across_active_connections() {
         let revision = Arc::new(AtomicI64::new(7));
-        let (signal_tx, signal_rx) = mpsc::unbounded_channel();
-        let (enrichment_tx, enrichment_rx) = watch::channel(());
-        let (_restart_tx, restart_rx) = watch::channel(false);
-        let read_revision = {
-            let revision = Arc::clone(&revision);
-            move || {
+        let read_count = Arc::new(AtomicUsize::new(0));
+        let watcher_sender = Arc::new(std::sync::Mutex::new(None));
+        let monitor = RevisionMonitor::new(
+            {
                 let revision = Arc::clone(&revision);
-                async move { Some(revision.load(Ordering::SeqCst)) }
-            }
-        };
-        let body = Sse::new(revision_stream(
-            signal_rx,
-            enrichment_rx,
-            None,
-            restart_rx,
-            read_revision,
+                let read_count = Arc::clone(&read_count);
+                move || {
+                    read_count.fetch_add(1, Ordering::SeqCst);
+                    Some(revision.load(Ordering::SeqCst))
+                }
+            },
+            {
+                let watcher_sender = Arc::clone(&watcher_sender);
+                move |signal_sender| {
+                    *watcher_sender.lock().unwrap() = Some(signal_sender);
+                    Some(Box::new(()))
+                }
+            },
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        let reads_without_subscribers = read_count.load(Ordering::SeqCst);
+        let (first_enrichment_sender, first_enrichment_updates) = watch::channel(());
+        let (_second_enrichment_sender, second_enrichment_updates) = watch::channel(());
+        let mut first = Sse::new(test_revision_stream(
+            monitor.subscribe(),
+            first_enrichment_updates,
         ))
         .into_response()
-        .into_body();
-        let mut chunks = body.into_data_stream();
-        let first = next_chunk(&mut chunks).await;
+        .into_body()
+        .into_data_stream();
+        let mut second = Sse::new(test_revision_stream(
+            monitor.subscribe(),
+            second_enrichment_updates,
+        ))
+        .into_response()
+        .into_body()
+        .into_data_stream();
+        let first_initial = next_chunk(&mut first).await;
+        let second_initial = next_chunk(&mut second).await;
+        let initial_read_count = read_count.load(Ordering::SeqCst);
 
         revision.store(8, Ordering::SeqCst);
-        signal_tx.send(()).unwrap();
-        let second = next_chunk(&mut chunks).await;
+        let signal_sender = watcher_sender.lock().unwrap().clone().unwrap();
+        for _ in 0..10 {
+            signal_sender.send(()).unwrap();
+        }
+        let first_update = next_chunk(&mut first).await;
+        let second_update = next_chunk(&mut second).await;
+        let update_read_count = read_count.load(Ordering::SeqCst);
+        first_enrichment_sender.send_replace(());
+        let enrichment_update = next_chunk(&mut first).await;
+        let enrichment_read_count = read_count.load(Ordering::SeqCst);
 
-        enrichment_tx.send_replace(());
-        let enrichment_update = next_chunk(&mut chunks).await;
-
-        let (_reconnect_signal_tx, reconnect_signal_rx) = mpsc::unbounded_channel();
-        let (_reconnect_enrichment_tx, reconnect_enrichment_rx) = watch::channel(());
-        let (_reconnect_restart_tx, reconnect_restart_rx) = watch::channel(false);
-        let read_current_revision = {
-            let revision = Arc::clone(&revision);
-            move || {
-                let revision = Arc::clone(&revision);
-                async move { Some(revision.load(Ordering::SeqCst)) }
+        drop(first);
+        drop(second);
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while signal_sender.send(()).is_ok() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
             }
-        };
-        let reconnect_body = Sse::new(revision_stream(
-            reconnect_signal_rx,
-            reconnect_enrichment_rx,
-            None,
-            reconnect_restart_rx,
-            read_current_revision,
+        })
+        .await
+        .unwrap();
+        tokio::time::sleep(REVISION_POLL_INTERVAL + Duration::from_millis(50)).await;
+        let idle_read_count = read_count.load(Ordering::SeqCst);
+
+        revision.store(9, Ordering::SeqCst);
+        let mut reconnected = Sse::new(test_revision_stream(
+            monitor.subscribe(),
+            watch::channel(()).1,
         ))
         .into_response()
-        .into_body();
-        let mut reconnect_chunks = reconnect_body.into_data_stream();
-        let reconnected = next_chunk(&mut reconnect_chunks).await;
+        .into_body()
+        .into_data_stream();
+        let reconnect_event = next_chunk(&mut reconnected).await;
+        let reconnect_read_count = read_count.load(Ordering::SeqCst);
 
         assert_eq!(
-            (first, second, enrichment_update, reconnected),
             (
-                indoc! {"
-                    event: sessions
-                    data: 7
-
-                "}
-                .to_string(),
-                indoc! {"
-                    event: sessions
-                    data: 8
-
-                "}
-                .to_string(),
-                indoc! {"
-                    event: sessions
-                    data: 8
-
-                "}
-                .to_string(),
-                indoc! {"
-                    event: sessions
-                    data: 8
-
-                "}
-                .to_string(),
+                reads_without_subscribers,
+                first_initial,
+                second_initial,
+                initial_read_count,
+                first_update,
+                second_update,
+                update_read_count,
+                enrichment_update,
+                enrichment_read_count,
+                idle_read_count,
+                reconnect_event,
+                reconnect_read_count,
+            ),
+            (
+                0,
+                sessions_event(7),
+                sessions_event(7),
+                1,
+                sessions_event(8),
+                sessions_event(8),
+                2,
+                sessions_event(8),
+                2,
+                2,
+                sessions_event(9),
+                3,
             ),
         );
     }
 
     #[tokio::test]
     async fn emits_restart_and_closes_the_event_stream() {
-        let (_signal_tx, signal_rx) = mpsc::unbounded_channel();
+        let revisions = RevisionMonitor::new(|| Some(12), |_| Some(Box::new(())));
         let (_enrichment_tx, enrichment_rx) = watch::channel(());
         let (restart_tx, restart_rx) = watch::channel(false);
-        let stream = revision_stream(signal_rx, enrichment_rx, None, restart_rx, || async {
-            Some(12)
-        });
+        let stream = revision_stream(revisions.subscribe(), enrichment_rx, restart_rx);
         let body = Sse::new(stream).into_response().into_body();
         let mut chunks = body.into_data_stream();
         let initial = next_chunk(&mut chunks).await;
@@ -403,6 +563,23 @@ mod tests {
                 true,
             ),
         );
+    }
+
+    fn test_revision_stream(
+        revisions: RevisionSubscription,
+        enrichment_updates: watch::Receiver<()>,
+    ) -> impl Stream<Item = Result<Event, Infallible>> {
+        let (_restart_sender, restart_signal) = watch::channel(false);
+        revision_stream(revisions, enrichment_updates, restart_signal)
+    }
+
+    fn sessions_event(revision: i64) -> String {
+        let mut event = indoc::formatdoc! {"
+            event: sessions
+            data: {revision}
+        "};
+        event.push('\n');
+        event
     }
 
     async fn next_chunk(

@@ -3,7 +3,10 @@ import '#components/conversation-pane-view.css'
 
 import { type ReactNode, useCallback, useMemo, useRef, useState } from 'react'
 
-import { useOptionalAsyncActionFeedback } from '#async-action-feedback'
+import {
+  isAsyncActionFailureStatus,
+  useOptionalAsyncActionFeedback,
+} from '#async-action-feedback'
 import { useAgentUsageContext } from '#components/agent-usage-context'
 import type {
   CommandOutputRefresh,
@@ -48,10 +51,12 @@ import type {
 
 type ConversationPaneViewProps = {
   session: Session
+  actionTimelineIndex?: number | undefined
   vibeMode?: VibeMode | undefined
   sessions?: readonly Session[]
   sessionLinkTargets?: readonly SessionLinkTarget[]
   messages: readonly ChatItem[]
+  messageImageSources?: Record<string, Record<string, string | null>>
   start?: number
   epoch?: string | undefined
   olderCursor?: string | undefined
@@ -84,6 +89,7 @@ type ConversationPaneViewProps = {
     messageId: string,
     mode: RewindMode,
     draft: string,
+    timelineIndex?: number,
   ) => Promise<boolean>
   onOpenInTerminal?: () => void
   onSelectSession: (id: string) => void
@@ -93,6 +99,7 @@ type ConversationPaneViewProps = {
   isMobile?: boolean
   statusPanelOpen?: boolean
   mobileStatusPanel?: ReactNode
+  pullRequestListTarget?: HTMLElement | null
   mobileWebUi?: ReactNode
   mobileUpdateNotice?: ReactNode
   selectedDecisionSeq?: number | null
@@ -104,6 +111,8 @@ type ConversationPaneViewProps = {
   onSelectDecision?: (seq: number) => void
   fileDropActive?: boolean
   onBack?: () => void
+  onOpenNavigation?: () => void
+  mobileNavOpen?: boolean
   onLater?: () => void
   onClose?: () => void
   isToday?: boolean
@@ -114,10 +123,12 @@ type ConversationPaneViewProps = {
 
 export function ConversationPaneView({
   session,
+  actionTimelineIndex,
   vibeMode = session.vibeMode,
   sessions = [],
   sessionLinkTargets: providedSessionLinkTargets,
   messages,
+  messageImageSources,
   start = 0,
   epoch,
   olderCursor,
@@ -151,6 +162,7 @@ export function ConversationPaneView({
   isMobile = false,
   statusPanelOpen = false,
   mobileStatusPanel = null,
+  pullRequestListTarget = null,
   mobileWebUi = null,
   mobileUpdateNotice,
   selectedDecisionSeq = null,
@@ -162,6 +174,8 @@ export function ConversationPaneView({
   onSelectDecision = () => undefined,
   fileDropActive = false,
   onBack,
+  onOpenNavigation,
+  mobileNavOpen = false,
   onLater,
   onClose,
   isToday = false,
@@ -263,8 +277,14 @@ export function ConversationPaneView({
     }
   }, [onAction, onOpenInTerminal])
   const rewindMessage = useCallback(
-    (messageId: string, mode: RewindMode, draftText: string) =>
-      onRewind?.(messageId, mode, draftText) ?? Promise.resolve(false),
+    (
+      messageId: string,
+      mode: RewindMode,
+      draftText: string,
+      timelineIndex?: number,
+    ) =>
+      onRewind?.(messageId, mode, draftText, timelineIndex) ??
+      Promise.resolve(false),
     [onRewind],
   )
   const {
@@ -275,6 +295,7 @@ export function ConversationPaneView({
     hasUnansweredProposal,
   } = useConversationMessageElements({
     messages,
+    ...(messageImageSources === undefined ? {} : { messageImageSources }),
     start,
     ...(decisions === undefined ? {} : { decisions }),
     ...(responseHasUnansweredProposal === undefined
@@ -310,11 +331,9 @@ export function ConversationPaneView({
     session,
     messages,
     backgroundTasks,
+    ...(activeTool === undefined ? {} : { activeTool }),
     editorReviewDocument: editorReviewDocument ?? null,
   })
-  // A merge result falls back to the trailing action list until the initial page establishes its boundary.
-  const mergeTimelineIndex =
-    loading && messages.length === 0 ? undefined : start + messages.length
   const returnToRequestCard = () => {
     scrollToConversationStatusCard(
       conversationScrollRef.current,
@@ -341,6 +360,8 @@ export function ConversationPaneView({
     updateDraft,
     sendMessage,
   })
+  const displayedError =
+    attachmentError !== null && attachmentError !== '' ? attachmentError : error
 
   const conversationPane = (
     <section
@@ -353,15 +374,26 @@ export function ConversationPaneView({
       onDrop={onDrop}
     >
       {fileDropActive || isFileDragActive ? (
-        <FileDropIndicator className="conversation-drop-target" />
+        <FileDropIndicator
+          className="conversation-drop-target"
+          label="Drop images to attach"
+          variant="conversation"
+        />
       ) : null}
       <ConversationPaneHeader
         key={session.id}
         session={session}
-        {...(mergeTimelineIndex === undefined
+        {...(actionTimelineIndex === undefined
           ? {}
-          : { timelineIndex: mergeTimelineIndex })}
+          : { timelineIndex: actionTimelineIndex })}
         mergeBandTarget={mergeBandTarget}
+        pullRequestListTarget={pullRequestListTarget}
+        activityFailed={
+          actionFeedback?.actions.some((action) =>
+            isAsyncActionFailureStatus(action.status),
+          ) ?? false
+        }
+        mobileNavOpen={mobileNavOpen}
         vibeMode={vibeMode}
         actions={actions}
         isMobile={isMobile}
@@ -376,6 +408,7 @@ export function ConversationPaneView({
         onOpenTasks={onOpenTasks}
         {...(onToggleToday === undefined ? {} : { onToggleToday })}
         {...(onBack === undefined ? {} : { onBack })}
+        {...(onOpenNavigation === undefined ? {} : { onOpenNavigation })}
         {...(onLater === undefined ? {} : { onLater })}
         {...(onClose === undefined ? {} : { onClose })}
       />
@@ -475,10 +508,9 @@ export function ConversationPaneView({
           />
         </>
       )}
-      {(error ?? attachmentError) != null &&
-      (error ?? attachmentError) !== '' ? (
+      {displayedError != null && displayedError !== '' ? (
         <p className="conversation-error" role="alert">
-          {error ?? attachmentError}
+          {displayedError}
         </p>
       ) : null}
       <SessionUsageRow isMobile={isMobile} usage={sessionUsage} />

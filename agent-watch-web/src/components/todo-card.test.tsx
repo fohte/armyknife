@@ -185,8 +185,10 @@ function setTextareaValue(textarea: HTMLTextAreaElement, value: string) {
   })
 }
 
-function normalizeBaseUiIds(markup: string | undefined) {
-  return markup?.replace(/ id="base-ui-[^"]+"/g, ' id="[generated]"')
+function normalizeBaseUiMarkup(markup: string | undefined) {
+  return markup
+    ?.replace(/ id="base-ui-[^"]+"/g, ' id="[generated]"')
+    .replace(/\sdata-base-ui-[\w-]+=""/g, '')
 }
 
 async function pasteImage(textarea: HTMLTextAreaElement, file: File) {
@@ -353,8 +355,8 @@ it('renders task detail and completion comments as markdown', () => {
   })
 
   const snapshot = () => ({
-    detail: normalizeBaseUiIds(detail),
-    completionComment: normalizeBaseUiIds(
+    detail: normalizeBaseUiMarkup(detail),
+    completionComment: normalizeBaseUiMarkup(
       container.querySelector('.chat-todo-completed-comment')?.innerHTML,
     ),
     selectedSessions: onSelectSession.mock.calls.map(([id]) => id),

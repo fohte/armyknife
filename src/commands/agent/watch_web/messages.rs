@@ -14,6 +14,7 @@ use crate::commands::agent::types::Session;
 #[cfg(test)]
 use axum::Router;
 
+pub(super) mod answer_images;
 mod background_task_outputs;
 mod background_tasks;
 mod command_source;
@@ -1917,6 +1918,15 @@ mod tests {
         let unanswered = message_response(&router).await;
         {
             let mut proposal = proposal.lock().unwrap();
+            proposal.body = r#"{"title":"Updated proposal","summary":null,"options":[{"label":"Updated A","description":null,"pros":[],"cons":[],"recommended":false},{"label":"Updated B","description":null,"pros":[],"cons":[],"recommended":false}]}"#.to_string();
+        }
+        let edited = message_response(&router).await;
+        {
+            let mut proposal = proposal.lock().unwrap();
+            proposal.body = r#"{"title":"Sample proposal","summary":null,"options":[{"label":"Option A","description":null,"pros":[],"cons":[],"recommended":false},{"label":"Option B","description":null,"pros":[],"cons":[],"recommended":false}]}"#.to_string();
+        }
+        {
+            let mut proposal = proposal.lock().unwrap();
             proposal.answer = Some(r#"{"choice":0,"comment":"Keep option A."}"#.to_string());
             proposal.resolved_at = Some(created_at);
         }
@@ -1930,12 +1940,17 @@ mod tests {
         let withdrawn = message_response(&router).await;
 
         assert_eq!(
-            (unanswered, resolved, withdrawn),
+            (unanswered, edited, resolved, withdrawn),
             (
                 (
                     StatusCode::OK,
                     Some("application/json".to_string()),
                     json!({"messages":[{"type":"proposal","seq":1,"title":"Sample proposal","summary":null,"options":[{"label":"Option A","description":null,"pros":[],"cons":[],"recommended":false},{"label":"Option B","description":null,"pros":[],"cons":[],"recommended":false}],"answer":null,"resolved":false,"resolution":null,"comment":null}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":true,"activeQuestionIndex":null})
+                ),
+                (
+                    StatusCode::OK,
+                    Some("application/json".to_string()),
+                    json!({"messages":[{"type":"proposal","seq":1,"title":"Updated proposal","summary":null,"options":[{"label":"Updated A","description":null,"pros":[],"cons":[],"recommended":false},{"label":"Updated B","description":null,"pros":[],"cons":[],"recommended":false}],"answer":null,"resolved":false,"resolution":null,"comment":null}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":true,"activeQuestionIndex":null})
                 ),
                 (
                     StatusCode::OK,
@@ -2085,7 +2100,7 @@ mod tests {
             .unwrap()
             .with_timezone(&chrono::Utc);
         let session = stored_session();
-        let todos = vec![
+        let todos = Arc::new(Mutex::new(vec![
             AgentTodo {
                 session_id: "fixture-session".to_string(),
                 seq: 1,
@@ -2110,7 +2125,8 @@ mod tests {
                 resolution: Some(TodoResolution::Completed),
                 comment: Some("Done".to_string()),
             },
-        ];
+        ]));
+        let todo_loader = Arc::clone(&todos);
         let loaders = RouteLoaders::new(
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
@@ -2118,46 +2134,88 @@ mod tests {
             |_, _| Ok(()),
             |_| Ok(Vec::new()),
         )
-        .with_todo_loader(move |_| Ok(todos.clone()));
+        .with_todo_loader(move |_| Ok(todo_loader.lock().unwrap().clone()));
         let router = routes_with_proposals_and_peer_out_messages(
             move |id| Ok((id == "fixture-session").then(|| session.clone())),
             |_| Ok(None),
             loaders,
         );
 
+        let original = message_response(&router).await;
+        {
+            let mut todos = todos.lock().unwrap();
+            todos[0].title = "Review the page".to_string();
+            todos[0].detail = Some("Check the navigation".to_string());
+        }
+        let edited = message_response(&router).await;
+
         assert_eq!(
-            message_response(&router).await,
+            (original, edited),
             (
-                StatusCode::OK,
-                Some("application/json".to_string()),
-                json!({
-                    "messages": [
-                        {
-                            "type": "todo",
-                            "seq": 2,
-                            "title": "Update settings",
-                            "detail": null,
-                            "completed": true,
-                            "resolution": "completed",
-                            "comment": "Done",
-                        },
-                        {
-                            "type": "todo",
-                            "seq": 1,
-                            "title": "Check the page",
-                            "detail": "Use a phone",
-                            "completed": false,
-                            "resolution": null,
-                            "comment": null,
-                        },
-                    ],
-                    "backgroundTasks": [],
-                    "start": 0,
-                    "total": 2,
-                    "decisions": [],
-                    "hasUnansweredProposal": false,
-                    "activeQuestionIndex": null,
-                }),
+                (
+                    StatusCode::OK,
+                    Some("application/json".to_string()),
+                    json!({
+                        "messages": [
+                            {
+                                "type": "todo",
+                                "seq": 2,
+                                "title": "Update settings",
+                                "detail": null,
+                                "completed": true,
+                                "resolution": "completed",
+                                "comment": "Done",
+                            },
+                            {
+                                "type": "todo",
+                                "seq": 1,
+                                "title": "Check the page",
+                                "detail": "Use a phone",
+                                "completed": false,
+                                "resolution": null,
+                                "comment": null,
+                            },
+                        ],
+                        "backgroundTasks": [],
+                        "start": 0,
+                        "total": 2,
+                        "decisions": [],
+                        "hasUnansweredProposal": false,
+                        "activeQuestionIndex": null,
+                    }),
+                ),
+                (
+                    StatusCode::OK,
+                    Some("application/json".to_string()),
+                    json!({
+                        "messages": [
+                            {
+                                "type": "todo",
+                                "seq": 2,
+                                "title": "Update settings",
+                                "detail": null,
+                                "completed": true,
+                                "resolution": "completed",
+                                "comment": "Done",
+                            },
+                            {
+                                "type": "todo",
+                                "seq": 1,
+                                "title": "Review the page",
+                                "detail": "Check the navigation",
+                                "completed": false,
+                                "resolution": null,
+                                "comment": null,
+                            },
+                        ],
+                        "backgroundTasks": [],
+                        "start": 0,
+                        "total": 2,
+                        "decisions": [],
+                        "hasUnansweredProposal": false,
+                        "activeQuestionIndex": null,
+                    }),
+                ),
             ),
         );
     }
@@ -2881,6 +2939,7 @@ mod tests {
             id,
             message_id: Some(format!("fixture-message-{id}")),
             content: content.to_string(),
+            action_event_kind: None,
             attachments: vec![],
             resolved: false,
             sent_at: chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
@@ -3840,6 +3899,86 @@ mod tests {
                 StatusCode::OK,
                 Some("application/json".to_string()),
                 r#"{"messages":[{"type":"queued_user","content":[{"type":"text","text":"Continue the fixture build."}],"timestamp":"2026-06-01T12:00:00+00:00"}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null}"#.to_string(),
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn message_route_confirms_only_requested_resolved_prompt_ids() {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_path = directory.path().join("transcript.jsonl");
+        std::fs::write(
+            &transcript_path,
+            br#"{"type":"queue-operation","operation":"popAll","timestamp":"2026-01-01T00:00:01Z"}"#,
+        )
+        .unwrap();
+
+        let mut session = stored_session();
+        session.transcript_path = Some(transcript_path);
+        let mut already_resolved = saved_prompt(8, "An unrelated resolved prompt.");
+        already_resolved.resolved = true;
+        let mut still_pending = saved_prompt(9, "A later queued prompt.");
+        still_pending.sent_at = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:02Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let queued_prompts = Arc::new(Mutex::new(vec![
+            saved_prompt(7, "A cancelled prompt."),
+            already_resolved,
+            still_pending,
+        ]));
+        let queue_loader = Arc::clone(&queued_prompts);
+        let queue_updater = Arc::clone(&queued_prompts);
+        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
+            move |id| Ok((id == "fixture-session").then(|| session.clone())),
+            |_| Ok(None),
+            |_| Ok(Vec::new()),
+            move |_| Ok(queue_loader.lock().unwrap().clone()),
+            |_| Ok(Vec::new()),
+            move |_, ids| {
+                for prompt in queue_updater.lock().unwrap().iter_mut() {
+                    if ids.contains(&prompt.id) {
+                        prompt.resolved = true;
+                    }
+                }
+                Ok(())
+            },
+        );
+        let query = "?pendingPromptIds=fixture-message-7%2Cfixture-message-9";
+
+        let first = message_response_with_query(&router, query).await;
+        let second = message_response_with_query(&router, query).await;
+        let third = message_response_with_query(&router, query).await;
+        let persisted_resolution = queued_prompts
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|prompt| (prompt.id, prompt.resolved))
+            .collect::<Vec<_>>();
+        let expected_response = (
+            StatusCode::OK,
+            Some("application/json".to_string()),
+            json!({
+                "messages": [{
+                    "type": "queued_user",
+                    "content": [{"type": "text", "text": "A later queued prompt."}],
+                    "queuedPromptId": "fixture-message-9",
+                    "timestamp": "2026-01-01T00:00:02+00:00",
+                }],
+                "confirmedQueuedPromptIds": ["fixture-message-7"],
+                "backgroundTasks": [],
+                "start": 0,
+                "total": 1,
+                "decisions": [],
+                "hasUnansweredProposal": false,
+                "activeQuestionIndex": null,
+            }),
+        );
+
+        assert_eq!(
+            (vec![first, second, third], persisted_resolution),
+            (
+                vec![expected_response.clone(); 3],
+                vec![(7, true), (8, true), (9, false)],
             ),
         );
     }

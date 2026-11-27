@@ -25,6 +25,8 @@ fn make_thread(review_id: Option<i64>, is_resolved: bool) -> ReviewThread {
     ReviewThread {
         id: None,
         is_resolved,
+        diff_side: None,
+        start_diff_side: None,
         comments: CommentsNode {
             nodes: vec![make_comment(1, review_id, false)],
         },
@@ -113,6 +115,8 @@ fn test_root_comment_and_replies() {
     let thread = ReviewThread {
         id: None,
         is_resolved: false,
+        diff_side: None,
+        start_diff_side: None,
         comments: CommentsNode {
             nodes: vec![
                 make_comment(1, Some(100), false), // root
@@ -137,6 +141,23 @@ fn test_reply_to_deserialize_ignores_extra_fields() {
     let json = r#"{"databaseId": 123}"#;
     let _reply_to: ReplyTo = serde_json::from_str(json).unwrap();
     assert_eq!(std::mem::size_of::<ReplyTo>(), 0);
+}
+
+#[test]
+fn test_thread_diff_sides_deserialize_from_graphql() {
+    let json = r#"{
+        "id": "THREAD_example",
+        "isResolved": false,
+        "diffSide": "RIGHT",
+        "startDiffSide": "RIGHT",
+        "comments": { "nodes": [] }
+    }"#;
+    let thread: ReviewThread = serde_json::from_str(json).unwrap();
+
+    assert_eq!(
+        (thread.diff_side, thread.start_diff_side),
+        (Some(DiffSide::Right), Some(DiffSide::Right)),
+    );
 }
 
 #[test]

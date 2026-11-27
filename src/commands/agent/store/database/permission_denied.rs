@@ -6,7 +6,7 @@ use rusqlite::{OptionalExtension, TransactionBehavior, params};
 use serde::Serialize;
 use serde_json::Value;
 
-use super::{increment_revision, open_connection, validate_session_id};
+use super::{bump_session_revision, open_connection, validate_session_id};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PermissionDeniedOperation {
@@ -49,13 +49,35 @@ impl PermissionDeniedResolution {
 
 impl PermissionDeniedOperation {
     pub(crate) fn has_classifier_verdict(&self) -> bool {
-        self.reason.as_deref().is_some_and(|reason| {
-            !reason.trim().is_empty()
-                && reason != "Classifier unavailable"
-                && reason != "No reason provided"
-                && !reason.starts_with("Auto mode could not evaluate this action")
-        })
+        has_classifier_verdict(self.reason.as_deref())
     }
+}
+
+fn has_classifier_verdict(reason: Option<&str>) -> bool {
+    reason.is_some_and(|reason| {
+        !reason.trim().is_empty()
+            && reason != "Classifier unavailable"
+            && reason != "No reason provided"
+            && !reason.starts_with("Auto mode could not evaluate this action")
+    })
+}
+
+fn same_tool_input(tool_name: &str, denied_input: &Value, retry_input: &Value) -> bool {
+    if tool_name != "Bash" {
+        return denied_input == retry_input;
+    }
+
+    // A Bash retry may reword its UI description without changing the command.
+    let (Some(denied_input), Some(retry_input)) =
+        (denied_input.as_object(), retry_input.as_object())
+    else {
+        return denied_input == retry_input;
+    };
+    let mut denied_input = denied_input.clone();
+    let mut retry_input = retry_input.clone();
+    denied_input.remove("description");
+    retry_input.remove("description");
+    denied_input == retry_input
 }
 
 pub(crate) fn add_permission_denied(
@@ -103,7 +125,7 @@ pub(crate) fn add_permission_denied(
             Utc::now().to_rfc3339()
         ],
     )?;
-    increment_revision(&transaction)?;
+    bump_session_revision(&transaction, session_id)?;
     transaction.commit()?;
     Ok(seq)
 }
@@ -190,8 +212,60 @@ pub(crate) fn resolve_permission_denied(
         ],
     )?;
     if changed > 0 {
-        increment_revision(&transaction)?;
+        bump_session_revision(&transaction, session_id)?;
     }
     transaction.commit()?;
     Ok(changed > 0)
+}
+
+pub(crate) fn resolve_matching_unclassified_permission_denials(
+    sessions_dir: &Path,
+    session_id: &str,
+    tool_name: &str,
+    tool_input: &Value,
+    resolution: PermissionDeniedResolution,
+) -> Result<usize> {
+    validate_session_id(session_id)?;
+    let mut connection = open_connection(sessions_dir)?;
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let matching_seqs = {
+        let mut statement = transaction.prepare(
+            "SELECT seq, tool_input, reason FROM agent_permission_denied
+             WHERE session_id = ?1 AND tool_name = ?2 AND resolved_at IS NULL",
+        )?;
+        let rows = statement.query_map(params![session_id, tool_name], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
+        })?;
+        let mut matching_seqs = Vec::new();
+        for row in rows {
+            let (seq, stored_input, reason) = row?;
+            let stored_input: Value =
+                serde_json::from_str(&stored_input).context("parsing denied tool input")?;
+            if same_tool_input(tool_name, &stored_input, tool_input)
+                && !has_classifier_verdict(reason.as_deref())
+            {
+                matching_seqs.push(seq);
+            }
+        }
+        matching_seqs
+    };
+
+    let resolved_at = Utc::now().to_rfc3339();
+    let mut changed = 0;
+    for seq in &matching_seqs {
+        changed += transaction.execute(
+            "UPDATE agent_permission_denied SET resolved_at = ?1, resolution = ?2
+                     WHERE session_id = ?3 AND seq = ?4 AND resolved_at IS NULL",
+            params![resolved_at, resolution.as_str(), session_id, seq],
+        )?;
+    }
+    if changed > 0 {
+        bump_session_revision(&transaction, session_id)?;
+    }
+    transaction.commit()?;
+    Ok(changed)
 }

@@ -14,7 +14,10 @@ use crate::commands::agent::{ensure_no_review_access, is_vibe_enabled};
 use crate::infra::git;
 use crate::infra::github::GitHubClient;
 use crate::shared::config::load_config;
-use crate::shared::human_in_the_loop::Document;
+use crate::shared::human_in_the_loop::{
+    Document, ReviewDocumentAction, ReviewFinishReason, request_review_finish,
+    successful_action_result,
+};
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct ReplyPullArgs {
@@ -68,13 +71,17 @@ enum PushPlan {
 }
 
 fn push_plan(changeset: &ReplyChangeSet, dry_run: bool) -> PushPlan {
-    if !changeset.has_changes() {
-        PushPlan::NoChanges
-    } else if dry_run {
+    if dry_run {
         PushPlan::DryRun
+    } else if !changeset.has_changes() {
+        PushPlan::NoChanges
     } else {
         PushPlan::Apply
     }
+}
+
+fn request_reply_review_finish_after_push(path: &std::path::Path) -> anyhow::Result<bool> {
+    request_review_finish(path, ReviewFinishReason::RepliesPushed).map_err(Into::into)
 }
 
 fn verify_push_approval(path: &std::path::Path, content: &str) -> anyhow::Result<()> {
@@ -100,6 +107,28 @@ fn verify_push_approval_if_required(
 fn verify_push_content_matches_file(path: &std::path::Path, content: &str) -> anyhow::Result<()> {
     if std::fs::read(path)? != content.as_bytes() {
         anyhow::bail!("threads.md changed while preparing the push; no changes were applied");
+    }
+
+    Ok(())
+}
+
+async fn run_push_after_access<Fut>(
+    plan: PushPlan,
+    threads_path: &std::path::Path,
+    apply_and_refresh: impl FnOnce() -> Fut,
+    finish_review: impl FnOnce(&std::path::Path) -> anyhow::Result<bool>,
+) -> anyhow::Result<()>
+where
+    Fut: Future<Output = anyhow::Result<()>>,
+{
+    match plan {
+        PushPlan::NoChanges => {}
+        PushPlan::DryRun => return Ok(()),
+        PushPlan::Apply => apply_and_refresh().await?,
+    }
+
+    if let Err(error) = finish_review(threads_path) {
+        eprintln!("Warning: Failed to finish the open PR reply review: {error}");
     }
 
     Ok(())
@@ -276,6 +305,13 @@ fn prepare_existing_thread_actions(
 }
 
 pub async fn run_push(args: &ReplyPushArgs) -> anyhow::Result<()> {
+    run_push_with_retry(args, None).await
+}
+
+pub(super) async fn run_push_with_retry(
+    args: &ReplyPushArgs,
+    retry_started_at: Option<chrono::DateTime<chrono::Utc>>,
+) -> anyhow::Result<()> {
     let (owner, repo) = git::get_repo_owner_and_name(args.repo.as_deref())?;
 
     run_push_with_access(
@@ -283,21 +319,38 @@ pub async fn run_push(args: &ReplyPushArgs) -> anyhow::Result<()> {
         &owner,
         &repo,
         |owner, repo| ensure_no_review_access(is_vibe_enabled, load_config, owner, repo),
-        || run_push_after_access(args, &owner, &repo),
+        || run_push_after_access_with_remote_state(args, &owner, &repo, retry_started_at),
     )
     .await
 }
 
-async fn run_push_after_access(
+async fn run_push_after_access_with_remote_state(
     args: &ReplyPushArgs,
     owner: &str,
     repo: &str,
+    retry_started_at: Option<chrono::DateTime<chrono::Utc>>,
 ) -> anyhow::Result<()> {
     let storage = ThreadStorage::new(owner, repo, args.pr_number);
+    run_push_after_access_with_storage(args, owner, repo, retry_started_at, storage).await
+}
 
+async fn run_push_after_access_with_storage(
+    args: &ReplyPushArgs,
+    owner: &str,
+    repo: &str,
+    retry_started_at: Option<chrono::DateTime<chrono::Utc>>,
+    storage: ThreadStorage,
+) -> anyhow::Result<()> {
     // Read and parse local data
     if !storage.exists() {
         return Err(PrReviewError::NoPulledData.into());
+    }
+
+    if let Some(result) =
+        successful_action_result(&storage.threads_path(), ReviewDocumentAction::PostReplies)?
+    {
+        result.print_for_agent();
+        return Ok(());
     }
 
     let content = storage.read_threads()?;
@@ -306,8 +359,24 @@ async fn run_push_after_access(
     // Fetch latest remote state
     let remote = fetch_pr_data(owner, repo, args.pr_number, true).await?;
 
+    let current_user = if local
+        .threads
+        .iter()
+        .any(|thread| thread.draft_reply.is_some())
+    {
+        Some(GitHubClient::get()?.get_current_user().await?)
+    } else {
+        None
+    };
+
     // Detect changes
-    let changeset = ReplyChangeSet::detect(&local, &remote, &local.frontmatter.pulled_at);
+    let changeset = ReplyChangeSet::detect_with_retry(
+        &local,
+        &remote,
+        &local.frontmatter.pulled_at,
+        current_user.as_deref().unwrap_or_default(),
+        retry_started_at,
+    );
 
     // Check for conflicts
     if changeset.has_conflicts() && !args.force {
@@ -318,40 +387,47 @@ async fn run_push_after_access(
         .into());
     }
 
-    match push_plan(&changeset, args.dry_run) {
-        PushPlan::NoChanges => {
-            println!("No changes to push.");
-            return Ok(());
-        }
-        PushPlan::DryRun => {
-            changeset.display();
-            println!("\n(dry-run mode: no changes applied)");
-            return Ok(());
-        }
-        PushPlan::Apply => {
-            changeset.display();
-            let client = GitHubClient::get()?;
-            verify_push_approval_if_required(&storage.threads_path(), &content, args.no_review)?;
-            changeset.apply(client, owner, repo, args.pr_number).await?;
-        }
+    let plan = push_plan(&changeset, args.dry_run);
+    if plan == PushPlan::NoChanges {
+        println!("No changes to push.");
+    } else if plan == PushPlan::DryRun {
+        changeset.display();
+        println!("\n(dry-run mode: no changes applied)");
     }
 
-    // Re-fetch and update local file after push
-    let include_resolved = local.threads.iter().any(|t| t.resolve);
-    let updated_remote = fetch_pr_data(owner, repo, args.pr_number, include_resolved).await?;
+    let threads_path = storage.threads_path();
+    run_push_after_access(
+        plan,
+        &threads_path,
+        || async {
+            changeset.display();
+            let client = GitHubClient::get()?;
+            verify_push_approval_if_required(&threads_path, &content, args.no_review)?;
+            changeset.apply(client, owner, repo, args.pr_number).await?;
 
-    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let frontmatter = ThreadsFrontmatter {
-        pr: args.pr_number,
-        repo: format!("{owner}/{repo}"),
-        pulled_at: now,
-        submit: false,
-    };
+            let include_resolved = local.threads.iter().any(|thread| thread.resolve);
+            let updated_remote =
+                fetch_pr_data(owner, repo, args.pr_number, include_resolved).await?;
 
-    let updated_content = MarkdownSerializer::serialize(&updated_remote, &frontmatter);
-    storage.write_threads(&updated_content)?;
+            let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+            let frontmatter = ThreadsFrontmatter {
+                pr: args.pr_number,
+                repo: format!("{owner}/{repo}"),
+                pulled_at: now,
+                submit: false,
+            };
 
-    println!("\nPush complete.");
+            let updated_content = MarkdownSerializer::serialize(&updated_remote, &frontmatter);
+            storage.write_threads(&updated_content)?;
+            Ok(())
+        },
+        request_reply_review_finish_after_push,
+    )
+    .await?;
+
+    if plan == PushPlan::Apply {
+        println!("\nPush complete.");
+    }
 
     Ok(())
 }
@@ -363,6 +439,92 @@ mod pull_tests {
     use super::*;
     use indoc::indoc;
     use rstest::rstest;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn successful_no_change_push_finishes_active_reply_review() {
+        use std::ffi::CString;
+        use std::fs;
+        use std::io::{Read, Write};
+        use std::os::unix::ffi::OsStrExt;
+        use std::os::unix::fs::OpenOptionsExt;
+        use std::sync::mpsc;
+        use std::thread;
+        use std::time::{Duration, Instant};
+
+        use crate::shared::human_in_the_loop::{
+            LockGuard, finish_ack_fifo_path, finish_request_fifo_path,
+        };
+
+        let temp_dir = tempfile::tempdir().expect("temporary review directory");
+        let threads_path = temp_dir.path().join("threads.md");
+        fs::write(&threads_path, "fixture review").expect("write review document");
+        let _review_lock = LockGuard::acquire(&threads_path).expect("active review lock");
+        let finish_fifo_path = finish_request_fifo_path(&threads_path);
+        let ack_fifo_path = finish_ack_fifo_path(&threads_path);
+        for fifo_path in [&finish_fifo_path, &ack_fifo_path] {
+            let c_path = CString::new(fifo_path.as_os_str().as_bytes()).expect("valid FIFO path");
+            // SAFETY: `c_path` is a valid NUL-terminated path owned by this scope.
+            assert_eq!(unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) }, 0);
+        }
+
+        let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
+        let review_actor = thread::spawn(move || -> std::io::Result<u8> {
+            let mut finish_reader = fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(&finish_fifo_path)?;
+            ready_sender
+                .send(())
+                .map_err(|error| std::io::Error::other(error.to_string()))?;
+            let deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                let mut signal = [0_u8; 1];
+                match finish_reader.read(&mut signal) {
+                    Ok(1) => {
+                        fs::OpenOptions::new()
+                            .write(true)
+                            .open(&ack_fifo_path)?
+                            .write_all(b"0")?;
+                        return Ok(signal[0]);
+                    }
+                    Ok(0) => {}
+                    Ok(bytes_read) => {
+                        return Err(std::io::Error::other(format!(
+                            "unexpected FIFO read size: {bytes_read}"
+                        )));
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                    Err(error) => return Err(error),
+                }
+                if Instant::now() >= deadline {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "finish request was not received",
+                    ));
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+        });
+        ready_receiver
+            .recv_timeout(Duration::from_secs(2))
+            .expect("review actor ready");
+
+        let push_result = run_push_after_access(
+            PushPlan::NoChanges,
+            &threads_path,
+            || async { Ok(()) },
+            request_reply_review_finish_after_push,
+        )
+        .await
+        .map_err(|error| error.to_string());
+        let finish_reason = review_actor
+            .join()
+            .expect("review actor thread")
+            .map_err(|error| error.to_string());
+
+        assert_eq!((push_result, finish_reason), (Ok(()), Ok(b'p')));
+    }
 
     const THREAD_WITH_DRAFT_AND_RESOLVE: &str = indoc! {r#"
         ---
@@ -490,11 +652,15 @@ mod pull_tests {
                 ReviewThread {
                     id: Some("RT_resolved_example".to_string()),
                     is_resolved: true,
+                    diff_side: None,
+                    start_diff_side: None,
                     comments: CommentsNode { nodes: vec![] },
                 },
                 ReviewThread {
                     id: Some("RT_active_example".to_string()),
                     is_resolved: false,
+                    diff_side: None,
+                    start_diff_side: None,
                     comments: CommentsNode { nodes: vec![] },
                 },
             ],
@@ -535,14 +701,60 @@ mod tests {
     use crate::commands::gh::pr_review::changeset::ReplyAction;
     use crate::commands::gh::pr_review::{PrReviewCommands, ReplyCommands};
     use crate::shared::config::Config;
-    use crate::shared::human_in_the_loop::HumanInTheLoopError;
+    use crate::shared::human_in_the_loop::{
+        HumanInTheLoopError, ReviewDocumentAction, ReviewDocumentActionResult, document_hash,
+        save_action_result, successful_action_result,
+    };
     use clap::Parser;
     use indoc::indoc;
     use rstest::rstest;
     use tempfile::TempDir;
 
+    #[tokio::test]
+    async fn push_reports_a_watch_web_reply_without_pushing_twice() {
+        let directory = TempDir::new().expect("fixture directory should be created");
+        let storage = ThreadStorage::with_dir(directory.path().join("owner/repository/42"));
+        storage
+            .write_threads("Approved fixture replies.")
+            .expect("fixture threads should be written");
+        let document_path = storage.threads_path();
+        let result = ReviewDocumentActionResult::new(
+            ReviewDocumentAction::PostReplies,
+            true,
+            "Pull request replies posted.".to_owned(),
+            document_hash(&document_path).expect("document hash should be computed"),
+            None,
+        );
+        save_action_result(&document_path, &result).expect("action result should be saved");
+
+        let pushed = run_push_after_access_with_storage(
+            &ReplyPushArgs {
+                pr_number: 42,
+                repo: None,
+                dry_run: false,
+                force: false,
+                no_review: false,
+            },
+            "owner",
+            "repository",
+            None,
+            storage,
+        )
+        .await;
+
+        assert_eq!(
+            (
+                pushed.map_err(|error| error.to_string()),
+                successful_action_result(&document_path, ReviewDocumentAction::PostReplies)
+                    .expect("successful action result should remain available"),
+            ),
+            (Ok(()), Some(result)),
+        );
+    }
+
     #[rstest]
     #[case::no_changes(false, false, PushPlan::NoChanges)]
+    #[case::dry_run_no_changes(false, true, PushPlan::DryRun)]
     #[case::dry_run(true, true, PushPlan::DryRun)]
     #[case::apply(true, false, PushPlan::Apply)]
     fn test_push_plan(
@@ -564,6 +776,89 @@ mod tests {
         };
 
         assert_eq!(push_plan(&changeset, dry_run), expected_plan);
+    }
+
+    #[rstest]
+    #[case::no_changes_finishes_review(
+        PushPlan::NoChanges,
+        false,
+        false,
+        Ok(()),
+        vec!["finish"],
+        vec![std::path::PathBuf::from("reply-review.md")],
+    )]
+    #[case::dry_run_keeps_review_open(
+        PushPlan::DryRun,
+        false,
+        false,
+        Ok(()),
+        vec![],
+        vec![],
+    )]
+    #[case::applied_push_finishes_review(
+        PushPlan::Apply,
+        false,
+        false,
+        Ok(()),
+        vec!["apply", "finish"],
+        vec![std::path::PathBuf::from("reply-review.md")],
+    )]
+    #[case::failed_push_keeps_review_open(
+        PushPlan::Apply,
+        true,
+        false,
+        Err("push failed".to_string()),
+        vec!["apply"],
+        vec![],
+    )]
+    #[case::finish_failure_does_not_fail_push(
+        PushPlan::NoChanges,
+        false,
+        true,
+        Ok(()),
+        vec!["finish"],
+        vec![std::path::PathBuf::from("reply-review.md")],
+    )]
+    #[tokio::test]
+    async fn run_push_after_access_routes_finish_requests_after_successful_pushes(
+        #[case] plan: PushPlan,
+        #[case] apply_fails: bool,
+        #[case] finish_fails: bool,
+        #[case] expected_result: Result<(), String>,
+        #[case] expected_steps: Vec<&'static str>,
+        #[case] expected_finish_paths: Vec<std::path::PathBuf>,
+    ) {
+        let steps = std::cell::RefCell::new(Vec::new());
+        let finish_paths = std::cell::RefCell::new(Vec::new());
+        let threads_path = std::path::PathBuf::from("reply-review.md");
+        let result = run_push_after_access(
+            plan,
+            &threads_path,
+            || {
+                steps.borrow_mut().push("apply");
+                async move {
+                    if apply_fails {
+                        anyhow::bail!("push failed");
+                    }
+                    Ok(())
+                }
+            },
+            |path| {
+                steps.borrow_mut().push("finish");
+                finish_paths.borrow_mut().push(path.to_path_buf());
+                if finish_fails {
+                    anyhow::bail!("finish failed");
+                }
+                Ok(true)
+            },
+        )
+        .await
+        .map_err(|error| error.to_string());
+
+        assert_eq!(
+            (result, steps.into_inner(), finish_paths.into_inner()),
+            (expected_result, expected_steps, expected_finish_paths)
+        );
     }
 
     #[test]

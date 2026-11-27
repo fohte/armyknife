@@ -187,7 +187,10 @@ pub(crate) fn ensure_no_review_access(
     ensure_repo_vibe_access(&load_config()?, owner, repo)
 }
 
-fn is_vibe_enabled_for(sessions_dir: &std::path::Path, session_id: &str) -> Result<bool> {
+pub(super) fn is_vibe_enabled_for(
+    sessions_dir: &std::path::Path,
+    session_id: &str,
+) -> Result<bool> {
     let Some(session) = store::load_session_from(sessions_dir, session_id)? else {
         return Ok(false);
     };
@@ -719,6 +722,7 @@ mod tests {
                     ),
                 ),
                 ("ARMYKNIFE_SESSION_ID", None::<&str>),
+                ("CLAUDE_CODE_SESSION_ID", None::<&str>),
                 ("CODEX_SESSION_ID", None::<&str>),
                 ("ARMYKNIFE_ANCESTOR_SESSION_IDS", Some("root")),
             ],

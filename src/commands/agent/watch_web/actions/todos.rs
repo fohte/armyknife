@@ -1,9 +1,11 @@
 use axum::Json;
 use axum::extract::{Path as RoutePath, State};
+use chrono::Utc;
 use serde::Deserialize;
 
 use super::super::super::{store, types::SessionStatus};
 use super::super::attachments;
+use super::request_fields::{deserialize_present, deserialize_present_nullable};
 use super::{
     ActionState, ApiError, Success, load_session, messages::remove_attachments,
     resolve_sessions_dir, run_blocking,
@@ -14,6 +16,18 @@ use super::{
 pub(super) struct ResolveRequest {
     resolution: UserTodoResolution,
     comment: Option<String>,
+    #[serde(
+        rename = "expectedTitle",
+        default,
+        deserialize_with = "deserialize_present"
+    )]
+    expected_title: Option<String>,
+    #[serde(
+        rename = "expectedDetail",
+        default,
+        deserialize_with = "deserialize_present_nullable"
+    )]
+    expected_detail: Option<Option<String>>,
     #[serde(default)]
     attachments: Vec<attachments::Request>,
 }
@@ -81,6 +95,19 @@ pub(super) async fn resolve_todo(
     if todo.completed_at.is_some() {
         return Err(ApiError::conflict("todo is not pending"));
     }
+    if request
+        .expected_title
+        .as_ref()
+        .is_some_and(|expected_title| &todo.title != expected_title)
+        || request
+            .expected_detail
+            .as_ref()
+            .is_some_and(|expected_detail| &todo.detail != expected_detail)
+    {
+        return Err(ApiError::conflict(
+            "todo changed; reload it before resolving",
+        ));
+    }
     let attachments = attachments::validate(request.attachments, vec![])
         .map_err(|error| ApiError::bad_request(error.to_string()))?;
     if session.status == SessionStatus::Ended && !attachments.is_empty() {
@@ -95,8 +122,10 @@ pub(super) async fn resolve_todo(
         .map(|comment| comment.trim().to_string())
         .filter(|comment| !comment.is_empty());
     let mut stored_comment = comment.clone();
+    let completed_at = Utc::now();
     if session.status != SessionStatus::Ended {
-        let content = todo_resolution_message(request.resolution, &todo.title, comment.as_deref());
+        let (action_event_kind, body, content) =
+            todo_resolution_message(request.resolution, &todo.title, comment.as_deref());
         let marker = if session.engine == super::super::super::types::Engine::Claude {
             let session_id = session.session_id.clone();
             let sessions_dir = sessions_dir.clone();
@@ -118,15 +147,37 @@ pub(super) async fn resolve_todo(
         stored_comment =
             attachments::append_image_previews_to_comment(stored_comment, &saved_attachments);
         let content = attachments::append_paths_to_message(content, &attachment_paths);
-        let content = super::messages::watch_web_action_message_content(
-            &session,
-            marker.as_deref(),
-            &content,
-        );
+        let event_text =
+            super::super::messages::action_event::event_text_for_kind(action_event_kind, &body);
+        let queued_attachments = saved_attachments
+            .iter()
+            .map(|attachment| match &attachment.image_source {
+                Some(source) => store::WatchWebQueuedAttachment::Image {
+                    source: source.clone(),
+                },
+                None => store::WatchWebQueuedAttachment::File {
+                    name: attachment.name.clone(),
+                },
+            })
+            .collect::<Vec<_>>();
         let runtime = state.runtime;
         let send_session = session.clone();
-        if let Err(error) =
-            run_blocking(move || runtime.send_message(&send_session, &content)).await
+        let send_sessions_dir = sessions_dir.clone();
+        if let Err(error) = run_blocking(move || {
+            super::messages::send_action_event_message(
+                &send_sessions_dir,
+                &send_session,
+                super::messages::ActionEventMessage {
+                    marker: marker.as_deref(),
+                    message_content: &content,
+                    event_text: &event_text,
+                    attachments: &queued_attachments,
+                    action_event_kind,
+                },
+                |session, content| runtime.send_message(session, content),
+            )
+        })
+        .await
         {
             remove_attachments(attachment_paths).await;
             return Err(error);
@@ -136,14 +187,21 @@ pub(super) async fn resolve_todo(
     let session_id = session.session_id;
     let configured_sessions_dir = state.sessions_dir;
     let resolved = run_blocking(move || match configured_sessions_dir {
-        Some(sessions_dir) => store::resolve_agent_todo_from(
+        Some(sessions_dir) => store::resolve_agent_todo_from_at(
             &sessions_dir,
             &session_id,
             seq,
             resolution,
             stored_comment.as_deref(),
+            completed_at,
         ),
-        None => store::resolve_agent_todo(&session_id, seq, resolution, stored_comment.as_deref()),
+        None => store::resolve_agent_todo_at(
+            &session_id,
+            seq,
+            resolution,
+            stored_comment.as_deref(),
+            completed_at,
+        ),
     })
     .await
     .map_err(|error| {
@@ -164,23 +222,25 @@ fn todo_resolution_message(
     resolution: UserTodoResolution,
     title: &str,
     comment: Option<&str>,
-) -> String {
-    let (tag, summary) = match resolution {
+) -> (store::WatchWebActionEventKind, String, String) {
+    let (kind, tag, summary) = match resolution {
         UserTodoResolution::Completed => (
+            store::WatchWebActionEventKind::TodoCompleted,
             super::super::messages::action_event::TODO_COMPLETED_TAG,
             format!("The user marked the to-do as done: {title}."),
         ),
         UserTodoResolution::Rejected => (
+            store::WatchWebActionEventKind::TodoRejected,
             super::super::messages::action_event::TODO_REJECTED_TAG,
             format!("The user rejected the to-do: {title}."),
         ),
     };
-    let mut content = format!("<{tag}>{summary}");
+    let mut body = summary;
     if let Some(comment) = comment {
-        content.push('\n');
-        content.push('\n');
-        content.push_str(comment);
+        body.push('\n');
+        body.push('\n');
+        body.push_str(comment);
     }
-    content.push_str(&format!("</{tag}>"));
-    content
+    let content = format!("<{tag}>{body}</{tag}>");
+    (kind, body, content)
 }

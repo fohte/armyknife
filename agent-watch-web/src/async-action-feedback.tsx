@@ -10,117 +10,34 @@ import {
 } from 'react'
 
 import {
-  shiftMergeTimelineIndices as shiftMergeActionTimelineIndices,
-  type ShiftMergeTimelineIndicesOptions,
+  type AsyncAction,
+  type AsyncActionOutcome,
+  isAsyncActionRunningStatus,
+  runningStatusFor,
+  type StartAsyncActionOptions,
+} from '#async-action-model'
+import {
+  shiftActionTimelineIndices as rebaseActionTimelineIndices,
+  type ShiftActionTimelineIndicesOptions,
 } from '#async-action-timeline'
 import { AsyncActionFeedbackHost } from '#components/async-action-feedback-host'
-import type { CloseWorktreeChecks } from '#session-operation-types'
 
-export type AsyncActionStatus =
-  | 'runningCommand'
-  | 'ranCommand'
-  | 'commandFailed'
-  | 'commandTimedOut'
-  | 'merging'
-  | 'merged'
-  | 'alreadyMerged'
-  | 'queued'
-  | 'mergeFailed'
-  | 'closing'
-  | 'closed'
-  | 'closeFailed'
-
-export function isAsyncActionFailureStatus(status: AsyncActionStatus) {
-  return (
-    status === 'mergeFailed' ||
-    status === 'closeFailed' ||
-    status === 'commandFailed' ||
-    status === 'commandTimedOut'
-  )
-}
-
-export function isAsyncActionRunningStatus(status: AsyncActionStatus) {
-  return (
-    status === 'merging' || status === 'closing' || status === 'runningCommand'
-  )
-}
-
-export function formatAsyncActionTime(timestamp: number) {
-  const date = new Date(timestamp)
-  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
-}
-
-export type AsyncAction = {
-  id: number
-  sessionId: string
-  sessionTitle: string
-  kind: 'merge' | 'close' | 'command'
-  status: AsyncActionStatus
-  command?: string
-  commandOutputIndex?: number
-  exitCode?: number
-  pullRequestNumber?: number
-  pullRequestOwner?: string
-  pullRequestRepo?: string
-  pullRequestHeadSha?: string
-  timelineIndex?: number
-  message?: string
-  error?: string
-  checks?: CloseWorktreeChecks
-  createdAt: number
-  completedAt?: number
-}
-
-export type AsyncActionOutcome =
-  | {
-      status: 'ranCommand' | 'commandTimedOut'
-      commandOutputIndex?: number
-    }
-  | {
-      status: 'commandFailed'
-      exitCode?: number
-      error?: string
-      commandOutputIndex?: number
-    }
-  | { status: 'merged' | 'alreadyMerged' | 'queued'; message?: string }
-  | { status: 'closed' }
-  | {
-      status: 'mergeFailed' | 'closeFailed'
-      error: string
-      checks?: CloseWorktreeChecks
-    }
-
-export type StartAsyncActionOptions = {
-  kind: 'merge' | 'close' | 'command'
-  sessionId: string
-  sessionTitle: string
-  command?: string
-  pullRequestNumber?: number
-  pullRequestOwner?: string
-  pullRequestRepo?: string
-  pullRequestHeadSha?: string
-  timelineIndex?: number
-  run: () => Promise<AsyncActionOutcome>
-  onRetry?: (retry: () => void, actionId: number) => void
-  onCloseKeepWorktree?: () => void
-  onOpenInTerminal?: () => void
-}
+export type {
+  AsyncAction,
+  AsyncActionOutcome,
+  AsyncActionStatus,
+  StartAsyncActionOptions,
+} from '#async-action-model'
+export {
+  formatAsyncActionTime,
+  isAsyncActionFailureStatus,
+  isAsyncActionRunningStatus,
+} from '#async-action-model'
 
 type AsyncActionRetryUpdate = Pick<
   StartAsyncActionOptions,
   'run' | 'onRetry' | 'pullRequestHeadSha'
 >
-function runningStatusFor(kind: AsyncAction['kind']): AsyncActionStatus {
-  switch (kind) {
-    case 'merge':
-      return 'merging'
-    case 'close':
-      return 'closing'
-    case 'command':
-      return 'runningCommand'
-  }
-}
-
 type AsyncActionFeedbackValue = {
   actions: readonly AsyncAction[]
   toastIds: readonly number[]
@@ -135,7 +52,9 @@ type AsyncActionFeedbackValue = {
   start: (options: StartAsyncActionOptions) => number
   retry: (id: number) => void
   retryWith: (id: number, update: AsyncActionRetryUpdate) => void
-  shiftMergeTimelineIndices: (options: ShiftMergeTimelineIndicesOptions) => void
+  shiftActionTimelineIndices: (
+    options: ShiftActionTimelineIndicesOptions,
+  ) => void
   requestMergeRetryConfirmation: (id: number) => void
   consumeMergeRetryConfirmation: (id: number) => void
   finishMergeRetryConfirmation: (id: number) => void
@@ -147,6 +66,7 @@ type AsyncActionFeedbackValue = {
   closeActivity: () => void
   closeWithWorktree: (id: number) => void
   openInTerminal: (id: number) => void
+  openSession: (id: number) => void
 }
 
 const AsyncActionFeedbackContext =
@@ -187,6 +107,7 @@ export function AsyncActionFeedbackProvider({
   )
   const closeWithWorktreeHandlers = useRef(new Map<number, () => void>())
   const openInTerminalHandlers = useRef(new Map<number, () => void>())
+  const openSessionHandlers = useRef(new Map<number, () => void>())
   const timers = useRef(new Map<number, ReturnType<typeof setTimeout>>())
 
   const dismissToast = useCallback((id: number) => {
@@ -212,6 +133,7 @@ export function AsyncActionFeedbackProvider({
             status: runningStatusFor(action.kind),
           }
           delete next.error
+          delete next.retryable
           delete next.message
           delete next.checks
           delete next.completedAt
@@ -231,6 +153,11 @@ export function AsyncActionFeedbackProvider({
           if ('message' in outcome) next.message = outcome.message
           if ('error' in outcome) next.error = outcome.error
           else delete next.error
+          if ('retryable' in outcome) {
+            next.retryable = outcome.retryable
+          } else {
+            delete next.retryable
+          }
           if ('checks' in outcome) {
             next.checks = outcome.checks
           } else {
@@ -254,7 +181,10 @@ export function AsyncActionFeedbackProvider({
         outcome.status === 'alreadyMerged' ||
         outcome.status === 'queued' ||
         outcome.status === 'closed' ||
-        outcome.status === 'ranCommand'
+        outcome.status === 'rewound' ||
+        outcome.status === 'ranCommand' ||
+        outcome.status === 'reviewDocumentActionSucceeded' ||
+        outcome.status === 'launched'
       ) {
         const timer = setTimeout(() => {
           dismissToast(id)
@@ -278,6 +208,9 @@ export function AsyncActionFeedbackProvider({
       if (options.onOpenInTerminal !== undefined) {
         openInTerminalHandlers.current.set(id, options.onOpenInTerminal)
       }
+      if (options.kind === 'launch') {
+        openSessionHandlers.current.set(id, options.onOpenSession)
+      }
       setActions((current) => [
         {
           id,
@@ -288,6 +221,13 @@ export function AsyncActionFeedbackProvider({
           ...(options.command === undefined
             ? {}
             : { command: options.command }),
+          ...(options.initialMessage === undefined
+            ? {}
+            : { initialMessage: options.initialMessage }),
+          ...(options.repo === undefined ? {} : { repo: options.repo }),
+          ...(options.reviewDocumentAction === undefined
+            ? {}
+            : { reviewDocumentAction: options.reviewDocumentAction }),
           ...(options.pullRequestNumber === undefined
             ? {}
             : { pullRequestNumber: options.pullRequestNumber }),
@@ -346,9 +286,9 @@ export function AsyncActionFeedbackProvider({
     [runAction],
   )
 
-  const shiftMergeTimelineIndices = useCallback(
-    (options: ShiftMergeTimelineIndicesOptions) => {
-      setActions((current) => shiftMergeActionTimelineIndices(current, options))
+  const shiftActionTimelineIndices = useCallback(
+    (options: ShiftActionTimelineIndicesOptions) => {
+      setActions((current) => rebaseActionTimelineIndices(current, options))
     },
     [],
   )
@@ -412,6 +352,7 @@ export function AsyncActionFeedbackProvider({
       retryHandlers.current.delete(id)
       closeWithWorktreeHandlers.current.delete(id)
       openInTerminalHandlers.current.delete(id)
+      openSessionHandlers.current.delete(id)
     }
   }, [actions])
 
@@ -446,6 +387,10 @@ export function AsyncActionFeedbackProvider({
     openInTerminalHandlers.current.get(id)?.()
   }, [])
 
+  const openSession = useCallback((id: number) => {
+    openSessionHandlers.current.get(id)?.()
+  }, [])
+
   useEffect(
     () => () => {
       timers.current.forEach(clearTimeout)
@@ -470,7 +415,7 @@ export function AsyncActionFeedbackProvider({
         start,
         retry,
         retryWith,
-        shiftMergeTimelineIndices,
+        shiftActionTimelineIndices,
         requestMergeRetryConfirmation,
         consumeMergeRetryConfirmation,
         finishMergeRetryConfirmation,
@@ -482,6 +427,7 @@ export function AsyncActionFeedbackProvider({
         closeActivity,
         closeWithWorktree,
         openInTerminal,
+        openSession,
       }}
     >
       {children}
@@ -500,6 +446,7 @@ export function AsyncActionFeedbackProvider({
         closeActivity={closeActivity}
         closeWithWorktree={closeWithWorktree}
         openInTerminal={openInTerminal}
+        openSession={openSession}
         showCommandOutput={requestCommandOutput}
       />
     </AsyncActionFeedbackContext.Provider>

@@ -117,6 +117,7 @@ mod tests {
             updated_at: None,
             priority,
             project_id: None,
+            github_links: Vec::new(),
         }
     }
 

@@ -24,7 +24,9 @@ const meta = {
   },
   decorators: [
     (Story, context) =>
-      context.args.form === 'toast' ? (
+      context.id.includes('rewind') ? (
+        <Story />
+      ) : context.args.form === 'toast' ? (
         <div className="async-action-toast-stack">
           <Story />
         </div>
@@ -37,8 +39,117 @@ const meta = {
 export default meta
 type Story = StoryObj<typeof meta>
 
+type FeedbackComparisonState = 'running' | 'succeeded' | 'failed'
+
+function RewindCloseComparison({ state }: { state: FeedbackComparisonState }) {
+  const rewindStatus =
+    state === 'running'
+      ? 'rewinding'
+      : state === 'succeeded'
+        ? 'rewound'
+        : 'rewindFailed'
+  const closeStatus =
+    state === 'running'
+      ? 'closing'
+      : state === 'succeeded'
+        ? 'closed'
+        : 'closeFailed'
+  const renderItem = (
+    kind: 'rewind' | 'close',
+    status: typeof rewindStatus | typeof closeStatus,
+  ) => (
+    <div>
+      <h3>{kind === 'rewind' ? 'Rewind' : 'Close'}</h3>
+      <div
+        className="async-action-toast-stack"
+        style={{
+          position: 'static',
+          width: '100%',
+          maxHeight: 'none',
+          flexDirection: 'column',
+          overflow: 'visible',
+          pointerEvents: 'auto',
+        }}
+      >
+        <AsyncActionItem
+          action={{
+            id: kind === 'rewind' ? 1 : 2,
+            kind,
+            sessionId: 'example-session',
+            sessionTitle: 'Review the example request',
+            status,
+            ...(state === 'failed'
+              ? {
+                  error: `The example session could not be ${kind === 'rewind' ? 'rewound' : 'closed'}.`,
+                }
+              : {}),
+            createdAt: 1_800_000_000_000,
+          }}
+          form="toast"
+          onRetry={() => undefined}
+          onDetails={() => undefined}
+        />
+      </div>
+    </div>
+  )
+
+  return (
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+        gap: 24,
+        maxWidth: 900,
+        padding: 32,
+      }}
+    >
+      {renderItem('rewind', rewindStatus)}
+      {renderItem('close', closeStatus)}
+    </div>
+  )
+}
+
+function RewindCloseAllStatesComparison() {
+  return (
+    <div style={{ display: 'grid', gap: 24, padding: 32 }}>
+      {(['running', 'succeeded', 'failed'] as const).map((state) => (
+        <section key={state}>
+          <h2>
+            {state === 'running'
+              ? 'Running'
+              : state === 'succeeded'
+                ? 'Succeeded'
+                : 'Failed'}
+          </h2>
+          <RewindCloseComparison state={state} />
+        </section>
+      ))}
+    </div>
+  )
+}
+
 export const MergeIsRunning: Story = {
   name: 'The merge is running in a toast.',
+}
+
+export const RewindIsRunningBesideClose: Story = {
+  name: 'The running rewind matches the running close toast.',
+  render: () => <RewindCloseComparison state="running" />,
+}
+
+export const RewindSucceededBesideClose: Story = {
+  name: 'The successful rewind matches the successful close toast.',
+  render: () => <RewindCloseComparison state="succeeded" />,
+}
+
+export const RewindFailedBesideClose: Story = {
+  name: 'The failed rewind avoids replaying an ambiguous operation.',
+  render: () => <RewindCloseComparison state="failed" />,
+}
+
+export const RewindAndCloseFeedbackComparison: Story = {
+  name: 'Rewind and Close feedback is compared across each outcome.',
+  render: () => <RewindCloseAllStatesComparison />,
 }
 
 export const MergeSucceededInActivity: Story = {
@@ -46,6 +157,43 @@ export const MergeSucceededInActivity: Story = {
   args: {
     form: 'row',
     action: { ...meta.args.action, status: 'merged' },
+  },
+}
+
+const launchAction: AsyncAction = {
+  id: 6,
+  kind: 'launch',
+  sessionId: 'example-launch-session',
+  sessionTitle: 'Review the example rollout',
+  initialMessage: 'Review the rollout plan.\nCompare the fallback options.',
+  repo: 'example-org/example-service',
+  status: 'launching',
+  createdAt: 1_800_000_000_000,
+}
+
+export const SessionIsStarting: Story = {
+  name: 'The toast shows the first message and repository while starting.',
+  args: { form: 'toast', action: launchAction },
+}
+
+export const SessionStartedInActivity: Story = {
+  name: 'Activity keeps a started session with an Open action.',
+  args: {
+    form: 'row',
+    action: { ...launchAction, status: 'launched' },
+    onOpenSession: () => undefined,
+  },
+}
+
+export const SessionStartFailed: Story = {
+  name: 'The failed launch toast shows its reason, Retry, and Details.',
+  args: {
+    form: 'toast',
+    action: {
+      ...launchAction,
+      status: 'launchFailed',
+      error: 'The example session could not be started.',
+    },
   },
 }
 
@@ -353,6 +501,66 @@ const commandAction = {
   command: "printf 'sample output'",
   status: 'runningCommand' as const,
   createdAt: 1_800_000_000_000,
+}
+
+const reviewDocumentAction = {
+  id: 5,
+  sessionId: 'sample-session',
+  sessionTitle: 'Review the example request',
+  kind: 'review_document' as const,
+  reviewDocumentAction: 'Post comment' as const,
+  status: 'reviewDocumentActionRunning' as const,
+  createdAt: 1_800_000_000_000,
+}
+
+export const ReviewDocumentPostIsInProgress: Story = {
+  name: 'Posting an issue comment shows an in-progress action',
+  args: { form: 'toast', action: reviewDocumentAction },
+}
+
+export const ReviewDocumentPostSucceeded: Story = {
+  name: 'A posted issue comment shows a success action',
+  args: {
+    form: 'toast',
+    action: {
+      ...reviewDocumentAction,
+      status: 'reviewDocumentActionSucceeded',
+    },
+  },
+}
+
+export const ReviewDocumentPostFailed: Story = {
+  name: 'A failed issue comment post can be retried',
+  args: {
+    form: 'toast',
+    action: {
+      ...reviewDocumentAction,
+      status: 'reviewDocumentActionFailed',
+      error: 'The remote issue could not be updated.',
+    },
+  },
+}
+
+const reviewDocumentUpdateAction = {
+  ...reviewDocumentAction,
+  reviewDocumentAction: 'Update PR #73',
+}
+
+export const ReviewDocumentPrUpdateIsInProgress: Story = {
+  name: 'Updating an existing pull request shows its number',
+  args: { form: 'toast', action: reviewDocumentUpdateAction },
+}
+
+export const ReviewDocumentPrUpdateFailed: Story = {
+  name: 'A failed pull request update names the existing pull request',
+  args: {
+    form: 'toast',
+    action: {
+      ...reviewDocumentUpdateAction,
+      status: 'reviewDocumentActionFailed',
+      error: 'The existing pull request could not be updated.',
+    },
+  },
 }
 
 type RunCommandSceneState = 'running' | 'succeeded' | 'failed' | 'timedOut'

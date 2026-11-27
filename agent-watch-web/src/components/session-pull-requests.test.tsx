@@ -8,7 +8,10 @@ import {
   useAsyncActionStarter,
 } from '#async-action-feedback'
 import { LaterMenu } from '#components/later-menu'
-import { SessionPullRequests } from '#components/session-pull-requests'
+import {
+  SessionPullRequests,
+  SessionPullRequestStatusBadge,
+} from '#components/session-pull-requests'
 import type { PullRequest } from '#types'
 import { useInboxFilterShortcut } from '#use-inbox-filter-shortcut'
 
@@ -310,6 +313,14 @@ it.each([
         mobileState:
           row.querySelector('.session-pr-row-mobile-state')?.textContent ??
           null,
+        mobileStateClass:
+          row
+            .querySelector('.session-pr-row-mobile-state')
+            ?.getAttribute('class') ?? null,
+        mobileStateRole:
+          row
+            .querySelector('.session-pr-row-mobile-state')
+            ?.getAttribute('role') ?? null,
         mobileStateAriaHidden:
           row
             .querySelector('.session-pr-row-mobile-state')
@@ -363,6 +374,8 @@ it.each([
           title: 'Show delivery status',
           repo: 'example-org/example-repo',
           mobileState: isMobile ? '· Open' : null,
+          mobileStateClass: isMobile ? 'session-pr-row-mobile-state' : null,
+          mobileStateRole: null,
           mobileStateAriaHidden: null,
           reason: 'CI running',
           hasAction: false,
@@ -374,6 +387,8 @@ it.each([
           title: 'Add retry settings',
           repo: 'example-org/example-infra',
           mobileState: isMobile ? '· Open' : null,
+          mobileStateClass: isMobile ? 'session-pr-row-mobile-state' : null,
+          mobileStateRole: null,
           mobileStateAriaHidden: null,
           reason: 'Merge',
           hasAction: true,
@@ -385,6 +400,8 @@ it.each([
           title: 'Close an old pull request',
           repo: 'example-org/example-infra',
           mobileState: isMobile ? '· Closed' : null,
+          mobileStateClass: isMobile ? 'session-pr-row-mobile-state' : null,
+          mobileStateRole: null,
           mobileStateAriaHidden: null,
           reason: isMobile ? null : 'Closed',
           hasAction: false,
@@ -395,9 +412,13 @@ it.each([
           number: '#41',
           title: 'Record attempts',
           repo: 'example-org/example-repo',
-          mobileState: isMobile ? '· Merged' : null,
+          mobileState: isMobile ? '· ✓ Merged' : null,
+          mobileStateClass: isMobile
+            ? 'session-pr-row-mobile-state is-merged'
+            : null,
+          mobileStateRole: isMobile ? 'status' : null,
           mobileStateAriaHidden: null,
-          reason: '✓ Merged',
+          reason: isMobile ? null : '✓ Merged',
           hasAction: false,
           ciState: 'CI status unknown',
           href: 'https://github.com/example-org/example-repo/pull/41',
@@ -583,23 +604,97 @@ it.each([
       status: row?.querySelector('.session-pr-row-state')?.textContent ?? null,
       mobileState:
         row?.querySelector('.session-pr-row-mobile-state')?.textContent ?? null,
+      mobileStateClass:
+        row
+          ?.querySelector('.session-pr-row-mobile-state')
+          ?.getAttribute('class') ?? null,
+      mobileStateRole:
+        row
+          ?.querySelector('.session-pr-row-mobile-state')
+          ?.getAttribute('role') ?? null,
       ciDotClass: row?.querySelector('.session-pr-ci-dot')?.className ?? null,
       actionTag: row?.querySelector('.pr-merge-entry')?.tagName ?? null,
       hasButton: row?.querySelector('button') !== null,
     })
     expect(snapshot()).toEqual({
-      status: expectedStatus,
+      status: isMobile && status === 'merged' ? null : expectedStatus,
       mobileState: isMobile
         ? status === 'merged'
-          ? '· Merged'
+          ? '· ✓ Merged'
           : '· Already merged'
         : null,
+      mobileStateClass: isMobile
+        ? status === 'merged'
+          ? 'session-pr-row-mobile-state is-merged'
+          : 'session-pr-row-mobile-state'
+        : null,
+      mobileStateRole: isMobile && status === 'merged' ? 'status' : null,
       ciDotClass: 'session-pr-ci-dot is-passed is-merged',
-      actionTag: 'SPAN',
+      actionTag: isMobile && status === 'merged' ? null : 'SPAN',
       hasButton: false,
     })
   },
 )
+
+it('draws the merge spinner arc over its background ring', () => {
+  act(() => {
+    root?.render(
+      <SessionPullRequestStatusBadge
+        pullRequests={pullRequests}
+        mergeStatus={() => 'merging'}
+      />,
+    )
+  })
+
+  const spinner = container.querySelector(
+    'svg.session-pr-status-mark.is-merging',
+  )
+  expect(
+    spinner === null
+      ? null
+      : {
+          ariaHidden: spinner.getAttribute('aria-hidden'),
+          viewBox: spinner.getAttribute('viewBox'),
+          width: spinner.getAttribute('width'),
+          height: spinner.getAttribute('height'),
+          stroke: spinner.getAttribute('stroke'),
+          strokeLinecap: spinner.getAttribute('stroke-linecap'),
+          strokeWidth: spinner.getAttribute('stroke-width'),
+          children: Array.from(spinner.children, (child) => ({
+            tag: child.tagName.toLowerCase(),
+            attributes:
+              child.tagName.toLowerCase() === 'circle'
+                ? {
+                    cx: child.getAttribute('cx'),
+                    cy: child.getAttribute('cy'),
+                    r: child.getAttribute('r'),
+                    stroke: child.getAttribute('stroke'),
+                  }
+                : { d: child.getAttribute('d') },
+          })),
+        },
+  ).toEqual({
+    ariaHidden: 'true',
+    viewBox: '0 0 24 24',
+    width: '15',
+    height: '15',
+    stroke: 'currentColor',
+    strokeLinecap: 'round',
+    strokeWidth: '3.5',
+    children: [
+      {
+        tag: 'circle',
+        attributes: {
+          cx: '12',
+          cy: '12',
+          r: '9',
+          stroke: 'var(--aw-border-control)',
+        },
+      },
+      { tag: 'path', attributes: { d: 'M21 12a9 9 0 0 0-9-9' } },
+    ],
+  })
+})
 
 it.each([
   {
@@ -1125,3 +1220,69 @@ it.each([
     })
   },
 )
+
+it('renders merge actions and unavailable reasons in the status panel list', () => {
+  const onMerge = vi.fn<(pullRequest: PullRequest) => void>()
+  const panelPullRequests = pullRequests
+    .filter(({ number }) => number === 42 || number === 43)
+    .map((pullRequest) =>
+      pullRequest.number === 42
+        ? { ...pullRequest, ciState: 'Failed' as const }
+        : pullRequest,
+    )
+  act(() => {
+    root?.render(
+      <SessionPullRequests
+        pullRequests={panelPullRequests}
+        repo="example-org/example-repo"
+        isMobile
+        open={false}
+        presentation="list"
+        onMerge={onMerge}
+        onOpenChange={() => undefined}
+      />,
+    )
+  })
+  const mergeButton = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Merge PR #43 in example-org/example-infra"]',
+  )
+  if (mergeButton === null) throw new Error('Expected a merge action')
+  act(() => {
+    mergeButton.click()
+  })
+
+  const snapshot = () => ({
+    dialogRole:
+      container.querySelector('.session-pr-list')?.getAttribute('role') ?? null,
+    listLabel:
+      container.querySelector('.session-pr-list')?.getAttribute('aria-label') ??
+      null,
+    listHeading:
+      container.querySelector('.session-pr-list-title')?.textContent.trim() ??
+      null,
+    mobileTrigger:
+      container.querySelector('.session-pr-trigger--mobile') !== null,
+    rows: Array.from(
+      container.querySelectorAll<HTMLElement>('.session-pr-row'),
+      (row) => ({
+        title: row.querySelector('.session-pr-row-title')?.textContent ?? null,
+        action: row.querySelector('.pr-merge-entry')?.textContent ?? null,
+      }),
+    ),
+    onMerge: onMerge.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    dialogRole: null,
+    listLabel: 'Pull requests',
+    listHeading: 'Pull requests',
+    mobileTrigger: false,
+    rows: [
+      { title: '#42 Show delivery status', action: 'CI failing' },
+      {
+        title: '#43 Add retry settings',
+        action: 'Merge',
+      },
+    ],
+    onMerge: [[pullRequests[1]]],
+  })
+})

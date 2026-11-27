@@ -41,6 +41,7 @@ use wiremock::matchers::{body_json, body_string_contains, method, path, path_reg
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 mod pr_number;
+mod reply_review;
 
 use super::client::GitHubClient;
 
@@ -499,6 +500,7 @@ impl<'a> MockRepoContext<'a> {
             body: "Test body",
             updated_at: "2024-01-02T00:00:00Z",
             labels: vec!["bug"],
+            assignees: Vec::new(),
             last_edited_at: None,
         }
     }
@@ -515,6 +517,25 @@ impl<'a> MockRepoContext<'a> {
     /// Mock REST endpoint for listing sub-issues (returns empty list by default).
     pub async fn sub_issues_empty(&self, issue_number: u64) {
         self.sub_issues(issue_number, &[]).await;
+    }
+
+    /// Resolve frontmatter milestone titles to repository-specific numbers in push tests.
+    pub async fn milestones(&self, milestones: &[(&str, u64)]) {
+        let body = milestones
+            .iter()
+            .map(|(title, number)| json!({ "title": title, "number": number }))
+            .collect::<Vec<_>>();
+        Mock::given(method("GET"))
+            .and(path(format!(
+                "/repos/{}/{}/milestones",
+                self.owner, self.repo
+            )))
+            .and(query_param("state", "all"))
+            .and(query_param("per_page", "100"))
+            .and(query_param("page", "1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(self.server)
+            .await;
     }
 
     /// Mock REST endpoint for listing sub-issues with specified data.
@@ -864,6 +885,7 @@ pub struct MockIssueBuilder<'a> {
     body: &'a str,
     updated_at: &'a str,
     labels: Vec<&'a str>,
+    assignees: Vec<&'a str>,
     last_edited_at: Option<&'a str>,
 }
 
@@ -889,6 +911,12 @@ impl<'a> MockIssueBuilder<'a> {
     /// Set the labels.
     pub fn labels(mut self, labels: Vec<&'a str>) -> Self {
         self.labels = labels;
+        self
+    }
+
+    /// Mirror the create request so reconciliation tests see GitHub's returned metadata.
+    pub fn assignees(mut self, assignees: Vec<&'a str>) -> Self {
+        self.assignees = assignees;
         self
     }
 
@@ -965,6 +993,19 @@ impl<'a> MockIssueBuilder<'a> {
             .await;
     }
 
+    /// Pin field-specific PATCH payloads so REST updates do not target unrelated fields.
+    pub async fn update_with_body(self, expected_body: serde_json::Value) {
+        let owner = self.owner;
+        let repo = self.repo;
+        let number = self.number;
+        Mock::given(method("PATCH"))
+            .and(path(format!("/repos/{owner}/{repo}/issues/{number}")))
+            .and(body_json(expected_body))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+            .mount(self.server)
+            .await;
+    }
+
     /// Mount mock for POST /repos/{owner}/{repo}/issues/{number}/labels.
     pub async fn add_labels(self) {
         let owner = self.owner;
@@ -1009,24 +1050,30 @@ impl<'a> MockIssueBuilder<'a> {
         let owner = self.owner;
         let repo = self.repo;
         let number = self.number;
+        let assignees = self.assignees;
         let mut mock =
             Mock::given(method("POST")).and(path(format!("/repos/{owner}/{repo}/issues")));
         if let Some(expected_body) = expected_body {
             mock = mock.and(body_json(expected_body));
         }
-        mock.respond_with(
-            ResponseTemplate::new(201).set_body_json(mock_issue_with_labels(
-                owner,
-                repo,
-                number,
-                self.title,
-                self.body,
-                self.updated_at,
-                &self.labels,
-            )),
-        )
-        .mount(self.server)
-        .await;
+        let mut issue = mock_issue_with_labels(
+            owner,
+            repo,
+            number,
+            self.title,
+            self.body,
+            self.updated_at,
+            &self.labels,
+        );
+        issue["assignees"] = json!(
+            assignees
+                .iter()
+                .map(|login| mock_user(login))
+                .collect::<Vec<_>>()
+        );
+        mock.respond_with(ResponseTemplate::new(201).set_body_json(issue))
+            .mount(self.server)
+            .await;
     }
 
     /// Mount mock for POST /repos/{owner}/{repo}/issues/{number}/comments.

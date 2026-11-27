@@ -1,7 +1,7 @@
 import '#components/session-status-panel.css'
 
 import { Button } from '@fohte/ui/button'
-import { ChevronLeft } from 'lucide-react'
+import { ChevronLeft, Minimize2 } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
@@ -20,19 +20,27 @@ export type SessionStatusPanelTab = {
 type SessionStatusPanelProps = {
   tabs: readonly SessionStatusPanelTab[]
   activeTabId: string | null
+  beforeTabs?: ReactNode
   size?: 'desktop' | 'phone'
   onTabChange: (id: string) => void
   onClose: () => void
   sessionTitle?: string
+  expanded?: boolean
+  showCollapseControl?: boolean
+  onCollapse?: () => void
 }
 
 export function SessionStatusPanel({
   tabs,
   activeTabId,
+  beforeTabs,
   size = 'desktop',
   onTabChange,
   onClose,
   sessionTitle,
+  expanded = false,
+  showCollapseControl = true,
+  onCollapse = () => undefined,
 }: SessionStatusPanelProps) {
   const isPhone = size === 'phone'
   const visibleTabs = tabs.filter((tab) => tab.visible ?? tab.count > 0)
@@ -59,10 +67,15 @@ export function SessionStatusPanel({
     const startPadding = Number.parseFloat(
       getComputedStyle(tabList).paddingLeft,
     )
-    setHasHiddenTabs({
+    const next = {
       left: tabList.scrollLeft > startPadding,
       right: tabList.scrollLeft + tabList.clientWidth < tabList.scrollWidth - 1,
-    })
+    }
+    setHasHiddenTabs((current) =>
+      current.left === next.left && current.right === next.right
+        ? current
+        : next,
+    )
   }, [])
 
   useEffect(() => {
@@ -107,6 +120,7 @@ export function SessionStatusPanel({
       id="session-status-panel"
       className="session-status-panel"
       data-size={size}
+      data-expanded={expanded}
       aria-label="Session status panel"
       aria-labelledby={isPhone ? 'session-status-panel-title' : undefined}
       role={isPhone ? 'dialog' : undefined}
@@ -139,6 +153,7 @@ export function SessionStatusPanel({
           </div>
         </header>
       ) : null}
+      {beforeTabs}
       <div className="session-status-panel-tabs">
         <div
           className={`session-status-panel-tablist-wrap${hasHiddenTabs.left ? ' has-hidden-tabs-left' : ''}${hasHiddenTabs.right ? ' has-hidden-tabs-right' : ''}`}
@@ -176,17 +191,30 @@ export function SessionStatusPanel({
           </div>
         </div>
         {isPhone ? null : (
-          <Button
-            className="session-status-panel-close"
-            type="button"
-            variant="plain"
-            aria-label="Close session status panel"
-            onClick={() => {
-              onClose()
-            }}
-          >
-            ×
-          </Button>
+          <>
+            {expanded && showCollapseControl ? (
+              <Button
+                className="session-status-panel-collapse"
+                type="button"
+                variant="plain"
+                aria-label="Exit full width review"
+                onClick={onCollapse}
+              >
+                <Minimize2 aria-hidden="true" size={16} />
+              </Button>
+            ) : null}
+            <Button
+              className="session-status-panel-close"
+              type="button"
+              variant="plain"
+              aria-label="Close session status panel"
+              onClick={() => {
+                onClose()
+              }}
+            >
+              ×
+            </Button>
+          </>
         )}
       </div>
       {activeTab !== undefined ? (

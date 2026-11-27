@@ -33,6 +33,7 @@ use chrono::Utc;
 use clap::Args;
 use tracing::Instrument;
 
+use super::super::compact_transcript_slim::spawn_compact_resume_with;
 use super::decision::{CompactDecision, CompactInputs, decide_compact};
 use crate::commands::agent::auto_pause;
 use crate::commands::agent::claude_sessions;
@@ -386,12 +387,12 @@ fn resolve_claude_pid_with(
 fn spawn_compact_resume(session: &Session) -> Result<()> {
     // ARMYKNIFE_SKIP_HOOKS=1 makes the child's own Stop hook bail out at the
     // top of `agent hook run`, so the compaction itself doesn't recursively
-    // schedule another auto-compact.
-    let result = process::spawn_detached(
-        "claude",
-        ["-r", &session.session_id, "-p", "/compact"],
-        Some(&session.cwd),
-        &[("ARMYKNIFE_SKIP_HOOKS", "1")],
+    // schedule another auto-compact. A separate marker lets compact
+    // SessionStart schedule transcript slimming without enabling other hooks.
+    let result = spawn_compact_resume_with(
+        &session.session_id,
+        &session.cwd,
+        |program, args, cwd, env| process::spawn_detached(program, args, cwd, env),
     );
     if let Err(e) = result {
         tracing::warn!(

@@ -76,10 +76,54 @@ fn routes_with(
             get(get_stored_file),
         )
         .route(
+            "/sessions/{session_id}/answer-images/{image_id}",
+            get(get_answer_image),
+        )
+        .route(
             "/sessions/{session_id}/transcript-files/{tool_use_id}/{index}",
             get(get_transcript_file),
         )
         .with_state(state)
+}
+
+async fn get_answer_image(
+    State(state): State<RoutesState>,
+    AxumPath((session_id, image_id)): AxumPath<(String, String)>,
+) -> Response {
+    if image_id.len() != 64 || !image_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let load_session = Arc::clone(&state.load_session);
+    let storage_root = state.storage_root;
+    let result = tokio::task::spawn_blocking(move || -> Result<_> {
+        if load_session(&session_id)?.is_none() {
+            return Ok(None);
+        }
+        super::messages::answer_images::read_snapshot(&storage_root, &session_id, &image_id)
+    })
+    .await;
+    match result {
+        Ok(Ok(Some((bytes, mime_type)))) => {
+            let mut response = Body::from(bytes).into_response();
+            let headers = response.headers_mut();
+            headers.insert(CONTENT_TYPE, HeaderValue::from_static(mime_type));
+            headers.insert(
+                CACHE_CONTROL,
+                HeaderValue::from_static("private, max-age=31536000, immutable"),
+            );
+            headers.insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+            response
+        }
+        Ok(Ok(None)) => StatusCode::NOT_FOUND.into_response(),
+        Ok(Err(error)) => {
+            tracing::warn!(%error, "failed to read answer image snapshot");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+        Err(error) => {
+            tracing::warn!(%error, "answer image task failed");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
 }
 
 pub(super) fn stored_chat_files(
@@ -515,7 +559,7 @@ mod tests {
     use crate::commands::agent::file_attachment_support::{
         FILE_TYPE_PREFIX_BYTES, FilePreviewType,
     };
-    use crate::commands::agent::store::{self, AgentFile};
+    use crate::commands::agent::store::AgentFile;
     use crate::commands::agent::types::Session;
 
     #[rstest]
@@ -773,18 +817,113 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn serves_an_answer_image_snapshot_and_rejects_missing_session_or_image() {
+        let storage = TempDir::new().unwrap();
+        let session_id = "fixture-session";
+        let image_id = "a".repeat(64);
+        let session_directory =
+            crate::commands::agent::file::session_directory(storage.path(), session_id).unwrap();
+        std::fs::write(
+            session_directory.join(format!("answer-image-{image_id}")),
+            [137, 80, 78, 71, 13, 10, 26, 10],
+        )
+        .unwrap();
+        let session: Session = serde_json::from_value(serde_json::json!({
+            "session_id": session_id,
+            "cwd": "/fixture/project",
+            "status": "ended",
+            "created_at": "2030-01-01T00:00:00Z",
+            "updated_at": "2030-01-01T00:00:00Z",
+            "transcript_path": "/fixture/transcript.jsonl"
+        }))
+        .unwrap();
+        let expected_session_id = session_id.to_owned();
+        let app = routes_with(
+            move |requested_session| {
+                Ok((requested_session == expected_session_id).then(|| session.clone()))
+            },
+            |_, _| Ok(None),
+            storage.path().to_path_buf(),
+        );
+        let valid_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/sessions/{session_id}/answer-images/{image_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let valid_status = valid_response.status();
+        let valid_headers = valid_response.headers();
+        let valid_content_type = valid_headers
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        let valid_cache_control = valid_headers
+            .get(axum::http::header::CACHE_CONTROL)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        let valid_nosniff = valid_headers
+            .get(axum::http::header::X_CONTENT_TYPE_OPTIONS)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        let valid_body = to_bytes(valid_response.into_body(), MAX_FILE_BYTES as usize)
+            .await
+            .unwrap()
+            .to_vec();
+        let missing_image_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/sessions/{session_id}/answer-images/{}",
+                        "b".repeat(64)
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let missing_session_response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/sessions/missing-session/answer-images/{image_id}"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            (
+                valid_status,
+                valid_content_type,
+                valid_cache_control,
+                valid_nosniff,
+                valid_body,
+                missing_image_response.status(),
+                missing_session_response.status(),
+            ),
+            (
+                StatusCode::OK,
+                Some("image/png".to_owned()),
+                Some("private, max-age=31536000, immutable".to_owned()),
+                Some("nosniff".to_owned()),
+                vec![137, 80, 78, 71, 13, 10, 26, 10],
+                StatusCode::NOT_FOUND,
+                StatusCode::NOT_FOUND,
+            ),
+        );
+    }
+
+    #[tokio::test]
     async fn serves_a_registered_file_and_rejects_an_unregistered_id() {
         let storage = TempDir::new().unwrap();
-        let sessions = TempDir::new().unwrap();
         let session_id = "fixture-session";
-        store::session_store_revision_from(sessions.path()).unwrap();
-        rusqlite::Connection::open(sessions.path().join("sessions.db"))
-            .unwrap()
-            .execute(
-                "INSERT INTO sessions (session_id, data, rev) VALUES (?1, '{}', 0)",
-                [session_id],
-            )
-            .unwrap();
         let storage_root = storage.path().join("attachments");
         let file = AgentFile {
             id: uuid::Uuid::new_v4().to_string(),
@@ -800,8 +939,6 @@ mod tests {
         )));
         std::fs::create_dir_all(&session_storage).unwrap();
         std::fs::write(session_storage.join(&file.id), b"fixture report").unwrap();
-        store::insert_agent_files_from(sessions.path(), session_id, std::slice::from_ref(&file))
-            .unwrap();
         let registered_file_id = file.id.clone();
         let request_file_id = file.id.clone();
         let app = routes_with(

@@ -1,12 +1,75 @@
 use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::time::{Duration, Instant};
 
 use super::SessionTaskMetadata;
 use crate::commands::agent::types::Session;
 use crate::infra::git::{github_owner_and_repo, open_repo_at};
 
+const REPO_NAME_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
+
+static REPO_NAME_CACHE: OnceLock<RepoNameCache> = OnceLock::new();
+
+#[derive(Default)]
+pub(super) struct RepoNameCache {
+    entries: Mutex<HashMap<PathBuf, CachedRepoName>>,
+}
+
+struct CachedRepoName {
+    name: String,
+    expires_at: Instant,
+}
+
+impl RepoNameCache {
+    fn resolve(&self, cwd: &Path, resolve_repo: impl FnOnce() -> String) -> String {
+        self.resolve_at(cwd, Instant::now(), resolve_repo)
+    }
+
+    fn resolve_at(
+        &self,
+        cwd: &Path,
+        now: Instant,
+        resolve_repo: impl FnOnce() -> String,
+    ) -> String {
+        {
+            let mut entries = self.lock_entries();
+            entries.retain(|_, entry| entry.expires_at > now);
+            if let Some(entry) = entries.get(cwd) {
+                return entry.name.clone();
+            }
+        }
+
+        let name = resolve_repo();
+        let mut entries = self.lock_entries();
+        if let Some(entry) = entries.get(cwd).filter(|entry| entry.expires_at > now) {
+            return entry.name.clone();
+        }
+        entries.insert(
+            cwd.to_path_buf(),
+            CachedRepoName {
+                name: name.clone(),
+                expires_at: now + REPO_NAME_CACHE_TTL,
+            },
+        );
+        name
+    }
+
+    fn lock_entries(&self) -> MutexGuard<'_, HashMap<PathBuf, CachedRepoName>> {
+        self.entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+pub(super) fn repo_name_cache() -> &'static RepoNameCache {
+    REPO_NAME_CACHE.get_or_init(RepoNameCache::default)
+}
+
 pub(super) fn resolve_repos_for_sessions(
     sessions: &[Session],
     all_sessions: &[Session],
+    repo_cache: &RepoNameCache,
     mut resolve_repo: impl FnMut(&std::path::Path) -> String,
 ) -> HashMap<String, String> {
     let relevant_ids = sessions
@@ -24,7 +87,7 @@ pub(super) fn resolve_repos_for_sessions(
         .map(|session| {
             let repo = repo_by_cwd
                 .entry(session.cwd.clone())
-                .or_insert_with(|| resolve_repo(&session.cwd))
+                .or_insert_with(|| repo_cache.resolve(&session.cwd, || resolve_repo(&session.cwd)))
                 .clone();
             (session.session_id.clone(), repo)
         })
@@ -81,10 +144,15 @@ pub(super) fn resolve_parent_project<'a>(
 
 #[cfg(test)]
 mod tests {
-    use super::{SessionTaskMetadata, resolve_parent_project, resolve_project};
+    use super::{
+        REPO_NAME_CACHE_TTL, RepoNameCache, SessionTaskMetadata, resolve_parent_project,
+        resolve_project,
+    };
     use crate::commands::agent::tq_session_tasks::SessionTask;
     use rstest::rstest;
     use std::collections::HashMap;
+    use std::path::Path;
+    use std::time::{Duration, Instant};
 
     fn task_metadata(links: &[(&str, &str)], projects: &[(&str, &str)]) -> SessionTaskMetadata {
         SessionTaskMetadata {
@@ -109,6 +177,41 @@ mod tests {
                 .collect(),
             ..SessionTaskMetadata::default()
         }
+    }
+
+    #[test]
+    fn cached_repo_names_are_reused_until_the_ttl_expires() {
+        let cache = RepoNameCache::default();
+        let cwd = Path::new("/example/repository");
+        let resolved_at = Instant::now();
+        let mut resolve_count = 0;
+
+        let first = cache.resolve_at(cwd, resolved_at, || {
+            resolve_count += 1;
+            "owner/first-repository".to_string()
+        });
+        let before_expiration = cache.resolve_at(
+            cwd,
+            resolved_at + REPO_NAME_CACHE_TTL - Duration::from_nanos(1),
+            || {
+                resolve_count += 1;
+                "owner/second-repository".to_string()
+            },
+        );
+        let after_expiration = cache.resolve_at(cwd, resolved_at + REPO_NAME_CACHE_TTL, || {
+            resolve_count += 1;
+            "owner/second-repository".to_string()
+        });
+
+        assert_eq!(
+            (first, before_expiration, after_expiration, resolve_count),
+            (
+                "owner/first-repository".to_string(),
+                "owner/first-repository".to_string(),
+                "owner/second-repository".to_string(),
+                2,
+            ),
+        );
     }
 
     #[rstest]

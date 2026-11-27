@@ -20,6 +20,7 @@ type AsyncActionFeedbackHostProps = {
   closeActivity: () => void
   closeWithWorktree: (id: number) => void
   openInTerminal: (id: number) => void
+  openSession?: (id: number) => void
   showCommandOutput: (id: number) => void
 }
 
@@ -38,6 +39,7 @@ export function AsyncActionFeedbackHost({
   closeActivity,
   closeWithWorktree,
   openInTerminal,
+  openSession,
   showCommandOutput,
 }: AsyncActionFeedbackHostProps) {
   const ordered = [...actions].sort(
@@ -98,6 +100,13 @@ export function AsyncActionFeedbackHost({
               onCloseKeepWorktree={() => {
                 closeWithWorktree(id)
               }}
+              {...(openSession === undefined
+                ? {}
+                : {
+                    onOpenSession: () => {
+                      openSession(id)
+                    },
+                  })}
               onShowOutput={() => {
                 showCommandOutput(id)
               }}
@@ -138,7 +147,10 @@ export function AsyncActionFeedbackHost({
             {ordered.length === 0 ? (
               <div className="async-action-empty">
                 <p>No recent activity.</p>
-                <p>Merge, Close and command results appear here.</p>
+                <p>
+                  Launches, merges, closes, rewinds, and command results appear
+                  here.
+                </p>
               </div>
             ) : null}
             <div className="async-action-activity-list">
@@ -167,6 +179,14 @@ export function AsyncActionFeedbackHost({
                       closeActivity()
                       openInTerminal(action.id)
                     }}
+                    {...(openSession === undefined
+                      ? {}
+                      : {
+                          onOpenSession: () => {
+                            closeActivity()
+                            openSession(action.id)
+                          },
+                        })}
                     onShowOutput={() => {
                       closeActivity()
                       showCommandOutput(action.id)

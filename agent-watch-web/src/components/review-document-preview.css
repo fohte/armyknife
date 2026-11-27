@@ -1,0 +1,402 @@
+.review-document-issue-frontmatter {
+  gap: 0;
+  padding: 8px 18px 14px;
+  color: #d4d4d8;
+  font-size: 14px;
+}
+
+.review-document-issue-frontmatter h2 {
+  min-height: 32px;
+  color: #8b8b94;
+  font-size: 11.5px;
+  letter-spacing: 0.04em;
+}
+
+.review-document-issue-title {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 6px;
+  color: #8b8b94;
+  font-size: 12px;
+}
+
+.review-document-issue-title textarea {
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  height: 36px;
+  resize: none;
+  border: 1px solid #3f3f46;
+  padding: 6px 8px;
+  color: #fafafa;
+  background: #0a0a0a;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.review-document-issue-fields {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px 12px;
+  margin: 12px 0 0;
+  font-size: 12px;
+}
+
+.review-document-issue-fields > dt {
+  display: flex;
+  min-height: 28px;
+  align-items: center;
+  color: #8b8b94;
+}
+
+.review-document-issue-fields > dd {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+}
+
+.review-document-issue-labels {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.review-document-issue-assignees {
+  align-items: center;
+}
+
+.review-document-issue-parent {
+  align-items: center;
+}
+
+.review-document-issue-parent > .review-document-issue-reference {
+  width: 100%;
+}
+
+.review-document-issue-chips {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.review-document-issue-chip {
+  box-sizing: border-box;
+  display: inline-flex;
+  height: 28px;
+  align-items: center;
+  gap: 2px;
+  border: 1px solid #3f3f46;
+  padding-left: 8px;
+  color: #fafafa;
+  background: #161616;
+}
+
+.review-document-issue-chip button,
+.review-document-issue-reference button {
+  width: 24px;
+  height: 100%;
+  border: 0;
+  padding: 0;
+  color: #a1a1aa;
+  background: transparent;
+  font-size: 14px;
+}
+
+.review-document-issue-chip--assignee {
+  gap: 6px;
+  padding-left: 4px;
+}
+
+.review-document-issue-chip--assignee > span {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  background: #27272a;
+  font-size: 10.5px;
+  font-weight: 700;
+}
+
+.review-document-issue-chip--assignee button {
+  margin-left: -4px;
+}
+
+.review-document-issue-fields input:not([type='checkbox']) {
+  box-sizing: border-box;
+  min-width: 100px;
+  height: 28px;
+  border: 1px solid #3f3f46;
+  padding: 0 8px;
+  color: #fafafa;
+  background: #0a0a0a;
+  font: inherit;
+  font-size: 12px;
+}
+
+.review-document-issue-fields input::placeholder {
+  color: #8b8b94;
+}
+
+.review-document-issue-reference {
+  box-sizing: border-box;
+  display: flex;
+  min-width: 0;
+  height: 28px;
+  flex: 1 1 220px;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid #3f3f46;
+  padding-left: 8px;
+  background: #0a0a0a;
+}
+
+.review-document-issue-reference-link,
+.review-document-issue-reference code {
+  flex: 0 0 auto;
+  color: #93c5fd;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.review-document-issue-reference-link {
+  text-decoration: underline;
+}
+
+.review-document-issue-reference-title {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: #a1a1aa;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-document-issue-reference button {
+  flex: 0 0 24px;
+  margin-left: auto;
+}
+
+.review-document-issue-fields .review-document-issue-add-field {
+  box-sizing: border-box;
+  min-width: 0;
+  height: 28px;
+  border: 1px dashed #3f3f46;
+  padding: 0 10px;
+  color: #d4d4d8;
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+}
+
+.review-document-issue-fields .review-document-issue-add-field::placeholder {
+  color: #d4d4d8;
+  opacity: 1;
+}
+
+.review-document-issue-fields
+  .review-document-issue-chips
+  .review-document-issue-add-field {
+  width: 120px;
+}
+
+.review-document-issue-fields .review-document-issue-add-field--label {
+  border-style: solid;
+  border-color: #fafafa;
+  padding-inline: 8px;
+  color: #fafafa;
+}
+
+.review-document-issue-fields
+  .review-document-issue-add-field--label::placeholder {
+  color: #8b8b94;
+}
+
+.review-document-issue-add-button {
+  box-sizing: border-box;
+  height: 28px;
+  border: 1px dashed #3f3f46;
+  padding: 0 10px;
+  color: #d4d4d8;
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+}
+
+.review-document-issue-add-button--parent {
+  border-style: solid;
+}
+
+.review-document-issue-sub-items {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.review-document-issue-sub-items > .review-document-issue-reference {
+  width: 100%;
+  flex: none;
+}
+
+.review-document-issue-sub-items > .review-document-issue-add-field {
+  width: 128px;
+}
+
+.review-document-issue-sub-items > .review-document-issue-add-button {
+  align-self: flex-start;
+}
+
+.review-document-issue-labels > .review-document-issue-chips {
+  width: 100%;
+}
+
+.review-document-issue-assignees > .review-document-issue-chips {
+  width: 100%;
+}
+
+.review-document-issue-assignees .review-document-issue-add-field {
+  width: 136px;
+}
+
+.review-document-issue-parent .review-document-issue-add-field--parent {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  padding-inline: 8px;
+}
+
+.review-document-issue-fields input[type='checkbox'] {
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  accent-color: #60a5fa;
+}
+
+.review-document-thread-comment-meta {
+  margin: 0;
+  color: #a1a1aa;
+  font-size: 12px;
+}
+
+.review-document-thread-comment-meta strong {
+  color: #fafafa;
+}
+
+.review-document-avatar {
+  box-sizing: border-box;
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  align-items: center;
+  justify-content: center;
+  background: #27272a;
+  color: #fafafa;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.review-document-issue-comment-body {
+  padding: 10px;
+  color: #d4d4d8;
+  font-size: 14px;
+}
+
+.session-status-panel[data-size='phone']
+  .review-document-panel[data-view='edit']
+  .review-document-issue-frontmatter {
+  max-height: 45%;
+  flex: 0 1 auto;
+  padding-inline: 16px;
+  font-size: 15px;
+}
+
+.session-status-panel[data-size='phone'] .review-document-issue-title {
+  font-size: 12.5px;
+}
+
+.session-status-panel[data-size='phone'] .review-document-issue-fields {
+  grid-template-columns: 84px minmax(0, 1fr);
+  font-size: 12.5px;
+}
+
+.session-status-panel[data-size='phone'] .review-document-issue-title textarea {
+  height: 66px;
+  font-size: 16px;
+}
+
+.session-status-panel[data-size='phone'] .review-document-thread-comment-meta {
+  font-size: 12.5px;
+}
+
+.session-status-panel[data-size='phone'] .review-document-issue-comment-body {
+  font-size: 15px;
+}
+
+.session-status-panel[data-size='phone']
+  .review-document-issue-fields
+  input:not([type='checkbox']) {
+  min-height: 40px;
+  font-size: 16px;
+}
+
+.session-status-panel[data-size='phone'] .review-document-issue-chip {
+  height: 36px;
+}
+
+.session-status-panel[data-size='phone'] .review-document-issue-chip button,
+.session-status-panel[data-size='phone']
+  .review-document-issue-reference
+  button {
+  width: 32px;
+}
+
+.session-status-panel[data-size='phone'] .review-document-issue-reference {
+  height: 36px;
+}
+
+.session-status-panel[data-size='phone'] .review-document-issue-fields > dt {
+  min-height: 36px;
+}
+
+.session-status-panel[data-size='phone']
+  .review-document-issue-fields
+  input.review-document-issue-add-field {
+  height: 36px;
+  min-height: 36px;
+  font-size: 12.5px;
+}
+
+.session-status-panel[data-size='phone'] .review-document-issue-add-button {
+  height: 36px;
+  font-size: 12.5px;
+}
+
+.session-status-panel[data-size='phone']
+  .review-document-issue-fields
+  .review-document-issue-chips
+  .review-document-issue-add-field--label {
+  width: 96px;
+  border-color: #3f3f46;
+  font-size: 16px;
+}
+
+.session-status-panel[data-size='phone']
+  .review-document-issue-assignees
+  .review-document-issue-add-button {
+  width: 136px;
+}
+
+.session-status-panel[data-size='phone']
+  .review-document-issue-sub-items
+  > .review-document-issue-add-field {
+  width: 140px;
+}

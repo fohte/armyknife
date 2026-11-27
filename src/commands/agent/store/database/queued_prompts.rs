@@ -12,9 +12,45 @@ pub(crate) struct WatchWebQueuedPrompt {
     pub(crate) id: i64,
     pub(crate) message_id: Option<String>,
     pub(crate) content: String,
+    pub(crate) action_event_kind: Option<WatchWebActionEventKind>,
     pub(crate) attachments: Vec<WatchWebQueuedAttachment>,
     pub(crate) resolved: bool,
     pub(crate) sent_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WatchWebActionEventKind {
+    VibeModeOn,
+    VibeModeOff,
+    TodoCompleted,
+    TodoRejected,
+    DecisionChange,
+}
+
+impl WatchWebActionEventKind {
+    fn as_db_value(self) -> &'static str {
+        match self {
+            Self::VibeModeOn => "vibe_mode_on",
+            Self::VibeModeOff => "vibe_mode_off",
+            Self::TodoCompleted => "todo_completed",
+            Self::TodoRejected => "todo_rejected",
+            Self::DecisionChange => "decision_change",
+        }
+    }
+
+    fn from_db_value(value: Option<String>) -> Result<Option<Self>> {
+        let Some(value) = value else {
+            return Ok(None);
+        };
+        match value.as_str() {
+            "vibe_mode_on" => Ok(Some(Self::VibeModeOn)),
+            "vibe_mode_off" => Ok(Some(Self::VibeModeOff)),
+            "todo_completed" => Ok(Some(Self::TodoCompleted)),
+            "todo_rejected" => Ok(Some(Self::TodoRejected)),
+            "decision_change" => Ok(Some(Self::DecisionChange)),
+            _ => anyhow::bail!("unknown watch-web action event kind: {value}"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -30,6 +66,7 @@ pub(crate) fn insert_watch_web_queued_prompt(
     message_id: &str,
     content: &str,
     attachments: &[WatchWebQueuedAttachment],
+    action_event_kind: Option<WatchWebActionEventKind>,
     sent_at: DateTime<Utc>,
 ) -> Result<i64> {
     super::validate_session_id(session_id)?;
@@ -37,13 +74,14 @@ pub(crate) fn insert_watch_web_queued_prompt(
     let attachments = serde_json::to_string(attachments)?;
     connection.execute(
         "INSERT INTO watch_web_queued_prompt (
-            session_id, message_id, content, attachments, sent_at, resolved
-         ) VALUES (?1, ?2, ?3, ?4, ?5, 0)",
+            session_id, message_id, content, attachments, action_event_kind, sent_at, resolved
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0)",
         params![
             session_id,
             message_id,
             content,
             attachments,
+            action_event_kind.map(WatchWebActionEventKind::as_db_value),
             sent_at.to_rfc3339()
         ],
     )?;
@@ -84,7 +122,7 @@ pub(crate) fn watch_web_queued_prompts(
 
     let connection = open_connection(sessions_dir)?;
     let mut statement = connection.prepare(
-        "SELECT id, message_id, content, attachments, resolved, sent_at
+        "SELECT id, message_id, content, attachments, action_event_kind, resolved, sent_at
          FROM watch_web_queued_prompt
          WHERE session_id = ?1",
     )?;
@@ -94,17 +132,19 @@ pub(crate) fn watch_web_queued_prompts(
             row.get::<_, Option<String>>(1)?,
             row.get::<_, String>(2)?,
             row.get::<_, String>(3)?,
-            row.get::<_, bool>(4)?,
-            row.get::<_, String>(5)?,
+            row.get::<_, Option<String>>(4)?,
+            row.get::<_, bool>(5)?,
+            row.get::<_, String>(6)?,
         ))
     })?;
     let mut prompts = rows
         .map(|row| {
-            let (id, message_id, content, attachments, resolved, sent_at) = row?;
+            let (id, message_id, content, attachments, action_event_kind, resolved, sent_at) = row?;
             Ok(WatchWebQueuedPrompt {
                 id,
                 message_id,
                 content,
+                action_event_kind: WatchWebActionEventKind::from_db_value(action_event_kind)?,
                 attachments: serde_json::from_str(&attachments)?,
                 resolved,
                 sent_at: DateTime::parse_from_rfc3339(&sent_at)?.with_timezone(&Utc),
@@ -173,9 +213,10 @@ mod tests {
         insert_watch_web_peer_out_message, watch_web_peer_out_messages,
     };
     use super::{
-        WatchWebQueuedAttachment, WatchWebQueuedPrompt, delete_watch_web_queued_prompts,
-        insert_watch_web_queued_prompt, mark_watch_web_queued_prompts_resolved,
-        watch_web_queued_prompt_message_id_exists, watch_web_queued_prompts,
+        WatchWebActionEventKind, WatchWebQueuedAttachment, WatchWebQueuedPrompt,
+        delete_watch_web_queued_prompts, insert_watch_web_queued_prompt,
+        mark_watch_web_queued_prompts_resolved, watch_web_queued_prompt_message_id_exists,
+        watch_web_queued_prompts,
     };
 
     #[fixture]
@@ -197,6 +238,7 @@ mod tests {
             "11111111-1111-4111-8111-111111111111",
             "First queued message with /fixture/image-a.webp",
             &[],
+            None,
             first_sent_at,
         )
         .unwrap();
@@ -206,6 +248,7 @@ mod tests {
             "22222222-2222-4222-8222-222222222222",
             "Second queued message",
             &[],
+            None,
             second_sent_at,
         )
         .unwrap();
@@ -215,6 +258,7 @@ mod tests {
             "33333333-3333-4333-8333-333333333333",
             "Another session's queued message",
             &[],
+            None,
             second_sent_at,
         )
         .unwrap();
@@ -236,6 +280,7 @@ mod tests {
                         id: first_id,
                         message_id: Some("11111111-1111-4111-8111-111111111111".to_string()),
                         content: "First queued message with /fixture/image-a.webp".to_string(),
+                        action_event_kind: None,
                         attachments: vec![],
                         resolved: false,
                         sent_at: first_sent_at,
@@ -244,6 +289,7 @@ mod tests {
                         id: second_id,
                         message_id: Some("22222222-2222-4222-8222-222222222222".to_string()),
                         content: "Second queued message".to_string(),
+                        action_event_kind: None,
                         attachments: vec![],
                         resolved: false,
                         sent_at: second_sent_at,
@@ -253,6 +299,7 @@ mod tests {
                     id: second_id,
                     message_id: Some("22222222-2222-4222-8222-222222222222".to_string()),
                     content: "Second queued message".to_string(),
+                    action_event_kind: None,
                     attachments: vec![],
                     resolved: false,
                     sent_at: second_sent_at,
@@ -261,6 +308,7 @@ mod tests {
                     id: second_id + 1,
                     message_id: Some("33333333-3333-4333-8333-333333333333".to_string()),
                     content: "Another session's queued message".to_string(),
+                    action_event_kind: None,
                     attachments: vec![],
                     resolved: false,
                     sent_at: second_sent_at,
@@ -287,6 +335,7 @@ mod tests {
             message_id,
             "A queued message",
             &[],
+            None,
             sent_at,
         )
         .unwrap();
@@ -310,6 +359,44 @@ mod tests {
     }
 
     #[rstest]
+    #[case::vibe_mode_on(WatchWebActionEventKind::VibeModeOn)]
+    #[case::vibe_mode_off(WatchWebActionEventKind::VibeModeOff)]
+    #[case::todo_completed(WatchWebActionEventKind::TodoCompleted)]
+    #[case::todo_rejected(WatchWebActionEventKind::TodoRejected)]
+    #[case::decision_change(WatchWebActionEventKind::DecisionChange)]
+    fn round_trips_action_event_kind(
+        sessions_dir: TempDir,
+        #[case] action_event_kind: WatchWebActionEventKind,
+    ) {
+        let sent_at = chrono::Utc
+            .with_ymd_and_hms(2026, 3, 14, 9, 26, 53)
+            .unwrap();
+        let id = insert_watch_web_queued_prompt(
+            sessions_dir.path(),
+            "fixture-session-a",
+            "fixture-action-message",
+            "Recorded action event text",
+            &[],
+            Some(action_event_kind),
+            sent_at,
+        )
+        .unwrap();
+
+        assert_eq!(
+            watch_web_queued_prompts(sessions_dir.path(), "fixture-session-a").unwrap(),
+            vec![WatchWebQueuedPrompt {
+                id,
+                message_id: Some("fixture-action-message".to_owned()),
+                content: "Recorded action event text".to_owned(),
+                action_event_kind: Some(action_event_kind),
+                attachments: vec![],
+                resolved: false,
+                sent_at,
+            }],
+        );
+    }
+
+    #[rstest]
     fn lists_prompts_by_send_time_when_inserts_finish_out_of_order(sessions_dir: TempDir) {
         let earlier_sent_at = chrono::Utc
             .with_ymd_and_hms(2026, 3, 14, 9, 26, 53)
@@ -323,6 +410,7 @@ mod tests {
             "44444444-4444-4444-8444-444444444444",
             "Later dispatched request",
             &[],
+            None,
             later_sent_at,
         )
         .unwrap();
@@ -332,6 +420,7 @@ mod tests {
             "55555555-5555-4555-8555-555555555555",
             "Earlier dispatched request",
             &[],
+            None,
             earlier_sent_at,
         )
         .unwrap();
@@ -343,6 +432,7 @@ mod tests {
                     id: earlier_id,
                     message_id: Some("55555555-5555-4555-8555-555555555555".to_string()),
                     content: "Earlier dispatched request".to_string(),
+                    action_event_kind: None,
                     attachments: vec![],
                     resolved: false,
                     sent_at: earlier_sent_at,
@@ -351,6 +441,7 @@ mod tests {
                     id: later_id,
                     message_id: Some("44444444-4444-4444-8444-444444444444".to_string()),
                     content: "Later dispatched request".to_string(),
+                    action_event_kind: None,
                     attachments: vec![],
                     resolved: false,
                     sent_at: later_sent_at,
@@ -373,6 +464,7 @@ mod tests {
             "77777777-7777-4777-8777-777777777777",
             "Review the attached file.",
             &attachments,
+            None,
             sent_at,
         )
         .unwrap();
@@ -386,6 +478,7 @@ mod tests {
                 id,
                 message_id: Some("77777777-7777-4777-8777-777777777777".to_owned()),
                 content: "Review the attached file.".to_owned(),
+                action_event_kind: None,
                 attachments: attachments.to_vec(),
                 resolved: true,
                 sent_at,
@@ -417,6 +510,7 @@ mod tests {
             "66666666-6666-4666-8666-666666666666",
             "Queued until this session is deleted",
             &[],
+            None,
             sent_at,
         )
         .unwrap();
