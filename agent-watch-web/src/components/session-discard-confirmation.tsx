@@ -74,9 +74,12 @@ export function SessionDiscardConfirmation({
   const title = reviewAgain
     ? 'Review the changes again'
     : 'Discard changes and close?'
+  const newItems = formatNewItems(newFileCount, newCommitCount)
   const description = reviewAgain
-    ? `Nothing was deleted: ${formatNewItems(newFileCount, newCommitCount) || 'no new changes'} appeared after you confirmed. Discarding deletes these too.`
-    : `Deletes the worktree and the branch ${branchName}. These are not saved anywhere else.`
+    ? newItems.length > 0
+      ? `Nothing was deleted: ${newItems} appeared after you confirmed. Discarding deletes these too.`
+      : 'Nothing was deleted. Review the current changes before discarding them.'
+    : `Deletes the worktree and the local branch ${branchName}. Changes that are not saved elsewhere will be lost.`
 
   return (
     <ConfirmDialog

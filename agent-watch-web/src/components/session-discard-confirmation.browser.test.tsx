@@ -24,6 +24,7 @@ afterEach(() => {
 
 function renderConfirmation(props: {
   changes: { status: 'M'; path: string; isNew?: boolean }[]
+  commits?: { sha: string; subject: string; isNew?: boolean }[]
   onCancel?: () => void
   onDiscard?: () => void
 }) {
@@ -34,7 +35,7 @@ function renderConfirmation(props: {
         branchName="feature/sample-update"
         worktreePath="/workspace/sample"
         changes={props.changes}
-        commits={[]}
+        commits={props.commits ?? []}
         onCancel={props.onCancel ?? (() => undefined)}
         onDiscard={props.onDiscard ?? (() => undefined)}
       />,
@@ -54,10 +55,17 @@ it('expands the file list when Show more is activated', async () => {
   )
   if (showMoreButton === null) throw new Error('Expected a Show more button')
   const initialLabel = showMoreButton.textContent
+  const initialPaths = Array.from(
+    document.querySelectorAll('.session-discard-confirmation__path'),
+    (element) => element.textContent,
+  )
+  const initialExpanded = showMoreButton.getAttribute('aria-expanded')
   await act(async () => userEvent.click(showMoreButton))
 
   const snapshot = () => ({
     initialLabel,
+    initialPaths,
+    initialExpanded,
     paths: Array.from(
       document.querySelectorAll('.session-discard-confirmation__path'),
       (element) => element.textContent,
@@ -70,6 +78,14 @@ it('expands the file list when Show more is activated', async () => {
   })
   expect(snapshot()).toEqual({
     initialLabel: 'Show 2 more',
+    initialPaths: [
+      'src/module-1.ts',
+      'src/module-2.ts',
+      'src/module-3.ts',
+      'src/module-4.ts',
+      'src/module-5.ts',
+    ],
+    initialExpanded: 'false',
     paths: [
       'src/module-1.ts',
       'src/module-2.ts',
@@ -78,6 +94,63 @@ it('expands the file list when Show more is activated', async () => {
       'src/module-5.ts',
       'src/module-6.ts',
       'src/module-7.ts',
+    ],
+    button: 'Show less',
+    expanded: 'true',
+  })
+})
+
+it('expands the commit list when its Show more button is activated', async () => {
+  const commits = Array.from({ length: 7 }, (_, index) => ({
+    sha: `a${String(index + 1)}b2c3d`,
+    subject: `Update module ${String(index + 1)}`,
+  }))
+  renderConfirmation({ changes: [], commits })
+
+  const showMoreButton = document.querySelector<HTMLButtonElement>(
+    '.session-discard-confirmation__show-more',
+  )
+  if (showMoreButton === null) throw new Error('Expected a Show more button')
+  const initialLabel = showMoreButton.textContent
+  const initialSubjects = Array.from(
+    document.querySelectorAll('.session-discard-confirmation__subject'),
+    (element) => element.textContent,
+  )
+  const initialExpanded = showMoreButton.getAttribute('aria-expanded')
+  await act(async () => userEvent.click(showMoreButton))
+
+  const snapshot = () => ({
+    initialLabel,
+    initialSubjects,
+    initialExpanded,
+    subjects: Array.from(
+      document.querySelectorAll('.session-discard-confirmation__subject'),
+      (element) => element.textContent,
+    ),
+    button: document.querySelector('.session-discard-confirmation__show-more')
+      ?.textContent,
+    expanded: document
+      .querySelector('.session-discard-confirmation__show-more')
+      ?.getAttribute('aria-expanded'),
+  })
+  expect(snapshot()).toEqual({
+    initialLabel: 'Show 2 more',
+    initialSubjects: [
+      'Update module 1',
+      'Update module 2',
+      'Update module 3',
+      'Update module 4',
+      'Update module 5',
+    ],
+    initialExpanded: 'false',
+    subjects: [
+      'Update module 1',
+      'Update module 2',
+      'Update module 3',
+      'Update module 4',
+      'Update module 5',
+      'Update module 6',
+      'Update module 7',
     ],
     button: 'Show less',
     expanded: 'true',
