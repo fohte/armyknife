@@ -269,7 +269,13 @@ impl AgentCommands {
         match self {
             Self::New(args) => new::run(args)?,
             Self::Codex(args) => codex::run(args)?,
-            Self::Current(_) => return Ok(Some(current::run())),
+            Self::Current(_) => {
+                let output = current::run(&current::ProcessContext);
+                if let Some(stdout) = output.stdout {
+                    println!("{stdout}");
+                }
+                return Ok(Some(output.exit_code));
+            }
             Self::CodexSubagentStop(args) => codex_subagent_stop::run(args)?,
             Self::CodexSubagentStopWorker(args) => codex_subagent_stop::run_worker(args)?,
             Self::Clean(args) => clean::run(args).await?,
