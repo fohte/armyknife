@@ -163,12 +163,15 @@ fn marker_path(port: u16) -> Result<PathBuf> {
     Ok(store::crit_dir()?.join(format!("{port}.monitor")))
 }
 
-fn claim_marker(path: &Path) -> Result<Option<String>> {
+fn claim_marker(path: &Path, discard_stale_state: impl FnOnce()) -> Result<Option<String>> {
     let _lock = lock_marker(path)?;
     if marker_is_active(path)? {
         return Ok(None);
     }
 
+    // State tied to the marker is written only while it is active, so what is left here belongs
+    // to a monitor that exited without cleaning up (SIGKILL, reboot, failed start).
+    discard_stale_state();
     let reservation = format!("starting:{}:{}", std::process::id(), unix_time_secs());
     fs::write(path, &reservation)?;
     Ok(Some(reservation))
@@ -492,6 +495,31 @@ mod tests {
 
     use super::*;
     use crate::commands::agent::types::WebUiRegistration;
+
+    #[rstest]
+    #[case::no_marker(None, true, 1)]
+    #[case::monitor_exited_without_cleanup(Some("0".to_string()), true, 1)]
+    #[case::live_monitor(Some(std::process::id().to_string()), false, 0)]
+    fn stale_marker_state_is_discarded_only_when_the_marker_is_claimed(
+        #[case] marker_contents: Option<String>,
+        #[case] expected_claimed: bool,
+        #[case] expected_discards: usize,
+    ) -> Result<()> {
+        let dir = tempfile::TempDir::new()?;
+        let marker = dir.path().join("43210.monitor");
+        if let Some(contents) = marker_contents {
+            fs::write(&marker, contents)?;
+        }
+        let discards = Cell::new(0);
+
+        let claimed = claim_marker(&marker, || discards.set(discards.get() + 1))?;
+
+        assert_eq!(
+            (claimed.is_some(), discards.get()),
+            (expected_claimed, expected_discards),
+        );
+        Ok(())
+    }
 
     #[rstest]
     #[case::owned_marker(std::process::id().to_string(), true, false)]
