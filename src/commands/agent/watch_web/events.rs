@@ -164,7 +164,7 @@ async fn run_revision_monitor(
     let mut last_warning_at = None;
     let mut refresh_pending;
     loop {
-        while *subscriber_receiver.borrow() == 0 {
+        while *subscriber_receiver.borrow_and_update() == 0 {
             if event_channel_open {
                 tokio::select! {
                     changed = subscriber_receiver.changed() => {
