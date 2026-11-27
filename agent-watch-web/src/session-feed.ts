@@ -306,7 +306,7 @@ export function startSessionFeed(
 
   const reportStatus = () => {
     if (requestError) {
-      onError('Unable to load sessions. Retrying…')
+      onError('Unable to load sessions. Waiting for a stream update…')
     } else if (streamError) {
       onError('Connection lost. Reconnecting…')
     } else {

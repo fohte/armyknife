@@ -514,7 +514,9 @@ it.each(invalidSessionCases)(
       },
       (message) => {
         errors.push(message)
-        if (message === 'Unable to load sessions. Retrying…') {
+        if (
+          message === 'Unable to load sessions. Waiting for a stream update…'
+        ) {
           failureReported.resolve(undefined)
         }
       },
@@ -530,7 +532,7 @@ it.each(invalidSessionCases)(
     const snapshot = () => ({ delivered, errors, closed: source.closed })
     expect(snapshot()).toEqual({
       delivered: false,
-      errors: ['Unable to load sessions. Retrying…'],
+      errors: ['Unable to load sessions. Waiting for a stream update…'],
       closed: true,
     })
   },
@@ -538,7 +540,7 @@ it.each(invalidSessionCases)(
 
 it('coalesces session events and refreshes when the stream reconnects', async () => {
   vi.useFakeTimers()
-  const source = new FakeEventSource()
+  const sources: FakeEventSource[] = []
   const firstRequestStarted = deferred<undefined>()
   const firstResponse = deferred<Response>()
   const updateReceived = deferred<undefined>()
@@ -630,10 +632,18 @@ it('coalesces session events and refreshes when the stream reconnects', async ()
     (message) => errors.push(message),
     {
       fetcher,
-      createEventSource: () => source,
+      createEventSource: () => {
+        const source = new FakeEventSource()
+        sources.push(source)
+        return source
+      },
     },
   )
 
+  const source = sources[0]
+  if (source === undefined) {
+    throw new Error('Initial event source was not created')
+  }
   await firstRequestStarted.promise
   source.emit('sessions')
   firstResponse.resolve(
@@ -675,6 +685,7 @@ it('coalesces session events and refreshes when the stream reconnects', async ()
   const snapshot = () => [
     responses,
     errors,
+    sources.length,
     fetcher.mock.calls.length,
     source.closed,
   ]
@@ -772,6 +783,7 @@ it('coalesces session events and refreshes when the stream reconnects', async ()
       },
     ],
     [null, null, 'Connection lost. Reconnecting…', null, null],
+    1,
     3,
     true,
   ])
@@ -997,7 +1009,7 @@ it('retries a failed session request on the next stream event', async () => {
     },
     (message) => {
       errors.push(message)
-      if (message === 'Unable to load sessions. Retrying…') {
+      if (message === 'Unable to load sessions. Waiting for a stream update…') {
         failureReported.resolve(undefined)
       }
     },
@@ -1022,7 +1034,7 @@ it('retries a failed session request on the next stream event', async () => {
 
   expect(snapshot()).toEqual([
     [8],
-    ['Unable to load sessions. Retrying…', null],
+    ['Unable to load sessions. Waiting for a stream update…', null],
     2,
     true,
   ])
@@ -1039,7 +1051,7 @@ it('cancels a closed stream reconnect when the page becomes hidden', async () =>
     () => {},
     (message) => {
       errors.push(message)
-      if (message === 'Unable to load sessions. Retrying…') {
+      if (message === 'Unable to load sessions. Waiting for a stream update…') {
         failureReported.resolve(undefined)
       }
     },
@@ -1065,8 +1077,8 @@ it('cancels a closed stream reconnect when the page becomes hidden', async () =>
   })
   expect(snapshot()).toEqual({
     errors: [
-      'Unable to load sessions. Retrying…',
-      'Unable to load sessions. Retrying…',
+      'Unable to load sessions. Waiting for a stream update…',
+      'Unable to load sessions. Waiting for a stream update…',
       null,
     ],
     requests: 1,
