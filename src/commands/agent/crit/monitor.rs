@@ -115,7 +115,13 @@ pub(super) fn run(args: &MonitorArgs) -> Result<()> {
                     error = %error,
                 );
             }
-            thread::sleep(MONITOR_POLL_INTERVAL);
+            // Waking on the daemon's exit event instead of sleeping avoids a lag
+            // before cleanup. Trusting the event rather than re-checking
+            // `is_process_alive` keeps an unreaped zombie daemon from spinning
+            // this loop.
+            if process::wait_for_any_exit(&[watched_pid], Some(MONITOR_POLL_INTERVAL)) {
+                break;
+            }
         }
 
         match crit_pid_for_port(args.port) {
