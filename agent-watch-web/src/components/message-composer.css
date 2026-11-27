@@ -19,15 +19,6 @@
   max-height: min(40dvh, 280px);
 }
 
-.composer-file-input {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
-}
-
 .mobile-interrupt-button[data-slot='button'] {
   width: 36px;
   height: 36px;

@@ -1,7 +1,7 @@
 import '#components/composer.css'
 
 import { Button } from '@fohte/ui/button'
-import { ArrowUp, Plus } from 'lucide-react'
+import { ArrowUp, Plus, X } from 'lucide-react'
 import type { ReactNode } from 'react'
 
 import type { AttachmentPreview } from '#components/attachment-preview-list'
@@ -16,7 +16,8 @@ export type ComposerProps = {
   onRemoveAttachment?: (id: string) => void
   onAddAttachments: () => void
   sendState: ComposerSendState
-  keyHints?: ReactNode
+  keyHint?: ReactNode
+  keyHint2?: ReactNode
   statusText?: string
   isMobile?: boolean
   isBusy?: boolean
@@ -29,7 +30,8 @@ export function Composer({
   onRemoveAttachment,
   onAddAttachments,
   sendState,
-  keyHints,
+  keyHint,
+  keyHint2,
   statusText,
   isMobile = false,
   isBusy = false,
@@ -69,7 +71,12 @@ export function Composer({
                       onRemoveAttachment(attachment.id)
                     }}
                   >
-                    ×
+                    <span
+                      className="composer-attachment-remove-face"
+                      aria-hidden="true"
+                    >
+                      <X aria-hidden="true" size={12} strokeWidth={3} />
+                    </span>
                   </Button>
                 )}
               </li>
@@ -85,9 +92,12 @@ export function Composer({
             aria-label="Add attachment"
             onClick={onAddAttachments}
           >
-            <Plus aria-hidden="true" size={18} />
+            <Plus aria-hidden="true" size={isMobile ? 22 : 18} />
           </Button>
-          <div className="composer-key-hints">{keyHints}</div>
+          <div className="composer-key-hint">{keyHint}</div>
+          {keyHint2 === undefined ? null : (
+            <div className="composer-key-hint2">{keyHint2}</div>
+          )}
           <div className="composer-send-actions">
             {trailingAction}
             <Button
@@ -97,7 +107,7 @@ export function Composer({
               aria-label="Send message"
               disabled={sendState !== 'on'}
             >
-              <ArrowUp aria-hidden="true" size={18} />
+              <ArrowUp aria-hidden="true" size={isMobile ? 22 : 18} />
             </Button>
           </div>
         </div>

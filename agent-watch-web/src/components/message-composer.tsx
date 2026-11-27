@@ -153,9 +153,10 @@ export function MessageComposer({
         isProcessingAttachments
       ? 'dim'
       : 'on'
-  const keyHints = isMobile
+  const keyHint = isMobile
     ? undefined
-    : `↵ Send · ⇧↵ / ⌥↵ New line${canInterrupt && !isInterrupting ? ' · Esc Interrupt' : ''} · ⌥↑ / ⌥↓ My messages`
+    : `↵ Send · ⇧↵ / ⌥↵ New line${canInterrupt && !isInterrupting ? ' · Esc Interrupt' : ''}`
+  const keyHint2 = isMobile ? undefined : '⌥↑ / ⌥↓ My messages'
 
   return (
     <form
@@ -170,7 +171,8 @@ export function MessageComposer({
         onRemoveAttachment={onRemoveAttachment}
         onAddAttachments={() => fileInputRef.current?.click()}
         sendState={sendState}
-        keyHints={keyHints}
+        keyHint={keyHint}
+        keyHint2={keyHint2}
         statusText={statusText ?? ''}
         isMobile={isMobile}
         isBusy={isProcessingAttachments}
@@ -228,14 +230,15 @@ export function MessageComposer({
       </Composer>
       <input
         ref={fileInputRef}
-        className="composer-file-input"
         type="file"
+        hidden
         multiple
-        aria-label="Add attachments"
+        accept="image/*"
         onChange={(event) => {
           const files = Array.from(event.currentTarget.files ?? [])
           if (files.length > 0) onPasteFiles(files)
           event.currentTarget.value = ''
+          if (files.length > 0) skillCompletion.textareaRef.current?.focus()
         }}
       />
     </form>

@@ -3639,22 +3639,24 @@ it('ignores Alt-arrow shortcuts on mobile', () => {
 it('shows desktop newline shortcuts with the applicable interrupt hint', () => {
   const onAction = () => Promise.resolve(true)
   renderView(onAction)
-  const interruptibleHint = container.querySelector(
-    '.composer-key-hints',
+  const interruptibleHint =
+    container.querySelector('.composer-key-hint')?.textContent
+  const ownMessageHint = container.querySelector(
+    '.composer-key-hint2',
   )?.textContent
   renderView(onAction, session, undefined, [], { ...actions, interrupt: false })
-  const nonInterruptibleHint = container.querySelector(
-    '.composer-key-hints',
-  )?.textContent
+  const nonInterruptibleHint =
+    container.querySelector('.composer-key-hint')?.textContent
 
   const snapshot = () => ({
     interruptibleHint,
     nonInterruptibleHint,
+    ownMessageHint,
   })
   expect(snapshot()).toEqual({
-    interruptibleHint:
-      '↵ Send · ⇧↵ / ⌥↵ New line · Esc Interrupt · ⌥↑ / ⌥↓ My messages',
-    nonInterruptibleHint: '↵ Send · ⇧↵ / ⌥↵ New line · ⌥↑ / ⌥↓ My messages',
+    interruptibleHint: '↵ Send · ⇧↵ / ⌥↵ New line · Esc Interrupt',
+    nonInterruptibleHint: '↵ Send · ⇧↵ / ⌥↵ New line',
+    ownMessageHint: '⌥↑ / ⌥↓ My messages',
   })
 })
 
@@ -3681,7 +3683,9 @@ it('keeps Enter for newlines and exposes mobile conversation actions', async () 
       enterEvent.defaultPrevented,
       shiftEnterEvent.defaultPrevented,
     ],
-    keyboardHint: container.querySelector('.composer-key-hints')?.textContent,
+    keyboardHint: container.querySelector('.composer-key-hint')?.textContent,
+    keyboardHint2:
+      container.querySelector('.composer-key-hint2')?.textContent ?? null,
     choiceShortcutBadges: container.querySelectorAll(
       '.chat-question-choices kbd',
     ).length,
@@ -3700,6 +3704,7 @@ it('keeps Enter for newlines and exposes mobile conversation actions', async () 
     actions: [['interrupt']],
     defaultPrevented: [false, false],
     keyboardHint: '',
+    keyboardHint2: null,
     choiceShortcutBadges: 0,
     interruptLabel: 'Interrupting…',
     interruptBusy: 'true',

@@ -179,7 +179,8 @@ it('shows desktop and mobile interrupt progress while the request is pending', (
   renderFreshComposer({ canInterrupt: true, isInterrupting: true, onInterrupt })
   const desktop = {
     hint: container.querySelector('[role="status"]')?.textContent,
-    keyHints: container.querySelector('.composer-key-hints')?.textContent,
+    keyHint: container.querySelector('.composer-key-hint')?.textContent,
+    keyHint2: container.querySelector('.composer-key-hint2')?.textContent,
     buttonCount: container.querySelectorAll('.mobile-interrupt-button').length,
   }
 
@@ -207,7 +208,8 @@ it('shows desktop and mobile interrupt progress while the request is pending', (
   expect(snapshot()).toEqual({
     desktop: {
       hint: 'Interrupting…',
-      keyHints: '↵ Send · ⇧↵ / ⌥↵ New line · ⌥↑ / ⌥↓ My messages',
+      keyHint: '↵ Send · ⇧↵ / ⌥↵ New line',
+      keyHint2: '⌥↑ / ⌥↓ My messages',
       buttonCount: 0,
     },
     mobile: { label: 'Interrupting…', busy: 'true', disabled: true },
@@ -316,7 +318,10 @@ it('opens a multi-file picker and sends selected files to the attachment handler
   const onPasteFiles = vi.fn()
   renderFreshComposer({ onPasteFiles })
   const fileInput = requireElement(
-    container.querySelector<HTMLInputElement>('.composer-file-input'),
+    container.querySelector<HTMLInputElement>('input[type="file"]'),
+  )
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
   )
   const pickerClick = vi.spyOn(fileInput, 'click').mockImplementation(() => {})
   const files = [
@@ -336,6 +341,7 @@ it('opens a multi-file picker and sends selected files to the attachment handler
     },
   })
   let firstResetValue = 'unset'
+  let firstSelectionFocused = false
 
   act(() => {
     requireElement(
@@ -346,6 +352,7 @@ it('opens a multi-file picker and sends selected files to the attachment handler
     inputValue = 'C:\\fakepath\\first.png'
     fileInput.dispatchEvent(new Event('change', { bubbles: true }))
     firstResetValue = fileInput.value
+    firstSelectionFocused = document.activeElement === textarea
     inputValue = 'C:\\fakepath\\first.png'
     fileInput.dispatchEvent(new Event('change', { bubbles: true }))
   })
@@ -353,6 +360,11 @@ it('opens a multi-file picker and sends selected files to the attachment handler
   const snapshot = () => ({
     pickerClicks: pickerClick.mock.calls,
     multiple: fileInput.multiple,
+    hidden: fileInput.hidden,
+    accept: fileInput.accept,
+    ariaLabel: fileInput.getAttribute('aria-label'),
+    firstSelectionFocused,
+    focusAfterSelection: document.activeElement === textarea,
     selectedFiles: onPasteFiles.mock.calls,
     firstResetValue,
     inputValue: fileInput.value,
@@ -360,6 +372,11 @@ it('opens a multi-file picker and sends selected files to the attachment handler
   expect(snapshot()).toEqual({
     pickerClicks: [[]],
     multiple: true,
+    hidden: true,
+    accept: 'image/*',
+    ariaLabel: null,
+    firstSelectionFocused: true,
+    focusAfterSelection: true,
     selectedFiles: [[files], [files]],
     firstResetValue: '',
     inputValue: '',

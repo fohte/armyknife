@@ -38,7 +38,7 @@
 .composer-attachments {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 12px;
   margin: 0;
   padding: 10px 12px 0;
   list-style: none;
@@ -92,24 +92,38 @@
 .composer-attachment-remove[data-slot='button'] {
   position: absolute;
   z-index: 1;
-  top: 0;
-  right: 0;
+  display: grid;
+  place-items: center;
+  top: -5px;
+  right: -5px;
   width: 24px;
   height: 24px;
   min-height: 24px;
   padding: 0;
-  border: 1px solid var(--aw-border-control);
-  border-radius: 50%;
-  background: var(--aw-bg-surface);
-  color: var(--aw-text-primary);
+  border: 0;
+  border-radius: var(--aw-radius);
+  background: transparent;
+  color: #0a0a0a;
   font-size: 18px;
   line-height: 1;
-  box-shadow: 0 1px 4px rgb(0 0 0 / 18%);
+}
+
+.composer-attachment-remove-face {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  box-sizing: border-box;
+  place-items: center;
+  border: 2px solid #141414;
+  border-radius: var(--aw-radius);
+  background: #fafafa;
+  color: #0a0a0a;
+  font-size: 18px;
+  line-height: 1;
 }
 
 .composer-footer {
-  display: grid;
-  grid-template-columns: 36px minmax(0, 1fr) auto;
+  display: flex;
   align-items: center;
   gap: 10px;
   padding: 6px 8px 8px;
@@ -126,35 +140,47 @@
 }
 
 .composer-add-button[data-slot='button'] {
-  border: 1px solid var(--aw-border-control);
-  background: transparent;
+  flex: none;
+  border: 0;
+  border-radius: var(--aw-radius);
+  background: #2a2a2e;
   color: var(--aw-text-body);
 }
 
-.composer-key-hints {
+.composer-key-hint {
+  flex: 1 1 0;
   min-width: 0;
-  text-align: center;
+  overflow: hidden;
+  padding-left: 4px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-key-hint2 {
+  flex: none;
+  white-space: nowrap;
 }
 
 .composer-send-actions {
+  flex: none;
   display: flex;
   align-items: center;
   gap: 6px;
 }
 
 .composer-send-button[data-slot='button'] {
-  border-radius: 50%;
-  background: var(--aw-color-brand);
-  color: var(--aw-bg-surface);
+  border-radius: var(--aw-radius);
+  background: #fafafa;
+  color: #0a0a0a;
 }
 
 .composer-send-button--dim[data-slot='button'] {
-  opacity: 0.45;
+  opacity: 0.5;
 }
 
 .composer-send-button--off[data-slot='button'] {
-  background: var(--aw-bg-pressed);
-  color: var(--aw-text-muted);
+  background: #2a2a2e;
+  color: #71717a;
   opacity: 1;
 }
 
@@ -170,7 +196,7 @@
 }
 
 .composer-shell[data-mobile='true'] .composer-attachments {
-  gap: 8px;
+  gap: 12px;
   padding: 10px 10px 0;
 }
 
@@ -184,9 +210,13 @@
   width: 44px;
   height: 44px;
   min-height: 44px;
-  top: 0;
-  right: 0;
-  font-size: 18px;
+  top: -15px;
+  right: -15px;
+}
+
+.composer-shell[data-mobile='true'] .composer-attachment-remove-face {
+  width: 24px;
+  height: 24px;
 }
 
 .composer-shell[data-mobile='true'] .composer-input-slot textarea {
@@ -196,7 +226,6 @@
 }
 
 .composer-shell[data-mobile='true'] .composer-footer {
-  grid-template-columns: 44px minmax(0, 1fr) auto;
   gap: 8px;
   padding: 4px 8px 8px;
 }
