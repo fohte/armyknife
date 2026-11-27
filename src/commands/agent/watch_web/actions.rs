@@ -29,6 +29,7 @@ mod keyed_mutex_registry;
 mod launch_sessions;
 mod merge_pull_request;
 mod messages;
+mod pane;
 mod permission_denied;
 mod permission_denied_locks;
 mod proposal_answer_locks;
@@ -78,6 +79,7 @@ pub(super) fn router(message_loaders: RouteLoaders) -> Router {
 fn router_with_state(state: ActionState) -> Router {
     Router::new()
         .route("/sessions/{id}/actions", get(actions))
+        .route("/sessions/{id}/pane", get(pane::get_pane_snapshot))
         .route("/sessions/{id}/resume", post(resume::resume_session))
         .route("/sessions/{id}/vibe", post(vibe::set_vibe))
         .route(
@@ -190,6 +192,7 @@ trait ActionRuntime: Send + Sync {
         mode: super::rewind::RewindMode,
     ) -> Result<String>;
     fn pane_current_command(&self, tmux_info: &TmuxInfo) -> Option<String>;
+    fn capture_pane(&self, tmux_info: &TmuxInfo) -> Result<String>;
     fn send_claude_escape_if_agent_is_running(
         &self,
         tmux_info: &TmuxInfo,
@@ -552,6 +555,9 @@ mod tests {
     #[path = "title.rs"]
     mod title;
 
+    #[path = "pane.rs"]
+    mod pane;
+
     #[path = "merge_pull_request.rs"]
     mod merge_pull_request;
 
@@ -581,6 +587,8 @@ mod tests {
             )>,
         >,
         pane_command: Mutex<Option<String>>,
+        pane_snapshot: Mutex<Option<String>>,
+        pane_snapshot_error: Mutex<Option<String>>,
         pane_has_agent_process: Mutex<bool>,
         pane_command_matches: Mutex<bool>,
         close_error: Mutex<Option<FakeCloseFailure>>,
@@ -606,6 +614,8 @@ mod tests {
                 message_gate: Mutex::new(None),
                 command_gate: Mutex::new(None),
                 pane_command: Mutex::new(Some("claude".to_string())),
+                pane_snapshot: Mutex::new(None),
+                pane_snapshot_error: Mutex::new(None),
                 pane_has_agent_process: Mutex::new(true),
                 pane_command_matches: Mutex::new(true),
                 close_error: Mutex::new(None),
@@ -695,6 +705,22 @@ mod tests {
                 "socketPath": tmux_info.socket_path,
             }));
             self.pane_command.lock().unwrap().clone()
+        }
+
+        fn capture_pane(&self, tmux_info: &TmuxInfo) -> Result<String> {
+            self.calls.lock().unwrap().push(json!({
+                "kind": "pane-snapshot",
+                "paneId": tmux_info.pane_id,
+                "socketPath": tmux_info.socket_path,
+            }));
+            if let Some(error) = self.pane_snapshot_error.lock().unwrap().clone() {
+                return Err(anyhow::anyhow!(error));
+            }
+            self.pane_snapshot
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("pane snapshot is not configured"))
         }
 
         fn send_claude_escape_if_agent_is_running(
@@ -965,6 +991,14 @@ mod tests {
 
         fn set_pane_command(&self, command: Option<&str>) {
             *self.runtime.pane_command.lock().unwrap() = command.map(str::to_string);
+        }
+
+        fn set_pane_snapshot(&self, snapshot: &str) {
+            *self.runtime.pane_snapshot.lock().unwrap() = Some(snapshot.to_string());
+        }
+
+        fn set_pane_snapshot_error(&self, error: &str) {
+            *self.runtime.pane_snapshot_error.lock().unwrap() = Some(error.to_string());
         }
 
         fn set_pane_has_agent_process(&self, has_agent_process: bool) {
