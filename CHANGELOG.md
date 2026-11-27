@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.971](https://github.com/fohte/armyknife/compare/v0.1.970...v0.1.971) (2026-11-27)
+
+
+### Features
+
+* **agent-watch-web:** add session launch feedback ([#2373](https://github.com/fohte/armyknife/issues/2373)) ([b1161dd](https://github.com/fohte/armyknife/commit/b1161dd4e5d6b33f9744131950a9ec63ee158c4e))
+
 ## [0.1.970](https://github.com/fohte/armyknife/compare/v0.1.969...v0.1.970) (2026-11-27)
 
 
