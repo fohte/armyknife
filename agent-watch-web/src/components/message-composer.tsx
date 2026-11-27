@@ -155,9 +155,7 @@ export function MessageComposer({
       : 'on'
   const keyHints = isMobile
     ? undefined
-    : canInterrupt
-      ? '↵ Send · ⇧↵ / ⌥↵ New line · Esc Interrupt · ⌥↑ / ⌥↓ My messages'
-      : '↵ Send · ⇧↵ / ⌥↵ New line · ⌥↑ / ⌥↓ My messages'
+    : `↵ Send · ⇧↵ / ⌥↵ New line${canInterrupt && !isInterrupting ? ' · Esc Interrupt' : ''} · ⌥↑ / ⌥↓ My messages`
 
   return (
     <form

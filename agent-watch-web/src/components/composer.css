@@ -3,13 +3,14 @@
 }
 
 .composer-box {
+  position: relative;
   border: 1px solid var(--aw-border-control);
   border-radius: var(--aw-radius);
   background: var(--aw-bg-surface);
 }
 
 .composer-input-slot {
-  position: relative;
+  position: static;
 }
 
 .composer-input-slot textarea {

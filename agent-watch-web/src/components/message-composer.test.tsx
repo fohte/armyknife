@@ -179,6 +179,7 @@ it('shows desktop and mobile interrupt progress while the request is pending', (
   renderFreshComposer({ canInterrupt: true, isInterrupting: true, onInterrupt })
   const desktop = {
     hint: container.querySelector('[role="status"]')?.textContent,
+    keyHints: container.querySelector('.composer-key-hints')?.textContent,
     buttonCount: container.querySelectorAll('.mobile-interrupt-button').length,
   }
 
@@ -204,7 +205,11 @@ it('shows desktop and mobile interrupt progress while the request is pending', (
     repeatCalls: onInterrupt.mock.calls,
   })
   expect(snapshot()).toEqual({
-    desktop: { hint: 'Interrupting…', buttonCount: 0 },
+    desktop: {
+      hint: 'Interrupting…',
+      keyHints: '↵ Send · ⇧↵ / ⌥↵ New line · ⌥↑ / ⌥↓ My messages',
+      buttonCount: 0,
+    },
     mobile: { label: 'Interrupting…', busy: 'true', disabled: true },
     repeatCalls: [],
   })
@@ -322,6 +327,15 @@ it('opens a multi-file picker and sends selected files to the attachment handler
     configurable: true,
     value: files,
   })
+  let inputValue = ''
+  Object.defineProperty(fileInput, 'value', {
+    configurable: true,
+    get: () => inputValue,
+    set: (value: string) => {
+      inputValue = value
+    },
+  })
+  let firstResetValue = 'unset'
 
   act(() => {
     requireElement(
@@ -329,6 +343,10 @@ it('opens a multi-file picker and sends selected files to the attachment handler
         '[aria-label="Add attachment"]',
       ),
     ).click()
+    inputValue = 'C:\\fakepath\\first.png'
+    fileInput.dispatchEvent(new Event('change', { bubbles: true }))
+    firstResetValue = fileInput.value
+    inputValue = 'C:\\fakepath\\first.png'
     fileInput.dispatchEvent(new Event('change', { bubbles: true }))
   })
 
@@ -336,11 +354,15 @@ it('opens a multi-file picker and sends selected files to the attachment handler
     pickerClicks: pickerClick.mock.calls,
     multiple: fileInput.multiple,
     selectedFiles: onPasteFiles.mock.calls,
+    firstResetValue,
+    inputValue: fileInput.value,
   })
   expect(snapshot()).toEqual({
     pickerClicks: [[]],
     multiple: true,
-    selectedFiles: [[files]],
+    selectedFiles: [[files], [files]],
+    firstResetValue: '',
+    inputValue: '',
   })
 })
 

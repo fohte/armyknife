@@ -6,6 +6,7 @@ import type { ReactNode } from 'react'
 
 import type { AttachmentPreview } from '#components/attachment-preview-list'
 import { ImageLightbox } from '#components/image-lightbox'
+import { formatFileSize } from '#lib/format-file-size'
 
 export type ComposerSendState = 'on' | 'dim' | 'off'
 
@@ -20,16 +21,6 @@ export type ComposerProps = {
   isMobile?: boolean
   isBusy?: boolean
   trailingAction?: ReactNode
-}
-
-function formatFileSize(bytes: number) {
-  if (bytes < 1024) return `${String(bytes)} B`
-  const kibibytes = bytes / 1024
-  const formatted = new Intl.NumberFormat(undefined, {
-    maximumFractionDigits: 1,
-  })
-  if (kibibytes < 1024) return `${formatted.format(kibibytes)} KiB`
-  return `${formatted.format(kibibytes / 1024)} MiB`
 }
 
 export function Composer({
