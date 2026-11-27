@@ -121,6 +121,25 @@ export const CompactPhoneSessionRow: Story = {
   args: { density: 'compact-phone' },
 }
 
+export const LongRepositoryAndBranchNames: Story = {
+  name: 'Long repository and branch names shorten while task details remain',
+  args: {
+    density: 'compact',
+    session: {
+      ...session,
+      task: {
+        id: 'example-task',
+        number: 2048,
+        title: 'Keep the task readable beside long repository names',
+        priority: 1,
+        isClosed: false,
+      },
+      repo: 'example-platform/notification-delivery-service',
+      branch: 'feature/preserve-task-details-with-long-identifiers',
+    },
+  },
+}
+
 export const VibeEnabledSession: Story = {
   name: 'The enabled session shows a filled bolt beside its title',
   args: {

@@ -9,6 +9,7 @@ import {
   UsersRound,
   Workflow,
 } from 'lucide-react'
+import { useLayoutEffect, useRef, useState } from 'react'
 
 import { useSessionElapsedStartedAt } from '#components/session-elapsed-context'
 import { VibeIndicator } from '#components/vibe-indicator'
@@ -20,7 +21,14 @@ import { useLiveElapsedOffsetSeconds } from '#use-live-elapsed-offset-seconds'
 
 type SessionRowData = Pick<
   Session,
-  'title' | 'category' | 'kind' | 'elapsedSeconds' | 'preview' | 'task' | 'repo'
+  | 'title'
+  | 'category'
+  | 'kind'
+  | 'elapsedSeconds'
+  | 'preview'
+  | 'task'
+  | 'repo'
+  | 'branch'
 > &
   Partial<
     Pick<
@@ -44,7 +52,82 @@ type SessionRowProps = {
   session: SessionRowData
   density?: 'full' | 'compact' | 'compact-phone'
   isMobile?: boolean
-  branch?: string | null
+}
+
+function RepositoryLabel({ repository }: { repository: string }) {
+  const repositoryRef = useRef<HTMLSpanElement>(null)
+  const measureRef = useRef<HTMLSpanElement>(null)
+  const [shortenOwner, setShortenOwner] = useState(false)
+  const separator = repository.lastIndexOf('/')
+  const owner = separator < 0 ? '' : repository.slice(0, separator)
+  const name = separator < 0 ? repository : repository.slice(separator + 1)
+
+  useLayoutEffect(() => {
+    const repositoryElement = repositoryRef.current
+    const measureElement = measureRef.current
+    if (
+      repositoryElement === null ||
+      measureElement === null ||
+      owner.length === 0
+    ) {
+      return
+    }
+
+    let active = true
+    const update = () => {
+      if (!active) return
+      const shouldShorten =
+        measureElement.getBoundingClientRect().width >
+        repositoryElement.clientWidth + 1
+      setShortenOwner(shouldShorten)
+    }
+
+    update()
+    const observer = new ResizeObserver(update)
+    observer.observe(repositoryElement)
+    if (repositoryElement.parentElement !== null) {
+      observer.observe(repositoryElement.parentElement)
+    }
+    document.fonts.addEventListener('loadingdone', update)
+    return () => {
+      active = false
+      observer.disconnect()
+      document.fonts.removeEventListener('loadingdone', update)
+    }
+  }, [owner, repository])
+
+  return (
+    <span ref={repositoryRef} className="session-repo" title={repository}>
+      <span className="session-repo-label">
+        {owner.length > 0 ? (
+          <>
+            <span className="session-repo-owner">
+              {shortenOwner ? '…' : owner}
+            </span>
+            <span aria-hidden="true">/</span>
+          </>
+        ) : null}
+        <span className="session-repo-name">{name}</span>
+      </span>
+      {owner.length > 0 ? (
+        <span
+          ref={measureRef}
+          aria-hidden="true"
+          className="session-repo-measure"
+        >
+          {repository}
+        </span>
+      ) : null}
+    </span>
+  )
+}
+
+function BranchLabel({ branch }: { branch: string }) {
+  return (
+    <span className="session-branch" title={branch}>
+      {branch}
+    </span>
+  )
 }
 
 function formatElapsedTime(totalSeconds: number) {
@@ -131,13 +214,12 @@ export function SessionRow({
   session,
   density = 'full',
   isMobile = false,
-  branch,
 }: SessionRowProps) {
   const role = rolePresentation(session.workType)
   const RoleIcon = role.Icon
   const task = session.task
   const repo = session.repo.trim() || '—'
-  const trimmedBranch = branch?.trim() ?? ''
+  const trimmedBranch = session.branch?.trim() ?? ''
   const isCompact = density !== 'full'
   const linkedTaskCount = isCompact ? formatLinkedTaskCount(session.tasks) : ''
   const decisionLabel = formatSessionDecisionCount(session)
@@ -241,7 +323,7 @@ export function SessionRow({
               <span className="session-repo-separator" aria-hidden="true">
                 ·
               </span>
-              <span className="session-repo">{repo}</span>
+              <RepositoryLabel repository={repo} />
             </>
           ) : null}
           {isCompact && decisionLabel !== null ? (
@@ -250,13 +332,13 @@ export function SessionRow({
         </span>
         {isCompact ? (
           <span className="session-repo-line">
-            <span className="session-repo">{repo}</span>
+            <RepositoryLabel repository={repo} />
             {trimmedBranch.length > 0 ? (
               <>
-                <span className="session-repo-separator" aria-hidden="true">
-                  ·
+                <span className="session-branch-separator" aria-hidden="true">
+                  ⑂
                 </span>
-                <span className="session-branch">{trimmedBranch}</span>
+                <BranchLabel branch={trimmedBranch} />
               </>
             ) : null}
           </span>
