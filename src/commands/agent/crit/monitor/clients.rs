@@ -31,6 +31,41 @@ pub(super) fn remove_clients(port: u16) {
     }
 }
 
+/// Reports announced clients that came or went since the previous call.
+///
+/// `client-started` writes the session wait state itself, so the monitor's record of what it last
+/// wrote can be stale. A client that exits before the next poll leaves the computed state
+/// unchanged, which only this watch can reveal. Call it before `has_live_client`, which prunes.
+pub(super) struct ClientsWatch {
+    dir: PathBuf,
+    seen: Vec<String>,
+}
+
+impl ClientsWatch {
+    pub(super) fn new(port: u16) -> Result<Self> {
+        Ok(Self {
+            dir: clients_dir(port)?,
+            seen: Vec::new(),
+        })
+    }
+
+    pub(super) fn changed(&mut self) -> bool {
+        let current = client_names(&self.dir);
+        std::mem::replace(&mut self.seen, current) != self.seen
+    }
+}
+
+fn client_names(dir: &Path) -> Vec<String> {
+    let mut names = fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    names.sort();
+    names
+}
+
 fn record_client_in(dir: &Path, pid: u32) -> Result<()> {
     fs::create_dir_all(dir)
         .with_context(|| format!("failed to create crit clients directory {}", dir.display()))?;
@@ -118,6 +153,34 @@ mod tests {
                 expected_live,
                 expected_files.iter().map(|name| name.to_string()).collect()
             ),
+        );
+        Ok(())
+    }
+
+    #[rstest]
+    fn watch_reports_clients_that_appeared_or_were_pruned(dir: TempDir) -> Result<()> {
+        let clients = dir.path().join("43210.clients");
+        let mut watch = ClientsWatch {
+            dir: clients.clone(),
+            seen: Vec::new(),
+        };
+
+        let before_any_client = watch.changed();
+        record_client_in(&clients, 4242)?;
+        // The client may already have exited by the poll that first sees its file.
+        let client_appeared = watch.changed();
+        has_live_client_in(&clients, |_| false)?;
+        let client_pruned = watch.changed();
+        let nothing_new = watch.changed();
+
+        assert_eq!(
+            (
+                before_any_client,
+                client_appeared,
+                client_pruned,
+                nothing_new
+            ),
+            (false, true, true, false),
         );
         Ok(())
     }

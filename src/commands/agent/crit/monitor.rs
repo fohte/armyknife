@@ -89,8 +89,12 @@ pub(super) fn run(args: &MonitorArgs) -> Result<()> {
     tracing::info!(event = "agent.crit.monitor.start", daemon_pid = args.pid);
     let mut watched_pid = args.pid;
     let mut previous_waiting = None;
+    let mut clients_watch = clients::ClientsWatch::new(args.port)?;
     loop {
         while process::is_process_alive(watched_pid) {
+            if clients_watch.changed() {
+                previous_waiting = None;
+            }
             let waiting =
                 match crit_client_waiting(args.port, watched_pid, process::run_with_timeout) {
                     Ok(waiting) => Some(waiting),
