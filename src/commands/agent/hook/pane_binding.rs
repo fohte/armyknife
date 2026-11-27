@@ -27,7 +27,7 @@ pub(super) fn resolve(input: &HookInput) -> Option<PaneInfo> {
         &input.session_id,
         std::process::id(),
         tmux::get_pane_info_by_pid,
-        |pid| ProcessSnapshot::capture().map(|snapshot| has_parent_agent_process(pid, &snapshot)),
+        has_parent_agent_process,
         find_by_session_option,
     )
 }
