@@ -386,12 +386,13 @@ fn resolve_claude_pid_with(
 fn spawn_compact_resume(session: &Session) -> Result<()> {
     // ARMYKNIFE_SKIP_HOOKS=1 makes the child's own Stop hook bail out at the
     // top of `agent hook run`, so the compaction itself doesn't recursively
-    // schedule another auto-compact.
+    // schedule another auto-compact. A separate marker lets compact
+    // SessionStart schedule transcript slimming without enabling other hooks.
     let result = process::spawn_detached(
         "claude",
         ["-r", &session.session_id, "-p", "/compact"],
         Some(&session.cwd),
-        &[("ARMYKNIFE_SKIP_HOOKS", "1")],
+        compact_resume_env(),
     );
     if let Err(e) = result {
         tracing::warn!(
@@ -402,6 +403,13 @@ fn spawn_compact_resume(session: &Session) -> Result<()> {
         return Err(e).context("spawn claude -r");
     }
     Ok(())
+}
+
+fn compact_resume_env() -> &'static [(&'static str, &'static str)] {
+    &[
+        ("ARMYKNIFE_SKIP_HOOKS", "1"),
+        ("ARMYKNIFE_SLIM_TRANSCRIPT_ON_COMPACT", "1"),
+    ]
 }
 
 fn mark_paused(session: &Session) -> Result<()> {
@@ -427,6 +435,17 @@ mod tests {
     use rstest::rstest;
     use std::path::PathBuf;
     use tempfile::TempDir;
+
+    #[test]
+    fn compact_resume_enables_only_the_compact_transcript_slim_hook() {
+        assert_eq!(
+            compact_resume_env(),
+            &[
+                ("ARMYKNIFE_SKIP_HOOKS", "1"),
+                ("ARMYKNIFE_SLIM_TRANSCRIPT_ON_COMPACT", "1"),
+            ],
+        );
+    }
 
     #[rstest]
     #[case::valid_pid("4242", 1, Some(4242))]

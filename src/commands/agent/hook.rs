@@ -82,7 +82,26 @@ pub fn run(args: &HookArgs) -> Result<()> {
 
     // Skip hooks when called from armyknife's own claude -p invocations
     // to prevent infinite recursion (hook → claude -p → hook → ...).
-    if EnvVars::load().skip_hooks {
+    let env_vars = EnvVars::load();
+    if env_vars.skip_hooks {
+        if env_vars.slim_transcript_on_compact
+            && event == HookEvent::SessionStart
+            && args.engine == Engine::Claude
+        {
+            let side_effects = SideEffects::all();
+            if let Err(error) = process_skipped_hook_compact_slim(
+                event,
+                args.engine,
+                &env_vars,
+                &side_effects,
+                || parse_stdin_json(&read_raw_stdin()?),
+            ) {
+                tracing::warn!(
+                    event = "agent.transcript.slim.compact_hook_input_failed",
+                    error = %error,
+                );
+            }
+        }
         return write_stop_response(args.engine, event, None, &mut io::stdout().lock());
     }
 
@@ -447,6 +466,30 @@ fn maybe_schedule_transcript_slim(event: HookEvent, input: &HookInput, side_effe
             error = %error,
         ),
     }
+}
+
+fn process_skipped_hook_compact_slim<F>(
+    event: HookEvent,
+    engine: Engine,
+    env_vars: &EnvVars,
+    side_effects: &SideEffects,
+    read_input: F,
+) -> Result<()>
+where
+    F: FnOnce() -> Result<HookInput>,
+{
+    if !env_vars.skip_hooks
+        || !env_vars.slim_transcript_on_compact
+        || event != HookEvent::SessionStart
+        || engine != Engine::Claude
+    {
+        return Ok(());
+    }
+
+    let mut input = read_input()?;
+    input.engine = engine;
+    maybe_schedule_transcript_slim(event, &input, side_effects);
+    Ok(())
 }
 
 fn process_hook_event_impl_with_instruction(
@@ -1980,6 +2023,115 @@ mod tests {
             } else {
                 Vec::new()
             },
+        );
+    }
+
+    #[rstest]
+    #[case::armed_compact_session_start(
+        true,
+        HookEvent::SessionStart,
+        Engine::Claude,
+        "compact",
+        true,
+        true
+    )]
+    #[case::unarmed_skipped_hook(
+        false,
+        HookEvent::SessionStart,
+        Engine::Claude,
+        "compact",
+        false,
+        false
+    )]
+    #[case::resume_skipped_hook(
+        true,
+        HookEvent::SessionStart,
+        Engine::Claude,
+        "resume",
+        true,
+        false
+    )]
+    #[case::codex_skipped_hook(
+        true,
+        HookEvent::SessionStart,
+        Engine::Codex,
+        "compact",
+        false,
+        false
+    )]
+    #[case::other_skipped_hook(
+        true,
+        HookEvent::PostModelSwitch,
+        Engine::Claude,
+        "compact",
+        false,
+        false
+    )]
+    fn skipped_hooks_slim_only_armed_large_claude_compact_transcripts(
+        #[case] allow_compact_slim: bool,
+        #[case] event: HookEvent,
+        #[case] engine: Engine,
+        #[case] source: &str,
+        #[case] expected_input_read: bool,
+        #[case] expected_scheduled: bool,
+    ) {
+        use std::cell::Cell;
+
+        let temp_dir = tempfile::TempDir::new().expect("hook fixture directory should be created");
+        let transcript_path = temp_dir.path().join("fixture-transcript.jsonl");
+        let transcript =
+            fs::File::create(&transcript_path).expect("transcript fixture should be created");
+        transcript
+            .set_len(TRANSCRIPT_SLIM_MIN_BYTES + 1)
+            .expect("transcript fixture size should be set");
+        let expected_transcript_path = transcript_path.clone();
+        let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let side_effects = SideEffects {
+            transcript_slim: true,
+            transcript_slim_calls: Some(calls.clone()),
+            ..SideEffects::none()
+        };
+        let env_vars = EnvVars {
+            skip_hooks: true,
+            slim_transcript_on_compact: allow_compact_slim,
+            ..EnvVars::default()
+        };
+        let read_count = Cell::new(0);
+        let mut input = create_test_input_with_source(None, Some(source));
+        input.engine = engine;
+        input.transcript_path = Some(transcript_path);
+
+        process_skipped_hook_compact_slim(event, engine, &env_vars, &side_effects, || {
+            read_count.set(read_count.get() + 1);
+            Ok(input)
+        })
+        .expect("skipped hook processing should succeed");
+
+        let expected_calls = if expected_scheduled {
+            vec![(
+                "test-123".to_string(),
+                expected_transcript_path.clone(),
+                vec![
+                    "agent".to_string(),
+                    "transcript".to_string(),
+                    "slim".to_string(),
+                    "test-123".to_string(),
+                    "--transcript-path".to_string(),
+                    expected_transcript_path.to_string_lossy().into_owned(),
+                ],
+            )]
+        } else {
+            Vec::new()
+        };
+        assert_eq!(
+            (
+                read_count.get(),
+                calls
+                    .lock()
+                    .expect("transcript slim calls should lock")
+                    .clone(),
+            ),
+            (usize::from(expected_input_read), expected_calls),
         );
     }
 
