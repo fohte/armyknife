@@ -406,6 +406,61 @@ it('opens a launched session through its registered handler', async () => {
   })
 })
 
+it('reports a failed launch and retries it successfully', async () => {
+  const run = vi
+    .fn<() => Promise<AsyncActionOutcome>>()
+    .mockResolvedValueOnce({
+      status: 'launchFailed',
+      error: 'The example session could not be started.',
+    })
+    .mockResolvedValueOnce({ status: 'launched' })
+  act(() => {
+    root?.render(
+      <AsyncActionFeedbackProvider>
+        <LaunchFeedbackHarness run={run} onOpenSession={() => undefined} />
+      </AsyncActionFeedbackProvider>,
+    )
+  })
+
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>('button')?.click()
+    await Promise.resolve()
+  })
+  const failure = {
+    alert: textContent('[role="alert"]'),
+    buttons: Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '.async-action-toast-stack .async-action-controls button',
+      ),
+      (button) => button.textContent,
+    ),
+  }
+  await act(async () => {
+    Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent === 'Retry')
+      ?.click()
+    await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    failure,
+    retryCalls: run.mock.calls.length,
+    status: textContent('output'),
+    successToast: textContent('.async-action-toast-stack'),
+  })
+  expect(snapshot()).toEqual({
+    failure: {
+      alert:
+        'Could not start sessionReview the rollout plan.example-org/example-serviceThe example session could not be started.RetryDetails',
+      buttons: ['Retry', 'Details'],
+    },
+    retryCalls: 2,
+    status: '{"actions":["launched"],"toastIds":[0]}',
+    successToast:
+      'Session startedReview the rollout plan.example-org/example-serviceOpen',
+  })
+})
+
 it('records a merge while it runs, then keeps its result in Activity', async () => {
   vi.useFakeTimers()
   let completeMerge: (() => void) | undefined

@@ -296,7 +296,8 @@ export function AsyncActionItem({
         ) : null}
         {action.kind === 'launch' &&
         action.status === 'launched' &&
-        form !== 'line' ? (
+        form !== 'line' &&
+        onOpenSession !== undefined ? (
           <div className="async-action-controls">
             <button type="button" onClick={onOpenSession}>
               Open

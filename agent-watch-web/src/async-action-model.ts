@@ -75,8 +75,7 @@ export type AsyncActionOutcome =
       checks?: CloseWorktreeChecks
     }
 
-export type StartAsyncActionOptions = {
-  kind: 'merge' | 'close' | 'command' | 'rewind' | 'review_document' | 'launch'
+type StartAsyncActionBaseOptions = {
   sessionId: string
   sessionTitle: string
   command?: string
@@ -92,8 +91,16 @@ export type StartAsyncActionOptions = {
   onRetry?: (retry: () => void, actionId: number) => void
   onCloseKeepWorktree?: () => void
   onOpenInTerminal?: () => void
-  onOpenSession?: () => void
 }
+
+export type StartAsyncActionOptions =
+  | (StartAsyncActionBaseOptions & {
+      kind: 'launch'
+      onOpenSession: () => void
+    })
+  | (StartAsyncActionBaseOptions & {
+      kind: Exclude<AsyncAction['kind'], 'launch'>
+    })
 
 export function isAsyncActionFailureStatus(status: AsyncActionStatus) {
   return (

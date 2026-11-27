@@ -181,6 +181,7 @@ export const SessionStartedInActivity: Story = {
   args: {
     form: 'row',
     action: { ...launchAction, status: 'launched' },
+    onOpenSession: () => undefined,
   },
 }
 

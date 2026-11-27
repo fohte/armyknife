@@ -208,7 +208,7 @@ export function AsyncActionFeedbackProvider({
       if (options.onOpenInTerminal !== undefined) {
         openInTerminalHandlers.current.set(id, options.onOpenInTerminal)
       }
-      if (options.onOpenSession !== undefined) {
+      if (options.kind === 'launch') {
         openSessionHandlers.current.set(id, options.onOpenSession)
       }
       setActions((current) => [
