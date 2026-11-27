@@ -47,30 +47,11 @@ impl TranscriptNode {
         }
     }
 
-    pub(super) fn from_graph_record(
-        record: &Value,
-        parent_uuid: Option<String>,
-        uuid_id: usize,
-        record_order: u64,
-    ) -> Self {
-        Self::from_record_with_tool_ids(record, parent_uuid, uuid_id, record_order, true)
-    }
-
     pub(super) fn from_record(
         record: &Value,
         parent_uuid: Option<String>,
         uuid_id: usize,
         record_order: u64,
-    ) -> Self {
-        Self::from_record_with_tool_ids(record, parent_uuid, uuid_id, record_order, true)
-    }
-
-    fn from_record_with_tool_ids(
-        record: &Value,
-        parent_uuid: Option<String>,
-        uuid_id: usize,
-        record_order: u64,
-        collect_tool_ids: bool,
     ) -> Self {
         let record_type = record.get("type").and_then(Value::as_str);
         let mut has_tool_use = false;
@@ -88,22 +69,20 @@ impl TranscriptNode {
                 match block.get("type").and_then(Value::as_str) {
                     Some("tool_use") if record_type == Some("assistant") => {
                         has_tool_use = true;
-                        if collect_tool_ids
-                            && let Some(id) = block
-                                .get("id")
-                                .or_else(|| block.get("tool_use_id"))
-                                .and_then(Value::as_str)
+                        if let Some(id) = block
+                            .get("id")
+                            .or_else(|| block.get("tool_use_id"))
+                            .and_then(Value::as_str)
                         {
                             tool_use_ids.push(id.to_owned());
                         }
                     }
                     Some("tool_result") if record_type == Some("user") => {
                         has_content_block = true;
-                        if collect_tool_ids
-                            && let Some(id) = block
-                                .get("id")
-                                .or_else(|| block.get("tool_use_id"))
-                                .and_then(Value::as_str)
+                        if let Some(id) = block
+                            .get("id")
+                            .or_else(|| block.get("tool_use_id"))
+                            .and_then(Value::as_str)
                         {
                             tool_result_ids.push(id.to_owned());
                         }

@@ -81,7 +81,7 @@ impl IncrementalClaudeParser {
                         .transcript_nodes
                         .insert(
                             uuid.to_owned(),
-                            TranscriptNode::from_graph_record(
+                            TranscriptNode::from_record(
                                 &record,
                                 parent_uuid,
                                 uuid_id,
