@@ -213,7 +213,15 @@ pub fn capture_pane_with_escapes_for_socket(
     socket_path: Option<&str>,
     pane_id: &str,
 ) -> Option<String> {
-    run_tmux_output_for_socket(socket_path, &["capture-pane", "-p", "-e", "-t", pane_id]).ok()
+    capture_pane_with_escapes_for_socket_result(socket_path, pane_id).ok()
+}
+
+/// Captures a pane from its recorded server with ANSI styling, preserving tmux errors.
+pub fn capture_pane_with_escapes_for_socket_result(
+    socket_path: Option<&str>,
+    pane_id: &str,
+) -> super::Result<String> {
+    run_tmux_output_for_socket(socket_path, &["capture-pane", "-p", "-e", "-t", pane_id])
 }
 
 /// Sends keys to a pane on its recorded server.
