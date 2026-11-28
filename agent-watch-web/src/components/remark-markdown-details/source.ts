@@ -7,6 +7,24 @@ export type MarkdownParser = (value: string) => MarkdownRoot
 export type ReferenceDefinitionSource = { offset: number; source: string }
 export type SourceOffsetMap = readonly number[]
 
+export function visitMarkdownNodes(
+  nodes: readonly MarkdownNode[],
+  visit: (node: MarkdownNode) => void,
+) {
+  const pending = [...nodes].reverse()
+  while (pending.length > 0) {
+    const node = pending.pop()
+    if (node === undefined) continue
+    visit(node)
+    if (node.children !== undefined) {
+      for (let index = node.children.length - 1; index >= 0; index -= 1) {
+        const child = node.children[index]
+        if (child !== undefined) pending.push(child)
+      }
+    }
+  }
+}
+
 function shiftMarkdownNodeOffsets(
   nodes: MarkdownNode[],
   offset: number,
@@ -56,11 +74,8 @@ export function getReferenceDefinitionSources(
   nodes: readonly MarkdownNode[],
   source: string,
 ): ReferenceDefinitionSource[] {
-  const pending = [...nodes].reverse()
   const definitions: ReferenceDefinitionSource[] = []
-  while (pending.length > 0) {
-    const node = pending.pop()
-    if (node === undefined) continue
+  visitMarkdownNodes(nodes, (node) => {
     if (node.type === 'definition') {
       const start = node.position?.start.offset
       const end = node.position?.end.offset
@@ -68,13 +83,7 @@ export function getReferenceDefinitionSources(
         definitions.push({ offset: start, source: source.slice(start, end) })
       }
     }
-    if (node.children !== undefined) {
-      for (let index = node.children.length - 1; index >= 0; index -= 1) {
-        const child = node.children[index]
-        if (child !== undefined) pending.push(child)
-      }
-    }
-  }
+  })
   return definitions
 }
 

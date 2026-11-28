@@ -1,7 +1,4 @@
-import type {
-  MarkdownNode,
-  MarkdownRoot,
-} from '#components/markdown-message-types'
+import type { MarkdownNode } from '#components/markdown-message-types'
 import type { MarkdownParser } from '#components/remark-markdown-details/source'
 
 export type SourceOffsetMap = readonly number[]
@@ -25,7 +22,6 @@ export type HtmlSourceAnalysis = {
   codeRanges: MarkdownCodeRange[]
   group: HtmlSourceGroup
   lexemes: HtmlLexeme[]
-  markdownTree: MarkdownRoot
   maskedSource: string
 }
 
@@ -104,7 +100,7 @@ function maskHtmlLexemes(source: string, lexemes: readonly HtmlLexeme[]) {
   let cursor = 0
   for (const lexeme of lexemes) {
     parts.push(source.slice(cursor, lexeme.at))
-    parts.push(lexeme.value.replace(/[^\r\n]/g, ' '))
+    parts.push(lexeme.value.replace(/[^\r\n]/g, 'x'))
     cursor = lexeme.at + lexeme.value.length
   }
   parts.push(source.slice(cursor))
@@ -197,7 +193,7 @@ export function analyzeHtmlSource(
     return interruption === undefined || interruption >= range.end
   })
 
-  return { codeRanges, group, lexemes, markdownTree, maskedSource }
+  return { codeRanges, group, lexemes, maskedSource }
 }
 
 export function sourceOffsetsForRange(

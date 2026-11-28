@@ -7,6 +7,7 @@ import {
   createMarkdownSource,
   type HtmlSourceAnalysis,
   type MarkdownSource,
+  sourceOffsetsForRange,
 } from '#components/remark-markdown-details/html-source'
 import {
   getSupportedDetailsIntervals,
@@ -17,6 +18,7 @@ import {
   type MarkdownParser,
   type ReferenceDefinitionSource,
   type SourceOffsetMap,
+  visitMarkdownNodes,
 } from '#components/remark-markdown-details/source'
 
 const htmlCandidateStart = /^\s*<\/?(?:details|summary)\b/i
@@ -25,6 +27,7 @@ const htmlLexemePattern =
 
 type Processor = { parse: (value: string) => unknown }
 type HiddenDefinition = {
+  end: number
   node: MarkdownNode
   reference: ReferenceDefinitionSource
 }
@@ -42,22 +45,17 @@ function isRoot(value: unknown): value is MarkdownRoot {
 
 function getDefinitionNodes(nodes: readonly MarkdownNode[]) {
   const definitions: MarkdownNode[] = []
-  const pending = [...nodes].reverse()
-  while (pending.length > 0) {
-    const node = pending.pop()
-    if (node === undefined) continue
+  visitMarkdownNodes(nodes, (node) => {
     if (node.type === 'definition') definitions.push(node)
-    if (node.children !== undefined) {
-      for (let index = node.children.length - 1; index >= 0; index -= 1) {
-        const child = node.children[index]
-        if (child !== undefined) pending.push(child)
-      }
-    }
-  }
+  })
   return definitions
 }
 
-function mapDefinitionOffsets(node: MarkdownNode, offsets: SourceOffsetMap) {
+function mapDefinitionOffsets(
+  node: MarkdownNode,
+  offsets: SourceOffsetMap,
+  positionOffset: number,
+) {
   const pending = [node]
   while (pending.length > 0) {
     const current = pending.pop()
@@ -67,15 +65,17 @@ function mapDefinitionOffsets(node: MarkdownNode, offsets: SourceOffsetMap) {
       current.position = {
         start: {
           ...start,
-          ...(start.offset === undefined || offsets[start.offset] === undefined
+          ...(start.offset === undefined ||
+          offsets[start.offset - positionOffset] === undefined
             ? {}
-            : { offset: offsets[start.offset] }),
+            : { offset: offsets[start.offset - positionOffset] }),
         },
         end: {
           ...end,
-          ...(end.offset === undefined || offsets[end.offset] === undefined
+          ...(end.offset === undefined ||
+          offsets[end.offset - positionOffset] === undefined
             ? {}
-            : { offset: offsets[end.offset] }),
+            : { offset: offsets[end.offset - positionOffset] }),
         },
       }
     }
@@ -83,6 +83,70 @@ function mapDefinitionOffsets(node: MarkdownNode, offsets: SourceOffsetMap) {
       for (const child of current.children) pending.push(child)
     }
   }
+}
+
+function getHtmlDefinitionCandidates(
+  analysis: HtmlSourceAnalysis,
+  parse: MarkdownParser,
+) {
+  const definitions: HiddenDefinition[] = []
+  const value = analysis.group.node.value ?? ''
+  let cursor = 0
+  let codeRangeIndex = 0
+  let inSummary = false
+  const appendDefinitions = (end: number) => {
+    const section = value.slice(cursor, end)
+    if (section.trim() === '' || inSummary) return
+    for (const definition of getDefinitionNodes(parse(section).children)) {
+      const start = definition.position?.start.offset
+      const finish = definition.position?.end.offset
+      if (start === undefined || finish === undefined) continue
+      const localStart = cursor + start
+      const localEnd = cursor + finish
+      const offsets = sourceOffsetsForRange(
+        analysis.group,
+        localStart,
+        localEnd,
+      )
+      mapDefinitionOffsets(definition, offsets, start)
+      definitions.push({
+        node: definition,
+        end:
+          offsets[offsets.length - 1] ??
+          analysis.group.offsets[localEnd] ??
+          localEnd,
+        reference: {
+          offset:
+            offsets[0] ?? analysis.group.offsets[localStart] ?? localStart,
+          source: section.slice(start, finish),
+        },
+      })
+    }
+  }
+
+  for (const lexeme of analysis.lexemes) {
+    while (
+      analysis.codeRanges[codeRangeIndex] !== undefined &&
+      analysis.codeRanges[codeRangeIndex].end <= lexeme.at
+    ) {
+      codeRangeIndex += 1
+    }
+    const codeRange = analysis.codeRanges[codeRangeIndex]
+    if (
+      codeRange !== undefined &&
+      codeRange.start <= lexeme.at &&
+      lexeme.at < codeRange.end
+    ) {
+      continue
+    }
+
+    appendDefinitions(lexeme.at)
+    cursor = lexeme.at + lexeme.value.length
+    if (/^<summary\s*>$/i.test(lexeme.value)) inSummary = true
+    if (/^<\/summary\s*>$/i.test(lexeme.value)) inSummary = false
+  }
+  appendDefinitions(value.length)
+  return definitions
 }
 
 function analyzeHtmlGroups(
@@ -110,37 +174,23 @@ function analyzeHtmlGroups(
   for (const node of nodes) {
     const analysis = analyses.get(node)
     if (analysis !== undefined) {
-      for (const definition of getDefinitionNodes(
-        analysis.markdownTree.children,
-      )) {
-        const localStart = definition.position?.start.offset
-        const localEnd = definition.position?.end.offset
-        if (localStart === undefined || localEnd === undefined) continue
-        const offset = analysis.group.offsets[localStart]
-        const end = analysis.group.offsets[localEnd]
+      for (const definition of getHtmlDefinitionCandidates(analysis, parse)) {
+        const offset = definition.reference.offset
         while (
           intervals[intervalIndex] !== undefined &&
-          intervals[intervalIndex].end < (offset ?? Number.MAX_SAFE_INTEGER)
+          intervals[intervalIndex].end < offset
         ) {
           intervalIndex += 1
         }
         const interval = intervals[intervalIndex]
         if (
-          offset === undefined ||
-          end === undefined ||
           interval === undefined ||
           interval.start > offset ||
-          end > interval.end
+          definition.end > interval.end
         ) {
           continue
         }
-
-        const source = analysis.maskedSource.slice(localStart, localEnd)
-        mapDefinitionOffsets(definition, analysis.group.offsets)
-        hiddenDefinitions.push({
-          node: definition,
-          reference: { offset, source },
-        })
+        hiddenDefinitions.push(definition)
       }
     }
     if (node.children !== undefined) {

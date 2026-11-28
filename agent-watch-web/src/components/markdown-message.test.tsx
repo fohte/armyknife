@@ -347,9 +347,10 @@ it('keeps unsafe summary HTML as text', () => {
 
 it('keeps comments visible between text in a details summary', () => {
   expect(
-    renderMessage(
-      '<details open><summary>Before <!-- note --> after</summary>\n\nBody\n</details>',
-    ),
+    renderMessage(`<details open><summary>Before <!-- note --> after</summary>
+
+Body
+</details>`),
   ).toBe(
     '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Before &lt;!-- note --&gt; after</span></button><div class="markdown-details-body"><p>Body</p></div></div></div>',
   )
@@ -644,7 +645,8 @@ it.each([
 Still inside
 </details>`,
     expected: [
-      '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Code</span></button><div class="markdown-details-body"><div class="syntax-code-block-container"><div class="syntax-code-block-toolbar"><span class="syntax-code-block-language">text</span><button class="syntax-code-block-copy-button" type="button" aria-label="Copy code" title="Copy code">Copy</button></div><pre class="syntax-code-block" data-language="text"><code class="language-text">&lt;/details&gt;\n</code></pre></div>',
+      '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Code</span></button><div class="markdown-details-body"><div class="syntax-code-block-container"><div class="syntax-code-block-toolbar"><span class="syntax-code-block-language">text</span><button class="syntax-code-block-copy-button" type="button" aria-label="Copy code" title="Copy code">Copy</button></div><pre class="syntax-code-block" data-language="text"><code class="language-text">&lt;/details&gt;',
+      '</code></pre></div>',
       '<p>Still inside</p></div></div></div>',
     ].join(String.fromCharCode(10)),
   },
