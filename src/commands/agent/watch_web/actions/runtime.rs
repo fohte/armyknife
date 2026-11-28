@@ -28,6 +28,11 @@ impl ActionRuntime for LiveActionRuntime {
         }
     }
 
+    fn retry_resume(&self, session: &Session) -> Result<()> {
+        crate::commands::agent::resume::respawn_stuck_session(session)?;
+        Ok(())
+    }
+
     fn execute_command(&self, cwd: &std::path::Path, command: &str) -> Result<CommandResult> {
         super::bang_commands::execute_command(cwd, command)
     }

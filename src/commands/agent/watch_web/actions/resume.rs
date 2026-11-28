@@ -322,6 +322,40 @@ pub(super) async fn resume_session(
     Ok(Json(Success::new()))
 }
 
+pub(super) async fn retry_resume(
+    State(state): State<ActionState>,
+    RoutePath(id): RoutePath<String>,
+) -> Result<Json<Success>, ApiError> {
+    load_session(state.clone(), id.clone()).await?;
+    let current_id = resolve_current_session_id(&state, &id).await?;
+    let lock = state.resume_locks.get_or_create(current_id.clone()).await;
+    let _guard = lock
+        .try_lock_owned()
+        .map_err(|_| ApiError::conflict("session resume is already in progress"))?;
+    let session_start_generation = load_session_start_generation(&state, &current_id).await?;
+    let session = load_session(state.clone(), current_id.clone()).await?;
+    if !matches!(
+        state
+            .resume_pending
+            .startup_status(&current_id, session.status, session_start_generation)
+            .await,
+        Some((ResumeStartupStatus::Stuck, _))
+    ) {
+        return Err(ApiError::conflict("session startup is not stuck"));
+    }
+
+    let runtime = state.runtime;
+    tokio::task::spawn_blocking(move || runtime.retry_resume(&session))
+        .await
+        .map_err(ApiError::internal)?
+        .map_err(ApiError::operation)?;
+    state
+        .resume_pending
+        .mark_pending(current_id, session_start_generation)
+        .await;
+    Ok(Json(Success::new()))
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex as StdMutex;

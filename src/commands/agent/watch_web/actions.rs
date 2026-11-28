@@ -83,6 +83,7 @@ fn router_with_state(state: ActionState) -> Router {
         .route("/sessions/{id}/actions", get(actions))
         .route("/sessions/{id}/pane", get(pane::get_pane_snapshot))
         .route("/sessions/{id}/resume", post(resume::resume_session))
+        .route("/sessions/{id}/resume/retry", post(resume::retry_resume))
         .route("/sessions/{id}/vibe", post(vibe::set_vibe))
         .route(
             "/sessions/{id}/messages",
@@ -176,6 +177,7 @@ struct CommandResult {
 
 trait ActionRuntime: Send + Sync {
     fn resume_session(&self, session: &Session) -> Result<Option<String>>;
+    fn retry_resume(&self, session: &Session) -> Result<()>;
     fn send_message(&self, session: &Session, content: &str) -> Result<()>;
     fn execute_command(&self, cwd: &std::path::Path, command: &str) -> Result<CommandResult>;
     fn rewind_session(
@@ -644,6 +646,15 @@ mod tests {
                 "status": session.status,
             }));
             Ok((session.status == SessionStatus::Ended).then(|| "%18".to_string()))
+        }
+
+        fn retry_resume(&self, session: &Session) -> Result<()> {
+            self.calls.lock().unwrap().push(json!({
+                "kind": "retry-resume",
+                "sessionId": session.session_id,
+                "status": session.status,
+            }));
+            Ok(())
         }
 
         fn send_message(&self, session: &Session, content: &str) -> Result<()> {
