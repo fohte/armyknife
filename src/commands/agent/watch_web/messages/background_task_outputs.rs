@@ -415,7 +415,7 @@ mod tests {
     async fn background_task_output_unrelated_events_do_not_suppress_matching_updates(
         output_file: OutputFile,
     ) {
-        let output_path = canonical_output_path(&output_file.path).unwrap();
+        let output_path = output_file.path;
         let callback = Arc::new(Mutex::new(None));
         let registered_callback = Arc::clone(&callback);
         let events = watch_output_events_with(output_path.clone(), move |_, handler| {
