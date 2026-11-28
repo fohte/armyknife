@@ -838,7 +838,7 @@ const INITIAL_PENDING_SIBLING_TRANSCRIPT: &str = indoc! {r#"
     indoc! {r#"
         {"type":"user","sourceToolAssistantUUID":"fixture-assistant","toolUseResult":{},"message":{"content":[{"type":"tool_result","tool_use_id":"call-a","content":"fixture output"}]}}
     "#},
-    IncrementalAppend::RestartRequired,
+    IncrementalAppend::Applied,
 )]
 #[case::tool_result_after_an_appended_hook_attachment(
     indoc! {r#"
@@ -848,7 +848,7 @@ const INITIAL_PENDING_SIBLING_TRANSCRIPT: &str = indoc! {r#"
         {"type":"attachment","uuid":"hook-attachment","parentUuid":"tool-call","timestamp":"2026-01-01T00:00:02Z","attachment":{"type":"hook_success"}}
         {"type":"user","uuid":"tool-result","parentUuid":"tool-call","timestamp":"2026-01-01T00:00:03Z","message":{"content":[{"type":"tool_result","tool_use_id":"call-a","content":"fixture output"}]}}
     "#},
-    IncrementalAppend::RestartRequired,
+    IncrementalAppend::Applied,
 )]
 #[case::tool_result_appended_after_a_hook_attachment_in_the_initial_transcript(
     indoc! {r#"
@@ -858,7 +858,7 @@ const INITIAL_PENDING_SIBLING_TRANSCRIPT: &str = indoc! {r#"
     indoc! {r#"
         {"type":"user","uuid":"tool-result","parentUuid":"tool-call","timestamp":"2026-01-01T00:00:03Z","message":{"content":[{"type":"tool_result","tool_use_id":"call-a","content":"fixture output"}]}}
     "#},
-    IncrementalAppend::RestartRequired,
+    IncrementalAppend::Applied,
 )]
 #[case::parallel_tool_result_continues_after_an_attachment_preserves_its_parent(
     indoc! {r#"
@@ -869,7 +869,7 @@ const INITIAL_PENDING_SIBLING_TRANSCRIPT: &str = indoc! {r#"
         {"type":"attachment","uuid":"hook-attachment","parentUuid":"result-a","timestamp":"2026-01-01T00:00:03Z","attachment":{"type":"hook_success"}}
         {"type":"user","uuid":"result-b","parentUuid":"parallel-calls","timestamp":"2026-01-01T00:00:04Z","message":{"content":[{"type":"tool_result","tool_use_id":"call-b","content":"second result"}]}}
     "#},
-    IncrementalAppend::RestartRequired,
+    IncrementalAppend::Applied,
 )]
 #[case::partial_json_at_delta_end(
     indoc! {r#"
@@ -886,7 +886,7 @@ const INITIAL_PENDING_SIBLING_TRANSCRIPT: &str = indoc! {r#"
 #[case::initial_pending_sibling_completes_on_append(
     INITIAL_PENDING_SIBLING_TRANSCRIPT.trim_end_matches('\n'),
     "\n",
-    IncrementalAppend::RestartRequired,
+    IncrementalAppend::Applied,
 )]
 #[case::queue_operation_crosses_append_boundary(
     indoc! {r#"
@@ -894,7 +894,7 @@ const INITIAL_PENDING_SIBLING_TRANSCRIPT: &str = indoc! {r#"
         {"type":"queue-operation","operation":"enqueue","content":"Queued
     "#}.trim_end_matches('\n'),
     " request.\"}\n",
-    IncrementalAppend::RestartRequired,
+    IncrementalAppend::Applied,
 )]
 #[case::ask_user_question_answer_arrives_later(
     indoc! {r#"
@@ -913,7 +913,7 @@ const INITIAL_PENDING_SIBLING_TRANSCRIPT: &str = indoc! {r#"
         {"type":"user","uuid":"task-started","parentUuid":"task-call","timestamp":"2026-01-01T00:00:02Z","toolUseResult":{"task_id":"fixture-task"},"message":{"content":[{"type":"tool_result","tool_use_id":"task-call-id","content":"Background task started (id: fixture-task)"}]}}
         {"type":"user","uuid":"task-finished","parentUuid":"task-started","timestamp":"2026-01-01T00:00:03Z","origin":{"kind":"task-notification"},"message":{"content":"<task-notification><task-id>fixture-task</task-id><status>completed</status><summary>Fixture task completed</summary></task-notification>"}}
     "#},
-    IncrementalAppend::RestartRequired,
+    IncrementalAppend::Applied,
 )]
 #[case::compaction_boundary_is_appended(
     indoc! {r#"
@@ -922,7 +922,7 @@ const INITIAL_PENDING_SIBLING_TRANSCRIPT: &str = indoc! {r#"
     indoc! {r#"
         {"type":"system","uuid":"compact","parentUuid":null,"logicalParentUuid":"message-one","timestamp":"2026-01-01T00:00:02Z","subtype":"compact_boundary"}
     "#},
-    IncrementalAppend::RestartRequired,
+    IncrementalAppend::Applied,
 )]
 #[case::assistant_continues_after_an_appended_attachment(
     indoc! {r#"
@@ -933,7 +933,7 @@ const INITIAL_PENDING_SIBLING_TRANSCRIPT: &str = indoc! {r#"
         {"type":"attachment","uuid":"fixture-reminder","parentUuid":"fixture-response","timestamp":"2026-01-01T00:00:03Z","attachment":{"type":"silent_turn_reminder"}}
         {"type":"assistant","uuid":"fixture-followup","parentUuid":"fixture-reminder","timestamp":"2026-01-01T00:00:04Z","message":{"content":[{"type":"text","text":"A fixture follow-up."}]}}
     "#},
-    IncrementalAppend::RestartRequired,
+    IncrementalAppend::Applied,
 )]
 #[case::assistant_continues_after_an_initial_attachment(
     indoc! {r#"
@@ -944,7 +944,7 @@ const INITIAL_PENDING_SIBLING_TRANSCRIPT: &str = indoc! {r#"
     indoc! {r#"
         {"type":"assistant","uuid":"fixture-followup","parentUuid":"fixture-reminder","timestamp":"2026-01-01T00:00:04Z","message":{"content":[{"type":"text","text":"A fixture follow-up."}]}}
     "#},
-    IncrementalAppend::RestartRequired,
+    IncrementalAppend::Applied,
 )]
 #[case::parallel_tool_results_share_the_same_parent(
     indoc! {r#"
@@ -955,7 +955,19 @@ const INITIAL_PENDING_SIBLING_TRANSCRIPT: &str = indoc! {r#"
         {"type":"user","uuid":"result-b","parentUuid":"parallel-calls","timestamp":"2026-01-01T00:00:03Z","message":{"content":[{"type":"tool_result","tool_use_id":"call-b","content":"second result"}]}}
         {"type":"assistant","uuid":"parallel-answer","parentUuid":"parallel-calls","timestamp":"2026-01-01T00:00:04Z","message":{"content":[{"type":"text","text":"Parallel work is complete."}]}}
     "#},
-    IncrementalAppend::RestartRequired,
+    IncrementalAppend::Applied,
+)]
+#[case::three_parallel_tool_results_share_the_same_parent(
+    indoc! {r#"
+        {"type":"assistant","uuid":"three-parallel-calls","parentUuid":null,"timestamp":"2026-01-01T00:00:01Z","message":{"content":[{"type":"tool_use","id":"call-a","name":"Read","input":{"file_path":"/fixture/a"}},{"type":"tool_use","id":"call-b","name":"Read","input":{"file_path":"/fixture/b"}},{"type":"tool_use","id":"call-c","name":"Read","input":{"file_path":"/fixture/c"}}]}}
+    "#},
+    indoc! {r#"
+        {"type":"user","uuid":"result-a","parentUuid":"three-parallel-calls","timestamp":"2026-01-01T00:00:02Z","message":{"content":[{"type":"tool_result","tool_use_id":"call-a","content":"first result"}]}}
+        {"type":"user","uuid":"result-b","parentUuid":"three-parallel-calls","timestamp":"2026-01-01T00:00:03Z","message":{"content":[{"type":"tool_result","tool_use_id":"call-b","content":"second result"}]}}
+        {"type":"user","uuid":"result-c","parentUuid":"three-parallel-calls","timestamp":"2026-01-01T00:00:04Z","message":{"content":[{"type":"tool_result","tool_use_id":"call-c","content":"third result"}]}}
+        {"type":"assistant","uuid":"parallel-answer","parentUuid":"three-parallel-calls","timestamp":"2026-01-01T00:00:05Z","message":{"content":[{"type":"text","text":"Parallel work is complete."}]}}
+    "#},
+    IncrementalAppend::Applied,
 )]
 #[case::user_message_branching_from_an_active_ancestor_restarts(
     indoc! {r#"
@@ -1059,7 +1071,7 @@ const INITIAL_PENDING_SIBLING_TRANSCRIPT: &str = indoc! {r#"
     indoc! {r#"
         {"type":"user","uuid":"unknown-result","parentUuid":"tool-call","timestamp":"2026-01-01T00:00:03Z","message":{"content":[{"type":"tool_result","tool_use_id":"unknown-call","content":"orphan output"}]}}
     "#},
-    IncrementalAppend::RestartRequired,
+    IncrementalAppend::Applied,
 )]
 fn appended_transcript_matches_a_full_parse(
     #[case] prefix: &str,
@@ -2046,9 +2058,61 @@ fn assistant_appended_after_an_attachment_in_a_separate_update_matches_a_full_pa
             parser.render_with(fixed_time(), empty_additions()).unwrap(),
         ),
         (
-            IncrementalAppend::RestartRequired,
-            IncrementalAppend::RestartRequired,
+            IncrementalAppend::Applied,
+            IncrementalAppend::Applied,
             parse_all(&transcript, empty_additions()),
+        ),
+    );
+}
+
+#[rstest]
+#[case::hook_success(
+    indoc! {r#"
+        {"type":"attachment","uuid":"fixture-hook","parentUuid":"fixture-tool-result","attachment":{"type":"hook_success","hookName":"PostToolUse"}}
+    "#},
+    indoc! {r#"
+        {"type":"assistant","uuid":"fixture-followup","parentUuid":"fixture-hook","message":{"content":[{"type":"text","text":"The fixture tool completed."}]}}
+    "#},
+)]
+#[case::empty_queued_command(
+    indoc! {r#"
+        {"type":"attachment","uuid":"fixture-queued-command","parentUuid":"fixture-tool-result","attachment":{"type":"queued_command","prompt":""}}
+    "#},
+    indoc! {r#"
+        {"type":"assistant","uuid":"fixture-followup","parentUuid":"fixture-queued-command","message":{"content":[{"type":"text","text":"The fixture tool completed."}]}}
+    "#},
+)]
+fn transparent_tip_attachment_and_child_across_updates_match_full_parse(
+    #[case] attachment: &str,
+    #[case] child: &str,
+) {
+    let prefix = indoc! {r#"
+        {"type":"user","uuid":"fixture-request","parentUuid":null,"message":{"content":"Run the fixture tool."}}
+        {"type":"assistant","uuid":"fixture-tool-call","parentUuid":"fixture-request","message":{"content":[{"type":"tool_use","id":"fixture-tool-use","name":"Read","input":{"file_path":"/fixture/input.md"}}]}}
+        {"type":"user","uuid":"fixture-tool-result","parentUuid":"fixture-tool-call","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-tool-use","content":"fixture output"}]}}
+    "#};
+    let mut parser = incremental_parser(prefix.as_bytes());
+    let attachment_append = parser
+        .append_bytes(attachment.as_bytes(), fixed_time())
+        .unwrap();
+    let after_attachment = parser.render_with(fixed_time(), empty_additions()).unwrap();
+    let transcript_after_attachment = format!("{prefix}{attachment}");
+    let assistant_append = parser.append_bytes(child.as_bytes(), fixed_time()).unwrap();
+    let transcript = format!("{transcript_after_attachment}{child}");
+    let after_assistant = parser.render_with(fixed_time(), empty_additions()).unwrap();
+
+    assert_eq!(
+        (
+            attachment_append,
+            after_attachment,
+            assistant_append,
+            after_assistant,
+        ),
+        (
+            IncrementalAppend::Applied,
+            parse_all(transcript_after_attachment.as_bytes(), empty_additions()),
+            IncrementalAppend::Applied,
+            parse_all(transcript.as_bytes(), empty_additions()),
         ),
     );
 }

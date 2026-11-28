@@ -53,13 +53,14 @@ pub(super) fn parse_session_transcript_incrementally(
     session_id: &str,
     input: TranscriptInput<'_>,
     fingerprint: Option<TranscriptFingerprint>,
+    pending_task_ids: &[String],
     cache: &MessageCache,
 ) -> Result<(ConversationResponse, Vec<i64>)> {
     parse_session_transcript_incrementally_for_range(
         session_id,
         input,
         fingerprint,
-        &[],
+        pending_task_ids,
         cache,
         TranscriptRangeContext::default(),
     )
@@ -90,7 +91,6 @@ pub(super) fn parse_session_transcript_incrementally_for_range(
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut restart_reason = Some("cache_miss");
-    let mut discard_tail_window_after_branch_switch = false;
     let can_reuse = if let Some(entry) = cached.as_mut()
         && entry.engine == input.engine
         && parser_matches_engine(&entry.parser, input.engine)
@@ -103,8 +103,6 @@ pub(super) fn parse_session_transcript_incrementally_for_range(
                 Ok(ParserAdvance::Reuse) => true,
                 Ok(ParserAdvance::Restart(reason)) => {
                     restart_reason = Some(reason);
-                    discard_tail_window_after_branch_switch =
-                        entry.tail_window.is_some() && reason == "append_requires_branch_reparse";
                     false
                 }
                 Err(error) => {
@@ -127,10 +125,6 @@ pub(super) fn parse_session_transcript_incrementally_for_range(
         }
         false
     };
-
-    if discard_tail_window_after_branch_switch {
-        *cached = None;
-    }
 
     if can_reuse {
         let rendered = {
@@ -174,11 +168,13 @@ pub(super) fn parse_session_transcript_incrementally_for_range(
     }
 
     if !range.require_full_history
-        && range
-            .requested_epoch
-            .is_some_and(super::range::epoch_token_is_decodable)
+        && (cached
+            .as_ref()
+            .is_some_and(|entry| entry.tail_window.is_some())
+            || range
+                .requested_epoch
+                .is_some_and(super::range::epoch_token_is_decodable))
         && restart_reason != Some("epoch_anchor_outside_tail_window")
-        && !discard_tail_window_after_branch_switch
         && !fingerprint.is_compressed()
     {
         let message_limit = cached
@@ -642,11 +638,76 @@ mod tests {
                 },
             },
             Some(fingerprint),
+            &[],
             &MessageCache::default(),
         )
         .unwrap();
 
         assert_eq!(result, (ConversationResponse::default(), Vec::new()));
+    }
+
+    #[rstest::rstest]
+    fn cached_tail_window_rebuilds_after_a_branch_switch(epoch_transcript: tempfile::TempDir) {
+        let path = epoch_transcript.path().join("fixture.jsonl");
+        let cache = MessageCache::default();
+        let initial_fingerprint = transcript_fingerprint(Engine::Claude, Some(&path))
+            .unwrap()
+            .unwrap();
+        super::tail_window::parse_initial_or_full_for_range(
+            "fixture-session",
+            epoch_input(&path),
+            Some(100),
+            &[],
+            Some(initial_fingerprint),
+            &cache,
+            super::TranscriptRangeContext::default(),
+        )
+        .unwrap();
+
+        let transcript = std::fs::read_to_string(&path).unwrap();
+        let appended_records = concat!(
+            r#"{"type":"user","uuid":"fixture-rewind-request","parentUuid":"fixture-assistant-50","timestamp":"2026-01-01T01:00:00Z","message":{"content":"Continue from an earlier request."}}"#,
+            "\n",
+            r#"{"type":"assistant","uuid":"fixture-rewind-response","parentUuid":"fixture-rewind-request","timestamp":"2026-01-01T01:00:01Z","message":{"content":[{"type":"text","text":"The earlier branch continues."}]}}"#,
+        );
+        std::fs::write(&path, format!("{transcript}\n{appended_records}")).unwrap();
+
+        let fingerprint = transcript_fingerprint(Engine::Claude, Some(&path))
+            .unwrap()
+            .unwrap();
+        let (mut actual, resolved_ids, _) = super::tail_window::parse_initial_or_full_for_range(
+            "fixture-session",
+            epoch_input(&path),
+            None,
+            &[],
+            Some(fingerprint),
+            &cache,
+            super::TranscriptRangeContext::default(),
+        )
+        .unwrap();
+        let (mut expected, expected_resolved_ids) =
+            parse_session_transcript(epoch_input(&path)).unwrap();
+        let page = MessageRange {
+            limit: Some(100),
+            ..MessageRange::default()
+        };
+        actual.initial_epoch = true;
+        actual.apply_range(page.clone());
+        expected.initial_epoch = true;
+        expected.apply_range(page);
+
+        assert_eq!(
+            (
+                serde_json::to_value(actual).unwrap(),
+                resolved_ids,
+                super::cached_tail_window_message_limit("fixture-session", &cache),
+            ),
+            (
+                serde_json::to_value(expected).unwrap(),
+                expected_resolved_ids,
+                Some(100),
+            ),
+        );
     }
 
     #[rstest::fixture]

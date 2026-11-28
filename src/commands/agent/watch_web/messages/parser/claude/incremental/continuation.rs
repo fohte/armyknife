@@ -5,7 +5,7 @@ use super::super::state::{ClaudeParserState, is_attachment_record, record_parent
 use super::super::transcript_branch::{
     BranchMembership, TranscriptContentMetadata, TranscriptNode,
 };
-use super::super::user_input::user_content;
+use super::super::user_input::{is_tool_result_only_user_record, user_content};
 
 #[derive(Clone, Default)]
 pub(super) struct AppendHistory {
@@ -91,6 +91,7 @@ impl AppendRecord {
 pub(super) enum AppendDecision {
     SimpleTail,
     ParallelResult,
+    BranchContinuation,
 }
 
 pub(super) struct ClassifiedAppend {
@@ -139,10 +140,10 @@ pub(super) fn classify_append(
     record: &Value,
 ) -> Option<ClassifiedAppend> {
     let candidate = AppendRecord::from_record(record);
-    let uuid = candidate.uuid.as_deref()?;
-    if state.transcript_nodes.contains_key(uuid)
-        || candidate.is_task_notification
-        || (is_attachment_record(record) && !candidate.is_transparent_attachment)
+    if candidate
+        .uuid
+        .as_deref()
+        .is_some_and(|uuid| state.transcript_nodes.contains_key(uuid))
     {
         return None;
     }
@@ -158,12 +159,62 @@ pub(super) fn classify_append(
         });
     }
 
-    let pending_tool_result = is_simple_tail_append(state, history, record, &candidate)?;
+    if let Some(pending_tool_result) = is_simple_tail_append(state, history, record, &candidate) {
+        return Some(ClassifiedAppend {
+            decision: AppendDecision::SimpleTail,
+            pending_tool_result,
+            record: candidate,
+        });
+    }
+    if !is_active_branch_continuation(state, record, &candidate) {
+        return None;
+    }
+    let pending_tool_result = is_tool_result_only_user_record(record)
+        && state.has_pending_tool_result_for_parent(record, candidate.parent_uuid.as_deref());
     Some(ClassifiedAppend {
-        decision: AppendDecision::SimpleTail,
+        decision: AppendDecision::BranchContinuation,
         pending_tool_result,
         record: candidate,
     })
+}
+
+fn is_active_branch_continuation(
+    state: &ClaudeParserState,
+    record: &Value,
+    candidate: &AppendRecord,
+) -> bool {
+    let Some(uuid) = candidate.uuid.as_deref() else {
+        return true;
+    };
+    if state.transcript_nodes.contains_key(uuid) {
+        return false;
+    }
+    let is_tool_result_only = is_tool_result_only_user_record(record);
+    if is_tool_result_only && candidate.parent_uuid.is_none() {
+        return false;
+    }
+    let Some(parent_uuid) = candidate.parent_uuid.as_deref() else {
+        return state.latest_uuid.is_none();
+    };
+    let parent_is_active = state
+        .transcript_nodes
+        .get(parent_uuid)
+        .is_some_and(|node| node.membership == BranchMembership::Active);
+    if !parent_is_active {
+        return false;
+    }
+    if is_tool_result_only {
+        return state.latest_uuid.as_deref() == Some(parent_uuid)
+            || state.tool_result_parent.as_deref() == Some(parent_uuid);
+    }
+    let parent_is_latest = state.latest_record_uuid.as_deref() == Some(parent_uuid);
+    if candidate.is_task_notification {
+        return parent_is_latest;
+    }
+    if record.get("type").and_then(Value::as_str) == Some("assistant") {
+        return parent_is_latest || state.tool_result_parent.as_deref() == Some(parent_uuid);
+    }
+    parent_is_latest
 }
 
 fn is_simple_tail_append(

@@ -25,14 +25,39 @@ fn measure_20k_transcript_shapes() {
     measure_shape("A", &shape_a_prefix, &shape_a_suffix);
 
     let shape_b_cycles = RECORDS_PER_SHAPE / 10;
-    let shape_b_prefix = jsonl(parallel_tool_cycles(0, shape_b_cycles, None));
+    let shape_b_prefix = jsonl(parallel_tool_cycles(
+        "bench-b",
+        0,
+        shape_b_cycles,
+        None,
+        false,
+    ));
     let shape_b_last_uuid = format!("bench-b-{}-continuation", shape_b_cycles - 1);
     let shape_b_suffix = parallel_tool_cycles(
+        "bench-b",
         shape_b_cycles,
         APPENDS_PER_ROUND / 10,
         Some(shape_b_last_uuid),
+        false,
     );
     measure_shape("B", &shape_b_prefix, &shape_b_suffix);
+
+    let shape_c_prefix = jsonl(parallel_tool_cycles(
+        "bench-c",
+        0,
+        shape_b_cycles,
+        None,
+        true,
+    ));
+    let shape_c_last_uuid = format!("bench-c-{}-continuation", shape_b_cycles - 1);
+    let shape_c_suffix = parallel_tool_cycles(
+        "bench-c",
+        shape_b_cycles,
+        APPENDS_PER_ROUND / 10,
+        Some(shape_c_last_uuid),
+        true,
+    );
+    measure_shape("C", &shape_c_prefix, &shape_c_suffix);
 }
 
 fn measure_shape(name: &str, prefix: &str, suffix_records: &[Value]) {
@@ -152,24 +177,26 @@ fn linear_records(start_index: usize, count: usize, mut parent_uuid: Option<Stri
 }
 
 fn parallel_tool_cycles(
+    id_prefix: &str,
     start_cycle: usize,
     cycle_count: usize,
     mut parent_uuid: Option<String>,
+    include_realistic_records: bool,
 ) -> Vec<Value> {
     let mut records = Vec::with_capacity(cycle_count * 10);
     for cycle in start_cycle..start_cycle + cycle_count {
-        let request = format!("bench-b-{cycle}-request");
-        let first_call = format!("bench-b-{cycle}-call-a");
-        let second_call = format!("bench-b-{cycle}-call-b");
-        let first_result = format!("bench-b-{cycle}-result-a");
-        let first_followup = format!("bench-b-{cycle}-followup-a");
-        let second_result = format!("bench-b-{cycle}-result-b");
-        let second_followup = format!("bench-b-{cycle}-followup-b");
-        let hook = format!("bench-b-{cycle}-hook");
-        let queued_command = format!("bench-b-{cycle}-queued");
-        let continuation = format!("bench-b-{cycle}-continuation");
-        let first_tool_id = format!("bench-b-{cycle}-tool-a");
-        let second_tool_id = format!("bench-b-{cycle}-tool-b");
+        let request = format!("{id_prefix}-{cycle}-request");
+        let first_call = format!("{id_prefix}-{cycle}-call-a");
+        let second_call = format!("{id_prefix}-{cycle}-call-b");
+        let first_result = format!("{id_prefix}-{cycle}-result-a");
+        let first_followup = format!("{id_prefix}-{cycle}-followup-a");
+        let second_result = format!("{id_prefix}-{cycle}-result-b");
+        let second_followup = format!("{id_prefix}-{cycle}-followup-b");
+        let hook = format!("{id_prefix}-{cycle}-hook");
+        let queued_command = format!("{id_prefix}-{cycle}-queued");
+        let continuation = format!("{id_prefix}-{cycle}-continuation");
+        let first_tool_id = format!("{id_prefix}-{cycle}-tool-a");
+        let second_tool_id = format!("{id_prefix}-{cycle}-tool-b");
 
         records.extend([
             json!({
@@ -232,25 +259,81 @@ fn parallel_tool_cycles(
                 "parentUuid": second_result,
                 "message": {"content": [{"type": "text", "text": "Second result is ready."}]},
             }),
-            json!({
-                "type": "attachment",
-                "uuid": hook,
-                "parentUuid": second_followup,
-                "attachment": {"type": "hook_success", "hookName": "PostToolUse"},
-            }),
-            json!({
-                "type": "attachment",
-                "uuid": queued_command,
-                "parentUuid": hook,
-                "attachment": {"type": "queued_command", "prompt": ""},
-            }),
-            json!({
-                "type": "assistant",
-                "uuid": continuation,
-                "parentUuid": queued_command,
-                "message": {"content": [{"type": "text", "text": "Sample continuation."}]},
-            }),
         ]);
+        records.push(json!({
+            "type": "attachment",
+            "uuid": hook,
+            "parentUuid": second_followup,
+            "attachment": {"type": "hook_success", "hookName": "PostToolUse"},
+        }));
+        let (intermediate_record, continuation_parent) = if include_realistic_records {
+            match cycle % 4 {
+                0 => (
+                    json!({
+                        "type": "attachment",
+                        "uuid": queued_command,
+                        "parentUuid": hook,
+                        "attachment": {"type": "queued_command", "prompt": ""},
+                    }),
+                    queued_command,
+                ),
+                1 => (
+                    json!({
+                        "type": "attachment",
+                        "uuid": queued_command,
+                        "parentUuid": hook,
+                        "attachment": {"type": "silent_turn_reminder"},
+                    }),
+                    queued_command,
+                ),
+                2 => {
+                    let message = format!(
+                        "<task-notification><task-id>fixture-task-{cycle}</task-id><status>completed</status></task-notification>"
+                    );
+                    (
+                        json!({
+                            "type": "user",
+                            "uuid": queued_command,
+                            "parentUuid": hook,
+                            "origin": {"kind": "task-notification"},
+                            "message": {"content": message},
+                        }),
+                        queued_command,
+                    )
+                }
+                _ => {
+                    let message = format!(
+                        "<task-notification><task-id>fixture-task-{cycle}</task-id><status>completed</status></task-notification>"
+                    );
+                    (
+                        json!({
+                            "type": "user",
+                            "parentUuid": hook,
+                            "origin": {"kind": "task-notification"},
+                            "message": {"content": message},
+                        }),
+                        hook,
+                    )
+                }
+            }
+        } else {
+            (
+                json!({
+                    "type": "attachment",
+                    "uuid": queued_command,
+                    "parentUuid": hook,
+                    "attachment": {"type": "queued_command", "prompt": ""},
+                }),
+                queued_command,
+            )
+        };
+        records.push(intermediate_record);
+        records.push(json!({
+            "type": "assistant",
+            "uuid": continuation,
+            "parentUuid": continuation_parent,
+            "message": {"content": [{"type": "text", "text": "Sample continuation."}]},
+        }));
         parent_uuid = Some(continuation);
     }
     records

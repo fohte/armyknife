@@ -73,6 +73,7 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_initial_or_full_for
                 session_id,
                 input,
                 fingerprint.clone(),
+                pending_task_ids,
                 cache,
             )
         } else {

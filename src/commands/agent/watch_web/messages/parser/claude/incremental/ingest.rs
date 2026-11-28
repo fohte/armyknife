@@ -32,6 +32,7 @@ pub(super) fn ingest_record(
     } else {
         None
     };
+    state.has_compact_boundary_record |= super::is_compact_boundary(&record);
     let append_decision = classified_append
         .as_ref()
         .map(|classified| classified.decision);
@@ -122,7 +123,11 @@ pub(super) fn ingest_record(
     }
     if matches!(origin, RecordOrigin::Appended) {
         match append_decision {
-            Some(AppendDecision::SimpleTail | AppendDecision::ParallelResult) => {}
+            Some(
+                AppendDecision::SimpleTail
+                | AppendDecision::ParallelResult
+                | AppendDecision::BranchContinuation,
+            ) => {}
             None => return false,
         }
     }
