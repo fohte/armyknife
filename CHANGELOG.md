@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1003](https://github.com/fohte/armyknife/compare/v0.1.1002...v0.1.1003) (2026-11-28)
+
+
+### Features
+
+* **watch-web:** run stale cleanup at startup ([#2435](https://github.com/fohte/armyknife/issues/2435)) ([3925b12](https://github.com/fohte/armyknife/commit/3925b12480ff31938925df0dca65118b79ac36dc))
+
 ## [0.1.1002](https://github.com/fohte/armyknife/compare/v0.1.1001...v0.1.1002) (2026-11-28)
 
 
