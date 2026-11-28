@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.993](https://github.com/fohte/armyknife/compare/v0.1.992...v0.1.993) (2026-11-28)
+
+
+### Features
+
+* **agent-watch-desktop:** hide macOS title bar ([#2417](https://github.com/fohte/armyknife/issues/2417)) ([98be6b9](https://github.com/fohte/armyknife/commit/98be6b9db8e3bbefe669a4a90bb0e8393cc355af))
+
 ## [0.1.992](https://github.com/fohte/armyknife/compare/v0.1.991...v0.1.992) (2026-11-28)
 
 
