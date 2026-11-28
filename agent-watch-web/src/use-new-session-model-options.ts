@@ -52,16 +52,34 @@ export function useNewSessionModelOptions(
   selectionsRef.current = selections
   const activeRef = useRef(active)
   activeRef.current = active
+  const requestSequenceRef = useRef<Record<SessionEngine, number>>({
+    claude: 0,
+    codex: 0,
+  })
+
+  const invalidateRequests = useCallback(() => {
+    requestSequenceRef.current = {
+      claude: requestSequenceRef.current.claude + 1,
+      codex: requestSequenceRef.current.codex + 1,
+    }
+  }, [])
 
   const loadModelOptionsFor = useCallback(
-    (engine: SessionEngine, isCurrent: () => boolean = () => true) => {
+    (engine: SessionEngine) => {
+      const sequence = requestSequenceRef.current[engine] + 1
+      requestSequenceRef.current[engine] = sequence
       setModelOptionsByEngine((states) => ({
         ...states,
         [engine]: { ...states[engine], isLoading: true, error: null },
       }))
       void getSessionModelOptions(engine).match(
         (options) => {
-          if (!isCurrent() || !activeRef.current) return
+          if (
+            !activeRef.current ||
+            requestSequenceRef.current[engine] !== sequence
+          ) {
+            return
+          }
           setModelOptionsByEngine((states) => ({
             ...states,
             [engine]: { modelOptions: options, isLoading: false, error: null },
@@ -73,7 +91,12 @@ export function useNewSessionModelOptions(
           )
         },
         (requestError) => {
-          if (!isCurrent() || !activeRef.current) return
+          if (
+            !activeRef.current ||
+            requestSequenceRef.current[engine] !== sequence
+          ) {
+            return
+          }
           setModelOptionsByEngine((states) => ({
             ...states,
             [engine]: {
@@ -90,17 +113,15 @@ export function useNewSessionModelOptions(
 
   useEffect(() => {
     if (!active) {
+      invalidateRequests()
       setModelOptionsByEngine(emptyModelOptionsState())
       return
     }
-    let current = true
     for (const engine of ['claude', 'codex'] as const) {
-      loadModelOptionsFor(engine, () => current)
+      loadModelOptionsFor(engine)
     }
-    return () => {
-      current = false
-    }
-  }, [active, loadModelOptionsFor])
+    return invalidateRequests
+  }, [active, invalidateRequests, loadModelOptionsFor])
 
   const retryFailedModelOptionsFor = useCallback(
     (engine: SessionEngine) => {
@@ -115,8 +136,9 @@ export function useNewSessionModelOptions(
   )
 
   const resetModelOptions = useCallback(() => {
+    invalidateRequests()
     setModelOptionsByEngine(emptyModelOptionsState())
-  }, [])
+  }, [invalidateRequests])
 
   const chooseModelFor = useCallback(
     (engine: SessionEngine, model: string | null) => {

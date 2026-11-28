@@ -14,8 +14,8 @@ let container: HTMLDivElement
 let root: Root | null = null
 let currentState: NewSessionState | null = null
 
-function NewSessionHarness() {
-  currentState = useNewSession(true)
+function NewSessionHarness({ active = true }: { active?: boolean } = {}) {
+  currentState = useNewSession(active)
   return null
 }
 
@@ -733,23 +733,33 @@ it('passes the overridden engine model and effort selection to launch', async ()
   ])
 })
 
-it('retains the selection when loading model options fails', async () => {
+it('retries a failed engine catalog and restores its selection', async () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   container = document.createElement('div')
   document.body.append(container)
+  let codexLoadCount = 0
   const fetcher = vi.fn<typeof fetch>((input) => {
     const url = requestUrl(input)
     if (url === '/api/model-options?engine=codex') {
-      return Promise.resolve(
-        new Response(JSON.stringify({ error: 'Fixture catalog unavailable' }), {
-          status: 503,
-          headers: { 'content-type': 'application/json' },
-        }),
-      )
+      codexLoadCount += 1
+      if (codexLoadCount < 3) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ error: 'Fixture catalog unavailable' }),
+            {
+              status: 503,
+              headers: { 'content-type': 'application/json' },
+            },
+          ),
+        )
+      }
     }
-    const body = url.startsWith('/api/skill-suggestions')
-      ? { skills: [] }
-      : exampleModelOptions
+    const body =
+      url === '/api/model-options?engine=codex'
+        ? codexModelOptions
+        : url.startsWith('/api/skill-suggestions')
+          ? { skills: [] }
+          : exampleModelOptions
     return Promise.resolve(
       new Response(JSON.stringify(body), {
         status: 200,
@@ -770,11 +780,13 @@ it('retains the selection when loading model options fails', async () => {
     currentState?.setEngine('claude')
   })
   await flushRequests()
+  const retryFailure = currentState?.engineOptions.codex
   act(() => currentState?.setEngine('codex'))
   await flushRequests()
 
   const snapshot = () => ({
     engineOptions: currentState?.engineOptions,
+    retryFailure,
     modelOptionRequests: fetcher.mock.calls
       .map(([input]) => requestUrl(input))
       .filter((url) => url.startsWith('/api/model-options')),
@@ -798,13 +810,21 @@ it('retains the selection when loading model options fails', async () => {
         activeModelOption: exampleModelOptions.models[0],
       },
       codex: {
-        modelOptions: null,
+        modelOptions: codexModelOptions,
         isLoading: false,
-        error: 'Fixture catalog unavailable',
+        error: null,
         selectedModel: 'fixture-model-codex',
         selectedEffort: 'xhigh',
-        activeModelOption: undefined,
+        activeModelOption: codexModelOptions.models[0],
       },
+    },
+    retryFailure: {
+      modelOptions: null,
+      isLoading: false,
+      error: 'Fixture catalog unavailable',
+      selectedModel: 'fixture-model-codex',
+      selectedEffort: 'xhigh',
+      activeModelOption: undefined,
     },
     modelOptionRequests: [
       '/api/model-options?engine=claude',
@@ -815,11 +835,117 @@ it('retains the selection when loading model options fails', async () => {
     currentEngineState: {
       engine: 'codex',
       isLoadingModelOptions: false,
-      modelOptions: null,
-      modelOptionsError: 'Fixture catalog unavailable',
+      modelOptions: codexModelOptions,
+      modelOptionsError: null,
       selectedModel: 'fixture-model-codex',
       selectedEffort: 'xhigh',
     },
+  })
+})
+
+it('ignores a retry response from an earlier activation', async () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  container = document.createElement('div')
+  document.body.append(container)
+  let codexLoadCount = 0
+  let resolveRetry: ((response: Response) => void) | undefined
+  const staleModelOptions = {
+    defaultModel: 'stale-fixture-model',
+    defaultEffort: 'low',
+    models: [
+      {
+        id: 'stale-fixture-model',
+        label: 'Stale fixture',
+        defaultEffort: 'low',
+        efforts: ['low'],
+      },
+    ],
+  }
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url === '/api/model-options?engine=codex') {
+      codexLoadCount += 1
+      if (codexLoadCount === 1) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ error: 'Fixture catalog unavailable' }),
+            {
+              status: 503,
+              headers: { 'content-type': 'application/json' },
+            },
+          ),
+        )
+      }
+      if (codexLoadCount === 2) {
+        return new Promise((resolve) => {
+          resolveRetry = resolve
+        })
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify(codexModelOptions), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      )
+    }
+    const body =
+      url === '/api/model-options?engine=claude'
+        ? exampleModelOptions
+        : { skills: [] }
+    return Promise.resolve(
+      new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+
+  act(() => root?.render(<NewSessionHarness />))
+  await flushRequests()
+  act(() => currentState?.setEngine('codex'))
+  await flushRequests()
+  act(() => root?.render(<NewSessionHarness active={false} />))
+  act(() => root?.render(<NewSessionHarness />))
+  await flushRequests()
+  act(() => currentState?.chooseModel('fixture-model-codex'))
+
+  if (resolveRetry === undefined) {
+    throw new Error('Expected a pending Codex retry')
+  }
+  await act(async () => {
+    resolveRetry(
+      new Response(JSON.stringify(staleModelOptions), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+    await new Promise((resolve) => window.setTimeout(resolve, 0))
+  })
+
+  const snapshot = () => ({
+    codex: currentState?.engineOptions.codex,
+    modelOptionRequests: fetcher.mock.calls
+      .map(([input]) => requestUrl(input))
+      .filter((url) => url.startsWith('/api/model-options')),
+  })
+  expect(snapshot()).toEqual({
+    codex: {
+      modelOptions: codexModelOptions,
+      isLoading: false,
+      error: null,
+      selectedModel: 'fixture-model-codex',
+      selectedEffort: null,
+      activeModelOption: codexModelOptions.models[0],
+    },
+    modelOptionRequests: [
+      '/api/model-options?engine=claude',
+      '/api/model-options?engine=codex',
+      '/api/model-options?engine=codex',
+      '/api/model-options?engine=claude',
+      '/api/model-options?engine=codex',
+    ],
   })
 })
 
