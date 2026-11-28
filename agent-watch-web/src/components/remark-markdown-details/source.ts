@@ -93,15 +93,20 @@ export function parseMarkdownSection(
   definitions: readonly ReferenceDefinitionSource[],
   sourceOffset: number,
   sourceOffsets?: SourceOffsetMap,
+  includeAllDefinitions = false,
 ): MarkdownNode[] {
   const sourceEndOffset =
     sourceOffsets?.[sourceOffsets.length - 1] ?? sourceOffset + source.length
-  const preceding = definitions
-    .filter((definition) => definition.offset < sourceOffset)
-    .map((definition) => definition.source)
-  const following = definitions
-    .filter((definition) => definition.offset >= sourceEndOffset)
-    .map((definition) => definition.source)
+  const preceding = includeAllDefinitions
+    ? definitions.map((definition) => definition.source)
+    : definitions
+        .filter((definition) => definition.offset < sourceOffset)
+        .map((definition) => definition.source)
+  const following = includeAllDefinitions
+    ? []
+    : definitions
+        .filter((definition) => definition.offset >= sourceEndOffset)
+        .map((definition) => definition.source)
   const prefix = preceding.length > 0 ? `${preceding.join('\n\n')}\n\n` : ''
   const suffix = following.length > 0 ? `\n\n${following.join('\n\n')}` : ''
   const sectionStart = prefix.length

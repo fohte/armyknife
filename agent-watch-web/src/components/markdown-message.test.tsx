@@ -246,7 +246,7 @@ it('keeps details that close outside their list item as text once', () => {
       '<div class="markdown-message"><ul>',
       '<li>Before',
       '&lt;details&gt;',
-      '  &lt;summary&gt;Split details&lt;/summary&gt;',
+      '&lt;summary&gt;Split details&lt;/summary&gt;',
       'Body',
       '</li>',
       '</ul>',
@@ -497,6 +497,23 @@ See the [guide][shared-guide].`,
     ].join(String.fromCharCode(10)),
   },
   {
+    name: 'a reference after details inside a blockquote',
+    markdown: `> <details open>
+> <summary>References</summary>
+> [shared-guide]: https://example.com/quoted
+>
+> Body
+> </details>
+>
+> See the [guide][shared-guide].`,
+    expected: [
+      '<div class="markdown-message"><blockquote>',
+      '<div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">References</span></button><div class="markdown-details-body"><p>Body</p></div></div>',
+      '<p>See the <a href="https://example.com/quoted" target="_blank" rel="noopener noreferrer">guide</a>.</p>',
+      '</blockquote></div>',
+    ].join(String.fromCharCode(10)),
+  },
+  {
     name: 'source order for duplicate definitions',
     markdown: `[shared-guide]: https://example.com/outside
 
@@ -628,8 +645,11 @@ Still inside.
 it.each([
   {
     name: 'an inline code span',
-    markdown:
-      '<details open><summary>Code</summary>\n\n`</details>`\nBody\n</details>',
+    markdown: `<details open><summary>Code</summary>
+
+\`</details>\`
+Body
+</details>`,
     expected: [
       '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Code</span></button><div class="markdown-details-body"><p><code>&lt;/details&gt;</code>',
       'Body</p></div></div></div>',
@@ -646,16 +666,21 @@ Still inside
 </details>`,
     expected: [
       '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Code</span></button><div class="markdown-details-body"><div class="syntax-code-block-container"><div class="syntax-code-block-toolbar"><span class="syntax-code-block-language">text</span><button class="syntax-code-block-copy-button" type="button" aria-label="Copy code" title="Copy code">Copy</button></div><pre class="syntax-code-block" data-language="text"><code class="language-text">&lt;/details&gt;',
-      '</code></pre></div>',
-      '<p>Still inside</p></div></div></div>',
+      '</code></pre></div><p>Still inside</p></div></div></div>',
     ].join(String.fromCharCode(10)),
   },
   {
     name: 'a multiline code span interrupted by an HTML block',
-    markdown:
-      '<details open><summary>Code</summary>\n`\n</details>\n`\n\nBody\n</details>',
+    markdown: `<details open><summary>Code</summary>
+\`
+</details>
+\`
+
+Body
+</details>`,
     expected: [
-      '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Code</span></button><div class="markdown-details-body"><p>`</p></div></div><p>`</p>',
+      '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Code</span></button><div class="markdown-details-body"><p>`</p></div></div>',
+      '<p>`</p>',
       '<p>Body</p>',
       '&lt;/details&gt;</div>',
     ].join(String.fromCharCode(10)),

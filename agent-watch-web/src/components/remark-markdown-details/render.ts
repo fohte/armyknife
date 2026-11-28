@@ -1,8 +1,15 @@
 import type { MarkdownNode } from '#components/markdown-message-types'
 import {
   type HtmlSourceAnalysis,
+  type MarkdownSource,
   sourceOffsetsForRange,
 } from '#components/remark-markdown-details/html-source'
+import { pairDetails } from '#components/remark-markdown-details/pair'
+import {
+  createHtmlAnalysisOffsetMap,
+  findReferenceCandidateNodes,
+  reparseReferenceBlock,
+} from '#components/remark-markdown-details/reference-blocks'
 import {
   type MarkdownParser,
   parseMarkdownSection,
@@ -34,7 +41,6 @@ type HtmlGroup = HtmlSourceAnalysis['group']
 type Unit =
   | { node: MarkdownNode; group?: HtmlGroup }
   | { marker: Marker; group?: HtmlGroup }
-type Pair = { close: number; summaryOpen: number; summaryClose: number }
 function marker(
   kind: Kind,
   value: string,
@@ -153,78 +159,19 @@ function unitsFrom(
   parse: MarkdownParser,
   references: readonly ReferenceDefinitionSource[],
   analyses: ReadonlyMap<MarkdownNode, HtmlSourceAnalysis>,
+  analysesByOffset?: ReadonlyMap<number, HtmlSourceAnalysis>,
 ): Unit[] {
   const units: Unit[] = []
   for (const node of nodes) {
-    const split = splitHtml(node, parse, references, analyses.get(node))
+    const start = node.position?.start.offset
+    const analysis =
+      analyses.get(node) ??
+      (start === undefined ? undefined : analysesByOffset?.get(start))
+    const split = splitHtml(node, parse, references, analysis)
     if (split === null) units.push({ node })
     else for (const unit of split) units.push(unit)
   }
   return units
-}
-
-function pairDetails(units: Unit[]) {
-  type Frame = {
-    open: number
-    render: boolean
-    summaryOpen?: number
-    summaryClose?: number
-  }
-  const pairs = new Map<number, Pair>()
-  const closes = new Map<number, number>()
-  const stack: Frame[] = []
-  const pending = new Set<Frame>()
-  const invalidatePending = () => {
-    pending.clear()
-  }
-
-  for (const [index, unit] of units.entries()) {
-    if (!('marker' in unit)) {
-      invalidatePending()
-      continue
-    }
-    const { kind } = unit.marker
-    if (kind === 'details-open') {
-      invalidatePending()
-      const frame = { open: index, render: true }
-      stack.push(frame)
-      pending.add(frame)
-    } else if (kind === 'details-raw-open') {
-      invalidatePending()
-      stack.push({ open: index, render: false })
-    } else if (kind === 'summary-open') {
-      const frame = stack.at(-1)
-      if (frame?.render === true && pending.delete(frame))
-        frame.summaryOpen = index
-      else invalidatePending()
-    } else if (kind === 'summary-close') {
-      const frame = stack.at(-1)
-      if (
-        frame?.render === true &&
-        frame.summaryOpen !== undefined &&
-        frame.summaryClose === undefined
-      ) {
-        frame.summaryClose = index
-      } else invalidatePending()
-    } else if (kind === 'details-close') {
-      const frame = stack.pop()
-      if (frame === undefined) continue
-      pending.delete(frame)
-      closes.set(frame.open, index)
-      if (
-        frame.render &&
-        frame.summaryOpen !== undefined &&
-        frame.summaryClose !== undefined
-      ) {
-        pairs.set(frame.open, {
-          close: index,
-          summaryOpen: frame.summaryOpen,
-          summaryClose: frame.summaryClose,
-        })
-      }
-    }
-  }
-  return { pairs, closes }
 }
 
 function rawDetailsNode(group: HtmlGroup, open: Marker, end: number) {
@@ -274,6 +221,24 @@ function summaryNode(
     if (unit === undefined) continue
     if ('marker' in unit && unit.marker.kind === 'summary-text') {
       fallback += unit.marker.value
+      const previous = units[index - 1]
+      const next = units[index + 1]
+      const leadingWhitespace =
+        previous !== undefined &&
+        !('marker' in previous) &&
+        previous.node.type === 'html'
+          ? (unit.marker.value.match(/^[ \t]+/)?.[0] ?? '')
+          : ''
+      const trailingWhitespace =
+        next !== undefined &&
+        !('marker' in next) &&
+        next.node.type === 'html' &&
+        unit.marker.value !== leadingWhitespace
+          ? (unit.marker.value.match(/[ \t]+$/)?.[0] ?? '')
+          : ''
+      if (leadingWhitespace !== '') {
+        children.push({ type: 'text', value: leadingWhitespace })
+      }
       const sourceOffsets =
         unit.group === undefined
           ? undefined
@@ -292,6 +257,9 @@ function summaryNode(
         ),
         /^[ \t]*\r?\n[ \t]*\r?\n/.test(unit.marker.value),
       )
+      if (trailingWhitespace !== '') {
+        children.push({ type: 'text', value: trailingWhitespace })
+      }
     } else if (!('marker' in unit) && unit.node.type === 'paragraph') {
       append([unit.node], true)
       fallback += (unit.node.children ?? [])
@@ -328,8 +296,12 @@ function renderUnits(
   parse: MarkdownParser,
   references: readonly ReferenceDefinitionSource[],
   analyses: ReadonlyMap<MarkdownNode, HtmlSourceAnalysis>,
+  markdown: MarkdownSource,
+  resolveHiddenReferences: boolean,
+  analysesByOffset: ReadonlyMap<number, HtmlSourceAnalysis>,
+  referenceCandidates: ReadonlySet<MarkdownNode>,
 ): MarkdownNode[] {
-  const units = unitsFrom(nodes, parse, references, analyses)
+  const units = unitsFrom(nodes, parse, references, analyses, analysesByOffset)
   const { pairs, closes } = pairDetails(units)
   const result: MarkdownNode[] = []
   const frames: Array<{
@@ -431,12 +403,40 @@ function renderUnits(
     } else if ('marker' in unit) {
       output.push(toNode(unit))
     } else {
+      const reparsed = resolveHiddenReferences
+        ? reparseReferenceBlock(
+            unit.node,
+            referenceCandidates.has(unit.node),
+            parse,
+            references,
+            markdown,
+          )
+        : null
+      if (reparsed !== null) {
+        output.push(
+          ...renderUnits(
+            reparsed,
+            parse,
+            references,
+            analyses,
+            markdown,
+            false,
+            analysesByOffset,
+            referenceCandidates,
+          ),
+        )
+        continue
+      }
       if (unit.node.children !== undefined) {
         unit.node.children = renderUnits(
           unit.node.children,
           parse,
           references,
           analyses,
+          markdown,
+          resolveHiddenReferences,
+          analysesByOffset,
+          referenceCandidates,
         )
       }
       output.push(unit.node)
@@ -475,6 +475,19 @@ export function renderMarkdownDetails(
   parse: MarkdownParser,
   references: readonly ReferenceDefinitionSource[],
   analyses: ReadonlyMap<MarkdownNode, HtmlSourceAnalysis>,
+  markdown: MarkdownSource,
+  resolveHiddenReferences: boolean,
 ) {
-  return renderUnits(nodes, parse, references, analyses)
+  const analysesByOffset = createHtmlAnalysisOffsetMap(analyses)
+  const referenceCandidates = findReferenceCandidateNodes(nodes)
+  return renderUnits(
+    nodes,
+    parse,
+    references,
+    analyses,
+    markdown,
+    resolveHiddenReferences,
+    analysesByOffset,
+    referenceCandidates,
+  )
 }

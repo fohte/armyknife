@@ -97,10 +97,16 @@ function getHtmlDefinitionCandidates(
   const appendDefinitions = (end: number) => {
     const section = value.slice(cursor, end)
     if (section.trim() === '' || inSummary) return
-    for (const definition of getDefinitionNodes(parse(section).children)) {
-      const start = definition.position?.start.offset
-      const finish = definition.position?.end.offset
-      if (start === undefined || finish === undefined) continue
+    const prefix = '\n\n'
+    for (const definition of getDefinitionNodes(
+      parse(`${prefix}${section}`).children,
+    )) {
+      const parsedStart = definition.position?.start.offset
+      const parsedEnd = definition.position?.end.offset
+      if (parsedStart === undefined || parsedEnd === undefined) continue
+      const start = parsedStart - prefix.length
+      const finish = parsedEnd - prefix.length
+      if (start < 0 || finish > section.length) continue
       const localStart = cursor + start
       const localEnd = cursor + finish
       const offsets = sourceOffsetsForRange(
@@ -108,7 +114,7 @@ function getHtmlDefinitionCandidates(
         localStart,
         localEnd,
       )
-      mapDefinitionOffsets(definition, offsets, start)
+      mapDefinitionOffsets(definition, offsets, parsedStart)
       definitions.push({
         node: definition,
         end:
@@ -270,6 +276,7 @@ export function remarkMarkdownDetails(this: Processor) {
       typeof file.value === 'string'
         ? file.value
         : new TextDecoder().decode(file.value)
+    const markdown = createMarkdownSource(source)
     const visibleReferences = getReferenceDefinitionSources(
       tree.children,
       source,
@@ -279,7 +286,7 @@ export function remarkMarkdownDetails(this: Processor) {
     analyzeHtmlGroups(
       tree.children,
       parse,
-      createMarkdownSource(source),
+      markdown,
       analyses,
       hiddenDefinitions,
     )
@@ -304,6 +311,8 @@ export function remarkMarkdownDetails(this: Processor) {
       parse,
       references,
       analyses,
+      markdown,
+      hiddenDefinitions.length > 0,
     )
   }
 }
