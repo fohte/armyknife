@@ -3914,6 +3914,68 @@ it('opens the session when its launch ID appears in the feed', async () => {
   })
 })
 
+it('posts once when Enter is pressed twice before the launch state rerenders', async () => {
+  let resolveLaunchResponse: (response: Response) => void = () => undefined
+  const launchResponse = new Promise<Response>((resolve) => {
+    resolveLaunchResponse = resolve
+  })
+  const fetcher = createSessionLaunchFetcher(launchResponse)
+  vi.stubGlobal('fetch', fetcher)
+  renderApp()
+  publishSessions({ revision: 1, sessions: [] })
+  clickButton('[aria-label="New session"]')
+  await waitForDirectoryResults()
+  clickButton('.new-session-directory-button')
+  clickButton('[aria-label="Select directory /Users/example/work/service"]')
+  const initialMessage = container.querySelector<HTMLTextAreaElement>(
+    '.new-session-view textarea',
+  )
+  if (initialMessage === null) {
+    throw new Error('Initial message was not rendered')
+  }
+  act(() => {
+    dispatchKey(initialMessage, 'Enter')
+    dispatchKey(initialMessage, 'Enter')
+  })
+
+  const snapshot = () => ({
+    postCount: fetcher.mock.calls.filter(
+      ([input, init]) =>
+        requestUrl(input) === '/api/sessions' && init?.method === 'POST',
+    ).length,
+    formOpen: container.querySelector('.new-session-view') !== null,
+    toasts: Array.from(
+      container.querySelectorAll(
+        '.async-action-toast-stack .async-action-item',
+      ),
+      (toast) => toast.textContent,
+    ),
+  })
+  expect(snapshot()).toEqual({
+    postCount: 1,
+    formOpen: true,
+    toasts: [],
+  })
+
+  await act(async () => {
+    resolveLaunchResponse(jsonResponse({ launchId: 'launch-fixture' }))
+    await launchResponse
+    await flushAsyncState()
+  })
+  publishSessions({
+    revision: 2,
+    sessions: [
+      {
+        ...session('session-launched', 'Created session'),
+        launchId: 'launch-fixture',
+      },
+    ],
+  })
+  await act(async () => {
+    await flushAsyncState()
+  })
+})
+
 it('opens a launch when its feed entry arrives before the POST response', async () => {
   let resolveLaunchResponse: (response: Response) => void = () => undefined
   const launchResponse = new Promise<Response>((resolve) => {
@@ -4277,6 +4339,90 @@ it('keeps a launch in Activity when the form closes during the POST', async () =
     selectedTitle: null,
     toast: ['Session started/Users/example/work/service'],
     activityRow: 'Session started/Users/example/work/service',
+  })
+})
+
+it('resets the form when history back hands a launch to Activity', async () => {
+  let resolveLaunchResponse: (response: Response) => void = () => undefined
+  const launchResponse = new Promise<Response>((resolve) => {
+    resolveLaunchResponse = resolve
+  })
+  const fetcher = createSessionLaunchFetcher(launchResponse)
+  vi.stubGlobal('fetch', fetcher)
+  window.history.replaceState(null, '', '/?session=session-before')
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-before', 'Previous session')],
+  })
+  clickButton('[aria-label="New session"]')
+  await waitForDirectoryResults()
+  clickButton('.new-session-directory-button')
+  clickButton('[aria-label="Select directory /Users/example/work/service"]')
+  const initialMessage = container.querySelector<HTMLTextAreaElement>(
+    '.new-session-view textarea',
+  )
+  if (initialMessage === null) {
+    throw new Error('Initial message was not rendered')
+  }
+  await act(async () => {
+    await userEvent.type(initialMessage, 'Keep this message out of history')
+  })
+  clickButton('.new-session-start')
+
+  await act(async () => {
+    await changeHistory('back')
+  })
+  await act(async () => {
+    await changeHistory('forward')
+  })
+
+  const restoredMessage = container.querySelector<HTMLTextAreaElement>(
+    '.new-session-view textarea',
+  )
+  const restoredDirectory = container.querySelector<HTMLElement>(
+    '.new-session-directory-button span',
+  )
+  const snapshot = () => ({
+    formOpen: container.querySelector('.new-session-view') !== null,
+    directory: restoredDirectory?.textContent,
+    initialMessage: restoredMessage?.value,
+    postCount: fetcher.mock.calls.filter(
+      ([input, init]) =>
+        requestUrl(input) === '/api/sessions' && init?.method === 'POST',
+    ).length,
+    toasts: Array.from(
+      container.querySelectorAll(
+        '.async-action-toast-stack .async-action-item',
+      ),
+      (toast) => toast.textContent,
+    ),
+  })
+  expect(snapshot()).toEqual({
+    formOpen: true,
+    directory: 'Choose a directory',
+    initialMessage: '',
+    postCount: 1,
+    toasts: ['Starting session/Users/example/work/service'],
+  })
+
+  await act(async () => {
+    resolveLaunchResponse(jsonResponse({ launchId: 'launch-fixture' }))
+    await launchResponse
+    await flushAsyncState()
+  })
+  publishSessions({
+    revision: 2,
+    sessions: [
+      session('session-before', 'Previous session'),
+      {
+        ...session('session-launched', 'Created session'),
+        launchId: 'launch-fixture',
+      },
+    ],
+  })
+  await act(async () => {
+    await flushAsyncState()
   })
 })
 

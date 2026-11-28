@@ -92,6 +92,7 @@ export function useSessionLaunch({
 
   const start = useCallback(
     (request: LaunchSessionRequest) => {
+      if (pendingLaunchRef.current !== null) return
       sequence.current += 1
       const key = sequence.current
       const result = launch(request)
@@ -154,7 +155,14 @@ export function useSessionLaunch({
       },
     })
     updatePendingLaunch(null)
-  }, [launch, openSessionFromNavigation, startAsyncAction, updatePendingLaunch])
+    newSession.reset()
+  }, [
+    launch,
+    newSession.reset,
+    openSessionFromNavigation,
+    startAsyncAction,
+    updatePendingLaunch,
+  ])
 
   useEffect(() => {
     if (pendingLaunch === null) return
@@ -164,10 +172,9 @@ export function useSessionLaunch({
     if (shouldKeepLaunchOnScreen) return
     handOff()
     if (newSessionMode === 'form') {
-      newSession.reset()
       navigate((current) => ({ ...current, newSessionMode: null }), 'replace')
     }
-  }, [handOff, navigate, newSession.reset, newSessionMode, pendingLaunch, view])
+  }, [handOff, navigate, newSessionMode, pendingLaunch, view])
 
   return { pendingLaunch, start, handOff }
 }
