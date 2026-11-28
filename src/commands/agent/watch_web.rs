@@ -45,6 +45,8 @@ use super::browser;
 use super::error::CcError;
 use crate::commands::agent::store;
 use crate::commands::agent::types::Session;
+use crate::commands::agent::watch_web::session_enrichment::SessionEnrichmentCache;
+use crate::infra::tq::TqEventSubscription;
 use crate::shared::env_var::EnvVars;
 use session_store_watcher::SessionStoreWatcher;
 
@@ -213,6 +215,7 @@ pub async fn run(args: &WatchWebArgs) -> Result<()> {
                         available: session_store_watcher_available,
                     },
                     output_shutdown_receiver,
+                    crate::infra::tq::subscribe_events(),
                 ),
             )
             .with_graceful_shutdown(async move {
@@ -291,6 +294,7 @@ fn app(
     restart_signal: watch::Receiver<bool>,
     session_store_watch: SessionStoreWatch,
     output_shutdown_signal: watch::Receiver<bool>,
+    tq_events: Option<TqEventSubscription>,
 ) -> Router {
     app_with_assets_and_queued_prompt_loaders_and_restart_signal(
         &assets::DIST,
@@ -322,6 +326,7 @@ fn app(
         restart_signal,
         session_store_watch,
         output_shutdown_signal,
+        tq_events,
     )
 }
 
@@ -367,9 +372,14 @@ fn app_with_assets_and_loader_and_restart_signal(
             available: true,
         },
         watch::channel(false).1,
+        None,
     )
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep the router dependencies explicit while adding the optional tq event subscription"
+)]
 fn app_with_assets_and_queued_prompt_loaders_and_restart_signal(
     dist: &'static Dir<'static>,
     load_session: impl Fn(&str) -> anyhow::Result<Option<Session>> + Send + Sync + 'static,
@@ -378,19 +388,36 @@ fn app_with_assets_and_queued_prompt_loaders_and_restart_signal(
     restart_signal: watch::Receiver<bool>,
     session_store_watch: SessionStoreWatch,
     output_shutdown_signal: watch::Receiver<bool>,
+    tq_events: Option<TqEventSubscription>,
 ) -> Router {
     let SessionStoreWatch {
         events: session_store_events,
         available: session_store_watcher_available,
     } = session_store_watch;
     let enrichment_updates = EnrichmentUpdates::new();
+    let session_enrichment = SessionEnrichmentCache::new(enrichment_updates.clone());
+    if let Some(mut tq_events) = tq_events {
+        let cache = session_enrichment.clone();
+        let mut shutdown = output_shutdown_signal.clone();
+        tokio::spawn(async move {
+            if *shutdown.borrow() {
+                return;
+            }
+            loop {
+                tokio::select! {
+                    _ = shutdown.changed() => break,
+                    event = tq_events.recv() => match event {
+                        Some(event) => cache.apply_tq_event(&event).await,
+                        None => break,
+                    },
+                }
+            }
+        });
+    }
     let api = Router::new()
         .merge(actions::router(loaders.clone(), enrichment_updates.clone()))
         .merge(session_state::router())
-        .merge(sessions::router(
-            enrichment_updates.clone(),
-            loaders.clone(),
-        ))
+        .merge(sessions::router(session_enrichment, loaders.clone()))
         .merge(usage::router())
         .merge(freeze_profiler::router())
         .merge(directories::router())
@@ -723,6 +750,7 @@ mod tests {
                 available: true,
             },
             watch::channel(false).1,
+            None,
         )
         .oneshot(request(method, uri, host, origin))
         .await
@@ -826,6 +854,7 @@ mod tests {
                 available: false,
             },
             shutdown_signal,
+            None,
         );
         let response = router
             .oneshot(request(
@@ -1022,6 +1051,7 @@ mod tests {
                 available: true,
             },
             watch::channel(false).1,
+            None,
         )
         .oneshot(
             Request::builder()

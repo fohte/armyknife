@@ -12,7 +12,9 @@ use crate::commands::agent::tq_session_tasks::{
 };
 use crate::commands::agent::types::Session;
 use crate::infra::github::{PrNumberQuery, PrProgressInfo, PrState};
-use crate::infra::tq::{TqClient, TqGithubLink, TqTaskSummary};
+use crate::infra::tq::{
+    TqChangeEvent, TqChangeResource, TqClient, TqEvent, TqGithubLink, TqTaskSummary,
+};
 use tokio::time::Instant;
 
 mod cache;
@@ -134,6 +136,28 @@ impl SessionEnrichmentCache {
             )
             .await
     }
+
+    pub(super) async fn apply_tq_event(&self, event: &TqEvent) {
+        match event {
+            TqEvent::Connected => {
+                self.tq.invalidate(true).await;
+                self.tq.updates.notify();
+            }
+            TqEvent::Change(TqChangeEvent {
+                resource:
+                    TqChangeResource::Task
+                    | TqChangeResource::Project
+                    | TqChangeResource::AgentSession
+                    | TqChangeResource::Github
+                    | TqChangeResource::Unknown,
+                ..
+            }) => {
+                self.tq.invalidate(false).await;
+                self.tq.updates.notify();
+            }
+            TqEvent::Change(_) => {}
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -151,7 +175,6 @@ struct RefreshingCache<T, K> {
     state: tokio::sync::Mutex<CacheState<T, K>>,
     updates: EnrichmentUpdates,
     fetch_timeout: Duration,
-    cache_ttl: Duration,
 }
 
 struct CacheOperations<T, K> {
@@ -166,6 +189,8 @@ struct CacheState<T, K> {
     attempted_at: HashMap<K, Instant>,
     last_requested: HashMap<K, Instant>,
     refresh_in_flight: bool,
+    cache_ttl: Option<Duration>,
+    generation: u64,
 }
 
 impl<T, K> RefreshingCache<T, K>
@@ -180,10 +205,20 @@ where
                 attempted_at: HashMap::new(),
                 last_requested: HashMap::new(),
                 refresh_in_flight: false,
+                cache_ttl: Some(cache_ttl),
+                generation: 0,
             }),
             updates,
             fetch_timeout,
-            cache_ttl,
+        }
+    }
+
+    async fn invalidate(&self, stop_ttl: bool) {
+        let mut state = self.state.lock().await;
+        state.attempted_at.clear();
+        state.generation = state.generation.wrapping_add(1);
+        if stop_ttl {
+            state.cache_ttl = None;
         }
     }
 }
@@ -226,16 +261,18 @@ where
             .iter()
             .filter(|key| {
                 (operations.can_refresh)(&state.value, key)
-                    && state
-                        .attempted_at
-                        .get(*key)
-                        .is_none_or(|last_attempt| last_attempt.elapsed() >= self.cache_ttl)
+                    && state.attempted_at.get(*key).is_none_or(|last_attempt| {
+                        state
+                            .cache_ttl
+                            .is_some_and(|ttl| last_attempt.elapsed() >= ttl)
+                    })
             })
             .cloned()
             .collect::<HashSet<_>>();
 
         if !expired_keys.is_empty() && !state.refresh_in_flight {
             state.refresh_in_flight = true;
+            let generation = state.generation;
             let cache = Arc::clone(self);
             let previous = cached.clone();
             let fetched_keys = (operations.fetched_keys)(&keys, &expired_keys);
@@ -252,9 +289,11 @@ where
                     Err(_) => Err(format!("lookup exceeded {fetch_timeout:?}")),
                 };
                 let mut state = cache.state.lock().await;
-                let attempted_at = Instant::now();
-                for key in &fetched_keys {
-                    state.attempted_at.insert(key.clone(), attempted_at);
+                if state.generation == generation {
+                    let attempted_at = Instant::now();
+                    for key in &fetched_keys {
+                        state.attempted_at.insert(key.clone(), attempted_at);
+                    }
                 }
                 match result {
                     Ok(value) => {
@@ -397,6 +436,15 @@ mod tests {
     use rstest::rstest;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::sync::Notify;
+
+    fn tq_change(resource: TqChangeResource) -> TqEvent {
+        TqEvent::Change(TqChangeEvent {
+            resource,
+            id: None,
+            origin: None,
+            task_ids: None,
+        })
+    }
 
     fn head_info(number: u64) -> PrProgressInfo {
         PrProgressInfo {
@@ -717,6 +765,124 @@ mod tests {
                 HashSet::from(["session-a".to_string(), "session-b".to_string()]),
             ]
         );
+    }
+
+    #[rstest]
+    #[case::connected(TqEvent::Connected, true)]
+    #[case::task(tq_change(TqChangeResource::Task), true)]
+    #[case::project(tq_change(TqChangeResource::Project), true)]
+    #[case::agent_session(tq_change(TqChangeResource::AgentSession), true)]
+    #[case::github(tq_change(TqChangeResource::Github), true)]
+    #[case::unknown(tq_change(TqChangeResource::Unknown), true)]
+    #[case::checklist_item(tq_change(TqChangeResource::ChecklistItem), false)]
+    #[tokio::test]
+    async fn tq_events_invalidate_session_task_metadata(
+        #[case] event: TqEvent,
+        #[case] should_invalidate: bool,
+    ) {
+        let updates = EnrichmentUpdates::new();
+        let mut receiver = updates.subscribe();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let fetch_calls = Arc::clone(&calls);
+        let task_fetcher: TaskMetadataFetcher = Arc::new(move |session_ids, _| {
+            let calls = Arc::clone(&fetch_calls);
+            Box::pin(async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok(metadata(session_ids))
+            })
+        });
+        let pull_request_fetcher: PullRequestFetcher =
+            Arc::new(|_, _| Box::pin(async { Ok(HashMap::new()) }));
+        let cache = cache_with_fetchers(updates, FETCH_TIMEOUT, task_fetcher, pull_request_fetcher);
+        let session = session("session-a", None);
+
+        let _ = cache.task_metadata(std::slice::from_ref(&session)).await;
+        wait_for_refresh(&mut receiver).await;
+        cache.apply_tq_event(&event).await;
+        let notified = receiver.has_changed().is_ok_and(|changed| changed);
+        if should_invalidate {
+            let _ = receiver.changed().await;
+            let _ = cache.task_metadata(std::slice::from_ref(&session)).await;
+            wait_for_refresh(&mut receiver).await;
+        }
+
+        assert_eq!(
+            (notified, calls.load(Ordering::SeqCst)),
+            (should_invalidate, if should_invalidate { 2 } else { 1 }),
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn connected_stops_the_tq_cache_ttl_after_existing_ttl_expiry() {
+        let updates = EnrichmentUpdates::new();
+        let mut receiver = updates.subscribe();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let fetch_calls = Arc::clone(&calls);
+        let task_fetcher: TaskMetadataFetcher = Arc::new(move |session_ids, _| {
+            let calls = Arc::clone(&fetch_calls);
+            Box::pin(async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok(metadata(session_ids))
+            })
+        });
+        let pull_request_fetcher: PullRequestFetcher =
+            Arc::new(|_, _| Box::pin(async { Ok(HashMap::new()) }));
+        let cache = cache_with_fetchers(updates, FETCH_TIMEOUT, task_fetcher, pull_request_fetcher);
+        let session = session("session-a", None);
+
+        let _ = cache.task_metadata(std::slice::from_ref(&session)).await;
+        wait_for_refresh(&mut receiver).await;
+        tokio::time::advance(CACHE_TTL).await;
+        let _ = cache.task_metadata(std::slice::from_ref(&session)).await;
+        wait_for_refresh(&mut receiver).await;
+        cache.apply_tq_event(&TqEvent::Connected).await;
+        let _ = receiver.changed().await;
+        tokio::time::advance(CACHE_TTL * 2).await;
+        let _ = cache.task_metadata(std::slice::from_ref(&session)).await;
+
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn invalidation_during_fetch_causes_another_refresh() {
+        let updates = EnrichmentUpdates::new();
+        let mut receiver = updates.subscribe();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let started = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let fetch_calls = Arc::clone(&calls);
+        let fetch_started = Arc::clone(&started);
+        let fetch_release = Arc::clone(&release);
+        let task_fetcher: TaskMetadataFetcher = Arc::new(move |session_ids, _| {
+            let calls = Arc::clone(&fetch_calls);
+            let started = Arc::clone(&fetch_started);
+            let release = Arc::clone(&fetch_release);
+            Box::pin(async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                started.notify_one();
+                release.notified().await;
+                Ok(metadata(session_ids))
+            })
+        });
+        let pull_request_fetcher: PullRequestFetcher =
+            Arc::new(|_, _| Box::pin(async { Ok(HashMap::new()) }));
+        let cache = cache_with_fetchers(updates, FETCH_TIMEOUT, task_fetcher, pull_request_fetcher);
+        let session = session("session-a", None);
+
+        let _ = cache.task_metadata(std::slice::from_ref(&session)).await;
+        started.notified().await;
+        cache
+            .apply_tq_event(&tq_change(TqChangeResource::Task))
+            .await;
+        let _ = receiver.changed().await;
+        release.notify_one();
+        wait_for_refresh(&mut receiver).await;
+        let _ = cache.task_metadata(std::slice::from_ref(&session)).await;
+        started.notified().await;
+        release.notify_one();
+        wait_for_refresh(&mut receiver).await;
+
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]
