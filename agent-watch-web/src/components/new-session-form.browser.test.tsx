@@ -376,16 +376,27 @@ it('moves focus to the starting timeline and restores it after a launch failure'
   await act(async () => {
     await userEvent.click(requireButton('.test-fail-launch'))
   })
+  const beforeUnload = new Event('beforeunload', { cancelable: true })
+  act(() => {
+    window.dispatchEvent(beforeUnload)
+  })
+  const restoredMessage = container.querySelector<HTMLTextAreaElement>(
+    '[aria-label="First message"]',
+  )
   const afterFailure = {
-    isFocused:
-      document.activeElement ===
-      container.querySelector('[aria-label="First message"]'),
+    isFocused: document.activeElement === restoredMessage,
+    message: restoredMessage?.value ?? null,
+    warnsBeforeLeaving: beforeUnload.defaultPrevented,
   }
 
   const snapshot = () => ({ duringLaunch, afterFailure })
   expect(snapshot()).toEqual({
     duringLaunch: { isFocused: true, tabIndex: -1 },
-    afterFailure: { isFocused: true },
+    afterFailure: {
+      isFocused: true,
+      message: 'A sent first message',
+      warnsBeforeLeaving: true,
+    },
   })
 })
 
