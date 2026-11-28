@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1001](https://github.com/fohte/armyknife/compare/v0.1.1000...v0.1.1001) (2026-11-28)
+
+
+### Bug Fixes
+
+* **agent/watch-web:** withdraw cards on end ([#2433](https://github.com/fohte/armyknife/issues/2433)) ([e05b895](https://github.com/fohte/armyknife/commit/e05b895a11d92716caaf844cbd632dde66ea5ab9))
+
 ## [0.1.1000](https://github.com/fohte/armyknife/compare/v0.1.999...v0.1.1000) (2026-11-28)
 
 
