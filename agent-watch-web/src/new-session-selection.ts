@@ -5,11 +5,6 @@ export type NewSessionModelSelection = {
   effort: string | null
 }
 
-export type ReconciledModelSelection = NewSessionModelSelection & {
-  modelChanged: boolean
-  effortChanged: boolean
-}
-
 export function defaultEffortModelOption(
   options: SessionModelOptions,
 ): SessionModelOption | undefined {
@@ -39,7 +34,7 @@ export function defaultEffortModelOption(
 export function reconcileModelSelection(
   selection: NewSessionModelSelection,
   options: SessionModelOptions,
-): ReconciledModelSelection {
+): NewSessionModelSelection {
   const model =
     selection.model !== null &&
     options.models.some((option) => option.id === selection.model)
@@ -55,10 +50,5 @@ export function reconcileModelSelection(
       ? selection.effort
       : null
 
-  return {
-    model,
-    effort,
-    modelChanged: model !== selection.model,
-    effortChanged: effort !== selection.effort,
-  }
+  return { model, effort }
 }

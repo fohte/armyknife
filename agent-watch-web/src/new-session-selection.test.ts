@@ -55,7 +55,7 @@ it('uses the profile effort when the configured model is in the catalog', () => 
   })
 })
 
-it('returns to the new engine default and keeps an effort the default model supports', () => {
+it('clears an unavailable model and keeps a supported effort', () => {
   expect(
     reconcileModelSelection(
       { model: 'fixture-model-orbit', effort: 'xhigh' },
@@ -75,12 +75,10 @@ it('returns to the new engine default and keeps an effort the default model supp
   ).toEqual({
     model: null,
     effort: 'xhigh',
-    modelChanged: true,
-    effortChanged: false,
   })
 })
 
-it('uses the selected model default when the previous effort is unavailable', () => {
+it('clears an effort unavailable to the selected model', () => {
   expect(
     reconcileModelSelection(
       { model: 'fixture-model-orbit', effort: 'xhigh' },
@@ -106,7 +104,5 @@ it('uses the selected model default when the previous effort is unavailable', ()
   ).toEqual({
     model: 'fixture-model-orbit',
     effort: null,
-    modelChanged: false,
-    effortChanged: true,
   })
 })
