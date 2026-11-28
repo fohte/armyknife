@@ -487,14 +487,181 @@ fn revision_stream(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::agent::types::Engine;
+    use crate::commands::agent::usage::model::{
+        EngineQuotas, RateLimits, SessionUsage, UsageResponse,
+    };
     use axum::response::IntoResponse;
     use futures_util::StreamExt;
     use indoc::indoc;
+    use rstest::rstest;
+    use std::collections::VecDeque;
     use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
     use std::sync::{Mutex, mpsc};
     use tokio::sync::mpsc as tokio_mpsc;
 
     use super::super::session_store_watcher::SessionStoreWatcher;
+
+    #[derive(Clone, Copy)]
+    enum UsageEventCase {
+        Initial,
+        Changed,
+        Unchanged,
+        Error,
+    }
+
+    #[derive(Clone)]
+    struct ScriptedUsageSource(Arc<Mutex<VecDeque<anyhow::Result<UsageResponse>>>>);
+
+    impl usage::UsageSource for ScriptedUsageSource {
+        async fn load(&self) -> anyhow::Result<UsageResponse> {
+            self.0
+                .lock()
+                .expect("usage source lock should not be poisoned")
+                .pop_front()
+                .unwrap_or_else(|| Err(anyhow::anyhow!("fixture usage exhausted")))
+        }
+    }
+
+    #[rstest]
+    #[case::initial(UsageEventCase::Initial)]
+    #[case::changed(UsageEventCase::Changed)]
+    #[case::unchanged(UsageEventCase::Unchanged)]
+    #[case::error(UsageEventCase::Error)]
+    #[tokio::test]
+    async fn event_stream_sends_usage_only_when_the_snapshot_changes(#[case] case: UsageEventCase) {
+        let initial_usage = UsageResponse {
+            sessions: Vec::new(),
+            quotas: EngineQuotas::default(),
+        };
+        let changed_usage = UsageResponse {
+            sessions: vec![SessionUsage {
+                session_id: "fixture-session".to_owned(),
+                engine: Engine::Claude,
+                model: Some("fixture-model".to_owned()),
+                effort: None,
+                context: None,
+                rate_limits: RateLimits::default(),
+                version: None,
+                observed_at: chrono::DateTime::parse_from_rfc3339("2026-11-16T12:00:00Z")
+                    .unwrap()
+                    .to_utc(),
+            }],
+            quotas: EngineQuotas::default(),
+        };
+        let snapshots = match case {
+            UsageEventCase::Initial => vec![Ok(initial_usage.clone())],
+            UsageEventCase::Changed => vec![Ok(initial_usage.clone()), Ok(changed_usage)],
+            UsageEventCase::Unchanged => vec![Ok(initial_usage.clone()), Ok(initial_usage)],
+            UsageEventCase::Error => vec![Err(anyhow::anyhow!("fixture usage failure"))],
+        };
+        let source = ScriptedUsageSource(Arc::new(Mutex::new(snapshots.into())));
+        let (usage_event_sender, usage_event_receiver) = broadcast::channel(4);
+        let (_revision_event_sender, revision_event_receiver) = broadcast::channel(4);
+        let revisions = RevisionMonitor::new(|| Ok(12), revision_event_receiver, true);
+        let usage_monitor = usage::UsageMonitor::new(source, usage_event_receiver);
+        let mut revision_subscription = revisions.subscribe();
+        while revision_subscription.revisions.borrow().is_none() {
+            revision_subscription.revisions.changed().await.unwrap();
+        }
+        let mut usage_subscription = usage_monitor.subscribe();
+        while usage_subscription.updates.borrow().is_none() {
+            usage_subscription.updates.changed().await.unwrap();
+        }
+        let (_enrichment_sender, enrichment_updates) = watch::channel(());
+        let (_restart_sender, restart_signal) = watch::channel(false);
+        let mut chunks = Sse::new(event_stream(
+            "fixture-server-instance".to_owned(),
+            "9.8.7",
+            revision_subscription,
+            usage_subscription,
+            enrichment_updates,
+            restart_signal,
+        ))
+        .into_response()
+        .into_body()
+        .into_data_stream();
+        let connection = format!(
+            "{}{}{}",
+            next_chunk(&mut chunks).await,
+            next_chunk(&mut chunks).await,
+            next_chunk(&mut chunks).await,
+        );
+        let initial_event = next_chunk(&mut chunks).await;
+        let actual = match case {
+            UsageEventCase::Initial | UsageEventCase::Error => {
+                format!("{connection}{initial_event}")
+            }
+            UsageEventCase::Changed => {
+                usage_event_sender.send(()).unwrap();
+                format!(
+                    "{connection}{initial_event}{}",
+                    next_usage_chunk(&mut chunks).await
+                )
+            }
+            UsageEventCase::Unchanged => {
+                usage_event_sender.send(()).unwrap();
+                let no_follow_up_event =
+                    tokio::time::timeout(Duration::from_millis(1250), chunks.next())
+                        .await
+                        .is_err();
+                assert!(no_follow_up_event);
+                format!("{connection}{initial_event}")
+            }
+        };
+        let expected = match case {
+            UsageEventCase::Initial | UsageEventCase::Unchanged => indoc! {"
+                event: instance
+                data: fixture-server-instance
+
+                event: version
+                data: 9.8.7
+
+                event: sessions
+                data: 12
+
+                event: usage
+                data: {\"sessions\":[],\"quotas\":{\"claude\":null,\"codex\":null}}
+
+            "}
+            .to_owned(),
+            UsageEventCase::Changed => indoc! {"
+                event: instance
+                data: fixture-server-instance
+
+                event: version
+                data: 9.8.7
+
+                event: sessions
+                data: 12
+
+                event: usage
+                data: {\"sessions\":[],\"quotas\":{\"claude\":null,\"codex\":null}}
+
+                event: usage
+                data: {\"sessions\":[{\"sessionId\":\"fixture-session\",\"engine\":\"claude\",\"model\":\"fixture-model\",\"effort\":null,\"context\":null,\"rateLimits\":{\"fiveHour\":null,\"sevenDay\":null},\"version\":null,\"observedAt\":\"2026-11-16T12:00:00Z\"}],\"quotas\":{\"claude\":null,\"codex\":null}}
+
+            "}
+            .to_owned(),
+            UsageEventCase::Error => indoc! {"
+                event: instance
+                data: fixture-server-instance
+
+                event: version
+                data: 9.8.7
+
+                event: sessions
+                data: 12
+
+                event: usage-error
+                data: fixture usage failure
+
+            "}
+            .to_owned(),
+        };
+
+        assert_eq!(actual, expected);
+    }
 
     #[tokio::test]
     async fn sends_the_server_instance_before_session_revisions() {
@@ -1027,6 +1194,17 @@ mod tests {
         chunks: &mut (impl Stream<Item = Result<axum::body::Bytes, axum::Error>> + Unpin),
     ) -> String {
         let chunk = tokio::time::timeout(Duration::from_secs(1), chunks.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        String::from_utf8(chunk.to_vec()).unwrap()
+    }
+
+    async fn next_usage_chunk(
+        chunks: &mut (impl Stream<Item = Result<axum::body::Bytes, axum::Error>> + Unpin),
+    ) -> String {
+        let chunk = tokio::time::timeout(Duration::from_secs(3), chunks.next())
             .await
             .unwrap()
             .unwrap()

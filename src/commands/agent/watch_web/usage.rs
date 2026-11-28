@@ -7,9 +7,6 @@ use axum::response::sse::Event;
 use tokio::sync::{broadcast, watch};
 use tokio::time::{self, Instant};
 
-#[cfg(test)]
-use futures_util::stream::{self, Stream};
-
 use crate::commands::agent::store;
 use crate::commands::agent::types::{Engine, Session};
 use crate::commands::agent::usage::codex;
@@ -252,33 +249,6 @@ async fn refresh_usage<S: UsageSource>(
 }
 
 #[cfg(test)]
-pub(super) fn usage_stream(
-    subscription: UsageSubscription,
-) -> impl Stream<Item = Result<Event, std::convert::Infallible>> {
-    stream::unfold(
-        (subscription.updates, subscription._guard, true),
-        |(mut updates, guard, initial_pending)| async move {
-            let mut initial_pending = initial_pending;
-            let snapshot = loop {
-                let snapshot = if initial_pending {
-                    updates.borrow_and_update().clone()
-                } else {
-                    if updates.changed().await.is_err() {
-                        return None;
-                    }
-                    updates.borrow_and_update().clone()
-                };
-                initial_pending = false;
-                if let Some(snapshot) = snapshot {
-                    break snapshot;
-                }
-            };
-            Some((Ok(usage_event(snapshot)), (updates, guard, initial_pending)))
-        },
-    )
-}
-
-#[cfg(test)]
 pub(super) fn no_updates_subscription() -> UsageSubscription {
     let (updates, _) = watch::channel(None);
     let (subscribers, _) = watch::channel(1);
@@ -353,18 +323,11 @@ fn usage_response(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::VecDeque;
     use std::path::PathBuf;
-    use std::sync::{Arc, Mutex};
-    use std::time::Duration;
 
-    use axum::response::IntoResponse;
-    use futures_util::StreamExt;
     use indoc::indoc;
-    use rstest::rstest;
-    use tokio::sync::broadcast;
 
-    use super::{UsageMonitor, UsageSource, usage_response, usage_stream};
+    use super::usage_response;
     use crate::commands::agent::types::Engine;
     use crate::commands::agent::types::{Session, SessionStatus};
     use crate::commands::agent::usage::codex;
@@ -372,122 +335,6 @@ mod tests {
         ContextUsage, EngineQuota, EngineQuotas, RateLimitWindow, RateLimits, SessionUsage,
         UsageResponse,
     };
-
-    #[derive(Clone, Copy)]
-    enum UsageStreamCase {
-        Initial,
-        Changed,
-        Unchanged,
-        Error,
-    }
-
-    #[derive(Clone)]
-    struct ScriptedUsageSource(Arc<Mutex<VecDeque<anyhow::Result<UsageResponse>>>>);
-
-    impl UsageSource for ScriptedUsageSource {
-        async fn load(&self) -> anyhow::Result<UsageResponse> {
-            self.0
-                .lock()
-                .expect("usage source lock should not be poisoned")
-                .pop_front()
-                .unwrap_or_else(|| Err(anyhow::anyhow!("fixture usage exhausted")))
-        }
-    }
-
-    #[rstest]
-    #[case::initial(UsageStreamCase::Initial)]
-    #[case::changed(UsageStreamCase::Changed)]
-    #[case::unchanged(UsageStreamCase::Unchanged)]
-    #[case::error(UsageStreamCase::Error)]
-    #[tokio::test]
-    async fn emits_usage_snapshots_as_server_sent_events(#[case] case: UsageStreamCase) {
-        let initial_usage = UsageResponse {
-            sessions: Vec::new(),
-            quotas: EngineQuotas::default(),
-        };
-        let changed_usage = UsageResponse {
-            sessions: vec![SessionUsage {
-                session_id: "fixture-session".to_owned(),
-                engine: Engine::Claude,
-                model: Some("fixture-model".to_owned()),
-                effort: None,
-                context: None,
-                rate_limits: RateLimits::default(),
-                version: None,
-                observed_at: chrono::DateTime::parse_from_rfc3339("2026-11-16T12:00:00Z")
-                    .unwrap()
-                    .to_utc(),
-            }],
-            quotas: EngineQuotas::default(),
-        };
-        let snapshots = match case {
-            UsageStreamCase::Initial => vec![Ok(initial_usage.clone())],
-            UsageStreamCase::Changed => vec![Ok(initial_usage.clone()), Ok(changed_usage)],
-            UsageStreamCase::Unchanged => vec![Ok(initial_usage.clone()), Ok(initial_usage)],
-            UsageStreamCase::Error => vec![Err(anyhow::anyhow!("fixture usage failure"))],
-        };
-        let source = ScriptedUsageSource(Arc::new(Mutex::new(snapshots.into())));
-        let (store_event_sender, store_event_receiver) = broadcast::channel(4);
-        let monitor = UsageMonitor::new(source, store_event_receiver);
-        let mut chunks = axum::response::sse::Sse::new(usage_stream(monitor.subscribe()))
-            .into_response()
-            .into_body()
-            .into_data_stream();
-        let initial_event = next_chunk(&mut chunks).await;
-        let actual = match case {
-            UsageStreamCase::Initial => initial_event,
-            UsageStreamCase::Changed => {
-                store_event_sender.send(()).unwrap();
-                format!("{initial_event}{}", next_chunk(&mut chunks).await)
-            }
-            UsageStreamCase::Unchanged => {
-                store_event_sender.send(()).unwrap();
-                let no_follow_up_event =
-                    tokio::time::timeout(Duration::from_millis(1250), chunks.next())
-                        .await
-                        .is_err();
-                assert!(no_follow_up_event);
-                initial_event
-            }
-            UsageStreamCase::Error => initial_event,
-        };
-        let expected = match case {
-            UsageStreamCase::Initial | UsageStreamCase::Unchanged => indoc! {"
-                event: usage
-                data: {\"sessions\":[],\"quotas\":{\"claude\":null,\"codex\":null}}
-
-            "}
-            .to_owned(),
-            UsageStreamCase::Changed => indoc! {"
-                event: usage
-                data: {\"sessions\":[],\"quotas\":{\"claude\":null,\"codex\":null}}
-
-                event: usage
-                data: {\"sessions\":[{\"sessionId\":\"fixture-session\",\"engine\":\"claude\",\"model\":\"fixture-model\",\"effort\":null,\"context\":null,\"rateLimits\":{\"fiveHour\":null,\"sevenDay\":null},\"version\":null,\"observedAt\":\"2026-11-16T12:00:00Z\"}],\"quotas\":{\"claude\":null,\"codex\":null}}
-
-            "}
-            .to_owned(),
-            UsageStreamCase::Error => indoc! {"
-                event: usage-error
-                data: fixture usage failure
-
-            "}
-            .to_owned(),
-        };
-
-        assert_eq!(actual, expected);
-    }
-
-    async fn next_chunk(
-        chunks: &mut (impl futures_util::Stream<Item = Result<axum::body::Bytes, axum::Error>> + Unpin),
-    ) -> String {
-        let chunk = tokio::time::timeout(Duration::from_secs(2), chunks.next())
-            .await
-            .unwrap()
-            .unwrap()
-            .unwrap();
-        String::from_utf8(chunk.to_vec()).unwrap()
-    }
 
     fn codex_session(session_id: &str, transcript_path: PathBuf) -> Session {
         Session {
