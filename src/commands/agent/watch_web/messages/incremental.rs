@@ -748,6 +748,12 @@ mod tests {
         );
     }
 
+    fn normalize_background_task_elapsed_seconds(tasks: &mut [super::super::BackgroundTask]) {
+        for task in tasks {
+            task.elapsed_seconds = 0;
+        }
+    }
+
     #[rstest::rstest]
     fn cached_tail_window_rebuild_restores_pending_task_state_after_a_branch_switch() {
         let directory = tempfile::tempdir().unwrap();
@@ -834,7 +840,7 @@ mod tests {
         let fingerprint = transcript_fingerprint(Engine::Claude, Some(&path))
             .unwrap()
             .unwrap();
-        let (actual, _, _) = super::tail_window::parse_initial_or_full_for_range(
+        let (mut actual, _, _) = super::tail_window::parse_initial_or_full_for_range(
             "fixture-session",
             epoch_input(&path),
             None,
@@ -844,7 +850,10 @@ mod tests {
             super::TranscriptRangeContext::default(),
         )
         .unwrap();
-        let (expected, _) = parse_session_transcript(epoch_input(&path)).unwrap();
+        let (mut expected, _) = parse_session_transcript(epoch_input(&path)).unwrap();
+
+        normalize_background_task_elapsed_seconds(&mut actual.background_tasks);
+        normalize_background_task_elapsed_seconds(&mut expected.background_tasks);
 
         assert_eq!(
             (
