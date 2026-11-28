@@ -1,6 +1,10 @@
 use super::{DisplayStatus, Engine, Session, SessionStatus, StatusColor};
 
 impl Session {
+    pub(crate) fn is_living(&self) -> bool {
+        self.archived_at.is_none() && self.status != SessionStatus::Ended
+    }
+
     pub(crate) fn is_direct_child_of(&self, parent_id: &str) -> bool {
         self.ancestor_session_ids.last().map(String::as_str) == Some(parent_id)
     }

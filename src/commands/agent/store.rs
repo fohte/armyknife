@@ -513,8 +513,7 @@ pub fn sort_sessions(sessions: &mut [Session]) {
 /// Lists current active sessions from disk, excluding ended and replaced sessions.
 pub fn list_sessions() -> Result<Vec<Session>> {
     let mut sessions = database::all_unreplaced_sessions(&sessions_dir()?)?;
-    sessions.retain(|session| session.archived_at.is_none());
-    sessions.retain(|s| s.status != SessionStatus::Ended);
+    sessions.retain(Session::is_living);
     sort_sessions(&mut sessions);
     Ok(sessions)
 }
