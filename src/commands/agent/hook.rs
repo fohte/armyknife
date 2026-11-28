@@ -295,6 +295,7 @@ fn end_sessions_on_pane_takeover(
         session.status = SessionStatus::Ended;
         session.updated_at = now;
         let _ = store::save_session_to(sessions_dir, &session);
+        crate::shared::cleanup::withdraw_ended_session_cards(sessions_dir, &session.session_id);
         side_effects.archive_tq_session(&session.session_id);
     }
 }
@@ -543,6 +544,10 @@ fn process_hook_event_impl_with_env_and_unreported_stop(
                         session.updated_at = Utc::now();
                         session.restore_from_archive();
                         store::save_session_to(sessions_dir, &session)?;
+                        crate::shared::cleanup::withdraw_ended_session_cards(
+                            sessions_dir,
+                            &input.session_id,
+                        );
                         side_effects.remove_notification_group(&input.session_id);
                         side_effects.archive_tq_session(&input.session_id);
                     }
@@ -2334,6 +2339,65 @@ mod tests {
             archived_calls,
             side_effects,
         }
+    }
+
+    fn add_session_end_cards(sessions_dir: &Path, session_id: &str) {
+        let completed_todo =
+            store::add_agent_todo_in(sessions_dir, session_id, "A finished task", None, false)
+                .expect("completed todo should be recorded");
+        store::resolve_agent_todo_from(
+            sessions_dir,
+            session_id,
+            completed_todo,
+            store::TodoResolution::Completed,
+            None,
+        )
+        .expect("todo should be completed");
+        store::add_agent_todo_in(sessions_dir, session_id, "A pending task", None, false)
+            .expect("pending todo should be recorded");
+
+        let answered_proposal = store::add_agent_proposal_in(
+            sessions_dir,
+            session_id,
+            "{\"title\":\"An answered choice\"}",
+        )
+        .expect("answered proposal should be recorded");
+        store::write_agent_proposal_answer_at_from(
+            sessions_dir,
+            session_id,
+            answered_proposal,
+            "Selected an option.",
+            Utc::now(),
+        )
+        .expect("proposal should be answered");
+        store::add_agent_proposal_in(sessions_dir, session_id, "{\"title\":\"A pending choice\"}")
+            .expect("pending proposal should be recorded");
+    }
+
+    type ExpectedSessionEndCardState = (
+        Vec<(i64, Option<store::TodoResolution>, Option<&'static str>)>,
+        Vec<(
+            i64,
+            Option<store::ProposalResolution>,
+            bool,
+            Option<&'static str>,
+        )>,
+    );
+
+    fn expected_session_end_card_state(withdrawn: bool) -> ExpectedSessionEndCardState {
+        let todo_resolution = withdrawn.then_some(store::TodoResolution::Withdrawn);
+        let proposal_resolution = withdrawn.then_some(store::ProposalResolution::Withdrawn);
+        let comment = withdrawn.then_some("Withdrawn because the session ended.");
+        (
+            vec![
+                (1, Some(store::TodoResolution::Completed), None),
+                (2, todo_resolution, comment),
+            ],
+            vec![
+                (1, None, true, None),
+                (2, proposal_resolution, withdrawn, comment),
+            ],
+        )
     }
 
     fn create_test_input(notification_type: Option<&str>) -> HookInput {
@@ -4692,6 +4756,7 @@ mod tests {
             effort: None,
         };
         store::save_session_to(sessions_dir, &session).expect("save");
+        add_session_end_cards(sessions_dir, &session.session_id);
 
         let removed = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
         side_effects.removed_notification_groups = Some(removed.clone());
@@ -4706,12 +4771,34 @@ mod tests {
         let reloaded = store::load_session_from(sessions_dir, "end-sess")
             .expect("load")
             .expect("session exists");
+        let todos = store::agent_todos_from(sessions_dir, "end-sess").expect("todos should load");
+        let proposals =
+            store::agent_proposals_from(sessions_dir, "end-sess").expect("proposals should load");
         let recorded = (
             reloaded.status,
             reloaded.archived_at.is_some(),
             removed.lock().expect("lock").clone(),
             archived_calls.lock().expect("lock").clone(),
+            (
+                todos
+                    .iter()
+                    .map(|todo| (todo.seq, todo.resolution, todo.comment.as_deref()))
+                    .collect::<Vec<_>>(),
+                proposals
+                    .iter()
+                    .map(|proposal| {
+                        (
+                            proposal.seq,
+                            proposal.resolution,
+                            proposal.resolved_at.is_some(),
+                            proposal.comment.as_deref(),
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+            ),
         );
+        let expected_cards_withdrawn =
+            engine == Engine::Claude && expected_status == SessionStatus::Ended;
         assert_eq!(
             recorded,
             (
@@ -4719,6 +4806,7 @@ mod tests {
                 expected_archived,
                 expected_removed.clone(),
                 expected_removed,
+                expected_session_end_card_state(expected_cards_withdrawn),
             ),
         );
     }

@@ -121,6 +121,7 @@ fn finish_ended_session(
     sessions_dir: &Path,
     side_effects: &SideEffects,
 ) {
+    crate::shared::cleanup::withdraw_ended_session_cards(sessions_dir, session_id);
     side_effects.remove_notification_group(session_id);
     side_effects.archive_tq_session(session_id);
     let work_type_config = session
@@ -368,6 +369,39 @@ mod tests {
         }
     }
 
+    fn add_ended_session_cards(sessions_dir: &Path, session_id: &str) {
+        let completed_todo =
+            store::add_agent_todo_in(sessions_dir, session_id, "A finished task", None, false)
+                .expect("completed todo should be recorded");
+        store::resolve_agent_todo_from(
+            sessions_dir,
+            session_id,
+            completed_todo,
+            store::TodoResolution::Completed,
+            None,
+        )
+        .expect("todo should be completed");
+        store::add_agent_todo_in(sessions_dir, session_id, "A pending task", None, false)
+            .expect("pending todo should be recorded");
+
+        let answered_proposal = store::add_agent_proposal_in(
+            sessions_dir,
+            session_id,
+            "{\"title\":\"An answered choice\"}",
+        )
+        .expect("answered proposal should be recorded");
+        store::write_agent_proposal_answer_at_from(
+            sessions_dir,
+            session_id,
+            answered_proposal,
+            "Selected an option.",
+            Utc::now(),
+        )
+        .expect("proposal should be answered");
+        store::add_agent_proposal_in(sessions_dir, session_id, "{\"title\":\"A pending choice\"}")
+            .expect("pending proposal should be recorded");
+    }
+
     fn compacting_state(sessions_dir: &Path, session_id: &str) -> Option<bool> {
         rusqlite::Connection::open(sessions_dir.join("sessions.db"))
             .expect("open session database")
@@ -379,6 +413,81 @@ mod tests {
             .optional()
             .expect("load compacting state")
             .flatten()
+    }
+
+    #[rstest]
+    #[case::close_ends_claude_session(Engine::Claude, true)]
+    #[case::codex_end_ends_codex_session(Engine::Codex, false)]
+    fn ended_lifecycle_paths_withdraw_only_unanswered_cards(
+        lifecycle_test_context: LifecycleTestContext,
+        #[case] engine: Engine,
+        #[case] is_close: bool,
+    ) {
+        let LifecycleTestContext { temp_dir, sinks } = lifecycle_test_context;
+        store::save_session_to(
+            temp_dir.path(),
+            &session(engine, SessionStatus::Stopped, false),
+        )
+        .expect("save session");
+        add_ended_session_cards(temp_dir.path(), "thread-one");
+
+        if is_close {
+            mark_session_ended_after_close_in("thread-one", temp_dir.path(), &sinks.side_effects)
+                .expect("close should end the session");
+        } else {
+            end_codex_session_in("thread-one", temp_dir.path(), &sinks.side_effects)
+                .expect("Codex end should end the session");
+        }
+
+        let updated = store::load_session_from(temp_dir.path(), "thread-one")
+            .expect("load session")
+            .expect("session exists");
+        let todos =
+            store::agent_todos_from(temp_dir.path(), "thread-one").expect("todos should load");
+        let proposals = store::agent_proposals_from(temp_dir.path(), "thread-one")
+            .expect("proposals should load");
+        let actual_cards = (
+            todos
+                .iter()
+                .map(|todo| (todo.seq, todo.resolution, todo.comment.as_deref()))
+                .collect::<Vec<_>>(),
+            proposals
+                .iter()
+                .map(|proposal| {
+                    (
+                        proposal.seq,
+                        proposal.resolution,
+                        proposal.resolved_at.is_some(),
+                        proposal.comment.as_deref(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(
+            (updated.status, actual_cards),
+            (
+                SessionStatus::Ended,
+                (
+                    vec![
+                        (1, Some(store::TodoResolution::Completed), None),
+                        (
+                            2,
+                            Some(store::TodoResolution::Withdrawn),
+                            Some("Withdrawn because the session ended."),
+                        ),
+                    ],
+                    vec![
+                        (1, None, true, None),
+                        (
+                            2,
+                            Some(store::ProposalResolution::Withdrawn),
+                            true,
+                            Some("Withdrawn because the session ended."),
+                        ),
+                    ],
+                ),
+            ),
+        );
     }
 
     #[rstest]
