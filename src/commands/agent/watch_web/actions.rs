@@ -1170,6 +1170,13 @@ mod tests {
     }
 
     async fn response_snapshot(response: Response<Body>, context: &ActionContext) -> Value {
+        response_snapshot_with_startup_at(response, context).await.0
+    }
+
+    async fn response_snapshot_with_startup_at(
+        response: Response<Body>,
+        context: &ActionContext,
+    ) -> (Value, Option<String>) {
         let status = response.status().as_u16();
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let mut calls = context.runtime.calls.lock().unwrap().clone();
@@ -1200,17 +1207,27 @@ mod tests {
             }
         }
         let mut body = serde_json::from_slice::<Value>(&body).unwrap_or(Value::Null);
+        let startup_at = body
+            .get("startupAt")
+            .and_then(Value::as_str)
+            .map(|timestamp| {
+                chrono::DateTime::parse_from_rfc3339(timestamp).expect("startupAt uses RFC 3339");
+                timestamp.to_string()
+            });
         if let Some(queued_prompt_id) = body.get_mut("queuedPromptId") {
             *queued_prompt_id = Value::String("<message-id>".to_string());
         }
         if let Some(startup_at) = body.get_mut("startupAt") {
             *startup_at = Value::String("<startup-at>".to_string());
         }
-        json!({
-            "status": status,
-            "body": body,
-            "calls": calls,
-        })
+        (
+            json!({
+                "status": status,
+                "body": body,
+                "calls": calls,
+            }),
+            startup_at,
+        )
     }
 
     fn normalized_queued_prompts(

@@ -23,7 +23,6 @@ impl ActionRuntime for LiveActionRuntime {
                     &config,
                     &super::resume::TmuxEndedSessionHost,
                 )
-                .map(Some)
             }
             _ => anyhow::bail!("session is not ended or paused"),
         }
@@ -148,7 +147,7 @@ fn resume_ended_session_with_config(
     session: &Session,
     config: &Config,
     host: &impl super::resume::EndedSessionHost,
-) -> Result<String> {
+) -> Result<Option<String>> {
     super::resume::resume_ended_session(session, &config.agent.worktree.layout, host)
 }
 
@@ -170,12 +169,12 @@ mod tests {
     }
 
     impl super::super::resume::EndedSessionHost for FakeEndedSessionHost {
-        fn open_layout(&self, spec: ResumeLayoutSpec<'_>) -> Result<String> {
+        fn open_layout(&self, spec: ResumeLayoutSpec<'_>) -> Result<Option<String>> {
             self.calls.lock().unwrap().push(json!({
                 "layout": serde_json::to_value(spec.layout).unwrap(),
                 "agentCommand": spec.agent_command,
             }));
-            Ok("%18".to_string())
+            Ok(Some("%18".to_string()))
         }
     }
 

@@ -23,13 +23,13 @@ use crate::shared::config::LayoutNode;
 const RESUME_START_TIMEOUT: Duration = Duration::from_secs(20);
 
 pub(super) trait EndedSessionHost {
-    fn open_layout(&self, spec: ResumeLayoutSpec<'_>) -> anyhow::Result<String>;
+    fn open_layout(&self, spec: ResumeLayoutSpec<'_>) -> anyhow::Result<Option<String>>;
 }
 
 pub(super) struct TmuxEndedSessionHost;
 
 impl EndedSessionHost for TmuxEndedSessionHost {
-    fn open_layout(&self, spec: ResumeLayoutSpec<'_>) -> anyhow::Result<String> {
+    fn open_layout(&self, spec: ResumeLayoutSpec<'_>) -> anyhow::Result<Option<String>> {
         crate::infra::tmux::layout::build_resume_layout(spec)
     }
 }
@@ -38,7 +38,7 @@ pub(super) fn resume_ended_session(
     session: &Session,
     layout: &LayoutNode,
     host: &impl EndedSessionHost,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<Option<String>> {
     ensure!(
         session.cwd.is_dir(),
         "session working directory does not exist: {}",
@@ -172,7 +172,7 @@ impl PendingSessionResumes {
         attempt_id
     }
 
-    pub(super) async fn mark_stuck(&self, session_id: &str, attempt_id: u64) -> bool {
+    pub(super) async fn mark_stuck(&self, session_id: &str, attempt_id: u64) {
         let mut states = self.states.lock().await;
         let Some(ResumeStartupState::Pending {
             attempt_id: current_attempt_id,
@@ -181,10 +181,10 @@ impl PendingSessionResumes {
             ..
         }) = states.get(session_id).cloned()
         else {
-            return false;
+            return;
         };
         if current_attempt_id != attempt_id {
-            return false;
+            return;
         }
 
         states.insert(
@@ -196,7 +196,6 @@ impl PendingSessionResumes {
         );
         drop(states);
         self.updates.notify();
-        true
     }
 
     pub(super) async fn startup_status(
@@ -262,6 +261,10 @@ pub(super) async fn resume_session(
     .await
     .map_err(ApiError::internal)?
     .map_err(ApiError::operation)?;
+    state
+        .resume_pending
+        .mark_pending(current_id.clone(), session_start_generation)
+        .await;
     if let Some(pane_id) = pane_id {
         let sessions_dir =
             resolve_sessions_dir(state.sessions_dir.clone()).map_err(ApiError::internal)?;
@@ -277,11 +280,6 @@ pub(super) async fn resume_session(
         })
         .await?;
     }
-    state
-        .resume_pending
-        .mark_pending(current_id, session_start_generation)
-        .await;
-
     Ok(Json(Success::new()))
 }
 
@@ -303,7 +301,7 @@ mod tests {
     }
 
     impl EndedSessionHost for FakeEndedSessionHost {
-        fn open_layout(&self, spec: ResumeLayoutSpec<'_>) -> Result<String> {
+        fn open_layout(&self, spec: ResumeLayoutSpec<'_>) -> Result<Option<String>> {
             self.calls.lock().unwrap().push(json!({
                 "kind": "layout",
                 "socketPath": spec.socket_path,
@@ -315,7 +313,7 @@ mod tests {
                 "agentCommand": spec.agent_command,
                 "layout": serde_json::to_value(spec.layout).unwrap(),
             }));
-            Ok("%18".to_string())
+            Ok(Some("%18".to_string()))
         }
     }
 
@@ -352,7 +350,7 @@ mod tests {
         assert_eq!(
             (pane_id, host.calls.lock().unwrap().clone()),
             (
-                "%18".to_string(),
+                Some("%18".to_string()),
                 vec![json!({
                     "kind": "layout",
                     "socketPath": "/fixture/tmux.sock",

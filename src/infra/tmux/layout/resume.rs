@@ -24,9 +24,9 @@ trait LayoutExecutor {
         commands: &[TmuxCommand],
         session: &str,
         window_name: &str,
-        agent_session_id: &str,
         socket_path: Option<&str>,
     ) -> anyhow::Result<String>;
+    fn output(&self, socket_path: Option<&str>, args: &[&str]) -> anyhow::Result<String>;
 }
 
 struct TmuxLayoutExecutor;
@@ -37,29 +37,26 @@ impl LayoutExecutor for TmuxLayoutExecutor {
         commands: &[TmuxCommand],
         session: &str,
         window_name: &str,
-        agent_session_id: &str,
         socket_path: Option<&str>,
     ) -> anyhow::Result<String> {
-        let window_id =
-            execute_layout_for_socket(commands, session, window_name, true, socket_path)?;
-        let format = format!("#{{pane_id}}\t#{{{TMUX_SESSION_OPTION}}}");
-        let output = crate::infra::tmux::run_tmux_output_for_socket(
-            socket_path,
-            &["list-panes", "-t", &window_id, "-F", &format],
-        )?;
-        find_agent_pane_id(&output, agent_session_id)
+        execute_layout_for_socket(commands, session, window_name, true, socket_path)
+            .map_err(Into::into)
+    }
+
+    fn output(&self, socket_path: Option<&str>, args: &[&str]) -> anyhow::Result<String> {
+        crate::infra::tmux::run_tmux_output_for_socket(socket_path, args).map_err(Into::into)
     }
 }
 
-/// Opens the configured window and returns the resumed agent's pane ID.
-pub fn build_resume_layout(spec: ResumeLayoutSpec<'_>) -> anyhow::Result<String> {
+/// Opens the configured window and returns the resumed agent's pane ID when tmux reports it.
+pub fn build_resume_layout(spec: ResumeLayoutSpec<'_>) -> anyhow::Result<Option<String>> {
     build_resume_layout_with_executor(spec, &TmuxLayoutExecutor)
 }
 
 fn build_resume_layout_with_executor(
     spec: ResumeLayoutSpec<'_>,
     executor: &impl LayoutExecutor,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<Option<String>> {
     let ResumeLayoutSpec {
         session,
         agent_session_id,
@@ -129,23 +126,30 @@ fn build_resume_layout_with_executor(
         },
     );
 
-    executor.execute(
-        &commands,
-        session,
-        window_name,
-        agent_session_id,
+    let window_id = executor.execute(&commands, session, window_name, socket_path)?;
+    let format = format!("#{{pane_id}}\t#{{{TMUX_SESSION_OPTION}}}");
+    let output = match executor.output(
         socket_path,
-    )
+        &["list-panes", "-t", &window_id, "-F", &format],
+    ) {
+        Ok(output) => output,
+        Err(error) => {
+            tracing::warn!(%error, %window_id, "failed to resolve resumed agent pane");
+            return Ok(None);
+        }
+    };
+    let pane_id = find_agent_pane_id(&output, agent_session_id);
+    if pane_id.is_none() {
+        tracing::warn!(%window_id, "tmux layout did not report the resumed agent pane");
+    }
+    Ok(pane_id)
 }
 
-fn find_agent_pane_id(output: &str, agent_session_id: &str) -> anyhow::Result<String> {
-    output
-        .lines()
-        .find_map(|line| {
-            let (pane_id, session_id) = line.split_once('\t')?;
-            (session_id == agent_session_id).then(|| pane_id.to_string())
-        })
-        .ok_or_else(|| anyhow::anyhow!("tmux layout did not report the resumed agent pane"))
+fn find_agent_pane_id(output: &str, agent_session_id: &str) -> Option<String> {
+    output.lines().find_map(|line| {
+        let (pane_id, session_id) = line.split_once('\t')?;
+        (session_id == agent_session_id).then(|| pane_id.to_string())
+    })
 }
 
 #[cfg(test)]
@@ -159,8 +163,8 @@ mod pane_id_tests {
             %18\tfixture-session
         "};
         assert_eq!(
-            find_agent_pane_id(output, "fixture-session").unwrap(),
-            "%18",
+            find_agent_pane_id(output, "fixture-session"),
+            Some("%18".to_string()),
         );
     }
 }
@@ -188,17 +192,25 @@ mod tests {
             commands: &[TmuxCommand],
             session: &str,
             window_name: &str,
-            agent_session_id: &str,
             socket_path: Option<&str>,
         ) -> Result<String> {
             self.calls.lock().unwrap().push(json!({
+                "kind": "layout",
                 "session": session,
                 "windowName": window_name,
-                "agentSessionId": agent_session_id,
                 "socketPath": socket_path,
                 "commands": commands.iter().map(|command| command.args.clone()).collect::<Vec<_>>(),
             }));
-            Ok("%18".to_string())
+            Ok("@fixture-window".to_string())
+        }
+
+        fn output(&self, socket_path: Option<&str>, args: &[&str]) -> Result<String> {
+            self.calls.lock().unwrap().push(json!({
+                "kind": "output",
+                "socketPath": socket_path,
+                "args": args,
+            }));
+            Ok("%18\tfixture-session\n".to_string())
         }
     }
 
@@ -238,25 +250,38 @@ mod tests {
         assert_eq!(
             (result.unwrap(), executor.calls.lock().unwrap().clone()),
             (
-                "%18".to_string(),
-                vec![json!({
-                    "session": "fixture-session",
-                    "windowName": "fixture-agent",
-                    "agentSessionId": "fixture-session",
-                    "socketPath": "/fixture/tmux.sock",
-                    "commands": [
-                        ["new-window", "-d", "-t", "fixture-session", "-c", "/fixture/worktree", "-n", "fixture-agent"],
-                        ["split-window", "-h", "-t", "fixture-session:=fixture-agent.1", "-c", "/fixture/worktree"],
-                        ["select-pane", "-t", "fixture-session:=fixture-agent.1"],
-                        ["send-keys", "-t", "fixture-session:=fixture-agent.1", "-l", "--", "nvim"],
-                        ["send-keys", "-t", "fixture-session:=fixture-agent.1", "C-m"],
-                        ["select-pane", "-t", "fixture-session:=fixture-agent.2"],
-                        ["set-option", "-p", "-t", "fixture-session:=fixture-agent.2", "@armyknife-last-agent-session-id", "fixture-session"],
-                        ["send-keys", "-t", "fixture-session:=fixture-agent.2", "-l", "--", "a agent resume fixture-session --engine codex"],
-                        ["send-keys", "-t", "fixture-session:=fixture-agent.2", "C-m"],
-                        ["select-pane", "-t", "fixture-session:=fixture-agent.1"],
-                    ],
-                })],
+                Some("%18".to_string()),
+                vec![
+                    json!({
+                        "kind": "layout",
+                        "session": "fixture-session",
+                        "windowName": "fixture-agent",
+                        "socketPath": "/fixture/tmux.sock",
+                        "commands": [
+                            ["new-window", "-d", "-t", "fixture-session", "-c", "/fixture/worktree", "-n", "fixture-agent"],
+                            ["split-window", "-h", "-t", "fixture-session:=fixture-agent.1", "-c", "/fixture/worktree"],
+                            ["select-pane", "-t", "fixture-session:=fixture-agent.1"],
+                            ["send-keys", "-t", "fixture-session:=fixture-agent.1", "-l", "--", "nvim"],
+                            ["send-keys", "-t", "fixture-session:=fixture-agent.1", "C-m"],
+                            ["select-pane", "-t", "fixture-session:=fixture-agent.2"],
+                            ["set-option", "-p", "-t", "fixture-session:=fixture-agent.2", "@armyknife-last-agent-session-id", "fixture-session"],
+                            ["send-keys", "-t", "fixture-session:=fixture-agent.2", "-l", "--", "a agent resume fixture-session --engine codex"],
+                            ["send-keys", "-t", "fixture-session:=fixture-agent.2", "C-m"],
+                            ["select-pane", "-t", "fixture-session:=fixture-agent.1"],
+                        ],
+                    }),
+                    json!({
+                        "kind": "output",
+                        "socketPath": "/fixture/tmux.sock",
+                        "args": [
+                            "list-panes",
+                            "-t",
+                            "@fixture-window",
+                            "-F",
+                            "#{pane_id}\t#{@armyknife-last-agent-session-id}",
+                        ],
+                    })
+                ],
             ),
         );
     }
@@ -286,25 +311,38 @@ mod tests {
         assert_eq!(
             (result.unwrap(), executor.calls.lock().unwrap().clone()),
             (
-                "%18".to_string(),
-                vec![json!({
-                    "session": "fixture-session",
-                    "windowName": "fixture-agent",
-                    "agentSessionId": "fixture-session",
-                    "socketPath": "/fixture/tmux.sock",
-                    "commands": [
-                        ["new-window", "-d", "-t", "fixture-session", "-c", "/fixture/worktree", "-n", "fixture-agent"],
-                        ["split-window", "-h", "-t", "fixture-session:=fixture-agent.1", "-c", "/fixture/worktree"],
-                        ["select-pane", "-t", "fixture-session:=fixture-agent.1"],
-                        ["send-keys", "-t", "fixture-session:=fixture-agent.1", "-l", "--", "nvim"],
-                        ["send-keys", "-t", "fixture-session:=fixture-agent.1", "C-m"],
-                        ["select-pane", "-t", "fixture-session:=fixture-agent.2"],
-                        ["set-option", "-p", "-t", "fixture-session:=fixture-agent.2", "@armyknife-last-agent-session-id", "fixture-session"],
-                        ["send-keys", "-t", "fixture-session:=fixture-agent.2", "-l", "--", "a agent resume fixture-session --engine codex"],
-                        ["send-keys", "-t", "fixture-session:=fixture-agent.2", "C-m"],
-                        ["select-pane", "-t", "fixture-session:=fixture-agent.2"],
-                    ],
-                })],
+                Some("%18".to_string()),
+                vec![
+                    json!({
+                        "kind": "layout",
+                        "session": "fixture-session",
+                        "windowName": "fixture-agent",
+                        "socketPath": "/fixture/tmux.sock",
+                        "commands": [
+                            ["new-window", "-d", "-t", "fixture-session", "-c", "/fixture/worktree", "-n", "fixture-agent"],
+                            ["split-window", "-h", "-t", "fixture-session:=fixture-agent.1", "-c", "/fixture/worktree"],
+                            ["select-pane", "-t", "fixture-session:=fixture-agent.1"],
+                            ["send-keys", "-t", "fixture-session:=fixture-agent.1", "-l", "--", "nvim"],
+                            ["send-keys", "-t", "fixture-session:=fixture-agent.1", "C-m"],
+                            ["select-pane", "-t", "fixture-session:=fixture-agent.2"],
+                            ["set-option", "-p", "-t", "fixture-session:=fixture-agent.2", "@armyknife-last-agent-session-id", "fixture-session"],
+                            ["send-keys", "-t", "fixture-session:=fixture-agent.2", "-l", "--", "a agent resume fixture-session --engine codex"],
+                            ["send-keys", "-t", "fixture-session:=fixture-agent.2", "C-m"],
+                            ["select-pane", "-t", "fixture-session:=fixture-agent.2"],
+                        ],
+                    }),
+                    json!({
+                        "kind": "output",
+                        "socketPath": "/fixture/tmux.sock",
+                        "args": [
+                            "list-panes",
+                            "-t",
+                            "@fixture-window",
+                            "-F",
+                            "#{pane_id}\t#{@armyknife-last-agent-session-id}",
+                        ],
+                    })
+                ],
             ),
         );
     }

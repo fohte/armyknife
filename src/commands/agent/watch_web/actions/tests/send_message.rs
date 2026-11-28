@@ -11,7 +11,8 @@ use tower::ServiceExt;
 
 use super::super::messages::lock_session_action;
 use super::{
-    ActionContext, action_context, normalized_queued_prompts, post, response_snapshot, session,
+    ActionContext, action_context, normalized_queued_prompts, post, response_snapshot,
+    response_snapshot_with_startup_at, session,
 };
 use crate::commands::agent::store;
 use crate::commands::agent::types::{Engine, SessionStatus};
@@ -78,6 +79,7 @@ async fn send_message_tracks_startup_only_for_paused_sessions(
         .unwrap();
     let send = response_snapshot(send, &action_context).await;
     let mut actions = Vec::new();
+    let mut startup_at_unchanged = true;
     if matches!(scenario, PausedMessageScenario::DeliveredWithoutStart) {
         updates.changed().await.unwrap();
         let pending = app
@@ -90,7 +92,9 @@ async fn send_message_tracks_startup_only_for_paused_sessions(
             )
             .await
             .unwrap();
-        actions.push(response_snapshot(pending, &action_context).await);
+        let (pending, pending_started_at) =
+            response_snapshot_with_startup_at(pending, &action_context).await;
+        actions.push(pending);
         advance(Duration::from_secs(20)).await;
         updates.changed().await.unwrap();
         let stuck = app
@@ -103,7 +107,10 @@ async fn send_message_tracks_startup_only_for_paused_sessions(
             )
             .await
             .unwrap();
-        actions.push(response_snapshot(stuck, &action_context).await);
+        let (stuck, stuck_started_at) =
+            response_snapshot_with_startup_at(stuck, &action_context).await;
+        startup_at_unchanged = pending_started_at == stuck_started_at;
+        actions.push(stuck);
     } else {
         if matches!(scenario, PausedMessageScenario::DeliveryFailed) {
             updates.changed().await.unwrap();
@@ -124,6 +131,7 @@ async fn send_message_tracks_startup_only_for_paused_sessions(
         send,
         actions,
         normalized_queued_prompts(&action_context, "sample-session", None),
+        startup_at_unchanged,
     );
     let message_call = json!([{
         "kind": "message",
@@ -244,7 +252,10 @@ async fn send_message_tracks_startup_only_for_paused_sessions(
             }]),
         ),
     };
-    assert_eq!(actual, (expected_send, expected_actions, expected_prompts));
+    assert_eq!(
+        actual,
+        (expected_send, expected_actions, expected_prompts, true)
+    );
 }
 
 #[rstest]
