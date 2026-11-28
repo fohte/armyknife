@@ -1,4 +1,6 @@
 use std::env;
+use std::path::Path;
+use std::process::{Command, Stdio};
 
 use anyhow::Context;
 
@@ -35,14 +37,44 @@ pub(super) fn should_configure(event: HookEvent, inside_tmux: bool, pane_resolve
 }
 
 pub(super) fn configure_for_session_start(session_id: &str) {
-    if let Err(error) = store::cleanup_stale_sessions() {
+    on_session_start_with(spawn_startup_cleanup, || {
+        configure_tmux_hooks_for_session_start(session_id)
+    });
+}
+
+fn on_session_start_with(
+    start_cleanup: impl FnOnce() -> anyhow::Result<()>,
+    configure_hooks: impl FnOnce(),
+) {
+    if let Err(error) = start_cleanup() {
         tracing::warn!(
             event = "agent.hook.tmux_cleanup_hooks.startup_cleanup_failed",
             error = %error,
-            "failed to clean up stale sessions at SessionStart"
+            "failed to start stale session cleanup at SessionStart"
         );
     }
+    configure_hooks();
+}
 
+fn spawn_startup_cleanup() -> anyhow::Result<()> {
+    let executable = env::current_exe().context("failed to resolve the armyknife executable")?;
+    startup_cleanup_command(&executable)
+        .spawn()
+        .context("failed to start stale session cleanup")?;
+    Ok(())
+}
+
+fn startup_cleanup_command(executable: &Path) -> Command {
+    let mut command = crate::shared::command::new(executable);
+    command
+        .args(["agent", "cleanup-stale-sessions"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    command
+}
+
+fn configure_tmux_hooks_for_session_start(session_id: &str) {
     let result = configure_for_session_start_with(
         session_id,
         tmux::in_tmux(),
@@ -177,7 +209,8 @@ fn tmux_double_quote(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        TmuxTarget, cleanup_command, configure, configure_for_session_start_with, should_configure,
+        TmuxTarget, cleanup_command, configure, configure_for_session_start_with,
+        on_session_start_with, should_configure, startup_cleanup_command,
     };
     use crate::commands::agent::types::HookEvent;
 
@@ -192,6 +225,61 @@ mod tests {
             ],
             [true, true, false, false],
         );
+    }
+
+    #[test]
+    fn session_start_starts_cleanup_before_hook_setup_even_when_spawning_fails() {
+        let events = std::cell::RefCell::new(Vec::new());
+
+        on_session_start_with(
+            || {
+                events.borrow_mut().push("cleanup");
+                Err(anyhow::anyhow!("fixture spawn failure"))
+            },
+            || events.borrow_mut().push("configure hooks"),
+        );
+
+        assert_eq!(events.into_inner(), vec!["cleanup", "configure hooks"],);
+    }
+
+    #[test]
+    fn startup_cleanup_uses_the_existing_subcommand() {
+        let command = startup_cleanup_command(std::path::Path::new("/fixture/bin/a"));
+
+        assert_eq!(
+            (
+                command.get_program().to_os_string(),
+                command
+                    .get_args()
+                    .map(std::ffi::OsStr::to_os_string)
+                    .collect::<Vec<_>>(),
+            ),
+            (
+                std::ffi::OsString::from("/fixture/bin/a"),
+                vec![
+                    std::ffi::OsString::from("agent"),
+                    std::ffi::OsString::from("cleanup-stale-sessions"),
+                ],
+            ),
+        );
+    }
+
+    #[test]
+    fn interactive_session_start_uses_the_current_tmux_server_without_a_recorded_binding() {
+        let mut actual_target = None;
+
+        configure_for_session_start_with(
+            "fixture-session",
+            true,
+            |_| Ok(None),
+            |target| {
+                actual_target = Some(target);
+                Ok(())
+            },
+        )
+        .expect("current tmux server should be selected");
+
+        assert_eq!(actual_target, Some(TmuxTarget::Current));
     }
 
     #[test]

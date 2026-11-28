@@ -450,6 +450,14 @@ mod tests {
         );
     }
 
+    #[test]
+    fn invalid_pane_ids_do_not_become_an_empty_pane_list() {
+        let result = pane_ids_from_query(Ok("%47\n%48x".to_owned()), Some("/fixture/tmux.sock"))
+            .map_err(|error| error.to_string());
+
+        assert_eq!(result, Err("tmux returned an invalid pane ID".to_owned()),);
+    }
+
     #[rstest]
     #[case::legacy_targets_default_server(None, vec!["-L", "default"])]
     #[case::recorded_socket_is_explicit(
