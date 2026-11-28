@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1013](https://github.com/fohte/armyknife/compare/v0.1.1012...v0.1.1013) (2026-11-28)
+
+
+### Features
+
+* **agent-watch-web:** restore new session drafts ([#2457](https://github.com/fohte/armyknife/issues/2457)) ([1997399](https://github.com/fohte/armyknife/commit/199739980696e32090a1cd509025e665c031be82))
+
 ## [0.1.1012](https://github.com/fohte/armyknife/compare/v0.1.1011...v0.1.1012) (2026-11-28)
 
 
