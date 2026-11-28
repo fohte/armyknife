@@ -144,7 +144,9 @@ export function useSessionLaunch({
       kind: 'launch',
       sessionId: `launch-${String(current.key)}`,
       sessionTitle: current.request.directory,
-      initialMessage: current.request.initialMessage,
+      ...(current.request.initialMessage === undefined
+        ? {}
+        : { initialMessage: current.request.initialMessage }),
       repo: current.request.directory,
       createdAt: current.startedAt,
       run,
