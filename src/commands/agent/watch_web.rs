@@ -500,17 +500,39 @@ mod tests {
 
     use super::messages::{BackgroundTask, BackgroundTaskKind, RouteLoaders};
     use super::{
-        LISTEN_PORT, SessionStoreWatch, app, app_with_assets, app_with_assets_and_loader,
+        EnrichmentUpdates, LISTEN_PORT, SessionEnrichmentCache, SessionStoreWatch, app,
+        app_with_assets, app_with_assets_and_loader,
         app_with_assets_and_queued_prompt_loaders_and_restart_signal, bind_listener,
-        compression_layer, ensure_port_allowed, open_browser_on_startup, restart_args_with_port,
-        start_web_ui_relay_manager_if_allowed, watch_web_url,
+        compression_layer, ensure_port_allowed, forward_tq_events, open_browser_on_startup,
+        restart_args_with_port, start_web_ui_relay_manager_if_allowed, watch_web_url,
     };
     use crate::cli::{Cli, Commands};
     use crate::commands::agent::AgentCommands;
     use crate::commands::agent::types::{Engine, Session};
+    use crate::infra::tq::TqEvent;
 
     static TEST_DIST: Dir<'static> =
         include_dir!("$CARGO_MANIFEST_DIR/src/commands/agent/watch_web/test_assets");
+
+    #[tokio::test]
+    async fn tq_event_forwarder_applies_events_and_stops_on_shutdown() {
+        let updates = EnrichmentUpdates::new();
+        let mut receiver = updates.subscribe();
+        let cache = SessionEnrichmentCache::new(updates);
+        let (event_sender, event_receiver) = tokio::sync::mpsc::channel(1);
+        let (shutdown_sender, shutdown_receiver) = tokio::sync::watch::channel(false);
+        let consumer = tokio::spawn(forward_tq_events(event_receiver, shutdown_receiver, cache));
+
+        let event_sent = event_sender.send(TqEvent::Connected).await.is_ok();
+        let event_applied = receiver.changed().await.is_ok();
+        shutdown_sender.send_replace(true);
+        let consumer_stopped = consumer.await.is_ok();
+
+        assert_eq!(
+            (event_sent, event_applied, consumer_stopped),
+            (true, true, true),
+        );
+    }
 
     #[rstest]
     #[case::agent_session_cannot_use_production_port(LISTEN_PORT, Some("fixture-session"), false)]

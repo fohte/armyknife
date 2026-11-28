@@ -187,6 +187,7 @@ struct CacheOperations<T, K> {
 struct CacheState<T, K> {
     value: T,
     attempted_at: HashMap<K, Instant>,
+    // Failed fetches need a retry interval when successful entries have no TTL.
     failed_at: HashMap<K, Instant>,
     last_requested: HashMap<K, Instant>,
     refresh_in_flight: bool,
@@ -834,9 +835,9 @@ mod tests {
         wait_for_refresh(&mut receiver).await;
         cache.apply_tq_event(&event).await;
         let notified = receiver.has_changed().is_ok_and(|changed| changed);
+        let _ = cache.task_metadata(std::slice::from_ref(&session)).await;
         if should_invalidate {
             let _ = receiver.changed().await;
-            let _ = cache.task_metadata(std::slice::from_ref(&session)).await;
             wait_for_refresh(&mut receiver).await;
         }
 
@@ -869,8 +870,15 @@ mod tests {
         wait_for_refresh(&mut receiver).await;
         tokio::time::advance(CACHE_TTL * 2).await;
         let _ = cache.task_metadata(std::slice::from_ref(&session)).await;
+        tokio::task::yield_now().await;
 
-        assert_eq!(calls.load(Ordering::SeqCst), 3);
+        assert_eq!(
+            (
+                calls.load(Ordering::SeqCst),
+                receiver.has_changed().is_ok_and(|changed| changed),
+            ),
+            (3, false),
+        );
     }
 
     #[tokio::test(start_paused = true)]
@@ -906,40 +914,6 @@ mod tests {
         wait_for_refresh(&mut receiver).await;
 
         assert_eq!(calls.load(Ordering::SeqCst), 3);
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn tq_event_consumer_invalidates_cache_and_stops_on_shutdown(
-        counting_task_cache: CountingTaskCache,
-    ) {
-        let CountingTaskCache {
-            cache,
-            calls,
-            mut receiver,
-        } = counting_task_cache;
-        let session = session("session-a", None);
-        let _ = cache.task_metadata(std::slice::from_ref(&session)).await;
-        wait_for_refresh(&mut receiver).await;
-        let (event_sender, event_receiver) = tokio::sync::mpsc::channel(1);
-        let (shutdown_sender, shutdown_receiver) = tokio::sync::watch::channel(false);
-        let consumer = tokio::spawn(super::super::forward_tq_events(
-            event_receiver,
-            shutdown_receiver,
-            cache.clone(),
-        ));
-
-        event_sender
-            .send(tq_change(TqChangeResource::Task))
-            .await
-            .unwrap();
-        let _ = receiver.changed().await;
-        let _ = cache.task_metadata(std::slice::from_ref(&session)).await;
-        wait_for_refresh(&mut receiver).await;
-        shutdown_sender.send_replace(true);
-        let consumer_stopped = consumer.await.is_ok();
-
-        assert_eq!((calls.load(Ordering::SeqCst), consumer_stopped), (2, true));
     }
 
     #[tokio::test]
