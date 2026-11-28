@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1000](https://github.com/fohte/armyknife/compare/v0.1.999...v0.1.1000) (2026-11-28)
+
+
+### Features
+
+* **agent-watch-web:** support last-used labels ([#2427](https://github.com/fohte/armyknife/issues/2427)) ([6cc1cf7](https://github.com/fohte/armyknife/commit/6cc1cf7665e9d03bab609eae457bfe7768d902d5))
+
 ## [0.1.999](https://github.com/fohte/armyknife/compare/v0.1.998...v0.1.999) (2026-11-28)
 
 
