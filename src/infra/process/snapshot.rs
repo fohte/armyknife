@@ -37,6 +37,19 @@ impl ProcessSnapshot {
         Some(Self::from_ps_output(&text))
     }
 
+    /// Captures process topology and argv for session-specific agent lookup.
+    pub(crate) fn capture_with_command_lines() -> Option<Self> {
+        let processes = capture_process_table()?;
+        let args_output = process_args_command().output().ok()?;
+        if !args_output.status.success() {
+            return None;
+        }
+        let mut snapshot = Self::from_ps_output(&processes);
+        snapshot.command_lines =
+            parse_ps_args_output(&String::from_utf8_lossy(&args_output.stdout));
+        Some(snapshot)
+    }
+
     /// Captures command arguments for checks that distinguish subcommands sharing one executable.
     fn capture_with_command_lines_and_groups() -> Option<Self> {
         let processes = capture_process_groups_table()?;
@@ -211,6 +224,38 @@ impl ProcessSnapshot {
         self.command_lines.get(&pid).map(String::as_str)
     }
 
+    /// Finds every process invoking `command` with the given consecutive argv
+    /// arguments. Session IDs are matched as complete arguments so one
+    /// session cannot accidentally select another whose ID is a prefix.
+    pub(crate) fn find_pids_by_command_arguments(
+        &self,
+        command: &str,
+        expected_arguments: &[&str],
+    ) -> Vec<u32> {
+        if expected_arguments.is_empty() {
+            return Vec::new();
+        }
+        let mut pids = self
+            .command_lines
+            .iter()
+            .filter_map(|(&pid, command_line)| {
+                let mut arguments = command_line.split_whitespace();
+                let executable = arguments.next()?;
+                let executable = Path::new(executable).file_name()?.to_str()?;
+                if executable != command {
+                    return None;
+                }
+                let arguments = arguments.collect::<Vec<_>>();
+                arguments
+                    .windows(expected_arguments.len())
+                    .any(|window| window == expected_arguments)
+                    .then_some(pid)
+            })
+            .collect::<Vec<_>>();
+        pids.sort_unstable();
+        pids
+    }
+
     fn codex_app_server_ancestors(&self, pid: u32) -> impl Iterator<Item = u32> + '_ {
         self.ancestors(pid)
             .into_iter()
@@ -371,6 +416,33 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(args, ["-A", "-ww", "-o", "pid=,args="]);
+    }
+
+    #[test]
+    fn find_pids_by_command_arguments_matches_all_exact_session_invocations() {
+        let snapshot = ProcessSnapshot::from_ps_outputs_with_groups(
+            indoc! {"
+                10 1 10 launchd
+                20 1 20 claude
+                21 1 21 claude
+                22 1 22 codex
+                23 1 23 codex
+            "},
+            indoc! {"
+                20 /opt/bin/claude --resume fixture-session
+                21 /opt/bin/claude --resume fixture-session-extra
+                22 /opt/bin/codex resume fixture-session
+                23 /opt/bin/codex resume fixture-session
+            "},
+        );
+
+        assert_eq!(
+            (
+                snapshot.find_pids_by_command_arguments("claude", &["--resume", "fixture-session"]),
+                snapshot.find_pids_by_command_arguments("codex", &["resume", "fixture-session"]),
+            ),
+            (vec![20], vec![22, 23]),
+        );
     }
 
     #[rstest]
