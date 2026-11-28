@@ -75,6 +75,7 @@ pub(crate) fn set_has_parent_agent_process(
 
 #[cfg(test)]
 mod tests {
+    use indoc::indoc;
     use rstest::{fixture, rstest};
 
     use super::*;
@@ -92,9 +93,11 @@ mod tests {
             chrono::Utc::now().timestamp_millis() - ORPHANED_CLASSIFICATION_TTL_MILLIS - 1;
         connection
             .execute(
-                "INSERT INTO agent_session_pane_binding_state
+                indoc! {"
+                    INSERT INTO agent_session_pane_binding_state
                     (session_id, has_parent_agent, created_at)
-                 VALUES (?1, ?2, ?3)",
+                    VALUES (?1, ?2, ?3)
+                "},
                 params!["fixture-session-orphan", true, created_at],
             )
             .expect("orphaned classification should be inserted");
@@ -169,9 +172,11 @@ mod tests {
             params!["fixture-session-active", "{}", 0],
         )?;
         connection.execute(
-            "INSERT INTO agent_session_pane_binding_state
+            indoc! {"
+                INSERT INTO agent_session_pane_binding_state
                 (session_id, has_parent_agent, created_at)
-             VALUES (?1, ?2, ?3)",
+                VALUES (?1, ?2, ?3)
+            "},
             params!["fixture-session-active", true, created_at],
         )?;
 
@@ -181,10 +186,10 @@ mod tests {
             Some(false),
         )?;
         let connection = open_connection(stale_orphaned_classification.path())?;
-        let mut statement = connection.prepare(
-            "SELECT session_id, has_parent_agent FROM agent_session_pane_binding_state
-             ORDER BY session_id",
-        )?;
+        let mut statement = connection.prepare(indoc! {"
+                SELECT session_id, has_parent_agent FROM agent_session_pane_binding_state
+                ORDER BY session_id
+            "})?;
         let states = statement
             .query_map([], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, bool>(1)?))
