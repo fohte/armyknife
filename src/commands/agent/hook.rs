@@ -294,7 +294,14 @@ fn end_sessions_on_pane_takeover(
 
         session.status = SessionStatus::Ended;
         session.updated_at = now;
-        let _ = store::save_session_to(sessions_dir, &session);
+        if let Err(error) = store::save_session_to(sessions_dir, &session) {
+            tracing::warn!(
+                event = "agent.hook.pane_takeover_end_failed",
+                session = %session.session_id,
+                error = %error,
+            );
+            continue;
+        }
         crate::shared::cleanup::withdraw_ended_session_cards(sessions_dir, &session.session_id);
         side_effects.archive_tq_session(&session.session_id);
     }
@@ -2260,6 +2267,7 @@ mod tests {
         temp_dir: tempfile::TempDir,
         archived_calls: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
         side_effects: SideEffects,
+        session_end_cards: crate::commands::agent::test_support::SessionEndCardFixture,
     }
 
     type PaneBindingResolveCall = (bool, Option<bool>);
@@ -2338,40 +2346,8 @@ mod tests {
             temp_dir: tempfile::TempDir::new().expect("temp dir"),
             archived_calls,
             side_effects,
+            session_end_cards: crate::commands::agent::test_support::session_end_cards(),
         }
-    }
-
-    fn add_session_end_cards(sessions_dir: &Path, session_id: &str) {
-        let completed_todo =
-            store::add_agent_todo_in(sessions_dir, session_id, "A finished task", None, false)
-                .expect("completed todo should be recorded");
-        store::resolve_agent_todo_from(
-            sessions_dir,
-            session_id,
-            completed_todo,
-            store::TodoResolution::Completed,
-            None,
-        )
-        .expect("todo should be completed");
-        store::add_agent_todo_in(sessions_dir, session_id, "A pending task", None, false)
-            .expect("pending todo should be recorded");
-
-        let answered_proposal = store::add_agent_proposal_in(
-            sessions_dir,
-            session_id,
-            "{\"title\":\"An answered choice\"}",
-        )
-        .expect("answered proposal should be recorded");
-        store::write_agent_proposal_answer_at_from(
-            sessions_dir,
-            session_id,
-            answered_proposal,
-            "Selected an option.",
-            Utc::now(),
-        )
-        .expect("proposal should be answered");
-        store::add_agent_proposal_in(sessions_dir, session_id, "{\"title\":\"A pending choice\"}")
-            .expect("pending proposal should be recorded");
     }
 
     type ExpectedSessionEndCardState = (
@@ -4711,6 +4687,7 @@ mod tests {
             temp_dir,
             archived_calls,
             mut side_effects,
+            session_end_cards,
         } = tq_archive_context;
         let sessions_dir = temp_dir.path();
 
@@ -4756,7 +4733,7 @@ mod tests {
             effort: None,
         };
         store::save_session_to(sessions_dir, &session).expect("save");
-        add_session_end_cards(sessions_dir, &session.session_id);
+        session_end_cards.add_to(sessions_dir, &session.session_id);
 
         let removed = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
         side_effects.removed_notification_groups = Some(removed.clone());
@@ -8120,11 +8097,13 @@ mod tests {
                 temp_dir,
                 archived_calls,
                 mut side_effects,
+                session_end_cards,
             } = tq_archive_context;
             let mut session = make_session(session_id, session_pane);
             session.engine = engine;
             session.status = initial_status;
             store::save_session_to(temp_dir.path(), &session).expect("save");
+            session_end_cards.add_to(temp_dir.path(), session_id);
             let removed = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
             side_effects.removed_notification_groups = Some(removed.clone());
 
@@ -8138,12 +8117,41 @@ mod tests {
             let reloaded = store::load_session_from(temp_dir.path(), session_id)
                 .expect("load")
                 .expect("session exists");
+            let todos = store::agent_todos_from(temp_dir.path(), session_id).expect("load todos");
+            let proposals =
+                store::agent_proposals_from(temp_dir.path(), session_id).expect("load proposals");
             let recorded = (
                 reloaded.status,
                 archived_calls.lock().expect("lock").clone(),
                 removed.lock().expect("lock").clone(),
+                (
+                    todos
+                        .iter()
+                        .map(|todo| (todo.seq, todo.resolution, todo.comment.as_deref()))
+                        .collect::<Vec<_>>(),
+                    proposals
+                        .iter()
+                        .map(|proposal| {
+                            (
+                                proposal.seq,
+                                proposal.resolution,
+                                proposal.resolved_at.is_some(),
+                                proposal.comment.as_deref(),
+                            )
+                        })
+                        .collect::<Vec<_>>(),
+                ),
             );
-            assert_eq!(recorded, expected);
+            let expected_cards_withdrawn = expected.0 == SessionStatus::Ended;
+            assert_eq!(
+                recorded,
+                (
+                    expected.0,
+                    expected.1,
+                    expected.2,
+                    expected_session_end_card_state(expected_cards_withdrawn),
+                ),
+            );
         }
 
         #[rstest]
@@ -8154,6 +8162,7 @@ mod tests {
                 temp_dir,
                 archived_calls,
                 mut side_effects,
+                ..
             } = tq_archive_context;
             let archived_at = Utc::now();
             let mut session = make_session("archived-codex", "%42");

@@ -291,6 +291,7 @@ mod tests {
     struct LifecycleTestContext {
         temp_dir: TempDir,
         sinks: RecordingSideEffects,
+        session_end_cards: crate::commands::agent::test_support::SessionEndCardFixture,
     }
 
     #[fixture]
@@ -298,6 +299,7 @@ mod tests {
         LifecycleTestContext {
             temp_dir: TempDir::new().expect("temp dir"),
             sinks: recording_side_effects(),
+            session_end_cards: crate::commands::agent::test_support::session_end_cards(),
         }
     }
 
@@ -369,39 +371,6 @@ mod tests {
         }
     }
 
-    fn add_ended_session_cards(sessions_dir: &Path, session_id: &str) {
-        let completed_todo =
-            store::add_agent_todo_in(sessions_dir, session_id, "A finished task", None, false)
-                .expect("completed todo should be recorded");
-        store::resolve_agent_todo_from(
-            sessions_dir,
-            session_id,
-            completed_todo,
-            store::TodoResolution::Completed,
-            None,
-        )
-        .expect("todo should be completed");
-        store::add_agent_todo_in(sessions_dir, session_id, "A pending task", None, false)
-            .expect("pending todo should be recorded");
-
-        let answered_proposal = store::add_agent_proposal_in(
-            sessions_dir,
-            session_id,
-            "{\"title\":\"An answered choice\"}",
-        )
-        .expect("answered proposal should be recorded");
-        store::write_agent_proposal_answer_at_from(
-            sessions_dir,
-            session_id,
-            answered_proposal,
-            "Selected an option.",
-            Utc::now(),
-        )
-        .expect("proposal should be answered");
-        store::add_agent_proposal_in(sessions_dir, session_id, "{\"title\":\"A pending choice\"}")
-            .expect("pending proposal should be recorded");
-    }
-
     fn compacting_state(sessions_dir: &Path, session_id: &str) -> Option<bool> {
         rusqlite::Connection::open(sessions_dir.join("sessions.db"))
             .expect("open session database")
@@ -423,13 +392,17 @@ mod tests {
         #[case] engine: Engine,
         #[case] is_close: bool,
     ) {
-        let LifecycleTestContext { temp_dir, sinks } = lifecycle_test_context;
+        let LifecycleTestContext {
+            temp_dir,
+            sinks,
+            session_end_cards,
+        } = lifecycle_test_context;
         store::save_session_to(
             temp_dir.path(),
             &session(engine, SessionStatus::Stopped, false),
         )
         .expect("save session");
-        add_ended_session_cards(temp_dir.path(), "thread-one");
+        session_end_cards.add_to(temp_dir.path(), "thread-one");
 
         if is_close {
             mark_session_ended_after_close_in("thread-one", temp_dir.path(), &sinks.side_effects)
@@ -504,7 +477,9 @@ mod tests {
         #[case] expected_removed: Vec<&str>,
         #[case] expected_archived: Vec<&str>,
     ) {
-        let LifecycleTestContext { temp_dir, sinks } = lifecycle_test_context;
+        let LifecycleTestContext {
+            temp_dir, sinks, ..
+        } = lifecycle_test_context;
         store::save_session_to(
             temp_dir.path(),
             &session(engine, initial_status, sweep_signaled),
@@ -548,7 +523,9 @@ mod tests {
 
     #[rstest]
     fn process_exit_restores_archived_codex_session(lifecycle_test_context: LifecycleTestContext) {
-        let LifecycleTestContext { temp_dir, sinks } = lifecycle_test_context;
+        let LifecycleTestContext {
+            temp_dir, sinks, ..
+        } = lifecycle_test_context;
         let mut archived = session(Engine::Codex, SessionStatus::Stopped, false);
         archived.archived_at = Some(Utc::now());
         store::save_session_to(temp_dir.path(), &archived).expect("save session");
@@ -567,7 +544,9 @@ mod tests {
 
     #[rstest]
     fn explicit_close_ends_a_paused_codex_session(lifecycle_test_context: LifecycleTestContext) {
-        let LifecycleTestContext { temp_dir, sinks } = lifecycle_test_context;
+        let LifecycleTestContext {
+            temp_dir, sinks, ..
+        } = lifecycle_test_context;
         let mut closing_session = session(Engine::Codex, SessionStatus::Paused, false);
         closing_session.web_uis = vec![crate::commands::agent::types::WebUiRegistration {
             name: "Editor".to_owned(),
@@ -605,7 +584,9 @@ mod tests {
         lifecycle_test_context: LifecycleTestContext,
         #[case] engine: Engine,
     ) {
-        let LifecycleTestContext { temp_dir, sinks } = lifecycle_test_context;
+        let LifecycleTestContext {
+            temp_dir, sinks, ..
+        } = lifecycle_test_context;
         let mut paused = session(engine, SessionStatus::Paused, true);
         paused.ancestor_session_ids = vec!["fixture-parent-session".to_string()];
         store::save_session_to(temp_dir.path(), &paused).expect("save session");
@@ -669,7 +650,9 @@ mod tests {
         #[case] newer_activity: bool,
         #[case] expected_transition: bool,
     ) {
-        let LifecycleTestContext { temp_dir, sinks } = lifecycle_test_context;
+        let LifecycleTestContext {
+            temp_dir, sinks, ..
+        } = lifecycle_test_context;
         let expected_session = session(Engine::Claude, SessionStatus::Stopped, true);
         let mut current_session = expected_session.clone();
         current_session.status = current_status;
@@ -732,7 +715,9 @@ mod tests {
     fn explicit_close_retries_when_compacting_state_cannot_be_cleared(
         lifecycle_test_context: LifecycleTestContext,
     ) {
-        let LifecycleTestContext { temp_dir, sinks } = lifecycle_test_context;
+        let LifecycleTestContext {
+            temp_dir, sinks, ..
+        } = lifecycle_test_context;
         store::save_session_to(
             temp_dir.path(),
             &session(Engine::Claude, SessionStatus::Paused, false),
