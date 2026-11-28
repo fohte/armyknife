@@ -197,15 +197,15 @@ pub struct Session {
     /// `status == Stopped`; other statuses ignore it.
     #[serde(default)]
     pub read_at: Option<DateTime<Utc>>,
-    /// Set by `sweep::signal_session` when it requests shutdown without yet
-    /// confirming the session as `Paused` (a live agent pid still resolved
-    /// at request time), so `status` stays `Stopped` in the
-    /// meantime. While set, a `SessionEnd` hook firing on the still-Stopped
-    /// session means the process is exiting as a result of that request,
-    /// not that the user ended it themselves -- see the
-    /// `SessionEnd` handler in `hook.rs`. Cleared by any other hook event
-    /// (the process is still responding, so sweep's earlier signal is no
-    /// longer relevant) and by `sweep::confirm_paused`.
+    /// Set by sweep after requesting shutdown for a `Stopped` session whose
+    /// agent process is still live. It is also set for a `Paused` session
+    /// after sweep finds a live process, giving a resume hook one sweep
+    /// interval to update the status before sweep requests shutdown.
+    ///
+    /// While a `Stopped` session has this flag, a `SessionEnd` hook means the
+    /// process exited in response to sweep's request rather than because the
+    /// user ended it. Any other hook event clears the flag because the process
+    /// is still responding. `sweep::confirm_paused` also clears it.
     #[serde(default)]
     pub sweep_signaled: bool,
     /// Set when armyknife blocks a Stop for a missing status, so the next

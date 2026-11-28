@@ -2,7 +2,9 @@
 //!
 //! Scans session records to mark terminal Codex turns, pause sessions that
 //! have been `Stopped` for longer than the configured timeout, and reap live
-//! processes whose records are already `Paused`. Designed to be
+//! processes whose records are already `Paused`. A first observation marks a
+//! paused process as awaiting its resume hook; if the next sweep still sees
+//! `Paused`, it requests shutdown. Designed to be
 //! invoked periodically (e.g., by a launchd agent on a 1-minute interval)
 //! rather than spawned on demand from the Stop hook.
 //!
@@ -16,12 +18,14 @@
 //! SIGTERM again on later runs with no retry limit.
 //!
 //! While a session waits in that signaled-but-not-yet-Paused window, it is
-//! marked `Session::sweep_signaled`. Codex gets one chance to exit through
-//! Ctrl+D so it can restore the terminal before the same sweep falls back to
-//! SIGTERM. The flag also lets the `SessionEnd` hook (see `hook.rs`) recognize
-//! a process exiting in response to sweep's own shutdown request
-//! and confirm it as `Paused` there and then, rather than misreading the
-//! still-`Stopped` status as the user manually ending the session.
+//! marked `Session::sweep_signaled`. Paused sessions use the same marker to
+//! defer signaling for one sweep so a resume hook can update their status.
+//! Codex gets one chance to exit through Ctrl+D so it can restore the terminal
+//! before the same sweep falls back to SIGTERM. For a still-`Stopped` session,
+//! the flag also lets the `SessionEnd` hook (see `hook.rs`) recognize a process
+//! exiting in response to sweep's own shutdown request and confirm it as
+//! `Paused` there and then, rather than misreading the status as the user
+//! manually ending the session.
 //!
 //! Auto-pause only considers Stopped sessions. A separate pass closes idle
 //! Stopped or Paused sessions after their linked-worktree pull request merges.
@@ -311,14 +315,21 @@ pub struct SweepReport {
     /// process exiting on its own) has actually taken effect, including a
     /// Codex process that exits within this run's graceful shutdown window.
     pub paused: usize,
-    /// Sessions that received a shutdown request this run, but were not yet
-    /// confirmed `Paused` because sweep can still resolve a live agent pid.
+    /// Sessions that received a shutdown request this run, including paused
+    /// records with live processes that have not exited yet.
     pub signaled: usize,
     /// Stopped sessions whose timeout has not yet elapsed.
     pub waiting: usize,
-    /// Sessions in an active state, with a detached background command
-    /// pending, or with a Remote Control connection.
+    /// Sessions that are active, have a detached background command or
+    /// Remote Control connection, or whose process state is unresolved.
     pub active: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PausedReapPreparation {
+    Armed,
+    Ready,
+    SessionChanged,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -328,9 +339,41 @@ enum ShutdownOutcome {
     SessionChanged,
 }
 
-/// Signals a resurrected process only while its record still describes the
-/// same paused session. Holding the session lock prevents a resume hook from
-/// changing the status between the check and signal delivery.
+/// Marks a paused process after resolving it. Waiting one sweep gives a resume
+/// hook time to move the session out of `Paused` before shutdown is requested.
+fn prepare_paused_reap(sessions_dir: &Path, session: &Session) -> Result<PausedReapPreparation> {
+    let mut preparation = PausedReapPreparation::SessionChanged;
+    store::update_session_in(sessions_dir, &session.session_id, |current| {
+        if current.status != SessionStatus::Paused || current.updated_at != session.updated_at {
+            return false;
+        }
+        if current.sweep_signaled {
+            preparation = PausedReapPreparation::Ready;
+            return false;
+        }
+        current.sweep_signaled = true;
+        preparation = PausedReapPreparation::Armed;
+        true
+    })?;
+    Ok(preparation)
+}
+
+fn clear_paused_reap_marker(sessions_dir: &Path, session: &Session) -> Result<()> {
+    store::update_session_in(sessions_dir, &session.session_id, |current| {
+        if current.status != SessionStatus::Paused
+            || current.updated_at != session.updated_at
+            || !current.sweep_signaled
+        {
+            return false;
+        }
+        current.sweep_signaled = false;
+        true
+    })
+}
+
+/// Signals a previously observed paused process only while its record still
+/// describes the same paused session. Holding the session lock prevents a
+/// resume hook from changing the status between the check and signal delivery.
 fn signal_paused_process<S: SignalSender>(
     sessions_dir: &Path,
     session: &Session,
@@ -341,7 +384,10 @@ fn signal_paused_process<S: SignalSender>(
     let Some(current) = lock.load()? else {
         return Ok(false);
     };
-    if current.status != SessionStatus::Paused || current.updated_at != session.updated_at {
+    if current.status != SessionStatus::Paused
+        || current.updated_at != session.updated_at
+        || !current.sweep_signaled
+    {
         return Ok(false);
     }
 
@@ -407,8 +453,18 @@ where
 
         if session.status == SessionStatus::Paused {
             match probe.resolve_pids(&session) {
-                Ok(None) => {}
-                Ok(Some(pids)) if pids.is_empty() => {}
+                Ok(None) => {
+                    tracing::warn!(
+                        event = "agent.sweep.process_unresolved",
+                        session = %session.session_id,
+                    );
+                    report.active += 1;
+                }
+                Ok(Some(pids)) if pids.is_empty() => {
+                    if !dry_run {
+                        clear_paused_reap_marker(sessions_dir, &session)?;
+                    }
+                }
                 Ok(Some(pids))
                     if pids
                         .iter()
@@ -421,9 +477,14 @@ where
                     report.active += 1;
                 }
                 Ok(Some(pids)) => {
-                    let mut signaled = false;
-                    for pid in pids {
-                        if dry_run {
+                    if dry_run && !session.sweep_signaled {
+                        tracing::info!(
+                            event = "agent.sweep.dry_run_paused_process_wait_for_hook",
+                            session = %session.session_id,
+                        );
+                        report.active += 1;
+                    } else if dry_run {
+                        for pid in &pids {
                             tracing::info!(
                                 event = "agent.sweep.dry_run_paused_process_signal",
                                 session = %session.session_id,
@@ -433,22 +494,37 @@ where
                                 "[armyknife] agent sweep (dry-run): would signal paused {} (pid={pid})",
                                 session.session_id,
                             );
-                            signaled = true;
-                            continue;
                         }
-                        if signal_paused_process(sessions_dir, &session, pid, sender)? {
-                            tracing::info!(
-                                event = "agent.sweep.paused_process_signaled",
-                                session = %session.session_id,
-                                pid,
-                            );
-                            signaled = true;
-                        } else {
-                            break;
-                        }
-                    }
-                    if signaled {
                         report.signaled += 1;
+                    } else {
+                        match prepare_paused_reap(sessions_dir, &session)? {
+                            PausedReapPreparation::Armed => {
+                                tracing::info!(
+                                    event = "agent.sweep.paused_process_waiting_for_hook",
+                                    session = %session.session_id,
+                                );
+                                report.active += 1;
+                            }
+                            PausedReapPreparation::Ready => {
+                                let mut signaled = false;
+                                for pid in pids {
+                                    if signal_paused_process(sessions_dir, &session, pid, sender)? {
+                                        tracing::info!(
+                                            event = "agent.sweep.paused_process_signaled",
+                                            session = %session.session_id,
+                                            pid,
+                                        );
+                                        signaled = true;
+                                    } else {
+                                        break;
+                                    }
+                                }
+                                if signaled {
+                                    report.signaled += 1;
+                                }
+                            }
+                            PausedReapPreparation::SessionChanged => {}
+                        }
                     }
                 }
                 Err(error) => {
@@ -1831,14 +1907,14 @@ mod tests {
     }
 
     #[rstest]
-    fn signals_all_live_processes_for_a_paused_session(test_dir: TestDir) {
+    fn waits_for_a_paused_session_hook_before_signaling_every_process(test_dir: TestDir) {
         let old = Utc::now() - TimeDelta::hours(1);
         let session = make_session("resurrected", SessionStatus::Paused, old);
         save_session_to(&test_dir.path, &session).expect("save");
 
         let sender = RecordingSender::default();
         let probe = FakeProbe::with_pid_lists(&[("resurrected", &[4242, 4343])]);
-        let report = sweep_impl(
+        let first_report = sweep_impl(
             &test_dir.path,
             Duration::from_secs(1),
             &sender,
@@ -1846,14 +1922,41 @@ mod tests {
             &RecordingTmuxStatusSyncer::default(),
             false,
         )
-        .expect("sweep");
+        .expect("first sweep");
+        let after_first = store::load_session_from(&test_dir.path, "resurrected")
+            .expect("load after first sweep")
+            .expect("session exists");
+        let second_report = sweep_impl(
+            &test_dir.path,
+            Duration::from_secs(1),
+            &sender,
+            &probe,
+            &RecordingTmuxStatusSyncer::default(),
+            false,
+        )
+        .expect("second sweep");
         let reloaded = store::load_session_from(&test_dir.path, "resurrected")
             .expect("load")
             .expect("session exists");
 
         assert_eq!(
-            (report, sender.calls.borrow().clone(), reloaded.status),
             (
+                first_report,
+                after_first.sweep_signaled,
+                second_report,
+                sender.calls.borrow().clone(),
+                reloaded.status,
+                reloaded.sweep_signaled,
+            ),
+            (
+                SweepReport {
+                    scanned: 1,
+                    paused: 0,
+                    signaled: 0,
+                    waiting: 0,
+                    active: 1,
+                },
+                true,
                 SweepReport {
                     scanned: 1,
                     paused: 0,
@@ -1863,6 +1966,93 @@ mod tests {
                 },
                 vec![(4242, libc::SIGTERM), (4343, libc::SIGTERM)],
                 SessionStatus::Paused,
+                true,
+            ),
+        );
+    }
+
+    #[rstest]
+    fn leaves_a_paused_session_active_when_process_identity_is_unknown(test_dir: TestDir) {
+        let old = Utc::now() - TimeDelta::hours(1);
+        let session = make_session("unresolved-paused", SessionStatus::Paused, old);
+        save_session_to(&test_dir.path, &session).expect("save");
+
+        let sender = RecordingSender::default();
+        let probe = FakeProbe::default().with_unresolved_sessions(&["unresolved-paused"]);
+        let report = sweep_impl(
+            &test_dir.path,
+            Duration::from_secs(1),
+            &sender,
+            &probe,
+            &RecordingTmuxStatusSyncer::default(),
+            false,
+        )
+        .expect("sweep");
+        let reloaded = store::load_session_from(&test_dir.path, "unresolved-paused")
+            .expect("load")
+            .expect("session exists");
+
+        assert_eq!(
+            (
+                report,
+                sender.calls.borrow().clone(),
+                reloaded.status,
+                reloaded.sweep_signaled,
+            ),
+            (
+                SweepReport {
+                    scanned: 1,
+                    paused: 0,
+                    signaled: 0,
+                    waiting: 0,
+                    active: 1,
+                },
+                Vec::new(),
+                SessionStatus::Paused,
+                false,
+            ),
+        );
+    }
+
+    #[rstest]
+    fn remote_control_blocks_reaping_a_paused_session(test_dir: TestDir) {
+        let old = Utc::now() - TimeDelta::hours(1);
+        let session = make_session("remote-paused", SessionStatus::Paused, old);
+        save_session_to(&test_dir.path, &session).expect("save");
+
+        let sender = RecordingSender::default();
+        let probe = FakeProbe::with_pids(&[("remote-paused", 4242)]).with_remote_control(&[4242]);
+        let report = sweep_impl(
+            &test_dir.path,
+            Duration::from_secs(1),
+            &sender,
+            &probe,
+            &RecordingTmuxStatusSyncer::default(),
+            false,
+        )
+        .expect("sweep");
+        let reloaded = store::load_session_from(&test_dir.path, "remote-paused")
+            .expect("load")
+            .expect("session exists");
+
+        assert_eq!(
+            (
+                report,
+                sender.calls.borrow().clone(),
+                reloaded.status,
+                reloaded.sweep_signaled
+            ),
+            (
+                SweepReport {
+                    scanned: 1,
+                    paused: 0,
+                    signaled: 0,
+                    waiting: 0,
+                    active: 1,
+                },
+                Vec::new(),
+                SessionStatus::Paused,
+                false,
             ),
         );
     }

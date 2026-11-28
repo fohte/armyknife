@@ -828,9 +828,9 @@ fn process_hook_event_impl_with_env_and_unreported_stop(
     session.updated_at = now;
 
     // Any hook event other than SessionEnd means the process is still
-    // responding, so a pending sweep signal (see `Session::sweep_signaled`)
-    // is no longer relevant -- clear it so a later SessionEnd isn't
-    // mistaken for the confirmation of that earlier signal.
+    // responding, so a sweep marker (see `Session::sweep_signaled`) is no
+    // longer relevant -- clear it so a later SessionEnd isn't mistaken for
+    // the confirmation of an earlier shutdown request.
     session.sweep_signaled = false;
 
     if event == HookEvent::UserPromptSubmit {
