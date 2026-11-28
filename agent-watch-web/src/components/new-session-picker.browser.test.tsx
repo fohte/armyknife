@@ -106,7 +106,7 @@ it('shows the last-used time beside a recent directory title', () => {
   act(() => {
     root?.render(
       <PickerHarness
-        start={() => Promise.resolve()}
+        start={() => undefined}
         now={new Date('2026-05-06T12:00:00Z')}
       />,
     )

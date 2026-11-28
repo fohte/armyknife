@@ -6,6 +6,14 @@
   gap: 4px;
 }
 
+.chat-user-group .chat-user-image {
+  display: block;
+  max-width: min(100%, 560px);
+  max-height: 480px;
+  border-radius: var(--aw-radius);
+  object-fit: contain;
+}
+
 .chat-user-group[data-own-message-highlighted='true'],
 .chat-user-group[data-command-output-highlighted='true'] {
   outline: 2px solid var(--aw-color-working);

@@ -445,12 +445,102 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::io::Write;
 
+    use chrono::{TimeZone, Utc};
+    use indoc::formatdoc;
     use serde_json::json;
 
     use super::load_conversation_with_queued_prompts;
-    use crate::commands::agent::store::PermissionRequestData;
+    use crate::commands::agent::store::{
+        PermissionRequestData, WatchWebQueuedAttachment, WatchWebQueuedPrompt,
+    };
     use crate::commands::agent::types::{Engine, MAIN_THREAD_AGENT_KEY, Session};
-    use crate::commands::agent::watch_web::messages::RouteLoaders;
+    use crate::commands::agent::watch_web::messages::{ChatItem, RouteLoaders, UserContentPart};
+
+    #[test]
+    fn conversation_resolves_first_message_images_with_session_context() {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_path = directory.path().join("fixture-session.jsonl");
+        let message_id = "watch-web-launch:fixture-launch";
+        let transcript = json!({
+            "type": "user",
+            "uuid": "fixture-user-message",
+            "parentUuid": null,
+            "origin": {"kind": "human"},
+            "timestamp": "2026-06-01T12:05:00Z",
+            "message": {"content": formatdoc! {"
+                Inspect this image.
+
+                Attached file(s):
+                - /fixture/upload/image.png
+                <!-- armyknife-queued-prompt-id:{} -->
+
+                <session-context>
+                - Working directory: /fixture/project
+                - Branch: fixture-branch
+                - Base: fixture-base
+                - Parent working directory: /fixture
+                </session-context>
+            ", message_id}},
+        });
+        std::fs::write(&transcript_path, format!("{transcript}\n")).unwrap();
+
+        let mut session: Session = serde_json::from_value(json!({
+            "session_id": "fixture-session",
+            "cwd": "/fixture/project",
+            "status": "ended",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "last_message": null,
+        }))
+        .unwrap();
+        session.engine = Engine::Claude;
+        session.transcript_path = Some(transcript_path);
+        let queued_prompt = WatchWebQueuedPrompt {
+            id: 12,
+            message_id: Some(message_id.to_string()),
+            content: "Inspect this image.".to_string(),
+            action_event_kind: None,
+            attachments: vec![WatchWebQueuedAttachment::Image {
+                source: "/api/images/fixture.png".to_string(),
+            }],
+            resolved: false,
+            sent_at: Utc.with_ymd_and_hms(2026, 6, 1, 12, 5, 0).single().unwrap(),
+        };
+        let loaders = RouteLoaders::new(
+            move |_| Ok(vec![queued_prompt.clone()]),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+            |_| Ok(Vec::new()),
+        );
+
+        let conversation = load_conversation_with_queued_prompts(
+            "fixture-session",
+            |id| Ok((id == "fixture-session").then(|| session.clone())),
+            |_| Ok(None),
+            &loaders,
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(
+            conversation.messages,
+            vec![ChatItem::UserWithContent {
+                content: vec![
+                    UserContentPart::Text {
+                        text: "Inspect this image.".to_string(),
+                    },
+                    UserContentPart::Image {
+                        source: "/api/images/fixture.png".to_string(),
+                        available: false,
+                    },
+                ],
+                from: None,
+                timestamp: Some("2026-06-01T12:05:00+00:00".to_string()),
+                rewind_id: Some("fixture-user-message".to_string()),
+                queued_prompt_id: Some(message_id.to_string()),
+            }],
+        );
+    }
 
     #[test]
     fn conversation_load_attaches_request_id_to_grouped_thinking_permission() {
