@@ -10,40 +10,6 @@
   color: var(--aw-text-muted);
 }
 
-.new-session-model-change {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0 8px 2px;
-  padding: 6px 10px;
-  border: 1px solid var(--aw-border-control);
-  background: var(--aw-bg-palette);
-  color: var(--aw-text-body);
-  font-size: 12px;
-}
-
-.new-session-model-change button {
-  min-height: 24px;
-  margin-left: auto;
-  padding: 0 8px;
-  border: 1px solid var(--aw-border-control);
-  background: transparent;
-  color: var(--aw-text-primary);
-  cursor: pointer;
-  font: inherit;
-}
-
-.new-session-view[data-mobile='true'] .new-session-model-change {
-  align-items: flex-start;
-  font-size: 14px;
-}
-
-.new-session-view[data-mobile='true'] .new-session-model-change button {
-  min-height: 44px;
-  flex: 0 0 auto;
-  padding: 0 12px;
-}
-
 .new-session-model-trigger {
   display: inline-flex;
   align-items: center;
