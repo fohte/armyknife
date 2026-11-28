@@ -338,9 +338,9 @@ fn prepare_close_session<'a, R: CloseRuntime>(
             (Some(pid), true, draft_inspection)
         }
         None if force => (None, true, DraftInspection::NotChecked),
-        None if matches!(
+        None if !matches!(
             session.status,
-            SessionStatus::Running | SessionStatus::WaitingInput
+            SessionStatus::Ended | SessionStatus::Paused | SessionStatus::Stopped
         ) =>
         {
             bail!(
@@ -1394,7 +1394,8 @@ mod tests {
     #[rstest]
     #[case::running(SessionStatus::Running)]
     #[case::waiting_for_input(SessionStatus::WaitingInput)]
-    fn close_refuses_to_remove_an_active_session_without_a_resolved_agent(
+    #[case::failed(SessionStatus::Failed)]
+    fn close_refuses_to_remove_a_disallowed_session_without_a_resolved_agent(
         mut session: Session,
         #[case] status: SessionStatus,
     ) {
