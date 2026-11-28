@@ -131,13 +131,11 @@ function getHtmlDefinitionCandidates(
   }
 
   for (const lexeme of analysis.lexemes) {
-    while (
-      analysis.codeRanges[codeRangeIndex] !== undefined &&
-      analysis.codeRanges[codeRangeIndex].end <= lexeme.at
-    ) {
+    let codeRange = analysis.codeRanges.at(codeRangeIndex)
+    while (codeRange !== undefined && codeRange.end <= lexeme.at) {
       codeRangeIndex += 1
+      codeRange = analysis.codeRanges.at(codeRangeIndex)
     }
-    const codeRange = analysis.codeRanges[codeRangeIndex]
     if (
       codeRange !== undefined &&
       codeRange.start <= lexeme.at &&
@@ -182,13 +180,11 @@ function analyzeHtmlGroups(
     if (analysis !== undefined) {
       for (const definition of getHtmlDefinitionCandidates(analysis, parse)) {
         const offset = definition.reference.offset
-        while (
-          intervals[intervalIndex] !== undefined &&
-          intervals[intervalIndex].end < offset
-        ) {
+        let interval = intervals.at(intervalIndex)
+        while (interval !== undefined && interval.end < offset) {
           intervalIndex += 1
+          interval = intervals.at(intervalIndex)
         }
-        const interval = intervals[intervalIndex]
         if (
           interval === undefined ||
           interval.start > offset ||

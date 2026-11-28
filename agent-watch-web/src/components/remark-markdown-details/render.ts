@@ -121,13 +121,11 @@ function splitHtml(
   }
 
   for (const { at, value } of lexemes) {
-    while (
-      codeRanges[codeRangeIndex] !== undefined &&
-      codeRanges[codeRangeIndex].end <= at
-    ) {
+    let codeRange = codeRanges.at(codeRangeIndex)
+    while (codeRange !== undefined && codeRange.end <= at) {
       codeRangeIndex += 1
+      codeRange = codeRanges.at(codeRangeIndex)
     }
-    const codeRange = codeRanges[codeRangeIndex]
     if (
       codeRange !== undefined &&
       codeRange.start <= at &&

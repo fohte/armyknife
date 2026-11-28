@@ -147,13 +147,11 @@ function getCommonMarkHtmlInterruptions(
     const lineStart = match.index
     const at = lineStart + match[0].indexOf(match[1] ?? '')
     if (!lexemeStarts.has(at)) continue
-    while (
-      fencedRanges[fenceIndex] !== undefined &&
-      fencedRanges[fenceIndex].end <= at
-    ) {
+    let fence = fencedRanges.at(fenceIndex)
+    while (fence !== undefined && fence.end <= at) {
       fenceIndex += 1
+      fence = fencedRanges.at(fenceIndex)
     }
-    const fence = fencedRanges[fenceIndex]
     if (fence !== undefined && rangeContains(fence, at)) continue
     interruptions.push(at)
   }
@@ -183,13 +181,11 @@ export function analyzeHtmlSource(
   let interruptionIndex = 0
   const codeRanges = ranges.filter((range) => {
     if (range.type === 'code') return true
-    while (
-      interruptions[interruptionIndex] !== undefined &&
-      interruptions[interruptionIndex] < range.start
-    ) {
+    let interruption = interruptions.at(interruptionIndex)
+    while (interruption !== undefined && interruption < range.start) {
       interruptionIndex += 1
+      interruption = interruptions.at(interruptionIndex)
     }
-    const interruption = interruptions[interruptionIndex]
     return interruption === undefined || interruption >= range.end
   })
 
