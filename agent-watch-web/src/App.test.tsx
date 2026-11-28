@@ -3997,7 +3997,7 @@ it('opens a launch when its feed entry arrives before the POST response', async 
 
   const beforeResponse = () => ({
     formOpen: container.querySelector('.new-session-view') !== null,
-    selectedTitle: readSelectedTitle(),
+    conversationOpen: container.querySelector('.conversation-pane') !== null,
     toasts: Array.from(
       container.querySelectorAll(
         '.async-action-toast-stack .async-action-item',
@@ -4007,7 +4007,7 @@ it('opens a launch when its feed entry arrives before the POST response', async 
   })
   expect(beforeResponse()).toEqual({
     formOpen: true,
-    selectedTitle: null,
+    conversationOpen: false,
     toasts: [],
   })
 
@@ -4018,6 +4018,7 @@ it('opens a launch when its feed entry arrives before the POST response', async 
   })
   const afterResponse = () => ({
     formOpen: container.querySelector('.new-session-view') !== null,
+    conversationOpen: container.querySelector('.conversation-pane') !== null,
     selectedTitle: readSelectedTitle(),
     toasts: Array.from(
       container.querySelectorAll(
@@ -4028,6 +4029,7 @@ it('opens a launch when its feed entry arrives before the POST response', async 
   })
   expect(afterResponse()).toEqual({
     formOpen: false,
+    conversationOpen: true,
     selectedTitle: 'Created session',
     toasts: [],
   })
@@ -4319,7 +4321,7 @@ it('keeps a launch in Activity when the form closes during the POST', async () =
 
   const snapshot = () => ({
     newSessionFormOpen: container.querySelector('.new-session-view') !== null,
-    selectedTitle: readSelectedTitle(),
+    conversationOpen: container.querySelector('.conversation-pane') !== null,
     toast: Array.from(
       container.querySelectorAll(
         '.async-action-toast-stack .async-action-item',
@@ -4336,9 +4338,9 @@ it('keeps a launch in Activity when the form closes during the POST', async () =
   })
   expect(snapshot()).toEqual({
     newSessionFormOpen: false,
-    selectedTitle: null,
-    toast: ['Session started/Users/example/work/service'],
-    activityRow: 'Session started/Users/example/work/service',
+    conversationOpen: false,
+    toast: ['Session started/Users/example/work/serviceOpen'],
+    activityRow: 'Session started/Users/example/work/serviceOpen',
   })
 })
 
@@ -4403,7 +4405,9 @@ it('resets the form when history back hands a launch to Activity', async () => {
     directory: 'Choose a directory',
     initialMessage: '',
     postCount: 1,
-    toasts: ['Starting session/Users/example/work/service'],
+    toasts: [
+      'Starting sessionKeep this message out of history/Users/example/work/service',
+    ],
   })
 
   await act(async () => {
@@ -4526,7 +4530,7 @@ it('shows a background launch failure and retries the POST', async () => {
   })
   expect(retrySnapshot()).toEqual({
     postCount: 2,
-    toast: ['Session started/Users/example/work/service'],
+    toast: ['Session started/Users/example/work/serviceOpen'],
     activityRow: 'Session started/Users/example/work/serviceOpen',
   })
 })
