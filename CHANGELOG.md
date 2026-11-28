@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1007](https://github.com/fohte/armyknife/compare/v0.1.1006...v0.1.1007) (2026-11-28)
+
+
+### Features
+
+* **agent-watch-web:** allow discarding work ([#2443](https://github.com/fohte/armyknife/issues/2443)) ([f1ab562](https://github.com/fohte/armyknife/commit/f1ab5629517fa21f8e06db5bf501eaceb9a3c87b))
+
 ## [0.1.1006](https://github.com/fohte/armyknife/compare/v0.1.1005...v0.1.1006) (2026-11-28)
 
 
