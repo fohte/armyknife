@@ -183,6 +183,10 @@ pub(in crate::commands::agent::watch_web::messages) fn cards_from_sources(
                 added_folded: todo.added_folded,
                 completed: todo.completed_at.is_some(),
                 resolution: todo.resolution,
+                session_ended_at: super::super::session_ended_at(
+                    todo.withdrawal_reason,
+                    todo.completed_at.as_ref(),
+                ),
                 comment: todo.comment.clone(),
             },
         )
@@ -218,7 +222,7 @@ mod tests {
 
     use super::*;
     use crate::commands::agent::proposal::{ProposalAnswer, ProposalOption};
-    use crate::commands::agent::store::{PermissionRequestData, TodoResolution};
+    use crate::commands::agent::store::{PermissionRequestData, TodoResolution, WithdrawalReason};
     use crate::commands::agent::watch_web::messages::parser::claude::{
         ParserAdditions, parse_with_queued_prompts_and_peer_out_messages_and_proposals,
     };
@@ -228,6 +232,58 @@ mod tests {
         DateTime::parse_from_rfc3339(value)
             .expect("test timestamp should parse")
             .with_timezone(&Utc)
+    }
+
+    #[rstest::rstest]
+    #[case::session_ended(
+        Some(WithdrawalReason::SessionEnded),
+        Some(TodoResolution::Withdrawn),
+        Some("2026-06-01T12:06:00+00:00")
+    )]
+    #[case::worktree_cleanup(
+        Some(WithdrawalReason::WorktreeCleanup),
+        Some(TodoResolution::Withdrawn),
+        None
+    )]
+    #[case::manual(Some(WithdrawalReason::Manual), Some(TodoResolution::Withdrawn), None)]
+    #[case::legacy_null(None, Some(TodoResolution::Withdrawn), None)]
+    #[case::completed(None, Some(TodoResolution::Completed), None)]
+    fn todo_chat_item_shows_session_end_time_only_for_session_end_withdrawals(
+        #[case] withdrawal_reason: Option<WithdrawalReason>,
+        #[case] resolution: Option<TodoResolution>,
+        #[case] expected_session_ended_at: Option<&str>,
+    ) {
+        let now = timestamp("2026-06-01T12:06:00Z");
+        let todo = AgentTodo {
+            session_id: "fixture-session".to_string(),
+            seq: 1,
+            title: "Task".to_string(),
+            detail: None,
+            folded: false,
+            added_folded: false,
+            created_at: timestamp("2026-06-01T12:01:00Z"),
+            completed_at: Some(now),
+            resolution,
+            withdrawal_reason,
+            comment: None,
+        };
+
+        let actual = cards_from_sources(&[], &[todo], &[], &[]).remove(0).item;
+
+        assert_eq!(
+            actual,
+            ChatItem::Todo {
+                seq: 1,
+                title: "Task".to_string(),
+                detail: None,
+                folded: false,
+                added_folded: false,
+                completed: true,
+                resolution,
+                session_ended_at: expected_session_ended_at.map(str::to_string),
+                comment: None,
+            },
+        );
     }
 
     #[test]
@@ -407,6 +463,7 @@ mod tests {
                     }),
                     resolved: true,
                     resolution: None,
+                    session_ended_at: None,
                     comment: None,
                 },
             },
@@ -428,6 +485,7 @@ mod tests {
                     answer: None,
                     resolved: false,
                     resolution: None,
+                    session_ended_at: None,
                     comment: None,
                 },
             },
@@ -449,6 +507,7 @@ mod tests {
                     answer: None,
                     resolved: false,
                     resolution: None,
+                    session_ended_at: None,
                     comment: None,
                 },
             },
@@ -464,6 +523,7 @@ mod tests {
                 created_at: timestamp("2026-06-01T11:59:00Z"),
                 completed_at: Some(timestamp("2026-06-01T12:03:00Z")),
                 resolution: Some(TodoResolution::Completed),
+                withdrawal_reason: None,
                 comment: None,
             },
             AgentTodo {
@@ -476,6 +536,7 @@ mod tests {
                 created_at: timestamp("2026-06-01T12:00:20Z"),
                 completed_at: None,
                 resolution: None,
+                withdrawal_reason: None,
                 comment: None,
             },
         ];
@@ -588,6 +649,7 @@ mod tests {
                 added_folded: false,
                 completed: true,
                 resolution: Some(TodoResolution::Completed),
+                session_ended_at: None,
                 comment: None,
             },
             ChatItem::Peer {
@@ -613,6 +675,7 @@ mod tests {
                 added_folded: true,
                 completed: false,
                 resolution: None,
+                session_ended_at: None,
                 comment: None,
             },
             proposals[2].item.clone(),

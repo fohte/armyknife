@@ -85,6 +85,7 @@ fn cleanup_sessions_in_path_with_policy(
                     &sessions_dir,
                     session_id,
                     "Withdrawn during worktree cleanup.",
+                    store::WithdrawalReason::WorktreeCleanup,
                 ),
                 Err(error) => PendingCardCleanup::failed(error),
             },
@@ -321,17 +322,19 @@ fn withdraw_pending_todos(
     sessions_dir: &Path,
     session_id: &str,
     comment: &str,
+    reason: store::WithdrawalReason,
 ) -> anyhow::Result<()> {
     let todos = store::agent_todos_from(sessions_dir, session_id)?;
     let mut errors = Vec::new();
 
     for todo in todos.into_iter().filter(|todo| todo.resolution.is_none()) {
-        if let Err(error) = store::resolve_agent_todo_from(
+        if let Err(error) = store::resolve_agent_todo_from_with_reason(
             sessions_dir,
             session_id,
             todo.seq,
             store::TodoResolution::Withdrawn,
             Some(comment),
+            reason,
         ) {
             errors.push(format!("todo {}: {error:#}", todo.seq));
         }
@@ -348,6 +351,7 @@ fn withdraw_pending_proposals(
     sessions_dir: &Path,
     session_id: &str,
     comment: &str,
+    reason: store::WithdrawalReason,
 ) -> anyhow::Result<()> {
     let proposals = store::agent_proposals_from(sessions_dir, session_id)?;
     let mut errors = Vec::new();
@@ -359,11 +363,12 @@ fn withdraw_pending_proposals(
         let result = (|| {
             let _lock =
                 store::lock_agent_proposal_resolution_from(sessions_dir, session_id, proposal.seq)?;
-            store::resolve_agent_proposal_from(
+            store::resolve_agent_proposal_from_with_reason(
                 sessions_dir,
                 session_id,
                 proposal.seq,
                 Some(comment),
+                reason,
             )?;
             anyhow::Ok(())
         })();
@@ -384,13 +389,14 @@ fn withdraw_pending_cards(
     sessions_dir: &Path,
     session_id: &str,
     comment: &str,
+    reason: store::WithdrawalReason,
 ) -> PendingCardCleanup {
     let todo_resolution_lock = match store::lock_agent_todo_resolution(sessions_dir, session_id) {
         Ok(lock) => lock,
         Err(error) => return PendingCardCleanup::failed(error),
     };
-    let todo_result = withdraw_pending_todos(sessions_dir, session_id, comment);
-    let proposal_result = withdraw_pending_proposals(sessions_dir, session_id, comment);
+    let todo_result = withdraw_pending_todos(sessions_dir, session_id, comment, reason);
+    let proposal_result = withdraw_pending_proposals(sessions_dir, session_id, comment, reason);
     let errors = [todo_result.err(), proposal_result.err()]
         .into_iter()
         .flatten()
@@ -412,6 +418,7 @@ pub(crate) fn withdraw_ended_session_cards(sessions_dir: &Path, session_id: &str
         sessions_dir,
         session_id,
         "Withdrawn because the session ended.",
+        store::WithdrawalReason::SessionEnded,
     );
     let PendingCardCleanup { error, .. } = cleanup;
 
@@ -582,6 +589,7 @@ mod tests {
                     sessions_dir.path(),
                     session_id,
                     "Withdrawn during worktree cleanup.",
+                    store::WithdrawalReason::WorktreeCleanup,
                 )
             },
             |_| Ok(()),
@@ -597,7 +605,14 @@ mod tests {
             (
                 todos
                     .iter()
-                    .map(|todo| (todo.seq, todo.resolution, todo.comment.as_deref()))
+                    .map(|todo| {
+                        (
+                            todo.seq,
+                            todo.resolution,
+                            todo.withdrawal_reason,
+                            todo.comment.as_deref(),
+                        )
+                    })
                     .collect::<Vec<_>>(),
                 proposals
                     .iter()
@@ -606,6 +621,7 @@ mod tests {
                             proposal.seq,
                             proposal.resolution,
                             proposal.resolved_at.is_some(),
+                            proposal.withdrawal_reason,
                             proposal.comment.as_deref(),
                         )
                     })
@@ -617,19 +633,21 @@ mod tests {
             ),
             (
                 vec![
-                    (1, Some(store::TodoResolution::Completed), None),
+                    (1, Some(store::TodoResolution::Completed), None, None),
                     (
                         2,
                         Some(store::TodoResolution::Withdrawn),
+                        Some(store::WithdrawalReason::WorktreeCleanup),
                         Some("Withdrawn during worktree cleanup."),
                     ),
                 ],
                 vec![
-                    (1, None, true, None),
+                    (1, None, true, None, None),
                     (
                         2,
                         Some(store::ProposalResolution::Withdrawn),
                         true,
+                        Some(store::WithdrawalReason::WorktreeCleanup),
                         Some("Withdrawn during worktree cleanup."),
                     ),
                 ],

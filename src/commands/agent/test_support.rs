@@ -7,11 +7,17 @@ use rstest::fixture;
 use super::types::{Engine, Session, SessionStatus};
 
 pub(super) type AgentCardState = (
-    Vec<(i64, Option<super::store::TodoResolution>, Option<String>)>,
+    Vec<(
+        i64,
+        Option<super::store::TodoResolution>,
+        Option<super::store::WithdrawalReason>,
+        Option<String>,
+    )>,
     Vec<(
         i64,
         Option<super::store::ProposalResolution>,
         bool,
+        Option<super::store::WithdrawalReason>,
         Option<String>,
     )>,
 );
@@ -25,7 +31,14 @@ pub(super) fn agent_card_state(
     Ok((
         todos
             .into_iter()
-            .map(|todo| (todo.seq, todo.resolution, todo.comment))
+            .map(|todo| {
+                (
+                    todo.seq,
+                    todo.resolution,
+                    todo.withdrawal_reason,
+                    todo.comment,
+                )
+            })
             .collect(),
         proposals
             .into_iter()
@@ -34,6 +47,7 @@ pub(super) fn agent_card_state(
                     proposal.seq,
                     proposal.resolution,
                     proposal.resolved_at.is_some(),
+                    proposal.withdrawal_reason,
                     proposal.comment,
                 )
             })

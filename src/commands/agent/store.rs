@@ -24,6 +24,7 @@ mod usage;
 pub(crate) use archive::{ArchiveLogContext, archive_codex_thread_before_delete_with};
 pub(crate) use database::AgentFile;
 pub(crate) use database::ProposalResolution;
+pub(crate) use database::WithdrawalReason;
 pub(crate) use database::check_unreported_stop;
 pub(crate) use database::set_watch_web_compacting;
 pub(crate) use database::{
@@ -712,6 +713,7 @@ pub(crate) fn write_agent_proposal_answer_at_from(
     database::write_agent_proposal_answer_at(sessions_dir, session_id, seq, answer, resolved_at)
 }
 
+#[cfg(test)]
 pub(crate) fn resolve_agent_proposal_from(
     sessions_dir: &Path,
     session_id: &str,
@@ -719,6 +721,23 @@ pub(crate) fn resolve_agent_proposal_from(
     comment: Option<&str>,
 ) -> Result<bool> {
     database::resolve_agent_proposal(sessions_dir, session_id, seq, comment)
+}
+
+pub(crate) fn resolve_agent_proposal_from_with_reason(
+    sessions_dir: &Path,
+    session_id: &str,
+    seq: i64,
+    comment: Option<&str>,
+    withdrawal_reason: WithdrawalReason,
+) -> Result<bool> {
+    database::resolve_agent_proposal_with_reason(
+        sessions_dir,
+        session_id,
+        seq,
+        comment,
+        Some(withdrawal_reason),
+        Utc::now(),
+    )
 }
 
 pub(crate) fn lock_agent_proposal_resolution_from(
@@ -794,6 +813,7 @@ pub(crate) fn set_agent_todo_folded(session_id: &str, seq: i64, folded: bool) ->
     set_agent_todo_folded_from(&sessions_dir()?, session_id, seq, folded)
 }
 
+#[cfg(test)]
 pub(crate) fn resolve_agent_todo_from(
     sessions_dir: &Path,
     session_id: &str,
@@ -802,6 +822,25 @@ pub(crate) fn resolve_agent_todo_from(
     comment: Option<&str>,
 ) -> Result<bool> {
     database::resolve_agent_todo(sessions_dir, session_id, seq, resolution, comment)
+}
+
+pub(crate) fn resolve_agent_todo_from_with_reason(
+    sessions_dir: &Path,
+    session_id: &str,
+    seq: i64,
+    resolution: TodoResolution,
+    comment: Option<&str>,
+    withdrawal_reason: WithdrawalReason,
+) -> Result<bool> {
+    database::resolve_agent_todo_at_with_reason(
+        sessions_dir,
+        session_id,
+        seq,
+        resolution,
+        comment,
+        Some(withdrawal_reason),
+        Utc::now(),
+    )
 }
 
 pub(crate) fn lock_agent_todo_resolution(

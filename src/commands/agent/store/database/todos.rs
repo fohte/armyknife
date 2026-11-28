@@ -1,6 +1,7 @@
 use std::fs::File;
 use std::path::Path;
 
+use super::WithdrawalReason;
 use super::resolution_lock::lock_resolution_file;
 use super::{bump_session_revision, open_connection, validate_session_id};
 use anyhow::{Context, Result, ensure};
@@ -19,6 +20,7 @@ pub(crate) struct AgentTodo {
     pub(crate) created_at: DateTime<Utc>,
     pub(crate) completed_at: Option<DateTime<Utc>>,
     pub(crate) resolution: Option<TodoResolution>,
+    pub(crate) withdrawal_reason: Option<WithdrawalReason>,
     pub(crate) comment: Option<String>,
 }
 
@@ -133,7 +135,7 @@ pub(crate) fn agent_todos(sessions_dir: &Path, session_id: &str) -> Result<Vec<A
 
     let connection = open_connection(sessions_dir)?;
     let mut statement = connection.prepare(
-        "SELECT session_id, seq, title, detail, folded, added_folded, created_at, completed_at, resolution, comment
+        "SELECT session_id, seq, title, detail, folded, added_folded, created_at, completed_at, resolution, withdrawal_reason, comment
          FROM agent_todo WHERE session_id = ?1 ORDER BY seq",
     )?;
     let rows = statement.query_map([session_id], |row| {
@@ -148,6 +150,7 @@ pub(crate) fn agent_todos(sessions_dir: &Path, session_id: &str) -> Result<Vec<A
             row.get::<_, Option<String>>(7)?,
             row.get::<_, Option<String>>(8)?,
             row.get::<_, Option<String>>(9)?,
+            row.get::<_, Option<String>>(10)?,
         ))
     })?;
     rows.map(|row| {
@@ -161,6 +164,7 @@ pub(crate) fn agent_todos(sessions_dir: &Path, session_id: &str) -> Result<Vec<A
             created_at,
             completed_at,
             resolution,
+            withdrawal_reason,
             comment,
         ) = row?;
         let resolution = TodoResolution::parse(resolution, completed_at.as_deref())?;
@@ -182,6 +186,7 @@ pub(crate) fn agent_todos(sessions_dir: &Path, session_id: &str) -> Result<Vec<A
                 })
                 .transpose()?,
             resolution,
+            withdrawal_reason: WithdrawalReason::parse(withdrawal_reason),
             comment,
         })
     })
@@ -240,6 +245,7 @@ pub(crate) fn set_agent_todo_folded(
     Ok(pending)
 }
 
+#[cfg(test)]
 pub(crate) fn resolve_agent_todo(
     sessions_dir: &Path,
     session_id: &str,
@@ -265,16 +271,37 @@ pub(crate) fn resolve_agent_todo_at(
     comment: Option<&str>,
     completed_at: DateTime<Utc>,
 ) -> Result<bool> {
+    resolve_agent_todo_at_with_reason(
+        sessions_dir,
+        session_id,
+        seq,
+        resolution,
+        comment,
+        None,
+        completed_at,
+    )
+}
+
+pub(crate) fn resolve_agent_todo_at_with_reason(
+    sessions_dir: &Path,
+    session_id: &str,
+    seq: i64,
+    resolution: TodoResolution,
+    comment: Option<&str>,
+    withdrawal_reason: Option<WithdrawalReason>,
+    completed_at: DateTime<Utc>,
+) -> Result<bool> {
     validate_session_id(session_id)?;
     let mut connection = open_connection(sessions_dir)?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let changed = transaction.execute(
-        "UPDATE agent_todo SET completed_at = ?1, resolution = ?2, comment = ?3
-         WHERE session_id = ?4 AND seq = ?5 AND completed_at IS NULL",
+        "UPDATE agent_todo SET completed_at = ?1, resolution = ?2, comment = ?3, withdrawal_reason = ?4
+         WHERE session_id = ?5 AND seq = ?6 AND completed_at IS NULL",
         params![
             completed_at.to_rfc3339(),
             resolution.as_str(),
             comment,
+            withdrawal_reason.map(WithdrawalReason::as_str),
             session_id,
             seq
         ],
@@ -296,10 +323,11 @@ mod tests {
     use rstest::{fixture, rstest};
     use tempfile::TempDir;
 
+    use super::super::WithdrawalReason;
     use super::{
         AgentTodo, TodoResolution, add_agent_todo, agent_todos, incomplete_agent_todo_titles,
         lock_agent_todo_resolution, open_connection, resolve_agent_todo, resolve_agent_todo_at,
-        set_agent_todo_folded,
+        resolve_agent_todo_at_with_reason, set_agent_todo_folded,
     };
     use crate::commands::agent::store::session_store_revision_from;
 
@@ -316,6 +344,67 @@ mod tests {
                 [session_id],
             )
             .expect("session row should be stored");
+    }
+
+    #[rstest]
+    #[case::session_ended(WithdrawalReason::SessionEnded)]
+    #[case::worktree_cleanup(WithdrawalReason::WorktreeCleanup)]
+    #[case::manual(WithdrawalReason::Manual)]
+    fn todo_withdrawal_persists_its_reason(
+        sessions_dir: TempDir,
+        #[case] reason: WithdrawalReason,
+    ) {
+        create_session(sessions_dir.path(), "session-a");
+        let seq = add_agent_todo(
+            sessions_dir.path(),
+            "session-a",
+            "Task",
+            Some("Details"),
+            false,
+        )
+        .expect("todo should be stored");
+        let resolved_at = Utc
+            .timestamp_opt(100, 0)
+            .single()
+            .expect("time should be valid");
+
+        resolve_agent_todo_at_with_reason(
+            sessions_dir.path(),
+            "session-a",
+            seq,
+            TodoResolution::Withdrawn,
+            Some("Withdrawal note"),
+            Some(reason),
+            resolved_at,
+        )
+        .expect("todo should be withdrawn");
+
+        let mut actual = agent_todos(sessions_dir.path(), "session-a")
+            .expect("todo should load")
+            .remove(0);
+        actual.created_at = Utc
+            .timestamp_opt(0, 0)
+            .single()
+            .expect("epoch should be valid");
+        assert_eq!(
+            actual,
+            AgentTodo {
+                session_id: "session-a".to_string(),
+                seq: 1,
+                title: "Task".to_string(),
+                detail: Some("Details".to_string()),
+                folded: false,
+                added_folded: false,
+                created_at: Utc
+                    .timestamp_opt(0, 0)
+                    .single()
+                    .expect("epoch should be valid"),
+                completed_at: Some(resolved_at),
+                resolution: Some(TodoResolution::Withdrawn),
+                withdrawal_reason: Some(reason),
+                comment: Some("Withdrawal note".to_string()),
+            },
+        );
     }
 
     #[rstest]
@@ -456,6 +545,7 @@ mod tests {
                         created_at: epoch,
                         completed_at: Some(epoch),
                         resolution: Some(TodoResolution::Completed),
+                        withdrawal_reason: None,
                         comment: Some("Done".to_string()),
                     },
                     AgentTodo {
@@ -468,6 +558,7 @@ mod tests {
                         created_at: epoch,
                         completed_at: None,
                         resolution: None,
+                        withdrawal_reason: None,
                         comment: None,
                     },
                 ],
@@ -523,6 +614,7 @@ mod tests {
                 created_at: epoch,
                 completed_at: Some(completed_at),
                 resolution: Some(TodoResolution::Completed),
+                withdrawal_reason: None,
                 comment: None,
             }],
         );
@@ -698,6 +790,7 @@ mod tests {
                     created_at: epoch,
                     completed_at: Some(epoch),
                     resolution: Some(TodoResolution::Completed),
+                    withdrawal_reason: None,
                     comment: Some("Done".to_string()),
                 },
                 AgentTodo {
@@ -710,6 +803,7 @@ mod tests {
                     created_at: epoch,
                     completed_at: None,
                     resolution: None,
+                    withdrawal_reason: None,
                     comment: None,
                 },
             ]

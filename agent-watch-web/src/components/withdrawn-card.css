@@ -12,6 +12,10 @@
   font-weight: 700;
 }
 
+.chat-withdrawn-card-note {
+  font-weight: 400;
+}
+
 .chat-withdrawn-card h3 {
   margin: 0;
   color: var(--aw-text-muted);

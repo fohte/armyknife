@@ -138,6 +138,7 @@ mod tests {
                 }),
                 resolved: true,
                 resolution: Some(ProposalResolution::Withdrawn),
+                session_ended_at: None,
                 comment: Some("proposal withdrawal".to_string()),
             },
             ChatItem::Todo {
@@ -148,6 +149,7 @@ mod tests {
                 added_folded: false,
                 completed: false,
                 resolution: None,
+                session_ended_at: None,
                 comment: Some("todo comment".to_string()),
             },
         ];

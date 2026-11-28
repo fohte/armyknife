@@ -699,6 +699,7 @@ mod tests {
                     .with_timezone(&Utc),
             ),
             resolution: Some(TodoResolution::Completed),
+            withdrawal_reason: None,
             comment: Some("The sample is ready.".to_string()),
         }
     }
@@ -837,6 +838,7 @@ mod tests {
                             added_folded: false,
                             completed: true,
                             resolution: Some(TodoResolution::Completed),
+                            session_ended_at: None,
                             comment: Some("The sample is ready.".to_string()),
                         },
                         ChatItem::User {
@@ -1098,6 +1100,7 @@ mod tests {
                         added_folded: false,
                         completed: true,
                         resolution: Some(TodoResolution::Completed),
+                        session_ended_at: None,
                         comment: Some("The sample is ready.".to_string()),
                     },
                     ChatItem::User {
@@ -1151,6 +1154,7 @@ mod tests {
                         added_folded: false,
                         completed: false,
                         resolution: None,
+                        session_ended_at: None,
                         comment: None,
                     },
                     ChatItem::Todo {
@@ -1161,6 +1165,7 @@ mod tests {
                         added_folded: false,
                         completed: false,
                         resolution: None,
+                        session_ended_at: None,
                         comment: None,
                     },
                 ],

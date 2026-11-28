@@ -27,6 +27,15 @@ function hasValidOptionalTimestamp(value: Record<string, unknown>): boolean {
   )
 }
 
+function hasValidOptionalSessionEndedAt(
+  value: Record<string, unknown>,
+): boolean {
+  return (
+    value['sessionEndedAt'] === undefined ||
+    typeof value['sessionEndedAt'] === 'string'
+  )
+}
+
 function isUserContentPart(value: unknown): boolean {
   if (!isRecord(value) || typeof value['type'] !== 'string') return false
   if (value['type'] === 'text') return typeof value['text'] === 'string'
@@ -195,7 +204,8 @@ function isChatItem(value: unknown): value is ChatItem {
           value['resolution'] === 'completed' ||
           value['resolution'] === 'rejected' ||
           value['resolution'] === 'withdrawn') &&
-        (value['comment'] === null || typeof value['comment'] === 'string')
+        (value['comment'] === null || typeof value['comment'] === 'string') &&
+        hasValidOptionalSessionEndedAt(value)
       )
     case 'tool_summary':
       return (
@@ -257,7 +267,8 @@ function isChatItem(value: unknown): value is ChatItem {
         Array.isArray(value['options']) &&
         value['options'].every(isProposalOption) &&
         (value['answer'] === null || isProposalAnswer(value['answer'])) &&
-        typeof value['resolved'] === 'boolean'
+        typeof value['resolved'] === 'boolean' &&
+        hasValidOptionalSessionEndedAt(value)
       )
     case 'todo':
       return (

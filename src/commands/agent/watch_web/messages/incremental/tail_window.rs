@@ -496,6 +496,7 @@ mod tests {
                     answer: None,
                     resolved: true,
                     resolution: None,
+                    session_ended_at: None,
                     comment: None,
                 },
             },
@@ -514,6 +515,7 @@ mod tests {
                     }),
                     resolved: true,
                     resolution: None,
+                    session_ended_at: None,
                     comment: None,
                 },
             },
@@ -535,6 +537,7 @@ mod tests {
                     answer: None,
                     resolved: false,
                     resolution: None,
+                    session_ended_at: None,
                     comment: None,
                 },
             },
@@ -550,6 +553,7 @@ mod tests {
                 created_at: timestamp("2026-06-01T11:59:58Z"),
                 completed_at: None,
                 resolution: None,
+                withdrawal_reason: None,
                 comment: None,
             },
             AgentTodo {
@@ -562,6 +566,7 @@ mod tests {
                 created_at: timestamp("2026-06-01T11:59:57Z"),
                 completed_at: Some(timestamp("2026-06-01T11:59:59Z")),
                 resolution: Some(TodoResolution::Completed),
+                withdrawal_reason: None,
                 comment: None,
             },
             AgentTodo {
@@ -574,6 +579,7 @@ mod tests {
                 created_at: timestamp("2026-06-01T11:59:56Z"),
                 completed_at: Some(timestamp("2026-06-01T12:00:02Z")),
                 resolution: Some(TodoResolution::Completed),
+                withdrawal_reason: None,
                 comment: None,
             },
         ];
@@ -618,6 +624,7 @@ mod tests {
                             added_folded: false,
                             completed: true,
                             resolution: Some(TodoResolution::Completed),
+                            session_ended_at: None,
                             comment: None,
                         },
                         ChatItem::Assistant {
@@ -632,6 +639,7 @@ mod tests {
                             added_folded: false,
                             completed: false,
                             resolution: None,
+                            session_ended_at: None,
                             comment: None,
                         },
                     ],

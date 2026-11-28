@@ -32,6 +32,7 @@ mod routes;
 mod skill_suggestions;
 mod subagent_reports;
 mod transcript_path;
+mod withdrawal;
 
 pub(super) use self::conversation::conversation_contains_markdown_source;
 #[cfg(test)]
@@ -53,6 +54,7 @@ use self::questions::QuestionChoice;
 use self::questions::{QuestionPrompt, question_item_from_input};
 use self::routes::MessagesRouteState;
 pub(super) use self::routes::{RouteLoaders, routes_with_proposals_and_peer_out_messages};
+use self::withdrawal::session_ended_at;
 
 pub(in crate::commands::agent::watch_web) mod action_event;
 mod cache;
@@ -1718,6 +1720,7 @@ mod tests {
             answer: None,
             resolved_at: None,
             resolution: None,
+            withdrawal_reason: None,
             comment: None,
         }));
         let proposal_loader = Arc::clone(&proposal);
@@ -1855,6 +1858,7 @@ mod tests {
             answer: resolved.then(|| r#"{"choice":0,"comment":"Keep option A."}"#.to_string()),
             resolved_at: resolved.then_some(created_at),
             resolution: None,
+            withdrawal_reason: None,
             comment: None,
         };
 
@@ -1926,6 +1930,7 @@ mod tests {
                 created_at: epoch,
                 completed_at: None,
                 resolution: None,
+                withdrawal_reason: None,
                 comment: None,
             },
             AgentTodo {
@@ -1938,6 +1943,7 @@ mod tests {
                 created_at: epoch,
                 completed_at: Some(epoch),
                 resolution: Some(TodoResolution::Completed),
+                withdrawal_reason: None,
                 comment: Some("Done".to_string()),
             },
         ]));
@@ -3385,6 +3391,7 @@ mod tests {
             answer: None,
             resolved_at: None,
             resolution: None,
+            withdrawal_reason: None,
             comment: None,
         };
         let pending_todo = AgentTodo {
@@ -3397,6 +3404,7 @@ mod tests {
             created_at: old_created_at,
             completed_at: None,
             resolution: None,
+            withdrawal_reason: None,
             comment: None,
         };
         let pending_denial = PermissionDeniedOperation {

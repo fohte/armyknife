@@ -24,7 +24,7 @@ CREATE TRIGGER agent_file_delete_session
         DELETE FROM agent_file WHERE session_id = OLD.session_id;
     END;";
 
-static MIGRATION_ENTRIES: [M<'static>; 35] = [
+static MIGRATION_ENTRIES: [M<'static>; 36] = [
     M::up(
         "CREATE TABLE sessions (
             session_id TEXT PRIMARY KEY,
@@ -340,6 +340,10 @@ static MIGRATION_ENTRIES: [M<'static>; 35] = [
             BEGIN
                 DELETE FROM agent_session_pane_binding_state WHERE session_id = OLD.session_id;
             END;",
+    ),
+    M::up(
+        "ALTER TABLE agent_todo ADD COLUMN withdrawal_reason TEXT;
+         ALTER TABLE agent_proposal ADD COLUMN withdrawal_reason TEXT;",
     ),
 ];
 

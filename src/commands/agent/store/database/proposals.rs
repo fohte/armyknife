@@ -1,6 +1,7 @@
 use std::fs::File;
 use std::path::Path;
 
+use super::WithdrawalReason;
 use super::resolution_lock::lock_resolution_file;
 use super::{bump_session_revision, open_connection, validate_session_id};
 use anyhow::{Context, Result};
@@ -16,6 +17,7 @@ pub(crate) struct AgentProposal {
     pub(crate) answer: Option<String>,
     pub(crate) resolved_at: Option<DateTime<Utc>>,
     pub(crate) resolution: Option<ProposalResolution>,
+    pub(crate) withdrawal_reason: Option<WithdrawalReason>,
     pub(crate) comment: Option<String>,
 }
 
@@ -131,7 +133,7 @@ pub(crate) fn agent_proposals(sessions_dir: &Path, session_id: &str) -> Result<V
 
     let connection = open_connection(sessions_dir)?;
     let mut statement = connection.prepare(
-        "SELECT session_id, seq, body, created_at, answer, resolved_at, resolution, comment
+        "SELECT session_id, seq, body, created_at, answer, resolved_at, resolution, withdrawal_reason, comment
          FROM agent_proposal WHERE session_id = ?1 ORDER BY seq",
     )?;
     let rows = statement.query_map([session_id], |row| {
@@ -144,10 +146,21 @@ pub(crate) fn agent_proposals(sessions_dir: &Path, session_id: &str) -> Result<V
             row.get::<_, Option<String>>(5)?,
             row.get::<_, Option<String>>(6)?,
             row.get::<_, Option<String>>(7)?,
+            row.get::<_, Option<String>>(8)?,
         ))
     })?;
     rows.map(|row| {
-        let (session_id, seq, body, created_at, answer, resolved_at, resolution, comment) = row?;
+        let (
+            session_id,
+            seq,
+            body,
+            created_at,
+            answer,
+            resolved_at,
+            resolution,
+            withdrawal_reason,
+            comment,
+        ) = row?;
         Ok(AgentProposal {
             session_id,
             seq,
@@ -164,29 +177,43 @@ pub(crate) fn agent_proposals(sessions_dir: &Path, session_id: &str) -> Result<V
                 })
                 .transpose()?,
             resolution: ProposalResolution::parse(resolution)?,
+            withdrawal_reason: WithdrawalReason::parse(withdrawal_reason),
             comment,
         })
     })
     .collect()
 }
 
+#[cfg(test)]
 pub(crate) fn resolve_agent_proposal(
     sessions_dir: &Path,
     session_id: &str,
     seq: i64,
     comment: Option<&str>,
 ) -> Result<bool> {
+    resolve_agent_proposal_with_reason(sessions_dir, session_id, seq, comment, None, Utc::now())
+}
+
+pub(crate) fn resolve_agent_proposal_with_reason(
+    sessions_dir: &Path,
+    session_id: &str,
+    seq: i64,
+    comment: Option<&str>,
+    withdrawal_reason: Option<WithdrawalReason>,
+    resolved_at: DateTime<Utc>,
+) -> Result<bool> {
     validate_session_id(session_id)?;
     let mut connection = open_connection(sessions_dir)?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let changed = transaction.execute(
         "UPDATE agent_proposal
-         SET resolution = ?1, comment = ?2, resolved_at = ?3
-         WHERE session_id = ?4 AND seq = ?5 AND answer IS NULL AND resolved_at IS NULL",
+         SET resolution = ?1, comment = ?2, resolved_at = ?3, withdrawal_reason = ?4
+         WHERE session_id = ?5 AND seq = ?6 AND answer IS NULL AND resolved_at IS NULL",
         params![
             ProposalResolution::Withdrawn.as_str(),
             comment,
-            Utc::now().to_rfc3339(),
+            resolved_at.to_rfc3339(),
+            withdrawal_reason.map(WithdrawalReason::as_str),
             session_id,
             seq
         ],
@@ -227,9 +254,11 @@ mod tests {
     use rusqlite::{Connection, params};
     use tempfile::TempDir;
 
+    use super::super::WithdrawalReason;
     use super::{
         AgentProposal, add_agent_proposal, agent_proposals, lock_agent_proposal_resolution,
-        unanswered_agent_proposal_bodies, write_agent_proposal_answer_at,
+        resolve_agent_proposal_with_reason, unanswered_agent_proposal_bodies,
+        write_agent_proposal_answer_at,
     };
     #[fixture]
     fn sessions_dir() -> TempDir {
@@ -260,6 +289,57 @@ mod tests {
             proposal.resolved_at = proposal.resolved_at.map(|_| epoch);
         });
         proposals
+    }
+
+    #[rstest]
+    #[case::session_ended(WithdrawalReason::SessionEnded)]
+    #[case::worktree_cleanup(WithdrawalReason::WorktreeCleanup)]
+    #[case::manual(WithdrawalReason::Manual)]
+    fn proposal_withdrawal_persists_its_reason(
+        sessions_dir: TempDir,
+        #[case] reason: WithdrawalReason,
+    ) {
+        let seq = add_agent_proposal(sessions_dir.path(), "session-a", "Proposal body")
+            .expect("proposal should be stored");
+        let resolved_at = Utc
+            .timestamp_opt(100, 0)
+            .single()
+            .expect("time should be valid");
+
+        resolve_agent_proposal_with_reason(
+            sessions_dir.path(),
+            "session-a",
+            seq,
+            Some("Withdrawal note"),
+            Some(reason),
+            resolved_at,
+        )
+        .expect("proposal should be withdrawn");
+
+        let mut actual = agent_proposals(sessions_dir.path(), "session-a")
+            .expect("proposal should load")
+            .remove(0);
+        actual.created_at = Utc
+            .timestamp_opt(0, 0)
+            .single()
+            .expect("epoch should be valid");
+        assert_eq!(
+            actual,
+            AgentProposal {
+                session_id: "session-a".to_string(),
+                seq: 1,
+                body: "Proposal body".to_string(),
+                created_at: Utc
+                    .timestamp_opt(0, 0)
+                    .single()
+                    .expect("epoch should be valid"),
+                answer: None,
+                resolved_at: Some(resolved_at),
+                resolution: Some(super::ProposalResolution::Withdrawn),
+                withdrawal_reason: Some(reason),
+                comment: Some("Withdrawal note".to_string()),
+            },
+        );
     }
 
     #[rstest]
@@ -320,6 +400,7 @@ mod tests {
                         answer: None,
                         resolved_at: None,
                         resolution: None,
+                        withdrawal_reason: None,
                         comment: None,
                     },
                     AgentProposal {
@@ -330,6 +411,7 @@ mod tests {
                         answer: None,
                         resolved_at: None,
                         resolution: None,
+                        withdrawal_reason: None,
                         comment: None,
                     },
                 ],

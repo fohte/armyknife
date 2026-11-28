@@ -143,7 +143,13 @@ fn withdraw_proposal(
     let comment = comment.map(str::trim).filter(|comment| !comment.is_empty());
     let _proposal_lock = store::lock_agent_proposal_resolution_from(sessions_dir, session_id, seq)?;
     ensure!(
-        store::resolve_agent_proposal_from(sessions_dir, session_id, seq, comment)?,
+        store::resolve_agent_proposal_from_with_reason(
+            sessions_dir,
+            session_id,
+            seq,
+            comment,
+            store::WithdrawalReason::Manual,
+        )?,
         "proposal is already resolved or does not exist"
     );
     Ok(())

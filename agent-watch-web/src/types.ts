@@ -214,6 +214,7 @@ export type ChatItem =
       answer: ProposalAnswer | null
       resolved: boolean
       resolution: 'withdrawn' | null
+      sessionEndedAt?: string
       comment: string | null
     }
   | {
@@ -225,6 +226,7 @@ export type ChatItem =
       addedFolded?: boolean
       completed: boolean
       resolution: 'completed' | 'rejected' | 'withdrawn' | null
+      sessionEndedAt?: string
       comment: string | null
     }
   | {

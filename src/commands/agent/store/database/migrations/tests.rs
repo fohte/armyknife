@@ -633,6 +633,7 @@ fn adds_todo_resolution_to_master_version_fourteen_database(database_fixture: Da
                     .to_utc(),
             ),
             resolution: Some(super::super::TodoResolution::Completed),
+            withdrawal_reason: None,
             comment: Some("Already handled".to_string()),
         }],
     );
@@ -788,4 +789,105 @@ fn adds_pane_binding_state_to_version_thirty_four_database(database_fixture: Dat
         .expect("pane binding state schema should be queryable");
 
     assert_eq!(actual, (true, true, false, true, current_version()));
+}
+
+#[rstest]
+fn adds_withdrawal_reasons_to_version_thirty_five_database(database_fixture: DatabaseFixture) {
+    let DatabaseFixture {
+        temp_dir,
+        mut connection,
+    } = database_fixture;
+    Migrations::from_slice(&MIGRATION_ENTRIES[..35])
+        .to_latest(&mut connection)
+        .expect("version thirty-five schema should be created");
+    connection
+        .execute(
+            "INSERT INTO sessions (session_id, data, rev) VALUES ('fixture-session-elm', '{}', 0)",
+            [],
+        )
+        .expect("session row should be inserted");
+    connection
+        .execute(
+            indoc! {"
+                INSERT INTO agent_todo (
+                    session_id, seq, title, detail, created_at, completed_at, comment,
+                    folded, added_folded, resolution
+                ) VALUES (
+                    'fixture-session-elm', 1, 'Legacy task', NULL,
+                    '2026-01-01T00:00:00Z', '2026-01-02T00:00:00Z', 'Legacy note',
+                    0, 0, 'withdrawn'
+                )
+            "},
+            [],
+        )
+        .expect("legacy todo should be inserted");
+    connection
+        .execute(
+            indoc! {"
+                INSERT INTO agent_proposal (
+                    session_id, seq, body, created_at, answer, resolved_at, resolution, comment
+                ) VALUES (
+                    'fixture-session-elm', 1, '{\"title\":\"Legacy choice\"}',
+                    '2026-01-01T00:00:00Z', NULL, '2026-01-02T00:00:00Z',
+                    'withdrawn', 'Legacy note'
+                )
+            "},
+            [],
+        )
+        .expect("legacy proposal should be inserted");
+    drop(connection);
+
+    let connection = super::super::open_connection(temp_dir.path())
+        .expect("version thirty-five database should migrate");
+    let actual = (
+        super::super::agent_todos(temp_dir.path(), "fixture-session-elm")
+            .expect("legacy todo should load"),
+        super::super::agent_proposals(temp_dir.path(), "fixture-session-elm")
+            .expect("legacy proposal should load"),
+        connection
+            .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+            .expect("database version should be readable"),
+    );
+    assert_eq!(
+        actual,
+        (
+            vec![super::super::AgentTodo {
+                session_id: "fixture-session-elm".to_string(),
+                seq: 1,
+                title: "Legacy task".to_string(),
+                detail: None,
+                folded: false,
+                added_folded: false,
+                created_at: chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+                    .unwrap()
+                    .to_utc(),
+                completed_at: Some(
+                    chrono::DateTime::parse_from_rfc3339("2026-01-02T00:00:00Z")
+                        .unwrap()
+                        .to_utc(),
+                ),
+                resolution: Some(super::super::TodoResolution::Withdrawn),
+                withdrawal_reason: None,
+                comment: Some("Legacy note".to_string()),
+            }],
+            vec![super::super::AgentProposal {
+                session_id: "fixture-session-elm".to_string(),
+                seq: 1,
+                body: r#"{"title":"Legacy choice"}"#.to_string(),
+                created_at: chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+                    .unwrap()
+                    .to_utc(),
+                answer: None,
+                resolved_at: Some(
+                    chrono::DateTime::parse_from_rfc3339("2026-01-02T00:00:00Z")
+                        .unwrap()
+                        .to_utc(),
+                ),
+                resolution: Some(super::super::ProposalResolution::Withdrawn),
+                withdrawal_reason: None,
+                comment: Some("Legacy note".to_string()),
+            }],
+            current_version(),
+        ),
+    );
 }
