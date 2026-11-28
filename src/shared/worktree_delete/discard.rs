@@ -5,8 +5,8 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::infra::git::cmd::run_git;
-use crate::infra::git::{MergeStatus, get_default_branch_for_repo};
-use crate::shared::worktree;
+use crate::infra::git::{GitRepo, MergeStatus, get_default_branch_for_repo};
+use crate::shared::worktree::{self, get_worktree_branch_checked};
 use crate::shared::worktree_delete::{
     UnmergedWorktreePolicy, WorktreeDeletePlan, check_merge_status, resolve_target,
 };
@@ -124,6 +124,16 @@ pub(crate) async fn prepare_discard(
         UnmergedWorktreePolicy::Reject,
     )
     .await?;
+    let branch_head = capture_merged_branch_head(
+        target.branch_name.as_deref(),
+        merge_status.as_ref(),
+        |branch| {
+            read_branch_head(&target.worktree_path, branch, |path, args| {
+                run_git(path, args).ok()
+            })
+        },
+    )
+    .map_err(|_| DiscardMismatchError)?;
     let commits = inspect_commits_for_discard(
         target.branch_name.as_deref(),
         merge_status.as_ref(),
@@ -149,7 +159,23 @@ pub(crate) async fn prepare_discard(
         merge_status,
         force: false,
         discard: Some(confirmed),
+        discard_branch_head: branch_head,
     })
+}
+
+fn capture_merged_branch_head(
+    branch: Option<&str>,
+    merge_status: Option<&MergeStatus>,
+    read_branch_head: impl FnOnce(&str) -> Option<String>,
+) -> std::result::Result<Option<String>, DiscardVerificationError> {
+    if !matches!(merge_status, Some(MergeStatus::Merged { .. })) {
+        return Ok(None);
+    }
+
+    branch
+        .and_then(read_branch_head)
+        .map(Some)
+        .ok_or(DiscardVerificationError::CommitsUnavailable)
 }
 
 fn inspect_commits_for_discard(
@@ -165,6 +191,10 @@ fn inspect_commits_for_discard(
             commits: Vec::new(),
             unavailable: true,
         },
+        (Some(_), None) => CommitInspection {
+            commits: Vec::new(),
+            unavailable: true,
+        },
         _ => CommitInspection {
             commits: Vec::new(),
             unavailable: false,
@@ -172,14 +202,66 @@ fn inspect_commits_for_discard(
     }
 }
 
-pub(crate) fn verify_before_delete_with(
+struct BeforeDeleteReaders<Branch, Changes, BranchHead, Commits> {
+    branch: Branch,
+    changes: Changes,
+    branch_head: BranchHead,
+    commits: Commits,
+}
+
+pub(crate) fn verify_before_delete(
     confirmed: &ConfirmedDiscard,
     worktree_path: &Path,
     merge_status: Option<&MergeStatus>,
-    read_branch: impl FnOnce() -> Result<Option<String>>,
-    read_changes: impl FnOnce(&Path) -> Result<Vec<worktree::UncommittedChange>>,
-    read_commits: impl FnOnce(&Path, &str) -> CommitInspection,
+    confirmed_branch_head: Option<&str>,
+    main_repo: &GitRepo,
+    worktree_name: &str,
 ) -> Result<()> {
+    let read_branch = || get_worktree_branch_checked(main_repo, worktree_name);
+    let read_branch_head = |path: &Path, branch: &str| {
+        read_branch_head(path, branch, |path, args| run_git(path, args).ok())
+    };
+    let read_commits = |path: &Path, branch: &str| {
+        read_branch_commits(
+            path,
+            branch,
+            || get_default_branch_for_repo(main_repo).ok(),
+            |path, args| run_git(path, args).ok(),
+        )
+    };
+    verify_before_delete_with(
+        confirmed,
+        worktree_path,
+        merge_status,
+        confirmed_branch_head,
+        BeforeDeleteReaders {
+            branch: read_branch,
+            changes: worktree::uncommitted_changes_without_lock,
+            branch_head: read_branch_head,
+            commits: read_commits,
+        },
+    )
+}
+
+fn verify_before_delete_with<Branch, Changes, BranchHead, Commits>(
+    confirmed: &ConfirmedDiscard,
+    worktree_path: &Path,
+    merge_status: Option<&MergeStatus>,
+    confirmed_branch_head: Option<&str>,
+    readers: BeforeDeleteReaders<Branch, Changes, BranchHead, Commits>,
+) -> Result<()>
+where
+    Branch: FnOnce() -> Result<Option<String>>,
+    Changes: FnOnce(&Path) -> Result<Vec<worktree::UncommittedChange>>,
+    BranchHead: FnOnce(&Path, &str) -> Option<String>,
+    Commits: FnOnce(&Path, &str) -> CommitInspection,
+{
+    let BeforeDeleteReaders {
+        branch: read_branch,
+        changes: read_changes,
+        branch_head: read_branch_head,
+        commits: read_commits,
+    } = readers;
     let current_branch =
         read_branch().context("Could not inspect worktree branch before discard")?;
     let changes = read_changes(worktree_path)?;
@@ -188,7 +270,24 @@ pub(crate) fn verify_before_delete_with(
     });
     let observed = observed_discard(worktree_path, current_branch.as_deref(), changes, commits);
     verify(confirmed, &observed).map_err(|_| DiscardMismatchError)?;
+    if let Some(confirmed_head) = confirmed_branch_head {
+        let current_head = current_branch
+            .as_deref()
+            .and_then(|branch| read_branch_head(worktree_path, branch));
+        if current_head.as_deref() != Some(confirmed_head) {
+            return Err(DiscardMismatchError.into());
+        }
+    }
     Ok(())
+}
+
+fn read_branch_head(
+    worktree_path: &Path,
+    branch: &str,
+    run_git: impl FnOnce(&Path, [&str; 2]) -> Option<String>,
+) -> Option<String> {
+    let branch_ref = format!("refs/heads/{branch}");
+    run_git(worktree_path, ["rev-parse", branch_ref.as_str()])
 }
 
 fn observed_discard(
@@ -301,6 +400,11 @@ mod tests {
         }
     }
 
+    #[fixture]
+    fn observed_change_paths() -> Vec<(&'static str, &'static str)> {
+        vec![("M", "src/fictional.rs"), ("??", "notes/fictional.txt")]
+    }
+
     #[rstest]
     #[case::exact_match(VerifyCase::ExactMatch, Ok(()))]
     #[case::fewer_changes(VerifyCase::FewerChanges, Ok(()))]
@@ -372,45 +476,209 @@ mod tests {
     }
 
     #[rstest]
-    #[case::merged(MergeStatus::Merged { reason: "fictional merge".to_string() }, false)]
-    #[case::not_merged(MergeStatus::NotMerged { reason: "fictional open pull request".to_string() }, true)]
+    #[case::merged(
+        MergeStatus::Merged { reason: "fictional merge".to_string() },
+        Some("sha-head"),
+        false
+    )]
+    #[case::not_merged(
+        MergeStatus::NotMerged { reason: "fictional open pull request".to_string() },
+        None,
+        true
+    )]
     fn before_delete_reads_commits_only_for_unmerged_branches(
         confirmed: ConfirmedDiscard,
+        observed_change_paths: Vec<(&'static str, &'static str)>,
         #[case] merge_status: MergeStatus,
+        #[case] confirmed_branch_head: Option<&str>,
         #[case] expected_commits_read: bool,
     ) {
         let merge_status = Some(merge_status);
         let commits_read = std::cell::Cell::new(false);
+        let branch_head_read = std::cell::Cell::new(false);
+        let read_branch = || Ok(Some("feature/fictional".to_string()));
+        let read_changes = move |_: &Path| Ok(uncommitted_changes(&observed_change_paths));
+        let read_branch_head = |_: &Path, _: &str| {
+            branch_head_read.set(true);
+            Some("sha-head".to_string())
+        };
+        let read_commits = |_: &Path, _: &str| {
+            commits_read.set(true);
+            CommitInspection {
+                commits: vec![commit("sha-a", "preserve fictional work")],
+                unavailable: false,
+            }
+        };
         let result = verify_before_delete_with(
             &confirmed,
             Path::new("/fictional/worktree"),
             merge_status.as_ref(),
-            || Ok(Some("feature/fictional".to_string())),
-            |_| {
-                Ok(vec![
-                    worktree::UncommittedChange {
-                        status: "M".to_string(),
-                        path: "src/fictional.rs".to_string(),
-                    },
-                    worktree::UncommittedChange {
-                        status: "??".to_string(),
-                        path: "notes/fictional.txt".to_string(),
-                    },
-                ])
-            },
-            |_, _| {
-                commits_read.set(true);
-                CommitInspection {
-                    commits: vec![commit("sha-a", "preserve fictional work")],
-                    unavailable: false,
-                }
+            confirmed_branch_head,
+            BeforeDeleteReaders {
+                branch: read_branch,
+                changes: read_changes,
+                branch_head: read_branch_head,
+                commits: read_commits,
             },
         )
         .map_err(|error| error.to_string());
 
         assert_eq!(
-            (result, commits_read.get()),
-            (Ok(()), expected_commits_read)
+            (result, commits_read.get(), branch_head_read.get(),),
+            (
+                Ok(()),
+                expected_commits_read,
+                confirmed_branch_head.is_some(),
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::same_head("sha-head", Ok(()))]
+    #[case::new_commit_after_preparation(
+        "sha-new",
+        Err("Worktree changed since discard confirmation; review the current close checks and retry".to_string())
+    )]
+    fn rejects_a_changed_merged_branch_head(
+        confirmed: ConfirmedDiscard,
+        observed_change_paths: Vec<(&'static str, &'static str)>,
+        #[case] current_head: &str,
+        #[case] expected: std::result::Result<(), String>,
+    ) {
+        let merge_status = MergeStatus::Merged {
+            reason: "fictional merge".to_string(),
+        };
+        let commits_read = std::cell::Cell::new(false);
+        let read_branch = || Ok(Some("feature/fictional".to_string()));
+        let read_changes = move |_: &Path| Ok(uncommitted_changes(&observed_change_paths));
+        let read_branch_head = |_: &Path, _: &str| Some(current_head.to_string());
+        let read_commits = |_: &Path, _: &str| {
+            commits_read.set(true);
+            CommitInspection {
+                commits: vec![commit("sha-a", "preserve fictional work")],
+                unavailable: false,
+            }
+        };
+        let result = verify_before_delete_with(
+            &confirmed,
+            Path::new("/fictional/worktree"),
+            Some(&merge_status),
+            Some("sha-head"),
+            BeforeDeleteReaders {
+                branch: read_branch,
+                changes: read_changes,
+                branch_head: read_branch_head,
+                commits: read_commits,
+            },
+        )
+        .map_err(|error| error.to_string());
+
+        assert_eq!((result, commits_read.get()), (expected, false));
+    }
+
+    #[rstest]
+    #[case::merged(
+        Some(MergeStatus::Merged { reason: "fictional merge".to_string() }),
+        Some("sha-head"),
+        true
+    )]
+    #[case::not_merged(
+        Some(MergeStatus::NotMerged { reason: "fictional open pull request".to_string() }),
+        None,
+        false
+    )]
+    #[case::merged_head_unavailable(
+        Some(MergeStatus::Merged { reason: "fictional merge".to_string() }),
+        None,
+        true
+    )]
+    fn captures_branch_head_only_for_merged_branches(
+        #[case] merge_status: Option<MergeStatus>,
+        #[case] head: Option<&str>,
+        #[case] expected_read: bool,
+    ) {
+        let head_read = std::cell::Cell::new(false);
+        let result =
+            capture_merged_branch_head(Some("feature/fictional"), merge_status.as_ref(), |_| {
+                head_read.set(true);
+                head.map(str::to_string)
+            });
+        let result = result.map_err(|_| DiscardVerificationError::CommitsUnavailable);
+
+        assert_eq!(
+            (result, head_read.get()),
+            (
+                if expected_read && head.is_none() {
+                    Err(DiscardVerificationError::CommitsUnavailable)
+                } else {
+                    Ok(head.map(str::to_string))
+                },
+                expected_read,
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::merge_status_unavailable(Some("feature/fictional"), None)]
+    #[case::branch_unavailable(None, Some(MergeStatus::Merged { reason: "fictional merge".to_string() }))]
+    fn commit_inspection_is_unavailable_without_a_known_target_or_status(
+        #[case] branch: Option<&str>,
+        #[case] merge_status: Option<MergeStatus>,
+    ) {
+        let git_called = std::cell::Cell::new(false);
+        let inspection = inspect_commits_for_discard(branch, merge_status.as_ref(), |_| {
+            git_called.set(true);
+            CommitInspection {
+                commits: vec![commit("sha-a", "preserve fictional work")],
+                unavailable: false,
+            }
+        });
+
+        assert_eq!(
+            (inspection, git_called.get()),
+            (
+                CommitInspection {
+                    commits: Vec::new(),
+                    unavailable: true,
+                },
+                false,
+            ),
+        );
+    }
+
+    #[rstest]
+    fn before_delete_rejects_an_unconfirmed_change_from_the_reader(
+        confirmed: ConfirmedDiscard,
+        mut observed_change_paths: Vec<(&'static str, &'static str)>,
+    ) {
+        let merge_status = MergeStatus::NotMerged {
+            reason: "fictional open pull request".to_string(),
+        };
+        observed_change_paths.push(("??", "src/new-fictional.txt"));
+        let read_branch = || Ok(Some("feature/fictional".to_string()));
+        let read_changes = move |_: &Path| Ok(uncommitted_changes(&observed_change_paths));
+        let read_branch_head = |_: &Path, _: &str| None;
+        let read_commits = |_: &Path, _: &str| CommitInspection {
+            commits: vec![commit("sha-a", "preserve fictional work")],
+            unavailable: false,
+        };
+        let result = verify_before_delete_with(
+            &confirmed,
+            Path::new("/fictional/worktree"),
+            Some(&merge_status),
+            None,
+            BeforeDeleteReaders {
+                branch: read_branch,
+                changes: read_changes,
+                branch_head: read_branch_head,
+                commits: read_commits,
+            },
+        )
+        .map_err(|error| error.to_string());
+
+        assert_eq!(
+            result,
+            Err("Worktree changed since discard confirmation; review the current close checks and retry".to_string()),
         );
     }
 
@@ -508,5 +776,15 @@ mod tests {
             sha: sha.to_string(),
             subject: subject.to_string(),
         }
+    }
+
+    fn uncommitted_changes(paths: &[(&str, &str)]) -> Vec<worktree::UncommittedChange> {
+        paths
+            .iter()
+            .map(|(status, path)| worktree::UncommittedChange {
+                status: (*status).to_string(),
+                path: (*path).to_string(),
+            })
+            .collect()
     }
 }

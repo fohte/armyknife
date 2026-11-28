@@ -195,27 +195,29 @@ impl CloseChecks {
             Some(branch) => inspect_merge_status(branch).await,
             None => None,
         };
-        let commit_inspection = match (merge_status.as_ref(), branch.as_ref()) {
-            (Some(status), _)
-                if matches!(
-                    &status.status,
-                    crate::infra::git::MergeStatus::NotMerged { .. }
-                        | crate::infra::git::MergeStatus::Closed { .. }
-                ) =>
-            {
-                let branch = status.branch.clone();
-                tokio::task::spawn_blocking(move || inspect_commits(branch))
-                    .await
-                    .unwrap_or(CommitInspection {
-                        commits: Vec::new(),
-                        unavailable: true,
-                    })
-            }
-            (None, Some(_)) => CommitInspection {
+        let commit_inspection = match merge_status.as_ref() {
+            Some(status) => match &status.status {
+                crate::infra::git::MergeStatus::NotMerged { .. }
+                | crate::infra::git::MergeStatus::Closed { .. } => {
+                    let branch = status.branch.clone();
+                    tokio::task::spawn_blocking(move || inspect_commits(branch))
+                        .await
+                        .unwrap_or(CommitInspection {
+                            commits: Vec::new(),
+                            unavailable: true,
+                        })
+                }
+                crate::infra::git::MergeStatus::Merged { .. }
+                | crate::infra::git::MergeStatus::NoUniqueCommits { .. } => CommitInspection {
+                    commits: Vec::new(),
+                    unavailable: false,
+                },
+            },
+            None if branch.is_some() => CommitInspection {
                 commits: Vec::new(),
                 unavailable: true,
             },
-            _ => CommitInspection {
+            None => CommitInspection {
                 commits: Vec::new(),
                 unavailable: commit_inspection_required,
             },

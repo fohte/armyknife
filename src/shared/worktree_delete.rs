@@ -10,7 +10,7 @@ use crate::shared::env_var::EnvVars;
 use crate::shared::hooks;
 use crate::shared::merge_notify::notify_delegator_of_merge;
 use crate::shared::worktree::{
-    self, branch_to_worktree_name, ensure_clean_for_deletion, find_worktree_name, get_main_repo,
+    branch_to_worktree_name, ensure_clean_for_deletion, find_worktree_name, get_main_repo,
     get_worktree_branch, get_worktree_branch_checked,
 };
 use crate::shared::worktree_error::WmError;
@@ -22,6 +22,7 @@ pub(crate) struct WorktreeDeletePlan {
     merge_status: Option<MergeStatus>,
     force: bool,
     discard: Option<discard::ConfirmedDiscard>,
+    discard_branch_head: Option<String>,
 }
 
 pub(crate) struct WorktreeDeleteTarget {
@@ -108,6 +109,7 @@ pub(crate) async fn prepare(
         merge_status,
         force,
         discard: None,
+        discard_branch_head: None,
     })
 }
 
@@ -139,6 +141,7 @@ pub(crate) async fn execute(plan: WorktreeDeletePlan, skip_hooks: bool) -> Resul
         merge_status,
         force,
         discard,
+        discard_branch_head,
     } = plan;
     let worktree_path_str = worktree_path.to_string_lossy();
 
@@ -164,10 +167,7 @@ pub(crate) async fn execute(plan: WorktreeDeletePlan, skip_hooks: bool) -> Resul
     );
 
     let discard_confirmed = discard;
-    let before_delete_path = worktree_path.clone();
-    let before_delete_repo = main_repo.clone();
-    let before_delete_worktree_name = worktree_name.clone();
-    let before_delete_merge_status = merge_status.clone();
+    let before_delete_branch_head = discard_branch_head;
 
     let result = cleanup::cleanup_worktree_by_name_with_before_delete(
         &main_repo,
@@ -178,25 +178,13 @@ pub(crate) async fn execute(plan: WorktreeDeletePlan, skip_hooks: bool) -> Resul
         || {
             if let Some(confirmed) = discard_confirmed {
                 // shortcut: Upgrade when deletion can prevent unrelated processes from writing between verification and removal.
-                discard::verify_before_delete_with(
+                discard::verify_before_delete(
                     &confirmed,
-                    &before_delete_path,
-                    before_delete_merge_status.as_ref(),
-                    || {
-                        get_worktree_branch_checked(
-                            &before_delete_repo,
-                            &before_delete_worktree_name,
-                        )
-                    },
-                    worktree::uncommitted_changes_without_lock,
-                    |path, branch| {
-                        discard::read_branch_commits(
-                            path,
-                            branch,
-                            || get_default_branch_for_repo(&before_delete_repo).ok(),
-                            |path, args| crate::infra::git::cmd::run_git(path, args).ok(),
-                        )
-                    },
+                    &worktree_path,
+                    merge_status.as_ref(),
+                    before_delete_branch_head.as_deref(),
+                    &main_repo,
+                    &worktree_name,
                 )?;
             }
             ensure_worktree_delete_plan_before_delete(
