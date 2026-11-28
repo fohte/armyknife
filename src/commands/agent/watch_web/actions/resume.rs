@@ -6,13 +6,15 @@ use std::time::Duration;
 use anyhow::{Result, ensure};
 use axum::Json;
 use axum::extract::{Path as RoutePath, State};
+use chrono::{DateTime, Utc};
 use tokio::sync::Mutex;
 use tokio::time::Instant;
 
 use super::super::super::types::{Session, SessionStatus};
+use super::super::store;
 use super::{
     ActionState, ApiError, Success, load_session, load_session_start_generation,
-    resolve_current_session_id,
+    resolve_current_session_id, resolve_sessions_dir, run_blocking,
 };
 use crate::commands::agent::watch_web::EnrichmentUpdates;
 use crate::infra::tmux::layout::ResumeLayoutSpec;
@@ -21,14 +23,14 @@ use crate::shared::config::LayoutNode;
 const RESUME_START_TIMEOUT: Duration = Duration::from_secs(20);
 
 pub(super) trait EndedSessionHost {
-    fn open_layout(&self, spec: ResumeLayoutSpec<'_>) -> anyhow::Result<()>;
+    fn open_layout(&self, spec: ResumeLayoutSpec<'_>) -> anyhow::Result<Option<String>>;
 }
 
 pub(super) struct TmuxEndedSessionHost;
 
 impl EndedSessionHost for TmuxEndedSessionHost {
-    fn open_layout(&self, spec: ResumeLayoutSpec<'_>) -> anyhow::Result<()> {
-        crate::infra::tmux::layout::build_resume_layout(spec).map(|_| ())
+    fn open_layout(&self, spec: ResumeLayoutSpec<'_>) -> anyhow::Result<Option<String>> {
+        crate::infra::tmux::layout::build_resume_layout(spec)
     }
 }
 
@@ -36,7 +38,7 @@ pub(super) fn resume_ended_session(
     session: &Session,
     layout: &LayoutNode,
     host: &impl EndedSessionHost,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Option<String>> {
     ensure!(
         session.cwd.is_dir(),
         "session working directory does not exist: {}",
@@ -73,9 +75,12 @@ enum ResumeStartupState {
         attempt_id: u64,
         deadline: Instant,
         session_start_generation: i64,
+        started_at: DateTime<Utc>,
     },
     Stuck {
+        attempt_id: u64,
         session_start_generation: i64,
+        started_at: DateTime<Utc>,
     },
 }
 
@@ -88,6 +93,7 @@ impl ResumeStartupState {
             }
             | Self::Stuck {
                 session_start_generation,
+                ..
             } => *session_start_generation,
         }
     }
@@ -140,15 +146,21 @@ impl PendingSessionResumes {
         )
     }
 
-    async fn mark_pending(&self, session_id: String, session_start_generation: i64) {
+    pub(super) async fn mark_pending(
+        &self,
+        session_id: String,
+        session_start_generation: i64,
+    ) -> u64 {
         let attempt_id = self.next_attempt_id.fetch_add(1, Ordering::Relaxed);
         let deadline = Instant::now() + RESUME_START_TIMEOUT;
+        let started_at = Utc::now();
         self.states.lock().await.insert(
             session_id.clone(),
             ResumeStartupState::Pending {
                 attempt_id,
                 deadline,
                 session_start_generation,
+                started_at,
             },
         );
         self.updates.notify();
@@ -156,33 +168,57 @@ impl PendingSessionResumes {
         let resumes = self.clone();
         tokio::spawn(async move {
             tokio::time::sleep_until(deadline).await;
-            if resumes.mark_stuck(&session_id, attempt_id).await {
-                resumes.updates.notify();
-            }
+            resumes.mark_stuck(&session_id, attempt_id).await;
         });
+        attempt_id
     }
 
-    async fn mark_stuck(&self, session_id: &str, attempt_id: u64) -> bool {
+    pub(super) async fn mark_stuck(&self, session_id: &str, attempt_id: u64) {
         let mut states = self.states.lock().await;
         let Some(ResumeStartupState::Pending {
             attempt_id: current_attempt_id,
             session_start_generation,
+            started_at,
             ..
         }) = states.get(session_id).cloned()
         else {
-            return false;
+            return;
         };
         if current_attempt_id != attempt_id {
-            return false;
+            return;
         }
 
         states.insert(
             session_id.to_string(),
             ResumeStartupState::Stuck {
+                attempt_id,
                 session_start_generation,
+                started_at,
             },
         );
-        true
+        drop(states);
+        self.updates.notify();
+    }
+
+    pub(super) async fn clear_pending(&self, session_id: &str, attempt_id: u64) {
+        let mut states = self.states.lock().await;
+        let matches_attempt = matches!(
+            states.get(session_id),
+            Some(
+                ResumeStartupState::Pending {
+                    attempt_id: current_attempt_id,
+                    ..
+                } | ResumeStartupState::Stuck {
+                    attempt_id: current_attempt_id,
+                    ..
+                }
+            ) if *current_attempt_id == attempt_id
+        );
+        if matches_attempt {
+            states.remove(session_id);
+            drop(states);
+            self.updates.notify();
+        }
     }
 
     pub(super) async fn startup_status(
@@ -190,7 +226,7 @@ impl PendingSessionResumes {
         session_id: &str,
         status: SessionStatus,
         session_start_generation: i64,
-    ) -> Option<ResumeStartupStatus> {
+    ) -> Option<(ResumeStartupStatus, DateTime<Utc>)> {
         let mut states = self.states.lock().await;
         let state = states.get(session_id).cloned()?;
         if session_start_generation > state.session_start_generation()
@@ -201,8 +237,12 @@ impl PendingSessionResumes {
         }
 
         match state {
-            ResumeStartupState::Pending { .. } => Some(ResumeStartupStatus::Pending),
-            ResumeStartupState::Stuck { .. } => Some(ResumeStartupStatus::Stuck),
+            ResumeStartupState::Pending { started_at, .. } => {
+                Some((ResumeStartupStatus::Pending, started_at))
+            }
+            ResumeStartupState::Stuck { started_at, .. } => {
+                Some((ResumeStartupStatus::Stuck, started_at))
+            }
         }
     }
 }
@@ -233,7 +273,7 @@ pub(super) async fn resume_session(
     }
 
     let runtime = state.runtime;
-    tokio::task::spawn_blocking(move || {
+    let pane_id = tokio::task::spawn_blocking(move || {
         ensure!(
             session.cwd.is_dir(),
             "session working directory does not exist: {}",
@@ -246,9 +286,39 @@ pub(super) async fn resume_session(
     .map_err(ApiError::operation)?;
     state
         .resume_pending
-        .mark_pending(current_id, session_start_generation)
+        .mark_pending(current_id.clone(), session_start_generation)
         .await;
-
+    if let Some(pane_id) = pane_id {
+        match resolve_sessions_dir(state.sessions_dir.clone()) {
+            Ok(sessions_dir) => {
+                let session_id = current_id.clone();
+                if let Err(error) = run_blocking(move || {
+                    store::update_session_in(&sessions_dir, &session_id, |session| {
+                        let Some(tmux_info) = session.tmux_info.as_mut() else {
+                            return false;
+                        };
+                        tmux_info.pane_id = pane_id;
+                        true
+                    })
+                })
+                .await
+                {
+                    tracing::warn!(
+                        session_id = %current_id,
+                        error = %error.message,
+                        "failed to persist resumed session pane ID"
+                    );
+                }
+            }
+            Err(error) => {
+                tracing::warn!(
+                    session_id = %current_id,
+                    error = %error,
+                    "failed to resolve session storage while persisting resumed pane ID"
+                );
+            }
+        }
+    }
     Ok(Json(Success::new()))
 }
 
@@ -270,7 +340,7 @@ mod tests {
     }
 
     impl EndedSessionHost for FakeEndedSessionHost {
-        fn open_layout(&self, spec: ResumeLayoutSpec<'_>) -> Result<()> {
+        fn open_layout(&self, spec: ResumeLayoutSpec<'_>) -> Result<Option<String>> {
             self.calls.lock().unwrap().push(json!({
                 "kind": "layout",
                 "socketPath": spec.socket_path,
@@ -282,7 +352,7 @@ mod tests {
                 "agentCommand": spec.agent_command,
                 "layout": serde_json::to_value(spec.layout).unwrap(),
             }));
-            Ok(())
+            Ok(Some("%18".to_string()))
         }
     }
 
@@ -314,25 +384,28 @@ mod tests {
         let host = FakeEndedSessionHost::default();
         let layout = LayoutNode::default();
 
-        resume_ended_session(&session, &layout, &host).unwrap();
+        let pane_id = resume_ended_session(&session, &layout, &host).unwrap();
 
         assert_eq!(
-            *host.calls.lock().unwrap(),
-            vec![json!({
-                "kind": "layout",
-                "socketPath": "/fixture/tmux.sock",
-                "sessionName": "fixture-session-window",
-                "agentSessionId": "fixture-session",
-                "cwd": temp_dir.path().display().to_string(),
-                "windowName": "fixture-agent",
-                "engine": "codex",
-                "agentCommand": "a agent resume fixture-session --engine codex --ancestor-session-ids fixture-parent --launched-with-vibe",
-                "layout": {
-                    "direction": "horizontal",
-                    "first": { "command": "nvim", "focus": true },
-                    "second": { "command": "claude", "focus": false },
-                },
-            }),],
+            (pane_id, host.calls.lock().unwrap().clone()),
+            (
+                Some("%18".to_string()),
+                vec![json!({
+                    "kind": "layout",
+                    "socketPath": "/fixture/tmux.sock",
+                    "sessionName": "fixture-session-window",
+                    "agentSessionId": "fixture-session",
+                    "cwd": temp_dir.path().display().to_string(),
+                    "windowName": "fixture-agent",
+                    "engine": "codex",
+                    "agentCommand": "a agent resume fixture-session --engine codex --ancestor-session-ids fixture-parent --launched-with-vibe",
+                    "layout": {
+                        "direction": "horizontal",
+                        "first": { "command": "nvim", "focus": true },
+                        "second": { "command": "claude", "focus": false },
+                    },
+                }),]
+            ),
         );
     }
 

@@ -8,7 +8,7 @@ use anyhow::Result;
 use axum::extract::{DefaultBodyLimit, Path as RoutePath, State};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::super::store;
@@ -175,7 +175,7 @@ struct CommandResult {
 }
 
 trait ActionRuntime: Send + Sync {
-    fn resume_session(&self, session: &Session) -> Result<()>;
+    fn resume_session(&self, session: &Session) -> Result<Option<String>>;
     fn send_message(&self, session: &Session, content: &str) -> Result<()>;
     fn execute_command(&self, cwd: &std::path::Path, command: &str) -> Result<CommandResult>;
     fn rewind_session(
@@ -218,6 +218,8 @@ struct ActionCapabilities {
     #[serde(skip_serializing_if = "Option::is_none")]
     startup: Option<resume::ResumeStartupStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    startup_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     resume_disabled_reason: Option<ResumeDisabledReason>,
     #[serde(skip_serializing_if = "Option::is_none")]
     permission: Option<PermissionCapabilities>,
@@ -246,10 +248,13 @@ async fn actions(
     let current_id = resolve_current_session_id(&state, &id).await?;
     let session = load_session(state.clone(), current_id.clone()).await?;
     let session_start_generation = load_session_start_generation(&state, &current_id).await?;
-    let startup = state
+    let (startup, startup_at) = state
         .resume_pending
         .startup_status(&current_id, session.status, session_start_generation)
-        .await;
+        .await
+        .map_or((None, None), |(status, started_at)| {
+            (Some(status), Some(started_at))
+        });
     let has_tmux = session.tmux_info.is_some();
     let can_resume_by_status =
         matches!(session.status, SessionStatus::Ended | SessionStatus::Paused);
@@ -280,6 +285,7 @@ async fn actions(
             && session.has_pending_permission_requests(),
         resume: can_resume_by_status && resume_disabled_reason.is_none(),
         startup,
+        startup_at,
         resume_disabled_reason,
         permission: (has_live_session
             && matches!(session.engine, Engine::Claude | Engine::Codex)
@@ -629,13 +635,13 @@ mod tests {
     }
 
     impl ActionRuntime for FakeRuntime {
-        fn resume_session(&self, session: &Session) -> Result<()> {
+        fn resume_session(&self, session: &Session) -> Result<Option<String>> {
             self.calls.lock().unwrap().push(json!({
                 "kind": "resume",
                 "sessionId": session.session_id,
                 "status": session.status,
             }));
-            Ok(())
+            Ok((session.status == SessionStatus::Ended).then(|| "%18".to_string()))
         }
 
         fn send_message(&self, session: &Session, content: &str) -> Result<()> {
@@ -1164,6 +1170,13 @@ mod tests {
     }
 
     async fn response_snapshot(response: Response<Body>, context: &ActionContext) -> Value {
+        response_snapshot_with_startup_at(response, context).await.0
+    }
+
+    async fn response_snapshot_with_startup_at(
+        response: Response<Body>,
+        context: &ActionContext,
+    ) -> (Value, Option<String>) {
         let status = response.status().as_u16();
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let mut calls = context.runtime.calls.lock().unwrap().clone();
@@ -1194,14 +1207,27 @@ mod tests {
             }
         }
         let mut body = serde_json::from_slice::<Value>(&body).unwrap_or(Value::Null);
+        let startup_at = body
+            .get("startupAt")
+            .and_then(Value::as_str)
+            .map(|timestamp| {
+                chrono::DateTime::parse_from_rfc3339(timestamp).expect("startupAt uses RFC 3339");
+                timestamp.to_string()
+            });
         if let Some(queued_prompt_id) = body.get_mut("queuedPromptId") {
             *queued_prompt_id = Value::String("<message-id>".to_string());
         }
-        json!({
-            "status": status,
-            "body": body,
-            "calls": calls,
-        })
+        if let Some(startup_at) = body.get_mut("startupAt") {
+            *startup_at = Value::String("<startup-at>".to_string());
+        }
+        (
+            json!({
+                "status": status,
+                "body": body,
+                "calls": calls,
+            }),
+            startup_at,
+        )
     }
 
     fn normalized_queued_prompts(

@@ -4,7 +4,67 @@ use rstest::rstest;
 use serde_json::json;
 use tower::ServiceExt;
 
-use super::{ActionContext, action_context, response_snapshot, session};
+use super::{ActionContext, action_context, post_empty, response_snapshot, session};
+
+#[rstest]
+#[tokio::test]
+async fn pane_endpoint_captures_the_pane_created_by_resuming_an_ended_session(
+    action_context: ActionContext,
+) {
+    let mut session = session("fixture-session");
+    session.status = crate::commands::agent::types::SessionStatus::Ended;
+    action_context.save_session(&session);
+    let snapshot = ["", "", "resumed agent prompt", ""].join("\n");
+    action_context.set_pane_snapshot(&snapshot);
+
+    let app = action_context.router();
+    let resume = app
+        .clone()
+        .oneshot(post_empty("/sessions/fixture-session/resume"))
+        .await
+        .unwrap();
+    let resume = response_snapshot(resume, &action_context).await;
+    let pane = app
+        .oneshot(get("/sessions/fixture-session/pane"))
+        .await
+        .unwrap();
+    let mut pane = response_snapshot(pane, &action_context).await;
+    normalize_captured_at(&mut pane);
+
+    assert_eq!(
+        (resume, pane),
+        (
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": { "ok": true },
+                "calls": [{
+                    "kind": "resume",
+                    "sessionId": "fixture-session",
+                    "status": "ended",
+                }],
+            }),
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": {
+                    "content": snapshot,
+                    "capturedAt": "2000-01-02T03:04:05Z",
+                },
+                "calls": [
+                    {
+                        "kind": "resume",
+                        "sessionId": "fixture-session",
+                        "status": "ended",
+                    },
+                    {
+                        "kind": "pane-snapshot",
+                        "paneId": "%18",
+                        "socketPath": "/tmp/example-tmux.sock",
+                    },
+                ],
+            }),
+        ),
+    );
+}
 
 #[rstest]
 #[tokio::test]
