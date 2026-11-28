@@ -19,6 +19,7 @@ pub struct AdoptArgs {
 }
 
 pub fn run(args: &AdoptArgs) -> Result<()> {
+    store::cleanup_stale_sessions()?;
     let caller_id = current_session_id()?;
     adopt_in(
         &store::sessions_dir()?,
@@ -53,7 +54,7 @@ fn adopt_in(sessions_dir: &Path, caller_id: &str, target_id: &str, force: bool) 
     if !force
         && let Some(parent_id) = target.ancestor_session_ids.last()
         && let Some(parent) = store::load_session_from(sessions_dir, parent_id)?
-        && parent.status != SessionStatus::Ended
+        && parent.is_living()
     {
         return Err(CcError::AdoptRequiresForce {
             session_id: target_id.to_string(),
@@ -290,15 +291,17 @@ mod tests {
         assert_eq!(after, before);
     }
 
-    #[test]
-    fn adopt_requires_force_when_current_parent_is_alive() {
+    #[rstest]
+    #[case::running(SessionStatus::Running)]
+    #[case::paused(SessionStatus::Paused)]
+    fn adopt_requires_force_when_current_parent_is_alive(#[case] parent_status: SessionStatus) {
         let store = session_store();
         seed_caller_and_target(&store, &[], &["old-parent"]);
-        store.save(&session("old-parent", &[], SessionStatus::Running));
+        store.save(&session("old-parent", &[], parent_status));
 
         let error = store
             .adopt("caller", "target", false)
-            .expect_err("a non-ended parent requires force");
+            .expect_err("a living parent requires force");
 
         assert_eq!(
             error.to_string(),
@@ -326,6 +329,24 @@ mod tests {
 
         assert_eq!(
             session_store.load("target").ancestor_session_ids,
+            vec!["root", "caller"]
+        );
+    }
+
+    #[test]
+    fn adopt_does_not_require_force_when_current_parent_is_archived() {
+        let store = session_store();
+        seed_caller_and_target(&store, &["root"], &["old-parent"]);
+        let mut parent = session("old-parent", &[], SessionStatus::Paused);
+        parent.archived_at = Some(Utc::now());
+        store.save(&parent);
+
+        store
+            .adopt("caller", "target", false)
+            .expect("archived parents should not block adoption");
+
+        assert_eq!(
+            store.load("target").ancestor_session_ids,
             vec!["root", "caller"]
         );
     }
