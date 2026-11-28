@@ -1,5 +1,6 @@
 export type ConversationChildLayout = {
   element: HTMLElement
+  cardId: string | null
   top: number
   height: number
   cardResolution: 'pending' | 'resolved' | null
@@ -47,6 +48,7 @@ export function readConversationChildLayout(
       ? [
           {
             element: child,
+            cardId: child.dataset['conversationCardId'] ?? null,
             top: child.getBoundingClientRect().top,
             height: child.getBoundingClientRect().height,
             cardResolution: conversationCardResolution(child),
@@ -106,8 +108,13 @@ export function hasConversationResolutionChanged(
   const currentByElement = new Map(
     current.map((child) => [child.element, child]),
   )
+  const currentByCardId = indexConversationChildrenByCardId(current)
   return previous.some((previousChild) => {
-    const currentChild = currentByElement.get(previousChild.element)
+    const currentChild = findConversationChild(
+      previousChild,
+      currentByElement,
+      currentByCardId,
+    )
     return (
       currentChild !== undefined &&
       previousChild.cardResolution !== null &&
@@ -123,9 +130,14 @@ export function newlyResolvedConversationCards(
   const currentByElement = new Map(
     current.map((child) => [child.element, child]),
   )
+  const currentByCardId = indexConversationChildrenByCardId(current)
   return new Set(
     previous.flatMap((previousChild) => {
-      const currentChild = currentByElement.get(previousChild.element)
+      const currentChild = findConversationChild(
+        previousChild,
+        currentByElement,
+        currentByCardId,
+      )
       return previousChild.cardResolution === 'pending' &&
         currentChild?.cardResolution === 'resolved'
         ? [previousChild.element]
@@ -145,17 +157,22 @@ export function preserveConversationChildPosition(
   const currentByElement = new Map(
     current.map((child) => [child.element, child]),
   )
+  const currentByCardId = indexConversationChildrenByCardId(current)
   const isVisible = ({
     top,
     height,
   }: Pick<ConversationChildLayout, 'top' | 'height'>) =>
     top < bounds.bottom && top + height > bounds.top
-  const visibleChildren = previous.filter(({ element, ...layout }) => {
-    const currentChild = currentByElement.get(element)
+  const visibleChildren = previous.filter((previousChild) => {
+    const currentChild = findConversationChild(
+      previousChild,
+      currentByElement,
+      currentByCardId,
+    )
     if (
       currentChild === undefined ||
-      recentResolutionCards.has(element) ||
-      !isVisible(layout)
+      recentResolutionCards.has(previousChild.element) ||
+      !isVisible(previousChild)
     ) {
       return false
     }
@@ -172,7 +189,7 @@ export function preserveConversationChildPosition(
   const firstCandidateCurrent =
     firstCandidate === undefined
       ? undefined
-      : currentByElement.get(firstCandidate.element)
+      : findConversationChild(firstCandidate, currentByElement, currentByCardId)
   return firstCandidate === undefined || firstCandidateCurrent === undefined
     ? null
     : {
@@ -436,6 +453,7 @@ export function clearOffscreenConversationScrollCompensation(
 function conversationCardResolution(
   element: HTMLElement,
 ): ConversationChildLayout['cardResolution'] {
+  if (element.classList.contains('chat-withdrawn-card')) return 'resolved'
   if (element.classList.contains('chat-proposal-card')) {
     return element.dataset['answerable'] === 'true' ? 'pending' : 'resolved'
   }
@@ -443,6 +461,29 @@ function conversationCardResolution(
     return element.dataset['resolution'] === 'pending' ? 'pending' : 'resolved'
   }
   return null
+}
+
+export function indexConversationChildrenByCardId(
+  children: readonly ConversationChildLayout[],
+) {
+  return new Map(
+    children.flatMap((child) =>
+      child.cardId === null ? [] : [[child.cardId, child] as const],
+    ),
+  )
+}
+
+export function findConversationChild(
+  previous: ConversationChildLayout,
+  currentByElement: ReadonlyMap<HTMLElement, ConversationChildLayout>,
+  currentByCardId: ReadonlyMap<string, ConversationChildLayout>,
+): ConversationChildLayout | undefined {
+  return (
+    currentByElement.get(previous.element) ??
+    (previous.cardId === null
+      ? undefined
+      : currentByCardId.get(previous.cardId))
+  )
 }
 
 function isPendingConversationCard(element: HTMLElement): boolean {

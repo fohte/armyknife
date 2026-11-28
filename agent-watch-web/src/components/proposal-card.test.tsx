@@ -1122,6 +1122,10 @@ it('shows only the heading and title for a withdrawn proposal', () => {
       container.querySelectorAll('h2, h3'),
       (heading) => heading.textContent,
     ),
+    children: Array.from(
+      container.querySelector('article')?.children ?? [],
+      (child) => child.tagName,
+    ),
     options: container.querySelectorAll('.chat-proposal-option').length,
     comment:
       container.querySelector('.chat-proposal-comment')?.textContent ?? null,
@@ -1129,6 +1133,7 @@ it('shows only the heading and title for a withdrawn proposal', () => {
   expect(snapshot()).toEqual({
     label: 'Proposal, withdrawn',
     headings: ['Proposal · withdrawn', title],
+    children: ['H2', 'H3'],
     options: 0,
     comment: null,
   })

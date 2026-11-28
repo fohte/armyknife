@@ -51,6 +51,7 @@ export function ProposalCard({
   onAnswer,
 }: ProposalCardProps) {
   const [draftSessionId] = useState(() => sessionId ?? crypto.randomUUID())
+  const conversationCardId = JSON.stringify([draftSessionId, 'proposal', seq])
   const proposalFieldId = `proposal-${useId()}`
   const attachmentState = useAttachments(
     `${sessionId ?? 'proposal'}:proposal:${String(seq)}`,
@@ -209,7 +210,13 @@ export function ProposalCard({
   ])
 
   if (isWithdrawn) {
-    return <WithdrawnCard kind="Proposal" title={title} />
+    return (
+      <WithdrawnCard
+        kind="Proposal"
+        title={title}
+        cardId={conversationCardId}
+      />
+    )
   }
 
   const status =
@@ -228,6 +235,7 @@ export function ProposalCard({
       aria-busy={isSubmitting || attachmentState.isProcessingAttachments}
       data-mobile={isMobile ? 'true' : undefined}
       data-answerable={isDisabled ? undefined : 'true'}
+      data-conversation-card-id={conversationCardId}
       ref={cardRef}
     >
       <h2>Proposal · {status}</h2>

@@ -5,8 +5,10 @@ import {
   clearOffscreenConversationScrollCompensation,
   type ConversationAnchorSpacing,
   type ConversationChildLayout,
+  findConversationChild,
   hasConversationChildrenInsertedBeforePendingCards,
   hasConversationResolutionChanged,
+  indexConversationChildrenByCardId,
   isConversationAtBottom,
   movedConversationChildren,
   newlyResolvedConversationCards,
@@ -157,9 +159,15 @@ export function useConversationScroll({
     const currentChildrenByElement = new Map(
       currentChildLayout.map((child) => [child.element, child]),
     )
+    const currentChildrenByCardId =
+      indexConversationChildrenByCardId(currentChildLayout)
     const becamePendingCards = new Set(
       previousChildLayout.flatMap((previousChild) => {
-        const currentChild = currentChildrenByElement.get(previousChild.element)
+        const currentChild = findConversationChild(
+          previousChild,
+          currentChildrenByElement,
+          currentChildrenByCardId,
+        )
         return previousChild.cardResolution === 'resolved' &&
           currentChild?.cardResolution === 'pending'
           ? [previousChild.element]

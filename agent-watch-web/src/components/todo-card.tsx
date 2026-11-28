@@ -47,6 +47,7 @@ export function TodoCard({
   onFold,
 }: TodoCardProps) {
   const [draftSessionId] = useState(() => sessionId ?? crypto.randomUUID())
+  const conversationCardId = JSON.stringify([draftSessionId, 'todo', seq])
   const commentId = useId()
   const attachmentState = useAttachments(
     `${sessionId ?? 'todo'}:todo:${String(seq)}`,
@@ -76,7 +77,9 @@ export function TodoCard({
     true,
   )
   if (resolution === 'withdrawn') {
-    return <WithdrawnCard kind="To-do" title={title} />
+    return (
+      <WithdrawnCard kind="To-do" title={title} cardId={conversationCardId} />
+    )
   }
 
   const currentResolution = resolution ?? resolutionLocally
@@ -145,6 +148,7 @@ export function TodoCard({
         className="chat-todo-card"
         aria-label={ariaLabel}
         data-resolution={currentResolution}
+        data-conversation-card-id={conversationCardId}
       >
         <h2>To-do · {status}</h2>
         <h3>{title}</h3>

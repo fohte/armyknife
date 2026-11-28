@@ -853,6 +853,10 @@ it('shows only the heading and title for a withdrawn task with a saved comment',
       container.querySelectorAll('h2, h3'),
       (heading) => heading.textContent,
     ),
+    children: Array.from(
+      container.querySelector('article')?.children ?? [],
+      (child) => child.tagName,
+    ),
     comment: container.querySelector('.chat-todo-completed-comment')
       ?.textContent,
     buttonCount: container.querySelectorAll('button').length,
@@ -860,6 +864,7 @@ it('shows only the heading and title for a withdrawn task with a saved comment',
   expect(snapshot()).toEqual({
     label: 'User task, withdrawn',
     headings: ['To-do · withdrawn', title],
+    children: ['H2', 'H3'],
     comment: undefined,
     buttonCount: 0,
   })

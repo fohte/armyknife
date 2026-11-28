@@ -17,7 +17,8 @@
 
 /* Resolved cards change timeline position, so browser anchoring must not follow them. */
 .conversation-scroll > .chat-proposal-card,
-.conversation-scroll > .chat-todo-card {
+.conversation-scroll > .chat-todo-card,
+.conversation-scroll > .chat-withdrawn-card {
   overflow-anchor: none;
 }
 
