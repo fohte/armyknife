@@ -193,12 +193,13 @@ pub async fn run(args: &WatchWebArgs) -> Result<()> {
         let relay_sessions_dir = sessions_dir.clone();
         let session_store_events =
             SessionStoreWatcher::subscribe_or_closed(session_store_watcher.as_ref());
+        let relay_session_store_events = session_store_events.resubscribe();
         let watch_web_server = async move {
             let (relay_shutdown_sender, relay_shutdown_receiver) = watch::channel(false);
             // Relay registrations are shared, so a development process must not reconcile them.
             let relay_task = start_web_ui_relay_manager_if_allowed(is_agent_session, || {
                 web_ui_relays::WebUiRelays::new(relay_sessions_dir)
-                    .start(relay_shutdown_receiver.clone())
+                    .start(relay_shutdown_receiver.clone(), relay_session_store_events)
             })
             .await;
             let output_shutdown_receiver = relay_shutdown_receiver.clone();

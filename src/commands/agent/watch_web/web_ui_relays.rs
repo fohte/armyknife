@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::future::pending;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -6,7 +7,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use reqwest::Url;
 use tokio::net::TcpListener;
-use tokio::sync::watch;
+use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::JoinHandle;
 
 use super::web_ui_proxy;
@@ -14,7 +15,7 @@ use crate::commands::agent::store;
 use crate::commands::agent::types::{SessionStatus, WebUiRegistration};
 use crate::shared::hooks;
 
-const SYNC_INTERVAL: Duration = Duration::from_secs(1);
+const STORE_EVENT_DEBOUNCE: Duration = Duration::from_millis(150);
 const HOOK_TIMEOUT: Duration = Duration::from_secs(30);
 
 type HookRunner = dyn Fn(&str, &[(&str, &str)]) -> Result<Option<String>> + Send + Sync;
@@ -63,6 +64,9 @@ pub(super) struct WebUiRelays {
     expose_backoff: RetryBackoff,
     unexpose_backoff: RetryBackoff,
     active: HashMap<RelayKey, Relay>,
+    relay_exit_sender: Option<mpsc::UnboundedSender<RelayKey>>,
+    #[cfg(test)]
+    relay_abort_handles: Arc<std::sync::Mutex<Vec<tokio::task::AbortHandle>>>,
 }
 
 impl WebUiRelays {
@@ -82,28 +86,65 @@ impl WebUiRelays {
             expose_backoff: RetryBackoff::default(),
             unexpose_backoff: RetryBackoff::default(),
             active: HashMap::new(),
+            relay_exit_sender: None,
+            #[cfg(test)]
+            relay_abort_handles: Arc::new(std::sync::Mutex::new(Vec::new())),
         }
     }
 
-    pub(super) async fn start(self, shutdown: watch::Receiver<bool>) -> JoinHandle<()> {
-        tokio::spawn(self.run_periodic(shutdown))
+    pub(super) async fn start(
+        self,
+        shutdown: watch::Receiver<bool>,
+        store_events: broadcast::Receiver<()>,
+    ) -> JoinHandle<()> {
+        tokio::spawn(self.run_event_driven(shutdown, store_events))
     }
 
-    async fn run_periodic(mut self, mut shutdown: watch::Receiver<bool>) {
-        let mut interval = tokio::time::interval(SYNC_INTERVAL);
-        interval.tick().await;
-        if !*shutdown.borrow()
-            && let Err(error) = self.sync().await
-        {
-            tracing::warn!(%error, "failed to synchronize web UI relays at startup");
+    async fn run_event_driven(
+        mut self,
+        mut shutdown: watch::Receiver<bool>,
+        mut store_events: broadcast::Receiver<()>,
+    ) {
+        let (relay_exit_sender, mut relay_exits) = mpsc::unbounded_channel();
+        self.relay_exit_sender = Some(relay_exit_sender);
+        let mut store_events_open = true;
+        if !*shutdown.borrow() {
+            self.sync_and_record_failure("at startup").await;
         }
         loop {
+            let retry_at = self.next_attempt_at();
             tokio::select! {
-                _ = interval.tick() => {
-                    if let Err(error) = self.sync().await {
-                        tracing::warn!(%error, "failed to synchronize web UI relays");
+                event = store_events.recv(), if store_events_open => {
+                    match event {
+                        Err(broadcast::error::RecvError::Closed) => store_events_open = false,
+                        Ok(()) | Err(broadcast::error::RecvError::Lagged(_)) => {
+                            tokio::time::sleep(STORE_EVENT_DEBOUNCE).await;
+                            loop {
+                                match store_events.try_recv() {
+                                    Ok(()) | Err(broadcast::error::TryRecvError::Lagged(_)) => {}
+                                    Err(broadcast::error::TryRecvError::Closed) => {
+                                        store_events_open = false;
+                                        break;
+                                    }
+                                    Err(broadcast::error::TryRecvError::Empty) => break,
+                                }
+                            }
+                            self.sync_and_record_failure("").await;
+                        }
                     }
                 }
+                relay_exit = relay_exits.recv() => {
+                    if relay_exit.is_some() {
+                        self.sync_and_record_failure("").await;
+                    }
+                }
+                _ = async {
+                    if let Some(retry_at) = retry_at {
+                        tokio::time::sleep_until(retry_at.into()).await;
+                    } else {
+                        pending::<()>().await;
+                    }
+                } => self.sync_and_record_failure("").await,
                 result = shutdown.changed() => {
                     if result.is_err() || *shutdown.borrow() {
                         break;
@@ -113,6 +154,27 @@ impl WebUiRelays {
         }
 
         self.stop_all().await;
+    }
+
+    async fn sync_and_record_failure(&mut self, timing: &str) {
+        match self.sync().await {
+            Ok(()) => self.expose_backoff.clear_sync_failure(),
+            Err(error) => {
+                self.expose_backoff
+                    .record_sync_failure(std::time::Instant::now());
+                tracing::warn!(%error, timing, "failed to synchronize web UI relays");
+            }
+        }
+    }
+
+    fn next_attempt_at(&self) -> Option<std::time::Instant> {
+        [
+            self.expose_backoff.next_attempt_at(),
+            self.unexpose_backoff.next_attempt_at(),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
     }
 
     async fn sync(&mut self) -> Result<()> {
@@ -144,6 +206,12 @@ impl WebUiRelays {
                 .retain_for(&stale_registrations.iter().cloned().collect());
             for registration in stale_registrations {
                 if active_ports.contains(&registration.port) {
+                    if !self
+                        .unexpose_backoff
+                        .should_attempt(&registration, std::time::Instant::now())
+                    {
+                        continue;
+                    }
                     self.unexpose_backoff.remove(&registration);
                     // The hook removes by port, so an old record must not target a live relay.
                     if let Err(error) = remove_and_save_relay_registration(
@@ -151,12 +219,16 @@ impl WebUiRelays {
                         registrations,
                         &registration,
                     ) {
+                        self.unexpose_backoff
+                            .record_failure(registration.clone(), std::time::Instant::now());
                         tracing::warn!(
                             session = %registration.session_id,
                             web_ui = %registration.name,
                             %error,
                             "failed to remove conflicting web UI relay registration"
                         );
+                    } else {
+                        self.unexpose_backoff.remove(&registration);
                     }
                     continue;
                 }
@@ -174,12 +246,16 @@ impl WebUiRelays {
                             registrations,
                             &registration,
                         ) {
+                            self.unexpose_backoff
+                                .record_failure(registration.clone(), std::time::Instant::now());
                             tracing::warn!(
                                 session = %registration.session_id,
                                 web_ui = %registration.name,
                                 %error,
                                 "failed to save web UI relay registrations after cleanup"
                             );
+                        } else {
+                            self.unexpose_backoff.remove(&registration);
                         }
                     }
                     Err(error) => {
@@ -324,6 +400,8 @@ impl WebUiRelays {
         let client = web_ui_proxy::new_client()?;
         let session_id = key.session_id.clone();
         let web_ui_name = key.name.clone();
+        let relay_exit_sender = self.relay_exit_sender.clone();
+        let relay_key = key.clone();
         let server = tokio::spawn(async move {
             if let Err(error) =
                 axum::serve(listener, web_ui_proxy::router(upstream_port, client)).await
@@ -335,7 +413,15 @@ impl WebUiRelays {
                     "web UI relay server stopped"
                 );
             }
+            if let Some(sender) = relay_exit_sender {
+                let _ = sender.send(relay_key);
+            }
         });
+        #[cfg(test)]
+        self.relay_abort_handles
+            .lock()
+            .expect("relay abort handle lock should succeed")
+            .push(server.abort_handle());
 
         Ok(Relay {
             url,
@@ -601,18 +687,28 @@ mod tests {
         fail_first_unexpose: bool,
         fail_expose: bool,
     ) -> (
+        tokio::sync::broadcast::Sender<()>,
         tokio::sync::watch::Sender<bool>,
         tokio::task::JoinHandle<()>,
         tokio::sync::mpsc::UnboundedReceiver<HookCall>,
+        Arc<std::sync::Mutex<Vec<tokio::task::AbortHandle>>>,
     ) {
         let (hook_sender, hook_receiver) = tokio::sync::mpsc::unbounded_channel();
         let relays = WebUiRelays::with_hook_runner(
             directory.path().to_path_buf(),
             recording_hook_runner(hook_sender, fail_first_unexpose, fail_expose),
         );
+        let relay_abort_handles = relays.relay_abort_handles.clone();
         let (shutdown_sender, shutdown_receiver) = tokio::sync::watch::channel(false);
-        let manager = relays.start(shutdown_receiver).await;
-        (shutdown_sender, manager, hook_receiver)
+        let (event_sender, event_receiver) = tokio::sync::broadcast::channel(16);
+        let manager = relays.start(shutdown_receiver, event_receiver).await;
+        (
+            event_sender,
+            shutdown_sender,
+            manager,
+            hook_receiver,
+            relay_abort_handles,
+        )
     }
 
     async fn next_hook_call(
@@ -648,6 +744,31 @@ mod tests {
                         .iter()
                         .find(|(name, _)| name == "ARMYKNIFE_WEB_UI_EXPOSED_URL")
                         .map(|(_, value)| value.clone()),
+                )
+            })
+            .collect()
+    }
+
+    fn normalize_hook_calls(calls: &[HookCall]) -> Vec<(String, Vec<(String, String)>)> {
+        calls
+            .iter()
+            .map(|(hook, variables)| {
+                (
+                    hook.clone(),
+                    variables
+                        .iter()
+                        .map(|(name, value)| {
+                            let value = match name.as_str() {
+                                "ARMYKNIFE_WEB_UI_URL" => Url::parse(value)
+                                    .expect("hook URL should be valid")
+                                    .path()
+                                    .to_owned(),
+                                "ARMYKNIFE_WEB_UI_PORT" => "<port>".to_owned(),
+                                _ => value.clone(),
+                            };
+                            (name.clone(), value)
+                        })
+                        .collect(),
                 )
             })
             .collect()
@@ -1117,7 +1238,8 @@ mod tests {
         state_write_failure_directory: TempDir,
     ) -> anyhow::Result<()> {
         let directory = state_write_failure_directory;
-        let (shutdown, manager, mut calls) = start_relay_manager(&directory, false, false).await;
+        let (_events, shutdown, manager, mut calls, _) =
+            start_relay_manager(&directory, false, false).await;
         let mut actual_calls = vec![
             next_hook_call(&mut calls).await?,
             next_hook_call(&mut calls).await?,
@@ -1132,21 +1254,59 @@ mod tests {
 
         assert_eq!(
             (
-                summarize_hook_calls(&actual_calls),
+                normalize_hook_calls(&actual_calls),
                 summarize_registration(saved_registration),
                 remaining_registrations,
             ),
             (
                 vec![
-                    ("web-ui-expose".to_owned(), None),
                     (
-                        "web-ui-unexpose".to_owned(),
-                        Some("https://public.example.invalid/relay/".to_owned()),
+                        "web-ui-expose".to_owned(),
+                        vec![
+                            (
+                                "ARMYKNIFE_WEB_UI_URL".to_owned(),
+                                "/design/sample/".to_owned(),
+                            ),
+                            ("ARMYKNIFE_WEB_UI_PORT".to_owned(), "<port>".to_owned()),
+                        ],
                     ),
-                    ("web-ui-expose".to_owned(), None),
                     (
                         "web-ui-unexpose".to_owned(),
-                        Some("https://public.example.invalid/relay/".to_owned()),
+                        vec![
+                            (
+                                "ARMYKNIFE_WEB_UI_URL".to_owned(),
+                                "/design/sample/".to_owned(),
+                            ),
+                            ("ARMYKNIFE_WEB_UI_PORT".to_owned(), "<port>".to_owned()),
+                            (
+                                "ARMYKNIFE_WEB_UI_EXPOSED_URL".to_owned(),
+                                "https://public.example.invalid/relay/".to_owned(),
+                            ),
+                        ],
+                    ),
+                    (
+                        "web-ui-expose".to_owned(),
+                        vec![
+                            (
+                                "ARMYKNIFE_WEB_UI_URL".to_owned(),
+                                "/design/sample/".to_owned(),
+                            ),
+                            ("ARMYKNIFE_WEB_UI_PORT".to_owned(), "<port>".to_owned()),
+                        ],
+                    ),
+                    (
+                        "web-ui-unexpose".to_owned(),
+                        vec![
+                            (
+                                "ARMYKNIFE_WEB_UI_URL".to_owned(),
+                                "/design/sample/".to_owned(),
+                            ),
+                            ("ARMYKNIFE_WEB_UI_PORT".to_owned(), "<port>".to_owned()),
+                            (
+                                "ARMYKNIFE_WEB_UI_EXPOSED_URL".to_owned(),
+                                "https://public.example.invalid/relay/".to_owned(),
+                            ),
+                        ],
                     ),
                 ],
                 (
@@ -1164,11 +1324,73 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
+    async fn store_changes_reconcile_only_after_a_broadcast_event(
+        session_directory_with_one_web_ui: TempDir,
+    ) -> anyhow::Result<()> {
+        let directory = session_directory_with_one_web_ui;
+        let (events, shutdown, manager, mut calls, _) =
+            start_relay_manager(&directory, false, false).await;
+        let expose = next_hook_call(&mut calls).await?;
+        store::update_session_in(directory.path(), "fixture-session", |session| {
+            session.web_uis.clear();
+            true
+        })?;
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        let no_call_without_event = calls.try_recv().is_err();
+
+        events
+            .send(())
+            .context("store event receiver should be subscribed")?;
+        let unexpose = next_hook_call(&mut calls).await?;
+        shutdown.send_replace(true);
+        tokio::time::timeout(std::time::Duration::from_secs(5), manager).await??;
+
+        assert_eq!(
+            (
+                no_call_without_event,
+                normalize_hook_calls(&[expose, unexpose])
+            ),
+            (
+                true,
+                vec![
+                    (
+                        "web-ui-expose".to_owned(),
+                        vec![
+                            (
+                                "ARMYKNIFE_WEB_UI_URL".to_owned(),
+                                "/design/sample/".to_owned(),
+                            ),
+                            ("ARMYKNIFE_WEB_UI_PORT".to_owned(), "<port>".to_owned()),
+                        ],
+                    ),
+                    (
+                        "web-ui-unexpose".to_owned(),
+                        vec![
+                            (
+                                "ARMYKNIFE_WEB_UI_URL".to_owned(),
+                                "/design/sample/".to_owned(),
+                            ),
+                            ("ARMYKNIFE_WEB_UI_PORT".to_owned(), "<port>".to_owned()),
+                            (
+                                "ARMYKNIFE_WEB_UI_EXPOSED_URL".to_owned(),
+                                "https://public.example.invalid/relay/".to_owned(),
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+        );
+        Ok(())
+    }
+
+    #[rstest]
+    #[tokio::test]
     async fn failed_registration_rollback_preserves_exposed_url_for_shutdown(
         state_write_failure_directory: TempDir,
     ) -> anyhow::Result<()> {
         let directory = state_write_failure_directory;
-        let (shutdown, manager, mut calls) = start_relay_manager(&directory, true, false).await;
+        let (_events, shutdown, manager, mut calls, _) =
+            start_relay_manager(&directory, true, false).await;
         let mut actual_calls = vec![
             next_hook_call(&mut calls).await?,
             next_hook_call(&mut calls).await?,
@@ -1217,7 +1439,8 @@ mod tests {
         session_directory_with_one_web_ui: TempDir,
     ) -> anyhow::Result<()> {
         let directory = session_directory_with_one_web_ui;
-        let (shutdown, manager, mut calls) = start_relay_manager(&directory, false, true).await;
+        let (_events, shutdown, manager, mut calls, _) =
+            start_relay_manager(&directory, false, true).await;
         let first_expose = next_hook_call(&mut calls).await?;
         let second_expose = next_hook_call(&mut calls).await?;
         let first_port = first_expose
@@ -1491,55 +1714,74 @@ mod tests {
     #[tokio::test]
     async fn finished_relay_is_unexposed_and_restarted() -> anyhow::Result<()> {
         let directory = TempDir::new()?;
-        let session = session_with_one_web_ui();
-        store::save_session_to(directory.path(), &session)?;
-        let calls = Arc::new(Mutex::new(Vec::new()));
-        let mut relays = WebUiRelays::with_hook_runner(
-            directory.path().to_path_buf(),
-            hook_runner(calls.clone()),
-        );
-
-        relays.sync().await?;
-        relays
-            .active
-            .values()
-            .next()
-            .expect("relay should be running")
-            .server
-            .abort();
-        tokio::time::timeout(std::time::Duration::from_secs(1), async {
-            while !relays
-                .active
-                .values()
-                .next()
-                .expect("relay should remain registered")
-                .server
-                .is_finished()
-            {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await?;
-        relays.sync().await?;
-        let restarted_count = relays.active.len();
-        let call_names = calls
+        store::save_session_to(directory.path(), &session_with_one_web_ui())?;
+        let (_events, shutdown, manager, mut calls, relay_abort_handles) =
+            start_relay_manager(&directory, false, false).await;
+        let expose = next_hook_call(&mut calls).await?;
+        relay_abort_handles
             .lock()
-            .expect("hook call lock should succeed")
-            .iter()
-            .map(|(hook, _)| hook.clone())
-            .collect::<Vec<_>>();
-        relays.stop_all().await;
+            .expect("relay abort handle lock should succeed")
+            .first()
+            .context("relay should have started")?
+            .abort();
+        let unexpose = next_hook_call(&mut calls).await?;
+        let expose_again = next_hook_call(&mut calls).await?;
+        shutdown.send_replace(true);
+        let shutdown_unexpose = next_hook_call(&mut calls).await?;
+        tokio::time::timeout(std::time::Duration::from_secs(5), manager).await??;
 
         assert_eq!(
-            (restarted_count, call_names),
-            (
-                1,
-                vec![
+            normalize_hook_calls(&[expose, unexpose, expose_again, shutdown_unexpose]),
+            vec![
+                (
                     "web-ui-expose".to_owned(),
+                    vec![
+                        (
+                            "ARMYKNIFE_WEB_UI_URL".to_owned(),
+                            "/design/sample/".to_owned(),
+                        ),
+                        ("ARMYKNIFE_WEB_UI_PORT".to_owned(), "<port>".to_owned()),
+                    ],
+                ),
+                (
                     "web-ui-unexpose".to_owned(),
+                    vec![
+                        (
+                            "ARMYKNIFE_WEB_UI_URL".to_owned(),
+                            "/design/sample/".to_owned(),
+                        ),
+                        ("ARMYKNIFE_WEB_UI_PORT".to_owned(), "<port>".to_owned()),
+                        (
+                            "ARMYKNIFE_WEB_UI_EXPOSED_URL".to_owned(),
+                            "https://public.example.invalid/relay/".to_owned(),
+                        ),
+                    ],
+                ),
+                (
                     "web-ui-expose".to_owned(),
-                ],
-            ),
+                    vec![
+                        (
+                            "ARMYKNIFE_WEB_UI_URL".to_owned(),
+                            "/design/sample/".to_owned(),
+                        ),
+                        ("ARMYKNIFE_WEB_UI_PORT".to_owned(), "<port>".to_owned()),
+                    ],
+                ),
+                (
+                    "web-ui-unexpose".to_owned(),
+                    vec![
+                        (
+                            "ARMYKNIFE_WEB_UI_URL".to_owned(),
+                            "/design/sample/".to_owned(),
+                        ),
+                        ("ARMYKNIFE_WEB_UI_PORT".to_owned(), "<port>".to_owned()),
+                        (
+                            "ARMYKNIFE_WEB_UI_EXPOSED_URL".to_owned(),
+                            "https://public.example.invalid/relay/".to_owned(),
+                        ),
+                    ],
+                ),
+            ],
         );
         Ok(())
     }
@@ -1561,9 +1803,10 @@ mod tests {
             Ok(None)
         });
         let (shutdown_sender, shutdown_receiver) = tokio::sync::watch::channel(false);
+        let (_event_sender, event_receiver) = tokio::sync::broadcast::channel(16);
         let manager = tokio::time::timeout(
             std::time::Duration::from_millis(100),
-            relays.start(shutdown_receiver),
+            relays.start(shutdown_receiver, event_receiver),
         )
         .await?;
 

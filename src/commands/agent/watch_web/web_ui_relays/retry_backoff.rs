@@ -9,6 +9,7 @@ const MAX_RETRY_DELAY: Duration = Duration::from_secs(10 * 60);
 #[derive(Default)]
 pub(super) struct RetryBackoff {
     failures: HashMap<RelayRegistration, Failure>,
+    sync_failure: Option<Failure>,
 }
 
 struct Failure {
@@ -24,7 +25,40 @@ impl RetryBackoff {
     }
 
     pub(super) fn record_failure(&mut self, registration: RelayRegistration, now: Instant) {
-        let failure = self.failures.entry(registration).or_insert(Failure {
+        Self::record(&mut self.failures, registration, now);
+    }
+
+    pub(super) fn record_sync_failure(&mut self, now: Instant) {
+        let failure = self.sync_failure.get_or_insert(Failure {
+            next_attempt_at: now,
+            next_delay: FIRST_RETRY_DELAY,
+        });
+        failure.next_attempt_at = now + failure.next_delay;
+        failure.next_delay = failure.next_delay.saturating_mul(2).min(MAX_RETRY_DELAY);
+    }
+
+    pub(super) fn clear_sync_failure(&mut self) {
+        self.sync_failure = None;
+    }
+
+    pub(super) fn next_attempt_at(&self) -> Option<Instant> {
+        self.failures
+            .values()
+            .map(|failure| failure.next_attempt_at)
+            .chain(
+                self.sync_failure
+                    .iter()
+                    .map(|failure| failure.next_attempt_at),
+            )
+            .min()
+    }
+
+    fn record(
+        failures: &mut HashMap<RelayRegistration, Failure>,
+        registration: RelayRegistration,
+        now: Instant,
+    ) {
+        let failure = failures.entry(registration).or_insert(Failure {
             next_attempt_at: now,
             next_delay: FIRST_RETRY_DELAY,
         });
@@ -107,5 +141,22 @@ mod tests {
         }
 
         assert_eq!(eligibility, vec![(false, true); 12]);
+    }
+
+    #[rstest]
+    fn next_attempt_at_returns_the_earliest_registration_deadline(registration: RelayRegistration) {
+        let start = Instant::now();
+        let later = RelayRegistration {
+            name: "Other preview".to_owned(),
+            ..registration.clone()
+        };
+        let mut backoff = RetryBackoff::default();
+        backoff.record_failure(registration, start);
+        backoff.record_failure(later, start + Duration::from_secs(1));
+
+        assert_eq!(
+            backoff.next_attempt_at(),
+            Some(start + Duration::from_secs(2))
+        );
     }
 }
