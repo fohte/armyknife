@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1011](https://github.com/fohte/armyknife/compare/v0.1.1010...v0.1.1011) (2026-11-28)
+
+
+### Features
+
+* **agent-watch-web:** show session end time ([#2452](https://github.com/fohte/armyknife/issues/2452)) ([556a887](https://github.com/fohte/armyknife/commit/556a88785ce31fe1152bd4ebea043604905346c1))
+
 ## [0.1.1010](https://github.com/fohte/armyknife/compare/v0.1.1009...v0.1.1010) (2026-11-28)
 
 
