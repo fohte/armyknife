@@ -1,16 +1,25 @@
+use std::cell::RefCell;
 use std::io::{self, BufRead, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use super::super::super::parser::jsonl::JsonlLineBuffer;
+#[cfg(test)]
+use super::ParsedTranscript;
 use super::state::{ClaudeParserState, is_attachment_record, record_parent_uuid};
 use super::transcript_branch::{BranchMembership, TranscriptNode, mark_active_branch};
 use super::user_input::is_tool_result_only_user_record;
-use super::{ParsedTranscript, ParserAdditions};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
+mod continuation;
+mod ingest;
+mod render;
 mod tail_window;
 mod window;
+
+use self::continuation::{AppendHistory, classify_append};
+use self::ingest::{RecordOrigin, ingest_record};
+use self::render::ActiveRecordCache;
 
 #[derive(Clone)]
 pub(in crate::commands::agent::watch_web::messages) struct IncrementalClaudeParser {
@@ -18,8 +27,10 @@ pub(in crate::commands::agent::watch_web::messages) struct IncrementalClaudePars
     lines: JsonlLineBuffer,
     image_directory: Option<PathBuf>,
     pending_is_initial: bool,
+    append_history: AppendHistory,
     tail_window_start: Option<DateTime<Utc>>,
     tail_window_start_offset: Option<u64>,
+    active_record_cache: RefCell<Option<ActiveRecordCache>>,
 }
 
 impl IncrementalClaudeParser {
@@ -28,11 +39,15 @@ impl IncrementalClaudeParser {
         image_directory: Option<&Path>,
     ) -> io::Result<Self> {
         let mut graph_lines = JsonlLineBuffer::default();
-        let mut transcript_nodes = std::collections::BTreeMap::new();
+        let mut state = ClaudeParserState::new();
         let mut latest_complete_uuid = None;
         let mut graph_latest_uuid = None;
+        let mut record_order = 0_u64;
+        let mut root_count = 0_usize;
         graph_lines.read_from(&mut reader, |line| {
             if let Some(record) = parse_record(line) {
+                state.has_compact_boundary_record |= is_compact_boundary(&record);
+                let parent_uuid = record_parent_uuid(&record);
                 if !is_attachment_record(&record) {
                     latest_complete_uuid = record
                         .get("uuid")
@@ -42,20 +57,102 @@ impl IncrementalClaudeParser {
                 }
                 if let Some(uuid) = record.get("uuid").and_then(Value::as_str) {
                     graph_latest_uuid = Some(uuid.to_owned());
-                    transcript_nodes.insert(
-                        uuid.to_owned(),
-                        TranscriptNode {
-                            parent_uuid: record_parent_uuid(&record),
-                            membership: BranchMembership::Unknown,
+                    root_count += usize::from(parent_uuid.is_none());
+                    let had_transcript_forks = state.has_transcript_forks;
+                    let is_self_parent = parent_uuid.as_deref() == Some(uuid);
+                    let parent_node = parent_uuid
+                        .as_deref()
+                        .and_then(|parent_uuid| state.transcript_nodes.get(parent_uuid));
+                    let mut parent_order = parent_node.map(|parent| parent.record_order as usize);
+                    let parent_has_tool_use = parent_node.is_some_and(|parent| parent.has_tool_use);
+                    if parent_uuid.is_some()
+                        && parent_order.is_none()
+                        && let Some(parent_uuid) = parent_uuid.as_deref()
+                    {
+                        state.forward_parent_uuids.insert(parent_uuid.to_owned());
+                    }
+                    let uuid_id = state.transcript_nodes.get(uuid).map_or_else(
+                        || {
+                            let uuid_id = state.next_uuid_id;
+                            state.next_uuid_id += 1;
+                            uuid_id
                         },
+                        |node: &TranscriptNode| node.uuid_id,
                     );
+                    let node = TranscriptNode::from_record(
+                        &record,
+                        parent_uuid.clone(),
+                        uuid_id,
+                        record_order,
+                    );
+                    let is_relevant_child = parent_uuid.is_some()
+                        && parent_has_tool_use
+                        && (node.has_tool_use || node.is_tool_result_only);
+                    let duplicate = state
+                        .transcript_nodes
+                        .insert(uuid.to_owned(), node)
+                        .is_some();
+                    state.has_duplicate_uuids |= duplicate;
+                    state.transcript_parent_child_counts.push(0);
+                    if !state.has_duplicate_uuids {
+                        if is_self_parent {
+                            parent_order = state
+                                .transcript_nodes
+                                .get(uuid)
+                                .and_then(|node| node.parent_uuid.as_deref())
+                                .and_then(|parent_uuid| state.transcript_nodes.get(parent_uuid))
+                                .map(|parent| parent.record_order as usize);
+                        }
+                        if let Some(parent_order) = parent_order
+                            && let Some(child_count) =
+                                state.transcript_parent_child_counts.get_mut(parent_order)
+                        {
+                            state.has_transcript_forks |= *child_count > 0;
+                            *child_count = child_count.saturating_add(1).min(2);
+                        }
+                    }
+                    if !had_transcript_forks && state.has_transcript_forks {
+                        state.rebuild_transcript_children();
+                    } else if had_transcript_forks
+                        && is_relevant_child
+                        && !duplicate
+                        && let Some(parent_uuid) = parent_uuid.as_deref()
+                    {
+                        state
+                            .transcript_children
+                            .entry(parent_uuid.to_owned())
+                            .or_default()
+                            .push(uuid.to_owned());
+                    }
+                    record_order += 1;
                 }
             }
         })?;
         let pending_record = parse_record(graph_lines.pending());
         reader.seek(SeekFrom::Start(0))?;
-        let mut state = ClaudeParserState::new();
-        state.transcript_nodes = transcript_nodes;
+        let pending_record_creates_fork = pending_record
+            .as_ref()
+            .and_then(record_parent_uuid)
+            .and_then(|parent_uuid| state.transcript_nodes.get(&parent_uuid))
+            .and_then(|parent| {
+                state
+                    .transcript_parent_child_counts
+                    .get(parent.record_order as usize)
+            })
+            .is_some_and(|child_count| *child_count > 0);
+        let simple_graph = !state.has_transcript_forks
+            && !pending_record_creates_fork
+            && !state.has_duplicate_uuids
+            && state.forward_parent_uuids.is_empty()
+            && !state.has_compact_boundary_record
+            && root_count <= 1;
+        if state.has_duplicate_uuids
+            || !state.forward_parent_uuids.is_empty()
+            || pending_record_creates_fork
+        {
+            state.rebuild_transcript_children();
+        }
+        reader.seek(SeekFrom::Start(0))?;
         activate_pending_record(
             &mut state,
             pending_record.as_ref(),
@@ -63,20 +160,35 @@ impl IncrementalClaudeParser {
             graph_latest_uuid,
             latest_complete_uuid,
         );
+        state.all_transcript_records_active = (pending_record.is_none() && simple_graph)
+            || state
+                .transcript_nodes
+                .values()
+                .all(|node| node.membership == BranchMembership::Active);
         let mut complete_lines = JsonlLineBuffer::default();
+        let mut append_history = AppendHistory::default();
         complete_lines.read_from(&mut reader, |line| {
             if let Some(record) = parse_record(line) {
-                ingest_record(&mut state, record, Utc::now(), RecordOrigin::Initial);
+                ingest_record(
+                    &mut state,
+                    &mut append_history,
+                    record,
+                    Utc::now(),
+                    RecordOrigin::Initial,
+                    None,
+                );
             }
         })?;
-
+        append_history.finish_initial();
         Ok(Self {
             state,
             lines: graph_lines,
             image_directory: image_directory.map(Path::to_path_buf),
             pending_is_initial: true,
+            append_history,
             tail_window_start: None,
             tail_window_start_offset: None,
+            active_record_cache: RefCell::default(),
         })
     }
 
@@ -103,9 +215,44 @@ impl IncrementalClaudeParser {
         pending_line: Vec<u8>,
     ) -> Self {
         let mut state = ClaudeParserState::new();
+        let mut seen_uuids = active_ancestor_uuids
+            .iter()
+            .cloned()
+            .collect::<std::collections::HashSet<_>>();
+        let mut next_record_order = 0_u64;
+        for uuid in &active_ancestor_uuids {
+            if state.transcript_nodes.contains_key(uuid) {
+                continue;
+            }
+            state.transcript_nodes.insert(
+                uuid.clone(),
+                TranscriptNode {
+                    uuid_id: state.next_uuid_id,
+                    record_order: next_record_order,
+                    parent_uuid: None,
+                    membership: BranchMembership::Unknown,
+                    has_tool_use: false,
+                    tool_use_ids: None,
+                    tool_result_ids: None,
+                    is_tool_result_only: false,
+                    is_task_notification: false,
+                },
+            );
+            state.next_uuid_id += 1;
+            next_record_order += 1;
+        }
         let mut latest_complete_uuid = None;
         let mut graph_latest_uuid = None;
         for record in &records {
+            state.has_compact_boundary_record |= is_compact_boundary(record);
+            let parent_uuid = record_parent_uuid(record);
+            if parent_uuid
+                .as_deref()
+                .is_some_and(|parent_uuid| !seen_uuids.contains(parent_uuid))
+                && let Some(parent_uuid) = parent_uuid
+            {
+                state.forward_parent_uuids.insert(parent_uuid);
+            }
             if !is_attachment_record(record) {
                 latest_complete_uuid = record
                     .get("uuid")
@@ -115,15 +262,30 @@ impl IncrementalClaudeParser {
             }
             if let Some(uuid) = record.get("uuid").and_then(Value::as_str) {
                 graph_latest_uuid = Some(uuid.to_owned());
+                seen_uuids.insert(uuid.to_owned());
+                let record_order = next_record_order;
+                state.has_duplicate_uuids |= state.transcript_nodes.contains_key(uuid);
+                let uuid_id = state.transcript_nodes.get(uuid).map_or_else(
+                    || {
+                        let uuid_id = state.next_uuid_id;
+                        state.next_uuid_id += 1;
+                        uuid_id
+                    },
+                    |node| node.uuid_id,
+                );
                 state.transcript_nodes.insert(
                     uuid.to_owned(),
-                    TranscriptNode {
-                        parent_uuid: record_parent_uuid(record),
-                        membership: BranchMembership::Unknown,
-                    },
+                    TranscriptNode::from_record(
+                        record,
+                        record_parent_uuid(record),
+                        uuid_id,
+                        record_order,
+                    ),
                 );
+                next_record_order += 1;
             }
         }
+        state.rebuild_transcript_children();
         let pending_record = parse_record(&pending_line);
         activate_pending_record(
             &mut state,
@@ -132,17 +294,32 @@ impl IncrementalClaudeParser {
             graph_latest_uuid,
             latest_complete_uuid,
         );
+        state.all_transcript_records_active = state
+            .transcript_nodes
+            .values()
+            .all(|node| node.membership == BranchMembership::Active);
+        let mut append_history = AppendHistory::default();
         for record in records {
-            ingest_record(&mut state, record, Utc::now(), RecordOrigin::Initial);
+            ingest_record(
+                &mut state,
+                &mut append_history,
+                record,
+                Utc::now(),
+                RecordOrigin::Initial,
+                None,
+            );
         }
+        append_history.finish_initial();
 
         Self {
             state,
             lines: JsonlLineBuffer::with_pending(pending_line),
             image_directory: image_directory.map(Path::to_path_buf),
             pending_is_initial: true,
+            append_history,
             tail_window_start: None,
             tail_window_start_offset: None,
+            active_record_cache: RefCell::default(),
         }
     }
 
@@ -184,7 +361,11 @@ impl IncrementalClaudeParser {
             return Ok(IncrementalAppend::Applied);
         }
         let mut restart_required = false;
+        let mut added_ids = Vec::new();
+        let track_active_cache =
+            self.state.has_transcript_forks && self.active_record_cache.get_mut().is_some();
         let state = &mut self.state;
+        let append_history = &mut self.append_history;
         let lines = &mut self.lines;
         lines.feed(suffix, |line| {
             if restart_required {
@@ -193,57 +374,50 @@ impl IncrementalClaudeParser {
             let Some(record) = parse_record(line) else {
                 return;
             };
-            if !ingest_record(state, record, now, RecordOrigin::Appended) {
+            if !ingest_record(
+                state,
+                append_history,
+                record,
+                now,
+                RecordOrigin::Appended,
+                track_active_cache.then_some(&mut added_ids),
+            ) {
                 restart_required = true;
             }
         });
         if !restart_required
             && let Some(record) = parse_record(lines.pending())
-            && !is_active_branch_continuation(state, &record)
+            && classify_append(state, append_history, &record).is_none()
         {
             restart_required = true;
         }
         if restart_required {
             return Ok(IncrementalAppend::RestartRequired);
         }
+        self.extend_active_record_cache(added_ids);
         self.pending_is_initial = false;
         Ok(IncrementalAppend::Applied)
     }
+}
 
-    pub(in crate::commands::agent::watch_web::messages) fn render_with(
-        &self,
-        now: DateTime<Utc>,
-        additions: ParserAdditions<'_>,
-    ) -> io::Result<ParsedTranscript> {
-        let pending = self.lines.pending();
-        if let Some(record) = parse_record(pending) {
-            let mut state = self.state.clone();
-            if !ingest_record(
-                &mut state,
-                record,
-                now,
-                RecordOrigin::Pending {
-                    is_initial: self.pending_is_initial,
-                },
-            ) {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "Claude transcript tail forks from the cached active branch",
-                ));
-            }
-            return Ok(super::render::render(
-                &state,
-                self.image_directory.as_deref(),
-                now,
-                additions,
-            ));
-        }
-        Ok(super::render::render(
-            &self.state,
-            self.image_directory.as_deref(),
-            now,
-            additions,
-        ))
+fn prepare_pending_render_state(state: &mut ClaudeParserState, record: &Value) {
+    let Some(uuid) = record.get("uuid").and_then(Value::as_str) else {
+        return;
+    };
+    if !state.transcript_nodes.contains_key(uuid) {
+        let parent_uuid = record_parent_uuid(record);
+        let record_order = state.transcript_parent_child_counts.len() as u64;
+        let uuid_id = state.next_uuid_id;
+        state.transcript_nodes.insert(
+            uuid.to_owned(),
+            TranscriptNode::from_record(record, parent_uuid.clone(), uuid_id, record_order),
+        );
+        state.index_transcript_child(parent_uuid.as_deref(), uuid);
+    }
+    if !is_tool_result_only_user_record(record) {
+        mark_active_branch(&mut state.transcript_nodes, Some(uuid));
+        state.latest_record_uuid = Some(uuid.to_owned());
+        state.latest_uuid = Some(uuid.to_owned());
     }
 }
 
@@ -262,12 +436,16 @@ fn activate_pending_record(
             if state.transcript_nodes.contains_key(uuid) {
                 false
             } else {
+                let record_order = state.transcript_parent_child_counts.len() as u64;
+                let uuid_id = state.next_uuid_id;
                 state.transcript_nodes.insert(
                     uuid.to_owned(),
-                    TranscriptNode {
-                        parent_uuid: record_parent_uuid(record),
-                        membership: BranchMembership::Unknown,
-                    },
+                    TranscriptNode::from_record(
+                        record,
+                        record_parent_uuid(record),
+                        uuid_id,
+                        record_order,
+                    ),
                 );
                 true
             }
@@ -280,15 +458,25 @@ fn activate_pending_record(
             .entry(uuid.clone())
             .and_modify(|node| node.membership = BranchMembership::Active)
             .or_insert(TranscriptNode {
+                uuid_id: state.next_uuid_id,
+                record_order: 0,
                 parent_uuid: None,
                 membership: BranchMembership::Active,
+                has_tool_use: false,
+                tool_use_ids: None,
+                tool_result_ids: None,
+                is_tool_result_only: false,
+                is_task_notification: false,
             });
     }
-    // The unfinished row selects the render branch but is ingested after it is completed.
+    // A pending first result can arrive while a sibling tool call is still running.
+    let pending_parallel_tool_use =
+        pending_record.and_then(|record| state.parallel_pending_tool_use_uuid(record));
     mark_active_branch(
         &mut state.transcript_nodes,
-        pending_uuid
+        pending_parallel_tool_use
             .as_deref()
+            .or(pending_uuid.as_deref())
             .or(fallback_latest_record_uuid.as_deref())
             .or(fallback_latest_uuid.as_deref()),
     );
@@ -307,95 +495,6 @@ fn activate_pending_record(
     };
 }
 
-#[derive(Clone, Copy)]
-enum RecordOrigin {
-    Initial,
-    Appended,
-    Pending { is_initial: bool },
-}
-
-fn ingest_record(
-    state: &mut ClaudeParserState,
-    record: Value,
-    now: DateTime<Utc>,
-    origin: RecordOrigin,
-) -> bool {
-    if matches!(
-        origin,
-        RecordOrigin::Appended | RecordOrigin::Pending { is_initial: false }
-    ) && !is_active_branch_continuation(state, &record)
-    {
-        return false;
-    }
-    if !matches!(origin, RecordOrigin::Initial)
-        && let Some(uuid) = record.get("uuid").and_then(Value::as_str)
-    {
-        let parent_uuid = record_parent_uuid(&record);
-        let parallel_tool_result = matches!(origin, RecordOrigin::Appended)
-            && is_tool_result_only_user_record(&record)
-            && parent_uuid.as_deref() == state.tool_result_parent.as_deref()
-            && parent_uuid.as_deref() != state.latest_uuid.as_deref();
-        state.transcript_nodes.insert(
-            uuid.to_owned(),
-            TranscriptNode {
-                parent_uuid,
-                membership: BranchMembership::Unknown,
-            },
-        );
-        mark_active_branch(&mut state.transcript_nodes, Some(uuid));
-        if matches!(origin, RecordOrigin::Appended) {
-            state.latest_record_uuid = Some(uuid.to_owned());
-        }
-        if matches!(origin, RecordOrigin::Appended)
-            && !parallel_tool_result
-            && !is_attachment_record(&record)
-        {
-            state.latest_uuid = Some(uuid.to_owned());
-        }
-    }
-    state.process_record(record, now);
-    true
-}
-
-fn is_active_branch_continuation(state: &ClaudeParserState, record: &Value) -> bool {
-    let Some(uuid) = record.get("uuid").and_then(Value::as_str) else {
-        return true;
-    };
-    if state.transcript_nodes.contains_key(uuid) {
-        return false;
-    }
-    let parent_uuid = record_parent_uuid(record);
-    let is_tool_result_only = is_tool_result_only_user_record(record);
-    let is_task_notification = super::background_tasks::task_notification_text(record).is_some();
-    if is_tool_result_only && parent_uuid.is_none() {
-        return false;
-    }
-    let Some(parent_uuid) = parent_uuid else {
-        return state.latest_uuid.is_none();
-    };
-    let parent_is_active = state
-        .transcript_nodes
-        .get(&parent_uuid)
-        .is_some_and(|node| node.membership == BranchMembership::Active);
-    if !parent_is_active {
-        return false;
-    }
-
-    if is_tool_result_only {
-        return state.latest_uuid.as_deref() == Some(parent_uuid.as_str())
-            || state.tool_result_parent.as_deref() == Some(parent_uuid.as_str());
-    }
-    let parent_is_latest = state.latest_record_uuid.as_deref() == Some(parent_uuid.as_str());
-    if is_task_notification {
-        return parent_is_latest;
-    }
-    if record.get("type").and_then(Value::as_str) == Some("assistant") {
-        return parent_is_latest
-            || state.tool_result_parent.as_deref() == Some(parent_uuid.as_str());
-    }
-    parent_is_latest
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::commands::agent::watch_web::messages) enum IncrementalAppend {
     Applied,
@@ -405,6 +504,11 @@ pub(in crate::commands::agent::watch_web::messages) enum IncrementalAppend {
 fn parse_record(line: &[u8]) -> Option<Value> {
     let line = std::str::from_utf8(line).ok()?;
     serde_json::from_str(line).ok()
+}
+
+fn is_compact_boundary(record: &Value) -> bool {
+    record.get("type").and_then(Value::as_str) == Some("system")
+        && record.get("subtype").and_then(Value::as_str) == Some("compact_boundary")
 }
 
 #[cfg(test)]

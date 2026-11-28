@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use chrono::{DateTime, Utc};
@@ -19,6 +19,7 @@ pub(super) fn render(
     image_directory: Option<&Path>,
     now: DateTime<Utc>,
     additions: ParserAdditions<'_>,
+    active_record_ids: Option<&HashSet<usize>>,
 ) -> ParsedTranscript {
     let mut items = Vec::new();
     let mut tools = ToolSummary::default();
@@ -30,30 +31,62 @@ pub(super) fn render(
     );
     let mut card_timeline = CardTimeline::new(&source_cards);
     let mut question_indices = HashMap::<String, Vec<usize>>::new();
+    let event_context = EventRenderContext {
+        image_directory,
+        additions,
+        active_record_ids,
+    };
 
-    for event in &state.events {
-        render_timed_event(
-            event,
-            image_directory,
-            additions,
-            &mut card_timeline,
-            &mut tools,
-            &mut items,
-            &mut question_indices,
-        );
+    if active_record_ids.is_some() {
+        for event in &state.events {
+            if !is_on_active_branch(event.uuid_id, event_context.active_record_ids) {
+                continue;
+            }
+            render_timed_event(
+                event,
+                &event_context,
+                &mut card_timeline,
+                &mut tools,
+                &mut items,
+                &mut question_indices,
+            );
+        }
+    } else {
+        for event in &state.events {
+            render_timed_event(
+                event,
+                &event_context,
+                &mut card_timeline,
+                &mut tools,
+                &mut items,
+                &mut question_indices,
+            );
+        }
     }
 
-    let active_tool =
-        active_tool_item(&state.tool_uses, additions.pending_tool).map(|(item, timestamp)| {
-            let mut thinking_items = tools.take_pending_thinking();
-            if thinking_items.is_empty() {
-                return (item, timestamp);
-            }
-            (
-                active_tool_with_thinking(item, &mut thinking_items),
-                timestamp,
-            )
-        });
+    let active_tool_item = if let Some(active_record_ids) = active_record_ids {
+        let active_tool_uses = state
+            .tool_uses
+            .iter()
+            .filter(|tool_use| {
+                is_on_active_branch(tool_use.assistant_uuid_id, Some(active_record_ids))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        active_tool_item(&active_tool_uses, additions.pending_tool)
+    } else {
+        active_tool_item(&state.tool_uses, additions.pending_tool)
+    };
+    let active_tool = active_tool_item.map(|(item, timestamp)| {
+        let mut thinking_items = tools.take_pending_thinking();
+        if thinking_items.is_empty() {
+            return (item, timestamp);
+        }
+        (
+            active_tool_with_thinking(item, &mut thinking_items),
+            timestamp,
+        )
+    });
     tools.flush_into(&mut items);
     if let Some((item, timestamp)) = active_tool {
         if matches!(
@@ -141,10 +174,15 @@ fn active_tool_with_thinking(
     }
 }
 
+struct EventRenderContext<'a> {
+    image_directory: Option<&'a Path>,
+    additions: ParserAdditions<'a>,
+    active_record_ids: Option<&'a HashSet<usize>>,
+}
+
 fn render_timed_event(
     event: &TimedClaudeEvent,
-    image_directory: Option<&Path>,
-    additions: ParserAdditions<'_>,
+    context: &EventRenderContext<'_>,
     card_timeline: &mut CardTimeline,
     tools: &mut ToolSummary,
     items: &mut Vec<ChatItem>,
@@ -161,7 +199,7 @@ fn render_timed_event(
                     text.clone(),
                     false,
                     None,
-                    image_directory,
+                    context.image_directory,
                     None,
                 );
             }
@@ -183,7 +221,9 @@ fn render_timed_event(
                 simplify_slash_command,
                 rewind_id,
             } => {
-                let marker = use_user_marker.then_some(additions.user_marker).flatten();
+                let marker = use_user_marker
+                    .then_some(context.additions.user_marker)
+                    .flatten();
                 let classification = classifier::classify_inbound(record, text, marker);
                 let classification = match classification {
                     classifier::MessageKind::User { text } if *simplify_slash_command => {
@@ -197,20 +237,31 @@ fn render_timed_event(
                     items,
                     classification,
                     images.clone(),
-                    image_directory,
-                    additions.parent,
+                    context.image_directory,
+                    context.additions.parent,
                     event.timestamp,
                     rewind_id.clone(),
                 );
             }
             ClaudeEffect::ToolAction {
+                tool_assistant_uuid_id,
                 name,
                 input,
                 failed,
-            } => tools.record(name, input.as_ref(), *failed),
+            } if is_on_active_branch(*tool_assistant_uuid_id, context.active_record_ids) => {
+                tools.record(name, input.as_ref(), *failed)
+            }
+            ClaudeEffect::ToolAction { .. } => {}
             ClaudeEffect::SendUserFile { tool_use, failed } => {
-                let file_item =
-                    send_user_file_item(tool_use, *failed, additions.session_id, event.timestamp);
+                if !is_on_active_branch(tool_use.assistant_uuid_id, context.active_record_ids) {
+                    continue;
+                }
+                let file_item = send_user_file_item(
+                    tool_use,
+                    *failed,
+                    context.additions.session_id,
+                    event.timestamp,
+                );
                 if let Some(file_item) = file_item {
                     tools.flush_into(items);
                     items.push(file_item);
@@ -237,6 +288,16 @@ fn render_timed_event(
             }
         }
     }
+}
+
+fn is_on_active_branch(uuid_id: Option<usize>, active_record_ids: Option<&HashSet<usize>>) -> bool {
+    let Some(active_record_ids) = active_record_ids else {
+        return true;
+    };
+    let Some(uuid_id) = uuid_id else {
+        return true;
+    };
+    active_record_ids.contains(&uuid_id)
 }
 
 fn send_user_file_item(
@@ -349,18 +410,24 @@ mod tests {
         let tool_uses = [
             ToolUse {
                 id: "first-call".to_string(),
+                assistant_uuid: None,
+                assistant_uuid_id: None,
                 name: "Bash".to_string(),
                 input: Some(json!({"command": "run fixture"})),
                 started_at: None,
             },
             ToolUse {
                 id: "different-call".to_string(),
+                assistant_uuid: None,
+                assistant_uuid_id: None,
                 name: "Read".to_string(),
                 input: Some(json!({"file_path": "fixture.txt"})),
                 started_at: None,
             },
             ToolUse {
                 id: "latest-call".to_string(),
+                assistant_uuid: None,
+                assistant_uuid_id: None,
                 name: "Bash".to_string(),
                 input: Some(json!({"command": "run fixture"})),
                 started_at: None,

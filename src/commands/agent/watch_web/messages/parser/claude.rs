@@ -44,7 +44,7 @@ pub(in crate::commands::agent::watch_web::messages) fn matching_pending_tool_use
         let Ok(record) = serde_json::from_str(&line) else {
             continue;
         };
-        state.process_record(record, Utc::now());
+        state.process_record(&record, Utc::now());
         // Permission matching needs unresolved tool uses, not the render timelines.
         state.events.clear();
         state.queue_events.clear();
@@ -226,13 +226,12 @@ mod tests {
     use rstest::rstest;
     use serde_json::json;
 
-    use crate::commands::agent::file_attachment_support::FilePreviewType;
-
     use super::{
         ParserAdditions, ProposalItem, parse, parse_with_image_directory,
         parse_with_queued_prompts_and_peer_out_messages_and_proposals_and_skills,
         parse_with_queued_prompts_and_proposals,
     };
+    use crate::commands::agent::file_attachment_support::FilePreviewType;
     #[test]
     fn renders_send_user_file_as_a_conversation_attachment() {
         let directory = tempfile::tempdir().unwrap();
@@ -2435,6 +2434,157 @@ mod tests {
                     text: "The fixture is updated.".to_string(),
                 },
             ]
+        );
+    }
+
+    #[rstest]
+    #[case::rewound_tool_use_results_do_not_escape_the_discarded_branch(
+        indoc! {r#"
+            {"uuid":"fixture-root-id","parentUuid":null,"type":"user","message":{"content":"Keep the root request."}}
+            {"uuid":"fixture-active-assistant-id","parentUuid":"fixture-root-id","type":"assistant","message":{"content":[{"type":"text","text":"Keep the shared response."}]}}
+            {"uuid":"fixture-old-assistant-id","parentUuid":"fixture-active-assistant-id","type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-old-first-call-id","name":"Read","input":{"file_path":"/fixture/old-first.md"}},{"type":"tool_use","id":"fixture-old-second-call-id","name":"Read","input":{"file_path":"/fixture/old-second.md"}}]}}
+            {"uuid":"fixture-old-first-result-id","parentUuid":"fixture-old-assistant-id","type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-old-first-call-id","content":"Discard this first result."}]}}
+            {"uuid":"fixture-old-second-result-id","parentUuid":"fixture-old-first-result-id","type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-old-second-call-id","content":"Discard this chained result."}]}}
+            {"uuid":"fixture-old-followup-id","parentUuid":"fixture-old-second-result-id","type":"assistant","message":{"content":[{"type":"text","text":"Discard this old follow-up."}]}}
+            {"uuid":"fixture-replacement-user-id","parentUuid":"fixture-active-assistant-id","type":"user","message":{"content":"Keep the replacement request."}}
+            {"uuid":"fixture-replacement-assistant-id","parentUuid":"fixture-replacement-user-id","type":"assistant","message":{"content":[{"type":"text","text":"Keep the replacement response."}]}}
+        "#},
+        vec![
+            ChatItem::User {
+                rewind_id: Some("fixture-root-id".to_string()),
+                text: "Keep the root request.".to_string(),
+                timestamp: None,
+                from: None,
+                queued_prompt_id: None,
+            },
+            ChatItem::Assistant {
+                text: "Keep the shared response.".to_string(),
+            },
+            ChatItem::User {
+                rewind_id: Some("fixture-replacement-user-id".to_string()),
+                text: "Keep the replacement request.".to_string(),
+                timestamp: None,
+                from: None,
+                queued_prompt_id: None,
+            },
+            ChatItem::Assistant {
+                text: "Keep the replacement response.".to_string(),
+            },
+        ],
+    )]
+    #[case::rewound_question_results_do_not_escape_the_discarded_branch(
+        indoc! {r#"
+            {"uuid":"fixture-root-id","parentUuid":null,"type":"user","message":{"content":"Keep the root request."}}
+            {"uuid":"fixture-active-assistant-id","parentUuid":"fixture-root-id","type":"assistant","message":{"content":[{"type":"text","text":"Keep the shared response."}]}}
+            {"uuid":"fixture-old-assistant-id","parentUuid":"fixture-active-assistant-id","type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-old-question-id","name":"AskUserQuestion","input":{"questions":[{"question":"Which display mode?","header":"Display","multiSelect":false,"options":[{"label":"Option A"},{"label":"Option B"}]}]}},{"type":"tool_use","id":"fixture-old-tool-id","name":"Read","input":{"file_path":"/fixture/old.md"}}]}}
+            {"uuid":"fixture-old-tool-result-id","parentUuid":"fixture-old-assistant-id","type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-old-tool-id","content":"Discard this result."}]}}
+            {"uuid":"fixture-old-question-result-id","parentUuid":"fixture-old-tool-result-id","type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-old-question-id","content":"Your questions have been answered: \"Which display mode?\"=\"Option A\""}]}}
+            {"uuid":"fixture-old-followup-id","parentUuid":"fixture-old-question-result-id","type":"assistant","message":{"content":[{"type":"text","text":"Discard this old follow-up."}]}}
+            {"uuid":"fixture-replacement-user-id","parentUuid":"fixture-active-assistant-id","type":"user","message":{"content":"Keep the replacement request."}}
+            {"uuid":"fixture-replacement-assistant-id","parentUuid":"fixture-replacement-user-id","type":"assistant","message":{"content":[{"type":"text","text":"Keep the replacement response."}]}}
+        "#},
+        vec![
+            ChatItem::User {
+                rewind_id: Some("fixture-root-id".to_string()),
+                text: "Keep the root request.".to_string(),
+                timestamp: None,
+                from: None,
+                queued_prompt_id: None,
+            },
+            ChatItem::Assistant {
+                text: "Keep the shared response.".to_string(),
+            },
+            ChatItem::User {
+                rewind_id: Some("fixture-replacement-user-id".to_string()),
+                text: "Keep the replacement request.".to_string(),
+                timestamp: None,
+                from: None,
+                queued_prompt_id: None,
+            },
+            ChatItem::Assistant {
+                text: "Keep the replacement response.".to_string(),
+            },
+        ],
+    )]
+    fn full_parse_does_not_resolve_results_from_rewound_branches(
+        #[case] transcript: &str,
+        #[case] expected: Vec<ChatItem>,
+    ) {
+        assert_eq!(
+            parse(Cursor::new(transcript), None, None, None).unwrap(),
+            expected,
+        );
+    }
+
+    #[rstest]
+    #[case::rewind_discards_an_old_text_branch(
+        indoc! {r#"
+            {"uuid":"fixture-root-id","parentUuid":null,"type":"user","message":{"content":"Keep the root request."}}
+            {"uuid":"fixture-active-assistant-id","parentUuid":"fixture-root-id","type":"assistant","message":{"content":[{"type":"text","text":"Keep the shared response."}]}}
+            {"uuid":"fixture-old-user-id","parentUuid":"fixture-active-assistant-id","type":"user","message":{"content":"Discard this old request."}}
+            {"uuid":"fixture-old-assistant-id","parentUuid":"fixture-old-user-id","type":"assistant","message":{"content":[{"type":"text","text":"Discard this old response."}]}}
+            {"uuid":"fixture-replacement-user-id","parentUuid":"fixture-active-assistant-id","type":"user","message":{"content":"Keep the replacement request."}}
+            {"uuid":"fixture-replacement-assistant-id","parentUuid":"fixture-replacement-user-id","type":"assistant","message":{"content":[{"type":"text","text":"Keep the replacement response."}]}}
+        "#},
+        vec![
+            ChatItem::User {
+                rewind_id: Some("fixture-root-id".to_string()),
+                text: "Keep the root request.".to_string(),
+                timestamp: None,
+                from: None,
+                queued_prompt_id: None,
+            },
+            ChatItem::Assistant {
+                text: "Keep the shared response.".to_string(),
+            },
+            ChatItem::User {
+                rewind_id: Some("fixture-replacement-user-id".to_string()),
+                text: "Keep the replacement request.".to_string(),
+                timestamp: None,
+                from: None,
+                queued_prompt_id: None,
+            },
+            ChatItem::Assistant {
+                text: "Keep the replacement response.".to_string(),
+            },
+        ],
+    )]
+    #[case::rewind_discards_an_old_tool_branch(
+        indoc! {r#"
+            {"uuid":"fixture-root-id","parentUuid":null,"type":"user","message":{"content":"Keep the root request."}}
+            {"uuid":"fixture-active-assistant-id","parentUuid":"fixture-root-id","type":"assistant","message":{"content":[{"type":"text","text":"Keep the shared response."}]}}
+            {"uuid":"fixture-old-tool-id","parentUuid":"fixture-active-assistant-id","type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-old-call-id","name":"Read","input":{"file_path":"/fixture/old-branch.md"}}]}}
+            {"uuid":"fixture-old-result-id","parentUuid":"fixture-old-tool-id","type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-old-call-id","content":"Old branch result."}]}}
+            {"uuid":"fixture-old-followup-id","parentUuid":"fixture-old-result-id","type":"assistant","message":{"content":[{"type":"text","text":"Discard this old follow-up."}]}}
+            {"uuid":"fixture-replacement-user-id","parentUuid":"fixture-active-assistant-id","type":"user","message":{"content":"Keep the replacement request."}}
+        "#},
+        vec![
+            ChatItem::User {
+                rewind_id: Some("fixture-root-id".to_string()),
+                text: "Keep the root request.".to_string(),
+                timestamp: None,
+                from: None,
+                queued_prompt_id: None,
+            },
+            ChatItem::Assistant {
+                text: "Keep the shared response.".to_string(),
+            },
+            ChatItem::User {
+                rewind_id: Some("fixture-replacement-user-id".to_string()),
+                text: "Keep the replacement request.".to_string(),
+                timestamp: None,
+                from: None,
+                queued_prompt_id: None,
+            },
+        ],
+    )]
+    fn full_parse_omits_rewound_assistant_branches(
+        #[case] transcript: &str,
+        #[case] expected: Vec<ChatItem>,
+    ) {
+        assert_eq!(
+            parse(Cursor::new(transcript), None, None, None).unwrap(),
+            expected,
         );
     }
 

@@ -73,6 +73,7 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_initial_or_full_for
                 session_id,
                 input,
                 fingerprint.clone(),
+                pending_task_ids,
                 cache,
             )
         } else {
@@ -80,6 +81,7 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_initial_or_full_for
                 session_id,
                 input,
                 fingerprint.clone(),
+                pending_task_ids,
                 cache,
                 range,
             )
@@ -111,6 +113,43 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_initial_or_full_for
             Ok((conversation, resolved_ids, used_tail_window))
         }
     }
+}
+
+pub(super) enum TailWindowRebuild {
+    Rebuilt(Box<TailWindowParse>),
+    AnchorMissing,
+    Unavailable,
+}
+
+pub(super) fn rebuild_tail_window_parser(
+    input: &TranscriptInput<'_>,
+    pending_task_ids: &[String],
+    fingerprint: &TranscriptFingerprint,
+    range: TranscriptRangeContext<'_>,
+    message_limit: usize,
+) -> Result<TailWindowRebuild> {
+    let started = Instant::now();
+    let tail = match parse_session_transcript_tail_window(
+        input,
+        message_limit,
+        pending_task_ids,
+        fingerprint.len(),
+    ) {
+        Ok(Some(tail)) => tail,
+        Ok(None) => return Ok(TailWindowRebuild::Unavailable),
+        Err(error) if contains_io_error(&error) => {
+            super::super::log_tail_window_fallback(started, "tail_window_read_error");
+            return Ok(TailWindowRebuild::Unavailable);
+        }
+        Err(error) => return Err(error),
+    };
+    if range
+        .requested_epoch
+        .is_some_and(|epoch| !tail.conversation.epoch_anchor_is_present(epoch))
+    {
+        return Ok(TailWindowRebuild::AnchorMissing);
+    }
+    Ok(TailWindowRebuild::Rebuilt(Box::new(tail)))
 }
 
 fn parse_older_page_tail_window(

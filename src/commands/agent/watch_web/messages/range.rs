@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 use super::{ChatItem, ConversationResponse, UserContentPart};
 
 const RECENT_TAIL_MESSAGE_COUNT: usize = 20;
-const INITIAL_EPOCH_MESSAGE_COUNT: usize = 100;
+pub(super) const INITIAL_EPOCH_MESSAGE_COUNT: usize = 100;
 const MAX_EPOCH_TOKEN_BYTES: usize = 4096;
 const EPOCH_CURSOR_VERSION: u8 = 3;
 
@@ -197,6 +197,10 @@ impl MessageEpochCursor {
         }
         matched_start
     }
+}
+
+pub(super) fn epoch_token_is_decodable(epoch: &str) -> bool {
+    MessageEpochCursor::decode(epoch).is_some()
 }
 
 impl ConversationResponse {
@@ -495,8 +499,30 @@ fn normalize_image_availability(content: &mut [UserContentPart]) {
 mod tests {
     use rstest::rstest;
 
-    use super::{MessageEpochCursor, MessageRange, active_question_index, message_digests};
+    use super::{
+        MessageEpochCursor, MessageRange, active_question_index, epoch_token_is_decodable,
+        message_digests,
+    };
     use crate::commands::agent::watch_web::messages::{ChatItem, ConversationResponse};
+
+    #[test]
+    fn epoch_token_decoding_rejects_malformed_values() {
+        let valid = MessageEpochCursor {
+            version: 3,
+            anchor_count: 1,
+            anchor_digests: vec!["a".repeat(64)],
+        }
+        .encode()
+        .unwrap();
+
+        assert_eq!(
+            (
+                epoch_token_is_decodable(&valid),
+                epoch_token_is_decodable("x"),
+            ),
+            (true, false),
+        );
+    }
 
     #[rstest]
     #[case::initial_page(MessageRange { limit: Some(100), ..MessageRange::default() }, Some(100))]

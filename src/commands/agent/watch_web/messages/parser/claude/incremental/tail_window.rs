@@ -354,7 +354,7 @@ pub(super) fn find_queued_prompt_deliveries<R: Read + Seek>(
     prefix_length: u64,
     queued_prompts: &[WatchWebQueuedPrompt],
     user_marker: Option<&str>,
-    transcript_nodes: &std::collections::BTreeMap<String, TranscriptNode>,
+    transcript_nodes: &std::collections::HashMap<String, TranscriptNode>,
 ) -> io::Result<(Vec<i64>, bool)> {
     const MAX_MARKER_RECORDS: usize = 4096;
 
