@@ -775,6 +775,9 @@ it('retains the selection when loading model options fails', async () => {
 
   const snapshot = () => ({
     engineOptions: currentState?.engineOptions,
+    modelOptionRequests: fetcher.mock.calls
+      .map(([input]) => requestUrl(input))
+      .filter((url) => url.startsWith('/api/model-options')),
     currentEngineState: {
       engine: currentState?.engine,
       isLoadingModelOptions: currentState?.isLoadingModelOptions,
@@ -803,6 +806,12 @@ it('retains the selection when loading model options fails', async () => {
         activeModelOption: undefined,
       },
     },
+    modelOptionRequests: [
+      '/api/model-options?engine=claude',
+      '/api/model-options?engine=codex',
+      '/api/model-options?engine=codex',
+      '/api/model-options?engine=codex',
+    ],
     currentEngineState: {
       engine: 'codex',
       isLoadingModelOptions: false,
