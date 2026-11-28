@@ -104,10 +104,7 @@ export function useNewSession(active: boolean) {
       initialMessage,
     }
     const serializedFields = JSON.stringify(fields)
-    if (serializedFields === lastFieldsRef.current) {
-      if (initialDraft === null && storedDraft !== '') updateDraft('')
-      return
-    }
+    if (serializedFields === lastFieldsRef.current) return
     lastFieldsRef.current = serializedFields
     if (isDefaultNewSessionDraft(fields)) {
       updateDraft('')
@@ -118,11 +115,9 @@ export function useNewSession(active: boolean) {
   }, [
     directoryQuery,
     engine,
-    initialDraft,
     initialMessage,
     selectedDirectory,
     selections,
-    storedDraft,
     updateDraft,
     worktree,
   ])

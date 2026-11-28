@@ -234,37 +234,6 @@
   color: var(--aw-text-secondary);
 }
 
-.new-session-restored-notice {
-  display: flex;
-  min-height: 32px;
-  box-sizing: border-box;
-  align-items: center;
-  gap: 8px;
-  padding: 0 10px 0 16px;
-  border-bottom: 1px solid #2a2a2a;
-  color: #a1a1aa;
-  font-size: 12px;
-}
-
-.new-session-restored-notice > svg {
-  flex: 0 0 auto;
-}
-
-.new-session-restored-notice > span {
-  min-width: 0;
-  flex: 1 1 auto;
-}
-
-.new-session-restored-notice button {
-  min-height: 24px;
-  padding: 0 8px;
-  border: 1px solid #3f3f46;
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-  font: inherit;
-}
-
 .new-session-composer-actions {
   position: relative;
   display: flex;
@@ -551,19 +520,6 @@
   .new-session-composer-box textarea {
     min-height: 72px;
     font-size: 16px;
-  }
-
-  .new-session-restored-notice[data-mobile='true'] {
-    min-height: 44px;
-    padding: 0 8px 0 16px;
-    font-size: 12px;
-  }
-
-  .new-session-restored-notice[data-mobile='true'] button {
-    min-height: 44px;
-    padding: 0 10px;
-    border: 0;
-    font-size: 14px;
   }
 
   .new-session-launch-status {

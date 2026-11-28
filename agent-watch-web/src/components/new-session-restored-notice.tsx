@@ -1,4 +1,4 @@
-import '#components/new-session.css'
+import '#components/new-session-restored-notice.css'
 
 import { RotateCcw } from 'lucide-react'
 
