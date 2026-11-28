@@ -51,6 +51,33 @@ it('searches directory suggestions with the encoded query', async () => {
   })
 })
 
+it('rejects directory suggestions with a non-string last-used time', async () => {
+  const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+    new Response(
+      JSON.stringify({
+        directories: [
+          {
+            path: '/Users/example/work/service',
+            source: 'recent',
+            lastUsedAt: 123,
+          },
+        ],
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    ),
+  )
+  vi.stubGlobal('fetch', fetcher)
+
+  const result = await getSessionDirectories('')
+
+  expect(
+    result.match(
+      (directories) => ({ ok: true, directories }),
+      (error) => ({ ok: false, message: error.message }),
+    ),
+  ).toEqual({ ok: false, message: 'The server returned an invalid response' })
+})
+
 it('loads skill suggestions for the selected engine and optional directory', async () => {
   const fetcher = vi.fn<typeof fetch>().mockImplementation(() =>
     Promise.resolve(

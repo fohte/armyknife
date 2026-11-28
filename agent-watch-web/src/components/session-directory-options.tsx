@@ -1,3 +1,5 @@
+import '#components/session-directory-options.css'
+
 import { formatLastUsed } from '#components/format-last-used'
 import type { SessionDirectory } from '#new-session-api'
 

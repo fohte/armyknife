@@ -29,6 +29,7 @@ function PickerHarness({
   selectedEffort = null,
   activeModelOption = exampleModelOptions.models[0],
   initialModelPickerOpen = false,
+  now,
 }: {
   start: NewSessionState['start']
   onClose?: () => void
@@ -39,6 +40,7 @@ function PickerHarness({
   selectedEffort?: NewSessionState['selectedEffort']
   activeModelOption?: NewSessionState['activeModelOption']
   initialModelPickerOpen?: boolean
+  now?: Date
 }) {
   const [selectedDirectory, setSelectedDirectory] = useState<
     NewSessionState['selectedDirectory']
@@ -78,6 +80,7 @@ function PickerHarness({
     <NewSessionPicker
       state={state}
       initialModelPickerOpen={initialModelPickerOpen}
+      now={now}
       onClose={onClose}
       onLaunched={() => undefined}
     />
@@ -96,6 +99,48 @@ afterEach(() => {
   container.remove()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
+})
+
+it('shows the last-used time beside a recent directory title', () => {
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <PickerHarness
+        start={() => Promise.resolve()}
+        now={new Date('2026-05-06T12:06:00Z')}
+      />,
+    )
+  })
+
+  const snapshot = () =>
+    Array.from(
+      container.querySelectorAll('.session-directory-option'),
+      (option) => ({
+        title: option.querySelector('.session-directory-option-title')
+          ?.textContent,
+        when: option.querySelector('.session-directory-option-when')
+          ?.textContent,
+        path: option.querySelector('.session-directory-option-path')
+          ?.textContent,
+      }),
+    )
+  expect(snapshot()).toEqual([
+    {
+      title: 'service',
+      when: '6m ago',
+      path: '/Users/example/work/service',
+    },
+    {
+      title: 'handbook',
+      when: undefined,
+      path: '/Users/example/work/handbook',
+    },
+    {
+      title: 'scratch',
+      when: undefined,
+      path: '/Users/example/work/scratch',
+    },
+  ])
 })
 
 it('launches Codex when Option+Enter is pressed after choosing a directory', async () => {
