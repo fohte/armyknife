@@ -3974,7 +3974,11 @@ it('restores the first message and notice after closing and reopening the form',
   await act(async () => {
     await userEvent.type(messageInput, 'Continue the unfinished setup.')
   })
+  const closedForm = waitForPopState()
   clickButton('.new-session-close')
+  await act(async () => {
+    await closedForm
+  })
   clickButton('[aria-label="New session"]')
 
   const restoredTime = readNewSessionDraftTime()

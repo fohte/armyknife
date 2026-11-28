@@ -28,7 +28,12 @@ export function NewSessionRestoredNotice({
     >
       <RotateCcw aria-hidden="true" size={13} />
       <span>Restored your draft from {time}</span>
-      <button onClick={onClear} type="button">
+      <button
+        onClick={() => {
+          onClear()
+        }}
+        type="button"
+      >
         Clear
       </button>
     </div>
