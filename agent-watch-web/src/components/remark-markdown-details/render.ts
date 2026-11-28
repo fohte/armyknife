@@ -41,6 +41,15 @@ type HtmlGroup = HtmlSourceAnalysis['group']
 type Unit =
   | { node: MarkdownNode; group?: HtmlGroup }
   | { marker: Marker; group?: HtmlGroup }
+type RenderContext = {
+  analyses: ReadonlyMap<MarkdownNode, HtmlSourceAnalysis>
+  analysesByOffset: ReadonlyMap<number, HtmlSourceAnalysis>
+  markdown: MarkdownSource
+  parse: MarkdownParser
+  referenceCandidates: ReadonlySet<MarkdownNode>
+  references: readonly ReferenceDefinitionSource[]
+}
+type RenderMode = 'resolve-references' | 'render'
 function marker(
   kind: Kind,
   value: string,
@@ -293,14 +302,17 @@ function toNode(unit: Unit): MarkdownNode {
 
 function renderUnits(
   nodes: MarkdownNode[],
-  parse: MarkdownParser,
-  references: readonly ReferenceDefinitionSource[],
-  analyses: ReadonlyMap<MarkdownNode, HtmlSourceAnalysis>,
-  markdown: MarkdownSource,
-  resolveHiddenReferences: boolean,
-  analysesByOffset: ReadonlyMap<number, HtmlSourceAnalysis>,
-  referenceCandidates: ReadonlySet<MarkdownNode>,
+  context: RenderContext,
+  mode: RenderMode,
 ): MarkdownNode[] {
+  const {
+    analyses,
+    analysesByOffset,
+    markdown,
+    parse,
+    referenceCandidates,
+    references,
+  } = context
   const units = unitsFrom(nodes, parse, references, analyses, analysesByOffset)
   const { pairs, closes } = pairDetails(units)
   const result: MarkdownNode[] = []
@@ -403,41 +415,22 @@ function renderUnits(
     } else if ('marker' in unit) {
       output.push(toNode(unit))
     } else {
-      const reparsed = resolveHiddenReferences
-        ? reparseReferenceBlock(
-            unit.node,
-            referenceCandidates.has(unit.node),
-            parse,
-            references,
-            markdown,
-          )
-        : null
+      const reparsed =
+        mode === 'resolve-references'
+          ? reparseReferenceBlock(
+              unit.node,
+              referenceCandidates.has(unit.node),
+              parse,
+              references,
+              markdown,
+            )
+          : null
       if (reparsed !== null) {
-        output.push(
-          ...renderUnits(
-            reparsed,
-            parse,
-            references,
-            analyses,
-            markdown,
-            false,
-            analysesByOffset,
-            referenceCandidates,
-          ),
-        )
+        output.push(...renderUnits(reparsed, context, 'render'))
         continue
       }
       if (unit.node.children !== undefined) {
-        unit.node.children = renderUnits(
-          unit.node.children,
-          parse,
-          references,
-          analyses,
-          markdown,
-          resolveHiddenReferences,
-          analysesByOffset,
-          referenceCandidates,
-        )
+        unit.node.children = renderUnits(unit.node.children, context, mode)
       }
       output.push(unit.node)
     }
@@ -478,16 +471,17 @@ export function renderMarkdownDetails(
   markdown: MarkdownSource,
   resolveHiddenReferences: boolean,
 ) {
-  const analysesByOffset = createHtmlAnalysisOffsetMap(analyses)
-  const referenceCandidates = findReferenceCandidateNodes(nodes)
+  const context: RenderContext = {
+    analyses,
+    analysesByOffset: createHtmlAnalysisOffsetMap(analyses),
+    markdown,
+    parse,
+    referenceCandidates: findReferenceCandidateNodes(nodes),
+    references,
+  }
   return renderUnits(
     nodes,
-    parse,
-    references,
-    analyses,
-    markdown,
-    resolveHiddenReferences,
-    analysesByOffset,
-    referenceCandidates,
+    context,
+    resolveHiddenReferences ? 'resolve-references' : 'render',
   )
 }

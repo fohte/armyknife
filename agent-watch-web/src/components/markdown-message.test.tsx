@@ -514,6 +514,25 @@ See the [guide][shared-guide].`,
     ].join(String.fromCharCode(10)),
   },
   {
+    name: 'a reference after details inside a list item',
+    markdown: `- <details open>
+  <summary>References</summary>
+  [shared-guide]: https://example.com/list
+
+  Body
+  </details>
+
+  See the [guide][shared-guide].`,
+    expected: [
+      '<div class="markdown-message"><ul>',
+      '<li>',
+      '<div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">References</span></button><div class="markdown-details-body"><p>Body</p></div></div>',
+      '<p>See the <a href="https://example.com/list" target="_blank" rel="noopener noreferrer">guide</a>.</p>',
+      '</li>',
+      '</ul></div>',
+    ].join(String.fromCharCode(10)),
+  },
+  {
     name: 'source order for duplicate definitions',
     markdown: `[shared-guide]: https://example.com/outside
 
