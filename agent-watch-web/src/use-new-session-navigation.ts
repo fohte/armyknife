@@ -17,7 +17,7 @@ type NewSessionNavigationOptions = {
   ) => void
   resetNewSession: () => void
   setCommandPaletteOpen: (isOpen: boolean) => void
-  handOffSessionLaunch: () => void
+  handOffSessionLaunch: () => boolean
   requestComposerFocus: (sessionId: string) => void
 }
 
@@ -33,8 +33,9 @@ export function useNewSessionNavigation({
 }: NewSessionNavigationOptions) {
   const openNewSession = useCallback(
     (mode: NewSessionMode) => {
-      handOffSessionLaunch()
-      resetNewSession()
+      if (!handOffSessionLaunch()) {
+        resetNewSession()
+      }
       setCommandPaletteOpen(false)
       closeMobileNav()
       navigate((current) => ({
@@ -58,14 +59,16 @@ export function useNewSessionNavigation({
     ],
   )
   const closeNewSession = useCallback(() => {
-    handOffSessionLaunch()
-    resetNewSession()
+    if (!handOffSessionLaunch()) {
+      resetNewSession()
+    }
     backFromNewSession()
   }, [backFromNewSession, handOffSessionLaunch, resetNewSession])
   const switchFromNewSessionToSession = useCallback(
     (sessionId: string, conversationOpen: boolean) => {
-      handOffSessionLaunch()
-      resetNewSession()
+      if (!handOffSessionLaunch()) {
+        resetNewSession()
+      }
       replaceNewSessionWithSession(sessionId, conversationOpen)
       requestComposerFocus(sessionId)
     },

@@ -124,7 +124,7 @@ export function useSessionLaunch({
 
   const handOff = useCallback(() => {
     const current = pendingLaunchRef.current
-    if (current === null) return
+    if (current === null) return false
     let useExistingResult = true
     let launchedSessionId: string | null = null
     const run = async () => {
@@ -156,6 +156,7 @@ export function useSessionLaunch({
     })
     updatePendingLaunch(null)
     newSession.reset()
+    return true
   }, [
     launch,
     newSession.reset,
