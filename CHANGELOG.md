@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1010](https://github.com/fohte/armyknife/compare/v0.1.1009...v0.1.1010) (2026-11-28)
+
+
+### Features
+
+* **agent-watch-web:** show first-message images ([#2448](https://github.com/fohte/armyknife/issues/2448)) ([605ff4a](https://github.com/fohte/armyknife/commit/605ff4a5e37b4be7dad220c04a8a080a2d0ed7e7))
+
 ## [0.1.1009](https://github.com/fohte/armyknife/compare/v0.1.1008...v0.1.1009) (2026-11-28)
 
 
