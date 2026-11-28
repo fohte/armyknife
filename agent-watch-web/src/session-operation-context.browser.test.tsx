@@ -153,7 +153,6 @@ function MessageOperationHarness() {
                   backgroundTasks: [],
                   start: 0,
                   total: 3,
-                  decisions: [],
                   hasUnansweredProposal: false,
                   activeQuestionIndex: null,
                 }

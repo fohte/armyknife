@@ -61,6 +61,9 @@ export function useAppSessionProjection({
         (session) => session.category === 'later',
       ),
       ...sessionsWithElapsedTime.filter(
+        (session) => session.category === 'waiting',
+      ),
+      ...sessionsWithElapsedTime.filter(
         (session) => session.category === 'in_progress',
       ),
       ...sessionsWithElapsedTime.filter(

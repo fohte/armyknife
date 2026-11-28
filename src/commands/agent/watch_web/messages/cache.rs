@@ -4,8 +4,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use crate::commands::agent::store::{
-    AgentDecision, AgentFile, AgentProposal, AgentTodo, PermissionDeniedOperation,
-    WatchWebPeerOutMessage, WatchWebQueuedPrompt,
+    AgentFile, AgentProposal, AgentTodo, PermissionDeniedOperation, WatchWebPeerOutMessage,
+    WatchWebQueuedPrompt,
 };
 use crate::commands::agent::types::{Engine, Session};
 
@@ -41,7 +41,6 @@ pub(super) struct MessageCacheKey {
     pub(super) current_tool: Option<String>,
     pub(super) current_tool_name: Option<String>,
     pub(super) user_marker: Option<String>,
-    pub(super) decisions: Vec<AgentDecision>,
     pub(super) queued_prompts: Vec<WatchWebQueuedPrompt>,
     pub(super) peer_out_messages: Vec<WatchWebPeerOutMessage>,
     pub(super) proposals: Vec<AgentProposal>,
@@ -55,7 +54,6 @@ impl MessageCacheKey {
         session: &Session,
         parent: Option<ParentSession>,
         user_marker: Option<String>,
-        decisions: Vec<AgentDecision>,
         queued_prompts: Vec<WatchWebQueuedPrompt>,
         peer_out_messages: Vec<WatchWebPeerOutMessage>,
         records: MessageCacheRecords,
@@ -94,7 +92,6 @@ impl MessageCacheKey {
             current_tool: session.current_tool.clone(),
             current_tool_name: session.current_tool_name.clone(),
             user_marker,
-            decisions,
             queued_prompts,
             peer_out_messages,
             proposals: records.proposals,
@@ -362,7 +359,6 @@ mod tests {
             None,
             Vec::new(),
             Vec::new(),
-            Vec::new(),
             MessageCacheRecords::default(),
         )
         .unwrap()
@@ -453,7 +449,6 @@ mod tests {
             None,
             Vec::new(),
             Vec::new(),
-            Vec::new(),
             MessageCacheRecords::default(),
         )
         .unwrap();
@@ -462,7 +457,6 @@ mod tests {
             &session,
             None,
             None,
-            Vec::new(),
             Vec::new(),
             Vec::new(),
             MessageCacheRecords::default(),
@@ -494,7 +488,6 @@ mod tests {
             None,
             Vec::new(),
             Vec::new(),
-            Vec::new(),
             MessageCacheRecords::default(),
         )
         .unwrap();
@@ -506,7 +499,6 @@ mod tests {
             &session,
             None,
             None,
-            Vec::new(),
             Vec::new(),
             Vec::new(),
             MessageCacheRecords::default(),
@@ -549,7 +541,6 @@ mod tests {
             None,
             Vec::new(),
             Vec::new(),
-            Vec::new(),
             MessageCacheRecords::default(),
         )
         .unwrap();
@@ -565,7 +556,6 @@ mod tests {
             &session,
             None,
             None,
-            Vec::new(),
             Vec::new(),
             Vec::new(),
             MessageCacheRecords::default(),
@@ -592,7 +582,6 @@ mod tests {
             None,
             Vec::new(),
             Vec::new(),
-            Vec::new(),
             MessageCacheRecords::default(),
         )
         .unwrap();
@@ -601,7 +590,6 @@ mod tests {
             &session,
             None,
             None,
-            Vec::new(),
             Vec::new(),
             Vec::new(),
             MessageCacheRecords::default(),

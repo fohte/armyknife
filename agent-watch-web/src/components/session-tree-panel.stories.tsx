@@ -23,7 +23,6 @@ const meta = {
         task: null,
         repo: 'sample/repo',
         vibeMode: { mode: 'enabled' },
-        decisionCount: 0,
         pullRequest: null,
       },
       {
@@ -40,7 +39,6 @@ const meta = {
         task: null,
         repo: 'sample/repo',
         vibeMode: { mode: 'inherited', ancestorSessionId: 'root-session' },
-        decisionCount: 0,
         pullRequest: null,
       },
       {
@@ -62,7 +60,6 @@ const meta = {
         },
         repo: 'sample/other-repo',
         vibeMode: { mode: 'disabled' },
-        decisionCount: 0,
         pullRequest: null,
       },
     ],

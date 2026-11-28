@@ -1,6 +1,9 @@
 import { err, ok, Result, ResultAsync } from 'neverthrow'
 
-import type { CloseWorktreeChecks } from '#session-operation-types'
+import type {
+  CloseChangeStatus,
+  CloseWorktreeChecks,
+} from '#session-operation-types'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
@@ -12,12 +15,37 @@ function toError(error: unknown) {
     : new Error('Request failed', { cause: error })
 }
 
+function isCloseChangeStatus(value: unknown): value is CloseChangeStatus {
+  return (
+    value === 'M' ||
+    value === 'A' ||
+    value === 'D' ||
+    value === 'R' ||
+    value === '??'
+  )
+}
+
 function isCloseWorktreeChecks(value: unknown): value is CloseWorktreeChecks {
   return (
     isRecord(value) &&
     typeof value['path'] === 'string' &&
     Array.isArray(value['files']) &&
     value['files'].every((file) => typeof file === 'string') &&
+    Array.isArray(value['changes']) &&
+    value['changes'].every(
+      (change) =>
+        isRecord(change) &&
+        isCloseChangeStatus(change['status']) &&
+        typeof change['path'] === 'string',
+    ) &&
+    Array.isArray(value['commits']) &&
+    value['commits'].every(
+      (commit) =>
+        isRecord(commit) &&
+        typeof commit['sha'] === 'string' &&
+        typeof commit['subject'] === 'string',
+    ) &&
+    typeof value['commitInspectionUnavailable'] === 'boolean' &&
     (typeof value['branch'] === 'string' || value['branch'] === null) &&
     (typeof value['merged'] === 'boolean' || value['merged'] === null) &&
     (typeof value['reason'] === 'string' || value['reason'] === null) &&
@@ -82,15 +110,6 @@ export function requestJson<T>(
   return ResultAsync.fromPromise(fetch(url), toError).andThen((response) =>
     jsonFromResponse(response, validate),
   )
-}
-
-export function requestText(url: string) {
-  return ResultAsync.fromPromise(fetch(url), toError).andThen((response) => {
-    if (!response.ok) {
-      return errorFromResponse(response).andThen((error) => err(error))
-    }
-    return ResultAsync.fromPromise(response.text(), toError)
-  })
 }
 
 export function requestUtf8Text(url: string) {

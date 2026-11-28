@@ -66,7 +66,10 @@ function TextPreview({
         <span className="chat-file-preview-loading">Loading preview…</span>
       ) : null
     ) : file.previewType === 'markdown' ? (
-      <MarkdownMessage className="chat-file-markdown-preview">
+      <MarkdownMessage
+        className="chat-file-markdown-preview"
+        unmappedImagePathsAreLocal={false}
+      >
         {content}
       </MarkdownMessage>
     ) : (

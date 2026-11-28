@@ -60,7 +60,6 @@ type ConversationPaneViewProps = {
   start?: number
   epoch?: string | undefined
   olderCursor?: string | undefined
-  decisions?: readonly Extract<ChatItem, { type: 'decision' }>[]
   hasUnansweredProposal?: boolean
   loadingOlder?: boolean
   onLoadOlder?: () => void
@@ -102,13 +101,8 @@ type ConversationPaneViewProps = {
   pullRequestListTarget?: HTMLElement | null
   mobileWebUi?: ReactNode
   mobileUpdateNotice?: ReactNode
-  selectedDecisionSeq?: number | null
-  decisionJump?: { seq: number } | null
-  onDecisionJumpComplete?: () => void
-  onDecisionJumpSucceeded?: () => void
   onToggleStatusPanel?: () => void
   onOpenTasks?: () => void
-  onSelectDecision?: (seq: number) => void
   fileDropActive?: boolean
   onBack?: () => void
   onOpenNavigation?: () => void
@@ -132,7 +126,6 @@ export function ConversationPaneView({
   start = 0,
   epoch,
   olderCursor,
-  decisions,
   hasUnansweredProposal: responseHasUnansweredProposal,
   loadingOlder = false,
   onLoadOlder = () => undefined,
@@ -165,13 +158,8 @@ export function ConversationPaneView({
   pullRequestListTarget = null,
   mobileWebUi = null,
   mobileUpdateNotice,
-  selectedDecisionSeq = null,
-  decisionJump = null,
-  onDecisionJumpComplete = () => undefined,
-  onDecisionJumpSucceeded = () => undefined,
   onToggleStatusPanel = () => undefined,
   onOpenTasks = () => undefined,
-  onSelectDecision = () => undefined,
   fileDropActive = false,
   onBack,
   onOpenNavigation,
@@ -241,10 +229,7 @@ export function ConversationPaneView({
     start,
     epoch,
     olderCursor,
-    decisionJump,
     isMobile,
-    onDecisionJumpComplete,
-    onDecisionJumpSucceeded,
   })
   useConversationCommandOutputHighlight({
     loading,
@@ -297,7 +282,6 @@ export function ConversationPaneView({
     messages,
     ...(messageImageSources === undefined ? {} : { messageImageSources }),
     start,
-    ...(decisions === undefined ? {} : { decisions }),
     ...(responseHasUnansweredProposal === undefined
       ? {}
       : { hasUnansweredProposal: responseHasUnansweredProposal }),
@@ -308,8 +292,6 @@ export function ConversationPaneView({
     actions,
     actionsReady,
     isMobile,
-    selectedDecisionSeq,
-    onSelectDecision,
     onAction,
     ...(onCommandExecuted === undefined ? {} : { onCommandExecuted }),
     ...(onCommandStarted === undefined ? {} : { onCommandStarted }),
@@ -331,6 +313,7 @@ export function ConversationPaneView({
     session,
     messages,
     backgroundTasks,
+    ...(activeTool === undefined ? {} : { activeTool }),
     editorReviewDocument: editorReviewDocument ?? null,
   })
   const returnToRequestCard = () => {
@@ -373,7 +356,11 @@ export function ConversationPaneView({
       onDrop={onDrop}
     >
       {fileDropActive || isFileDragActive ? (
-        <FileDropIndicator className="conversation-drop-target" />
+        <FileDropIndicator
+          className="conversation-drop-target"
+          label="Drop images to attach"
+          variant="conversation"
+        />
       ) : null}
       <ConversationPaneHeader
         key={session.id}
@@ -444,6 +431,7 @@ export function ConversationPaneView({
           isMobile={isMobile}
           isResuming={isResumePending}
           canResume={actions.resume !== false}
+          resumeDisabledReason={actions.resumeDisabledReason}
           onResume={resume}
         />
       ) : (

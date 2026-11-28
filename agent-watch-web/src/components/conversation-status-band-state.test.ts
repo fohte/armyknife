@@ -89,6 +89,18 @@ type StatusCase = {
 
 const statusCases: StatusCase[] = [
   {
+    name: 'waiting category',
+    input: {
+      session: {
+        ...session,
+        category: 'waiting',
+        activityStatus: 'waiting',
+        waitingReason: 'Waiting for the build to finish',
+      },
+    },
+    expected: { kind: 'waiting', detail: 'Waiting for the build to finish' },
+  },
+  {
     name: 'working',
     input: { session: { ...session, activityStatus: 'working' as const } },
     expected: { kind: 'working', detail: null },
@@ -374,6 +386,42 @@ it.each(statusCases)(
     ).toEqual(expected)
   },
 )
+
+it('shows an active tool while the session is working and marked as compacting', () => {
+  expect(
+    getConversationStatusBandState({
+      session: {
+        ...session,
+        activityStatus: 'working',
+        isCompacting: true,
+      },
+      messages: [],
+      backgroundTasks: [],
+      activeTool: { tool: 'Bash', target: 'cargo test --package sample' },
+    }),
+  ).toEqual({ kind: 'working', detail: null })
+})
+
+it('keeps draft review primary while an active tool is marked as compacting', () => {
+  expect(
+    getConversationStatusBandState({
+      session: {
+        ...session,
+        activityStatus: 'working',
+        isCompacting: true,
+        reviewDocumentId: editorIssueComment.id,
+        reviewDocumentCount: 1,
+      },
+      messages: [],
+      backgroundTasks: [],
+      activeTool: { tool: 'Bash', target: 'cargo test --package sample' },
+      editorReviewDocument: editorIssueCommentState,
+    }),
+  ).toEqual({
+    kind: 'draft-review',
+    detail: '1 draft · Issue comment #1234 is in the editor',
+  })
+})
 
 it('keeps Crit review primary while background tasks continue', () => {
   expect(

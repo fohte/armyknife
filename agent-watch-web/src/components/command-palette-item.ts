@@ -105,6 +105,8 @@ export function itemIcon(item: PaletteItem) {
       return '◆'
     case 'later':
       return '◷'
+    case 'waiting':
+      return '⌛︎'
     case 'in_progress':
       return '●'
     case 'done':

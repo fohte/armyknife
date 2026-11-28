@@ -24,7 +24,6 @@ const EMPTY_CONVERSATION: ConversationResponse = {
   skills: [],
   start: 0,
   total: 0,
-  decisions: [],
   hasUnansweredProposal: false,
   activeQuestionIndex: null,
 }

@@ -77,29 +77,11 @@ pub(crate) fn set_watch_web_compacting(
 
     let mut connection = open_connection(sessions_dir)?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let current: Option<Option<bool>> = transaction
-        .query_row(
-            "SELECT is_compacting FROM watch_web_session_state WHERE session_id = ?1",
-            [session_id],
-            |row| row.get(0),
-        )
-        .optional()?;
-    let exists: bool = transaction.query_row(
-        "SELECT EXISTS(SELECT 1 FROM sessions WHERE session_id = ?1)",
-        [session_id],
-        |row| row.get(0),
-    )?;
-    if !exists || current.flatten().unwrap_or(false) == is_compacting {
+    if !set_watch_web_compacting_in_transaction(&transaction, session_id, is_compacting)? {
         transaction.rollback()?;
         return Ok(false);
     }
 
-    transaction.execute(
-        "INSERT INTO watch_web_session_state (session_id, is_compacting)
-         VALUES (?1, ?2)
-         ON CONFLICT(session_id) DO UPDATE SET is_compacting = excluded.is_compacting",
-        params![session_id, is_compacting],
-    )?;
     let revision = super::increment_revision(&transaction)?;
     let changed = transaction.execute(
         "UPDATE sessions SET rev = ?1 WHERE session_id = ?2",
@@ -110,6 +92,70 @@ pub(crate) fn set_watch_web_compacting(
         "session {session_id} disappeared during state update"
     );
     transaction.commit()?;
+    Ok(true)
+}
+
+pub(in crate::commands::agent::store) fn watch_web_session_start_generation(
+    sessions_dir: &Path,
+    session_id: &str,
+) -> Result<i64> {
+    super::validate_session_id(session_id)?;
+    if !sessions_dir.exists() {
+        return Ok(0);
+    }
+
+    let connection = open_connection(sessions_dir)?;
+    connection
+        .query_row(
+            "SELECT generation FROM watch_web_session_start WHERE session_id = ?1",
+            [session_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map(|generation| generation.unwrap_or_default())
+        .map_err(Into::into)
+}
+
+pub(super) fn record_watch_web_session_start_in_transaction(
+    connection: &Connection,
+    session_id: &str,
+) -> Result<()> {
+    connection.execute(
+        "INSERT INTO watch_web_session_start (session_id, generation)
+         VALUES (?1, 1)
+         ON CONFLICT(session_id) DO UPDATE SET generation = generation + 1",
+        [session_id],
+    )?;
+    Ok(())
+}
+
+pub(super) fn set_watch_web_compacting_in_transaction(
+    connection: &Connection,
+    session_id: &str,
+    is_compacting: bool,
+) -> Result<bool> {
+    let exists: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sessions WHERE session_id = ?1)",
+        [session_id],
+        |row| row.get(0),
+    )?;
+    let current: Option<Option<bool>> = connection
+        .query_row(
+            "SELECT is_compacting FROM watch_web_session_state WHERE session_id = ?1",
+            [session_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if !exists || current.flatten().unwrap_or(false) == is_compacting {
+        return Ok(false);
+    }
+
+    connection.execute(
+        "INSERT INTO watch_web_session_state (session_id, is_compacting)
+         VALUES (?1, ?2)
+         ON CONFLICT(session_id) DO UPDATE SET is_compacting = excluded.is_compacting",
+        params![session_id, is_compacting],
+    )?;
     Ok(true)
 }
 

@@ -17,22 +17,6 @@ pub use caller::find_caller_pids_in_path;
 pub use worktree::{ProcessInPath, SHELL_COMMANDS, find_non_shell_processes_in_path};
 pub(crate) use worktree::{WorktreeProcessInspection, inspect_worktree_processes};
 
-/// Looks up the parent PID of `pid` using `ps -o ppid= -p <pid>`.
-/// Returns `None` if the process is gone or `ps` fails.
-pub fn get_parent_pid(pid: u32) -> Option<u32> {
-    let output = command::new("ps")
-        .args(["-o", "ppid=", "-p", &pid.to_string()])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .parse::<u32>()
-        .ok()
-}
-
 /// Process topology and command names captured from the process table.
 ///
 /// Stores a parent → children mapping so callers can search for descendants
@@ -137,6 +121,23 @@ impl ProcessSnapshot {
             current = parent;
         }
         result
+    }
+
+    /// Returns the nearest recognized agent ancestor of `pid`.
+    pub(crate) fn agent_ancestor_engine(&self, pid: u32) -> Option<&'static str> {
+        let mut current = pid;
+        let mut visited = HashSet::from([pid]);
+        while let Some(&parent) = self.parents.get(&current) {
+            if !visited.insert(parent) {
+                break;
+            }
+            match self.comm_basename(parent) {
+                Some("claude") => return Some("claude-code"),
+                Some("codex") => return Some("codex"),
+                _ => current = parent,
+            }
+        }
+        None
     }
 
     /// Returns caller-pane descendants that should not block worktree removal.
@@ -373,6 +374,62 @@ mod tests {
     }
 
     #[rstest]
+    #[case::claude_code(
+        indoc! {"
+            10 1 launchd
+            20 10 claude
+            30 20 a
+        "},
+        30,
+        Some("claude-code"),
+    )]
+    #[case::codex_app_server(
+        indoc! {"
+            10 1 launchd
+            20 10 codex
+            30 20 a
+        "},
+        30,
+        Some("codex"),
+    )]
+    #[case::codex_exec(
+        indoc! {"
+            10 1 launchd
+            20 10 /opt/tools/codex
+            30 20 a
+        "},
+        30,
+        Some("codex"),
+    )]
+    #[case::nearest_agent_ancestor(
+        indoc! {"
+            10 1 launchd
+            20 10 claude
+            30 20 codex
+            40 30 a
+        "},
+        40,
+        Some("codex"),
+    )]
+    #[case::unrelated_process(
+        indoc! {"
+            10 1 launchd
+            20 10 zsh
+            30 20 a
+        "},
+        30,
+        None,
+    )]
+    fn agent_ancestor_engine_cases(
+        #[case] processes: &str,
+        #[case] pid: u32,
+        #[case] expected: Option<&str>,
+    ) {
+        let snapshot = ProcessSnapshot::from_ps_output(processes);
+        assert_eq!(snapshot.agent_ancestor_engine(pid), expected);
+    }
+
+    #[rstest]
     #[case::pane_pid_is_claude_basename(
         indoc! {"
             100 1 /sbin/launchd
@@ -504,56 +561,5 @@ mod tests {
             .map(|&(pid, path)| (pid, PathBuf::from(path)))
             .collect();
         assert_eq!(got, expected);
-    }
-
-    #[rstest]
-    #[case::nested_under_claude(
-        indoc! {"
-            100 1 init
-            200 100 claude
-            300 200 claude
-            400 300 hook
-        "},
-        400,
-        true,
-    )]
-    #[case::nested_under_codex(
-        indoc! {"
-            100 1 init
-            200 100 claude
-            300 200 /agent/bin/codex
-            400 300 hook
-        "},
-        400,
-        true,
-    )]
-    #[case::direct_agent_process(
-        indoc! {"
-            100 1 init
-            200 100 claude
-            300 200 hook
-        "},
-        300,
-        false,
-    )]
-    #[case::ordinary_shell_ancestor(
-        indoc! {"
-            100 1 init
-            200 100 zsh
-            300 200 hook
-        "},
-        300,
-        false,
-    )]
-    fn has_parent_agent_process_cases(
-        #[case] ps_output: &str,
-        #[case] pid: u32,
-        #[case] expected: bool,
-    ) {
-        let snapshot = ProcessSnapshot::from_ps_output(ps_output);
-        assert_eq!(
-            crate::commands::agent::pane::process::has_parent_agent_process(pid, &snapshot),
-            expected,
-        );
     }
 }

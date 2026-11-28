@@ -46,6 +46,36 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+it('uses an hourglass for the external waiting state', () => {
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationStatusBand
+        state={{ kind: 'waiting', detail: 'Waiting for the checks to finish' }}
+        elapsedSeconds={0}
+        activeTool={undefined}
+        backgroundTasks={[]}
+      />,
+    )
+  })
+
+  const snapshot = () => ({
+    icon: container
+      .querySelector('.conversation-status-band-hourglass')
+      ?.classList.contains('lucide-hourglass'),
+    label: container.querySelector('.conversation-status-band-label')
+      ?.textContent,
+    detail: container.querySelector('.conversation-status-band-inline-detail')
+      ?.textContent,
+  })
+
+  expect(snapshot()).toEqual({
+    icon: true,
+    label: 'Waiting',
+    detail: 'Waiting for the checks to finish',
+  })
+})
+
 it('updates the working elapsed label from the shared clock', async () => {
   vi.useFakeTimers()
   vi.setSystemTime(new Date('2026-11-10T00:00:00.000Z'))

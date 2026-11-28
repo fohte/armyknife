@@ -1,11 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import { useOptionalAsyncActionFeedback } from '#async-action-feedback'
 import { getPendingCritReviewUrl } from '#components/conversation-crit-url'
 import { isReviewDocumentResponse } from '#components/conversation-pane-response'
 import { requestJson } from '#components/conversation-requests'
-import type { Decision } from '#components/decision-card'
-import { DecisionsPanel } from '#components/decisions-panel'
 import {
   frontmatterForReviewFinish,
   requestReviewDocumentAction,
@@ -29,15 +27,13 @@ import {
   needsActionDescendantCount,
   type SessionTreeViewState,
 } from '#session-tree-model'
-import type { BackgroundTask, ChatItem, Session, SessionTreeNode } from '#types'
+import type { BackgroundTask, Session, SessionTreeNode } from '#types'
 
 type UseConversationStatusPanelOptions = {
   session: Session
   actionTimelineIndex?: number | undefined
   reviewDocumentSummaries?: ReviewDocumentSummariesState | null
   onRetryReviewDocumentSummaries?: () => void
-  messages: readonly ChatItem[]
-  allDecisions?: readonly Decision[]
   backgroundTasks: readonly BackgroundTask[]
   sessionTree?: readonly SessionTreeNode[] | null
   sessionTreeError?: string | null
@@ -57,8 +53,6 @@ type UseConversationStatusPanelOptions = {
 export function useConversationStatusPanel({
   session,
   actionTimelineIndex,
-  messages,
-  allDecisions,
   backgroundTasks,
   sessionTree = null,
   sessionTreeError = null,
@@ -78,17 +72,6 @@ export function useConversationStatusPanel({
   const [activePanelTabId, setActivePanelTabId] = useState<string | null>(null)
   const [pullRequestListTarget, setPullRequestListTarget] =
     useState<HTMLDivElement | null>(null)
-  const [selectedDecisionSeq, setSelectedDecisionSeq] = useState<number | null>(
-    null,
-  )
-  const [decisionJump, setDecisionJump] = useState<{ seq: number } | null>(null)
-  const onDecisionJumpComplete = useCallback(() => {
-    setDecisionJump(null)
-  }, [])
-  const onDecisionJumpSucceeded = useCallback(() => {
-    onDecisionJumpComplete()
-    if (isMobile) onCloseStatusPanel()
-  }, [isMobile, onCloseStatusPanel, onDecisionJumpComplete])
   const [reviewDocumentStates, setReviewDocumentStates] =
     useState<ReviewDocumentStates>({})
   const [reviewDocumentRetryCounts, setReviewDocumentRetryCounts] = useState<
@@ -124,19 +107,6 @@ export function useConversationStatusPanel({
     selectedDocumentId === null
       ? 0
       : (reviewDocumentRetryCounts[selectedDocumentId] ?? 0)
-  const decisions =
-    allDecisions ??
-    messages.filter(
-      (message): message is Decision => message.type === 'decision',
-    )
-  const decisionCount = session.decisionCount ?? decisions.length
-  const unreviewedDecisionCount =
-    session.unreviewedDecisionCount ??
-    decisions.filter((decision) => decision.review === null).length
-  const selectedDecision =
-    decisions.find((decision) => decision.seq === selectedDecisionSeq) ??
-    decisions.find((decision) => decision.review === null) ??
-    decisions[0]
   const pendingCritReviewUrl = getPendingCritReviewUrl(session)
   const registeredWebUis = (session.webUis ?? []).filter(
     (webUi) => webUi.name !== 'crit' || webUi.url.trim() !== '',
@@ -177,7 +147,6 @@ export function useConversationStatusPanel({
     ...(sessionTasks.length === 0 ? [] : ['tasks']),
     ...(treeAvailable ? ['tree'] : []),
     ...(reviewTabCount === 0 ? [] : ['review-document']),
-    ...(decisionCount === 0 ? [] : ['decisions']),
     ...webUiTabIds,
   ]
   const defaultPanelTabId =
@@ -551,34 +520,6 @@ export function useConversationStatusPanel({
           },
         ]
       : []),
-    ...(availableTabIds.includes('decisions')
-      ? [
-          {
-            id: 'decisions',
-            label: 'Decisions',
-            count: unreviewedDecisionCount,
-            visible: true,
-            showCount: true,
-            countTone: 'warning' as const,
-            content: (
-              <DecisionsPanel
-                decisions={decisions}
-                session={session}
-                selectedSeq={selectedDecision?.seq ?? null}
-                showReviewed
-                onSelect={(seq) => {
-                  setSelectedDecisionSeq(seq)
-                  setDecisionJump({ seq })
-                }}
-                onOk={(seq) => onAction(`decisions/${String(seq)}/ok`)}
-                onChange={(seq, comment) =>
-                  onAction(`decisions/${String(seq)}/change`, { comment })
-                }
-              />
-            ),
-          },
-        ]
-      : []),
     ...webUis.map((webUi, index) => ({
       id: webUiTabIds[index] ?? `web-ui-${String(index)}`,
       label: webUi.name,
@@ -640,12 +581,7 @@ export function useConversationStatusPanel({
     onCloseReviewFocus: () => {
       setReviewFocusOpen(false)
     },
-    onDecisionJumpComplete,
-    onDecisionJumpSucceeded,
-    onSelectDecision: setSelectedDecisionSeq,
-    decisionJump,
     onTabChange: setActivePanelTabId,
-    selectedDecisionSeq: selectedDecision?.seq ?? null,
     tabs,
   }
 }

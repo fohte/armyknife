@@ -236,6 +236,27 @@ pub fn capture_pane_with_escapes_for_socket(
     run_tmux_output_for_socket(socket_path, &["capture-pane", "-p", "-e", "-t", pane_id]).ok()
 }
 
+/// Captures plain pane text from its recorded server while preserving output whitespace.
+pub(crate) fn capture_pane_for_socket_result(
+    socket_path: Option<&str>,
+    pane_id: &str,
+) -> super::Result<String> {
+    capture_pane_for_socket_result_with(socket_path, pane_id, |args| {
+        super::run_tmux_output_untrimmed(args)
+    })
+}
+
+fn capture_pane_for_socket_result_with(
+    socket_path: Option<&str>,
+    pane_id: &str,
+    run_tmux_output: impl FnOnce(&[OsString]) -> super::Result<String>,
+) -> super::Result<String> {
+    run_tmux_output(&socket_command_args(
+        socket_path,
+        &["capture-pane", "-p", "-t", pane_id],
+    ))
+}
+
 /// Sends keys to a pane on its recorded server.
 pub fn send_keys_for_socket(socket_path: Option<&str>, pane_id: &str, keys: &str) -> Result<()> {
     send_keys_sequence_for_socket(socket_path, pane_id, &[keys])
@@ -439,6 +460,40 @@ mod tests {
         assert_eq!(
             socket_selector_args(socket_path),
             expected.into_iter().map(OsString::from).collect::<Vec<_>>(),
+        );
+    }
+
+    #[test]
+    fn plain_pane_capture_uses_the_recorded_socket_and_preserves_output() {
+        let expected_output = ["", "fixture pane output", ""].join("\n");
+        let mut actual_args = None;
+        let actual_output = capture_pane_for_socket_result_with(
+            Some("/tmp/armyknife-test/private.sock"),
+            "%47",
+            |args| {
+                actual_args = Some(
+                    args.iter()
+                        .map(|arg| arg.to_string_lossy().into_owned())
+                        .collect::<Vec<_>>(),
+                );
+                Ok(expected_output.clone())
+            },
+        )
+        .map_err(|error| error.to_string());
+
+        assert_eq!(
+            (actual_output, actual_args),
+            (
+                Ok(expected_output),
+                Some(vec![
+                    "-S".to_owned(),
+                    "/tmp/armyknife-test/private.sock".to_owned(),
+                    "capture-pane".to_owned(),
+                    "-p".to_owned(),
+                    "-t".to_owned(),
+                    "%47".to_owned(),
+                ]),
+            ),
         );
     }
 
