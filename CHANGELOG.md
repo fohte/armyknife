@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1009](https://github.com/fohte/armyknife/compare/v0.1.1008...v0.1.1009) (2026-11-28)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** keep launches after leaving ([#2436](https://github.com/fohte/armyknife/issues/2436)) ([7b515e0](https://github.com/fohte/armyknife/commit/7b515e0e351365dd485a542298f6165e276c5533))
+
 ## [0.1.1008](https://github.com/fohte/armyknife/compare/v0.1.1007...v0.1.1008) (2026-11-28)
 
 
