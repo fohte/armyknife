@@ -32,15 +32,6 @@ impl ApiError {
         }
     }
 
-    pub(super) fn decision_not_found() -> Self {
-        Self {
-            status: StatusCode::NOT_FOUND,
-            message: "decision not found".to_string(),
-            code: None,
-            checks: None,
-        }
-    }
-
     pub(super) fn conflict(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::CONFLICT,
@@ -84,6 +75,18 @@ impl ApiError {
             .is_some()
         {
             return Self::internal(error);
+        }
+
+        if error
+            .downcast_ref::<crate::shared::worktree_delete::discard::DiscardMismatchError>()
+            .is_some()
+        {
+            return Self {
+                status: StatusCode::CONFLICT,
+                message: error.to_string(),
+                code: Some("close_checks_changed"),
+                checks: None,
+            };
         }
 
         if let Some(dirty_worktree) =

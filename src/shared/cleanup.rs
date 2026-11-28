@@ -81,7 +81,11 @@ fn cleanup_sessions_in_path_with_policy(
             send_sigterm: tmux::send_sigterm_to_pane_for_socket,
             delete_session: store::delete_session_without_archive,
             withdraw_pending_cards: |session_id: &str| match store::sessions_dir() {
-                Ok(sessions_dir) => withdraw_pending_cards(&sessions_dir, session_id),
+                Ok(sessions_dir) => withdraw_pending_cards(
+                    &sessions_dir,
+                    session_id,
+                    "Withdrawn during worktree cleanup.",
+                ),
                 Err(error) => PendingCardCleanup::failed(error),
             },
             remove_notification_group: crate::infra::notification::remove_group,
@@ -313,7 +317,11 @@ fn cleanup_sessions(
     cleaned
 }
 
-fn withdraw_pending_todos(sessions_dir: &Path, session_id: &str) -> anyhow::Result<()> {
+fn withdraw_pending_todos(
+    sessions_dir: &Path,
+    session_id: &str,
+    comment: &str,
+) -> anyhow::Result<()> {
     let todos = store::agent_todos_from(sessions_dir, session_id)?;
     let mut errors = Vec::new();
 
@@ -323,7 +331,7 @@ fn withdraw_pending_todos(sessions_dir: &Path, session_id: &str) -> anyhow::Resu
             session_id,
             todo.seq,
             store::TodoResolution::Withdrawn,
-            Some("Withdrawn during worktree cleanup."),
+            Some(comment),
         ) {
             errors.push(format!("todo {}: {error:#}", todo.seq));
         }
@@ -336,7 +344,11 @@ fn withdraw_pending_todos(sessions_dir: &Path, session_id: &str) -> anyhow::Resu
     }
 }
 
-fn withdraw_pending_proposals(sessions_dir: &Path, session_id: &str) -> anyhow::Result<()> {
+fn withdraw_pending_proposals(
+    sessions_dir: &Path,
+    session_id: &str,
+    comment: &str,
+) -> anyhow::Result<()> {
     let proposals = store::agent_proposals_from(sessions_dir, session_id)?;
     let mut errors = Vec::new();
 
@@ -351,7 +363,7 @@ fn withdraw_pending_proposals(sessions_dir: &Path, session_id: &str) -> anyhow::
                 sessions_dir,
                 session_id,
                 proposal.seq,
-                Some("Withdrawn during worktree cleanup."),
+                Some(comment),
             )?;
             anyhow::Ok(())
         })();
@@ -368,13 +380,17 @@ fn withdraw_pending_proposals(sessions_dir: &Path, session_id: &str) -> anyhow::
     }
 }
 
-fn withdraw_pending_cards(sessions_dir: &Path, session_id: &str) -> PendingCardCleanup {
+fn withdraw_pending_cards(
+    sessions_dir: &Path,
+    session_id: &str,
+    comment: &str,
+) -> PendingCardCleanup {
     let todo_resolution_lock = match store::lock_agent_todo_resolution(sessions_dir, session_id) {
         Ok(lock) => lock,
         Err(error) => return PendingCardCleanup::failed(error),
     };
-    let todo_result = withdraw_pending_todos(sessions_dir, session_id);
-    let proposal_result = withdraw_pending_proposals(sessions_dir, session_id);
+    let todo_result = withdraw_pending_todos(sessions_dir, session_id, comment);
+    let proposal_result = withdraw_pending_proposals(sessions_dir, session_id, comment);
     let errors = [todo_result.err(), proposal_result.err()]
         .into_iter()
         .flatten()
@@ -388,6 +404,24 @@ fn withdraw_pending_cards(sessions_dir: &Path, session_id: &str) -> PendingCardC
             _todo_resolution_lock: Some(todo_resolution_lock),
             error: Some(anyhow::anyhow!(errors.join("; "))),
         }
+    }
+}
+
+pub(crate) fn withdraw_ended_session_cards(sessions_dir: &Path, session_id: &str) {
+    let cleanup = withdraw_pending_cards(
+        sessions_dir,
+        session_id,
+        "Withdrawn because the session ended.",
+    );
+    let PendingCardCleanup { error, .. } = cleanup;
+
+    if let Some(error) = error {
+        tracing::warn!(
+            target: "armyknife::shared::cleanup",
+            event = "cleanup.ended_session_card_withdrawal.err",
+            session = %session_id,
+            msg = format!("failed to withdraw pending cards: {error:#}"),
+        );
     }
 }
 
@@ -543,7 +577,13 @@ mod tests {
             },
             |_, _| {},
             |_| Ok(true),
-            |session_id| withdraw_pending_cards(sessions_dir.path(), session_id),
+            |session_id| {
+                withdraw_pending_cards(
+                    sessions_dir.path(),
+                    session_id,
+                    "Withdrawn during worktree cleanup.",
+                )
+            },
             |_| Ok(()),
             |_| Ok(()),
         );

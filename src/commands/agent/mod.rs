@@ -12,12 +12,14 @@ pub(crate) mod claude_registry;
 pub(crate) mod claude_sessions;
 mod clean;
 mod clean_detached;
+mod cleanup_stale_sessions;
 mod close;
 mod codex;
 pub(crate) mod codex_steer;
 mod codex_subagent_stop;
 mod compact_transcript_slim;
 mod crit;
+mod current;
 mod decision;
 mod display;
 mod error;
@@ -120,6 +122,9 @@ pub enum AgentCommands {
     /// Start Codex and bind its thread ID to the current tmux pane
     Codex(CodexArgs),
 
+    /// Print the current agent engine as JSON
+    Current(current::CurrentArgs),
+
     /// Wake an idle Codex parent after a subagent turn completes
     #[command(name = "codex-subagent-stop")]
     CodexSubagentStop(CodexSubagentStopArgs),
@@ -130,6 +135,10 @@ pub enum AgentCommands {
 
     /// Delete merged or closed worktrees
     Clean(CleanArgs),
+
+    /// Clean up stale agent sessions after a tmux pane exits
+    #[command(name = "cleanup-stale-sessions")]
+    CleanupStaleSessions,
 
     /// Safely close an agent session and its tmux pane
     #[command(visible_alias = "c")]
@@ -268,9 +277,17 @@ impl AgentCommands {
         match self {
             Self::New(args) => new::run(args)?,
             Self::Codex(args) => codex::run(args)?,
+            Self::Current(_) => {
+                let output = current::run(&current::ProcessContext);
+                if let Some(stdout) = output.stdout {
+                    println!("{stdout}");
+                }
+                return Ok(Some(output.exit_code));
+            }
             Self::CodexSubagentStop(args) => codex_subagent_stop::run(args)?,
             Self::CodexSubagentStopWorker(args) => codex_subagent_stop::run_worker(args)?,
             Self::Clean(args) => clean::run(args).await?,
+            Self::CleanupStaleSessions => cleanup_stale_sessions::run()?,
             Self::Close(args) => close::run(args).await?,
             Self::Crit(command) => crit::run(command)?,
             Self::WebUi(command) => web_ui::run(command)?,

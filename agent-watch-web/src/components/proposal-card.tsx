@@ -15,6 +15,7 @@ import type { EncodedAttachment } from '#components/use-attachments'
 import { useAttachments } from '#components/use-attachments'
 import { cardDraftStorageKey, useDraft } from '#components/use-composer-draft'
 import { useFileDrop } from '#components/use-file-drop'
+import { WithdrawnCard } from '#components/withdrawn-card'
 import type { ProposalAnswer, ProposalOption } from '#types'
 
 type ProposalCardProps = {
@@ -22,11 +23,11 @@ type ProposalCardProps = {
   seq: number
   title: string
   summary: string | null
+  imageSources?: Readonly<Record<string, string | null>>
   options: ProposalOption[]
   answer: ProposalAnswer | null
   resolved: boolean
   resolution: 'withdrawn' | null
-  withdrawalComment: string | null
   isMobile: boolean
   defaultChoice?: number | null
   defaultComment?: string
@@ -41,17 +42,18 @@ export function ProposalCard({
   seq,
   title,
   summary,
+  imageSources,
   options,
   answer,
   resolved,
   resolution,
-  withdrawalComment,
   isMobile,
   defaultChoice = null,
   defaultComment = '',
   onAnswer,
 }: ProposalCardProps) {
   const [draftSessionId] = useState(() => sessionId ?? crypto.randomUUID())
+  const conversationCardId = JSON.stringify([draftSessionId, 'proposal', seq])
   const proposalFieldId = `proposal-${useId()}`
   const attachmentState = useAttachments(
     `${sessionId ?? 'proposal'}:proposal:${String(seq)}`,
@@ -209,16 +211,24 @@ export function ProposalCard({
     submitAnswer,
   ])
 
+  if (isWithdrawn) {
+    return (
+      <WithdrawnCard
+        kind="Proposal"
+        title={title}
+        cardId={conversationCardId}
+      />
+    )
+  }
+
   const status =
     latestAnswer !== null
       ? latestAnswer.choice === null
         ? 'asked for another option'
         : `chose ${options[latestAnswer.choice]?.label ?? 'an option'}`
-      : isWithdrawn
-        ? 'withdrawn'
-        : resolved
-          ? 'answered elsewhere'
-          : 'waiting for your choice'
+      : resolved
+        ? 'answered elsewhere'
+        : 'waiting for your choice'
 
   return (
     <article
@@ -227,18 +237,17 @@ export function ProposalCard({
       aria-busy={isSubmitting || attachmentState.isProcessingAttachments}
       data-mobile={isMobile ? 'true' : undefined}
       data-answerable={isDisabled ? undefined : 'true'}
+      data-conversation-card-id={conversationCardId}
       ref={cardRef}
     >
       <h2>Proposal · {status}</h2>
       <h3>{title}</h3>
       {summary !== null ? (
-        <MarkdownMessage className="chat-proposal-summary">
+        <MarkdownMessage
+          className="chat-proposal-summary"
+          {...(imageSources === undefined ? {} : { imageSources })}
+        >
           {summary}
-        </MarkdownMessage>
-      ) : null}
-      {isWithdrawn && withdrawalComment !== null ? (
-        <MarkdownMessage className="chat-proposal-withdrawal-comment">
-          {withdrawalComment}
         </MarkdownMessage>
       ) : null}
       <div
@@ -287,7 +296,10 @@ export function ProposalCard({
                 ) : null}
               </div>
               {option.description !== null ? (
-                <MarkdownMessage className="chat-proposal-option-description">
+                <MarkdownMessage
+                  className="chat-proposal-option-description"
+                  {...(imageSources === undefined ? {} : { imageSources })}
+                >
                   {option.description}
                 </MarkdownMessage>
               ) : null}
@@ -310,7 +322,10 @@ export function ProposalCard({
         ))}
       </div>
       {latestAnswer?.comment != null ? (
-        <MarkdownMessage className="chat-proposal-answer-comment">
+        <MarkdownMessage
+          className="chat-proposal-answer-comment"
+          {...(imageSources === undefined ? {} : { imageSources })}
+        >
           {latestAnswer.comment}
         </MarkdownMessage>
       ) : (
@@ -322,7 +337,9 @@ export function ProposalCard({
             Comment (optional)
           </label>
           <div className="chat-card-comment-drop-zone">
-            {isFileDragActive ? <FileDropIndicator /> : null}
+            {isFileDragActive ? (
+              <FileDropIndicator label="Drop files to attach" variant="card" />
+            ) : null}
             <textarea
               id={`${proposalFieldId}-comment`}
               className="chat-card-comment chat-proposal-comment"

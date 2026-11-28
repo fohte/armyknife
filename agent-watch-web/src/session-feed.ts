@@ -1,5 +1,6 @@
 import { err, errAsync, ok, Result, ResultAsync } from 'neverthrow'
 
+import { type AgentUsage, isAgentUsage } from '#agent-usage'
 import { createEventSourceReconnectScheduler } from '#session-feed/reconnect'
 import { isPullRequest, isSessionTask } from '#session-record-validation'
 import {
@@ -25,6 +26,8 @@ type SessionFeedDependencies = {
   reconnectRetryDelayMs?: number
   initialServerVersion?: string | null
   onUpdateAvailable?: (version: string | null) => void
+  onUsage?: (usage: AgentUsage) => void
+  onUsageError?: () => void
   visibilityTarget?: PageVisibilityTarget
 }
 
@@ -292,6 +295,8 @@ export function startSessionFeed(
     reconnectRetryDelayMs = 2_000,
     initialServerVersion = readInitialServerVersion(),
     onUpdateAvailable,
+    onUsage,
+    onUsageError,
     visibilityTarget = typeof document === 'undefined' ? undefined : document,
   }: SessionFeedDependencies = {},
 ) {
@@ -415,6 +420,35 @@ export function startSessionFeed(
         : null,
     )
   }
+  const onUsageEvent: EventListener = (event) => {
+    if (!active || !visible) {
+      return
+    }
+    const data = 'data' in event ? event.data : null
+    const parsed =
+      typeof data === 'string'
+        ? Result.fromThrowable(
+            () => JSON.parse(data) as unknown,
+            toSessionFeedError,
+          )()
+        : err(new Error('Usage event is invalid'))
+
+    parsed.match(
+      (value) => {
+        if (isAgentUsage(value)) {
+          onUsage?.(value)
+        } else {
+          onUsageError?.()
+        }
+      },
+      () => onUsageError?.(),
+    )
+  }
+  const onUsageErrorEvent: EventListener = () => {
+    if (active && visible) {
+      onUsageError?.()
+    }
+  }
   const onConnectionOpen: EventListener = () => {
     if (!active || !visible) {
       return
@@ -432,6 +466,8 @@ export function startSessionFeed(
     eventSource = createEventSource('/api/events')
     eventSource.addEventListener('sessions', onSessionsEvent)
     eventSource.addEventListener('version', onServerVersion)
+    eventSource.addEventListener('usage', onUsageEvent)
+    eventSource.addEventListener('usage-error', onUsageErrorEvent)
     eventSource.addEventListener('error', onConnectionError)
     eventSource.addEventListener('open', onConnectionOpen)
   }
@@ -447,6 +483,8 @@ export function startSessionFeed(
     }
     eventSource.removeEventListener('sessions', onSessionsEvent)
     eventSource.removeEventListener('version', onServerVersion)
+    eventSource.removeEventListener('usage', onUsageEvent)
+    eventSource.removeEventListener('usage-error', onUsageErrorEvent)
     eventSource.removeEventListener('error', onConnectionError)
     eventSource.removeEventListener('open', onConnectionOpen)
     eventSource.close()

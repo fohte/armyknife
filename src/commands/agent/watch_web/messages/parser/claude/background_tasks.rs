@@ -105,9 +105,41 @@ pub(super) fn task_notification_text(record: &Value) -> Option<String> {
     if origin_kind == Some("human") {
         return None;
     }
+    let is_task_notification_origin = origin_kind == Some("task-notification");
+    if !is_task_notification_origin && !has_task_notification_marker(record) {
+        return None;
+    }
     let text = notification_text(record)?;
-    (origin_kind == Some("task-notification") || task_notification_body(&text).is_some())
-        .then_some(text)
+    (is_task_notification_origin || task_notification_body(&text).is_some()).then_some(text)
+}
+
+fn has_task_notification_marker(record: &Value) -> bool {
+    let user_content = (record.get("type").and_then(Value::as_str) == Some("user"))
+        .then(|| {
+            record
+                .get("message")
+                .and_then(|message| message.get("content"))
+        })
+        .flatten();
+    let attachment_prompt = record
+        .get("attachment")
+        .filter(|attachment| {
+            attachment.get("type").and_then(Value::as_str) == Some("queued_command")
+        })
+        .and_then(|attachment| attachment.get("prompt"));
+    let content = user_content.or(attachment_prompt);
+    const MARKER: &str = "<task-notification>";
+    match content {
+        Some(Value::String(text)) => text.contains(MARKER),
+        Some(Value::Array(blocks)) => blocks.iter().any(|block| {
+            block.get("type").and_then(Value::as_str) != Some("tool_result")
+                && block
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .is_some_and(|text| text.contains(MARKER))
+        }),
+        _ => false,
+    }
 }
 
 pub(super) fn finished_task_notification_id(text: &str) -> Option<&str> {
@@ -291,6 +323,7 @@ mod tests {
     #[case::foreground(false)]
     fn classifies_bash_tasks_by_background_mode(
         background_bash_transcript: String,
+        running_background_task: BackgroundTask,
         #[case] run_in_background: bool,
     ) {
         let transcript = background_bash_transcript.replace(
@@ -298,14 +331,7 @@ mod tests {
             &format!("\"run_in_background\":{run_in_background}"),
         );
         let expected_tasks = if run_in_background {
-            vec![BackgroundTask {
-                id: "fixture-task-id".to_string(),
-                description: "Watch the synthetic build".to_string(),
-                elapsed_seconds: 90,
-                kind: BackgroundTaskKind::BackgroundTask,
-                agent_type: None,
-                output_path: Some(PathBuf::from("/fixture/task-output.log")),
-            }]
+            vec![running_background_task]
         } else {
             Vec::new()
         };
@@ -409,6 +435,72 @@ mod tests {
     }
 
     #[rstest]
+    #[case::user_content(false)]
+    #[case::queued_command_prompt(true)]
+    fn array_text_blocks_finish_task_notifications(
+        background_bash_transcript: String,
+        #[case] queued_command: bool,
+    ) {
+        let text = "<task-notification><task-id>fixture-task-id</task-id><status>completed</status></task-notification>";
+        let notification = if queued_command {
+            json!({
+                "uuid": "fixture-array-notification-row",
+                "parentUuid": "fixture-disconnected-parent-row",
+                "attachment": {
+                    "type": "queued_command",
+                    "prompt": [{"type": "text", "text": text}],
+                },
+            })
+        } else {
+            json!({
+                "uuid": "fixture-array-notification-row",
+                "parentUuid": "fixture-disconnected-parent-row",
+                "type": "user",
+                "message": {"content": [{"type": "text", "text": text}]},
+            })
+        };
+        let mut expected_messages = background_bash_messages();
+        expected_messages.push(ChatItem::Event {
+            kind: super::super::super::super::EventKind::System,
+            text: "Background task fixture-task-id completed".to_string(),
+            timestamp: None,
+            failed: false,
+        });
+
+        assert_notification_transcript(
+            background_bash_transcript,
+            notification,
+            expected_messages,
+            Vec::new(),
+        );
+    }
+
+    #[rstest]
+    fn tool_result_marker_does_not_finish_a_running_task(
+        background_bash_transcript: String,
+        running_background_task: BackgroundTask,
+    ) {
+        let notification = json!({
+            "uuid": "fixture-tool-result-marker-row",
+            "parentUuid": "fixture-bash-call-row",
+            "sourceToolAssistantUUID": "fixture-bash-call-row",
+            "type": "user",
+            "message": {"content": [{
+                "type": "tool_result",
+                "tool_use_id": "fixture-unmatched-tool-id",
+                "content": "<task-notification><task-id>fixture-task-id</task-id><status>completed</status></task-notification>",
+            }]},
+        });
+
+        assert_notification_transcript(
+            background_bash_transcript,
+            notification,
+            background_bash_messages(),
+            vec![running_background_task],
+        );
+    }
+
+    #[rstest]
     fn prefixed_task_notifications_remove_finished_tasks(background_bash_transcript: String) {
         let notification = indoc! {r#"
             [SYSTEM NOTIFICATION - NOT USER INPUT]
@@ -446,6 +538,7 @@ mod tests {
     )]
     fn quoted_task_tags_in_user_text_do_not_finish_a_running_task(
         background_bash_transcript: String,
+        running_background_task: BackgroundTask,
         #[case] user_text: &str,
     ) {
         let mut transcript = background_bash_transcript;
@@ -477,17 +570,7 @@ mod tests {
                 &[],
             )
             .unwrap(),
-            (
-                expected_messages,
-                vec![BackgroundTask {
-                    id: "fixture-task-id".to_string(),
-                    description: "Watch the synthetic build".to_string(),
-                    elapsed_seconds: 90,
-                    kind: BackgroundTaskKind::BackgroundTask,
-                    agent_type: None,
-                    output_path: Some(PathBuf::from("/fixture/task-output.log")),
-                }],
-            ),
+            (expected_messages, vec![running_background_task],),
         );
     }
 
@@ -895,6 +978,18 @@ mod tests {
             {"uuid":"fixture-bash-result-row","parentUuid":"fixture-bash-call-row","type":"user","sourceToolAssistantUUID":"fixture-bash-call-row","toolUseResult":{},"message":{"content":[{"type":"tool_result","tool_use_id":"fixture-bash-tool-use-id","content":"Command running in background with ID: fixture-task-id. Output is being written to: /fixture/task-output.log"}]}}
         "#}
         .to_string()
+    }
+
+    #[fixture]
+    fn running_background_task() -> BackgroundTask {
+        BackgroundTask {
+            id: "fixture-task-id".to_string(),
+            description: "Watch the synthetic build".to_string(),
+            elapsed_seconds: 90,
+            kind: BackgroundTaskKind::BackgroundTask,
+            agent_type: None,
+            output_path: Some(PathBuf::from("/fixture/task-output.log")),
+        }
     }
 
     fn background_bash_messages() -> Vec<ChatItem> {

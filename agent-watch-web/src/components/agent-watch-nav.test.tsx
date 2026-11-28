@@ -15,6 +15,7 @@ import type { Session } from '#types'
 
 let container: HTMLDivElement
 let root: Root | null = null
+let titleBarFixture: HTMLDivElement | null = null
 
 const baseTodaySession: Session = {
   id: 'today-session',
@@ -126,6 +127,8 @@ function MobileNavigationWithActivity({
 
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  document.documentElement.removeAttribute('data-agent-watch-desktop')
+  titleBarFixture = null
   container = document.createElement('div')
   container.className = 'agent-watch-shell'
   document.body.append(container)
@@ -135,8 +138,148 @@ afterEach(() => {
   if (root !== null) act(() => root?.unmount())
   root = null
   container.remove()
+  titleBarFixture?.remove()
+  titleBarFixture = null
+  document.documentElement.removeAttribute('data-agent-watch-desktop')
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
+})
+
+it('drags desktop headers while preserving browser and mobile header regions', () => {
+  titleBarFixture = document.createElement('div')
+  const fixture = titleBarFixture
+  fixture.innerHTML = `
+    <section class="inbox-view">
+      <header class="view-header"><button>Close</button></header>
+    </section>
+    <section class="conversation-pane">
+      <header class="conversation-header"><a href="#session">Session</a></header>
+    </section>
+    <section class="conversation-pane" data-mobile="true">
+      <header class="conversation-header"><a href="#mobile-session">Mobile session</a></header>
+    </section>
+  `
+  document.body.append(fixture)
+  renderNav([])
+
+  const brandRow = container.querySelector<HTMLElement>('.brand-row')
+  const brandButton =
+    container.querySelector<HTMLButtonElement>('.brand-row button')
+  const inboxHeader = fixture.querySelector<HTMLElement>('.view-header')
+  const inboxButton = fixture.querySelector<HTMLButtonElement>('button')
+  const conversationHeader = fixture.querySelector<HTMLElement>(
+    '.conversation-header',
+  )
+  const conversationLink = fixture.querySelector<HTMLAnchorElement>('a')
+  const mobileConversationHeader = fixture.querySelector<HTMLElement>(
+    '.conversation-pane[data-mobile="true"] .conversation-header',
+  )
+  const mobileConversationLink = fixture.querySelector<HTMLAnchorElement>(
+    '.conversation-pane[data-mobile="true"] a',
+  )
+  const navigation = container.querySelector<HTMLElement>('.agent-watch-nav')
+  const navigationScroll = container.querySelector<HTMLElement>(
+    '.agent-watch-nav-scroll',
+  )
+  if (
+    brandRow === null ||
+    brandButton === null ||
+    inboxHeader === null ||
+    inboxButton === null ||
+    conversationHeader === null ||
+    conversationLink === null ||
+    mobileConversationHeader === null ||
+    mobileConversationLink === null ||
+    navigation === null ||
+    navigationScroll === null
+  ) {
+    throw new Error('Title-bar header fixture is incomplete')
+  }
+
+  navigation.style.height = '120px'
+  navigationScroll.style.height = '80px'
+  navigationScroll.style.maxHeight = '80px'
+  navigationScroll.style.flex = 'none'
+  const scrollFiller = document.createElement('div')
+  scrollFiller.style.height = '320px'
+  navigationScroll.append(scrollFiller)
+
+  const region = (element: Element) =>
+    getComputedStyle(element).getPropertyValue('-webkit-app-region')
+  const measureRowScrollOffset = () => {
+    const initialTop = brandRow.getBoundingClientRect().top
+    navigationScroll.scrollTop = 64
+    const scrollOffset = Math.round(
+      brandRow.getBoundingClientRect().top - initialTop,
+    )
+    navigationScroll.scrollTop = 0
+    return scrollOffset
+  }
+  const browserScrollOffset = measureRowScrollOffset()
+  const snapshot = () => ({
+    browserPadding: getComputedStyle(brandRow).paddingLeft,
+    browserPosition: getComputedStyle(brandRow).position,
+    browserScrollOffset,
+    browserRegions: [
+      region(brandRow),
+      region(brandButton),
+      region(inboxHeader),
+      region(inboxButton),
+      region(conversationHeader),
+      region(conversationLink),
+      region(mobileConversationHeader),
+      region(mobileConversationLink),
+    ],
+  })
+  const desktopScrollOffset = () => measureRowScrollOffset()
+  const desktopSnapshot = () => ({
+    desktopPadding: getComputedStyle(brandRow).paddingLeft,
+    desktopPosition: getComputedStyle(brandRow).position,
+    desktopScrollOffset: desktopScrollOffset(),
+    desktopRegions: [
+      region(brandRow),
+      region(brandButton),
+      region(inboxHeader),
+      region(inboxButton),
+      region(conversationHeader),
+      region(conversationLink),
+      region(mobileConversationHeader),
+      region(mobileConversationLink),
+    ],
+  })
+
+  expect(snapshot()).toEqual({
+    browserPadding: '8px',
+    browserPosition: 'static',
+    browserScrollOffset: -64,
+    browserRegions: [
+      'none',
+      'none',
+      'none',
+      'none',
+      'none',
+      'none',
+      'none',
+      'none',
+    ],
+  })
+
+  document.documentElement.dataset['agentWatchDesktop'] = 'true'
+  expect(desktopSnapshot()).toEqual({
+    desktopPadding: '64px',
+    desktopPosition: 'sticky',
+    desktopScrollOffset: 0,
+    desktopRegions: [
+      'drag',
+      'no-drag',
+      'drag',
+      'no-drag',
+      'drag',
+      'no-drag',
+      'none',
+      'none',
+    ],
+  })
 })
 
 it('renders the configured label and opens the selected session', () => {
@@ -324,7 +467,7 @@ it('uses the shared compact row without a starred marker', () => {
           ?.getAttribute('aria-label'),
         engine: row.querySelector('.session-engine')?.textContent,
         task: row.querySelector('.session-task')?.textContent,
-        repo: row.querySelector('.session-repo')?.textContent,
+        repo: row.querySelector('.session-repo-label')?.textContent,
       }),
     ),
     starMarkers: container.querySelectorAll('.today-star').length,
@@ -342,6 +485,36 @@ it('uses the shared compact row without a starred marker', () => {
       },
     ],
     starMarkers: 0,
+  })
+})
+
+it('shows the Waiting status for a starred session in navigation', () => {
+  renderNav([], {
+    todaySessions: [
+      {
+        ...baseTodaySession,
+        id: 'waiting-session',
+        category: 'waiting',
+        kind: null,
+        waitingReason: 'Waiting for the checks to finish',
+      },
+    ],
+  })
+
+  const row = container.querySelector('.today-nav .session-row-content')
+  const status = row?.querySelector('.session-row-status')
+  const snapshot = () => ({
+    title: row?.querySelector('.session-title')?.textContent,
+    status: status?.getAttribute('aria-label'),
+    icon: status?.querySelector('svg')?.classList.contains('lucide-hourglass'),
+    reason: row?.querySelector('.session-preview')?.textContent ?? null,
+  })
+
+  expect(snapshot()).toEqual({
+    title: 'Review the retry policy',
+    status: 'Waiting',
+    icon: true,
+    reason: null,
   })
 })
 

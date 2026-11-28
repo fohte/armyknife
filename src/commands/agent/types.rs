@@ -230,13 +230,10 @@ pub struct HookInput {
     #[serde(default)]
     pub reason: Option<String>,
 
-    /// Identifies which agent fired this hook event. Present only when the
-    /// event fires inside a subagent (per
-    /// https://code.claude.com/docs/en/hooks.md); absent for main-thread
-    /// events. `Stop`'s `background_tasks[].id` uses the same value for a
-    /// `type == "subagent"` entry, which is what lets the `Stop` handler in
-    /// `hook.rs` reconcile `Session::pending_permission_agent_ids` against
-    /// still-live subagents.
+    /// Identifies which subagent fired this hook event. `Stop`'s
+    /// `background_tasks[].id` uses the same value for a `type == "subagent"`
+    /// entry, which lets the `Stop` handler reconcile
+    /// `Session::pending_permission_agent_ids` against still-live subagents.
     #[serde(default)]
     pub agent_id: Option<String>,
 

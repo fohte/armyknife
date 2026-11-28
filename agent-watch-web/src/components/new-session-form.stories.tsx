@@ -10,6 +10,7 @@ const meta = {
   component: NewSessionForm,
   args: {
     state: createNewSessionStoryState(),
+    now: new Date('2026-05-06T12:00:00Z'),
     onClose: () => undefined,
     onLaunched: () => undefined,
   },
@@ -70,19 +71,6 @@ export const ModelAndEffortPickerIsOpen: Story = {
   },
 }
 
-export const EngineSwitchResetsTheModelWithUndo: Story = {
-  name: 'An unavailable model returns to the engine default and can be restored',
-  args: {
-    state: createNewSessionStoryState({
-      selectedDirectory: exampleSessionDirectories[0] ?? null,
-      engine: 'codex',
-      modelChangeNotice:
-        'Codex has no fixture-model-comet, so the model is back to the default. Effort stays xhigh.',
-      selectedEffort: 'xhigh',
-    }),
-  },
-}
-
 export const SessionIsStarting: Story = {
   name: 'The form waits for the launched session to appear in the feed',
   args: {
@@ -96,32 +84,6 @@ export const SessionIsStarting: Story = {
 export const IPhoneShowsTheEmptyNewSession: Story = {
   name: 'The empty session form fills an iPhone screen',
   args: { isMobile: true },
-  decorators: [
-    (Story) => (
-      <div
-        className="agent-watch-shell"
-        data-layout="mobile"
-        data-mobile-screen="conversation"
-        style={{ width: 390, height: 844 }}
-      >
-        <Story />
-      </div>
-    ),
-  ],
-}
-
-export const IPhoneShowsTheEngineModelSwitch: Story = {
-  name: 'The iPhone composer explains the model reset and offers Undo',
-  args: {
-    isMobile: true,
-    state: createNewSessionStoryState({
-      selectedDirectory: exampleSessionDirectories[0] ?? null,
-      engine: 'codex',
-      modelChangeNotice:
-        'This engine does not offer the selected model. The model returned to its default.',
-      selectedEffort: 'xhigh',
-    }),
-  },
   decorators: [
     (Story) => (
       <div

@@ -85,11 +85,11 @@ pub(super) async fn expose_and_record_registration(
     relay: &mut Relay,
 ) {
     let should_rollback_on_save_failure = !relay.exposed;
+    let registration = RelayRegistration::from_relay(key, relay);
+    if !backoff.should_attempt(&registration, std::time::Instant::now()) {
+        return;
+    }
     if !relay.exposed {
-        let registration = RelayRegistration::from_relay(key, relay);
-        if !backoff.should_attempt(&registration, std::time::Instant::now()) {
-            return;
-        }
         match super::invoke_hook(
             hook_runner.clone(),
             "web-ui-expose",
@@ -143,8 +143,13 @@ pub(super) async fn expose_and_record_registration(
                 relay.exposed_url = None;
             }
         }
+        backoff.record_failure(
+            RelayRegistration::from_relay(key, relay),
+            std::time::Instant::now(),
+        );
         return;
     }
+    backoff.remove(&registration);
     relay.registration_saved = true;
 }
 

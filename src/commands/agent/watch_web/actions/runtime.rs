@@ -10,10 +10,11 @@ use crate::shared::config::Config;
 pub(super) struct LiveActionRuntime;
 
 impl ActionRuntime for LiveActionRuntime {
-    fn resume_session(&self, session: &Session) -> Result<()> {
+    fn resume_session(&self, session: &Session) -> Result<Option<String>> {
         match session.status {
             crate::commands::agent::types::SessionStatus::Paused => {
                 crate::commands::agent::resume::respawn_paused_session(session)?;
+                Ok(None)
             }
             crate::commands::agent::types::SessionStatus::Ended => {
                 let config = crate::shared::config::load_config_or_default();
@@ -21,11 +22,10 @@ impl ActionRuntime for LiveActionRuntime {
                     session,
                     &config,
                     &super::resume::TmuxEndedSessionHost,
-                )?;
+                )
             }
             _ => anyhow::bail!("session is not ended or paused"),
         }
-        Ok(())
     }
 
     fn execute_command(&self, cwd: &std::path::Path, command: &str) -> Result<CommandResult> {
@@ -58,6 +58,14 @@ impl ActionRuntime for LiveActionRuntime {
             tmux_info.socket_path.as_deref(),
             &tmux_info.pane_id,
         )
+    }
+
+    fn capture_pane(&self, tmux_info: &TmuxInfo) -> Result<String> {
+        crate::infra::tmux::capture_pane_for_socket_result(
+            tmux_info.socket_path.as_deref(),
+            &tmux_info.pane_id,
+        )
+        .map_err(anyhow::Error::from)
     }
 
     fn send_claude_escape_if_agent_is_running(
@@ -110,11 +118,17 @@ impl ActionRuntime for LiveActionRuntime {
         session: &'a Session,
         keep_worktree: bool,
         stop_and_close: bool,
+        discard: Option<crate::shared::worktree_delete::discard::ConfirmedDiscard>,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         let session = session.clone();
         Box::pin(super::close::run_on_blocking_worker(move || async move {
-            crate::commands::agent::close_from_watch_web(&session, keep_worktree, stop_and_close)
-                .await
+            crate::commands::agent::close_from_watch_web(
+                &session,
+                keep_worktree,
+                stop_and_close,
+                discard,
+            )
+            .await
         }))
     }
 
@@ -139,7 +153,7 @@ fn resume_ended_session_with_config(
     session: &Session,
     config: &Config,
     host: &impl super::resume::EndedSessionHost,
-) -> Result<()> {
+) -> Result<Option<String>> {
     super::resume::resume_ended_session(session, &config.agent.worktree.layout, host)
 }
 
@@ -161,17 +175,18 @@ mod tests {
     }
 
     impl super::super::resume::EndedSessionHost for FakeEndedSessionHost {
-        fn open_layout(&self, spec: ResumeLayoutSpec<'_>) -> Result<()> {
+        fn open_layout(&self, spec: ResumeLayoutSpec<'_>) -> Result<Option<String>> {
             self.calls.lock().unwrap().push(json!({
                 "layout": serde_json::to_value(spec.layout).unwrap(),
                 "agentCommand": spec.agent_command,
             }));
-            Ok(())
+            Ok(Some("%18".to_string()))
         }
     }
 
     #[test]
     fn ended_resume_uses_the_worktree_layout_from_config() {
+        let temp_dir = tempfile::tempdir().unwrap();
         let mut config = Config::default();
         config.agent.worktree.layout = LayoutNode::Pane(PaneConfig {
             command: "fixture-editor".to_string(),
@@ -188,6 +203,7 @@ mod tests {
             "last_message": null,
         }))
         .unwrap();
+        session.cwd = temp_dir.path().to_path_buf();
         session.engine = Engine::Codex;
         session.tmux_info = Some(TmuxInfo {
             session_name: "fixture-session-window".to_string(),

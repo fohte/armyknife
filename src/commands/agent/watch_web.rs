@@ -18,6 +18,7 @@ mod rewind;
 mod security;
 mod session_enrichment;
 mod session_state;
+mod session_store_watcher;
 mod sessions;
 mod stale_session_cleanup;
 mod usage;
@@ -44,7 +45,10 @@ use super::browser;
 use super::error::CcError;
 use crate::commands::agent::store;
 use crate::commands::agent::types::Session;
+use crate::commands::agent::watch_web::session_enrichment::SessionEnrichmentCache;
+use crate::infra::tq::{TqEvent, TqEventSubscription};
 use crate::shared::env_var::EnvVars;
+use session_store_watcher::SessionStoreWatcher;
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct WatchWebArgs {
@@ -138,6 +142,47 @@ pub(super) struct EnrichmentUpdates {
     sender: watch::Sender<()>,
 }
 
+struct SessionStoreWatch {
+    events: tokio::sync::broadcast::Receiver<()>,
+    available: bool,
+}
+
+trait TqEventReceiver: Send {
+    fn recv(&mut self) -> impl Future<Output = Option<TqEvent>> + Send + '_;
+}
+
+impl TqEventReceiver for TqEventSubscription {
+    fn recv(&mut self) -> impl Future<Output = Option<TqEvent>> + Send + '_ {
+        TqEventSubscription::recv(self)
+    }
+}
+
+#[cfg(test)]
+impl TqEventReceiver for tokio::sync::mpsc::Receiver<TqEvent> {
+    fn recv(&mut self) -> impl Future<Output = Option<TqEvent>> + Send + '_ {
+        tokio::sync::mpsc::Receiver::recv(self)
+    }
+}
+
+async fn forward_tq_events<E: TqEventReceiver + 'static>(
+    mut events: E,
+    mut shutdown: watch::Receiver<bool>,
+    cache: SessionEnrichmentCache,
+) {
+    if *shutdown.borrow() {
+        return;
+    }
+    loop {
+        tokio::select! {
+            _ = shutdown.changed() => break,
+            event = events.recv() => match event {
+                Some(event) => cache.apply_tq_event(&event).await,
+                None => break,
+            },
+        }
+    }
+}
+
 impl EnrichmentUpdates {
     fn new() -> Self {
         let (sender, _) = watch::channel(());
@@ -157,9 +202,16 @@ pub async fn run(args: &WatchWebArgs) -> Result<()> {
     let own_session_id = EnvVars::load().own_session_id();
     ensure_port_allowed(args.port, own_session_id.as_deref())?;
     let is_agent_session = own_session_id.is_some();
+    let sessions_dir = store::sessions_dir()?;
+    let session_store_watcher = SessionStoreWatcher::start_or_warn(&sessions_dir);
+    let session_store_watcher_available = session_store_watcher.is_some();
 
     let executable = std::env::current_exe()?;
     let mut executable_identity = restart::ExecutableIdentity::read(&executable)?;
+    let mut executable_watcher =
+        restart::create_watcher_or_warn(|| restart::ExecutableWatcher::new(&executable));
+    let mut startup_replacement_pending = executable_watcher.is_some()
+        && restart::ExecutableIdentity::read(&executable)? != executable_identity;
     let (listener, address) = bind_listener(args.port).await?;
     ensure_port_allowed(address.port(), own_session_id.as_deref())?;
     let restart_args = restart_args_with_port(std::env::args_os().skip(1), address.port());
@@ -173,31 +225,44 @@ pub async fn run(args: &WatchWebArgs) -> Result<()> {
     );
 
     let mut listener = listener;
-    let mut restart_retry_interval = restart::POLL_INTERVAL;
-    let sessions_dir = store::sessions_dir()?;
     loop {
         let (restart_sender, restart_receiver) = watch::channel(false);
         let mut shutdown_receiver = restart_sender.subscribe();
         let relay_sessions_dir = sessions_dir.clone();
+        let session_store_events =
+            SessionStoreWatcher::subscribe_or_closed(session_store_watcher.as_ref());
+        let relay_session_store_events = session_store_events.resubscribe();
         let watch_web_server = async move {
             let (relay_shutdown_sender, relay_shutdown_receiver) = watch::channel(false);
             // Relay registrations are shared, so a development process must not reconcile them.
             let relay_task = start_web_ui_relay_manager_if_allowed(is_agent_session, || {
                 web_ui_relays::WebUiRelays::new(relay_sessions_dir)
-                    .start(relay_shutdown_receiver.clone())
+                    .start(relay_shutdown_receiver.clone(), relay_session_store_events)
             })
             .await;
-            let cleanup_task = stale_session_cleanup::start(relay_shutdown_receiver);
+            let output_shutdown_receiver = relay_shutdown_receiver.clone();
+            let cleanup_task = stale_session_cleanup::start();
             let shutdown_signal_sender = relay_shutdown_sender.clone();
-            let result = axum::serve(listener, app(restart_receiver))
-                .with_graceful_shutdown(async move {
-                    tokio::select! {
-                        _ = shutdown_receiver.changed() => {}
-                        _ = process_shutdown_signal() => {}
-                    }
-                    shutdown_signal_sender.send_replace(true);
-                })
-                .await;
+            let result = axum::serve(
+                listener,
+                app(
+                    restart_receiver,
+                    SessionStoreWatch {
+                        events: session_store_events,
+                        available: session_store_watcher_available,
+                    },
+                    output_shutdown_receiver,
+                    crate::infra::tq::subscribe_events(),
+                ),
+            )
+            .with_graceful_shutdown(async move {
+                tokio::select! {
+                    _ = shutdown_receiver.changed() => {}
+                    _ = process_shutdown_signal() => {}
+                }
+                shutdown_signal_sender.send_replace(true);
+            })
+            .await;
             relay_shutdown_sender.send_replace(true);
             if let Err(error) = cleanup_task.await {
                 tracing::warn!(%error, "stale session cleanup task failed to stop");
@@ -212,7 +277,14 @@ pub async fn run(args: &WatchWebArgs) -> Result<()> {
         let server = watch_web_server;
         match restart::wait_for_server_or_restart(
             server,
-            restart::wait_for_replacement(&executable, executable_identity, restart_retry_interval),
+            restart::wait_for_replacement(
+                &executable,
+                executable_identity,
+                &mut startup_replacement_pending,
+                executable_watcher
+                    .as_mut()
+                    .map(|watcher| &mut watcher.events),
+            ),
             restart_sender,
             restart::SERVER_SHUTDOWN_TIMEOUT,
         )
@@ -221,13 +293,12 @@ pub async fn run(args: &WatchWebArgs) -> Result<()> {
             restart::ServerOutcome::Exited => return Ok(()),
             restart::ServerOutcome::Restart => {
                 match restart::exec_replacement(&executable, executable_identity, &restart_args) {
-                    Ok(_) => restart_retry_interval = restart::POLL_INTERVAL,
+                    Ok(_) => {}
                     Err(error) => {
                         eprintln!("Could not restart the Agent Watch Web UI: {error}");
                         if let Ok(identity) = restart::ExecutableIdentity::read(&executable) {
                             executable_identity = identity;
                         }
-                        restart_retry_interval = restart::EXEC_RETRY_INTERVAL;
                     }
                 }
                 listener = bind_listener(address.port()).await?.0;
@@ -256,13 +327,17 @@ async fn process_shutdown_signal() {
     }
 }
 
-fn app(restart_signal: watch::Receiver<bool>) -> Router {
+fn app(
+    restart_signal: watch::Receiver<bool>,
+    session_store_watch: SessionStoreWatch,
+    output_shutdown_signal: watch::Receiver<bool>,
+    tq_events: Option<TqEventSubscription>,
+) -> Router {
     app_with_assets_and_queued_prompt_loaders_and_restart_signal(
         &assets::DIST,
         store::load_session,
         store::watch_web_user_marker,
         messages::RouteLoaders::new(
-            |session_id| store::agent_decisions_from(&store::sessions_dir()?, session_id),
             |session_id| store::watch_web_queued_prompts_from(&store::sessions_dir()?, session_id),
             |session_id| {
                 store::watch_web_peer_out_messages_from(&store::sessions_dir()?, session_id)
@@ -286,6 +361,9 @@ fn app(restart_signal: watch::Receiver<bool>) -> Router {
             crate::commands::agent::vibe::repo_identity_for_path,
         ),
         restart_signal,
+        session_store_watch,
+        output_shutdown_signal,
+        tq_events,
     )
 }
 
@@ -322,38 +400,63 @@ fn app_with_assets_and_loader_and_restart_signal(
         messages::RouteLoaders::new(
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
-            |_| Ok(Vec::new()),
             |_, _| Ok(()),
             |_| Ok(Vec::new()),
         ),
         restart_signal,
+        SessionStoreWatch {
+            events: tokio::sync::broadcast::channel(1).1,
+            available: true,
+        },
+        watch::channel(false).1,
+        None,
     )
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep the router dependencies explicit while adding the optional tq event subscription"
+)]
 fn app_with_assets_and_queued_prompt_loaders_and_restart_signal(
     dist: &'static Dir<'static>,
     load_session: impl Fn(&str) -> anyhow::Result<Option<Session>> + Send + Sync + 'static,
     load_user_marker: impl Fn(&str) -> anyhow::Result<Option<String>> + Send + Sync + 'static,
     loaders: messages::RouteLoaders,
     restart_signal: watch::Receiver<bool>,
+    session_store_watch: SessionStoreWatch,
+    output_shutdown_signal: watch::Receiver<bool>,
+    tq_events: Option<TqEventSubscription>,
 ) -> Router {
+    let SessionStoreWatch {
+        events: session_store_events,
+        available: session_store_watcher_available,
+    } = session_store_watch;
     let enrichment_updates = EnrichmentUpdates::new();
+    let session_enrichment = SessionEnrichmentCache::new(enrichment_updates.clone());
+    if let Some(tq_events) = tq_events {
+        tokio::spawn(forward_tq_events(
+            tq_events,
+            output_shutdown_signal.clone(),
+            session_enrichment.clone(),
+        ));
+    }
     let api = Router::new()
-        .merge(actions::router(loaders.clone()))
+        .merge(actions::router(loaders.clone(), enrichment_updates.clone()))
         .merge(session_state::router())
-        .merge(sessions::router(
-            enrichment_updates.clone(),
-            loaders.clone(),
-        ))
-        .merge(usage::router())
+        .merge(sessions::router(session_enrichment, loaders.clone()))
         .merge(freeze_profiler::router())
         .merge(directories::router())
         .merge(model_options::router())
-        .merge(events::router(enrichment_updates, restart_signal))
+        .merge(events::router(
+            enrichment_updates,
+            restart_signal,
+            session_store_events,
+            session_store_watcher_available,
+        ))
         .merge(messages::routes_with_proposals_and_peer_out_messages(
             load_session,
             load_user_marker,
-            loaders,
+            loaders.with_shutdown_signal(output_shutdown_signal),
         ))
         .merge(review_document::router())
         .merge(file_attachments::routes())
@@ -393,20 +496,49 @@ mod tests {
     use std::ffi::OsString;
     use std::io::Read;
     use std::net::{IpAddr, Ipv4Addr};
+    use std::time::Duration;
     use tokio::sync::watch;
     use tower::ServiceExt;
 
+    use super::messages::{BackgroundTask, BackgroundTaskKind, RouteLoaders};
     use super::{
-        LISTEN_PORT, app, app_with_assets, app_with_assets_and_loader, bind_listener,
-        compression_layer, ensure_port_allowed, open_browser_on_startup, restart_args_with_port,
-        start_web_ui_relay_manager_if_allowed, watch_web_url,
+        EnrichmentUpdates, LISTEN_PORT, SessionEnrichmentCache, SessionStoreWatch, app,
+        app_with_assets, app_with_assets_and_loader,
+        app_with_assets_and_queued_prompt_loaders_and_restart_signal, bind_listener,
+        compression_layer, ensure_port_allowed, forward_tq_events, open_browser_on_startup,
+        restart_args_with_port, start_web_ui_relay_manager_if_allowed, watch_web_url,
     };
     use crate::cli::{Cli, Commands};
     use crate::commands::agent::AgentCommands;
-    use crate::commands::agent::types::Session;
+    use crate::commands::agent::types::{Engine, Session};
+    use crate::infra::tq::TqEvent;
 
     static TEST_DIST: Dir<'static> =
         include_dir!("$CARGO_MANIFEST_DIR/src/commands/agent/watch_web/test_assets");
+
+    #[tokio::test]
+    async fn tq_event_forwarder_applies_events_and_stops_on_shutdown() {
+        let updates = EnrichmentUpdates::new();
+        let mut receiver = updates.subscribe();
+        let cache = SessionEnrichmentCache::new(updates);
+        let (event_sender, event_receiver) = tokio::sync::mpsc::channel(1);
+        let (shutdown_sender, shutdown_receiver) = tokio::sync::watch::channel(false);
+        let consumer = tokio::spawn(forward_tq_events(event_receiver, shutdown_receiver, cache));
+
+        let event_sent = event_sender.send(TqEvent::Connected).await.is_ok();
+        let event_applied = tokio::time::timeout(Duration::from_secs(1), receiver.changed())
+            .await
+            .is_ok_and(|changed| changed.is_ok());
+        shutdown_sender.send_replace(true);
+        let consumer_stopped = tokio::time::timeout(Duration::from_secs(1), consumer)
+            .await
+            .is_ok_and(|result| result.is_ok());
+
+        assert_eq!(
+            (event_sent, event_applied, consumer_stopped),
+            (true, true, true),
+        );
+    }
 
     #[rstest]
     #[case::agent_session_cannot_use_production_port(LISTEN_PORT, Some("fixture-session"), false)]
@@ -663,10 +795,18 @@ mod tests {
         #[case] expected_content_type: Option<&str>,
         #[case] expected_body: &str,
     ) {
-        let response = app(watch::channel(false).1)
-            .oneshot(request(method, uri, host, origin))
-            .await
-            .unwrap();
+        let response = app(
+            watch::channel(false).1,
+            SessionStoreWatch {
+                events: tokio::sync::broadcast::channel(1).1,
+                available: true,
+            },
+            watch::channel(false).1,
+            None,
+        )
+        .oneshot(request(method, uri, host, origin))
+        .await
+        .unwrap();
 
         assert_eq!(
             response_snapshot(response).await,
@@ -683,7 +823,7 @@ mod tests {
         "/api/sessions/fixture-session/messages",
         StatusCode::OK,
         Some("application/json"),
-        r#"{"messages":[],"backgroundTasks":[],"start":0,"total":0,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null}"#
+        r#"{"messages":[],"backgroundTasks":[],"start":0,"total":0,"hasUnansweredProposal":false,"activeQuestionIndex":null}"#
     )]
     #[case::unknown_session(
         "/api/sessions/unregistered-session/messages",
@@ -721,6 +861,93 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
+    async fn background_task_output_stream_closes_on_graceful_shutdown_signal(
+        fixture_session: Session,
+    ) {
+        let mut fixture_session = fixture_session;
+        fixture_session.engine = Engine::Codex;
+        fixture_session.transcript_path = None;
+        let directory = tempfile::tempdir().unwrap();
+        let output_path = directory.path().join("output.log");
+        std::fs::write(&output_path, "initial output").unwrap();
+        let (_restart_sender, restart_signal) = watch::channel(false);
+        let (shutdown_sender, shutdown_signal) = watch::channel(false);
+        let loaders = RouteLoaders::new_with_background_task_output_event_stream(
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+            |_| Ok(Vec::new()),
+            |_| Ok(Box::pin(stream::pending())),
+        )
+        .with_background_task_loader({
+            let output_path = output_path.clone();
+            move |session_id| {
+                Ok((session_id == "fixture-session")
+                    .then(|| BackgroundTask {
+                        id: "fixture-background-task-id".to_owned(),
+                        description: "Background command".to_owned(),
+                        elapsed_seconds: 1,
+                        kind: BackgroundTaskKind::BackgroundTask,
+                        output_path: Some(output_path.clone()),
+                        agent_type: None,
+                    })
+                    .into_iter()
+                    .collect())
+            }
+        });
+        let router = app_with_assets_and_queued_prompt_loaders_and_restart_signal(
+            &TEST_DIST,
+            move |session_id| Ok((session_id == "fixture-session").then(|| fixture_session.clone())),
+            |_| Ok(None),
+            loaders,
+            restart_signal,
+            SessionStoreWatch {
+                events: tokio::sync::broadcast::channel(1).1,
+                available: false,
+            },
+            shutdown_signal,
+            None,
+        );
+        let response = router
+            .oneshot(request(
+                "GET",
+                "/api/sessions/fixture-session/background-tasks/fixture-background-task-id/output/events",
+                "localhost",
+                None,
+            ))
+            .await
+            .unwrap();
+        let mut body = response.into_body().into_data_stream();
+        let initial_event = body.next().await.unwrap().unwrap().to_vec();
+
+        shutdown_sender.send_replace(true);
+        let after_shutdown = tokio::time::timeout(std::time::Duration::from_secs(1), body.next())
+            .await
+            .map(|chunk| {
+                chunk.map(|chunk| {
+                    chunk
+                        .map(|bytes| bytes.to_vec())
+                        .map_err(|error| error.to_string())
+                })
+            })
+            .map_err(|_| "shutdown timed out");
+
+        assert_eq!(
+            (initial_event, after_shutdown),
+            (
+                indoc! {"
+                    data: {\"output\":\"initial output\"}
+
+                "}
+                .as_bytes()
+                .to_vec(),
+                Ok(None),
+            ),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
     async fn api_responses_are_gzip_encoded(fixture_session: Session) {
         let router = app_with_assets_and_loader(
             &TEST_DIST,
@@ -747,7 +974,7 @@ mod tests {
             ),
             (
                 Some("gzip".to_owned()),
-                br#"{"messages":[],"backgroundTasks":[],"start":0,"total":0,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null}"#.to_vec(),
+                br#"{"messages":[],"backgroundTasks":[],"start":0,"total":0,"hasUnansweredProposal":false,"activeQuestionIndex":null}"#.to_vec(),
             ),
         );
     }
@@ -869,19 +1096,27 @@ mod tests {
 
     #[tokio::test]
     async fn matching_origin_reaches_the_action_route() {
-        let response = app(watch::channel(false).1)
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/sessions/not-found/answer")
-                    .header(HOST, "localhost")
-                    .header(ORIGIN, "http://localhost")
-                    .header(CONTENT_TYPE, "application/json")
-                    .body(Body::from(r#"{"skip":"invalid"}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let response = app(
+            watch::channel(false).1,
+            SessionStoreWatch {
+                events: tokio::sync::broadcast::channel(1).1,
+                available: true,
+            },
+            watch::channel(false).1,
+            None,
+        )
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/sessions/not-found/answer")
+                .header(HOST, "localhost")
+                .header(ORIGIN, "http://localhost")
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"skip":"invalid"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(
             response_snapshot(response).await,

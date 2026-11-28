@@ -140,13 +140,6 @@ function requestFor(operation: SessionOperation) {
             : { answers: operation.answers }),
         },
       }
-    case 'decision_ok':
-      return { path: `decisions/${String(operation.seq)}/ok`, body: undefined }
-    case 'decision_change':
-      return {
-        path: `decisions/${String(operation.seq)}/change`,
-        body: { comment: operation.comment },
-      }
     case 'proposal_answer':
       return {
         path: `proposals/${String(operation.seq)}/answer`,
@@ -462,23 +455,6 @@ export function createSessionOperation(
             taskId: requiredString('taskId') ?? '',
           })
     default: {
-      const decision = sequenceFromPath('decisions', 'ok')
-      if (decision !== null) {
-        return ok<SessionOperation, Error>({
-          type: 'decision_ok',
-          sessionId,
-          seq: decision,
-        })
-      }
-      const decisionChange = sequenceFromPath('decisions', 'change')
-      if (decisionChange !== null && requiredString('comment') !== null) {
-        return ok<SessionOperation, Error>({
-          type: 'decision_change',
-          sessionId,
-          seq: decisionChange,
-          comment: requiredString('comment') ?? '',
-        })
-      }
       const proposal = sequenceFromPath('proposals', 'answer')
       if (
         proposal !== null &&

@@ -21,7 +21,11 @@ export const exampleModelOptions: SessionModelOptions = {
 }
 
 export const exampleSessionDirectories: SessionDirectory[] = [
-  { path: '/Users/example/work/service', source: 'recent' },
+  {
+    path: '/Users/example/work/service',
+    source: 'recent',
+    lastUsedAt: '2026-05-06T10:00:00Z',
+  },
   { path: '/Users/example/work/handbook', source: 'repo' },
   { path: '/Users/example/work/scratch', source: 'path' },
 ]
@@ -39,7 +43,6 @@ export function createNewSessionStoryState(
     modelOptionsError: null,
     selectedModel: null,
     selectedEffort: null,
-    modelChangeNotice: null,
     activeModelOption: exampleModelOptions.models[0],
     worktree: false,
     initialMessage: '',
@@ -52,7 +55,6 @@ export function createNewSessionStoryState(
     setEngine: () => undefined,
     chooseModel: () => undefined,
     setSelectedEffort: () => undefined,
-    undoEngineChange: () => undefined,
     setWorktree: () => undefined,
     setInitialMessage: () => undefined,
     start: () => Promise.resolve(),

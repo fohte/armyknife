@@ -6,6 +6,7 @@ use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::routing::get;
 use axum::{Json, Router};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::commands::agent::store;
@@ -68,9 +69,12 @@ enum DirectorySourceKind {
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 struct DirectoryView {
     path: String,
     source: DirectorySourceKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_used_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Serialize)]
@@ -131,6 +135,7 @@ fn build_directory_list(
                 &mut seen,
                 repo.clone(),
                 DirectorySourceKind::Recent,
+                Some(session.updated_at),
             );
         }
     }
@@ -146,6 +151,7 @@ fn build_directory_list(
                     &mut seen,
                     repo.clone(),
                     DirectorySourceKind::Repo,
+                    None,
                 );
             }
         }
@@ -154,7 +160,13 @@ fn build_directory_list(
     if let Some(query) = query.as_deref()
         && let Some(path) = search_path(query, source.home_dir())
     {
-        push_directory(&mut directories, &mut seen, path, DirectorySourceKind::Path);
+        push_directory(
+            &mut directories,
+            &mut seen,
+            path,
+            DirectorySourceKind::Path,
+            None,
+        );
     }
 
     Ok(DirectoriesResponse { directories })
@@ -182,6 +194,7 @@ fn push_directory(
     seen: &mut HashSet<PathBuf>,
     path: PathBuf,
     source: DirectorySourceKind,
+    last_used_at: Option<DateTime<Utc>>,
 ) {
     let Ok(normalized) = path.canonicalize() else {
         return;
@@ -193,6 +206,7 @@ fn push_directory(
         output.push(DirectoryView {
             path: normalized.to_string_lossy().into_owned(),
             source,
+            last_used_at,
         });
     }
 }
@@ -252,7 +266,7 @@ mod tests {
     use super::*;
     use axum::body::{Body, to_bytes};
     use axum::http::Request;
-    use chrono::{TimeZone, Utc};
+    use chrono::TimeZone;
     use rstest::{fixture, rstest};
     use serde_json::Value;
     use tower::ServiceExt;
@@ -395,8 +409,8 @@ mod tests {
                 StatusCode::OK,
                 serde_json::json!({
                     "directories": [
-                        {"path": older_repo.canonicalize().unwrap().to_string_lossy(), "source": "recent"},
-                        {"path": newer_repo.canonicalize().unwrap().to_string_lossy(), "source": "recent"},
+                        {"path": older_repo.canonicalize().unwrap().to_string_lossy(), "source": "recent", "lastUsedAt": "1970-01-01T00:00:40Z"},
+                        {"path": newer_repo.canonicalize().unwrap().to_string_lossy(), "source": "recent", "lastUsedAt": "1970-01-01T00:00:30Z"},
                     ],
                 }),
             ),
@@ -424,7 +438,7 @@ mod tests {
                 StatusCode::OK,
                 serde_json::json!({
                     "directories": [
-                        {"path": repo.canonicalize().unwrap().to_string_lossy(), "source": "recent"},
+                        {"path": repo.canonicalize().unwrap().to_string_lossy(), "source": "recent", "lastUsedAt": "1970-01-01T00:00:20Z"},
                     ],
                 }),
             ),
@@ -511,6 +525,7 @@ mod tests {
                     "directories": [{
                         "path": repo.canonicalize().unwrap().to_string_lossy(),
                         "source": "recent",
+                        "lastUsedAt": "1970-01-01T00:00:10Z",
                     }],
                 }),
             ),

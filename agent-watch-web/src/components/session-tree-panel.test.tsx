@@ -20,7 +20,6 @@ const sessions: SessionTreeNode[] = [
     task: null,
     repo: 'sample/repo',
     vibeMode: { mode: 'enabled' },
-    decisionCount: 0,
     pullRequest: null,
   },
   {
@@ -42,7 +41,6 @@ const sessions: SessionTreeNode[] = [
     },
     repo: 'sample/other-repo',
     vibeMode: { mode: 'inherited', ancestorSessionId: 'root' },
-    decisionCount: 0,
     pullRequest: null,
   },
   {
@@ -59,7 +57,6 @@ const sessions: SessionTreeNode[] = [
     task: null,
     repo: 'sample/other-repo',
     vibeMode: { mode: 'disabled' },
-    decisionCount: 0,
     pullRequest: null,
   },
 ]
@@ -163,7 +160,7 @@ it('shows every tree session with the shared row and keeps ended sessions visibl
       engine: row.querySelector('.session-engine')?.textContent ?? null,
       selected: row.getAttribute('aria-selected'),
       task: row.querySelector('.session-task')?.textContent ?? null,
-      repo: row.querySelector('.session-repo')?.textContent ?? null,
+      repo: row.querySelector('.session-repo-label')?.textContent ?? null,
       vibeMode:
         row.querySelector('.vibe-indicator')?.getAttribute('aria-label') ??
         null,

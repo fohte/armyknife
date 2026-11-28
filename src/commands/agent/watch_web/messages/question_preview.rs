@@ -103,7 +103,6 @@ fn transcript_question_preview(session: &Session, cache: &QuestionPreviewCache) 
             parent: None,
             pending_tool: None,
             user_marker: None,
-            decisions: &[],
             queued_prompts: &[],
             peer_out_messages: &[],
             proposals: &[],

@@ -8,6 +8,7 @@ import {
   getCommandPaletteShortcut,
 } from '#command-palette-shortcut'
 import { CommandPalette } from '#components/command-palette'
+import { itemIcon } from '#components/command-palette-item'
 import type { Session } from '#types'
 
 let container: HTMLDivElement
@@ -192,7 +193,7 @@ it('shows the primary task and the count of other linked tasks for a session', (
 
   const snapshot = () => ({
     task: container.querySelector('.session-task')?.textContent,
-    repo: container.querySelector('.session-repo')?.textContent,
+    repo: container.querySelector('.session-repo-label')?.textContent,
   })
   expect(snapshot()).toEqual({
     task: 'P1 #42 Improve notifications +1',
@@ -364,6 +365,28 @@ it.each([
     expect(actual).toEqual(`${icon}${title}`)
   },
 )
+
+it('uses a monochrome hourglass for Waiting sessions', () => {
+  renderPalette({
+    sessions: [{ ...session, category: 'waiting', kind: null }],
+    initialQuery: 'Review notification settings',
+  })
+
+  const snapshot = () => ({
+    paletteIcon: itemIcon({
+      type: 'session',
+      id: session.id,
+      session: { ...session, category: 'waiting', kind: null },
+    }),
+    icon: container
+      .querySelector(
+        '.command-palette-item .session-row-status svg.lucide-hourglass',
+      )
+      ?.getAttribute('aria-hidden'),
+  })
+
+  expect(snapshot()).toEqual({ paletteIcon: '⌛︎', icon: 'true' })
+})
 
 it('adds the task number to result rows but not action headings', async () => {
   renderPalette({ initialQuery: '#notification' })
@@ -622,7 +645,7 @@ it('matches a session by branch name and renders the shared session row', () => 
   const snapshot = () => ({
     title: container.querySelector('.session-title')?.textContent,
     task: container.querySelector('.session-task')?.textContent,
-    repo: container.querySelector('.session-repo')?.textContent,
+    repo: container.querySelector('.session-repo-label')?.textContent,
     branch: container.querySelector('.session-branch')?.textContent,
   })
   expect(snapshot()).toEqual({
@@ -650,7 +673,7 @@ it.each([
 
     const snapshot = () => ({
       task: container.querySelector('.session-task')?.textContent,
-      repo: container.querySelector('.session-repo')?.textContent,
+      repo: container.querySelector('.session-repo-label')?.textContent,
       branch: container.querySelector('.session-branch')?.textContent ?? null,
     })
     expect(snapshot()).toEqual({
@@ -674,7 +697,7 @@ it('keeps the branch after the task when the repository is blank', () => {
 
   const snapshot = () => ({
     task: container.querySelector('.session-task')?.textContent,
-    repo: container.querySelector('.session-repo')?.textContent,
+    repo: container.querySelector('.session-repo-label')?.textContent,
     branch: container.querySelector('.session-branch')?.textContent,
   })
   expect(snapshot()).toEqual({

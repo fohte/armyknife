@@ -13,10 +13,6 @@
   border-color: var(--aw-color-error);
 }
 
-.chat-todo-card[data-resolution='withdrawn'] {
-  border-color: var(--aw-border-control);
-}
-
 .chat-todo-card--folded {
   padding: 0;
 }

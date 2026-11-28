@@ -28,7 +28,9 @@ function PickerHarness({
   selectedModel = null,
   selectedEffort = null,
   activeModelOption = exampleModelOptions.models[0],
+  modelOptionsError = null,
   initialModelPickerOpen = false,
+  now,
 }: {
   start: NewSessionState['start']
   onClose?: () => void
@@ -38,7 +40,9 @@ function PickerHarness({
   selectedModel?: NewSessionState['selectedModel']
   selectedEffort?: NewSessionState['selectedEffort']
   activeModelOption?: NewSessionState['activeModelOption']
+  modelOptionsError?: NewSessionState['modelOptionsError']
   initialModelPickerOpen?: boolean
+  now?: Date
 }) {
   const [selectedDirectory, setSelectedDirectory] = useState<
     NewSessionState['selectedDirectory']
@@ -52,10 +56,9 @@ function PickerHarness({
     engine,
     modelOptions: exampleModelOptions,
     isLoadingModelOptions: false,
-    modelOptionsError: null,
+    modelOptionsError,
     selectedModel,
     selectedEffort,
-    modelChangeNotice: null,
     activeModelOption,
     worktree,
     initialMessage: '',
@@ -68,7 +71,6 @@ function PickerHarness({
     setEngine,
     chooseModel,
     setSelectedEffort,
-    undoEngineChange: () => undefined,
     setWorktree,
     setInitialMessage: () => undefined,
     start,
@@ -78,6 +80,7 @@ function PickerHarness({
     <NewSessionPicker
       state={state}
       initialModelPickerOpen={initialModelPickerOpen}
+      {...(now === undefined ? {} : { now })}
       onClose={onClose}
       onLaunched={() => undefined}
     />
@@ -96,6 +99,48 @@ afterEach(() => {
   container.remove()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
+})
+
+it('shows the last-used time beside a recent directory title', () => {
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <PickerHarness
+        start={() => Promise.resolve()}
+        now={new Date('2026-05-06T12:00:00Z')}
+      />,
+    )
+  })
+
+  const snapshot = () =>
+    Array.from(
+      container.querySelectorAll('.session-directory-option'),
+      (option) => ({
+        title: option.querySelector('.session-directory-option-title')
+          ?.textContent,
+        when: option.querySelector('.session-directory-option-when')
+          ?.textContent,
+        path: option.querySelector('.session-directory-option-path')
+          ?.textContent,
+      }),
+    )
+  expect(snapshot()).toEqual([
+    {
+      title: 'service',
+      when: '2h ago',
+      path: '/Users/example/work/service',
+    },
+    {
+      title: 'handbook',
+      when: undefined,
+      path: '/Users/example/work/handbook',
+    },
+    {
+      title: 'scratch',
+      when: undefined,
+      path: '/Users/example/work/scratch',
+    },
+  ])
 })
 
 it('launches Codex when Option+Enter is pressed after choosing a directory', async () => {
@@ -340,6 +385,38 @@ it('shows the profile model in Default while another model is selected', () => {
       '.new-session-model-option .new-session-model-detail',
     )?.textContent,
   ).toEqual('fixture-model-orbit')
+})
+
+it('shows a catalog error alongside cached model and effort choices', () => {
+  const start = vi.fn<NewSessionState['start']>(() => Promise.resolve())
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <PickerHarness
+        initialModelPickerOpen
+        modelOptionsError="Model catalog refresh failed."
+        selectedDirectory={exampleSessionDirectories[0] ?? null}
+        selectedEffort="high"
+        selectedModel="fixture-model-orbit"
+        start={start}
+      />,
+    )
+  })
+
+  const snapshot = () => ({
+    alert: container.querySelector('[role="alert"]')?.textContent,
+    checkedModel: container.querySelector(
+      '[aria-label="Model"] [aria-checked="true"]',
+    )?.textContent,
+    checkedEffort: container.querySelector(
+      '[aria-label="Reasoning effort"] [aria-checked="true"]',
+    )?.textContent,
+  })
+  expect(snapshot()).toEqual({
+    alert: 'Model catalog refresh failed.',
+    checkedModel: 'Orbitup to high',
+    checkedEffort: 'high',
+  })
 })
 
 it('closes the picker when Enter activates the close button', async () => {

@@ -42,7 +42,6 @@ const meta = {
     answer: null,
     resolved: false,
     resolution: null,
-    withdrawalComment: null,
     isMobile: false,
     ...callbacks,
   },
@@ -70,6 +69,24 @@ export const ProposalFormatsItsAgentTextAsMarkdown: Story = {
       },
       ...options.slice(1),
     ],
+  },
+}
+
+export const ProposalShowsAServedImageInItsSummary: Story = {
+  name: 'A proposal shows a served image in its summary',
+  args: {
+    summary: '![Sample screenshot](/Users/guest/screenshot.png)',
+    imageSources: {
+      '/Users/guest/screenshot.png': '/card-comment-attachment.svg',
+    },
+  },
+}
+
+export const ProposalShowsWhenItsImageIsUnavailable: Story = {
+  name: 'A proposal explains when its local image is unavailable',
+  args: {
+    summary: '![Sample screenshot](/Users/guest/screenshot.png)',
+    imageSources: {},
   },
 }
 
@@ -182,11 +199,9 @@ export const ProposalShowsItWasAnsweredElsewhere: Story = {
 }
 
 export const ProposalShowsItWasWithdrawn: Story = {
-  name: 'A proposal shows that it was withdrawn with a reason',
+  name: 'A withdrawn proposal shows only its heading and title',
   args: {
     resolved: true,
     resolution: 'withdrawn',
-    withdrawalComment:
-      'See [the update](https://example.test) for **context**.',
   },
 }

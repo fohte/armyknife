@@ -29,6 +29,7 @@ const GROUPS = [
     title: 'Needs action',
     className: 'needs-action',
   },
+  { category: 'waiting', title: 'Waiting', className: 'waiting' },
   { category: 'in_progress', title: 'In progress', className: 'in-progress' },
   { category: 'done', title: 'Done', className: 'done' },
 ] as const
@@ -53,7 +54,12 @@ function ProjectCard({
         onSelectSession(session.id)
       }}
     >
-      <SessionRow session={session} density="compact" isMobile={isMobile} />
+      <SessionRow
+        session={session}
+        density="compact"
+        isMobile={isMobile}
+        showWaitingReason
+      />
     </Button>
   )
 }

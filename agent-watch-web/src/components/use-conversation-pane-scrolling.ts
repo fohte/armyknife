@@ -1,4 +1,3 @@
-import { useConversationDecisionJump } from '#components/use-conversation-decision-jump'
 import { useConversationScroll } from '#components/use-conversation-scroll'
 import { useOwnMessageKeyboardNavigation } from '#components/use-own-message-keyboard-navigation'
 import type { ChatItem } from '#types'
@@ -12,9 +11,6 @@ type UseConversationPaneScrollingOptions = {
   start: number
   epoch: string | undefined
   olderCursor: string | undefined
-  decisionJump: { seq: number } | null
-  onDecisionJumpComplete: () => void
-  onDecisionJumpSucceeded: () => void
   isMobile: boolean
 }
 
@@ -27,9 +23,6 @@ export function useConversationPaneScrolling({
   start,
   epoch,
   olderCursor,
-  decisionJump,
-  onDecisionJumpComplete,
-  onDecisionJumpSucceeded,
   isMobile,
 }: UseConversationPaneScrollingOptions) {
   const conversationScroll = useConversationScroll({
@@ -41,17 +34,6 @@ export function useConversationPaneScrolling({
     start,
     epoch,
     olderCursor,
-  })
-  useConversationDecisionJump({
-    decisionJump,
-    epoch,
-    loadingOlder,
-    loadOlder: conversationScroll.loadOlder,
-    messages,
-    olderCursor,
-    onComplete: onDecisionJumpComplete,
-    onSucceeded: onDecisionJumpSucceeded,
-    start,
   })
   useOwnMessageKeyboardNavigation({
     isMobile,

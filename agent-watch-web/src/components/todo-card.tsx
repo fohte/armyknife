@@ -15,14 +15,17 @@ import type { EncodedAttachment } from '#components/use-attachments'
 import { useAttachments } from '#components/use-attachments'
 import { cardDraftStorageKey, useDraft } from '#components/use-composer-draft'
 import { useFileDrop } from '#components/use-file-drop'
+import { WithdrawnCard } from '#components/withdrawn-card'
 
 type TodoCardProps = {
   seq?: number
   sessionId?: string
   title: string
   detail: string | null
+  imageSources?: Readonly<Record<string, string | null>>
   folded?: boolean
   addedFolded?: boolean
+  defaultDetailExpanded?: boolean
   resolution: 'completed' | 'rejected' | 'withdrawn' | null
   defaultComment?: string
   onResolve: (
@@ -38,14 +41,17 @@ export function TodoCard({
   sessionId,
   title,
   detail,
+  imageSources,
   folded = false,
   addedFolded = false,
+  defaultDetailExpanded = false,
   resolution,
   defaultComment = '',
   onResolve,
   onFold,
 }: TodoCardProps) {
   const [draftSessionId] = useState(() => sessionId ?? crypto.randomUUID())
+  const conversationCardId = JSON.stringify([draftSessionId, 'todo', seq])
   const commentId = useId()
   const attachmentState = useAttachments(
     `${sessionId ?? 'todo'}:todo:${String(seq)}`,
@@ -57,10 +63,16 @@ export function TodoCard({
   const { draft: comment, updateDraft, clearDraftIfUnchanged } = commentDraft
   const detailContent = useMemo(
     () =>
-      detail === null ? null : <MarkdownMessage>{detail}</MarkdownMessage>,
-    [detail],
+      detail === null ? null : (
+        <MarkdownMessage
+          {...(imageSources === undefined ? {} : { imageSources })}
+        >
+          {detail}
+        </MarkdownMessage>
+      ),
+    [detail, imageSources],
   )
-  const [detailExpanded, setDetailExpanded] = useState(false)
+  const [detailExpanded, setDetailExpanded] = useState(defaultDetailExpanded)
   const [resolutionLocally, setResolutionLocally] = useState<
     'completed' | 'rejected' | null
   >(null)
@@ -74,6 +86,12 @@ export function TodoCard({
     !isSubmitting,
     true,
   )
+  if (resolution === 'withdrawn') {
+    return (
+      <WithdrawnCard kind="To-do" title={title} cardId={conversationCardId} />
+    )
+  }
+
   const currentResolution = resolution ?? resolutionLocally
   const isResolved = currentResolution !== null
 
@@ -132,7 +150,6 @@ export function TodoCard({
     const labels = {
       completed: ['done', 'Completed user task'],
       rejected: ['rejected', 'Rejected user task'],
-      withdrawn: ['withdrawn', 'Withdrawn user task'],
     } as const
     const [status, ariaLabel] = labels[currentResolution]
 
@@ -141,11 +158,15 @@ export function TodoCard({
         className="chat-todo-card"
         aria-label={ariaLabel}
         data-resolution={currentResolution}
+        data-conversation-card-id={conversationCardId}
       >
         <h2>To-do · {status}</h2>
         <h3>{title}</h3>
         {completionComment !== '' ? (
-          <MarkdownMessage className="chat-todo-completed-comment">
+          <MarkdownMessage
+            className="chat-todo-completed-comment"
+            {...(imageSources === undefined ? {} : { imageSources })}
+          >
             {completionComment}
           </MarkdownMessage>
         ) : null}
@@ -232,7 +253,9 @@ export function TodoCard({
         </p>
       ) : null}
       <div className="chat-card-comment-drop-zone">
-        {isFileDragActive ? <FileDropIndicator /> : null}
+        {isFileDragActive ? (
+          <FileDropIndicator label="Drop files to attach" variant="card" />
+        ) : null}
         <textarea
           id={commentId}
           className="chat-todo-comment"

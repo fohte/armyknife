@@ -9,10 +9,10 @@ backup="/Applications/.Agent Watch.backup.$$.app"
 
 restore_on_failure() {
   if [[ -d "$backup" && ! -e "$destination" ]]; then
-    sudo mv "$backup" "$destination"
+    mv "$backup" "$destination"
   fi
   if [[ -e "$stage" ]]; then
-    sudo rm -rf "$stage"
+    rm -rf "$stage"
   fi
 }
 trap restore_on_failure EXIT
@@ -32,15 +32,17 @@ if [[ -z "$built_app" ]]; then
   exit 1
 fi
 
-sudo ditto "$built_app" "$stage"
+ditto "$built_app" "$stage"
 if [[ -e "$destination" ]]; then
-  sudo mv "$destination" "$backup"
+  mv "$destination" "$backup"
 fi
-sudo mv "$stage" "$destination"
-if [[ -e "$backup" ]]; then
-  sudo rm -rf "$backup"
-fi
+mv "$stage" "$destination"
 trap - EXIT
+if [[ -e "$backup" ]]; then
+  if ! rm -rf "$backup"; then
+    echo "Could not remove the previous app backup: $backup" >&2
+  fi
+fi
 
 if pgrep -x 'Agent Watch' > /dev/null; then
   osascript -e 'display notification "新しいバージョンをインストールしました。Agent Watch を終了して開き直してください。" with title "Agent Watch"' || true

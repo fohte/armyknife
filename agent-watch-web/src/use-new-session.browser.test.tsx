@@ -14,6 +14,14 @@ function NewSessionHarness() {
   return null
 }
 
+function currentEngineSelection() {
+  return {
+    engine: currentState?.engine,
+    selectedModel: currentState?.selectedModel,
+    selectedEffort: currentState?.selectedEffort,
+  }
+}
+
 function requestUrl(input: RequestInfo | URL) {
   if (typeof input === 'string') return input
   if (input instanceof URL) return input.href
@@ -321,142 +329,28 @@ it('uses profile defaults after clearing an effort unsupported by the default mo
   )
 })
 
-it('falls back to the new engine default and keeps a supported effort', async () => {
+const codexModelOptions = {
+  defaultModel: 'fixture-model-codex',
+  defaultEffort: 'medium',
+  models: [
+    {
+      id: 'fixture-model-codex',
+      label: 'Codex fixture',
+      defaultEffort: 'medium',
+      efforts: ['medium', 'xhigh'],
+    },
+  ],
+}
+
+it('restores each engine model and effort selection after switching', async () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   container = document.createElement('div')
   document.body.append(container)
-  const codexOptions = {
-    defaultModel: 'fixture-model-codex',
-    defaultEffort: 'medium',
-    models: [
-      {
-        id: 'fixture-model-codex',
-        label: 'Codex fixture',
-        defaultEffort: 'medium',
-        efforts: ['medium', 'xhigh'],
-      },
-    ],
-  }
-  const fetcher = vi.fn<typeof fetch>((input) => {
-    const url = requestUrl(input)
-    const options =
-      url === '/api/model-options?engine=codex'
-        ? codexOptions
-        : exampleModelOptions
-    return Promise.resolve(
-      new Response(
-        JSON.stringify(
-          url.startsWith('/api/skill-suggestions') ? { skills: [] } : options,
-        ),
-        { status: 200, headers: { 'content-type': 'application/json' } },
-      ),
-    )
-  })
-  vi.stubGlobal('fetch', fetcher)
-  root = createRoot(container)
-
-  act(() => root?.render(<NewSessionHarness />))
-  await flushRequests()
-  act(() => {
-    currentState?.chooseModel('fixture-model-comet')
-    currentState?.setSelectedEffort('xhigh')
-    currentState?.setEngine('codex')
-  })
-  await flushRequests()
-
-  const snapshot = () => ({
-    engine: currentState?.engine,
-    selectedModel: currentState?.selectedModel,
-    selectedEffort: currentState?.selectedEffort,
-    notice: currentState?.modelChangeNotice,
-  })
-  expect(snapshot()).toEqual({
-    engine: 'codex',
-    selectedModel: null,
-    selectedEffort: 'xhigh',
-    notice:
-      'Codex has no fixture-model-comet, so the model is back to the default. Effort stays xhigh.',
-  })
-})
-
-it('resets the model and effort and shows an error when options cannot load', async () => {
-  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
-  container = document.createElement('div')
-  document.body.append(container)
-  const fetcher = vi.fn<typeof fetch>((input) => {
-    const url = requestUrl(input)
-    if (url === '/api/model-options?engine=codex') {
-      return Promise.resolve(
-        new Response(JSON.stringify({ error: 'Fixture catalog unavailable' }), {
-          status: 503,
-          headers: { 'content-type': 'application/json' },
-        }),
-      )
-    }
-    const body = url.startsWith('/api/skill-suggestions')
-      ? { skills: [] }
-      : exampleModelOptions
-    return Promise.resolve(
-      new Response(JSON.stringify(body), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      }),
-    )
-  })
-  vi.stubGlobal('fetch', fetcher)
-  root = createRoot(container)
-
-  act(() => root?.render(<NewSessionHarness />))
-  await flushRequests()
-  act(() => {
-    currentState?.chooseModel('fixture-model-comet')
-    currentState?.setSelectedEffort('high')
-    currentState?.setEngine('codex')
-  })
-  await flushRequests()
-
-  const snapshot = () => ({
-    engine: currentState?.engine,
-    isLoadingModelOptions: currentState?.isLoadingModelOptions,
-    modelOptions: currentState?.modelOptions,
-    modelOptionsError: currentState?.modelOptionsError,
-    selectedModel: currentState?.selectedModel,
-    selectedEffort: currentState?.selectedEffort,
-    notice: currentState?.modelChangeNotice,
-  })
-  expect(snapshot()).toEqual({
-    engine: 'codex',
-    isLoadingModelOptions: false,
-    modelOptions: null,
-    modelOptionsError: 'Fixture catalog unavailable',
-    selectedModel: null,
-    selectedEffort: null,
-    notice:
-      'Could not load Codex models, so the model and effort are back to the default.',
-  })
-})
-
-it('undoes an engine change and restores the previous model and effort', async () => {
-  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
-  container = document.createElement('div')
-  document.body.append(container)
-  const codexOptions = {
-    defaultModel: 'fixture-model-codex',
-    defaultEffort: 'medium',
-    models: [
-      {
-        id: 'fixture-model-codex',
-        label: 'Codex fixture',
-        defaultEffort: 'medium',
-        efforts: ['medium'],
-      },
-    ],
-  }
   const fetcher = vi.fn<typeof fetch>((input) => {
     const url = requestUrl(input)
     const body =
       url === '/api/model-options?engine=codex'
-        ? codexOptions
+        ? codexModelOptions
         : url.startsWith('/api/skill-suggestions')
           ? { skills: [] }
           : exampleModelOptions
@@ -478,19 +372,223 @@ it('undoes an engine change and restores the previous model and effort', async (
     currentState?.setEngine('codex')
   })
   await flushRequests()
-  act(() => currentState?.undoEngineChange())
+  const codexStartsEmpty = currentEngineSelection()
+  act(() => {
+    currentState?.chooseModel('fixture-model-codex')
+    currentState?.setSelectedEffort('xhigh')
+    currentState?.setEngine('claude')
+  })
+  await flushRequests()
+  const claudeSelectionRestored = currentEngineSelection()
+  act(() => currentState?.setEngine('codex'))
+  await flushRequests()
+
+  const selectionHistory = () => ({
+    codexStartsEmpty,
+    claudeSelectionRestored,
+    codexSelectionRestored: currentEngineSelection(),
+  })
+  expect(selectionHistory()).toEqual({
+    codexStartsEmpty: {
+      engine: 'codex',
+      selectedModel: null,
+      selectedEffort: null,
+    },
+    claudeSelectionRestored: {
+      engine: 'claude',
+      selectedModel: 'fixture-model-comet',
+      selectedEffort: 'high',
+    },
+    codexSelectionRestored: {
+      engine: 'codex',
+      selectedModel: 'fixture-model-codex',
+      selectedEffort: 'xhigh',
+    },
+  })
+})
+
+it('starts with the overridden engine model and effort selection', async () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  container = document.createElement('div')
+  document.body.append(container)
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    const body =
+      url === '/api/model-options?engine=codex'
+        ? codexModelOptions
+        : url.startsWith('/api/skill-suggestions')
+          ? { skills: [] }
+          : url === '/api/sessions'
+            ? { launchId: 'launch-fixture' }
+            : exampleModelOptions
+    return Promise.resolve(
+      new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+
+  act(() => root?.render(<NewSessionHarness />))
+  await flushRequests()
+  act(() => {
+    currentState?.chooseDirectory({
+      path: '/fixture/project',
+      source: 'recent',
+    })
+    currentState?.chooseModel('fixture-model-comet')
+    currentState?.setSelectedEffort('high')
+    currentState?.setEngine('codex')
+  })
+  await flushRequests()
+  act(() => {
+    currentState?.chooseModel('fixture-model-codex')
+    currentState?.setSelectedEffort('xhigh')
+    currentState?.setEngine('claude')
+  })
+  await flushRequests()
+  await act(async () => {
+    await currentState?.start(() => undefined, 'codex')
+  })
+
+  const launchBody = fetcher.mock.calls.find(
+    ([input]) => requestUrl(input) === '/api/sessions',
+  )?.[1]?.body
+  expect(launchBody).toEqual(
+    JSON.stringify({
+      directory: '/fixture/project',
+      engine: 'codex',
+      worktree: false,
+      model: 'fixture-model-codex',
+      reasoningEffort: 'xhigh',
+    }),
+  )
+})
+
+it('retains the selection when loading model options fails', async () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  container = document.createElement('div')
+  document.body.append(container)
+  let codexLoadCount = 0
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url === '/api/model-options?engine=codex') {
+      codexLoadCount += 1
+      if (codexLoadCount > 1) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ error: 'Fixture catalog unavailable' }),
+            {
+              status: 503,
+              headers: { 'content-type': 'application/json' },
+            },
+          ),
+        )
+      }
+    }
+    const body =
+      url === '/api/model-options?engine=codex'
+        ? codexModelOptions
+        : url.startsWith('/api/skill-suggestions')
+          ? { skills: [] }
+          : exampleModelOptions
+    return Promise.resolve(
+      new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+
+  act(() => root?.render(<NewSessionHarness />))
+  await flushRequests()
+  act(() => currentState?.setEngine('codex'))
+  await flushRequests()
+  act(() => {
+    currentState?.chooseModel('fixture-model-codex')
+    currentState?.setSelectedEffort('xhigh')
+    currentState?.setEngine('claude')
+  })
+  await flushRequests()
+  act(() => currentState?.setEngine('codex'))
   await flushRequests()
 
   const snapshot = () => ({
     engine: currentState?.engine,
+    isLoadingModelOptions: currentState?.isLoadingModelOptions,
+    modelOptions: currentState?.modelOptions,
+    modelOptionsError: currentState?.modelOptionsError,
     selectedModel: currentState?.selectedModel,
     selectedEffort: currentState?.selectedEffort,
-    notice: currentState?.modelChangeNotice,
   })
   expect(snapshot()).toEqual({
-    engine: 'claude',
-    selectedModel: 'fixture-model-comet',
-    selectedEffort: 'high',
-    notice: null,
+    engine: 'codex',
+    isLoadingModelOptions: false,
+    modelOptions: codexModelOptions,
+    modelOptionsError: 'Fixture catalog unavailable',
+    selectedModel: 'fixture-model-codex',
+    selectedEffort: 'xhigh',
+  })
+})
+
+it('clears model and effort selections for both engines on reset', async () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  container = document.createElement('div')
+  document.body.append(container)
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    const body =
+      url === '/api/model-options?engine=codex'
+        ? codexModelOptions
+        : url.startsWith('/api/skill-suggestions')
+          ? { skills: [] }
+          : exampleModelOptions
+    return Promise.resolve(
+      new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+
+  act(() => root?.render(<NewSessionHarness />))
+  await flushRequests()
+  act(() => {
+    currentState?.chooseModel('fixture-model-comet')
+    currentState?.setSelectedEffort('high')
+    currentState?.setEngine('codex')
+  })
+  await flushRequests()
+  act(() => {
+    currentState?.chooseModel('fixture-model-codex')
+    currentState?.setSelectedEffort('xhigh')
+    currentState?.reset()
+  })
+  await flushRequests()
+  const claudeSelection = currentEngineSelection()
+  act(() => currentState?.setEngine('codex'))
+  await flushRequests()
+
+  const selectionHistory = () => ({
+    claudeSelection,
+    codexSelection: currentEngineSelection(),
+  })
+  expect(selectionHistory()).toEqual({
+    claudeSelection: {
+      engine: 'claude',
+      selectedModel: null,
+      selectedEffort: null,
+    },
+    codexSelection: {
+      engine: 'codex',
+      selectedModel: null,
+      selectedEffort: null,
+    },
   })
 })

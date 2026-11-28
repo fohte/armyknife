@@ -70,6 +70,26 @@ export const TodoShowsMarkdownCodeBlock: Story = {
   },
 }
 
+export const TodoShowsAServedImageInItsDetail: Story = {
+  name: 'A to-do shows a served image in its detail',
+  args: {
+    defaultDetailExpanded: true,
+    detail: '![Sample screenshot](/Users/guest/screenshot.png)',
+    imageSources: {
+      '/Users/guest/screenshot.png': '/card-comment-attachment.svg',
+    },
+  },
+}
+
+export const TodoShowsWhenItsImageIsUnavailable: Story = {
+  name: 'A to-do explains when its local image is unavailable',
+  args: {
+    defaultDetailExpanded: true,
+    detail: '![Sample screenshot](/Users/guest/screenshot.png)',
+    imageSources: {},
+  },
+}
+
 export const TodoHasNoAdditionalDetail: Story = {
   name: 'A to-do shows only its title when it has no detail',
   args: { detail: null },
@@ -102,6 +122,6 @@ export const TodoIsRejected: Story = {
 }
 
 export const TodoIsWithdrawn: Story = {
-  name: 'A withdrawn to-do shows its title without a comment',
-  args: { resolution: 'withdrawn', defaultComment: '' },
+  name: 'A withdrawn to-do shows only its heading and title, even with a saved comment',
+  args: { resolution: 'withdrawn', defaultComment: 'The plan changed.' },
 }

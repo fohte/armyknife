@@ -1,5 +1,3 @@
-import { requestJson } from '#api-requests'
-
 export type RateLimitWindow = {
   usedPercentage: number
   resetsAt: number | null
@@ -88,7 +86,7 @@ function isEngineQuota(value: unknown): value is EngineQuota {
   )
 }
 
-function isAgentUsage(value: unknown): value is AgentUsage {
+export function isAgentUsage(value: unknown): value is AgentUsage {
   return (
     isRecord(value) &&
     Array.isArray(value['sessions']) &&
@@ -99,10 +97,6 @@ function isAgentUsage(value: unknown): value is AgentUsage {
     (value['quotas']['codex'] === null ||
       isEngineQuota(value['quotas']['codex']))
   )
-}
-
-export function requestAgentUsage() {
-  return requestJson('/api/usage', isAgentUsage)
 }
 
 function getElapsedWindowRatio(window: RateLimitWindow, nowSeconds: number) {

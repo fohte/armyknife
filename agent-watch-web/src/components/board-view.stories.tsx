@@ -168,6 +168,34 @@ export const BoardShowsActiveProjectsFirst: Story = {
   name: 'The board puts projects that need attention first',
 }
 
+export const BoardShowsWaitingSessions: Story = {
+  name: 'The Waiting group appears between action and working sessions',
+  args: {
+    projects: buildBoardProjects([
+      createSession({
+        id: 'action-session',
+        category: 'needs_action',
+        project: 'sample project',
+        kind: 'Question',
+        title: 'Choose a retry policy',
+      }),
+      createSession({
+        id: 'waiting-session',
+        category: 'waiting',
+        project: 'sample project',
+        title: 'Wait for the integration check',
+        waitingReason: 'Waiting for CI to finish',
+      }),
+      createSession({
+        id: 'working-session',
+        category: 'in_progress',
+        project: 'sample project',
+        title: 'Update the retry policy',
+      }),
+    ]),
+  },
+}
+
 export const BoardShowsPausedSessions: Story = {
   name: 'The Done group identifies paused sessions',
   args: {

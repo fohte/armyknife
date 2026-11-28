@@ -11,7 +11,6 @@ use axum::routing::get;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 
-use super::EnrichmentUpdates;
 use super::interrupted::interrupted_session_ids;
 use super::session_enrichment::{
     SessionEnrichmentCache, SessionPullRequestInfo, SessionTaskMetadata,
@@ -116,7 +115,6 @@ struct SessionRowView {
     task: Option<TqTaskView>,
     repo: String,
     vibe_mode: VibeState,
-    decision_count: i64,
 }
 
 struct SessionRowDetails {
@@ -128,7 +126,6 @@ struct SessionRowDetails {
     task: Option<TqTaskView>,
     repo: String,
     vibe_mode: VibeState,
-    decision_count: i64,
 }
 
 impl SessionRowView {
@@ -145,7 +142,6 @@ impl SessionRowView {
             task: details.task,
             repo: details.repo,
             vibe_mode: details.vibe_mode,
-            decision_count: details.decision_count,
         }
     }
 }
@@ -211,7 +207,6 @@ struct SessionView {
     later_until: Option<DateTime<Utc>>,
     is_today: bool,
     is_compacting: bool,
-    unreviewed_decision_count: i64,
     #[serde(skip_serializing_if = "is_zero")]
     todo_later_count: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -255,7 +250,6 @@ pub(super) struct SessionSnapshot {
     web_states: Vec<store::WatchWebSessionState>,
     title_by_id: HashMap<String, String>,
     repo_by_id: HashMap<String, String>,
-    decision_counts: HashMap<String, store::AgentDecisionCounts>,
     session_revisions: HashMap<String, i64>,
     agent_response_timestamps: HashMap<String, DateTime<Utc>>,
     unanswered_proposal_titles: HashMap<String, String>,
@@ -370,29 +364,13 @@ impl SessionSource for LiveSessionSource {
 }
 
 pub(super) fn router(
-    updates: EnrichmentUpdates,
+    enrichment: SessionEnrichmentCache,
     message_loaders: super::messages::RouteLoaders,
 ) -> Router {
     router_with_source(LiveSessionSource {
-        enrichment: SessionEnrichmentCache::new(updates),
+        enrichment,
         message_loaders,
     })
-}
-
-pub(super) fn decision_category_is_done(
-    session: &Session,
-    agent_config: &AgentConfig,
-    has_running_background_task: bool,
-    state: Option<&store::WatchWebSessionState>,
-    now: DateTime<Utc>,
-) -> bool {
-    category::decision_category_is_done(
-        session,
-        agent_config,
-        has_running_background_task,
-        state,
-        now,
-    )
 }
 
 fn router_with_source<S: SessionSource>(source: S) -> Router {
@@ -592,8 +570,7 @@ async fn list_sessions<S: SessionSource>(
                     now,
                 },
             );
-            let waiting =
-                agent_is_waiting && category_when_not_later == SessionCategory::InProgress;
+            let waiting = agent_is_waiting && category_when_not_later == SessionCategory::Waiting;
             let crit_url = session.crit_urls.last().cloned();
             let crit_exposed_url = crit_url.as_ref().and_then(|url| {
                 session
@@ -643,10 +620,6 @@ async fn list_sessions<S: SessionSource>(
                 .signed_duration_since(last_conversation_activity_at)
                 .num_seconds()
                 .max(0) as u64;
-            let decision_count = snapshot
-                .decision_counts
-                .get(&session.session_id)
-                .map_or(0, |counts| counts.total);
             SessionView {
                 row: SessionRowView::new(
                     session,
@@ -659,7 +632,6 @@ async fn list_sessions<S: SessionSource>(
                         task,
                         repo: repo.clone(),
                         vibe_mode,
-                        decision_count,
                     },
                 ),
                 is_paused: session.status == SessionStatus::Paused,
@@ -674,7 +646,8 @@ async fn list_sessions<S: SessionSource>(
                     SessionActivityStatus::Stopped
                 },
                 waiting_reason: if agent_is_waiting
-                    && (category_when_not_later == SessionCategory::InProgress
+                    && (category_when_not_later == SessionCategory::Waiting
+                        || category_when_not_later == SessionCategory::InProgress
                         || is_waiting_for_crit_review)
                 {
                     session
@@ -712,10 +685,6 @@ async fn list_sessions<S: SessionSource>(
                 later_until: state.and_then(|state| state.later_until),
                 is_today: state.is_some_and(|state| state.is_today),
                 is_compacting: state.is_some_and(|state| state.is_compacting),
-                unreviewed_decision_count: snapshot
-                    .decision_counts
-                    .get(&session.session_id)
-                    .map_or(0, |counts| counts.unreviewed),
                 todo_later_count: snapshot
                     .folded_todo_summaries
                     .get(&session.session_id)
@@ -789,7 +758,6 @@ fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
     let sessions_dir = store::sessions_dir()?;
     let vibe_sessions_dir = sessions_dir.clone();
     let agent_response_timestamps = store::agent_response_timestamps_from(&sessions_dir)?;
-    let decision_counts = store::agent_decision_counts_by_session_from(&sessions_dir)?;
     let session_revisions = store::session_revisions_by_session_from(&sessions_dir)?;
     let mut unanswered_proposal_titles = HashMap::new();
     let visible_session_ids = all_sessions
@@ -818,7 +786,6 @@ fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
         web_states: store::watch_web_session_states_from(&store::sessions_dir()?)?,
         title_by_id,
         repo_by_id,
-        decision_counts,
         session_revisions,
         agent_response_timestamps,
         unanswered_proposal_titles,
@@ -932,7 +899,6 @@ mod tests {
         task_priority_order: HashMap<String, usize>,
         task_projects: HashMap<String, String>,
         pull_requests: HashMap<String, Vec<SessionPullRequestInfo>>,
-        decision_counts: HashMap<String, store::AgentDecisionCounts>,
         session_revisions: HashMap<String, i64>,
         session_store_dir: Option<PathBuf>,
         agent_response_timestamps: HashMap<String, DateTime<Utc>>,
@@ -963,7 +929,6 @@ mod tests {
                 web_states: self.web_states.clone(),
                 title_by_id: self.title_by_id.clone(),
                 repo_by_id: self.repo_by_id.clone(),
-                decision_counts: self.decision_counts.clone(),
                 session_revisions,
                 agent_response_timestamps: self.agent_response_timestamps.clone(),
                 unanswered_proposal_titles: self.unanswered_proposal_titles.clone(),
@@ -1230,20 +1195,12 @@ mod tests {
                     },
                 ],
             )]),
-            decision_counts: HashMap::from([(
-                "child-session".to_string(),
-                store::AgentDecisionCounts {
-                    total: 4,
-                    unreviewed: 2,
-                },
-            )]),
             session_revisions: HashMap::new(),
             session_store_dir: None,
             agent_response_timestamps: HashMap::new(),
             work_type_nav_labels: HashMap::new(),
             agent_statuses: HashMap::new(),
             message_loaders: super::super::messages::RouteLoaders::new(
-                |_| Ok(Vec::new()),
                 |_| Ok(Vec::new()),
                 |_| Ok(Vec::new()),
                 |_, _| Ok(()),
@@ -1597,7 +1554,6 @@ mod tests {
                 },
                 "repo": "example-org/example-repo",
                 "vibeMode": vibe_mode,
-                "decisionCount": 4,
                 "pullRequest": { "number": 42, "state": "Open" },
                 "pullRequests": [
                     { "number": 42, "state": "Open" },
@@ -1718,7 +1674,6 @@ mod tests {
                         },
                         "repo": "example-org/example-repo",
                         "vibeMode": { "mode": "repo_disabled" },
-                        "decisionCount": 4,
                         "pullRequest": { "number": 42, "state": "Open" },
                         "pullRequests": [
                             { "number": 42, "state": "Open" },
@@ -1793,7 +1748,6 @@ mod tests {
                         },
                         "repo": "example-org/example-repo",
                         "vibeMode": { "mode": "repo_disabled" },
-                        "decisionCount": 4,
                         "pullRequest": { "number": 42, "state": "Open" },
                         "pullRequests": [
                             { "number": 42, "state": "Open" },
@@ -1814,7 +1768,6 @@ mod tests {
                         "task": null,
                         "repo": "example-org/grandchild-repo",
                         "vibeMode": { "mode": "repo_disabled" },
-                        "decisionCount": 0,
                         "pullRequest": null,
                         "pullRequests": [],
                     },
@@ -1975,8 +1928,6 @@ mod tests {
                 "laterUntil": later_until,
                 "isToday": is_today,
                 "isCompacting": false,
-                "decisionCount": 4,
-                "unreviewedDecisionCount": 2,
                 "critUrl": details.crit_url,
                 "isWaitingForCritReview": false
             }]
@@ -2229,7 +2180,6 @@ mod tests {
         source.message_loaders = super::super::messages::RouteLoaders::new(
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
-            |_| Ok(Vec::new()),
             |_, _| Ok(()),
             |_| Ok(Vec::new()),
         )
@@ -2301,6 +2251,9 @@ mod tests {
         std::fs::write(&queued_review_document_path, "queued fixture").unwrap();
         let _review_lock =
             crate::shared::human_in_the_loop::LockGuard::acquire(&review_document_path).unwrap();
+        let _queued_review_lock =
+            crate::shared::human_in_the_loop::LockGuard::acquire(&queued_review_document_path)
+                .unwrap();
         source.sessions[0].pending_human_review_ids.insert(format!(
             "fixture-review\0v2\0{}\0{}\0",
             42,
@@ -3449,12 +3402,12 @@ mod tests {
         source.web_states[0].later_until = None;
 
         let mut expected = expected_response(
-            "in_progress",
+            "waiting",
             None,
             true,
             ExpectedSessionDetails {
                 kind: Some("Stopped"),
-                category_when_not_later: "in_progress",
+                category_when_not_later: "waiting",
                 is_paused: false,
                 unread: true,
                 crit_url: None,
