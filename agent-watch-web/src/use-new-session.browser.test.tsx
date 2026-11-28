@@ -3,6 +3,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, expect, it, vi } from 'vitest'
 
 import type { LaunchSessionRequest } from '#new-session-api'
+import { NEW_SESSION_DRAFT_STORAGE_KEY } from '#new-session-draft'
 import { exampleModelOptions } from '#new-session-story-fixtures.test'
 import { type NewSessionState, useNewSession } from '#use-new-session'
 
@@ -45,8 +46,94 @@ afterEach(() => {
   if (root !== null) act(() => root?.unmount())
   root = null
   currentState = null
+  window.localStorage.removeItem(NEW_SESSION_DRAFT_STORAGE_KEY)
   container.remove()
   vi.unstubAllGlobals()
+})
+
+it('restores a saved draft and clears it back to defaults', async () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  container = document.createElement('div')
+  document.body.append(container)
+  const savedAt = '2026-05-06T12:03:00.000Z'
+  window.localStorage.setItem(
+    NEW_SESSION_DRAFT_STORAGE_KEY,
+    JSON.stringify({
+      version: 1,
+      savedAt,
+      directory: { path: '/example/project', source: 'recent' },
+      directoryQuery: 'project',
+      engine: 'claude',
+      selections: {
+        claude: { model: 'fixture-model-orbit', effort: 'high' },
+        codex: { model: null, effort: null },
+      },
+      worktree: true,
+      initialMessage: 'Continue the setup.',
+    }),
+  )
+  vi.stubGlobal(
+    'fetch',
+    vi.fn<typeof fetch>((input) => {
+      const url = requestUrl(input)
+      const body = url.startsWith('/api/model-options')
+        ? exampleModelOptions
+        : { skills: [] }
+      return Promise.resolve(
+        new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      )
+    }),
+  )
+  root = createRoot(container)
+
+  act(() => root?.render(<NewSessionHarness />))
+  await flushRequests()
+  const restored = () => ({
+    directory: currentState?.selectedDirectory,
+    directoryQuery: currentState?.directoryQuery,
+    engine: currentState?.engine,
+    model: currentState?.selectedModel,
+    effort: currentState?.selectedEffort,
+    worktree: currentState?.worktree,
+    initialMessage: currentState?.initialMessage,
+    restoredAt: currentState?.restoredAt,
+  })
+  expect(restored()).toEqual({
+    directory: { path: '/example/project', source: 'recent' },
+    directoryQuery: 'project',
+    engine: 'claude',
+    model: 'fixture-model-orbit',
+    effort: 'high',
+    worktree: true,
+    initialMessage: 'Continue the setup.',
+    restoredAt: savedAt,
+  })
+
+  act(() => currentState?.clearDraft())
+
+  const cleared = () => ({
+    directory: currentState?.selectedDirectory,
+    directoryQuery: currentState?.directoryQuery,
+    engine: currentState?.engine,
+    worktree: currentState?.worktree,
+    initialMessage: currentState?.initialMessage,
+    restoredAt: currentState?.restoredAt,
+    modelOptions: currentState?.modelOptions,
+    storedDraft: window.localStorage.getItem(NEW_SESSION_DRAFT_STORAGE_KEY),
+  })
+  expect(cleared()).toEqual({
+    directory: null,
+    directoryQuery: '',
+    engine: 'claude',
+    worktree: false,
+    initialMessage: '',
+    restoredAt: null,
+    modelOptions: exampleModelOptions,
+    storedDraft: null,
+  })
 })
 
 it('reloads skill suggestions when the selected engine and directory change', async () => {

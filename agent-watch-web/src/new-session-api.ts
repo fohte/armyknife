@@ -38,7 +38,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
 
-function isSessionDirectory(value: unknown): value is SessionDirectory {
+export function isSessionDirectory(value: unknown): value is SessionDirectory {
   return (
     isRecord(value) &&
     typeof value['path'] === 'string' &&

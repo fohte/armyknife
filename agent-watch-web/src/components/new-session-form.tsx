@@ -4,13 +4,13 @@ import { ArrowLeft, ChevronDown, Folder, GitBranch, X } from 'lucide-react'
 import { type ReactNode, useRef, useState } from 'react'
 
 import { NewSessionModelPicker } from '#components/new-session-model-picker'
+import { NewSessionRestoredNotice } from '#components/new-session-restored-notice'
 import { SessionDirectoryOptions } from '#components/session-directory-options'
 import {
   skillCompletionTextareaAttributes,
   SkillSuggestionList,
   useSkillCompletion,
 } from '#components/skill-completion'
-import { useBeforeUnloadWarning } from '#components/use-beforeunload-warning'
 import { useDismissableLayer } from '#components/use-dismissable-layer'
 import { useNewSessionMessageKeyboard } from '#components/use-new-session-message-keyboard'
 import type { LaunchSessionRequest } from '#new-session-api'
@@ -61,7 +61,6 @@ export function NewSessionForm({
     onDraftChange: state.setInitialMessage,
     onKeyDown: handleMessageKeyDown,
   })
-  useBeforeUnloadWarning(state.initialMessage !== '' && !launchPending)
   useDismissableLayer(directoryPickerOpen, setDirectoryPickerOpen, [
     directoryTriggerRef,
     directoryPopoverRef,
@@ -256,6 +255,14 @@ export function NewSessionForm({
             </button>
           </div>
         </div>
+        {state.restoredAt !== null ? (
+          <NewSessionRestoredNotice
+            savedAt={state.restoredAt}
+            {...(now === undefined ? {} : { now })}
+            isMobile={isMobile}
+            onClear={state.clearDraft}
+          />
+        ) : null}
       </div>
     </section>
   )

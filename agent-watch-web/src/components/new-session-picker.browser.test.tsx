@@ -62,6 +62,7 @@ function PickerHarness({
     activeModelOption,
     worktree,
     initialMessage: '',
+    restoredAt: null,
     skillSuggestions: [],
     isLoadingDirectories: false,
     error: null,
@@ -74,6 +75,7 @@ function PickerHarness({
     setWorktree,
     setInitialMessage: () => undefined,
     start,
+    clearDraft: () => undefined,
     reset: () => undefined,
   }
   return (

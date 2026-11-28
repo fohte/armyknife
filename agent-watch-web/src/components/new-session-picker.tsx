@@ -9,6 +9,7 @@ import {
 } from 'react'
 
 import { NewSessionModelPicker } from '#components/new-session-model-picker'
+import { NewSessionRestoredNotice } from '#components/new-session-restored-notice'
 import { SessionDirectoryOptions } from '#components/session-directory-options'
 import type { LaunchSessionRequest } from '#new-session-api'
 import type { NewSessionState } from '#use-new-session'
@@ -225,6 +226,14 @@ export function NewSessionPicker({
             <X aria-hidden="true" size={16} />
           </button>
         </header>
+        {state.restoredAt !== null ? (
+          <NewSessionRestoredNotice
+            savedAt={state.restoredAt}
+            {...(now === undefined ? {} : { now })}
+            isMobile={isMobile}
+            onClear={state.clearDraft}
+          />
+        ) : null}
         {selectedDirectory === null ? (
           <SessionDirectoryOptions
             autoFocus={!isMobile}

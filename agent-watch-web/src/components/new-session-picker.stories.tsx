@@ -34,6 +34,17 @@ export const EngineAndWorktreeCanBeSelected: Story = {
   },
 }
 
+export const RestoredDraft: Story = {
+  name: 'The palette shows the restored draft notice under the input',
+  args: {
+    state: createNewSessionStoryState({
+      selectedDirectory: exampleSessionDirectories[0] ?? null,
+      initialMessage: 'Resume the unfinished setup.',
+      restoredAt: '2026-05-06T12:03:00Z',
+    }),
+  },
+}
+
 export const ModelEffortOptionsAreOpen: Story = {
   name: 'The command palette exposes the selected model and effort controls',
   args: {

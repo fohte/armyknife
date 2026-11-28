@@ -5,6 +5,8 @@ import { userEvent } from 'vitest/browser'
 
 import type { AgentUsage } from '#agent-usage'
 import { App } from '#App'
+import { formatMessageTime } from '#components/message-time'
+import { NEW_SESSION_DRAFT_STORAGE_KEY } from '#new-session-draft'
 import { readSavedInboxViews } from '#saved-inbox-views'
 import type { Session, SessionsResponse } from '#types'
 
@@ -768,6 +770,30 @@ function readActiveView() {
 
   const label = active.textContent.trim()
   return label.startsWith('Inbox') ? 'Inbox' : label
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+function readStoredNewSessionDraft() {
+  const raw = window.localStorage.getItem(NEW_SESSION_DRAFT_STORAGE_KEY)
+  if (raw === null) return null
+  const draft: unknown = JSON.parse(raw)
+  if (!isRecord(draft)) return null
+  return { ...draft, savedAt: '<saved-at>' }
+}
+
+function readNewSessionDraftTime() {
+  const raw = window.localStorage.getItem(NEW_SESSION_DRAFT_STORAGE_KEY)
+  if (raw === null) throw new Error('Expected the new session draft')
+  const draft: unknown = JSON.parse(raw)
+  if (!isRecord(draft) || typeof draft['savedAt'] !== 'string') {
+    throw new Error('Expected the saved time')
+  }
+  const time = formatMessageTime(draft['savedAt'])
+  if (time === null) throw new Error('Expected a valid saved time')
+  return time
 }
 
 function renderApp() {
@@ -1626,6 +1652,7 @@ beforeEach(() => {
   window.history.replaceState(null, '', '/')
   window.localStorage.removeItem('agent-watch-web:inbox-sort')
   window.localStorage.removeItem('agent-watch-web:saved-inbox-views')
+  window.localStorage.removeItem(NEW_SESSION_DRAFT_STORAGE_KEY)
   mediaQueries.clear()
   container = document.createElement('div')
   document.body.append(container)
@@ -1645,6 +1672,7 @@ afterEach(() => {
   root = null
   window.localStorage.removeItem('agent-watch:navigation-width')
   window.localStorage.removeItem('agent-watch-web:inbox-sort')
+  window.localStorage.removeItem(NEW_SESSION_DRAFT_STORAGE_KEY)
   container.remove()
   window.localStorage.removeItem('agent-watch-web:saved-inbox-views')
   vi.useRealTimers()
@@ -3892,6 +3920,7 @@ it('opens the session when its launch ID appears in the feed', async () => {
 
   const launchedSession = {
     newSessionFormOpen: container.querySelector('.new-session-view') !== null,
+    storedDraft: window.localStorage.getItem(NEW_SESSION_DRAFT_STORAGE_KEY),
     selectedTitle: readSelectedTitle(),
     selectedId: new URLSearchParams(window.location.search).get('session'),
     toasts: Array.from(
@@ -3916,6 +3945,7 @@ it('opens the session when its launch ID appears in the feed', async () => {
   expect(snapshot()).toEqual({
     launchedSession: {
       newSessionFormOpen: false,
+      storedDraft: null,
       selectedTitle: 'Created session',
       selectedId: 'session-launched',
       toasts: [],
@@ -3924,6 +3954,101 @@ it('opens the session when its launch ID appears in the feed', async () => {
       selectedTitle: 'Previous session',
       url: '?session=session-before',
     },
+  })
+})
+
+it('restores the first message and notice after closing and reopening the form', async () => {
+  vi.stubGlobal('fetch', createSessionLaunchFetcher(mockPendingResponse()))
+  renderApp()
+  publishSessions({ revision: 1, sessions: [] })
+  clickButton('[aria-label="New session"]')
+  await waitForDirectoryResults()
+  clickButton('.new-session-directory-button')
+  clickButton('[aria-label="Select directory /Users/example/work/service"]')
+  const messageInput = container.querySelector<HTMLTextAreaElement>(
+    '.new-session-view textarea',
+  )
+  if (messageInput === null) {
+    throw new Error('First message field was not rendered')
+  }
+  await act(async () => {
+    await userEvent.type(messageInput, 'Continue the unfinished setup.')
+  })
+  clickButton('.new-session-close')
+  clickButton('[aria-label="New session"]')
+
+  const restoredTime = readNewSessionDraftTime()
+  const storedDraft = readStoredNewSessionDraft()
+  const restoredMessage = container.querySelector<HTMLTextAreaElement>(
+    '.new-session-view textarea',
+  )
+  const snapshot = () => ({
+    directory: container.querySelector('.new-session-directory-button span')
+      ?.textContent,
+    initialMessage: restoredMessage?.value,
+    notice: container.querySelector('.new-session-restored-notice')
+      ?.textContent,
+    storedDraft,
+  })
+  expect(snapshot()).toEqual({
+    directory: '/Users/example/work/service',
+    initialMessage: 'Continue the unfinished setup.',
+    notice: `Restored your draft from ${restoredTime}Clear`,
+    storedDraft: {
+      version: 1,
+      savedAt: '<saved-at>',
+      directory: { path: '/Users/example/work/service', source: 'repo' },
+      directoryQuery: '',
+      engine: 'claude',
+      selections: {
+        claude: { model: null, effort: null },
+        codex: { model: null, effort: null },
+      },
+      worktree: false,
+      initialMessage: 'Continue the unfinished setup.',
+    },
+  })
+})
+
+it('restores a draft after switching to another session', async () => {
+  vi.stubGlobal('fetch', createSessionLaunchFetcher(mockPendingResponse()))
+  window.history.replaceState(null, '', '/?session=session-before')
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-before', 'Previous session')],
+  })
+  clickButton('[aria-label="New session"]')
+  await waitForDirectoryResults()
+  clickButton('.new-session-directory-button')
+  clickButton('[aria-label="Select directory /Users/example/work/service"]')
+  const messageInput = container.querySelector<HTMLTextAreaElement>(
+    '.new-session-view textarea',
+  )
+  if (messageInput === null) {
+    throw new Error('First message field was not rendered')
+  }
+  await act(async () => {
+    await userEvent.type(messageInput, 'Switch back to this draft.')
+  })
+  clickButton('[data-session-row]')
+  clickButton('[aria-label="New session"]')
+
+  const restoredTime = readNewSessionDraftTime()
+  const restoredMessage = container.querySelector<HTMLTextAreaElement>(
+    '.new-session-view textarea',
+  )
+  const snapshot = () => ({
+    directory: container.querySelector('.new-session-directory-button span')
+      ?.textContent,
+    initialMessage: restoredMessage?.value,
+    notice: container.querySelector('.new-session-restored-notice')
+      ?.textContent,
+  })
+  expect(snapshot()).toEqual({
+    directory: '/Users/example/work/service',
+    initialMessage: 'Switch back to this draft.',
+    notice: `Restored your draft from ${restoredTime}Clear`,
   })
 })
 
@@ -4256,6 +4381,7 @@ it('shows a launch failure and allows another attempt', async () => {
     startDisabled:
       container.querySelector<HTMLButtonElement>('.new-session-start')
         ?.disabled,
+    storedDraft: readStoredNewSessionDraft(),
     toasts: Array.from(
       container.querySelectorAll(
         '.async-action-toast-stack .async-action-item',
@@ -4266,6 +4392,19 @@ it('shows a launch failure and allows another attempt', async () => {
   expect(snapshot()).toEqual({
     error: 'The session could not be started.',
     startDisabled: false,
+    storedDraft: {
+      version: 1,
+      savedAt: '<saved-at>',
+      directory: { path: '/Users/example/work/service', source: 'repo' },
+      directoryQuery: '',
+      engine: 'claude',
+      selections: {
+        claude: { model: null, effort: null },
+        codex: { model: null, effort: null },
+      },
+      worktree: false,
+      initialMessage: '',
+    },
     toasts: [],
   })
 })

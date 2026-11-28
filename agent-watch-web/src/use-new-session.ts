@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
+import { useDraft } from '#components/use-composer-draft'
 import {
   getSessionDirectories,
   getSessionModelOptions,
@@ -10,6 +11,14 @@ import {
   type SessionModelOptions,
 } from '#new-session-api'
 import {
+  decodeNewSessionDraft,
+  emptyNewSessionDraftFields,
+  encodeNewSessionDraft,
+  isDefaultNewSessionDraft,
+  NEW_SESSION_DRAFT_STORAGE_KEY,
+  type NewSessionDraftFields,
+} from '#new-session-draft'
+import {
   defaultEffortModelOption,
   type NewSessionModelSelection,
   reconcileModelSelection,
@@ -17,11 +26,19 @@ import {
 import type { SkillSuggestion } from '#types'
 
 export function useNewSession(active: boolean) {
-  const [directoryQuery, setDirectoryQuery] = useState('')
+  const { draft: storedDraft, updateDraft } = useDraft(
+    NEW_SESSION_DRAFT_STORAGE_KEY,
+  )
+  const [initialDraft] = useState(() => decodeNewSessionDraft(storedDraft))
+  const [directoryQuery, setDirectoryQuery] = useState(
+    () => initialDraft?.directoryQuery ?? '',
+  )
   const [directories, setDirectories] = useState<SessionDirectory[]>([])
   const [selectedDirectory, setSelectedDirectory] =
-    useState<SessionDirectory | null>(null)
-  const [engine, setEngine] = useState<SessionEngine>('claude')
+    useState<SessionDirectory | null>(() => initialDraft?.directory ?? null)
+  const [engine, setEngine] = useState<SessionEngine>(
+    () => initialDraft?.engine ?? 'claude',
+  )
   const [modelOptionsCache, setModelOptionsCache] = useState<
     Partial<Record<SessionEngine, SessionModelOptions>>
   >({})
@@ -31,21 +48,84 @@ export function useNewSession(active: boolean) {
   )
   const [selections, setSelections] = useState<
     Record<SessionEngine, NewSessionModelSelection>
-  >({
-    claude: { model: null, effort: null },
-    codex: { model: null, effort: null },
-  })
-  const [worktree, setWorktree] = useState(false)
-  const [initialMessage, setInitialMessage] = useState('')
+  >(
+    () =>
+      initialDraft?.selections ?? {
+        claude: { model: null, effort: null },
+        codex: { model: null, effort: null },
+      },
+  )
+  const [worktree, setWorktree] = useState(
+    () => initialDraft?.worktree ?? false,
+  )
+  const [initialMessage, setInitialMessage] = useState(
+    () => initialDraft?.initialMessage ?? '',
+  )
   const [skillSuggestions, setSkillSuggestions] = useState<SkillSuggestion[]>(
     [],
   )
   const [isLoadingDirectories, setIsLoadingDirectories] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [restoredAt, setRestoredAt] = useState<string | null>(null)
+  const activeRef = useRef(false)
+  const lastFieldsRef = useRef(
+    JSON.stringify(
+      initialDraft === null
+        ? emptyNewSessionDraftFields()
+        : {
+            directory: initialDraft.directory,
+            directoryQuery: initialDraft.directoryQuery,
+            engine: initialDraft.engine,
+            selections: initialDraft.selections,
+            worktree: initialDraft.worktree,
+            initialMessage: initialDraft.initialMessage,
+          },
+    ),
+  )
   const requestSequence = useRef(0)
   const skillSuggestionsSequence = useRef(0)
   const selectionsRef = useRef(selections)
   selectionsRef.current = selections
+
+  useEffect(() => {
+    if (active && !activeRef.current) {
+      setRestoredAt(decodeNewSessionDraft(storedDraft)?.savedAt ?? null)
+    }
+    activeRef.current = active
+  }, [active, storedDraft])
+
+  useEffect(() => {
+    const fields: NewSessionDraftFields = {
+      directory: selectedDirectory,
+      directoryQuery,
+      engine,
+      selections,
+      worktree,
+      initialMessage,
+    }
+    const serializedFields = JSON.stringify(fields)
+    if (serializedFields === lastFieldsRef.current) {
+      if (initialDraft === null && storedDraft !== '') updateDraft('')
+      return
+    }
+    lastFieldsRef.current = serializedFields
+    if (isDefaultNewSessionDraft(fields)) {
+      updateDraft('')
+      return
+    }
+    const savedAt = new Date().toISOString()
+    updateDraft(encodeNewSessionDraft(fields, savedAt))
+  }, [
+    directoryQuery,
+    engine,
+    initialDraft,
+    initialMessage,
+    selectedDirectory,
+    selections,
+    storedDraft,
+    updateDraft,
+    worktree,
+  ])
 
   const updateSelection = useCallback(
     (selectionEngine: SessionEngine, selection: NewSessionModelSelection) => {
@@ -146,16 +226,13 @@ export function useNewSession(active: boolean) {
     }
   }, [active, engine, selectedDirectory?.path])
 
-  const reset = useCallback(() => {
-    requestSequence.current += 1
-    skillSuggestionsSequence.current += 1
+  const clearDraft = useCallback(() => {
+    const emptyFields = emptyNewSessionDraftFields()
+    lastFieldsRef.current = JSON.stringify(emptyFields)
+    updateDraft('')
     setDirectoryQuery('')
-    setDirectories([])
     setSelectedDirectory(null)
     setEngine('claude')
-    setModelOptionsCache({})
-    setIsLoadingModelOptions(false)
-    setModelOptionsError(null)
     const emptySelections = {
       claude: { model: null, effort: null },
       codex: { model: null, effort: null },
@@ -164,10 +241,21 @@ export function useNewSession(active: boolean) {
     setSelections(emptySelections)
     setWorktree(false)
     setInitialMessage('')
+    setError(null)
+    setRestoredAt(null)
+  }, [updateDraft])
+
+  const reset = useCallback(() => {
+    requestSequence.current += 1
+    skillSuggestionsSequence.current += 1
+    clearDraft()
+    setDirectories([])
+    setModelOptionsCache({})
+    setIsLoadingModelOptions(false)
+    setModelOptionsError(null)
     setSkillSuggestions([])
     setIsLoadingDirectories(false)
-    setError(null)
-  }, [])
+  }, [clearDraft])
 
   const changeEngine = useCallback((nextEngine: SessionEngine) => {
     setEngine(nextEngine)
@@ -258,6 +346,7 @@ export function useNewSession(active: boolean) {
     activeModelOption,
     worktree,
     initialMessage,
+    restoredAt,
     skillSuggestions,
     isLoadingDirectories,
     error,
@@ -270,6 +359,7 @@ export function useNewSession(active: boolean) {
     setWorktree,
     setInitialMessage,
     start,
+    clearDraft,
     reset,
   }
 }

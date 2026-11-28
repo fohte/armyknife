@@ -53,6 +53,17 @@ export const FirstMessageAndWorktreeAreSelected: Story = {
   },
 }
 
+export const RestoredDraft: Story = {
+  name: 'A restored draft keeps its directory and message under a Restored notice',
+  args: {
+    state: createNewSessionStoryState({
+      selectedDirectory: exampleSessionDirectories[0] ?? null,
+      initialMessage: 'Resume the unfinished setup.',
+      restoredAt: '2026-05-06T12:03:00Z',
+    }),
+  },
+}
+
 export const ModelAndEffortPickerIsOpen: Story = {
   name: 'The selected model shows its available effort levels',
   args: {
