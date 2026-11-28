@@ -9,10 +9,11 @@ pub(super) fn has_parent_agent_process_from_connection(
     connection: &Connection,
     session_id: &str,
 ) -> Result<Option<bool>> {
+    // Nullable schemas can still have old NULL rows, which must act like cache misses.
     let state = connection
         .query_row(
             "SELECT has_parent_agent FROM agent_session_pane_binding_state
-             WHERE session_id = ?1",
+             WHERE session_id = ?1 AND has_parent_agent IS NOT NULL",
             [session_id],
             |row| row.get::<_, bool>(0),
         )
@@ -48,6 +49,7 @@ pub(crate) fn set_has_parent_agent_process(
 
 #[cfg(test)]
 mod tests {
+    use indoc::indoc;
     use rstest::{fixture, rstest};
 
     use super::*;
@@ -96,6 +98,25 @@ mod tests {
                 state_exists,
             ),
             (None, false),
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn null_parent_agent_state_is_treated_as_missing() -> Result<()> {
+        let connection = Connection::open_in_memory()?;
+        connection.execute_batch(indoc! {"
+            CREATE TABLE agent_session_pane_binding_state (
+                session_id TEXT PRIMARY KEY,
+                has_parent_agent INTEGER
+            );
+            INSERT INTO agent_session_pane_binding_state (session_id, has_parent_agent)
+            VALUES ('fixture-session-cedar', NULL);
+        "})?;
+
+        assert_eq!(
+            has_parent_agent_process_from_connection(&connection, "fixture-session-cedar",)?,
+            None,
         );
         Ok(())
     }

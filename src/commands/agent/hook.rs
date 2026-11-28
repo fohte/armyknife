@@ -2266,7 +2266,8 @@ mod tests {
         resolve_calls: PaneBindingResolveCallSink,
         session_start_calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
         classification_checks: std::sync::Arc<std::sync::atomic::AtomicUsize>,
-        fallback_has_parent_agent: Option<bool>,
+        fallback_has_parent_agent:
+            std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<Option<bool>>>>,
     }
 
     impl PaneBindingOperations for RecordingPaneBinding {
@@ -2293,6 +2294,10 @@ mod tests {
                         self.classification_checks
                             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         self.fallback_has_parent_agent
+                            .lock()
+                            .expect("classification result queue lock should not be poisoned")
+                            .pop_front()
+                            .unwrap_or(None)
                     }
                 }
             };
@@ -2627,7 +2632,9 @@ mod tests {
                 resolve_calls: resolve_calls.clone(),
                 session_start_calls,
                 classification_checks: classification_checks.clone(),
-                fallback_has_parent_agent: None,
+                fallback_has_parent_agent: std::sync::Arc::new(std::sync::Mutex::new(
+                    std::collections::VecDeque::new(),
+                )),
             })),
             ..SideEffects::none()
         };
@@ -2699,7 +2706,9 @@ mod tests {
                 resolve_calls: resolve_calls.clone(),
                 session_start_calls,
                 classification_checks: classification_checks.clone(),
-                fallback_has_parent_agent: None,
+                fallback_has_parent_agent: std::sync::Arc::new(std::sync::Mutex::new(
+                    std::collections::VecDeque::from([None, Some(false)]),
+                )),
             })),
             ..SideEffects::none()
         };
@@ -2776,7 +2785,16 @@ mod tests {
             None,
             EnvVars::default(),
         )
-        .expect("unavailable classification should be retried");
+        .expect("the next fallback should recover the classification");
+        process_hook_event_impl_with_env(
+            HookEvent::PostToolUse,
+            create_test_input_with_source(None, None),
+            temp_dir.path(),
+            &side_effects,
+            None,
+            EnvVars::default(),
+        )
+        .expect("a recovered classification should be reused");
         let session = store::load_session_from(temp_dir.path(), "test-123")
             .expect("session should load")
             .expect("session should exist");
@@ -2793,13 +2811,14 @@ mod tests {
                 session.tmux_info.map(|info| info.pane_id),
             ),
             (
-                None,
+                Some(false),
                 vec![
                     (true, None),
                     (false, Some(false)),
                     (false, Some(false)),
                     (false, None),
                     (false, None),
+                    (false, Some(false)),
                 ],
                 2,
                 Some("%42".to_string()),
@@ -2833,6 +2852,7 @@ mod tests {
                     (false, Some(false)),
                     (false, None),
                     (false, None),
+                    (false, Some(false)),
                     (true, None),
                 ],
             ),
