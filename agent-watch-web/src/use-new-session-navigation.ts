@@ -58,16 +58,23 @@ export function useNewSessionNavigation({
     ],
   )
   const closeNewSession = useCallback(() => {
+    handOffSessionLaunch()
     resetNewSession()
     backFromNewSession()
-  }, [backFromNewSession, resetNewSession])
+  }, [backFromNewSession, handOffSessionLaunch, resetNewSession])
   const switchFromNewSessionToSession = useCallback(
     (sessionId: string, conversationOpen: boolean) => {
+      handOffSessionLaunch()
       resetNewSession()
       replaceNewSessionWithSession(sessionId, conversationOpen)
       requestComposerFocus(sessionId)
     },
-    [replaceNewSessionWithSession, requestComposerFocus, resetNewSession],
+    [
+      handOffSessionLaunch,
+      replaceNewSessionWithSession,
+      requestComposerFocus,
+      resetNewSession,
+    ],
   )
 
   return { closeNewSession, openNewSession, switchFromNewSessionToSession }

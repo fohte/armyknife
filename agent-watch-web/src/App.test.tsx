@@ -3914,6 +3914,63 @@ it('opens the session when its launch ID appears in the feed', async () => {
   })
 })
 
+it('opens a launch when its feed entry arrives before the POST response', async () => {
+  let resolveLaunchResponse: (response: Response) => void = () => undefined
+  const launchResponse = new Promise<Response>((resolve) => {
+    resolveLaunchResponse = resolve
+  })
+  vi.stubGlobal('fetch', createSessionLaunchFetcher(launchResponse))
+  renderApp()
+  publishSessions({ revision: 1, sessions: [] })
+  await startNewSessionFromForm()
+  publishSessions({
+    revision: 2,
+    sessions: [
+      {
+        ...session('session-launched', 'Created session'),
+        launchId: 'launch-fixture',
+      },
+    ],
+  })
+
+  const beforeResponse = () => ({
+    formOpen: container.querySelector('.new-session-view') !== null,
+    selectedTitle: readSelectedTitle(),
+    toasts: Array.from(
+      container.querySelectorAll(
+        '.async-action-toast-stack .async-action-item',
+      ),
+      (toast) => toast.textContent,
+    ),
+  })
+  expect(beforeResponse()).toEqual({
+    formOpen: true,
+    selectedTitle: null,
+    toasts: [],
+  })
+
+  await act(async () => {
+    resolveLaunchResponse(jsonResponse({ launchId: 'launch-fixture' }))
+    await launchResponse
+    await flushAsyncState()
+  })
+  const afterResponse = () => ({
+    formOpen: container.querySelector('.new-session-view') !== null,
+    selectedTitle: readSelectedTitle(),
+    toasts: Array.from(
+      container.querySelectorAll(
+        '.async-action-toast-stack .async-action-item',
+      ),
+      (toast) => toast.textContent,
+    ),
+  })
+  expect(afterResponse()).toEqual({
+    formOpen: false,
+    selectedTitle: 'Created session',
+    toasts: [],
+  })
+})
+
 it('opens a launched session from a new-session palette on the Board', async () => {
   vi.stubGlobal(
     'fetch',
