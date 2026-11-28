@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.994](https://github.com/fohte/armyknife/compare/v0.1.993...v0.1.994) (2026-11-28)
+
+
+### Bug Fixes
+
+* **agent/close:** close stopped sessions ([#2419](https://github.com/fohte/armyknife/issues/2419)) ([bf9e040](https://github.com/fohte/armyknife/commit/bf9e040884b24d1bfcda42655d508c882d4a1122))
+
 ## [0.1.993](https://github.com/fohte/armyknife/compare/v0.1.992...v0.1.993) (2026-11-28)
 
 
