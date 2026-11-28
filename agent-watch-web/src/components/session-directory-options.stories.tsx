@@ -7,6 +7,7 @@ const meta = {
   component: SessionDirectoryOptions,
   args: {
     directories: exampleSessionDirectories,
+    now: new Date('2026-05-06T12:00:00Z'),
     isLoading: false,
     query: '',
     onQueryChange: () => undefined,

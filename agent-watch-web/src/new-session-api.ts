@@ -5,6 +5,7 @@ import type { SkillSuggestion } from '#types'
 export type SessionDirectory = {
   path: string
   source: 'recent' | 'repo' | 'path'
+  lastUsedAt?: string
 }
 
 export type SessionEngine = 'claude' | 'codex'
@@ -41,6 +42,8 @@ function isSessionDirectory(value: unknown): value is SessionDirectory {
   return (
     isRecord(value) &&
     typeof value['path'] === 'string' &&
+    (value['lastUsedAt'] === undefined ||
+      typeof value['lastUsedAt'] === 'string') &&
     (value['source'] === 'recent' ||
       value['source'] === 'repo' ||
       value['source'] === 'path')

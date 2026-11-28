@@ -16,7 +16,12 @@ it('searches directory suggestions with the encoded query', async () => {
     new Response(
       JSON.stringify({
         directories: [
-          { path: '/Users/example/work/service', source: 'recent' },
+          {
+            path: '/Users/example/work/service',
+            source: 'recent',
+            lastUsedAt: '2026-05-06T12:00:00Z',
+          },
+          { path: '/Users/example/work/handbook', source: 'repo' },
         ],
       }),
       { status: 200, headers: { 'content-type': 'application/json' } },
@@ -34,7 +39,14 @@ it('searches directory suggestions with the encoded query', async () => {
     requests: fetcher.mock.calls,
   })
   expect(snapshot()).toEqual({
-    result: [{ path: '/Users/example/work/service', source: 'recent' }],
+    result: [
+      {
+        path: '/Users/example/work/service',
+        source: 'recent',
+        lastUsedAt: '2026-05-06T12:00:00Z',
+      },
+      { path: '/Users/example/work/handbook', source: 'repo' },
+    ],
     requests: [['/api/directories?q=service+docs']],
   })
 })

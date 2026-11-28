@@ -21,7 +21,11 @@ export const exampleModelOptions: SessionModelOptions = {
 }
 
 export const exampleSessionDirectories: SessionDirectory[] = [
-  { path: '/Users/example/work/service', source: 'recent' },
+  {
+    path: '/Users/example/work/service',
+    source: 'recent',
+    lastUsedAt: '2026-05-06T12:00:00Z',
+  },
   { path: '/Users/example/work/handbook', source: 'repo' },
   { path: '/Users/example/work/scratch', source: 'path' },
 ]
