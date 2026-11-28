@@ -4643,7 +4643,7 @@ it('shows every close check in Activity and opens the failed worktree in a termi
   await act(async () => {
     container
       .querySelector<HTMLButtonElement>(
-        '.async-action-toast-stack .async-action-controls--close-secondary button:last-child',
+        '.async-action-toast-stack .async-action-controls button:nth-child(3)',
       )
       ?.click()
     await flushAsyncState()
@@ -4676,11 +4676,11 @@ it('shows every close check in Activity and opens the failed worktree in a termi
     }
   }
   expect(activitySnapshot()).toEqual({
-    text: 'Close failedExample sessionUncommitted changessrc/example.ts · src/example.test.ts2 filesBranch feature/example-workThe example pull request is still open.Not mergedRunning processes12345 example-server · 23456 example-watcher2 running/worktrees/example-projectClose anywayKeep worktreeDiscard changes…RetryOpen in terminal<time>',
+    text: 'Close failedExample sessionUncommitted changessrc/example.ts · src/example.test.ts2 filesBranch feature/example-workThe example pull request is still open.Not mergedRunning processes12345 example-server · 23456 example-watcher2 running/worktrees/example-projectClose and keep worktreeRetryOpen in terminal<time>',
     time: '<time>',
-    buttons: ['Keep worktree', 'Discard changes…', 'Retry', 'Open in terminal'],
+    buttons: ['Close and keep worktree', 'Retry', 'Open in terminal'],
     conversationLine:
-      'Close failedLeft in the worktree: 2 uncommitted files, branch not merged, 2 running processesClose anywayKeep worktreeDiscard changes…RetryDetails',
+      'Close failedLeft in the worktree: 2 uncommitted files, branch not merged, 2 running processesClose and keep worktreeRetry',
   })
 
   await act(async () => {
@@ -4699,7 +4699,7 @@ it('shows every close check in Activity and opens the failed worktree in a termi
         '.async-action-toast-stack .async-action-controls button',
       ),
     )
-      .find((button) => button.textContent === 'Keep worktree')
+      .find((button) => button.textContent === 'Close and keep worktree')
       ?.click()
     await flushAsyncState()
   })
@@ -4759,7 +4759,7 @@ it('requires a new review when the worktree changes during discard confirmation'
     ),
     conversation: Array.from(
       container.querySelectorAll(
-        '.async-action-item--line .async-action-item-content strong',
+        '.conversation-pane .async-action-item--line .async-action-item-content strong',
       ),
       (element) => element.textContent,
     ),
@@ -5013,7 +5013,7 @@ it('offers retry and terminal access when a process blocks discard', async () =>
   })
   expect(snapshot()).toEqual({
     message:
-      'Did not delete worktreeReview sample process guardRunning in the worktree: 23456 (sample-server). Stop it, then Retry.',
+      'Did not delete worktreeReview sample process guardRunning in the worktree: 23456 (sample-server). Stop it, then Retry.RetryOpen in terminal',
     actions: ['Retry', 'Open in terminal'],
     closeBodies: [
       { keepWorktree: false, stopAndClose: true },

@@ -190,7 +190,7 @@ export function AsyncActionItem({
                 type="button"
                 aria-haspopup="dialog"
                 aria-label="Discard changes and close…"
-                onClick={onDiscardChanges}
+                onClick={() => onDiscardChanges?.()}
               >
                 <Trash2 aria-hidden="true" size={13} />
                 Discard changes…
@@ -228,7 +228,7 @@ export function AsyncActionItem({
                 type="button"
                 aria-haspopup="dialog"
                 aria-label="Discard changes and close…"
-                onClick={onDiscardChanges}
+                onClick={() => onDiscardChanges?.()}
               >
                 <Trash2 aria-hidden="true" size={13} />
                 Discard changes…
