@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  createContentWindowOptions,
   createPopupWindowOptions,
   withHiddenTitleBar,
 } from './window-options.js'
@@ -46,6 +47,18 @@ describe('withHiddenTitleBar', () => {
       },
       titleBarStyle: 'hidden',
       trafficLightPosition: { x: 9, y: 13 },
+    })
+  })
+
+  it('keeps standalone content windows with the native title bar', () => {
+    expect(createContentWindowOptions()).toEqual({
+      width: 1100,
+      height: 800,
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        sandbox: true,
+      },
     })
   })
 })

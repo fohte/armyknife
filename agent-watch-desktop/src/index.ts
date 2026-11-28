@@ -5,9 +5,14 @@ import { resolveWatchTarget } from './config.js'
 import type { WatchTarget } from './config.js'
 import { createConnectionController } from './connection.js'
 import { installApplicationMenu } from './menu.js'
-import { classifyNavigation, isAllowedWatchUrl } from './navigation.js'
+import {
+  classifyNavigation,
+  isAllowedWatchUrl,
+  isWatchAppPageUrl,
+} from './navigation.js'
 import { appendDesktopUserAgentMarker } from './user-agent.js'
 import {
+  createContentWindowOptions,
   createPopupWindowOptions,
   withHiddenTitleBar,
 } from './window-options.js'
@@ -179,9 +184,9 @@ const configureWebContents = (contents: Electron.WebContents) => {
     if (action === 'open-window') {
       return {
         action: 'allow',
-        overrideBrowserWindowOptions: createPopupWindowOptions(
-          process.platform,
-        ),
+        overrideBrowserWindowOptions: isWatchAppPageUrl(url, target.url)
+          ? createPopupWindowOptions(process.platform)
+          : createContentWindowOptions(),
       }
     }
 

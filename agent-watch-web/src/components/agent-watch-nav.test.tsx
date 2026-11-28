@@ -177,6 +177,10 @@ it('drags desktop headers while preserving browser and mobile header regions', (
   const mobileConversationLink = fixture.querySelector<HTMLAnchorElement>(
     '.conversation-pane[data-mobile="true"] a',
   )
+  const navigation = container.querySelector<HTMLElement>('.agent-watch-nav')
+  const navigationScroll = container.querySelector<HTMLElement>(
+    '.agent-watch-nav-scroll',
+  )
   if (
     brandRow === null ||
     brandButton === null ||
@@ -185,15 +189,37 @@ it('drags desktop headers while preserving browser and mobile header regions', (
     conversationHeader === null ||
     conversationLink === null ||
     mobileConversationHeader === null ||
-    mobileConversationLink === null
+    mobileConversationLink === null ||
+    navigation === null ||
+    navigationScroll === null
   ) {
     throw new Error('Title-bar header fixture is incomplete')
   }
 
+  navigation.style.height = '120px'
+  navigationScroll.style.height = '80px'
+  navigationScroll.style.maxHeight = '80px'
+  navigationScroll.style.flex = 'none'
+  const scrollFiller = document.createElement('div')
+  scrollFiller.style.height = '320px'
+  navigationScroll.append(scrollFiller)
+
   const region = (element: Element) =>
     getComputedStyle(element).getPropertyValue('-webkit-app-region')
+  const measureRowScrollOffset = () => {
+    const initialTop = brandRow.getBoundingClientRect().top
+    navigationScroll.scrollTop = 64
+    const scrollOffset = Math.round(
+      brandRow.getBoundingClientRect().top - initialTop,
+    )
+    navigationScroll.scrollTop = 0
+    return scrollOffset
+  }
+  const browserScrollOffset = measureRowScrollOffset()
   const snapshot = () => ({
     browserPadding: getComputedStyle(brandRow).paddingLeft,
+    browserPosition: getComputedStyle(brandRow).position,
+    browserScrollOffset,
     browserRegions: [
       region(brandRow),
       region(brandButton),
@@ -205,8 +231,11 @@ it('drags desktop headers while preserving browser and mobile header regions', (
       region(mobileConversationLink),
     ],
   })
+  const desktopScrollOffset = () => measureRowScrollOffset()
   const desktopSnapshot = () => ({
     desktopPadding: getComputedStyle(brandRow).paddingLeft,
+    desktopPosition: getComputedStyle(brandRow).position,
+    desktopScrollOffset: desktopScrollOffset(),
     desktopRegions: [
       region(brandRow),
       region(brandButton),
@@ -221,6 +250,8 @@ it('drags desktop headers while preserving browser and mobile header regions', (
 
   expect(snapshot()).toEqual({
     browserPadding: '8px',
+    browserPosition: 'static',
+    browserScrollOffset: -64,
     browserRegions: [
       'none',
       'none',
@@ -236,6 +267,8 @@ it('drags desktop headers while preserving browser and mobile header regions', (
   document.documentElement.dataset['agentWatchDesktop'] = 'true'
   expect(desktopSnapshot()).toEqual({
     desktopPadding: '64px',
+    desktopPosition: 'sticky',
+    desktopScrollOffset: 0,
     desktopRegions: [
       'drag',
       'no-drag',

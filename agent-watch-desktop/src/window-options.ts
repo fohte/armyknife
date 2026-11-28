@@ -1,5 +1,15 @@
 import type { BrowserWindowConstructorOptions } from 'electron'
 
+const popupWindowOptions = {
+  width: 1100,
+  height: 800,
+  webPreferences: {
+    nodeIntegration: false,
+    contextIsolation: true,
+    sandbox: true,
+  },
+} satisfies BrowserWindowConstructorOptions
+
 export const withHiddenTitleBar = (
   platform: NodeJS.Platform,
   options: BrowserWindowConstructorOptions,
@@ -13,13 +23,7 @@ export const withHiddenTitleBar = (
     : options
 
 export const createPopupWindowOptions = (platform: NodeJS.Platform) =>
-  withHiddenTitleBar(platform, {
-    width: 1100,
-    height: 800,
-    minWidth: 800,
-    webPreferences: {
-      nodeIntegration: false,
-      contextIsolation: true,
-      sandbox: true,
-    },
-  })
+  withHiddenTitleBar(platform, { ...popupWindowOptions, minWidth: 800 })
+
+export const createContentWindowOptions =
+  (): BrowserWindowConstructorOptions => ({ ...popupWindowOptions })

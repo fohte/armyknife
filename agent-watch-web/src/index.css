@@ -78,7 +78,11 @@ html[data-agent-watch-desktop='true']
 }
 
 html[data-agent-watch-desktop='true'] .brand-row {
+  position: sticky;
+  top: 0;
+  z-index: 1;
   padding-left: 64px;
+  background: var(--aw-bg-nav);
 }
 
 html[data-agent-watch-desktop='true']
