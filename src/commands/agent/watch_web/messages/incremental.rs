@@ -682,7 +682,7 @@ mod tests {
         transcript.push('\n');
         transcript.push_str(
             indoc! {r#"
-                {"type":"user","uuid":"fixture-rewind-request","parentUuid":"fixture-assistant-50","timestamp":"2026-01-01T01:00:00Z","message":{"content":"Continue from an earlier request."}}
+                {"type":"user","uuid":"fixture-rewind-request","parentUuid":"fixture-assistant-178","timestamp":"2026-01-01T01:00:00Z","message":{"content":"Continue from an earlier request."}}
                 {"type":"assistant","uuid":"fixture-rewind-response","parentUuid":"fixture-rewind-request","timestamp":"2026-01-01T01:00:01Z","message":{"content":[{"type":"text","text":"The earlier branch continues."}]}}
             "#}
             .trim(),
@@ -811,7 +811,7 @@ mod tests {
             &serde_json::json!({
                 "type": "user",
                 "uuid": "fixture-rewind-request",
-                "parentUuid": "fixture-assistant-20",
+                "parentUuid": "fixture-assistant-128",
                 "timestamp": "2026-01-01T02:00:00Z",
                 "message": {"content": "Continue from an earlier request."},
             })
