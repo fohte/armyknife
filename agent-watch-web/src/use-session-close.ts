@@ -29,10 +29,15 @@ type DiscardConfirmationSnapshot = {
   previousChecks?: CloseWorktreeChecks
 }
 
+type ComparedItems = {
+  changes: (CloseWorktreeChecks['changes'][number] & { isNew?: boolean })[]
+  commits: (CloseWorktreeChecks['commits'][number] & { isNew?: boolean })[]
+}
+
 function comparedItems(
   current: CloseWorktreeChecks,
   previous?: CloseWorktreeChecks,
-) {
+): ComparedItems {
   const targetChanged =
     previous !== undefined &&
     (previous.path !== current.path || previous.branch !== current.branch)
