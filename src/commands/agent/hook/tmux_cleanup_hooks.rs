@@ -1,13 +1,14 @@
 use std::env;
-use std::path::Path;
-use std::process::{Command, Stdio};
+use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 
 use crate::commands::agent::store;
 use crate::commands::agent::types::{HookEvent, TmuxInfo};
+use crate::infra::process;
 use crate::infra::tmux;
 
+// Keep our hooks separate from user hooks commonly installed at index 0.
 const HOOK_INDEX: usize = 1000;
 const TMUX_HOOKS: [&str; 6] = [
     "pane-exited",
@@ -57,21 +58,22 @@ fn on_session_start_with(
 }
 
 fn spawn_startup_cleanup() -> anyhow::Result<()> {
-    let executable = env::current_exe().context("failed to resolve the armyknife executable")?;
-    startup_cleanup_command(&executable)
-        .spawn()
-        .context("failed to start stale session cleanup")?;
-    Ok(())
+    let cwd = crate::shared::dirs::home_dir();
+    spawn_startup_cleanup_with(
+        || env::current_exe().context("failed to resolve the armyknife executable"),
+        cwd.as_deref(),
+        |executable, args, cwd| process::spawn_detached(executable, args, cwd, &[]),
+    )
 }
 
-fn startup_cleanup_command(executable: &Path) -> Command {
-    let mut command = crate::shared::command::new(executable);
-    command
-        .args(["agent", "cleanup-stale-sessions"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    command
+fn spawn_startup_cleanup_with(
+    executable: impl FnOnce() -> anyhow::Result<PathBuf>,
+    cwd: Option<&Path>,
+    spawn: impl FnOnce(&Path, &[&str], Option<&Path>) -> std::io::Result<()>,
+) -> anyhow::Result<()> {
+    let executable = executable()?;
+    spawn(&executable, &["agent", "cleanup-stale-sessions"], cwd)
+        .context("failed to start stale session cleanup")
 }
 
 fn configure_tmux_hooks_for_session_start(session_id: &str) {
@@ -210,20 +212,25 @@ fn tmux_double_quote(value: &str) -> String {
 mod tests {
     use super::{
         TmuxTarget, cleanup_command, configure, configure_for_session_start_with,
-        on_session_start_with, should_configure, startup_cleanup_command,
+        on_session_start_with, should_configure, spawn_startup_cleanup_with,
     };
     use crate::commands::agent::types::HookEvent;
+    use rstest::rstest;
 
-    #[test]
-    fn configures_session_start_inside_tmux_or_with_a_resolved_pane() {
+    #[rstest]
+    #[case::inside_tmux(HookEvent::SessionStart, true, false, true)]
+    #[case::recorded_pane(HookEvent::SessionStart, false, true, true)]
+    #[case::no_tmux_binding(HookEvent::SessionStart, false, false, false)]
+    #[case::non_start_event(HookEvent::UserPromptSubmit, true, true, false)]
+    fn configures_session_start_inside_tmux_or_with_a_resolved_pane(
+        #[case] event: HookEvent,
+        #[case] inside_tmux: bool,
+        #[case] pane_resolved: bool,
+        #[case] expected: bool,
+    ) {
         assert_eq!(
-            [
-                should_configure(HookEvent::SessionStart, true, false),
-                should_configure(HookEvent::SessionStart, false, true),
-                should_configure(HookEvent::SessionStart, false, false),
-                should_configure(HookEvent::UserPromptSubmit, true, true),
-            ],
-            [true, true, false, false],
+            should_configure(event, inside_tmux, pane_resolved),
+            expected,
         );
     }
 
@@ -243,24 +250,31 @@ mod tests {
     }
 
     #[test]
-    fn startup_cleanup_uses_the_existing_subcommand() {
-        let command = startup_cleanup_command(std::path::Path::new("/fixture/bin/a"));
+    fn startup_cleanup_uses_the_existing_subcommand_and_home_directory() {
+        let mut actual = None;
+        let cwd = std::path::Path::new("/fixture/home");
+
+        spawn_startup_cleanup_with(
+            || Ok(std::path::PathBuf::from("/fixture/bin/a")),
+            Some(cwd),
+            |executable, args, cwd| {
+                actual = Some((
+                    executable.to_path_buf(),
+                    args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>(),
+                    cwd.map(std::path::Path::to_path_buf),
+                ));
+                Ok(())
+            },
+        )
+        .expect("cleanup should be started");
 
         assert_eq!(
-            (
-                command.get_program().to_os_string(),
-                command
-                    .get_args()
-                    .map(std::ffi::OsStr::to_os_string)
-                    .collect::<Vec<_>>(),
-            ),
-            (
-                std::ffi::OsString::from("/fixture/bin/a"),
-                vec![
-                    std::ffi::OsString::from("agent"),
-                    std::ffi::OsString::from("cleanup-stale-sessions"),
-                ],
-            ),
+            actual,
+            Some((
+                std::path::PathBuf::from("/fixture/bin/a"),
+                vec!["agent".to_owned(), "cleanup-stale-sessions".to_owned()],
+                Some(std::path::PathBuf::from("/fixture/home")),
+            )),
         );
     }
 
