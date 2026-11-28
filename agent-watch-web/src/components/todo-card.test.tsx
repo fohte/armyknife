@@ -837,24 +837,30 @@ it('rejects a task with the trimmed optional comment', async () => {
   })
 })
 
-it('shows a withdrawn task as distinct from a completed task', () => {
+it('shows only the heading and title for a withdrawn task with a saved comment', () => {
+  const title = 'Check the updated layout on a phone'
   renderCard(
-    props({ resolution: 'withdrawn', defaultComment: 'The plan changed.' }),
+    props({
+      title,
+      resolution: 'withdrawn',
+      defaultComment: 'The plan changed.',
+    }),
   )
 
   const snapshot = () => ({
-    status: container.querySelector('h2')?.textContent,
-    resolution: container
-      .querySelector('.chat-todo-card')
-      ?.getAttribute('data-resolution'),
+    label: container.querySelector('article')?.getAttribute('aria-label'),
+    headings: Array.from(
+      container.querySelectorAll('h2, h3'),
+      (heading) => heading.textContent,
+    ),
     comment: container.querySelector('.chat-todo-completed-comment')
       ?.textContent,
-    buttonCount: container.querySelectorAll('.chat-todo-footer button').length,
+    buttonCount: container.querySelectorAll('button').length,
   })
   expect(snapshot()).toEqual({
-    status: 'To-do · withdrawn',
-    resolution: 'withdrawn',
-    comment: 'The plan changed.',
+    label: 'User task, withdrawn',
+    headings: ['To-do · withdrawn', title],
+    comment: undefined,
     buttonCount: 0,
   })
 })

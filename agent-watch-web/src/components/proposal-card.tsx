@@ -15,6 +15,7 @@ import type { EncodedAttachment } from '#components/use-attachments'
 import { useAttachments } from '#components/use-attachments'
 import { cardDraftStorageKey, useDraft } from '#components/use-composer-draft'
 import { useFileDrop } from '#components/use-file-drop'
+import { WithdrawnCard } from '#components/withdrawn-card'
 import type { ProposalAnswer, ProposalOption } from '#types'
 
 type ProposalCardProps = {
@@ -26,7 +27,6 @@ type ProposalCardProps = {
   answer: ProposalAnswer | null
   resolved: boolean
   resolution: 'withdrawn' | null
-  withdrawalComment: string | null
   isMobile: boolean
   defaultChoice?: number | null
   defaultComment?: string
@@ -45,7 +45,6 @@ export function ProposalCard({
   answer,
   resolved,
   resolution,
-  withdrawalComment,
   isMobile,
   defaultChoice = null,
   defaultComment = '',
@@ -209,16 +208,18 @@ export function ProposalCard({
     submitAnswer,
   ])
 
+  if (isWithdrawn) {
+    return <WithdrawnCard kind="Proposal" title={title} />
+  }
+
   const status =
     latestAnswer !== null
       ? latestAnswer.choice === null
         ? 'asked for another option'
         : `chose ${options[latestAnswer.choice]?.label ?? 'an option'}`
-      : isWithdrawn
-        ? 'withdrawn'
-        : resolved
-          ? 'answered elsewhere'
-          : 'waiting for your choice'
+      : resolved
+        ? 'answered elsewhere'
+        : 'waiting for your choice'
 
   return (
     <article
@@ -234,11 +235,6 @@ export function ProposalCard({
       {summary !== null ? (
         <MarkdownMessage className="chat-proposal-summary">
           {summary}
-        </MarkdownMessage>
-      ) : null}
-      {isWithdrawn && withdrawalComment !== null ? (
-        <MarkdownMessage className="chat-proposal-withdrawal-comment">
-          {withdrawalComment}
         </MarkdownMessage>
       ) : null}
       <div

@@ -55,7 +55,6 @@ function props(overrides: Partial<Props> = {}): Props {
     answer: null,
     resolved: false,
     resolution: null,
-    withdrawalComment: null,
     isMobile: false,
     onAnswer: vi.fn(() => Promise.resolve(true)),
     ...overrides,
@@ -187,7 +186,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-it('links session IDs in proposal summary, options, answers, and withdrawal comments', () => {
+it('links session IDs in proposal summaries, options, and answers', () => {
   renderCards([
     props({
       summary: `Compare the choices with ${linkedSessionId}.`,
@@ -201,12 +200,6 @@ it('links session IDs in proposal summary, options, answers, and withdrawal comm
       ),
       answer: { choice: 0, comment: `See the result in ${linkedSessionId}.` },
       resolved: true,
-    }),
-    props({
-      seq: 8,
-      resolution: 'withdrawn',
-      resolved: true,
-      withdrawalComment: `The session ${linkedSessionId} explains the change.`,
     }),
   ])
 
@@ -229,11 +222,11 @@ it('links session IDs in proposal summary, options, answers, and withdrawal comm
     selectedSessions: onSelectSession.mock.calls.map(([id]) => id),
   })
   expect(getActual()).toEqual({
-    links: Array.from({ length: 4 }, () => ({
+    links: Array.from({ length: 3 }, () => ({
       text: linkedSessionId,
       href: `?session=${linkedSessionId}`,
     })),
-    selectedSessions: Array.from({ length: 4 }, () => linkedSessionId),
+    selectedSessions: Array.from({ length: 3 }, () => linkedSessionId),
   })
 })
 
@@ -362,7 +355,7 @@ it('does not restore a choice without proposal content identity', () => {
   expect(snapshot()).toEqual({ selected: [false, false], chooseDisabled: true })
 })
 
-it('renders proposal summaries, descriptions, and withdrawal comments as markdown', () => {
+it('renders proposal summaries and descriptions as markdown', () => {
   renderCard(
     props({
       summary: 'Compare **the options** in [the guide](https://example.test).',
@@ -377,9 +370,6 @@ it('renders proposal summaries, descriptions, and withdrawal comments as markdow
         },
       ],
       resolved: true,
-      resolution: 'withdrawn',
-      withdrawalComment:
-        'See [the update](https://example.test) for **context**.',
     }),
   )
 
@@ -387,9 +377,6 @@ it('renders proposal summaries, descriptions, and withdrawal comments as markdow
     summary: container.querySelector('.chat-proposal-summary')?.innerHTML,
     description: container.querySelector('.chat-proposal-option-description')
       ?.innerHTML,
-    withdrawalComment: container.querySelector(
-      '.chat-proposal-withdrawal-comment',
-    )?.innerHTML,
   })
 
   expect(snapshot()).toEqual({
@@ -397,8 +384,6 @@ it('renders proposal summaries, descriptions, and withdrawal comments as markdow
       '<p>Compare <strong>the options</strong> in <a href="https://example.test" target="_blank" rel="noopener noreferrer">the guide</a>.</p>',
     description:
       '<p>Keep <strong>the current flow</strong> and <a href="https://example.test" target="_blank" rel="noopener noreferrer">review details</a>.</p>',
-    withdrawalComment:
-      '<p>See <a href="https://example.test" target="_blank" rel="noopener noreferrer">the update</a> for <strong>context</strong>.</p>',
   })
 })
 
@@ -1073,14 +1058,8 @@ it('attaches dropped images to the proposal comment without bubbling to the conv
   })
 })
 
-it('lets the conversation handle drops over a withdrawn proposal comment', async () => {
-  renderCard(
-    props({
-      resolved: true,
-      resolution: 'withdrawn',
-      withdrawalComment: 'This proposal is no longer active.',
-    }),
-  )
+it('lets the conversation handle drops over an answered-elsewhere proposal comment', async () => {
+  renderCard(props({ resolved: true }))
   const comment = requireElement(
     container.querySelector<HTMLTextAreaElement>('.chat-proposal-comment'),
   )
@@ -1133,40 +1112,24 @@ it('disables choices when the proposal was answered elsewhere', () => {
   })
 })
 
-it('shows a withdrawn proposal reason and disables every answer control', () => {
-  renderCard(
-    props({
-      resolved: true,
-      resolution: 'withdrawn',
-      withdrawalComment: 'The direction changed.',
-    }),
-  )
+it('shows only the heading and title for a withdrawn proposal', () => {
+  const title = 'When should the setting take effect?'
+  renderCard(props({ title, resolved: true, resolution: 'withdrawn' }))
 
   const snapshot = () => ({
-    status: container.querySelector('h2')?.textContent,
-    comment: container.querySelector('.chat-proposal-withdrawal-comment')
-      ?.textContent,
-    optionsDisabled: Array.from(
-      container.querySelectorAll<HTMLInputElement>(
-        '.chat-proposal-option input',
-      ),
-      (input) => input.disabled,
+    label: container.querySelector('article')?.getAttribute('aria-label'),
+    headings: Array.from(
+      container.querySelectorAll('h2, h3'),
+      (heading) => heading.textContent,
     ),
-    buttonsDisabled: Array.from(
-      container.querySelectorAll<HTMLButtonElement>(
-        '.chat-proposal-actions button',
-      ),
-      (button) => button.disabled,
-    ),
-    commentDisabled: container.querySelector<HTMLTextAreaElement>(
-      '.chat-proposal-comment',
-    )?.disabled,
+    options: container.querySelectorAll('.chat-proposal-option').length,
+    comment:
+      container.querySelector('.chat-proposal-comment')?.textContent ?? null,
   })
   expect(snapshot()).toEqual({
-    status: 'Proposal · withdrawn',
-    comment: 'The direction changed.',
-    optionsDisabled: [true, true],
-    buttonsDisabled: [true, true],
-    commentDisabled: true,
+    label: 'Proposal, withdrawn',
+    headings: ['Proposal · withdrawn', title],
+    options: 0,
+    comment: null,
   })
 })

@@ -15,6 +15,7 @@ import type { EncodedAttachment } from '#components/use-attachments'
 import { useAttachments } from '#components/use-attachments'
 import { cardDraftStorageKey, useDraft } from '#components/use-composer-draft'
 import { useFileDrop } from '#components/use-file-drop'
+import { WithdrawnCard } from '#components/withdrawn-card'
 
 type TodoCardProps = {
   seq?: number
@@ -74,6 +75,10 @@ export function TodoCard({
     !isSubmitting,
     true,
   )
+  if (resolution === 'withdrawn') {
+    return <WithdrawnCard kind="To-do" title={title} />
+  }
+
   const currentResolution = resolution ?? resolutionLocally
   const isResolved = currentResolution !== null
 
@@ -132,7 +137,6 @@ export function TodoCard({
     const labels = {
       completed: ['done', 'Completed user task'],
       rejected: ['rejected', 'Rejected user task'],
-      withdrawn: ['withdrawn', 'Withdrawn user task'],
     } as const
     const [status, ariaLabel] = labels[currentResolution]
 
