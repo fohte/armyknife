@@ -219,6 +219,418 @@ it('renders an inline summary on the details opening line', () => {
 
 it.each([
   {
+    name: 'a list item',
+    markdown: `- Before
+
+  <details open>
+  <summary>List details</summary>
+
+  List body
+  </details>`,
+    expected: [
+      '<div class="markdown-message"><ul>',
+      '<li>',
+      '<p>Before</p>',
+      '<div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">List details</span></button><div class="markdown-details-body"><p>List body</p></div></div>',
+      '</li>',
+      '</ul></div>',
+    ].join(String.fromCharCode(10)),
+  },
+  {
+    name: 'a blockquote',
+    markdown: `> Before
+>
+> <details open><summary>Quoted details</summary>
+>
+> Quoted body
+> </details>`,
+    expected: [
+      '<div class="markdown-message"><blockquote>',
+      '<p>Before</p>',
+      '<div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Quoted details</span></button><div class="markdown-details-body"><p>Quoted body</p></div></div>',
+      '</blockquote></div>',
+    ].join(String.fromCharCode(10)),
+  },
+])('renders details contained in $name', ({ markdown, expected }) => {
+  expect(renderMessage(markdown)).toBe(expected)
+})
+
+it('keeps details that close outside their list item as text once', () => {
+  expect(
+    renderMessage(`- Before
+  <details>
+  <summary>Split details</summary>
+  Body
+
+</details>`),
+  ).toBe(
+    [
+      '<div class="markdown-message"><ul>',
+      '<li>Before',
+      '&lt;details&gt;',
+      '&lt;summary&gt;Split details&lt;/summary&gt;',
+      'Body',
+      '</li>',
+      '</ul>',
+      '&lt;/details&gt;</div>',
+    ].join(String.fromCharCode(10)),
+  )
+})
+
+it('keeps details as text when content precedes the summary', () => {
+  expect(
+    renderMessage(`<details>
+foo
+<summary>Summary</summary>
+
+Body
+</details>`),
+  ).toBe(
+    [
+      '<div class="markdown-message">&lt;details&gt;',
+      'foo',
+      '&lt;summary&gt;Summary&lt;/summary&gt;',
+      '<p>Body</p>',
+      '&lt;/details&gt;</div>',
+    ].join(String.fromCharCode(10)),
+  )
+})
+
+it('renders Markdown after an unsupported details block normally', () => {
+  expect(
+    renderMessage(`<details>
+foo
+</details>[guide](https://example.com)`),
+  ).toBe(
+    [
+      '<div class="markdown-message">&lt;details&gt;',
+      'foo',
+      '&lt;/details&gt;',
+      '<p><a href="https://example.com" target="_blank" rel="noopener noreferrer">guide</a></p></div>',
+    ].join(String.fromCharCode(10)),
+  )
+})
+
+it.each([
+  {
+    name: 'a list item',
+    markdown: `- <details>
+  foo
+  <summary>Summary</summary>
+
+  Body
+  </details>`,
+    expected: [
+      '<div class="markdown-message"><ul>',
+      '<li>',
+      '&lt;details&gt;',
+      'foo',
+      '&lt;summary&gt;Summary&lt;/summary&gt;',
+      '<p>Body</p>',
+      '&lt;/details&gt;',
+      '</li>',
+      '</ul></div>',
+    ].join(String.fromCharCode(10)),
+  },
+  {
+    name: 'a blockquote',
+    markdown: `> <details>
+> foo
+> <summary>Summary</summary>
+>
+> Body
+> </details>`,
+    expected: [
+      '<div class="markdown-message"><blockquote>',
+      '&lt;details&gt;',
+      'foo',
+      '&lt;summary&gt;Summary&lt;/summary&gt;',
+      '<p>Body</p>',
+      '&lt;/details&gt;',
+      '</blockquote></div>',
+    ].join(String.fromCharCode(10)),
+  },
+])(
+  'keeps content before a summary as text in $name',
+  ({ markdown, expected }) => {
+    expect(renderMessage(markdown)).toBe(expected)
+  },
+)
+
+it('keeps unsafe summary HTML as text', () => {
+  expect(
+    renderMessage(
+      '<details open><summary><img src=x onerror=alert(1)></summary>\n\nBody\n</details>',
+    ),
+  ).toBe(
+    '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">&lt;img src=x onerror=alert(1)&gt;</span></button><div class="markdown-details-body"><p>Body</p></div></div></div>',
+  )
+})
+
+it('keeps comments visible between text in a details summary', () => {
+  expect(
+    renderMessage(`<details open><summary>Before <!-- note --> after</summary>
+
+Body
+</details>`),
+  ).toBe(
+    '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Before &lt;!-- note --&gt; after</span></button><div class="markdown-details-body"><p>Body</p></div></div></div>',
+  )
+})
+
+it('renders nested details with both opening tags on the same line', () => {
+  expect(
+    renderMessage(`<details open><summary>Outer</summary><details open><summary>Inner</summary>
+Inner body
+</details></details>`),
+  ).toBe(
+    '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Outer</span></button><div class="markdown-details-body"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Inner</span></button><div class="markdown-details-body"><p>Inner body</p></div></div></div></div></div>',
+  )
+})
+
+it.each([
+  {
+    name: 'a nested block without a blank line',
+    markdown: `<details open>
+<summary>Outer</summary>
+
+<details>
+inner
+</details>
+</details>`,
+    body: ['&lt;details&gt;', 'inner', '&lt;/details&gt;'].join(
+      String.fromCharCode(10),
+    ),
+  },
+  {
+    name: 'a nested block whose body spans HTML groups',
+    markdown: `<details open>
+<summary>Outer</summary>
+
+<details>
+inner
+
+more
+</details>
+</details>`,
+    body:
+      ['&lt;details&gt;', 'inner'].join(String.fromCharCode(10)) +
+      '<p>more</p>&lt;/details&gt;',
+  },
+])('preserves unsupported nested details in $name', ({ markdown, body }) => {
+  const expected = `<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Outer</span></button><div class="markdown-details-body">${body}</div></div></div>`
+
+  expect(renderMessage(markdown)).toBe(expected)
+})
+
+it.each([
+  {
+    name: 'a heading',
+    markdown: `<details>
+<summary>Context</summary>
+
+Hidden context
+</details>
+## Next heading`,
+    expected: [
+      '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="false" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Context</span></button></div>',
+      '<h2>Next heading</h2></div>',
+    ].join(String.fromCharCode(10)),
+  },
+  {
+    name: 'inline text',
+    markdown: `<details open>
+<summary>Context</summary>
+Hidden context
+</details>Visible text`,
+    expected: [
+      '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Context</span></button><div class="markdown-details-body"><p>Hidden context</p></div></div>',
+      '<p>Visible text</p></div>',
+    ].join(String.fromCharCode(10)),
+  },
+  {
+    name: 'a non-ASCII autolink',
+    markdown: `<details open>
+<summary>Context</summary>
+Hidden context
+</details>http://example.com/日本語 説明`,
+    expected: [
+      '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Context</span></button><div class="markdown-details-body"><p>Hidden context</p></div></div>',
+      '<p><a href="http://example.com/" target="_blank" rel="noopener noreferrer">http://example.com/</a>日本語 説明</p></div>',
+    ].join(String.fromCharCode(10)),
+  },
+  {
+    name: 'a non-ASCII autolink in a blockquote',
+    markdown: `> <details open>
+> <summary>Context</summary>
+> http://example.com/日本語 説明
+> </details>`,
+    expected: [
+      '<div class="markdown-message"><blockquote>',
+      '<div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Context</span></button><div class="markdown-details-body"><p><a href="http://example.com/" target="_blank" rel="noopener noreferrer">http://example.com/</a>日本語 説明</p></div></div>',
+      '</blockquote></div>',
+    ].join(String.fromCharCode(10)),
+  },
+  {
+    name: 'a second details block',
+    markdown: `<details>
+<summary>First section</summary>
+First body
+</details>
+<details>
+<summary>Second section</summary>
+Second body
+</details>`,
+    expected: [
+      '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="false" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">First section</span></button></div>',
+      '<div class="markdown-details"><button aria-expanded="false" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Second section</span></button></div></div>',
+    ].join(String.fromCharCode(10)),
+  },
+])('preserves $name after details', ({ markdown, expected }) => {
+  expect(renderMessage(markdown)).toBe(expected)
+})
+
+it.each([
+  {
+    name: 'a reference defined outside the block',
+    markdown: `<details open>
+<summary>References</summary>
+
+See the [guide][shared-guide].
+</details>
+
+[shared-guide]: https://example.com/guide`,
+    expected:
+      '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">References</span></button><div class="markdown-details-body"><p>See the <a href="https://example.com/guide" target="_blank" rel="noopener noreferrer">guide</a>.</p></div></div></div>',
+  },
+  {
+    name: 'a reference defined immediately after the summary',
+    markdown: `<details open>
+<summary>References</summary>
+[shared-guide]: https://example.com/hidden
+
+Body
+</details>
+
+See the [guide][shared-guide].`,
+    expected: [
+      '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">References</span></button><div class="markdown-details-body"><p>Body</p></div></div>',
+      '<p>See the <a href="https://example.com/hidden" target="_blank" rel="noopener noreferrer">guide</a>.</p></div>',
+    ].join(String.fromCharCode(10)),
+  },
+  {
+    name: 'a reference after details inside a blockquote',
+    markdown: `> <details open>
+> <summary>References</summary>
+> [shared-guide]: https://example.com/quoted
+>
+> Body
+> </details>
+>
+> See the [guide][shared-guide].`,
+    expected: [
+      '<div class="markdown-message"><blockquote>',
+      '<div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">References</span></button><div class="markdown-details-body"><p>Body</p></div></div>',
+      '<p>See the <a href="https://example.com/quoted" target="_blank" rel="noopener noreferrer">guide</a>.</p>',
+      '</blockquote></div>',
+    ].join(String.fromCharCode(10)),
+  },
+  {
+    name: 'a reference after details inside a list item',
+    markdown: `- <details open>
+  <summary>References</summary>
+  [shared-guide]: https://example.com/list
+
+  Body
+  </details>
+
+  See the [guide][shared-guide].`,
+    expected: [
+      '<div class="markdown-message"><ul>',
+      '<li>',
+      '<div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">References</span></button><div class="markdown-details-body"><p>Body</p></div></div>',
+      '<p>See the <a href="https://example.com/list" target="_blank" rel="noopener noreferrer">guide</a>.</p>',
+      '</li>',
+      '</ul></div>',
+    ].join(String.fromCharCode(10)),
+  },
+  {
+    name: 'source order for duplicate definitions',
+    markdown: `[shared-guide]: https://example.com/outside
+
+<details open>
+<summary>References</summary>
+
+See the [guide][shared-guide].
+
+[shared-guide]: https://example.com/inside
+</details>`,
+    expected:
+      '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">References</span></button><div class="markdown-details-body"><p>See the <a href="https://example.com/outside" target="_blank" rel="noopener noreferrer">guide</a>.</p></div></div></div>',
+  },
+  {
+    name: 'a summary reference defined in the body',
+    markdown: `<details open>
+<summary>See the [guide][shared-guide]</summary>
+
+[shared-guide]: https://example.com/summary
+
+Body
+</details>`,
+    expected:
+      '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">See the <a href="https://example.com/summary" target="_blank" rel="noopener noreferrer">guide</a></span></button><div class="markdown-details-body"><p>Body</p></div></div></div>',
+  },
+  {
+    name: 'an outer-body reference inside nested details',
+    markdown: `<details open>
+<summary>Outer</summary>
+
+[shared-guide]: https://example.com/nested
+
+<details open>
+<summary>Inner</summary>
+
+See the [guide][shared-guide].
+</details>
+</details>`,
+    expected:
+      '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Outer</span></button><div class="markdown-details-body"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Inner</span></button><div class="markdown-details-body"><p>See the <a href="https://example.com/nested" target="_blank" rel="noopener noreferrer">guide</a>.</p></div></div></div></div></div>',
+  },
+])('resolves $name', ({ markdown, expected }) => {
+  expect(renderMessage(markdown)).toBe(expected)
+})
+
+it('preserves indentation in a leading code block inside details', () => {
+  expect(
+    renderMessage(`<details open>
+<summary>Command</summary>
+
+    cargo build --locked
+</details>`),
+  ).toBe(
+    '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Command</span></button><div class="markdown-details-body"><div class="syntax-code-block-container"><div class="syntax-code-block-toolbar"><span class="syntax-code-block-language">text</span><button class="syntax-code-block-copy-button" type="button" aria-label="Copy code" title="Copy code">Copy</button></div><pre class="syntax-code-block" data-language="text"><code class="language-text">cargo build --locked\n</code></pre></div></div></div></div>',
+  )
+})
+
+it('preserves all paragraphs in a details summary', () => {
+  expect(
+    renderMessage(`<details>
+<summary>
+First sentence.
+
+Second sentence.
+</summary>
+</details>`),
+  ).toBe(
+    [
+      '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="false" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">First sentence.<br/>',
+      'Second sentence.</span></button></div></div>',
+    ].join(String.fromCharCode(10)),
+  )
+})
+
+it.each([
+  {
     name: 'the details tag is unclosed',
     markdown: '<details>\n<summary>Unclosed details</summary>\nBody',
     expected:
@@ -230,6 +642,13 @@ it.each([
       '<details onclick="runUnsafe()">\n<summary>Unsafe details</summary>\nBody\n</details>',
     expected:
       '<div class="markdown-message">&lt;details onclick=&quot;runUnsafe()&quot;&gt;\n&lt;summary&gt;Unsafe details&lt;/summary&gt;\nBody\n&lt;/details&gt;</div>',
+  },
+  {
+    name: 'the open details tag has an onclick attribute',
+    markdown:
+      '<details open onclick="runUnsafe()">\n<summary>Unsafe details</summary>\nBody\n</details>',
+    expected:
+      '<div class="markdown-message">&lt;details open onclick=&quot;runUnsafe()&quot;&gt;\n&lt;summary&gt;Unsafe details&lt;/summary&gt;\nBody\n&lt;/details&gt;</div>',
   },
   {
     name: 'the summary tag has a style attribute',
@@ -263,6 +682,116 @@ Still inside.
     '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Code samples</span></button><div class="markdown-details-body"><div class="syntax-code-block-container"><div class="syntax-code-block-toolbar"><span class="syntax-code-block-language">text</span><button class="syntax-code-block-copy-button" type="button" aria-label="Copy code" title="Copy code">Copy</button></div><pre class="syntax-code-block" data-language="text"><code class="language-text">&lt;/details&gt;\n</code></pre></div><div class="syntax-code-block-container"><div class="syntax-code-block-toolbar"><span class="syntax-code-block-language">text</span><button class="syntax-code-block-copy-button" type="button" aria-label="Copy code" title="Copy code">Copy</button></div><pre class="syntax-code-block" data-language="text"><code class="language-text">&lt;/details&gt;\nStill indented.\n</code></pre></div><p>Still inside.</p></div></div></div>',
   )
 })
+
+it.each([
+  {
+    name: 'an inline code span',
+    markdown: `<details open><summary>Code</summary>
+
+\`</details>\`
+Body
+</details>`,
+    expected: [
+      '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Code</span></button><div class="markdown-details-body"><p><code>&lt;/details&gt;</code>',
+      'Body</p></div></div></div>',
+    ].join(String.fromCharCode(10)),
+  },
+  {
+    name: 'a fenced code block immediately after the summary',
+    markdown: `<details open>
+<summary>Code</summary>
+~~~
+</details>
+~~~
+Still inside
+</details>`,
+    expected: [
+      '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Code</span></button><div class="markdown-details-body"><div class="syntax-code-block-container"><div class="syntax-code-block-toolbar"><span class="syntax-code-block-language">text</span><button class="syntax-code-block-copy-button" type="button" aria-label="Copy code" title="Copy code">Copy</button></div><pre class="syntax-code-block" data-language="text"><code class="language-text">&lt;/details&gt;',
+      '</code></pre></div><p>Still inside</p></div></div></div>',
+    ].join(String.fromCharCode(10)),
+  },
+  {
+    name: 'a multiline code span interrupted by an HTML block',
+    markdown: `<details open><summary>Code</summary>
+\`
+</details>
+\`
+
+Body
+</details>`,
+    expected: [
+      '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Code</span></button><div class="markdown-details-body"><p>`</p></div></div>',
+      '<p>`</p>',
+      '<p>Body</p>',
+      '&lt;/details&gt;</div>',
+    ].join(String.fromCharCode(10)),
+  },
+])(
+  'handles closing tags in $name according to CommonMark',
+  ({ markdown, expected }) => {
+    expect(renderMessage(markdown)).toBe(expected)
+  },
+)
+
+it.each([
+  {
+    name: 'a comment',
+    source: '<!-- </details> -->',
+    escaped: '&lt;!-- &lt;/details&gt; --&gt;',
+  },
+  {
+    name: 'a multiline comment',
+    source: `<!--
+</details>
+-->`,
+    escaped: ['&lt;!--', '&lt;/details&gt;', '--&gt;'].join(
+      String.fromCharCode(10),
+    ),
+  },
+  {
+    name: 'a script element',
+    source: '<script>const closingTag = "</details>";</script>',
+    escaped:
+      '&lt;script&gt;const closingTag = &quot;&lt;/details&gt;&quot;;&lt;/script&gt;',
+  },
+  {
+    name: 'a style element',
+    source: '<style>.example { content: "</details>"; }</style>',
+    escaped:
+      '&lt;style&gt;.example { content: &quot;&lt;/details&gt;&quot;; }&lt;/style&gt;',
+  },
+  {
+    name: 'a pre element',
+    source: `<pre>
+</details>
+</pre>`,
+    escaped: ['&lt;pre&gt;', '&lt;/details&gt;', '&lt;/pre&gt;'].join(
+      String.fromCharCode(10),
+    ),
+  },
+  {
+    name: 'a textarea element',
+    source: `<textarea>
+</details>
+</textarea>`,
+    escaped: ['&lt;textarea&gt;', '&lt;/details&gt;', '&lt;/textarea&gt;'].join(
+      String.fromCharCode(10),
+    ),
+  },
+])(
+  'ignores closing details tags inside $name in the same HTML block',
+  ({ source, escaped }) => {
+    expect(
+      renderMessage(`<details open>
+<summary>Example</summary>
+${source}
+Hidden body content
+</details>`),
+    ).toBe(
+      `<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Example</span></button><div class="markdown-details-body">${escaped}<p>Hidden body content</p></div></div></div>`,
+    )
+  },
+)
 
 it('renders br tags as line breaks in paragraphs and table cells', () => {
   const html = renderMessage(
