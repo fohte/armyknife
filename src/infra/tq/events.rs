@@ -163,6 +163,7 @@ async fn run_events<F>(
             }
         };
 
+        let mut received_change = false;
         let reached_eof = loop {
             let mut line = String::new();
             let read_result = tokio::select! {
@@ -175,8 +176,9 @@ async fn run_events<F>(
                 Ok(0) => break true,
                 Ok(_) => match parse_event_line(&line) {
                     Ok(event) => {
-                        if matches!(event, TqEvent::Connected) {
+                        if matches!(event, TqEvent::Change(_)) && !received_change {
                             restart_delay = INITIAL_RESTART_DELAY;
+                            received_change = true;
                         }
                         let send_result = tokio::select! {
                             _ = &mut shutdown => return,
@@ -239,6 +241,7 @@ fn spawn_tq_events() -> io::Result<EventProcess> {
     let mut command = Command::from(ExternalTool::Tq.command());
     command
         .arg("events")
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .kill_on_drop(true);
     let mut child = command.spawn()?;
@@ -303,7 +306,10 @@ mod tests {
             {"resource":"project","id":"project-placeholder","origin":null,"taskIds":null}
         "#}
         .to_string();
-        let mut subscription = subscription_with(move || Ok(stream_process(contents.as_bytes())));
+        let mut subscription = subscription_with(
+            move || Ok(stream_process(contents.as_bytes())),
+            Box::new(|_| Box::pin(std::future::pending::<()>())),
+        );
 
         let events = vec![subscription.recv().await, subscription.recv().await];
         assert_eq!(
@@ -332,21 +338,8 @@ mod tests {
                 Ok(stream_process(b"{\"type\":\"connected\"}\n"))
             }
         };
-        let (requested_delay_sender, mut requested_delay_receiver) = mpsc::unbounded_channel();
-        let notify = Arc::new(Notify::new());
-        let delay_notify = Arc::clone(&notify);
-        let delay: DelayFn = Box::new(move |duration| {
-            let _ = requested_delay_sender.send(duration);
-            let delay_notify = Arc::clone(&delay_notify);
-            Box::pin(async move { delay_notify.notified().await })
-        });
-        let (sender, receiver) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
-        let (shutdown_sender, shutdown_receiver) = oneshot::channel();
-        tokio::spawn(run_events(sender, shutdown_receiver, spawn, delay));
-        let mut subscription = TqEventSubscription {
-            receiver,
-            _shutdown: shutdown_sender,
-        };
+        let (delay, mut requested_delay_receiver, notify) = gated_delay();
+        let mut subscription = subscription_with(spawn, delay);
 
         let first_delay = requested_delay_receiver.recv().await;
         let starts_before_retry = starts.load(Ordering::SeqCst);
@@ -365,71 +358,97 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn restarts_with_exponential_delay_and_resets_after_connected() {
+    async fn restarts_with_exponential_delay_and_resets_after_first_change() {
         let starts = Arc::new(AtomicUsize::new(0));
-        let (requested_delay_sender, mut requested_delay_receiver) = mpsc::unbounded_channel();
-        let notify = Arc::new(Notify::new());
         let spawn_starts = Arc::clone(&starts);
         let spawn = move || {
             let start = spawn_starts.fetch_add(1, Ordering::SeqCst);
             let lines: &[u8] = if start == 1 {
                 b"{\"type\":\"connected\"}\n"
+            } else if start == 2 {
+                indoc! {r#"
+                    {"type":"connected"}
+                    {"resource":"task","id":"task-placeholder","origin":null,"taskIds":null}
+                "#}
+                .as_bytes()
             } else {
                 b""
             };
             Ok(stream_process(lines))
         };
+        let (delay, mut requested_delay_receiver, notify) = gated_delay();
+        let mut subscription = subscription_with(spawn, delay);
+
+        let mut restarts = vec![(
+            requested_delay_receiver.recv().await,
+            starts.load(Ordering::SeqCst),
+        )];
+        let mut events = Vec::new();
+        notify.notify_one();
+        events.push(subscription.recv().await);
+        restarts.push((
+            requested_delay_receiver.recv().await,
+            starts.load(Ordering::SeqCst),
+        ));
+        notify.notify_one();
+        events.push(subscription.recv().await);
+        events.push(subscription.recv().await);
+        restarts.push((
+            requested_delay_receiver.recv().await,
+            starts.load(Ordering::SeqCst),
+        ));
+        notify.notify_one();
+        restarts.push((
+            requested_delay_receiver.recv().await,
+            starts.load(Ordering::SeqCst),
+        ));
+        assert_eq!(
+            (restarts, events),
+            (
+                vec![
+                    (Some(Duration::from_secs(1)), 1),
+                    (Some(Duration::from_secs(2)), 2),
+                    (Some(Duration::from_secs(1)), 3),
+                    (Some(Duration::from_secs(2)), 4),
+                ],
+                vec![
+                    Some(TqEvent::Connected),
+                    Some(TqEvent::Connected),
+                    Some(TqEvent::Change(TqChangeEvent {
+                        resource: TqChangeResource::Task,
+                        id: Some("task-placeholder".to_string()),
+                        origin: None,
+                        task_ids: None,
+                    })),
+                ],
+            )
+        );
+        subscription.shutdown();
+    }
+
+    fn subscription_with<F>(spawn: F, delay: DelayFn) -> TqEventSubscription
+    where
+        F: FnMut() -> io::Result<EventProcess> + Send + 'static,
+    {
+        let (sender, receiver) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
+        let (shutdown_sender, shutdown_receiver) = oneshot::channel();
+        tokio::spawn(run_events(sender, shutdown_receiver, spawn, delay));
+        TqEventSubscription {
+            receiver,
+            _shutdown: shutdown_sender,
+        }
+    }
+
+    fn gated_delay() -> (DelayFn, mpsc::UnboundedReceiver<Duration>, Arc<Notify>) {
+        let (requested_delay_sender, requested_delay_receiver) = mpsc::unbounded_channel();
+        let notify = Arc::new(Notify::new());
         let delay_notify = Arc::clone(&notify);
         let delay: DelayFn = Box::new(move |duration| {
             let _ = requested_delay_sender.send(duration);
             let delay_notify = Arc::clone(&delay_notify);
             Box::pin(async move { delay_notify.notified().await })
         });
-        let (sender, receiver) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
-        let (shutdown_sender, shutdown_receiver) = oneshot::channel();
-        tokio::spawn(run_events(sender, shutdown_receiver, spawn, delay));
-        let mut subscription = TqEventSubscription {
-            receiver,
-            _shutdown: shutdown_sender,
-        };
-
-        assert_eq!(
-            requested_delay_receiver.recv().await,
-            Some(Duration::from_secs(1))
-        );
-        assert_eq!(starts.load(Ordering::SeqCst), 1);
-        notify.notify_one();
-        assert_eq!(subscription.recv().await, Some(TqEvent::Connected));
-        assert_eq!(
-            requested_delay_receiver.recv().await,
-            Some(Duration::from_secs(1))
-        );
-        assert_eq!(starts.load(Ordering::SeqCst), 2);
-        notify.notify_one();
-        assert_eq!(
-            requested_delay_receiver.recv().await,
-            Some(Duration::from_secs(2))
-        );
-        assert_eq!(starts.load(Ordering::SeqCst), 3);
-        subscription.shutdown();
-    }
-
-    fn subscription_with<F>(spawn: F) -> TqEventSubscription
-    where
-        F: FnMut() -> io::Result<EventProcess> + Send + 'static,
-    {
-        let (sender, receiver) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
-        let (shutdown_sender, shutdown_receiver) = oneshot::channel();
-        tokio::spawn(run_events(
-            sender,
-            shutdown_receiver,
-            spawn,
-            Box::new(|_| Box::pin(std::future::pending::<()>())),
-        ));
-        TqEventSubscription {
-            receiver,
-            _shutdown: shutdown_sender,
-        }
+        (delay, requested_delay_receiver, notify)
     }
 
     fn stream_process(contents: &[u8]) -> EventProcess {
