@@ -17,7 +17,6 @@ const detailsOpenPattern =
 const detailsClosePattern = /^<\/details\s*>$/i
 const summaryOpenPattern = /^<summary\s*>$/i
 const summaryClosePattern = /^<\/summary\s*>$/i
-const maxDetailsNesting = 32
 
 type Processor = { parse: (value: string) => unknown }
 type Kind =
@@ -28,7 +27,7 @@ type Kind =
   | 'summary-close'
   | 'summary-text'
 type Marker = { kind: Kind; value: string; node: MarkdownNode; offset: number }
-type HtmlGroup = { node: MarkdownNode }
+type HtmlGroup = { node: MarkdownNode; offset: number }
 type Unit =
   | { node: MarkdownNode; group?: HtmlGroup }
   | { marker: Marker; group?: HtmlGroup }
@@ -78,8 +77,8 @@ function splitHtml(
   ) {
     return null
   }
-  const group = { node }
   const base = node.position?.start.offset ?? 0
+  const group = { node, offset: base }
   const units: Unit[] = []
   const pattern = new RegExp(htmlLexemePattern.source, 'gi')
   let cursor = 0
@@ -142,7 +141,7 @@ function unitsFrom(
   return units
 }
 
-function pairDetails(units: Unit[]): Map<number, Pair> {
+function pairDetails(units: Unit[]) {
   type Frame = {
     open: number
     render: boolean
@@ -150,6 +149,7 @@ function pairDetails(units: Unit[]): Map<number, Pair> {
     summaryClose?: number
   }
   const pairs = new Map<number, Pair>()
+  const closes = new Map<number, number>()
   const stack: Frame[] = []
   const pending = new Set<Frame>()
   const invalidatePending = () => {
@@ -188,6 +188,7 @@ function pairDetails(units: Unit[]): Map<number, Pair> {
       const frame = stack.pop()
       if (frame === undefined) continue
       pending.delete(frame)
+      closes.set(frame.open, index)
       if (
         frame.render &&
         frame.summaryOpen !== undefined &&
@@ -201,7 +202,27 @@ function pairDetails(units: Unit[]): Map<number, Pair> {
       }
     }
   }
-  return pairs
+  return { pairs, closes }
+}
+
+function rawDetailsNode(group: HtmlGroup, open: Marker, close: Marker) {
+  const value = group.node.value ?? ''
+  const start = open.offset - group.offset
+  const end = close.offset - group.offset + close.value.length
+  const position = group.node.position
+  return {
+    ...group.node,
+    value: value.slice(start, end),
+    ...(position === undefined
+      ? {}
+      : {
+          position: {
+            ...position,
+            start: { ...position.start, offset: open.offset },
+            end: { ...position.end, offset: close.offset + close.value.length },
+          },
+        }),
+  }
 }
 
 function summaryNode(
@@ -259,18 +280,15 @@ function renderUnits(
   nodes: MarkdownNode[],
   parse: MarkdownParser,
   references: readonly ReferenceDefinitionSource[],
-  depth: number,
 ): MarkdownNode[] {
   const units = unitsFrom(nodes, parse, references)
-  const pairs = pairDetails(units)
+  const { pairs, closes } = pairDetails(units)
   const result: MarkdownNode[] = []
   const frames: Array<{
     close: number
-    group?: HtmlGroup
     node: MarkdownNode
     parent: MarkdownNode[]
   }> = []
-  const activeGroups = new Map<HtmlGroup, number>()
   let output = result
 
   for (let index = 0; index < units.length; index += 1) {
@@ -284,14 +302,6 @@ function renderUnits(
       const pair =
         unit.marker.kind === 'details-open' ? pairs.get(index) : undefined
       if (pair !== undefined) {
-        if (depth + frames.length >= maxDetailsNesting) {
-          for (let raw = index; raw <= pair.close; raw += 1) {
-            const rawUnit = units[raw]
-            if (rawUnit !== undefined) output.push(toNode(rawUnit))
-          }
-          index = pair.close
-          continue
-        }
         const children = [
           summaryNode(
             units,
@@ -313,18 +323,26 @@ function renderUnits(
         }
         frames.push({
           close: pair.close,
-          group: unit.group,
           node,
           parent: output,
         })
-        if (unit.group !== undefined) {
-          activeGroups.set(unit.group, (activeGroups.get(unit.group) ?? 0) + 1)
-        }
         output = children
         index = pair.summaryClose
         continue
       }
-      if (unit.group !== undefined && !activeGroups.has(unit.group)) {
+      if (unit.group !== undefined) {
+        const closeIndex = closes.get(index)
+        const closeUnit =
+          closeIndex === undefined ? undefined : units[closeIndex]
+        if (
+          closeUnit !== undefined &&
+          'marker' in closeUnit &&
+          closeUnit.group === unit.group
+        ) {
+          output.push(rawDetailsNode(unit.group, unit.marker, closeUnit.marker))
+          index = closeIndex
+          continue
+        }
         output.push(unit.group.node)
         while (units[index + 1]?.group === unit.group) index += 1
         continue
@@ -338,11 +356,6 @@ function renderUnits(
     ) {
       const frame = frames.pop()
       if (frame !== undefined) {
-        if (frame.group !== undefined) {
-          const count = activeGroups.get(frame.group) ?? 0
-          if (count <= 1) activeGroups.delete(frame.group)
-          else activeGroups.set(frame.group, count - 1)
-        }
         output = frame.parent
         output.push(frame.node)
       }
@@ -350,12 +363,7 @@ function renderUnits(
       output.push(toNode(unit))
     } else {
       if (unit.node.children !== undefined) {
-        unit.node.children = renderUnits(
-          unit.node.children,
-          parse,
-          references,
-          depth + frames.length,
-        )
+        unit.node.children = renderUnits(unit.node.children, parse, references)
       }
       output.push(unit.node)
     }
@@ -374,6 +382,6 @@ export function remarkMarkdownDetails(this: Processor) {
         ? file.value
         : new TextDecoder().decode(file.value)
     const references = getReferenceDefinitionSources(tree.children, source)
-    tree.children = renderUnits(tree.children, parse, references, 0)
+    tree.children = renderUnits(tree.children, parse, references)
   }
 }

@@ -269,6 +269,20 @@ Inner body
   )
 })
 
+it('preserves an unsupported nested details block inside an outer details block', () => {
+  expect(
+    renderMessage(`<details open>
+<summary>Outer</summary>
+
+<details>
+inner
+</details>
+</details>`),
+  ).toBe(
+    '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Outer</span></button><div class="markdown-details-body">&lt;details&gt;\ninner\n&lt;/details&gt;</div></div></div>',
+  )
+})
+
 it.each([
   {
     name: 'a heading',
@@ -478,48 +492,46 @@ it.each([
 
 it.each([
   {
-    name: 'script',
-    source: `<script>\n</details>\n</script>`,
-    escaped: '&lt;script&gt;\n&lt;/details&gt;\n&lt;/script&gt;',
+    name: 'a comment',
+    source: '<!-- </details> -->',
+    escaped: '&lt;!-- &lt;/details&gt; --&gt;',
   },
   {
-    name: 'style',
-    source: `<style>\n.example { content: </details>; }\n</style>`,
+    name: 'a script element',
+    source: '<script>const closingTag = "</details>";</script>',
     escaped:
-      '&lt;style&gt;\n.example { content: &lt;/details&gt;; }\n&lt;/style&gt;',
+      '&lt;script&gt;const closingTag = "&lt;/details&gt;";&lt;/script&gt;',
+  },
+  {
+    name: 'a style element',
+    source: '<style>.example { content: "</details>"; }</style>',
+    escaped:
+      '&lt;style&gt;.example { content: "&lt;/details&gt;"; }&lt;/style&gt;',
+  },
+  {
+    name: 'a pre element',
+    source: '<pre>\n</details>\n</pre>',
+    escaped: '&lt;pre&gt;\n&lt;/details&gt;\n&lt;/pre&gt;',
+  },
+  {
+    name: 'a textarea element',
+    source: '<textarea>\n</details>\n</textarea>',
+    escaped: '&lt;textarea&gt;\n&lt;/details&gt;\n&lt;/textarea&gt;',
   },
 ])(
-  'keeps closing details tags inside $name raw text',
+  'ignores closing details tags inside $name in the same HTML block',
   ({ source, escaped }) => {
     expect(
-      renderMessage(`<details>
+      renderMessage(`<details open>
 <summary>Example</summary>
-
 ${source}
-
 Hidden body content
 </details>`),
     ).toBe(
-      `<div class="markdown-message"><div class="markdown-details"><button aria-expanded="false" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Example</span></button><div class="markdown-details-body">${escaped}<p>Hidden body content</p></div></div></div>`,
+      `<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Example</span></button><div class="markdown-details-body">${escaped}<p>Hidden body content</p></div></div></div>`,
     )
   },
 )
-
-it('keeps closing tags in HTML comments inside the details body', () => {
-  expect(
-    renderMessage(`<details open>
-<summary>Comment</summary>
-
-<!--
-</details>
--->
-
-Body
-</details>`),
-  ).toBe(
-    '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Comment</span></button><div class="markdown-details-body">&lt;!--\n&lt;/details&gt;\n--&gt;<p>Body</p></div></div></div>',
-  )
-})
 
 it('renders br tags as line breaks in paragraphs and table cells', () => {
   const html = renderMessage(
