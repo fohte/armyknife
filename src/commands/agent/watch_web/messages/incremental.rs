@@ -167,16 +167,14 @@ pub(super) fn parse_session_transcript_incrementally_for_range(
         }
     }
 
-    if !range.require_full_history
-        && (cached
+    if should_rebuild_tail_window(
+        cached
             .as_ref()
-            .is_some_and(|entry| entry.tail_window.is_some())
-            || range
-                .requested_epoch
-                .is_some_and(super::range::epoch_token_is_decodable))
-        && restart_reason != Some("epoch_anchor_outside_tail_window")
-        && !fingerprint.is_compressed()
-    {
+            .is_some_and(|entry| entry.tail_window.is_some()),
+        range,
+        restart_reason,
+        fingerprint.is_compressed(),
+    ) {
         let message_limit = cached
             .as_ref()
             .and_then(|entry| entry.tail_window.as_ref())
@@ -303,6 +301,21 @@ fn parser_matches_engine(parser: &IncrementalTranscriptParser, engine: Engine) -
         (IncrementalTranscriptParser::Claude(_), Engine::Claude)
             | (IncrementalTranscriptParser::Codex(_), Engine::Codex)
     )
+}
+
+fn should_rebuild_tail_window(
+    cached_tail_window: bool,
+    range: TranscriptRangeContext<'_>,
+    restart_reason: Option<&str>,
+    compressed: bool,
+) -> bool {
+    !range.require_full_history
+        && range
+            .requested_epoch
+            .is_none_or(super::range::epoch_token_is_decodable)
+        && (cached_tail_window || range.requested_epoch.is_some())
+        && restart_reason != Some("epoch_anchor_outside_tail_window")
+        && !compressed
 }
 
 fn advance_cached_parser(
@@ -478,6 +491,7 @@ mod tests {
         ChatItem, ConversationResponse, TranscriptInput, UserContentPart,
     };
     use chrono::{DateTime, Utc};
+    use indoc::indoc;
 
     #[rstest::rstest]
     #[case::claude(Engine::Claude)]
@@ -664,13 +678,16 @@ mod tests {
         )
         .unwrap();
 
-        let transcript = std::fs::read_to_string(&path).unwrap();
-        let appended_records = concat!(
-            r#"{"type":"user","uuid":"fixture-rewind-request","parentUuid":"fixture-assistant-50","timestamp":"2026-01-01T01:00:00Z","message":{"content":"Continue from an earlier request."}}"#,
-            "\n",
-            r#"{"type":"assistant","uuid":"fixture-rewind-response","parentUuid":"fixture-rewind-request","timestamp":"2026-01-01T01:00:01Z","message":{"content":[{"type":"text","text":"The earlier branch continues."}]}}"#,
+        let mut transcript = std::fs::read_to_string(&path).unwrap();
+        transcript.push('\n');
+        transcript.push_str(
+            indoc! {r#"
+                {"type":"user","uuid":"fixture-rewind-request","parentUuid":"fixture-assistant-50","timestamp":"2026-01-01T01:00:00Z","message":{"content":"Continue from an earlier request."}}
+                {"type":"assistant","uuid":"fixture-rewind-response","parentUuid":"fixture-rewind-request","timestamp":"2026-01-01T01:00:01Z","message":{"content":[{"type":"text","text":"The earlier branch continues."}]}}
+            "#}
+            .trim(),
         );
-        std::fs::write(&path, format!("{transcript}\n{appended_records}")).unwrap();
+        std::fs::write(&path, transcript).unwrap();
 
         let fingerprint = transcript_fingerprint(Engine::Claude, Some(&path))
             .unwrap()
@@ -707,6 +724,134 @@ mod tests {
                 expected_resolved_ids,
                 Some(100),
             ),
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::no_epoch(None, true)]
+    #[case::undecodable_epoch(Some("x"), false)]
+    fn cached_tail_window_rebuild_policy(
+        #[case] requested_epoch: Option<&str>,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(
+            super::should_rebuild_tail_window(
+                true,
+                super::TranscriptRangeContext {
+                    requested_epoch,
+                    ..super::TranscriptRangeContext::default()
+                },
+                Some("append_requires_branch_reparse"),
+                false,
+            ),
+            expected,
+        );
+    }
+
+    #[rstest::rstest]
+    fn cached_tail_window_rebuild_restores_pending_task_state_after_a_branch_switch() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("fixture.jsonl");
+        let pending_task_ids = vec!["fixture-task-id".to_owned()];
+        let mut transcript = indoc! {r#"
+            {"type":"assistant","uuid":"fixture-task-call","parentUuid":null,"timestamp":"2026-01-01T00:00:01Z","message":{"content":[{"type":"tool_use","id":"fixture-task-use","name":"Bash","input":{"command":"fixture background task","run_in_background":true}}]}}
+            {"type":"user","uuid":"fixture-task-started","parentUuid":"fixture-task-call","timestamp":"2026-01-01T00:00:02Z","toolUseResult":{"task_id":"fixture-task-id"},"message":{"content":[{"type":"tool_result","tool_use_id":"fixture-task-use","content":"Background task started (id: fixture-task-id)"}]}}
+        "#}
+        .trim()
+        .to_owned();
+        let mut parent_uuid = "fixture-task-started".to_owned();
+        for index in 0..130 {
+            let user_uuid = format!("fixture-user-{index}");
+            let assistant_uuid = format!("fixture-assistant-{index}");
+            let timestamp = format!("2026-01-01T00:{:02}:{:02}Z", index / 60, index % 60);
+            transcript.push('\n');
+            transcript.push_str(
+                &serde_json::json!({
+                    "type": "user",
+                    "uuid": &user_uuid,
+                    "parentUuid": &parent_uuid,
+                    "timestamp": &timestamp,
+                    "message": {"content": format!("Fixture request {index}.")},
+                })
+                .to_string(),
+            );
+            transcript.push('\n');
+            transcript.push_str(
+                &serde_json::json!({
+                    "type": "assistant",
+                    "uuid": &assistant_uuid,
+                    "parentUuid": &user_uuid,
+                    "timestamp": &timestamp,
+                    "message": {"content": [{"type": "text", "text": format!("Fixture response {index}.")}]},
+                })
+                .to_string(),
+            );
+            parent_uuid = assistant_uuid;
+        }
+        transcript.push('\n');
+        std::fs::write(&path, transcript).unwrap();
+
+        let cache = MessageCache::default();
+        let initial_fingerprint = transcript_fingerprint(Engine::Claude, Some(&path))
+            .unwrap()
+            .unwrap();
+        super::tail_window::parse_initial_or_full_for_range(
+            "fixture-session",
+            epoch_input(&path),
+            Some(100),
+            &pending_task_ids,
+            Some(initial_fingerprint),
+            &cache,
+            super::TranscriptRangeContext::default(),
+        )
+        .unwrap();
+
+        let mut transcript = std::fs::read_to_string(&path).unwrap();
+        transcript.push_str(
+            &serde_json::json!({
+                "type": "user",
+                "uuid": "fixture-rewind-request",
+                "parentUuid": "fixture-assistant-20",
+                "timestamp": "2026-01-01T02:00:00Z",
+                "message": {"content": "Continue from an earlier request."},
+            })
+            .to_string(),
+        );
+        transcript.push('\n');
+        transcript.push_str(
+            &serde_json::json!({
+                "type": "assistant",
+                "uuid": "fixture-rewind-response",
+                "parentUuid": "fixture-rewind-request",
+                "timestamp": "2026-01-01T02:00:01Z",
+                "message": {"content": [{"type": "text", "text": "The earlier branch continues."}]},
+            })
+            .to_string(),
+        );
+        transcript.push('\n');
+        std::fs::write(&path, transcript).unwrap();
+
+        let fingerprint = transcript_fingerprint(Engine::Claude, Some(&path))
+            .unwrap()
+            .unwrap();
+        let (actual, _, _) = super::tail_window::parse_initial_or_full_for_range(
+            "fixture-session",
+            epoch_input(&path),
+            None,
+            &pending_task_ids,
+            Some(fingerprint),
+            &cache,
+            super::TranscriptRangeContext::default(),
+        )
+        .unwrap();
+        let (expected, _) = parse_session_transcript(epoch_input(&path)).unwrap();
+
+        assert_eq!(
+            (
+                actual.background_tasks,
+                super::cached_tail_window_message_limit("fixture-session", &cache),
+            ),
+            (expected.background_tasks, Some(100)),
         );
     }
 

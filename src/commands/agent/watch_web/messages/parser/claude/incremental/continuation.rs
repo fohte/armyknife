@@ -183,12 +183,9 @@ fn is_active_branch_continuation(
     record: &Value,
     candidate: &AppendRecord,
 ) -> bool {
-    let Some(uuid) = candidate.uuid.as_deref() else {
+    let Some(_) = candidate.uuid.as_deref() else {
         return true;
     };
-    if state.transcript_nodes.contains_key(uuid) {
-        return false;
-    }
     let is_tool_result_only = is_tool_result_only_user_record(record);
     if is_tool_result_only && candidate.parent_uuid.is_none() {
         return false;
