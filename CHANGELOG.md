@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1004](https://github.com/fohte/armyknife/compare/v0.1.1003...v0.1.1004) (2026-11-28)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** hide withdrawn card details ([#2431](https://github.com/fohte/armyknife/issues/2431)) ([24d963a](https://github.com/fohte/armyknife/commit/24d963a52a2910051f74cf57ef68ed6b6182ae9c))
+
 ## [0.1.1003](https://github.com/fohte/armyknife/compare/v0.1.1002...v0.1.1003) (2026-11-28)
 
 
