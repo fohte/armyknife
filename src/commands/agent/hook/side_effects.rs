@@ -9,8 +9,8 @@ use super::super::types::{
 };
 #[cfg(not(test))]
 use super::super::{archive_tq_session_detached, bg};
+use crate::infra::tmux;
 use crate::shared::config::AgentConfig;
-use crate::{infra::tmux, infra::tmux::PaneInfo};
 
 pub(super) type PrContextCapture = Arc<dyn Fn(&Path) -> Option<SessionPrContext> + Send + Sync>;
 
@@ -25,7 +25,12 @@ type TranscriptSlimCall = (String, std::path::PathBuf, Vec<String>);
 type TranscriptSlimCallSink = std::sync::Arc<std::sync::Mutex<Vec<TranscriptSlimCall>>>;
 
 pub(super) trait PaneBindingOperations: Send + Sync {
-    fn resolve(&self, input: &HookInput) -> Option<PaneInfo>;
+    fn resolve(
+        &self,
+        input: &HookInput,
+        is_session_start: bool,
+        cached_has_parent_agent: Option<bool>,
+    ) -> super::pane_binding::Resolution;
     fn set_session_id(&self, pane_id: &str, session_id: &str);
     fn current_socket_path(&self) -> anyhow::Result<Option<String>>;
 }
@@ -33,8 +38,13 @@ pub(super) trait PaneBindingOperations: Send + Sync {
 struct LivePaneBindingOperations;
 
 impl PaneBindingOperations for LivePaneBindingOperations {
-    fn resolve(&self, input: &HookInput) -> Option<PaneInfo> {
-        super::pane_binding::resolve(input)
+    fn resolve(
+        &self,
+        input: &HookInput,
+        is_session_start: bool,
+        cached_has_parent_agent: Option<bool>,
+    ) -> super::pane_binding::Resolution {
+        super::pane_binding::resolve(input, is_session_start, cached_has_parent_agent)
     }
 
     fn set_session_id(&self, pane_id: &str, session_id: &str) {
@@ -168,10 +178,19 @@ impl SideEffects {
         }
     }
 
-    pub(super) fn resolve_pane(&self, input: &HookInput) -> Option<PaneInfo> {
+    pub(super) fn resolve_pane(
+        &self,
+        input: &HookInput,
+        is_session_start: bool,
+        cached_has_parent_agent: Option<bool>,
+    ) -> super::pane_binding::Resolution {
         self.pane_binding
             .as_ref()
-            .and_then(|binding| binding.resolve(input))
+            .map(|binding| binding.resolve(input, is_session_start, cached_has_parent_agent))
+            .unwrap_or(super::pane_binding::Resolution {
+                pane_info: None,
+                has_parent_agent: cached_has_parent_agent,
+            })
     }
 
     pub(super) fn set_pane_session_id(&self, pane_id: &str, session_id: &str) {

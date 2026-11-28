@@ -20,12 +20,33 @@ use crate::commands::agent::types::{
 use crate::infra::process::ProcessSnapshot;
 use crate::infra::tmux::{self, PaneInfo, PaneInfoWithOption};
 
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct Resolution {
+    pub(super) pane_info: Option<PaneInfo>,
+    pub(super) has_parent_agent: Option<bool>,
+}
+
+#[derive(Clone, Copy)]
+enum ParentAgentResolution {
+    Check,
+    Cached(Option<bool>),
+}
+
 /// Resolves the hook's pane through process ancestry or its explicit session binding.
-pub(super) fn resolve(input: &HookInput) -> Option<PaneInfo> {
+pub(super) fn resolve(
+    input: &HookInput,
+    is_session_start: bool,
+    cached_has_parent_agent: Option<bool>,
+) -> Resolution {
     resolve_with(
         input.engine,
         &input.session_id,
         std::process::id(),
+        if is_session_start {
+            ParentAgentResolution::Check
+        } else {
+            ParentAgentResolution::Cached(cached_has_parent_agent)
+        },
         tmux::get_pane_info_and_pid_by_pid,
         has_parent_agent_process,
         find_by_session_option,
@@ -36,22 +57,51 @@ fn resolve_with(
     engine: Engine,
     session_id: &str,
     pid: u32,
+    parent_agent_resolution: ParentAgentResolution,
     get_pane_info: impl FnOnce(u32) -> Option<(PaneInfo, u32)>,
     has_parent_agent: impl FnOnce(u32, u32) -> Option<bool>,
     find_by_session: impl FnOnce(&str) -> Option<PaneInfo>,
-) -> Option<PaneInfo> {
+) -> Resolution {
     if let Some((pane, pane_pid)) = get_pane_info(pid) {
-        return match has_parent_agent(pid, pane_pid) {
-            Some(false) => Some(pane),
-            Some(true) | None => None,
+        let has_parent_agent = match parent_agent_resolution {
+            ParentAgentResolution::Check | ParentAgentResolution::Cached(None) => {
+                has_parent_agent(pid, pane_pid)
+            }
+            ParentAgentResolution::Cached(Some(state)) => Some(state),
+        };
+        return Resolution {
+            pane_info: (!has_parent_agent.unwrap_or(true)).then_some(pane),
+            has_parent_agent,
         };
     }
 
     if engine == Engine::Codex {
-        return find_by_session(session_id);
+        let pane_info = find_by_session(session_id);
+        let has_parent_agent = match parent_agent_resolution {
+            ParentAgentResolution::Check if pane_info.is_some() => Some(false),
+            ParentAgentResolution::Check => None,
+            ParentAgentResolution::Cached(Some(state)) => Some(state),
+            ParentAgentResolution::Cached(None) if pane_info.is_some() => Some(false),
+            ParentAgentResolution::Cached(None) => None,
+        };
+        return Resolution {
+            pane_info: if has_parent_agent == Some(false) {
+                pane_info
+            } else {
+                None
+            },
+            has_parent_agent,
+        };
     }
 
-    None
+    Resolution {
+        pane_info: None,
+        has_parent_agent: match parent_agent_resolution {
+            ParentAgentResolution::Check => None,
+            ParentAgentResolution::Cached(Some(state)) => Some(state),
+            ParentAgentResolution::Cached(None) => None,
+        },
+    }
 }
 
 /// Detects a reused pane so its inherited launch environment cannot pin a new session.
@@ -116,7 +166,7 @@ fn unique_live_pane_for_session<'a>(
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_with, unique_live_pane_for_session};
+    use super::{ParentAgentResolution, Resolution, resolve_with, unique_live_pane_for_session};
     use crate::commands::agent::types::Engine;
     use crate::infra::tmux::{PaneInfo, PaneInfoWithOption};
     use rstest::{fixture, rstest};
@@ -161,6 +211,7 @@ mod tests {
             Engine::Claude,
             "session-example",
             123,
+            ParentAgentResolution::Check,
             |_| Some((pane_info(), 100)),
             |hook_pid, pane_pid| {
                 ancestry_arguments = Some((hook_pid, pane_pid));
@@ -169,23 +220,78 @@ mod tests {
             |_| None,
         );
 
-        assert_eq!((result, ancestry_arguments), (expected, Some((123, 100))),);
+        assert_eq!(
+            (
+                result.pane_info,
+                result.has_parent_agent,
+                ancestry_arguments,
+            ),
+            (expected, Some(has_parent_agent), Some((123, 100))),
+        );
     }
 
     #[rstest]
     #[case::snapshot_failure_is_unresolved(None)]
     #[case::nested_agent_is_unresolved(Some(true))]
-    fn ancestry_pane_binding_requires_a_known_direct_agent(#[case] has_parent_agent: Option<bool>) {
+    fn session_start_pane_binding_requires_a_known_direct_agent(
+        #[case] has_parent_agent: Option<bool>,
+    ) {
         assert_eq!(
             resolve_with(
                 Engine::Claude,
                 "session-example",
                 123,
+                ParentAgentResolution::Check,
                 |_| Some((pane_info(), 100)),
                 |_, _| has_parent_agent,
                 |_| None,
             ),
-            None,
+            Resolution {
+                pane_info: None,
+                has_parent_agent,
+            },
+        );
+    }
+
+    #[rstest]
+    #[case::cached_direct_agent(Some(false), None, Some(pane_info()), Some(false), false)]
+    #[case::cached_nested_agent(Some(true), None, None, Some(true), false)]
+    #[case::missing_direct_agent(None, Some(false), Some(pane_info()), Some(false), true)]
+    #[case::missing_nested_agent(None, Some(true), None, Some(true), true)]
+    #[case::missing_classification_is_retried(None, None, None, None, true)]
+    fn non_session_start_reuses_known_state_and_retries_unclassified_state(
+        #[case] cached_has_parent_agent: Option<bool>,
+        #[case] checked_has_parent_agent: Option<bool>,
+        #[case] expected_pane: Option<PaneInfo>,
+        #[case] expected_state: Option<bool>,
+        #[case] expected_ancestry_check: bool,
+    ) {
+        let mut ancestry_was_checked = false;
+        let mut pane_lookup_count = 0;
+        let result = resolve_with(
+            Engine::Claude,
+            "session-example",
+            123,
+            ParentAgentResolution::Cached(cached_has_parent_agent),
+            |_| {
+                pane_lookup_count += 1;
+                Some((pane_info(), 100))
+            },
+            |_, _| {
+                ancestry_was_checked = true;
+                checked_has_parent_agent
+            },
+            |_| None,
+        );
+
+        assert_eq!(
+            (
+                result.pane_info,
+                result.has_parent_agent,
+                ancestry_was_checked,
+                pane_lookup_count,
+            ),
+            (expected_pane, expected_state, expected_ancestry_check, 1,),
         );
     }
 
@@ -197,11 +303,62 @@ mod tests {
                 Engine::Codex,
                 "session-example",
                 123,
+                ParentAgentResolution::Cached(None),
                 |_| None,
                 |_, _| Some(false),
                 |session_id| (session_id == "session-example").then(|| expected.clone()),
             ),
-            Some(expected),
+            Resolution {
+                pane_info: Some(expected),
+                has_parent_agent: Some(false),
+            },
+        );
+    }
+
+    #[rstest]
+    #[case::direct_classification(Some(false), Some(false), Some(pane_info()))]
+    #[case::nested_classification(Some(true), Some(true), None)]
+    #[case::unclassified_session_option_resolves_directly(None, Some(false), Some(pane_info()))]
+    fn codex_session_option_pane_requires_a_direct_classification(
+        #[case] cached_has_parent_agent: Option<bool>,
+        #[case] expected_has_parent_agent: Option<bool>,
+        #[case] expected_pane_info: Option<PaneInfo>,
+    ) {
+        let expected = pane_info();
+        assert_eq!(
+            resolve_with(
+                Engine::Codex,
+                "session-example",
+                123,
+                ParentAgentResolution::Cached(cached_has_parent_agent),
+                |_| None,
+                |_, _| Some(false),
+                |session_id| (session_id == "session-example").then(|| expected.clone()),
+            ),
+            Resolution {
+                pane_info: expected_pane_info,
+                has_parent_agent: expected_has_parent_agent,
+            },
+        );
+    }
+
+    #[test]
+    fn codex_session_start_records_a_session_option_pane_as_direct() {
+        let expected = pane_info();
+        assert_eq!(
+            resolve_with(
+                Engine::Codex,
+                "session-example",
+                123,
+                ParentAgentResolution::Check,
+                |_| None,
+                |_, _| Some(true),
+                |session_id| (session_id == "session-example").then(|| expected.clone()),
+            ),
+            Resolution {
+                pane_info: Some(expected),
+                has_parent_agent: Some(false),
+            },
         );
     }
 
