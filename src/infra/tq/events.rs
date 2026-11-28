@@ -332,7 +332,7 @@ mod tests {
         let starts = Arc::new(AtomicUsize::new(0));
         let spawn_starts = Arc::clone(&starts);
         let spawn = move || {
-            if spawn_starts.fetch_add(1, Ordering::SeqCst) == 0 {
+            if spawn_starts.fetch_add(1, Ordering::SeqCst) < 2 {
                 Err(io::Error::other("placeholder spawn failure"))
             } else {
                 Ok(stream_process(b"{\"type\":\"connected\"}\n"))
@@ -341,18 +341,27 @@ mod tests {
         let (delay, mut requested_delay_receiver, notify) = gated_delay();
         let mut subscription = subscription_with(spawn, delay);
 
-        let first_delay = requested_delay_receiver.recv().await;
-        let starts_before_retry = starts.load(Ordering::SeqCst);
+        let mut retries = vec![(
+            requested_delay_receiver.recv().await,
+            starts.load(Ordering::SeqCst),
+        )];
+        notify.notify_one();
+        retries.push((
+            requested_delay_receiver.recv().await,
+            starts.load(Ordering::SeqCst),
+        ));
         notify.notify_one();
         let event = subscription.recv().await;
         assert_eq!(
+            (retries, event, starts.load(Ordering::SeqCst)),
             (
-                first_delay,
-                starts_before_retry,
-                event,
-                starts.load(Ordering::SeqCst)
-            ),
-            (Some(Duration::from_secs(1)), 1, Some(TqEvent::Connected), 2,)
+                vec![
+                    (Some(Duration::from_secs(1)), 1),
+                    (Some(Duration::from_secs(2)), 2),
+                ],
+                Some(TqEvent::Connected),
+                3,
+            )
         );
         subscription.shutdown();
     }
