@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.997](https://github.com/fohte/armyknife/compare/v0.1.996...v0.1.997) (2026-11-28)
+
+
+### Features
+
+* **agent-watch-web:** separate engine selections ([#2425](https://github.com/fohte/armyknife/issues/2425)) ([ebd02a5](https://github.com/fohte/armyknife/commit/ebd02a5ea19c9eba68ef3864c91a9cdc1a9ff204))
+
+## [0.1.996](https://github.com/fohte/armyknife/compare/v0.1.995...v0.1.996) (2026-11-28)
+
+
+### Features
+
+* **infra/tq:** support tq event subscriptions ([#2423](https://github.com/fohte/armyknife/issues/2423)) ([fd5d1fb](https://github.com/fohte/armyknife/commit/fd5d1fb6789885f8bea097a529d51f867d299570))
+
 ## [0.1.995](https://github.com/fohte/armyknife/compare/v0.1.994...v0.1.995) (2026-11-28)
 
 
