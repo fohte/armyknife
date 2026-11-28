@@ -1,7 +1,7 @@
 import '#components/new-session.css'
 
 import { ArrowLeft, ChevronDown, Folder, GitBranch, X } from 'lucide-react'
-import { type ReactNode, useRef, useState } from 'react'
+import { type ReactNode, useLayoutEffect, useRef, useState } from 'react'
 
 import { NewSessionModelPicker } from '#components/new-session-model-picker'
 import { NewSessionStarting } from '#components/new-session-starting'
@@ -49,6 +49,7 @@ export function NewSessionForm({
   const directoryTriggerRef = useRef<HTMLButtonElement>(null)
   const directoryPopoverRef = useRef<HTMLDivElement>(null)
   const engineControlRef = useRef<HTMLDivElement>(null)
+  const hadPendingLaunch = useRef(false)
   const selectedDirectory = state.selectedDirectory
   const launchPending = pendingLaunch !== null
   const handleMessageKeyDown = useNewSessionMessageKeyboard({
@@ -64,6 +65,16 @@ export function NewSessionForm({
     onDraftChange: state.setInitialMessage,
     onKeyDown: handleMessageKeyDown,
   })
+  useLayoutEffect(() => {
+    if (launchPending) {
+      hadPendingLaunch.current = true
+      return
+    }
+    if (hadPendingLaunch.current && state.error !== null) {
+      skillCompletion.textareaRef.current?.focus()
+    }
+    hadPendingLaunch.current = false
+  }, [launchPending, skillCompletion.textareaRef, state.error])
   useBeforeUnloadWarning(state.initialMessage !== '' && !launchPending)
   useDismissableLayer(directoryPickerOpen, setDirectoryPickerOpen, [
     directoryTriggerRef,
@@ -94,12 +105,13 @@ export function NewSessionForm({
         ) : null}
         <h1>New session</h1>
         <button
+          aria-disabled={launchPending}
           aria-expanded={directoryPickerOpen && !launchPending}
           aria-haspopup="dialog"
           className={`new-session-directory-button${selectedDirectory === null ? ' is-empty' : ''}`}
-          disabled={launchPending}
           ref={directoryTriggerRef}
           onClick={() => {
+            if (launchPending) return
             setDirectoryPickerOpen((open) => !open)
           }}
           type="button"

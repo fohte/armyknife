@@ -52,6 +52,21 @@ function makeState(overrides: Partial<NewSessionState> = {}): NewSessionState {
   }
 }
 
+function makePendingLaunch(
+  requestOverrides: Partial<LaunchSessionRequest> = {},
+): PendingLaunchView {
+  return {
+    request: {
+      directory: exampleSessionDirectories[0]?.path ?? '',
+      engine: 'claude',
+      worktree: false,
+      initialMessage: 'A sent first message',
+      ...requestOverrides,
+    },
+    startedAt: new Date('2026-05-06T12:03:00Z').getTime(),
+  }
+}
+
 function renderForm(
   state: NewSessionState,
   onStart = vi.fn(),
@@ -113,6 +128,49 @@ function StatefulKeyboardForm({
   )
 }
 
+function PendingLaunchFocusForm() {
+  const [pendingLaunch, setPendingLaunch] = useState<PendingLaunchView | null>(
+    null,
+  )
+  const [error, setError] = useState<string | null>(null)
+  const { request } = makePendingLaunch()
+  const state = makeState({
+    selectedDirectory: exampleSessionDirectories[0] ?? null,
+    initialMessage: request.initialMessage ?? '',
+    error,
+    setLaunchError: setError,
+    start: (onStart) => {
+      onStart(request)
+    },
+  })
+
+  return (
+    <>
+      <NewSessionForm
+        state={state}
+        pendingLaunch={pendingLaunch}
+        onClose={() => undefined}
+        onStart={(launchRequest) => {
+          setPendingLaunch({
+            request: launchRequest,
+            startedAt: new Date('2026-05-06T12:03:00Z').getTime(),
+          })
+        }}
+      />
+      <button
+        className="test-fail-launch"
+        onClick={() => {
+          setError('The example session could not start.')
+          setPendingLaunch(null)
+        }}
+        type="button"
+      >
+        Fail launch
+      </button>
+    </>
+  )
+}
+
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   container = document.createElement('div')
@@ -158,15 +216,11 @@ it('does not warn before leaving when the first message is empty', () => {
 })
 
 it('does not warn before leaving after the first message is sent', () => {
-  renderForm(makeState({ initialMessage: 'A sent first message' }), vi.fn(), {
-    request: {
-      directory: exampleSessionDirectories[0]?.path ?? '',
-      engine: 'claude',
-      worktree: false,
-      initialMessage: 'A sent first message',
-    },
-    startedAt: new Date('2026-05-06T12:03:00Z').getTime(),
-  })
+  renderForm(
+    makeState({ initialMessage: 'A sent first message' }),
+    vi.fn(),
+    makePendingLaunch(),
+  )
   const event = new Event('beforeunload', { cancelable: true })
 
   act(() => {
@@ -186,15 +240,7 @@ it.each([
       selectedDirectory: exampleSessionDirectories[0] ?? null,
       initialMessage: 'A sent first message',
     })
-    const pendingLaunch: PendingLaunchView = {
-      request: {
-        directory: exampleSessionDirectories[0]?.path ?? '',
-        engine,
-        worktree: false,
-        initialMessage: 'A sent first message',
-      },
-      startedAt: new Date('2026-05-06T12:03:00Z').getTime(),
-    }
+    const pendingLaunch = makePendingLaunch({ engine })
     renderForm(state, vi.fn(), pendingLaunch)
 
     const line = container.querySelector('.async-action-item--line')
@@ -205,13 +251,14 @@ it.each([
         .map((element) => element.textContent)
         .join(' '),
       replyPlaceholder: container.querySelector<HTMLTextAreaElement>(
-        '[aria-label="Reply"]',
+        '[aria-label="Message"]',
       )?.placeholder,
       replyDisabled: container.querySelector<HTMLTextAreaElement>(
-        '[aria-label="Reply"]',
+        '[aria-label="Message"]',
       )?.disabled,
-      directoryDisabled: requireButton('.new-session-directory-button')
-        .disabled,
+      directoryDisabled: requireButton(
+        '.new-session-directory-button',
+      ).getAttribute('aria-disabled'),
       startButton:
         container.querySelector('.new-session-start')?.textContent ?? null,
     })
@@ -220,7 +267,7 @@ it.each([
       line: `Starting ${engineLabel} in /Users/example/work/service… You can leave this page. We’ll let you know when it starts.`,
       replyPlaceholder: 'Reply once the session starts',
       replyDisabled: true,
-      directoryDisabled: true,
+      directoryDisabled: 'true',
       startButton: null,
     })
   },
@@ -248,6 +295,76 @@ it('suggests and inserts skills in the first message field', async () => {
     draft: '/debug-flow ',
     optionCount: 0,
     expanded: 'false',
+  })
+})
+
+it('keeps the directory control focusable and inert while the session starts', async () => {
+  renderForm(
+    makeState({
+      selectedDirectory: exampleSessionDirectories[0] ?? null,
+      initialMessage: 'A sent first message',
+    }),
+    vi.fn(),
+    makePendingLaunch(),
+  )
+
+  const directoryButton = requireButton('.new-session-directory-button')
+  await act(async () => {
+    await userEvent.click(directoryButton)
+  })
+
+  const snapshot = () => ({
+    ariaDisabled: directoryButton.getAttribute('aria-disabled'),
+    isNativeDisabled: directoryButton.disabled,
+    isFocused: document.activeElement === directoryButton,
+    expanded: directoryButton.getAttribute('aria-expanded'),
+    directoryDialogCount: container.querySelectorAll(
+      '[aria-label="Choose a directory"]',
+    ).length,
+  })
+  expect(snapshot()).toEqual({
+    ariaDisabled: 'true',
+    isNativeDisabled: false,
+    isFocused: true,
+    expanded: 'false',
+    directoryDialogCount: 0,
+  })
+})
+
+it('moves focus to the starting timeline and restores it after a launch failure', async () => {
+  root = createRoot(container)
+  act(() => root?.render(<PendingLaunchFocusForm />))
+
+  const firstMessage = container.querySelector<HTMLTextAreaElement>(
+    '[aria-label="First message"]',
+  )
+  if (firstMessage === null) throw new Error('Expected first message field')
+  firstMessage.focus()
+
+  await act(async () => {
+    await userEvent.click(requireButton('.new-session-start'))
+  })
+  const timeline = container.querySelector<HTMLElement>(
+    '.new-session-starting-timeline',
+  )
+  const duringLaunch = {
+    isFocused: document.activeElement === timeline,
+    tabIndex: timeline?.tabIndex ?? null,
+  }
+
+  await act(async () => {
+    await userEvent.click(requireButton('.test-fail-launch'))
+  })
+  const afterFailure = {
+    isFocused:
+      document.activeElement ===
+      container.querySelector('[aria-label="First message"]'),
+  }
+
+  const snapshot = () => ({ duringLaunch, afterFailure })
+  expect(snapshot()).toEqual({
+    duringLaunch: { isFocused: true, tabIndex: -1 },
+    afterFailure: { isFocused: true },
   })
 })
 

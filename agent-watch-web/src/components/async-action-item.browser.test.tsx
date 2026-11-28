@@ -271,3 +271,44 @@ it('hides retry for PR actions that require a new review', () => {
   }
   expect(snapshot()).toEqual(expected)
 })
+
+it.each([
+  {
+    name: 'engine_and_repo',
+    engine: 'claude' as const,
+    repo: '/example/service',
+    expected: 'Starting Claude Code in /example/service…',
+  },
+  {
+    name: 'missing_engine',
+    repo: '/example/service',
+    expected: 'Starting session in /example/service…',
+  },
+  {
+    name: 'missing_repo',
+    engine: 'codex' as const,
+    expected: 'Starting Codex…',
+  },
+])('formats the launch line with $name', ({ engine, repo, expected }) => {
+  const action: AsyncAction = {
+    id: 4,
+    kind: 'launch',
+    sessionId: 'example-launch-session',
+    sessionTitle: 'Review the example request',
+    status: 'launching',
+    ...(engine === undefined ? {} : { engine }),
+    ...(repo === undefined ? {} : { repo }),
+    createdAt: 1_799_000_000_009,
+  }
+  root = createRoot(container)
+  act(() => {
+    root?.render(<AsyncActionItem action={action} form="line" />)
+  })
+
+  const snapshot = () => ({
+    role: container.querySelector('[role="status"]')?.getAttribute('role'),
+    line: container.querySelector('.async-action-item-content strong')
+      ?.textContent,
+  })
+  expect(snapshot()).toEqual({ role: 'status', line: expected })
+})

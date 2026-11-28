@@ -67,6 +67,12 @@
   border-color: var(--aw-border-control);
 }
 
+.new-session-directory-button[aria-disabled='true'] {
+  border-color: var(--aw-border-control);
+  color: var(--aw-text-muted);
+  cursor: default;
+}
+
 .new-session-directory-popover {
   position: absolute;
   top: calc(100% + 2px);

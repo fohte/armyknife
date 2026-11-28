@@ -1,6 +1,8 @@
 import '#components/message-composer.css'
 import '#components/new-session-starting.css'
 
+import { useLayoutEffect, useRef } from 'react'
+
 import { AsyncActionItem } from '#components/async-action-item'
 import { Composer } from '#components/composer'
 import { UserWithContent } from '#components/user-with-content'
@@ -19,10 +21,19 @@ export function NewSessionStarting({
 }: NewSessionStartingProps) {
   const { request, startedAt } = pendingLaunch
   const hasMessage = (request.initialMessage?.trim().length ?? 0) > 0
+  const timelineRef = useRef<HTMLDivElement>(null)
+
+  useLayoutEffect(() => {
+    timelineRef.current?.focus()
+  }, [])
 
   return (
     <div className="new-session-starting">
-      <div className="new-session-starting-timeline">
+      <div
+        className="new-session-starting-timeline"
+        ref={timelineRef}
+        tabIndex={-1}
+      >
         {hasMessage ? (
           <UserWithContent
             message={{
@@ -67,7 +78,7 @@ export function NewSessionStarting({
           isMobile={isMobile}
         >
           <textarea
-            aria-label="Reply"
+            aria-label="Message"
             placeholder="Reply once the session starts"
             disabled
             rows={isMobile ? 1 : 2}

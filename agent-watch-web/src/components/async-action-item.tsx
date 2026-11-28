@@ -138,14 +138,10 @@ function copy(action: AsyncAction) {
             : action.engine === 'codex'
               ? 'Codex'
               : undefined
-        if (
-          engine === undefined ||
-          action.repo === undefined ||
-          action.repo.length === 0
-        ) {
-          return { title: 'Starting session', line: 'Starting session' }
-        }
-        const label = `Starting ${engine} in ${action.repo}…`
+        const repo = action.repo
+        const repoLabel =
+          repo !== undefined && repo.length > 0 ? ` in ${repo}` : ''
+        const label = `Starting ${engine ?? 'session'}${repoLabel}…`
         return { title: 'Starting session', line: label }
       }
       case 'launched':
