@@ -15,7 +15,6 @@ type NewSessionNavigationOptions = {
     sessionId: string,
     conversationOpen: boolean,
   ) => void
-  resetNewSession: () => void
   setCommandPaletteOpen: (isOpen: boolean) => void
   handOffSessionLaunch: () => boolean
   requestComposerFocus: (sessionId: string) => void
@@ -26,16 +25,13 @@ export function useNewSessionNavigation({
   closeMobileNav,
   navigate,
   replaceNewSessionWithSession,
-  resetNewSession,
   setCommandPaletteOpen,
   handOffSessionLaunch,
   requestComposerFocus,
 }: NewSessionNavigationOptions) {
   const openNewSession = useCallback(
     (mode: NewSessionMode) => {
-      if (!handOffSessionLaunch()) {
-        resetNewSession()
-      }
+      handOffSessionLaunch()
       setCommandPaletteOpen(false)
       closeMobileNav()
       navigate((current) => ({
@@ -50,34 +46,19 @@ export function useNewSessionNavigation({
         newSessionMode: mode,
       }))
     },
-    [
-      closeMobileNav,
-      handOffSessionLaunch,
-      navigate,
-      resetNewSession,
-      setCommandPaletteOpen,
-    ],
+    [closeMobileNav, handOffSessionLaunch, navigate, setCommandPaletteOpen],
   )
   const closeNewSession = useCallback(() => {
-    if (!handOffSessionLaunch()) {
-      resetNewSession()
-    }
+    handOffSessionLaunch()
     backFromNewSession()
-  }, [backFromNewSession, handOffSessionLaunch, resetNewSession])
+  }, [backFromNewSession, handOffSessionLaunch])
   const switchFromNewSessionToSession = useCallback(
     (sessionId: string, conversationOpen: boolean) => {
-      if (!handOffSessionLaunch()) {
-        resetNewSession()
-      }
+      handOffSessionLaunch()
       replaceNewSessionWithSession(sessionId, conversationOpen)
       requestComposerFocus(sessionId)
     },
-    [
-      handOffSessionLaunch,
-      replaceNewSessionWithSession,
-      requestComposerFocus,
-      resetNewSession,
-    ],
+    [handOffSessionLaunch, replaceNewSessionWithSession, requestComposerFocus],
   )
 
   return { closeNewSession, openNewSession, switchFromNewSessionToSession }

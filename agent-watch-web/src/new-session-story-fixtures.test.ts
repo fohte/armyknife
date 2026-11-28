@@ -46,6 +46,7 @@ export function createNewSessionStoryState(
     activeModelOption: exampleModelOptions.models[0],
     worktree: false,
     initialMessage: '',
+    restoredAt: null,
     skillSuggestions: [],
     isLoadingDirectories: false,
     error: null,
@@ -58,6 +59,7 @@ export function createNewSessionStoryState(
     setWorktree: () => undefined,
     setInitialMessage: () => undefined,
     start: () => undefined,
+    clearDraft: () => undefined,
     reset: () => undefined,
     ...overrides,
   }

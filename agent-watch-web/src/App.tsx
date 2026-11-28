@@ -425,7 +425,6 @@ function AppContent() {
       closeMobileNav,
       navigate,
       replaceNewSessionWithSession,
-      resetNewSession: newSession.reset,
       setCommandPaletteOpen,
       handOffSessionLaunch: handOff,
       requestComposerFocus,

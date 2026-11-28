@@ -34,6 +34,7 @@ function makeState(overrides: Partial<NewSessionState> = {}): NewSessionState {
     activeModelOption: exampleModelOptions.models[0],
     worktree: false,
     initialMessage: '',
+    restoredAt: null,
     skillSuggestions: [],
     isLoadingDirectories: false,
     error: null,
@@ -46,6 +47,7 @@ function makeState(overrides: Partial<NewSessionState> = {}): NewSessionState {
     setWorktree: () => undefined,
     setInitialMessage: () => undefined,
     start: () => undefined,
+    clearDraft: () => undefined,
     reset: () => undefined,
     ...overrides,
   }
@@ -134,41 +136,23 @@ it('requires a directory before the session can start', () => {
   ).toBe(true)
 })
 
-it('warns before leaving while the first message is unsent', () => {
-  renderForm(makeState({ initialMessage: 'An unsent first message' }))
-  const event = new Event('beforeunload', { cancelable: true })
-
-  act(() => {
-    window.dispatchEvent(event)
-  })
-
-  expect(event.defaultPrevented).toBe(true)
-})
-
-it('does not warn before leaving when the first message is empty', () => {
-  renderForm(makeState())
-  const event = new Event('beforeunload', { cancelable: true })
-
-  act(() => {
-    window.dispatchEvent(event)
-  })
-
-  expect(event.defaultPrevented).toBe(false)
-})
-
-it('does not warn before leaving after the first message is sent', () => {
+it('clears the restored draft from the form', async () => {
+  const clearDraft = vi.fn()
   renderForm(
-    makeState({ initialMessage: 'A sent first message' }),
-    vi.fn(),
-    true,
+    makeState({
+      restoredAt: '2026-05-06T12:03:00Z',
+      clearDraft,
+    }),
   )
-  const event = new Event('beforeunload', { cancelable: true })
-
-  act(() => {
-    window.dispatchEvent(event)
+  const clearButton = container.querySelector<HTMLButtonElement>(
+    '.new-session-restored-notice button',
+  )
+  if (clearButton === null) throw new Error('Expected the Clear button')
+  await act(async () => {
+    await userEvent.click(clearButton)
   })
 
-  expect(event.defaultPrevented).toBe(false)
+  expect(clearDraft.mock.calls).toEqual([[]])
 })
 
 it('suggests and inserts skills in the first message field', async () => {

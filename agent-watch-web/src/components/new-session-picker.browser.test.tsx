@@ -30,6 +30,8 @@ function PickerHarness({
   activeModelOption = exampleModelOptions.models[0],
   modelOptionsError = null,
   initialModelPickerOpen = false,
+  restoredAt = null,
+  clearDraft = () => undefined,
   now,
 }: {
   start: NewSessionState['start']
@@ -42,6 +44,8 @@ function PickerHarness({
   activeModelOption?: NewSessionState['activeModelOption']
   modelOptionsError?: NewSessionState['modelOptionsError']
   initialModelPickerOpen?: boolean
+  restoredAt?: NewSessionState['restoredAt']
+  clearDraft?: NewSessionState['clearDraft']
   now?: Date
 }) {
   const [selectedDirectory, setSelectedDirectory] = useState<
@@ -62,6 +66,7 @@ function PickerHarness({
     activeModelOption,
     worktree,
     initialMessage: '',
+    restoredAt,
     skillSuggestions: [],
     isLoadingDirectories: false,
     error: null,
@@ -74,6 +79,7 @@ function PickerHarness({
     setWorktree,
     setInitialMessage: () => undefined,
     start,
+    clearDraft,
     reset: () => undefined,
   }
   return (
@@ -141,6 +147,54 @@ it('shows the last-used time beside a recent directory title', () => {
       path: '/Users/example/work/scratch',
     },
   ])
+})
+
+it('clears a restored draft from the picker', async () => {
+  const clearDraft = vi.fn()
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <PickerHarness
+        start={() => undefined}
+        selectedDirectory={exampleSessionDirectories[0] ?? null}
+        restoredAt="2026-05-06T12:03:00Z"
+        clearDraft={clearDraft}
+      />,
+    )
+  })
+
+  await act(async () => {
+    await userEvent.click(requireButton('.new-session-restored-notice button'))
+  })
+
+  expect(clearDraft.mock.calls).toEqual([[]])
+})
+
+it('shows the restored notice below the directory search input', () => {
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <PickerHarness
+        start={() => undefined}
+        restoredAt="2026-05-06T12:03:00Z"
+      />,
+    )
+  })
+
+  const searchInput = container.querySelector<HTMLInputElement>(
+    '[aria-label="Search directories"]',
+  )
+  const notice = container.querySelector('.new-session-restored-notice')
+  const listbox = container.querySelector('[aria-label="Directories"]')
+  const snapshot = () => ({
+    noticeImmediatelyFollowsInput:
+      searchInput?.closest('label')?.nextElementSibling === notice,
+    noticePrecedesListbox: notice?.nextElementSibling === listbox,
+  })
+  expect(snapshot()).toEqual({
+    noticeImmediatelyFollowsInput: true,
+    noticePrecedesListbox: true,
+  })
 })
 
 it('launches Codex when Option+Enter is pressed after choosing a directory', async () => {
