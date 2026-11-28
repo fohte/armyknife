@@ -123,22 +123,17 @@ fn pane_ids_from_query(
     match parse_pane_ids(&output) {
         Ok(pane_ids) => Ok(pane_ids),
         Err(PaneIdsParseError::Empty) => Ok(HashSet::new()),
-        Err(error) => Err(error),
+        Err(PaneIdsParseError::InvalidPaneId) => {
+            tracing::warn!(
+                ?socket_path,
+                reason = "invalid pane ID",
+                "tmux list-panes output is untrusted; pane liveness is unknown"
+            );
+            Err(TmuxError::Internal(
+                "tmux returned an invalid pane ID".to_owned(),
+            ))
+        }
     }
-    .map_err(|error| {
-        let (reason, message) = match error {
-            PaneIdsParseError::Empty => ("empty output", "tmux returned no pane IDs"),
-            PaneIdsParseError::InvalidPaneId => {
-                ("invalid pane ID", "tmux returned an invalid pane ID")
-            }
-        };
-        tracing::warn!(
-            ?socket_path,
-            reason,
-            "tmux list-panes output is untrusted; pane liveness is unknown"
-        );
-        TmuxError::Internal(message.to_owned())
-    })
 }
 
 /// Returns whether a pane exists in its recorded server.
@@ -411,28 +406,25 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+    use crate::infra::tmux::CommandFailedError;
 
-    #[test]
-    fn missing_tmux_server_is_an_empty_pane_list() {
-        let error = TmuxError::CommandFailed(super::super::CommandFailedError {
+    #[rstest]
+    #[case::stopped_server(
+        Err(TmuxError::CommandFailed(CommandFailedError {
             command: "tmux".to_string(),
             args: vec!["list-panes".to_string()],
             message: "command exited with non-zero status".to_string(),
             stderr: Some("no server running on /fixture/tmux.sock".to_string()),
-        });
-
+        })),
+        Some("/fixture/tmux.sock")
+    )]
+    #[case::empty_listing(Ok(String::new()), Some("/fixture/tmux.sock"))]
+    fn empty_or_stopped_tmux_server_has_no_panes(
+        #[case] query: Result<String>,
+        #[case] socket_path: Option<&str>,
+    ) {
         assert_eq!(
-            pane_ids_from_query(Err(error), Some("/fixture/tmux.sock"))
-                .expect("a stopped server has no panes"),
-            HashSet::new(),
-        );
-    }
-
-    #[test]
-    fn empty_tmux_pane_listing_is_an_empty_pane_list() {
-        assert_eq!(
-            pane_ids_from_query(Ok(String::new()), Some("/fixture/tmux.sock"))
-                .expect("a successful empty listing has no panes"),
+            pane_ids_from_query(query, socket_path).expect("there are no live panes"),
             HashSet::new(),
         );
     }

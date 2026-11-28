@@ -2,14 +2,17 @@ use std::env;
 
 use anyhow::Context;
 
-use crate::commands::agent::types::HookEvent;
+use crate::commands::agent::store;
+use crate::commands::agent::types::{HookEvent, TmuxInfo};
 use crate::infra::tmux;
 
 const HOOK_INDEX: usize = 1000;
-const TMUX_HOOKS: [&str; 4] = [
+const TMUX_HOOKS: [&str; 6] = [
     "pane-exited",
     "pane-died",
     "after-kill-pane",
+    "window-unlinked",
+    "after-kill-window",
     "session-closed",
 ];
 const CLEANUP_ENVIRONMENT: [&str; 6] = [
@@ -21,21 +24,69 @@ const CLEANUP_ENVIRONMENT: [&str; 6] = [
     "CODEX_HOME",
 ];
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum TmuxTarget {
+    Current,
+    Recorded(Option<String>),
+}
+
 pub(super) fn should_configure(event: HookEvent, inside_tmux: bool, pane_resolved: bool) -> bool {
     event == HookEvent::SessionStart && (inside_tmux || pane_resolved)
 }
 
-pub(super) fn configure_current() -> anyhow::Result<()> {
-    configure_from_current_process(tmux::run_tmux)
+pub(super) fn configure_for_session_start(session_id: &str) {
+    if let Err(error) = store::cleanup_stale_sessions() {
+        tracing::warn!(
+            event = "agent.hook.tmux_cleanup_hooks.startup_cleanup_failed",
+            error = %error,
+            "failed to clean up stale sessions at SessionStart"
+        );
+    }
+
+    let result = configure_for_session_start_with(
+        session_id,
+        tmux::in_tmux(),
+        |session_id| Ok(store::load_session(session_id)?.and_then(|session| session.tmux_info)),
+        configure_from_current_process,
+    );
+    if let Err(error) = result {
+        tracing::warn!(
+            event = "agent.hook.tmux_cleanup_hooks.failed",
+            error = %error,
+            "failed to configure tmux cleanup hooks"
+        );
+    }
 }
 
-pub(super) fn configure_for_socket(socket_path: Option<&str>) -> anyhow::Result<()> {
-    configure_from_current_process(|args| tmux::run_tmux_for_socket(socket_path, args))
-}
-
-fn configure_from_current_process(
-    run_tmux: impl FnMut(&[&str]) -> tmux::Result<()>,
+fn configure_for_session_start_with(
+    session_id: &str,
+    inside_tmux: bool,
+    load_tmux_info: impl FnOnce(&str) -> anyhow::Result<Option<TmuxInfo>>,
+    configure_target: impl FnOnce(TmuxTarget) -> anyhow::Result<()>,
 ) -> anyhow::Result<()> {
+    let tmux_info = match load_tmux_info(session_id) {
+        Ok(tmux_info) => tmux_info,
+        Err(error) => {
+            tracing::warn!(
+                event = "agent.hook.tmux_cleanup_hooks.session_lookup_failed",
+                session_id,
+                error = %error,
+                "failed to load session for tmux cleanup hook setup"
+            );
+            None
+        }
+    };
+    if !should_configure(HookEvent::SessionStart, inside_tmux, tmux_info.is_some()) {
+        return Ok(());
+    }
+
+    let target = tmux_info.map_or(TmuxTarget::Current, |info| {
+        TmuxTarget::Recorded(info.socket_path)
+    });
+    configure_target(target)
+}
+
+fn configure_from_current_process(target: TmuxTarget) -> anyhow::Result<()> {
     let executable = env::current_exe().context("failed to resolve the armyknife executable")?;
     let executable = executable
         .to_str()
@@ -49,22 +100,42 @@ fn configure_from_current_process(
         .map(|(name, value)| (*name, value.as_str()))
         .collect::<Vec<_>>();
 
-    configure(executable, &environment, run_tmux)?;
+    configure(executable, &environment, target, run_tmux_target)?;
     Ok(())
 }
 
 fn configure(
     executable: &str,
     environment: &[(&str, &str)],
-    mut run_tmux: impl FnMut(&[&str]) -> tmux::Result<()>,
+    target: TmuxTarget,
+    mut run_tmux: impl FnMut(&TmuxTarget, &[&str]) -> tmux::Result<()>,
 ) -> tmux::Result<()> {
     let command = cleanup_command(executable, environment);
-    for hook in TMUX_HOOKS {
+    let mut args = Vec::with_capacity(TMUX_HOOKS.len() * 5);
+    for (index, hook) in TMUX_HOOKS.iter().enumerate() {
+        if index > 0 {
+            args.push(";".to_string());
+        }
         let indexed_hook = format!("{hook}[{HOOK_INDEX}]");
-        run_tmux(&["set-hook", "-g", &indexed_hook, &command])?;
+        args.extend([
+            "set-hook".to_string(),
+            "-g".to_string(),
+            indexed_hook,
+            command.clone(),
+        ]);
     }
 
-    Ok(())
+    let args = args.iter().map(String::as_str).collect::<Vec<_>>();
+    run_tmux(&target, &args)
+}
+
+fn run_tmux_target(target: &TmuxTarget, args: &[&str]) -> tmux::Result<()> {
+    match target {
+        TmuxTarget::Current => tmux::run_tmux(args),
+        TmuxTarget::Recorded(socket_path) => {
+            tmux::run_tmux_for_socket(socket_path.as_deref(), args)
+        }
+    }
 }
 
 fn cleanup_command(executable: &str, environment: &[(&str, &str)]) -> String {
@@ -80,7 +151,10 @@ fn cleanup_command(executable: &str, environment: &[(&str, &str)]) -> String {
         format!("{assignments} {executable} agent cleanup-stale-sessions")
     };
 
-    format!("run-shell -b {}", tmux_double_quote(&shell_command))
+    format!(
+        "run-shell -b {}",
+        tmux_double_quote(&format!("{shell_command} >/dev/null 2>&1"))
+    )
 }
 
 fn shell_quote(value: &str) -> String {
@@ -102,7 +176,9 @@ fn tmux_double_quote(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{configure, should_configure};
+    use super::{
+        TmuxTarget, cleanup_command, configure, configure_for_session_start_with, should_configure,
+    };
     use crate::commands::agent::types::HookEvent;
 
     #[test]
@@ -119,78 +195,95 @@ mod tests {
     }
 
     #[test]
-    fn configure_sets_each_global_cleanup_hook_at_the_fixed_index() {
+    fn daemon_session_start_configures_each_global_hook_on_the_recorded_socket() {
+        let tmux_info = crate::commands::agent::types::TmuxInfo {
+            session_name: "fixture-session".to_string(),
+            window_name: "fixture-window".to_string(),
+            window_index: 0,
+            pane_id: "%73".to_string(),
+            socket_path: Some("/fixture/tmux.sock".to_string()),
+        };
         let mut calls = Vec::new();
 
-        configure(
-            "/fixture/bin/a",
-            &[
-                ("PATH", "/fixture/bin:/usr/bin"),
-                ("XDG_CACHE_HOME", "/fixture/cache"),
-            ],
-            |args| {
-                calls.push(args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>());
+        configure_for_session_start_with(
+            "fixture-session",
+            false,
+            |_| Ok(Some(tmux_info)),
+            |target| {
+                configure(
+                    "/fixture/bin/a",
+                    &[
+                        ("PATH", "/fixture/bin:/usr/bin"),
+                        ("XDG_CACHE_HOME", "/fixture/cache"),
+                    ],
+                    target,
+                    |target, args| {
+                        calls.push((
+                            target.clone(),
+                            args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>(),
+                        ));
+                        Ok(())
+                    },
+                )?;
                 Ok(())
             },
         )
         .expect("tmux hook setup should succeed");
 
+        let expected_args = [
+            "set-hook",
+            "-g",
+            "pane-exited[1000]",
+            "run-shell -b \"PATH=/fixture/bin:/usr/bin XDG_CACHE_HOME=/fixture/cache /fixture/bin/a agent cleanup-stale-sessions >/dev/null 2>&1\"",
+            ";",
+            "set-hook",
+            "-g",
+            "pane-died[1000]",
+            "run-shell -b \"PATH=/fixture/bin:/usr/bin XDG_CACHE_HOME=/fixture/cache /fixture/bin/a agent cleanup-stale-sessions >/dev/null 2>&1\"",
+            ";",
+            "set-hook",
+            "-g",
+            "after-kill-pane[1000]",
+            "run-shell -b \"PATH=/fixture/bin:/usr/bin XDG_CACHE_HOME=/fixture/cache /fixture/bin/a agent cleanup-stale-sessions >/dev/null 2>&1\"",
+            ";",
+            "set-hook",
+            "-g",
+            "window-unlinked[1000]",
+            "run-shell -b \"PATH=/fixture/bin:/usr/bin XDG_CACHE_HOME=/fixture/cache /fixture/bin/a agent cleanup-stale-sessions >/dev/null 2>&1\"",
+            ";",
+            "set-hook",
+            "-g",
+            "after-kill-window[1000]",
+            "run-shell -b \"PATH=/fixture/bin:/usr/bin XDG_CACHE_HOME=/fixture/cache /fixture/bin/a agent cleanup-stale-sessions >/dev/null 2>&1\"",
+            ";",
+            "set-hook",
+            "-g",
+            "session-closed[1000]",
+            "run-shell -b \"PATH=/fixture/bin:/usr/bin XDG_CACHE_HOME=/fixture/cache /fixture/bin/a agent cleanup-stale-sessions >/dev/null 2>&1\"",
+        ]
+        .map(str::to_owned)
+        .to_vec();
+
         assert_eq!(
             calls,
-            vec![
-                vec![
-                    "set-hook",
-                    "-g",
-                    "pane-exited[1000]",
-                    "run-shell -b \"PATH=/fixture/bin:/usr/bin XDG_CACHE_HOME=/fixture/cache /fixture/bin/a agent cleanup-stale-sessions\"",
-                ],
-                vec![
-                    "set-hook",
-                    "-g",
-                    "pane-died[1000]",
-                    "run-shell -b \"PATH=/fixture/bin:/usr/bin XDG_CACHE_HOME=/fixture/cache /fixture/bin/a agent cleanup-stale-sessions\"",
-                ],
-                vec![
-                    "set-hook",
-                    "-g",
-                    "after-kill-pane[1000]",
-                    "run-shell -b \"PATH=/fixture/bin:/usr/bin XDG_CACHE_HOME=/fixture/cache /fixture/bin/a agent cleanup-stale-sessions\"",
-                ],
-                vec![
-                    "set-hook",
-                    "-g",
-                    "session-closed[1000]",
-                    "run-shell -b \"PATH=/fixture/bin:/usr/bin XDG_CACHE_HOME=/fixture/cache /fixture/bin/a agent cleanup-stale-sessions\"",
-                ],
-            ]
+            vec![(
+                TmuxTarget::Recorded(Some("/fixture/tmux.sock".to_string())),
+                expected_args,
+            )]
         );
     }
 
     #[test]
     fn cleanup_command_quotes_paths_for_the_shell_and_tmux() {
-        let mut calls = Vec::new();
-
-        configure(
-            "/fixture/bin/a path",
-            &[
-                ("HOME", "/fixture/home with space"),
-                ("XDG_CACHE_HOME", "/fixture/cache/#$data"),
-            ],
-            |args| {
-                calls.push(args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>());
-                Ok(())
-            },
-        )
-        .expect("tmux hook setup should succeed");
-
         assert_eq!(
-            calls[0],
-            vec![
-                "set-hook",
-                "-g",
-                "pane-exited[1000]",
-                "run-shell -b \"HOME='/fixture/home with space' XDG_CACHE_HOME='/fixture/cache/##\\$data' '/fixture/bin/a path' agent cleanup-stale-sessions\"",
-            ],
+            cleanup_command(
+                "/fixture/bin/a path",
+                &[
+                    ("HOME", "/fixture/home with space"),
+                    ("XDG_CACHE_HOME", "/fixture/cache/#$data"),
+                ],
+            ),
+            "run-shell -b \"HOME='/fixture/home with space' XDG_CACHE_HOME='/fixture/cache/##\\$data' '/fixture/bin/a path' agent cleanup-stale-sessions >/dev/null 2>&1\"",
         );
     }
 }
