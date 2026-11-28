@@ -1,6 +1,13 @@
 import '#components/async-action-item.css'
 
-import { AlertCircle, Check, Clock3, LoaderCircle, X } from 'lucide-react'
+import {
+  AlertCircle,
+  Check,
+  Clock3,
+  LoaderCircle,
+  Trash2,
+  X,
+} from 'lucide-react'
 
 import {
   type AsyncAction,
@@ -17,6 +24,8 @@ type AsyncActionItemProps = {
   onDetails?: () => void
   onDismiss?: () => void
   onCloseKeepWorktree?: () => void
+  onDiscardChanges?: () => void
+  onReviewDiscardAgain?: () => void
   onOpenInTerminal?: () => void
   onShowOutput?: () => void
   onOpenSession?: () => void
@@ -105,6 +114,29 @@ function copy(action: AsyncAction) {
         return action.kind === 'close'
           ? { title: 'Close failed', line: 'Close failed' }
           : { title: '', line: '' }
+      case 'deleting':
+        return action.kind === 'discard'
+          ? { title: 'Deleting worktree', line: 'Deleting worktree…' }
+          : { title: '', line: '' }
+      case 'deleted':
+        return action.kind === 'discard'
+          ? {
+              title: 'Closed session and deleted worktree',
+              line: 'Closed session and deleted worktree',
+            }
+          : { title: '', line: '' }
+      case 'deleteChanged':
+      case 'deleteBlocked':
+        return action.kind === 'discard'
+          ? {
+              title: 'Did not delete worktree',
+              line: 'Did not delete worktree',
+            }
+          : { title: '', line: '' }
+      case 'deleteFailed':
+        return action.kind === 'discard'
+          ? { title: 'Delete failed', line: 'Delete failed' }
+          : { title: '', line: '' }
       case 'rewinding':
         return action.kind === 'rewind'
           ? { title: 'Rewinding session', line: 'Rewinding session…' }
@@ -144,6 +176,7 @@ function copy(action: AsyncAction) {
   const icon =
     action.status === 'merging' ||
     action.status === 'closing' ||
+    action.status === 'deleting' ||
     action.status === 'rewinding' ||
     action.status === 'runningCommand' ||
     action.status === 'reviewDocumentActionRunning' ||
@@ -151,6 +184,7 @@ function copy(action: AsyncAction) {
       ? 'running'
       : action.status === 'merged' ||
           action.status === 'closed' ||
+          action.status === 'deleted' ||
           action.status === 'rewound' ||
           action.status === 'ranCommand' ||
           action.status === 'reviewDocumentActionSucceeded' ||
@@ -172,6 +206,8 @@ export function AsyncActionItem({
   onDetails,
   onDismiss,
   onCloseKeepWorktree,
+  onDiscardChanges,
+  onReviewDiscardAgain,
   onOpenInTerminal,
   onShowOutput,
   onOpenSession,
@@ -193,13 +229,30 @@ export function AsyncActionItem({
   const isRunning = text.icon === 'running'
   const isQueue = text.icon === 'queued'
   const label = form === 'line' ? text.line : text.title
-  const hasCloseChecks = action.kind === 'close' && action.checks !== undefined
+  const hasCloseChecks =
+    (action.kind === 'close' || action.kind === 'discard') &&
+    action.checks !== undefined
+  const closeFailedWithChecks =
+    action.kind === 'close' && action.status === 'closeFailed' && hasCloseChecks
+  const canDiscard =
+    closeFailedWithChecks &&
+    action.discardable === true &&
+    action.checks?.commitInspectionUnavailable === false
+  const showDiscardControls = closeFailedWithChecks && canDiscard
+  const discardChanged =
+    action.kind === 'discard' && action.status === 'deleteChanged'
+  const discardBlocked =
+    action.kind === 'discard' && action.status === 'deleteBlocked'
+  const discardFailed =
+    action.kind === 'discard' && action.status === 'deleteFailed'
   const canRetry = action.kind !== 'rewind' && action.retryable !== false
   const canShowCommandOutput =
     action.kind === 'command' &&
     (action.status === 'commandFailed' || action.status === 'commandTimedOut')
   const closeSummary =
-    action.kind === 'close' && action.checks !== undefined
+    action.kind === 'close' &&
+    action.status === 'closeFailed' &&
+    action.checks !== undefined
       ? closeFailureSummary(action.checks)
       : undefined
   const launchInitialMessage = action.initialMessage?.split(/\r?\n/u)[0]
@@ -250,10 +303,11 @@ export function AsyncActionItem({
         {action.message !== undefined ? <span>{action.message}</span> : null}
         {closeSummary !== undefined && form !== 'row' ? (
           <span className="async-action-close-summary">{closeSummary}</span>
-        ) : action.error !== undefined && !hasCloseChecks ? (
+        ) : action.error !== undefined &&
+          (!hasCloseChecks || action.status === 'deleteFailed') ? (
           <span className="async-action-error">{action.error}</span>
         ) : null}
-        {form === 'row' && action.checks !== undefined ? (
+        {form === 'row' && hasCloseChecks ? (
           <CloseChecksList checks={action.checks} />
         ) : null}
         {canShowCommandOutput && form === 'toast' ? (
@@ -263,9 +317,113 @@ export function AsyncActionItem({
             </button>
           </div>
         ) : null}
+        {showDiscardControls && form !== 'line' ? (
+          <>
+            <span className="async-action-control-caption">Close anyway</span>
+            <div className="async-action-controls async-action-controls--close-options">
+              <button type="button" onClick={onCloseKeepWorktree}>
+                Close and keep worktree
+              </button>
+              <button
+                className="async-action-discard"
+                type="button"
+                aria-haspopup="dialog"
+                onClick={onDiscardChanges}
+              >
+                <Trash2 aria-hidden="true" size={13} />
+                Discard changes…
+              </button>
+            </div>
+            <div className="async-action-controls async-action-controls--close-secondary">
+              {canRetry ? (
+                <button type="button" onClick={onRetry}>
+                  Retry
+                </button>
+              ) : null}
+              <button
+                type="button"
+                onClick={form === 'row' ? onOpenInTerminal : onDetails}
+              >
+                {form === 'row' ? 'Open in terminal' : 'Details'}
+              </button>
+            </div>
+          </>
+        ) : null}
+        {showDiscardControls && form === 'line' ? (
+          <>
+            <div className="async-action-controls async-action-controls--close-options">
+              <button type="button" onClick={onCloseKeepWorktree}>
+                Close and keep worktree
+              </button>
+              <button
+                className="async-action-discard"
+                type="button"
+                aria-haspopup="dialog"
+                onClick={onDiscardChanges}
+              >
+                <Trash2 aria-hidden="true" size={13} />
+                Discard changes…
+              </button>
+            </div>
+            <div className="async-action-controls async-action-controls--close-secondary">
+              {canRetry ? (
+                <button type="button" onClick={onRetry}>
+                  Retry
+                </button>
+              ) : null}
+              <button type="button" onClick={onDetails}>
+                Details
+              </button>
+            </div>
+          </>
+        ) : null}
         {isFailure &&
         !canShowCommandOutput &&
         form === 'toast' &&
+        !showDiscardControls &&
+        (discardChanged || discardBlocked || discardFailed) ? (
+          <div className="async-action-controls async-action-controls--discard">
+            {discardChanged ? (
+              <>
+                <button type="button" onClick={onReviewDiscardAgain}>
+                  Review again
+                </button>
+                <button type="button" onClick={onCloseKeepWorktree}>
+                  Close and keep worktree
+                </button>
+              </>
+            ) : discardBlocked ? (
+              <>
+                <button type="button" onClick={onRetry}>
+                  Retry
+                </button>
+                <button
+                  className="async-action-open-terminal"
+                  type="button"
+                  onClick={onOpenInTerminal}
+                >
+                  Open in terminal
+                </button>
+              </>
+            ) : (
+              <>
+                <button type="button" onClick={onRetry}>
+                  Retry
+                </button>
+                <button type="button" onClick={onDetails}>
+                  Details
+                </button>
+              </>
+            )}
+          </div>
+        ) : null}
+        {isFailure &&
+        !canShowCommandOutput &&
+        form === 'toast' &&
+        !showDiscardControls &&
+        !discardChanged &&
+        !discardBlocked &&
+        !discardFailed &&
         (canRetry || hasCloseChecks) ? (
           <div className="async-action-controls">
             {hasCloseChecks ? (
@@ -307,6 +465,48 @@ export function AsyncActionItem({
         {isFailure &&
         !canShowCommandOutput &&
         form === 'row' &&
+        !showDiscardControls &&
+        (discardChanged || discardBlocked || discardFailed) ? (
+          <div className="async-action-controls async-action-controls--discard">
+            {discardChanged ? (
+              <>
+                <button type="button" onClick={onReviewDiscardAgain}>
+                  Review again
+                </button>
+                <button type="button" onClick={onCloseKeepWorktree}>
+                  Close and keep worktree
+                </button>
+              </>
+            ) : discardBlocked ? (
+              <>
+                <button type="button" onClick={onRetry}>
+                  Retry
+                </button>
+                <button
+                  className="async-action-open-terminal"
+                  type="button"
+                  onClick={onOpenInTerminal}
+                >
+                  Open in terminal
+                </button>
+                <button type="button" onClick={onCloseKeepWorktree}>
+                  Close and keep worktree
+                </button>
+              </>
+            ) : (
+              <button type="button" onClick={onRetry}>
+                Retry
+              </button>
+            )}
+          </div>
+        ) : null}
+        {isFailure &&
+        !canShowCommandOutput &&
+        form === 'row' &&
+        !showDiscardControls &&
+        !discardChanged &&
+        !discardBlocked &&
+        !discardFailed &&
         (canRetry || hasCloseChecks) ? (
           <div className="async-action-controls">
             {hasCloseChecks ? (
@@ -333,6 +533,32 @@ export function AsyncActionItem({
         {isFailure &&
         !canShowCommandOutput &&
         form === 'line' &&
+        !showDiscardControls &&
+        (discardChanged || discardBlocked || discardFailed) ? (
+          <div className="async-action-controls async-action-controls--discard">
+            {discardChanged ? (
+              <>
+                <button type="button" onClick={onReviewDiscardAgain}>
+                  Review again
+                </button>
+                <button type="button" onClick={onCloseKeepWorktree}>
+                  Close and keep worktree
+                </button>
+              </>
+            ) : (
+              <button type="button" onClick={onRetry}>
+                Retry
+              </button>
+            )}
+          </div>
+        ) : null}
+        {isFailure &&
+        !canShowCommandOutput &&
+        form === 'line' &&
+        !showDiscardControls &&
+        !discardChanged &&
+        !discardBlocked &&
+        !discardFailed &&
         (canRetry || hasCloseChecks) ? (
           <div className="async-action-controls">
             {hasCloseChecks ? (

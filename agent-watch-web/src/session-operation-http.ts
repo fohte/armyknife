@@ -93,6 +93,9 @@ function requestFor(operation: SessionOperation) {
         body: {
           keepWorktree: operation.keepWorktree,
           ...(operation.stopAndClose === true ? { stopAndClose: true } : {}),
+          ...(operation.discard === undefined
+            ? {}
+            : { discard: operation.discard }),
         },
       }
     case 'focus':

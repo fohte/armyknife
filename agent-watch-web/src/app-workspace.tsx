@@ -13,6 +13,7 @@ import { NewSessionForm } from '#components/new-session-form'
 import { NewSessionPicker } from '#components/new-session-picker'
 import { ResizableColumns } from '#components/resizable-columns'
 import { SessionCloseConfirmation } from '#components/session-close-confirmation'
+import { SessionDiscardConfirmation } from '#components/session-discard-confirmation'
 import { UpdateNotice } from '#components/update-notice'
 import type { InboxSort } from '#inbox-sort'
 import type { useSessionHistory } from '#session-history'
@@ -21,6 +22,7 @@ import type { SessionOperation } from '#session-operations'
 import type { Session } from '#types'
 import type { useNewSession } from '#use-new-session'
 import type { useSavedInboxViews } from '#use-saved-inbox-views'
+import type { SessionDiscardConfirmationState } from '#use-session-close'
 
 type AppWorkspaceState = {
   isMobile: boolean
@@ -63,6 +65,7 @@ type AppWorkspaceState = {
   workTypeNavLabels: Readonly<Record<string, string>>
   pendingFocusSessionId: string | null
   closeConfirmationSession: Session | undefined
+  discardConfirmation: SessionDiscardConfirmationState | undefined
 }
 
 type AppWorkspaceActions = {
@@ -98,6 +101,8 @@ type AppWorkspaceActions = {
   requestCloseSession: (id: string) => void
   cancelCloseConfirmation: () => void
   confirmCloseSession: (id: string) => void
+  cancelDiscardConfirmation: () => void
+  confirmDiscardChanges: () => void
   onLater: (id: string) => void
   closeLater: () => void
   laterSubmissionInFlight: { current: boolean }
@@ -461,6 +466,19 @@ export function AppWorkspace({
             onConfirm={() => {
               actions.confirmCloseSession(closeConfirmationSession.id)
             }}
+          />
+        )}
+        {state.discardConfirmation === undefined ? null : (
+          <SessionDiscardConfirmation
+            sessionName={state.discardConfirmation.sessionName}
+            branchName={state.discardConfirmation.branchName}
+            worktreePath={state.discardConfirmation.worktreePath}
+            changes={state.discardConfirmation.changes}
+            commits={state.discardConfirmation.commits}
+            reviewAgain={state.discardConfirmation.reviewAgain}
+            mobile={state.isMobile}
+            onCancel={actions.cancelDiscardConfirmation}
+            onDiscard={actions.confirmDiscardChanges}
           />
         )}
       </div>

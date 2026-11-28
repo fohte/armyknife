@@ -65,6 +65,8 @@ type AsyncActionFeedbackValue = {
   openActivity: (actionId?: number, anchor?: HTMLElement) => void
   closeActivity: () => void
   closeWithWorktree: (id: number) => void
+  discardChanges: (id: number) => void
+  reviewDiscardAgain: (id: number) => void
   openInTerminal: (id: number) => void
   openSession: (id: number) => void
 }
@@ -106,6 +108,12 @@ export function AsyncActionFeedbackProvider({
     new Map<number, (retry: () => void, actionId: number) => void>(),
   )
   const closeWithWorktreeHandlers = useRef(new Map<number, () => void>())
+  const discardChangesHandlers = useRef(
+    new Map<number, (action: AsyncAction) => void>(),
+  )
+  const reviewDiscardAgainHandlers = useRef(
+    new Map<number, (action: AsyncAction) => void>(),
+  )
   const openInTerminalHandlers = useRef(new Map<number, () => void>())
   const openSessionHandlers = useRef(new Map<number, () => void>())
   const timers = useRef(new Map<number, ReturnType<typeof setTimeout>>())
@@ -181,6 +189,7 @@ export function AsyncActionFeedbackProvider({
         outcome.status === 'alreadyMerged' ||
         outcome.status === 'queued' ||
         outcome.status === 'closed' ||
+        outcome.status === 'deleted' ||
         outcome.status === 'rewound' ||
         outcome.status === 'ranCommand' ||
         outcome.status === 'reviewDocumentActionSucceeded' ||
@@ -205,6 +214,12 @@ export function AsyncActionFeedbackProvider({
       if (options.onCloseKeepWorktree !== undefined) {
         closeWithWorktreeHandlers.current.set(id, options.onCloseKeepWorktree)
       }
+      if (options.onDiscardChanges !== undefined) {
+        discardChangesHandlers.current.set(id, options.onDiscardChanges)
+      }
+      if (options.onReviewDiscardAgain !== undefined) {
+        reviewDiscardAgainHandlers.current.set(id, options.onReviewDiscardAgain)
+      }
       if (options.onOpenInTerminal !== undefined) {
         openInTerminalHandlers.current.set(id, options.onOpenInTerminal)
       }
@@ -225,6 +240,7 @@ export function AsyncActionFeedbackProvider({
             ? {}
             : { initialMessage: options.initialMessage }),
           ...(options.repo === undefined ? {} : { repo: options.repo }),
+          ...(options.discardable === true ? { discardable: true } : {}),
           ...(options.reviewDocumentAction === undefined
             ? {}
             : { reviewDocumentAction: options.reviewDocumentAction }),
@@ -351,6 +367,8 @@ export function AsyncActionFeedbackProvider({
       timers.current.delete(id)
       retryHandlers.current.delete(id)
       closeWithWorktreeHandlers.current.delete(id)
+      discardChangesHandlers.current.delete(id)
+      reviewDiscardAgainHandlers.current.delete(id)
       openInTerminalHandlers.current.delete(id)
       openSessionHandlers.current.delete(id)
     }
@@ -382,6 +400,26 @@ export function AsyncActionFeedbackProvider({
   const closeWithWorktree = useCallback((id: number) => {
     closeWithWorktreeHandlers.current.get(id)?.()
   }, [])
+
+  const discardChanges = useCallback(
+    (id: number) => {
+      const action = actions.find((candidate) => candidate.id === id)
+      if (action !== undefined) {
+        discardChangesHandlers.current.get(id)?.(action)
+      }
+    },
+    [actions],
+  )
+
+  const reviewDiscardAgain = useCallback(
+    (id: number) => {
+      const action = actions.find((candidate) => candidate.id === id)
+      if (action !== undefined) {
+        reviewDiscardAgainHandlers.current.get(id)?.(action)
+      }
+    },
+    [actions],
+  )
 
   const openInTerminal = useCallback((id: number) => {
     openInTerminalHandlers.current.get(id)?.()
@@ -426,6 +464,8 @@ export function AsyncActionFeedbackProvider({
         openActivity,
         closeActivity,
         closeWithWorktree,
+        discardChanges,
+        reviewDiscardAgain,
         openInTerminal,
         openSession,
       }}
@@ -445,6 +485,8 @@ export function AsyncActionFeedbackProvider({
         openActivity={openActivity}
         closeActivity={closeActivity}
         closeWithWorktree={closeWithWorktree}
+        discardChanges={discardChanges}
+        reviewDiscardAgain={reviewDiscardAgain}
         openInTerminal={openInTerminal}
         openSession={openSession}
         showCommandOutput={requestCommandOutput}

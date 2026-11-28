@@ -8,6 +8,7 @@ import {
   isSessionOperationConfirmed,
   requiresStateConfirmation,
   type SessionOperation,
+  type SessionOperationError,
   sessionOperationKey,
   submitSessionOperation,
 } from '#session-operations'
@@ -143,6 +144,32 @@ const requests: {
     },
     path: 'close',
     body: { keepWorktree: false },
+  },
+  {
+    name: 'discard a confirmed worktree snapshot while closing a session',
+    operation: {
+      type: 'close',
+      sessionId: 'test-session',
+      keepWorktree: false,
+      stopAndClose: true,
+      discard: {
+        path: '/workspace/sample-worktree',
+        branch: 'feature/sample-change',
+        changes: [{ status: 'M', path: 'src/sample.ts' }],
+        commits: ['sample-sha'],
+      },
+    },
+    path: 'close',
+    body: {
+      keepWorktree: false,
+      stopAndClose: true,
+      discard: {
+        path: '/workspace/sample-worktree',
+        branch: 'feature/sample-change',
+        changes: [{ status: 'M', path: 'src/sample.ts' }],
+        commits: ['sample-sha'],
+      },
+    },
   },
   {
     name: 'focus terminal',
@@ -1009,6 +1036,88 @@ it.each(requests.filter(({ response }) => response !== undefined))(
     expect(actual).toEqual(testCase.response)
   },
 )
+
+it('returns current close checks when a confirmed discard no longer matches', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn<typeof fetch>().mockResolvedValue(
+      Response.json(
+        {
+          error: 'The worktree changed after confirmation.',
+          code: 'close_checks_changed',
+          checks: {
+            path: '/workspace/sample-worktree',
+            files: ['src/sample.ts', 'tmp/new-output.log'],
+            changes: [
+              { status: 'M', path: 'src/sample.ts' },
+              { status: '??', path: 'tmp/new-output.log' },
+            ],
+            commits: [
+              { sha: 'sample-sha', subject: 'add sample behavior' },
+              { sha: 'new-sample-sha', subject: 'add another sample behavior' },
+            ],
+            commitInspectionUnavailable: false,
+            branch: 'feature/sample-change',
+            merged: true,
+            reason: null,
+            processes: [],
+            processInspectionUnavailable: false,
+          },
+        },
+        { status: 409 },
+      ),
+    ),
+  )
+
+  const result = await submitSessionOperation({
+    type: 'close',
+    sessionId: session.id,
+    keepWorktree: false,
+    stopAndClose: true,
+    discard: {
+      path: '/workspace/sample-worktree',
+      branch: 'feature/sample-change',
+      changes: [{ status: 'M', path: 'src/sample.ts' }],
+      commits: ['sample-sha'],
+    },
+  })
+  const actual = result.match(
+    () => ({ type: 'success' as const }),
+    (error) => {
+      const operationError = error as SessionOperationError
+      return {
+        type: 'error' as const,
+        message: operationError.message,
+        code: operationError.code,
+        checks: operationError.checks,
+      }
+    },
+  )
+
+  expect(actual).toEqual({
+    type: 'error',
+    message: 'The worktree changed after confirmation.',
+    code: 'close_checks_changed',
+    checks: {
+      path: '/workspace/sample-worktree',
+      files: ['src/sample.ts', 'tmp/new-output.log'],
+      changes: [
+        { status: 'M', path: 'src/sample.ts' },
+        { status: '??', path: 'tmp/new-output.log' },
+      ],
+      commits: [
+        { sha: 'sample-sha', subject: 'add sample behavior' },
+        { sha: 'new-sample-sha', subject: 'add another sample behavior' },
+      ],
+      commitInspectionUnavailable: false,
+      branch: 'feature/sample-change',
+      merged: true,
+      reason: null,
+      processes: [],
+      processInspectionUnavailable: false,
+    },
+  })
+})
 
 it('returns a direct review action failure with its updated revision', async () => {
   const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(

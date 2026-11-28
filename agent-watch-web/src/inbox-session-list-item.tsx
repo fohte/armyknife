@@ -56,7 +56,9 @@ export function InboxSessionListItem({
   const suppressClick = useRef(false)
   const feedback = useOptionalAsyncActionFeedback()
   const closeAction = feedback?.actions.find(
-    (action) => action.kind === 'close' && action.sessionId === session.id,
+    (action) =>
+      (action.kind === 'close' || action.kind === 'discard') &&
+      action.sessionId === session.id,
   )
   const canShowActions =
     isMobile &&
@@ -249,6 +251,12 @@ export function InboxSessionListItem({
           onCloseKeepWorktree={() =>
             feedback?.closeWithWorktree(closeAction.id)
           }
+          onDiscardChanges={() => feedback?.discardChanges(closeAction.id)}
+          onReviewDiscardAgain={() =>
+            feedback?.reviewDiscardAgain(closeAction.id)
+          }
+          onOpenInTerminal={() => feedback?.openInTerminal(closeAction.id)}
+          onDetails={() => feedback?.openActivity(closeAction.id)}
           onRetry={() => feedback?.retry(closeAction.id)}
         />
       )}

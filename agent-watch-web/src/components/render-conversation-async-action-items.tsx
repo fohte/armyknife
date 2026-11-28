@@ -23,6 +23,18 @@ function renderConversationAsyncActionItem({
       onCloseKeepWorktree={() => {
         feedback.closeWithWorktree(action.id)
       }}
+      onDiscardChanges={() => {
+        feedback.discardChanges(action.id)
+      }}
+      onReviewDiscardAgain={() => {
+        feedback.reviewDiscardAgain(action.id)
+      }}
+      onOpenInTerminal={() => {
+        feedback.openInTerminal(action.id)
+      }}
+      onDetails={() => {
+        feedback.openActivity(action.id)
+      }}
       onRetry={() => {
         feedback.retry(action.id)
       }}

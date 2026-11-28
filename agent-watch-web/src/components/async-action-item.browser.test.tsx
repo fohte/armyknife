@@ -3,7 +3,7 @@ import '#index.css'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { page } from 'vitest/browser'
+import { page, userEvent } from 'vitest/browser'
 
 import type { AsyncAction } from '#async-action-feedback'
 import { AsyncActionItem } from '#components/async-action-item'
@@ -14,6 +14,7 @@ let root: Root | null = null
 const failedCloseAction: AsyncAction = {
   id: 1,
   kind: 'close',
+  discardable: true,
   sessionId: 'example-close-session',
   sessionTitle: 'Review the notification route',
   status: 'closeFailed',
@@ -62,7 +63,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-it('keeps close failure controls compact on desktop and unchanged on phone', async () => {
+it('keeps discard and close failure controls aligned on desktop and phone', async () => {
   await page.viewport(1440, 900)
   container.style.width = '400px'
   root = createRoot(container)
@@ -73,43 +74,53 @@ it('keeps close failure controls compact on desktop and unchanged on phone', asy
         form="row"
         onRetry={() => undefined}
         onCloseKeepWorktree={() => undefined}
+        onDiscardChanges={() => undefined}
         onOpenInTerminal={() => undefined}
       />,
     )
   })
 
   const desktop = () => {
-    const controls = container.querySelector<HTMLElement>(
-      '.async-action-controls',
+    const options = container.querySelector<HTMLElement>(
+      '.async-action-controls--close-options',
+    )
+    const secondary = container.querySelector<HTMLElement>(
+      '.async-action-controls--close-secondary',
     )
     const buttons = Array.from(
       container.querySelectorAll<HTMLButtonElement>(
-        '.async-action-controls button',
+        '.async-action-controls--close-options button, .async-action-controls--close-secondary button',
       ),
     )
-    const [keepButton, retryButton, terminalButton] = buttons
+    const [keepButton, discardButton, retryButton, terminalButton] = buttons
     if (
-      controls === null ||
-      buttons.length !== 3 ||
+      options === null ||
+      secondary === null ||
+      buttons.length !== 4 ||
       keepButton === undefined ||
+      discardButton === undefined ||
       retryButton === undefined ||
       terminalButton === undefined
     ) {
       throw new Error('The close failure controls are missing')
     }
-    const controlsRect = controls.getBoundingClientRect()
     const keep = keepButton.getBoundingClientRect()
+    const discard = discardButton.getBoundingClientRect()
     const retry = retryButton.getBoundingClientRect()
     const terminal = terminalButton.getBoundingClientRect()
     return {
-      keepAndRetryShareRow: Math.abs(keep.y - retry.y) < 1,
-      terminalIsBelow: terminal.y > retry.bottom,
-      buttonsUseTextWidths: [keep, retry, terminal].every(
-        (rect) => rect.width < controlsRect.width,
+      discardSharesRowWithKeep: Math.abs(keep.y - discard.y) < 1,
+      retrySharesRowWithDetails: Math.abs(retry.y - terminal.y) < 1,
+      buttonsUseTextWidths: [keep, discard, retry, terminal].every(
+        (rect) =>
+          rect.width <
+          (rect === keep || rect === discard
+            ? options.getBoundingClientRect().width
+            : secondary.getBoundingClientRect().width),
       ),
-      buttonsAlignLeft:
-        Math.abs(keep.x - controlsRect.x) < 1 &&
-        Math.abs(terminal.x - controlsRect.x) < 1,
+      bothGroupsAlignLeft:
+        Math.abs(keep.x - options.getBoundingClientRect().x) < 1 &&
+        Math.abs(retry.x - secondary.getBoundingClientRect().x) < 1,
     }
   }
 
@@ -117,33 +128,38 @@ it('keeps close failure controls compact on desktop and unchanged on phone', asy
   await page.viewport(390, 844)
   container.style.width = '390px'
   const phoneLayout = () => {
-    const controls = container.querySelector<HTMLElement>(
-      '.async-action-controls',
+    const options = container.querySelector<HTMLElement>(
+      '.async-action-controls--close-options',
+    )
+    const secondary = container.querySelector<HTMLElement>(
+      '.async-action-controls--close-secondary',
     )
     const buttons = Array.from(
       container.querySelectorAll<HTMLButtonElement>(
-        '.async-action-controls button',
+        '.async-action-controls--close-options button, .async-action-controls--close-secondary button',
       ),
     )
-    const [keepButton, retryButton, terminalButton] = buttons
+    const [keepButton, discardButton, retryButton, terminalButton] = buttons
     if (
-      controls === null ||
-      buttons.length !== 3 ||
+      options === null ||
+      secondary === null ||
+      buttons.length !== 4 ||
       keepButton === undefined ||
+      discardButton === undefined ||
       retryButton === undefined ||
       terminalButton === undefined
     ) {
       throw new Error('The phone close failure controls are missing')
     }
-    const controlsRect = controls.getBoundingClientRect()
     const keep = keepButton.getBoundingClientRect()
+    const discard = discardButton.getBoundingClientRect()
     const retry = retryButton.getBoundingClientRect()
     const terminal = terminalButton.getBoundingClientRect()
     return {
-      keepUsesFullRow: Math.abs(keep.width - controlsRect.width) < 1,
+      discardAndKeepShareRow: Math.abs(keep.y - discard.y) < 1,
       retryAndTerminalShareRow: Math.abs(retry.y - terminal.y) < 1,
-      keepIsAboveActions: retry.y > keep.bottom,
-      buttonsAre44pxTall: [keep, retry, terminal].every(
+      secondaryIsBelowOptions: retry.y > keep.bottom,
+      buttonsAre44pxTall: [keep, discard, retry, terminal].every(
         (rect) => rect.height === 44,
       ),
     }
@@ -152,19 +168,43 @@ it('keeps close failure controls compact on desktop and unchanged on phone', asy
   const snapshot = () => ({ desktop: desktopLayout, phone: phoneLayout() })
   const expected = {
     desktop: {
-      keepAndRetryShareRow: true,
-      terminalIsBelow: true,
+      discardSharesRowWithKeep: true,
+      retrySharesRowWithDetails: true,
       buttonsUseTextWidths: true,
-      buttonsAlignLeft: true,
+      bothGroupsAlignLeft: true,
     },
     phone: {
-      keepUsesFullRow: true,
+      discardAndKeepShareRow: true,
       retryAndTerminalShareRow: true,
-      keepIsAboveActions: true,
+      secondaryIsBelowOptions: true,
       buttonsAre44pxTall: true,
     },
   }
   expect(snapshot()).toEqual(expected)
+})
+
+it('opens the discard confirmation from a close failure', async () => {
+  const onDiscardChanges = vi.fn()
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <AsyncActionItem
+        action={failedCloseAction}
+        form="toast"
+        onDiscardChanges={onDiscardChanges}
+      />,
+    )
+  })
+
+  const discardButton = Array.from(container.querySelectorAll('button')).find(
+    (button) => button.textContent === 'Discard changes…',
+  )
+  if (discardButton === undefined) {
+    throw new Error('Expected the discard action')
+  }
+  await userEvent.click(discardButton)
+
+  expect(onDiscardChanges.mock.calls).toEqual([[]])
 })
 
 it('shows merge failure detail and Retry as the desktop design does', async () => {

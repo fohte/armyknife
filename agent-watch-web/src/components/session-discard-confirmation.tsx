@@ -18,7 +18,7 @@ type DiscardCommit = {
 
 type SessionDiscardConfirmationProps = {
   sessionName: string
-  branchName: string
+  branchName: string | null
   worktreePath: string
   changes: readonly DiscardFileChange[]
   commits: readonly DiscardCommit[]
@@ -79,7 +79,9 @@ export function SessionDiscardConfirmation({
     ? newItems.length > 0
       ? `Nothing was deleted: ${newItems} appeared after you confirmed. Discarding deletes these too.`
       : 'Nothing was deleted. Review the current changes before discarding them.'
-    : `Deletes the worktree and the local branch ${branchName}. Changes that are not saved elsewhere will be lost.`
+    : `Deletes the worktree${
+        branchName === null ? '' : ` and the local branch ${branchName}`
+      }. Changes that are not saved elsewhere will be lost.`
 
   return (
     <ConfirmDialog
