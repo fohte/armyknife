@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.998](https://github.com/fohte/armyknife/compare/v0.1.997...v0.1.998) (2026-11-28)
+
+
+### Features
+
+* **agent:** recover sessions after tmux exits ([#2359](https://github.com/fohte/armyknife/issues/2359)) ([6ef4b38](https://github.com/fohte/armyknife/commit/6ef4b38eb209c06fdf5e5c85a28581f84063efaa))
+
 ## [0.1.997](https://github.com/fohte/armyknife/compare/v0.1.996...v0.1.997) (2026-11-28)
 
 
