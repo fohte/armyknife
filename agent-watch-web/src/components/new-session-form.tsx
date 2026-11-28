@@ -251,7 +251,7 @@ export function NewSessionForm({
                 </span>
                 <button
                   className="new-session-start"
-                  disabled={selectedDirectory === null || launchPending}
+                  disabled={selectedDirectory === null}
                   onClick={() => {
                     state.start(onStart)
                   }}

@@ -146,7 +146,7 @@ function copy(action: AsyncAction) {
           return { title: 'Starting session', line: 'Starting session' }
         }
         const label = `Starting ${engine} in ${action.repo}…`
-        return { title: label, line: label }
+        return { title: 'Starting session', line: label }
       }
       case 'launched':
         return { title: 'Session started', line: 'Session started' }

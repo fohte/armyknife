@@ -176,47 +176,55 @@ it('does not warn before leaving after the first message is sent', () => {
   expect(event.defaultPrevented).toBe(false)
 })
 
-it('shows the sent first message and reply field while the session starts', () => {
-  const state = makeState({
-    selectedDirectory: exampleSessionDirectories[0] ?? null,
-    initialMessage: 'A sent first message',
-  })
-  const pendingLaunch: PendingLaunchView = {
-    request: {
-      directory: exampleSessionDirectories[0]?.path ?? '',
-      engine: 'claude',
-      worktree: false,
+it.each([
+  { engine: 'claude' as const, engineLabel: 'Claude Code' },
+  { engine: 'codex' as const, engineLabel: 'Codex' },
+])(
+  'shows the first message while the $engineLabel session starts',
+  ({ engine, engineLabel }) => {
+    const state = makeState({
+      selectedDirectory: exampleSessionDirectories[0] ?? null,
       initialMessage: 'A sent first message',
-    },
-    startedAt: new Date('2026-05-06T12:03:00Z').getTime(),
-  }
-  renderForm(state, vi.fn(), pendingLaunch)
+    })
+    const pendingLaunch: PendingLaunchView = {
+      request: {
+        directory: exampleSessionDirectories[0]?.path ?? '',
+        engine,
+        worktree: false,
+        initialMessage: 'A sent first message',
+      },
+      startedAt: new Date('2026-05-06T12:03:00Z').getTime(),
+    }
+    renderForm(state, vi.fn(), pendingLaunch)
 
-  const line = container.querySelector('.async-action-item--line')
-  const snapshot = () => ({
-    message: container.querySelector('.chat-user-message')?.textContent ?? null,
-    line: Array.from(line?.querySelectorAll('strong, span') ?? [])
-      .map((element) => element.textContent)
-      .join(' '),
-    replyPlaceholder: container.querySelector<HTMLTextAreaElement>(
-      '[aria-label="Reply"]',
-    )?.placeholder,
-    replyDisabled: container.querySelector<HTMLTextAreaElement>(
-      '[aria-label="Reply"]',
-    )?.disabled,
-    directoryDisabled: requireButton('.new-session-directory-button').disabled,
-    startButton:
-      container.querySelector('.new-session-start')?.textContent ?? null,
-  })
-  expect(snapshot()).toEqual({
-    message: 'A sent first message',
-    line: 'Starting Claude Code in /Users/example/work/service… You can leave this page. We’ll let you know when it starts.',
-    replyPlaceholder: 'Reply once the session starts',
-    replyDisabled: true,
-    directoryDisabled: true,
-    startButton: null,
-  })
-})
+    const line = container.querySelector('.async-action-item--line')
+    const snapshot = () => ({
+      message:
+        container.querySelector('.chat-user-message')?.textContent ?? null,
+      line: Array.from(line?.querySelectorAll('strong, span') ?? [])
+        .map((element) => element.textContent)
+        .join(' '),
+      replyPlaceholder: container.querySelector<HTMLTextAreaElement>(
+        '[aria-label="Reply"]',
+      )?.placeholder,
+      replyDisabled: container.querySelector<HTMLTextAreaElement>(
+        '[aria-label="Reply"]',
+      )?.disabled,
+      directoryDisabled: requireButton('.new-session-directory-button')
+        .disabled,
+      startButton:
+        container.querySelector('.new-session-start')?.textContent ?? null,
+    })
+    expect(snapshot()).toEqual({
+      message: 'A sent first message',
+      line: `Starting ${engineLabel} in /Users/example/work/service… You can leave this page. We’ll let you know when it starts.`,
+      replyPlaceholder: 'Reply once the session starts',
+      replyDisabled: true,
+      directoryDisabled: true,
+      startButton: null,
+    })
+  },
+)
 
 it('suggests and inserts skills in the first message field', async () => {
   root = createRoot(container)
