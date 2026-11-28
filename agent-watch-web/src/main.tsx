@@ -4,10 +4,9 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 
 import { App } from '#App'
+import { applyDesktopTitleBarMarker } from '#desktop-titlebar'
 
-if (navigator.userAgent.includes('AgentWatchDesktop')) {
-  document.documentElement.dataset['agentWatchDesktop'] = 'true'
-}
+applyDesktopTitleBarMarker(navigator.userAgent, document.documentElement)
 
 const rootElement = document.getElementById('root')
 

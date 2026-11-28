@@ -7,7 +7,10 @@ import { createConnectionController } from './connection.js'
 import { installApplicationMenu } from './menu.js'
 import { classifyNavigation, isAllowedWatchUrl } from './navigation.js'
 import { appendDesktopUserAgentMarker } from './user-agent.js'
-import { withHiddenTitleBar } from './window-options.js'
+import {
+  createPopupWindowOptions,
+  withHiddenTitleBar,
+} from './window-options.js'
 import {
   createQuitLifecycle,
   handleRendererPreventedUnload,
@@ -176,15 +179,9 @@ const configureWebContents = (contents: Electron.WebContents) => {
     if (action === 'open-window') {
       return {
         action: 'allow',
-        overrideBrowserWindowOptions: withHiddenTitleBar(process.platform, {
-          width: 1100,
-          height: 800,
-          webPreferences: {
-            nodeIntegration: false,
-            contextIsolation: true,
-            sandbox: true,
-          },
-        }),
+        overrideBrowserWindowOptions: createPopupWindowOptions(
+          process.platform,
+        ),
       }
     }
 

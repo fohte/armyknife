@@ -145,7 +145,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-it('adds draggable title-bar space only in the desktop app', () => {
+it('drags desktop headers while preserving browser and mobile header regions', () => {
   titleBarFixture = document.createElement('div')
   const fixture = titleBarFixture
   fixture.innerHTML = `
@@ -154,6 +154,9 @@ it('adds draggable title-bar space only in the desktop app', () => {
     </section>
     <section class="conversation-pane">
       <header class="conversation-header"><a href="#session">Session</a></header>
+    </section>
+    <section class="conversation-pane" data-mobile="true">
+      <header class="conversation-header"><a href="#mobile-session">Mobile session</a></header>
     </section>
   `
   document.body.append(fixture)
@@ -168,13 +171,21 @@ it('adds draggable title-bar space only in the desktop app', () => {
     '.conversation-header',
   )
   const conversationLink = fixture.querySelector<HTMLAnchorElement>('a')
+  const mobileConversationHeader = fixture.querySelector<HTMLElement>(
+    '.conversation-pane[data-mobile="true"] .conversation-header',
+  )
+  const mobileConversationLink = fixture.querySelector<HTMLAnchorElement>(
+    '.conversation-pane[data-mobile="true"] a',
+  )
   if (
     brandRow === null ||
     brandButton === null ||
     inboxHeader === null ||
     inboxButton === null ||
     conversationHeader === null ||
-    conversationLink === null
+    conversationLink === null ||
+    mobileConversationHeader === null ||
+    mobileConversationLink === null
   ) {
     throw new Error('Title-bar header fixture is incomplete')
   }
@@ -190,6 +201,8 @@ it('adds draggable title-bar space only in the desktop app', () => {
       region(inboxButton),
       region(conversationHeader),
       region(conversationLink),
+      region(mobileConversationHeader),
+      region(mobileConversationLink),
     ],
   })
   const desktopSnapshot = () => ({
@@ -201,18 +214,38 @@ it('adds draggable title-bar space only in the desktop app', () => {
       region(inboxButton),
       region(conversationHeader),
       region(conversationLink),
+      region(mobileConversationHeader),
+      region(mobileConversationLink),
     ],
   })
 
   expect(snapshot()).toEqual({
     browserPadding: '8px',
-    browserRegions: ['none', 'none', 'none', 'none', 'none', 'none'],
+    browserRegions: [
+      'none',
+      'none',
+      'none',
+      'none',
+      'none',
+      'none',
+      'none',
+      'none',
+    ],
   })
 
   document.documentElement.dataset['agentWatchDesktop'] = 'true'
   expect(desktopSnapshot()).toEqual({
     desktopPadding: '64px',
-    desktopRegions: ['drag', 'no-drag', 'drag', 'no-drag', 'drag', 'no-drag'],
+    desktopRegions: [
+      'drag',
+      'no-drag',
+      'drag',
+      'no-drag',
+      'drag',
+      'no-drag',
+      'none',
+      'none',
+    ],
   })
 })
 
