@@ -391,7 +391,6 @@ fn app_with_assets_and_queued_prompt_loaders_and_restart_signal(
             enrichment_updates.clone(),
             loaders.clone(),
         ))
-        .merge(usage::router())
         .merge(freeze_profiler::router())
         .merge(directories::router())
         .merge(model_options::router())

@@ -1,23 +1,26 @@
 use std::collections::HashMap;
 use std::future::Future;
+use std::sync::Arc;
+use std::time::Duration;
 
-use axum::Json;
-use axum::Router;
-use axum::extract::State;
-use axum::http::StatusCode;
-use axum::routing::get;
+use axum::response::sse::Event;
+use tokio::sync::{broadcast, watch};
+use tokio::time::{self, Instant};
+
+#[cfg(test)]
+use futures_util::stream::{self, Stream};
 
 use crate::commands::agent::store;
 use crate::commands::agent::types::{Engine, Session};
 use crate::commands::agent::usage::codex;
 use crate::commands::agent::usage::model::{EngineQuota, EngineQuotas, UsageResponse};
 
-trait UsageSource: Clone + Send + Sync + 'static {
+pub(super) trait UsageSource: Clone + Send + Sync + 'static {
     fn load(&self) -> impl Future<Output = anyhow::Result<UsageResponse>> + Send;
 }
 
 #[derive(Clone, Copy)]
-struct LiveUsageSource;
+pub(super) struct LiveUsageSource;
 
 impl UsageSource for LiveUsageSource {
     async fn load(&self) -> anyhow::Result<UsageResponse> {
@@ -25,23 +28,264 @@ impl UsageSource for LiveUsageSource {
     }
 }
 
-pub(super) fn router() -> Router {
-    router_with_source(LiveUsageSource)
+const USAGE_REFRESH_DEBOUNCE: Duration = Duration::from_millis(150);
+const USAGE_MIN_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+
+pub(super) type UsageSnapshot = Result<UsageResponse, String>;
+
+#[derive(Clone)]
+pub(super) struct UsageMonitor {
+    inner: Arc<UsageMonitorInner>,
 }
 
-fn router_with_source<S: UsageSource>(source: S) -> Router {
-    Router::new()
-        .route("/usage", get(get_usage::<S>))
-        .with_state(source)
+struct UsageMonitorInner {
+    updates: watch::Sender<Option<UsageSnapshot>>,
+    subscribers: watch::Sender<usize>,
 }
 
-async fn get_usage<S: UsageSource>(
-    State(source): State<S>,
-) -> Result<Json<UsageResponse>, StatusCode> {
-    source.load().await.map(Json).map_err(|error| {
+pub(super) struct UsageSubscription {
+    pub(super) updates: watch::Receiver<Option<UsageSnapshot>>,
+    pub(super) _guard: UsageSubscriberGuard,
+}
+
+pub(super) fn usage_event(snapshot: UsageSnapshot) -> Event {
+    match snapshot {
+        Ok(usage) => Event::default()
+            .event("usage")
+            .json_data(usage)
+            .unwrap_or_else(|_| {
+                Event::default()
+                    .event("usage-error")
+                    .data("serialization failed")
+            }),
+        Err(error) => Event::default().event("usage-error").data(error),
+    }
+}
+
+pub(super) struct UsageSubscriberGuard {
+    subscribers: watch::Sender<usize>,
+}
+
+impl Drop for UsageSubscriberGuard {
+    fn drop(&mut self) {
+        self.subscribers
+            .send_modify(|count| *count = count.saturating_sub(1));
+    }
+}
+
+impl UsageMonitor {
+    pub(super) fn new<S: UsageSource>(source: S, store_events: broadcast::Receiver<()>) -> Self {
+        let (updates, _) = watch::channel(None);
+        let (subscribers, subscriber_receiver) = watch::channel(0);
+        tokio::spawn(run_usage_monitor(
+            source,
+            subscriber_receiver,
+            updates.clone(),
+            store_events,
+        ));
+        Self {
+            inner: Arc::new(UsageMonitorInner {
+                updates,
+                subscribers,
+            }),
+        }
+    }
+
+    pub(super) fn subscribe(&self) -> UsageSubscription {
+        self.inner.subscribers.send_modify(|count| {
+            if *count == 0 {
+                self.inner.updates.send_replace(None);
+            }
+            *count = count.saturating_add(1);
+        });
+        UsageSubscription {
+            updates: self.inner.updates.subscribe(),
+            _guard: UsageSubscriberGuard {
+                subscribers: self.inner.subscribers.clone(),
+            },
+        }
+    }
+}
+
+async fn run_usage_monitor<S: UsageSource>(
+    source: S,
+    mut subscriber_receiver: watch::Receiver<usize>,
+    updates: watch::Sender<Option<UsageSnapshot>>,
+    mut store_events: broadcast::Receiver<()>,
+) {
+    let mut event_channel_open = true;
+    loop {
+        while *subscriber_receiver.borrow_and_update() == 0 {
+            if event_channel_open {
+                tokio::select! {
+                    changed = subscriber_receiver.changed() => {
+                        if changed.is_err() {
+                            return;
+                        }
+                    }
+                    signal = store_events.recv() => {
+                        if matches!(signal, Err(broadcast::error::RecvError::Closed)) {
+                            event_channel_open = false;
+                        }
+                    }
+                }
+            } else if subscriber_receiver.changed().await.is_err() {
+                return;
+            }
+        }
+
+        refresh_usage(&source, &subscriber_receiver, &updates).await;
+        let mut last_refresh_at = Instant::now();
+
+        loop {
+            if *subscriber_receiver.borrow() == 0 {
+                break;
+            }
+            let has_signal = tokio::select! {
+                changed = subscriber_receiver.changed() => {
+                    if changed.is_err() {
+                        return;
+                    }
+                    *subscriber_receiver.borrow() > 0
+                }
+                signal = store_events.recv(), if event_channel_open => {
+                    match signal {
+                        Ok(()) | Err(broadcast::error::RecvError::Lagged(_)) => true,
+                        Err(broadcast::error::RecvError::Closed) => {
+                            event_channel_open = false;
+                            false
+                        }
+                    }
+                }
+            };
+            if !has_signal {
+                continue;
+            }
+            if !debounce_store_events(
+                &mut subscriber_receiver,
+                &mut store_events,
+                &mut event_channel_open,
+            )
+            .await
+            {
+                break;
+            }
+            if !wait_for_refresh_interval(
+                &mut subscriber_receiver,
+                &mut store_events,
+                &mut event_channel_open,
+                last_refresh_at,
+            )
+            .await
+            {
+                break;
+            }
+            if *subscriber_receiver.borrow() > 0 {
+                refresh_usage(&source, &subscriber_receiver, &updates).await;
+                last_refresh_at = Instant::now();
+            }
+        }
+    }
+}
+
+async fn debounce_store_events(
+    subscribers: &mut watch::Receiver<usize>,
+    store_events: &mut broadcast::Receiver<()>,
+    event_channel_open: &mut bool,
+) -> bool {
+    loop {
+        tokio::select! {
+            () = time::sleep(USAGE_REFRESH_DEBOUNCE) => return *subscribers.borrow() > 0,
+            changed = subscribers.changed() => {
+                if changed.is_err() || *subscribers.borrow() == 0 {
+                    return false;
+                }
+            }
+            signal = store_events.recv(), if *event_channel_open => {
+                match signal {
+                    Ok(()) | Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(broadcast::error::RecvError::Closed) => *event_channel_open = false,
+                }
+            }
+        }
+    }
+}
+
+async fn wait_for_refresh_interval(
+    subscribers: &mut watch::Receiver<usize>,
+    store_events: &mut broadcast::Receiver<()>,
+    event_channel_open: &mut bool,
+    last_refresh_at: Instant,
+) -> bool {
+    let deadline = last_refresh_at + USAGE_MIN_REFRESH_INTERVAL;
+    loop {
+        tokio::select! {
+            () = time::sleep_until(deadline) => return *subscribers.borrow() > 0,
+            changed = subscribers.changed() => {
+                if changed.is_err() || *subscribers.borrow() == 0 {
+                    return false;
+                }
+            }
+            signal = store_events.recv(), if *event_channel_open => {
+                match signal {
+                    Ok(()) | Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(broadcast::error::RecvError::Closed) => *event_channel_open = false,
+                }
+            }
+        }
+    }
+}
+
+async fn refresh_usage<S: UsageSource>(
+    source: &S,
+    subscribers: &watch::Receiver<usize>,
+    updates: &watch::Sender<Option<UsageSnapshot>>,
+) {
+    let snapshot = source.load().await.map_err(|error| {
         tracing::warn!(%error, "failed to load agent usage");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })
+        format!("{error:#}")
+    });
+    if *subscribers.borrow() == 0 || updates.borrow().as_ref() == Some(&snapshot) {
+        return;
+    }
+    updates.send_replace(Some(snapshot));
+}
+
+#[cfg(test)]
+pub(super) fn usage_stream(
+    subscription: UsageSubscription,
+) -> impl Stream<Item = Result<Event, std::convert::Infallible>> {
+    stream::unfold(
+        (subscription.updates, subscription._guard, true),
+        |(mut updates, guard, initial_pending)| async move {
+            let mut initial_pending = initial_pending;
+            let snapshot = loop {
+                let snapshot = if initial_pending {
+                    updates.borrow_and_update().clone()
+                } else {
+                    if updates.changed().await.is_err() {
+                        return None;
+                    }
+                    updates.borrow_and_update().clone()
+                };
+                initial_pending = false;
+                if let Some(snapshot) = snapshot {
+                    break snapshot;
+                }
+            };
+            Some((Ok(usage_event(snapshot)), (updates, guard, initial_pending)))
+        },
+    )
+}
+
+#[cfg(test)]
+pub(super) fn no_updates_subscription() -> UsageSubscription {
+    let (updates, _) = watch::channel(None);
+    let (subscribers, _) = watch::channel(1);
+    UsageSubscription {
+        updates: updates.subscribe(),
+        _guard: UsageSubscriberGuard { subscribers },
+    }
 }
 
 fn load_usage_response() -> anyhow::Result<UsageResponse> {
@@ -109,16 +353,18 @@ fn usage_response(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
     use std::path::PathBuf;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
-    use axum::body::{Body, to_bytes};
-    use axum::http::{Request, StatusCode};
+    use axum::response::IntoResponse;
+    use futures_util::StreamExt;
     use indoc::indoc;
-    use serde_json::{Value, json};
-    use tower::ServiceExt;
+    use rstest::rstest;
+    use tokio::sync::broadcast;
 
-    use super::{UsageSource, router_with_source, usage_response};
+    use super::{UsageMonitor, UsageSource, usage_response, usage_stream};
     use crate::commands::agent::types::Engine;
     use crate::commands::agent::types::{Session, SessionStatus};
     use crate::commands::agent::usage::codex;
@@ -127,13 +373,120 @@ mod tests {
         UsageResponse,
     };
 
-    #[derive(Clone)]
-    struct StaticUsageSource(Arc<UsageResponse>);
+    #[derive(Clone, Copy)]
+    enum UsageStreamCase {
+        Initial,
+        Changed,
+        Unchanged,
+        Error,
+    }
 
-    impl UsageSource for StaticUsageSource {
+    #[derive(Clone)]
+    struct ScriptedUsageSource(Arc<Mutex<VecDeque<anyhow::Result<UsageResponse>>>>);
+
+    impl UsageSource for ScriptedUsageSource {
         async fn load(&self) -> anyhow::Result<UsageResponse> {
-            Ok((*self.0).clone())
+            self.0
+                .lock()
+                .expect("usage source lock should not be poisoned")
+                .pop_front()
+                .unwrap_or_else(|| Err(anyhow::anyhow!("fixture usage exhausted")))
         }
+    }
+
+    #[rstest]
+    #[case::initial(UsageStreamCase::Initial)]
+    #[case::changed(UsageStreamCase::Changed)]
+    #[case::unchanged(UsageStreamCase::Unchanged)]
+    #[case::error(UsageStreamCase::Error)]
+    #[tokio::test]
+    async fn emits_usage_snapshots_as_server_sent_events(#[case] case: UsageStreamCase) {
+        let initial_usage = UsageResponse {
+            sessions: Vec::new(),
+            quotas: EngineQuotas::default(),
+        };
+        let changed_usage = UsageResponse {
+            sessions: vec![SessionUsage {
+                session_id: "fixture-session".to_owned(),
+                engine: Engine::Claude,
+                model: Some("fixture-model".to_owned()),
+                effort: None,
+                context: None,
+                rate_limits: RateLimits::default(),
+                version: None,
+                observed_at: chrono::DateTime::parse_from_rfc3339("2026-11-16T12:00:00Z")
+                    .unwrap()
+                    .to_utc(),
+            }],
+            quotas: EngineQuotas::default(),
+        };
+        let snapshots = match case {
+            UsageStreamCase::Initial => vec![Ok(initial_usage.clone())],
+            UsageStreamCase::Changed => vec![Ok(initial_usage.clone()), Ok(changed_usage)],
+            UsageStreamCase::Unchanged => vec![Ok(initial_usage.clone()), Ok(initial_usage)],
+            UsageStreamCase::Error => vec![Err(anyhow::anyhow!("fixture usage failure"))],
+        };
+        let source = ScriptedUsageSource(Arc::new(Mutex::new(snapshots.into())));
+        let (store_event_sender, store_event_receiver) = broadcast::channel(4);
+        let monitor = UsageMonitor::new(source, store_event_receiver);
+        let mut chunks = axum::response::sse::Sse::new(usage_stream(monitor.subscribe()))
+            .into_response()
+            .into_body()
+            .into_data_stream();
+        let initial_event = next_chunk(&mut chunks).await;
+        let actual = match case {
+            UsageStreamCase::Initial => initial_event,
+            UsageStreamCase::Changed => {
+                store_event_sender.send(()).unwrap();
+                format!("{initial_event}{}", next_chunk(&mut chunks).await)
+            }
+            UsageStreamCase::Unchanged => {
+                store_event_sender.send(()).unwrap();
+                let no_follow_up_event =
+                    tokio::time::timeout(Duration::from_millis(1250), chunks.next())
+                        .await
+                        .is_err();
+                assert!(no_follow_up_event);
+                initial_event
+            }
+            UsageStreamCase::Error => initial_event,
+        };
+        let expected = match case {
+            UsageStreamCase::Initial | UsageStreamCase::Unchanged => indoc! {"
+                event: usage
+                data: {\"sessions\":[],\"quotas\":{\"claude\":null,\"codex\":null}}
+
+            "}
+            .to_owned(),
+            UsageStreamCase::Changed => indoc! {"
+                event: usage
+                data: {\"sessions\":[],\"quotas\":{\"claude\":null,\"codex\":null}}
+
+                event: usage
+                data: {\"sessions\":[{\"sessionId\":\"fixture-session\",\"engine\":\"claude\",\"model\":\"fixture-model\",\"effort\":null,\"context\":null,\"rateLimits\":{\"fiveHour\":null,\"sevenDay\":null},\"version\":null,\"observedAt\":\"2026-11-16T12:00:00Z\"}],\"quotas\":{\"claude\":null,\"codex\":null}}
+
+            "}
+            .to_owned(),
+            UsageStreamCase::Error => indoc! {"
+                event: usage-error
+                data: fixture usage failure
+
+            "}
+            .to_owned(),
+        };
+
+        assert_eq!(actual, expected);
+    }
+
+    async fn next_chunk(
+        chunks: &mut (impl futures_util::Stream<Item = Result<axum::body::Bytes, axum::Error>> + Unpin),
+    ) -> String {
+        let chunk = tokio::time::timeout(Duration::from_secs(2), chunks.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        String::from_utf8(chunk.to_vec()).unwrap()
     }
 
     fn codex_session(session_id: &str, transcript_path: PathBuf) -> Session {
@@ -332,104 +685,6 @@ mod tests {
                     }),
                 },
             },
-        );
-    }
-
-    #[tokio::test]
-    async fn returns_sessions_and_engine_quotas() {
-        let source = StaticUsageSource(Arc::new(UsageResponse {
-            sessions: vec![SessionUsage {
-                session_id: "fixture-session".to_owned(),
-                engine: Engine::Claude,
-                model: Some("fixture-model-amber".to_owned()),
-                effort: Some("high".to_owned()),
-                context: Some(ContextUsage {
-                    used_tokens: 220,
-                    window_tokens: 1000,
-                    used_percentage: 28,
-                }),
-                rate_limits: RateLimits {
-                    five_hour: Some(RateLimitWindow {
-                        used_percentage: 32.5,
-                        resets_at: Some(1794841200),
-                        window_seconds: 18_000,
-                    }),
-                    seven_day: None,
-                },
-                version: Some("0.99.0".to_owned()),
-                observed_at: chrono::DateTime::parse_from_rfc3339("2026-11-16T12:00:00Z")
-                    .unwrap()
-                    .to_utc(),
-            }],
-            quotas: EngineQuotas {
-                claude: Some(EngineQuota {
-                    engine: Engine::Claude,
-                    rate_limits: RateLimits {
-                        five_hour: Some(RateLimitWindow {
-                            used_percentage: 32.5,
-                            resets_at: Some(1794841200),
-                            window_seconds: 18_000,
-                        }),
-                        seven_day: None,
-                    },
-                    observed_at: chrono::DateTime::parse_from_rfc3339("2026-11-16T12:00:00Z")
-                        .unwrap()
-                        .to_utc(),
-                }),
-                codex: None,
-            },
-        }));
-        let response = router_with_source(source)
-            .oneshot(Request::get("/usage").body(Body::empty()).unwrap())
-            .await
-            .unwrap();
-        let status = response.status();
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let actual: Value = serde_json::from_slice(&body).unwrap();
-
-        assert_eq!(
-            (status, actual),
-            (
-                StatusCode::OK,
-                json!({
-                    "sessions": [{
-                        "sessionId": "fixture-session",
-                        "engine": "claude",
-                        "model": "fixture-model-amber",
-                        "effort": "high",
-                        "context": {
-                            "usedTokens": 220,
-                            "windowTokens": 1000,
-                            "usedPercentage": 28,
-                        },
-                        "rateLimits": {
-                            "fiveHour": {
-                                "usedPercentage": 32.5,
-                                "resetsAt": 1794841200,
-                                "windowSeconds": 18000,
-                            },
-                            "sevenDay": null,
-                        },
-                        "version": "0.99.0",
-                        "observedAt": "2026-11-16T12:00:00Z",
-                    }],
-                    "quotas": {
-                        "claude": {
-                            "engine": "claude",
-                            "rateLimits": {
-                                "fiveHour": {
-                                    "usedPercentage": 32.5,
-                                    "resetsAt": 1794841200,
-                                    "windowSeconds": 18000,
-                                },
-                                "sevenDay": null,
-                            },
-                            "observedAt": "2026-11-16T12:00:00Z",
-                        },
-                        "codex": null,
-                    }
-                }),
-            ),
         );
     }
 }

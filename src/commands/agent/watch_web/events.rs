@@ -10,7 +10,7 @@ use futures_util::stream::{self, Stream, StreamExt};
 use tokio::sync::{broadcast, watch};
 use tokio::time;
 
-use super::{EnrichmentUpdates, SERVER_INSTANCE_ID, SERVER_VERSION};
+use super::{EnrichmentUpdates, SERVER_INSTANCE_ID, SERVER_VERSION, usage};
 use crate::commands::agent::store;
 
 const WATCHER_DEBOUNCE: Duration = Duration::from_millis(150);
@@ -23,6 +23,7 @@ const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(15);
 struct EventUpdates {
     enrichment: EnrichmentUpdates,
     revisions: RevisionMonitor,
+    usage: usage::UsageMonitor,
     restart: watch::Receiver<bool>,
 }
 
@@ -32,6 +33,8 @@ pub(super) fn router(
     session_store_events: broadcast::Receiver<()>,
     session_store_watcher_available: bool,
 ) -> Router {
+    let usage =
+        usage::UsageMonitor::new(usage::LiveUsageSource, session_store_events.resubscribe());
     Router::new()
         .route("/events", get(events))
         .with_state(EventUpdates {
@@ -41,6 +44,7 @@ pub(super) fn router(
                 session_store_events,
                 session_store_watcher_available,
             ),
+            usage,
             restart,
         })
 }
@@ -52,6 +56,7 @@ async fn events(
         SERVER_INSTANCE_ID.clone(),
         SERVER_VERSION,
         updates.revisions.subscribe(),
+        updates.usage.subscribe(),
         updates.enrichment.subscribe(),
         updates.restart,
     );
@@ -67,6 +72,7 @@ fn event_stream(
     instance_id: String,
     server_version: &'static str,
     revisions: RevisionSubscription,
+    usage: usage::UsageSubscription,
     enrichment_updates: watch::Receiver<()>,
     restart_signal: watch::Receiver<bool>,
 ) -> impl Stream<Item = Result<Event, Infallible>> {
@@ -76,6 +82,7 @@ fn event_stream(
         }))
         .chain(revision_stream(
             revisions,
+            usage,
             enrichment_updates,
             restart_signal,
         ))
@@ -328,6 +335,12 @@ struct RevisionStreamState {
     enrichment_update_pending: bool,
     revisions: watch::Receiver<Option<i64>>,
     _subscriber_guard: RevisionSubscriberGuard,
+    usage_updates: watch::Receiver<
+        Option<Result<crate::commands::agent::usage::model::UsageResponse, String>>,
+    >,
+    _usage_subscriber_guard: usage::UsageSubscriberGuard,
+    initial_usage_event_pending: bool,
+    usage_channel_open: bool,
     revision_channel_open: bool,
     enrichment_updates: watch::Receiver<()>,
     enrichment_channel_open: bool,
@@ -339,6 +352,7 @@ struct RevisionStreamState {
 
 fn revision_stream(
     revisions: RevisionSubscription,
+    usage_subscription: usage::UsageSubscription,
     enrichment_updates: watch::Receiver<()>,
     restart_signal: watch::Receiver<bool>,
 ) -> impl Stream<Item = Result<Event, Infallible>> {
@@ -349,6 +363,10 @@ fn revision_stream(
             enrichment_update_pending: false,
             revisions: revisions.revisions,
             _subscriber_guard: revisions._guard,
+            usage_updates: usage_subscription.updates,
+            _usage_subscriber_guard: usage_subscription._guard,
+            initial_usage_event_pending: true,
+            usage_channel_open: true,
             revision_channel_open: true,
             enrichment_updates,
             enrichment_channel_open: true,
@@ -387,32 +405,53 @@ fn revision_stream(
                 }
             }
 
+            if state.initial_usage_event_pending {
+                let snapshot = { state.usage_updates.borrow_and_update().clone() };
+                if let Some(snapshot) = snapshot {
+                    state.initial_usage_event_pending = false;
+                    return Some((Ok(usage::usage_event(snapshot)), state));
+                }
+            }
+
             loop {
-                let (revision_update, enrichment_update, restart_received) = tokio::select! {
+                let (revision_update, enrichment_update, restart_received, usage_update) = tokio::select! {
                     update = state.revisions.changed(), if state.revision_channel_open => {
                         if update.is_err() {
                             state.revision_channel_open = false;
                         }
-                        (update.is_ok(), false, false)
+                        (update.is_ok(), false, false, false)
                     }
                     update = state.enrichment_updates.changed(), if state.enrichment_channel_open => {
                         if update.is_err() {
                             state.enrichment_channel_open = false;
                         }
-                        (false, update.is_ok(), false)
+                        (false, update.is_ok(), false, false)
                     }
                     update = state.restart_signal.changed(), if state.restart_channel_open => {
                         if update.is_err() {
                             state.restart_channel_open = false;
-                            (false, false, false)
+                            (false, false, false, false)
                         } else {
-                            (false, false, *state.restart_signal.borrow())
+                            (false, false, *state.restart_signal.borrow(), false)
                         }
+                    }
+                    update = state.usage_updates.changed(), if state.usage_channel_open => {
+                        if update.is_err() {
+                            state.usage_channel_open = false;
+                        }
+                        (false, false, false, update.is_ok())
                     }
                 };
                 if restart_received {
                     state.restart_event_pending = true;
                     continue;
+                }
+                if usage_update {
+                    let snapshot = { state.usage_updates.borrow_and_update().clone() };
+                    if let Some(snapshot) = snapshot {
+                        state.initial_usage_event_pending = false;
+                        return Some((Ok(usage::usage_event(snapshot)), state));
+                    }
                 }
                 state.enrichment_update_pending |= enrichment_update;
 
@@ -467,6 +506,7 @@ mod tests {
             "fixture-server-instance".to_string(),
             "9.8.7",
             revisions.subscribe(),
+            usage::no_updates_subscription(),
             enrichment_rx,
             restart_rx,
         ))
@@ -924,7 +964,12 @@ mod tests {
         let revisions = RevisionMonitor::new(|| Ok(12), event_receiver, true);
         let (_enrichment_tx, enrichment_rx) = watch::channel(());
         let (restart_tx, restart_rx) = watch::channel(false);
-        let stream = revision_stream(revisions.subscribe(), enrichment_rx, restart_rx);
+        let stream = revision_stream(
+            revisions.subscribe(),
+            usage::no_updates_subscription(),
+            enrichment_rx,
+            restart_rx,
+        );
         let body = Sse::new(stream).into_response().into_body();
         let mut chunks = body.into_data_stream();
         let initial = next_chunk(&mut chunks).await;
@@ -961,7 +1006,12 @@ mod tests {
         enrichment_updates: watch::Receiver<()>,
     ) -> impl Stream<Item = Result<Event, Infallible>> {
         let (_restart_sender, restart_signal) = watch::channel(false);
-        revision_stream(revisions, enrichment_updates, restart_signal)
+        revision_stream(
+            revisions,
+            usage::no_updates_subscription(),
+            enrichment_updates,
+            restart_signal,
+        )
     }
 
     fn sessions_event(revision: i64) -> String {
