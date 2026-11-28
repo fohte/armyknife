@@ -319,7 +319,7 @@ it('suggests and inserts skills in the first message field', async () => {
   })
 })
 
-it('keeps the directory control focusable and inert while the session starts', async () => {
+it('keeps the directory control focusable and inert while the session starts', () => {
   renderForm(
     makeState({
       selectedDirectory: exampleSessionDirectories[0] ?? null,
@@ -330,8 +330,9 @@ it('keeps the directory control focusable and inert while the session starts', a
   )
 
   const directoryButton = requireButton('.new-session-directory-button')
-  await act(async () => {
-    await userEvent.click(directoryButton)
+  act(() => {
+    directoryButton.focus()
+    directoryButton.click()
   })
 
   const snapshot = () => ({
