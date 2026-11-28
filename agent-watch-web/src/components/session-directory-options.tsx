@@ -1,3 +1,5 @@
+import type { ReactNode } from 'react'
+
 import { formatLastUsed } from '#components/format-last-used'
 import type { SessionDirectory } from '#new-session-api'
 
@@ -9,6 +11,7 @@ type SessionDirectoryOptionsProps = {
   autoFocus?: boolean
   activeIndex?: number
   now?: Date
+  afterSearchInput?: ReactNode
   onQueryChange: (query: string) => void
   onSelect: (directory: SessionDirectory) => void
   onActiveIndexChange?: (index: number) => void
@@ -31,6 +34,7 @@ export function SessionDirectoryOptions({
   autoFocus = false,
   activeIndex = 0,
   now,
+  afterSearchInput,
   onQueryChange,
   onSelect,
   onActiveIndexChange = () => {},
@@ -53,6 +57,7 @@ export function SessionDirectoryOptions({
           value={query}
         />
       </label>
+      {afterSearchInput}
       <div
         aria-label="Directories"
         className="session-directory-results"

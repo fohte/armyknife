@@ -4,6 +4,7 @@ import { ArrowLeft, ChevronDown, Folder, GitBranch, X } from 'lucide-react'
 import { type ReactNode, useLayoutEffect, useRef, useState } from 'react'
 
 import { NewSessionModelPicker } from '#components/new-session-model-picker'
+import { NewSessionRestoredNotice } from '#components/new-session-restored-notice'
 import { NewSessionStarting } from '#components/new-session-starting'
 import { SessionDirectoryOptions } from '#components/session-directory-options'
 import {
@@ -273,6 +274,14 @@ export function NewSessionForm({
                 </button>
               </div>
             </div>
+            {state.restoredAt !== null ? (
+              <NewSessionRestoredNotice
+                savedAt={state.restoredAt}
+                {...(now === undefined ? {} : { now })}
+                isMobile={isMobile}
+                onClear={state.clearDraft}
+              />
+            ) : null}
           </div>
         </>
       ) : (

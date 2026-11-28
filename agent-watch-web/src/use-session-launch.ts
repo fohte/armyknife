@@ -105,6 +105,7 @@ export function useSessionLaunch({
           if (pendingLaunchRef.current?.key !== key) return
           updatePendingLaunch(null)
           newSession.setLaunchError(null)
+          newSession.reset()
           setCommandPaletteOpen(false)
           openSessionInInbox(sessionId, 'replace')
         },
@@ -117,6 +118,7 @@ export function useSessionLaunch({
     },
     [
       launch,
+      newSession.reset,
       newSession.setLaunchError,
       openSessionInInbox,
       setCommandPaletteOpen,

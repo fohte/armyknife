@@ -35,6 +35,7 @@ function makeState(overrides: Partial<NewSessionState> = {}): NewSessionState {
     activeModelOption: exampleModelOptions.models[0],
     worktree: false,
     initialMessage: '',
+    restoredAt: null,
     skillSuggestions: [],
     isLoadingDirectories: false,
     error: null,
@@ -47,6 +48,7 @@ function makeState(overrides: Partial<NewSessionState> = {}): NewSessionState {
     setWorktree: () => undefined,
     setInitialMessage: () => undefined,
     start: () => undefined,
+    clearDraft: () => undefined,
     reset: () => undefined,
     ...overrides,
   }
@@ -228,6 +230,25 @@ it('does not warn before leaving after the first message is sent', () => {
   })
 
   expect(event.defaultPrevented).toBe(false)
+})
+
+it('clears the restored draft from the form', async () => {
+  const clearDraft = vi.fn()
+  renderForm(
+    makeState({
+      restoredAt: '2026-05-06T12:03:00Z',
+      clearDraft,
+    }),
+  )
+  const clearButton = container.querySelector<HTMLButtonElement>(
+    '.new-session-restored-notice button',
+  )
+  if (clearButton === null) throw new Error('Expected the Clear button')
+  await act(async () => {
+    await userEvent.click(clearButton)
+  })
+
+  expect(clearDraft.mock.calls).toEqual([[]])
 })
 
 it.each([
