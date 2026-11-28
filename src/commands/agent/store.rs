@@ -44,10 +44,11 @@ pub(crate) use peer_out_messages::{
     watch_web_peer_out_messages_from,
 };
 pub(crate) use queued_prompts::{
-    delete_watch_web_queued_prompts_from, ensure_watch_web_user_marker_from,
-    insert_watch_web_queued_prompt_from, mark_watch_web_queued_prompts_resolved,
-    mark_watch_web_queued_prompts_resolved_from, move_watch_web_queued_prompts_to_session_from,
-    watch_web_queued_prompt_message_id_exists_from, watch_web_queued_prompts_from,
+    claim_watch_web_launch_prompt_from, delete_watch_web_queued_prompts_from,
+    ensure_watch_web_user_marker_from, insert_watch_web_queued_prompt_from,
+    mark_watch_web_queued_prompts_resolved, mark_watch_web_queued_prompts_resolved_from,
+    watch_web_launch_session_id, watch_web_queued_prompt_message_id_exists_from,
+    watch_web_queued_prompts_from,
 };
 pub(crate) use todos::{resolve_agent_todo_at, resolve_agent_todo_from_at};
 pub(crate) use usage::{engine_quotas_from, record_usage_from, usage_snapshots_from};

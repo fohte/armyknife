@@ -37,12 +37,17 @@ pub(crate) fn insert_watch_web_queued_prompt_from(
     )
 }
 
-pub(crate) fn move_watch_web_queued_prompts_to_session_from(
+pub(crate) fn watch_web_launch_session_id(launch_id: &str) -> String {
+    format!("watch-web-launch:{launch_id}")
+}
+
+pub(crate) fn claim_watch_web_launch_prompt_from(
     sessions_dir: &Path,
-    launch_session_id: &str,
+    launch_id: &str,
     session_id: &str,
 ) -> Result<()> {
-    database::move_watch_web_queued_prompts_to_session(sessions_dir, launch_session_id, session_id)
+    let launch_session_id = watch_web_launch_session_id(launch_id);
+    database::move_watch_web_queued_prompts_to_session(sessions_dir, &launch_session_id, session_id)
 }
 
 pub(crate) fn watch_web_queued_prompt_message_id_exists_from(

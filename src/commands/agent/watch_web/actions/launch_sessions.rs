@@ -118,6 +118,11 @@ async fn launch_session(
         .map_err(ApiError::bad_request)?;
     let validated_attachments = attachments::validate(request.attachments, vec![])
         .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    let has_attachments = !validated_attachments.is_empty();
+    let sessions_dir = has_attachments
+        .then(|| super::support::resolve_sessions_dir(state.sessions_dir.clone()))
+        .transpose()
+        .map_err(ApiError::internal)?;
     let launch_id = uuid::Uuid::new_v4().to_string();
     let initial_message = request
         .initial_message
@@ -133,12 +138,7 @@ async fn launch_session(
         .iter()
         .map(|attachment| attachment.path.clone())
         .collect::<Vec<_>>();
-    let has_attachments = !attachment_paths.is_empty();
-    let sessions_dir = has_attachments
-        .then(|| super::support::resolve_sessions_dir(state.sessions_dir.clone()))
-        .transpose()
-        .map_err(ApiError::internal)?;
-    let launch_session_id = format!("watch-web-launch:{launch_id}");
+    let launch_session_id = store::watch_web_launch_session_id(&launch_id);
     let queued_attachments = saved_attachments
         .iter()
         .map(|attachment| match &attachment.image_source {
