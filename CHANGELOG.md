@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1008](https://github.com/fohte/armyknife/compare/v0.1.1007...v0.1.1008) (2026-11-28)
+
+
+### Bug Fixes
+
+* **agent/store:** withdraw stale session cards ([#2445](https://github.com/fohte/armyknife/issues/2445)) ([8960109](https://github.com/fohte/armyknife/commit/8960109f35d6691837256408bc1ef8bc7b69fb50))
+
 ## [0.1.1007](https://github.com/fohte/armyknife/compare/v0.1.1006...v0.1.1007) (2026-11-28)
 
 
