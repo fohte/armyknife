@@ -30,11 +30,12 @@ mod tests {
     use crate::shared::env_var::EnvVars;
 
     #[rstest]
-    #[case::matching_launch_id(Some("fixture-launch"), false, true)]
-    #[case::missing_launch_id(None, true, false)]
-    fn session_start_claims_the_initial_prompt_only_for_a_matching_launch_id(
+    #[case::matching_launch_id_on_startup(Some("fixture-launch"), Some("startup"), true)]
+    #[case::missing_launch_id(None, Some("startup"), false)]
+    #[case::clear_does_not_claim(Some("fixture-launch"), Some("clear"), false)]
+    fn session_start_claims_the_initial_prompt_only_for_a_startup_launch_id(
         #[case] launch_id: Option<&str>,
-        #[case] expected_unclaimed: bool,
+        #[case] source: Option<&str>,
         #[case] expected_claimed: bool,
     ) {
         let sessions_dir = tempfile::TempDir::new().expect("sessions directory should be created");
@@ -56,6 +57,7 @@ mod tests {
         let input: HookInput = serde_json::from_value(serde_json::json!({
             "session_id": session_id,
             "cwd": "/fixture/project",
+            "source": source,
         }))
         .expect("session-start input should be valid");
 
@@ -91,7 +93,7 @@ mod tests {
                     .expect("claimed queued prompts should load"),
             ),
             (
-                expected_unclaimed
+                (!expected_claimed)
                     .then_some(expected_prompt.clone())
                     .into_iter()
                     .collect::<Vec<_>>(),

@@ -231,14 +231,14 @@ async fn launch_session(
         Ok(Ok(())) => {}
         Ok(Err(error)) => {
             if let (Some(sessions_dir), Some(prompt_id)) = (&sessions_dir, queued_prompt_id) {
-                remove_initial_prompt_row(sessions_dir, &launch_session_id, Some(prompt_id)).await;
+                remove_initial_prompt_row(sessions_dir, &launch_session_id, prompt_id).await;
             }
             super::messages::remove_attachments(attachment_paths).await;
             return Err(ApiError::operation(error));
         }
         Err(error) => {
             if let (Some(sessions_dir), Some(prompt_id)) = (&sessions_dir, queued_prompt_id) {
-                remove_initial_prompt_row(sessions_dir, &launch_session_id, Some(prompt_id)).await;
+                remove_initial_prompt_row(sessions_dir, &launch_session_id, prompt_id).await;
             }
             super::messages::remove_attachments(attachment_paths).await;
             return Err(ApiError::internal(error));
@@ -251,11 +251,8 @@ async fn launch_session(
 async fn remove_initial_prompt_row(
     sessions_dir: &std::path::Path,
     launch_session_id: &str,
-    queued_prompt_id: Option<i64>,
+    id: i64,
 ) {
-    let Some(id) = queued_prompt_id else {
-        return;
-    };
     let sessions_dir = sessions_dir.to_path_buf();
     let session_id = launch_session_id.to_owned();
     if let Err(error) = super::run_blocking(move || {

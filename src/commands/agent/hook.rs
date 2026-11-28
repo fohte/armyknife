@@ -1114,10 +1114,6 @@ fn process_hook_event_impl_with_env_and_unreported_stop(
     }
     drop(session_lock);
 
-    if event == HookEvent::SessionStart {
-        watch_web::claim_launch_prompt(sessions_dir, &session);
-    }
-
     if event == HookEvent::SessionStart && input.source.as_deref() == Some("resume") {
         store::clear_session_closed_from(sessions_dir, &session.session_id)?;
     }
