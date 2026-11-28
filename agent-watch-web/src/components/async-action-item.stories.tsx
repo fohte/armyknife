@@ -491,6 +491,51 @@ export const RunningProcessBlocksDiscard: Story = {
   },
 }
 
+export const DiscardIsInProgress: Story = {
+  name: 'The confirmed discard is removing the worktree.',
+  args: {
+    action: {
+      id: 11,
+      sessionId: 'example-session',
+      sessionTitle: 'Review the example configuration',
+      kind: 'discard',
+      status: 'deleting',
+      createdAt: 1_800_000_000_000,
+    },
+  },
+}
+
+export const SessionClosesAfterDiscard: Story = {
+  name: 'The session closes after the confirmed discard succeeds.',
+  args: {
+    action: {
+      id: 12,
+      sessionId: 'example-session',
+      sessionTitle: 'Review the example configuration',
+      kind: 'discard',
+      status: 'closed',
+      createdAt: 1_800_000_000_000,
+    },
+  },
+}
+
+export const DiscardFailureCanBeRetried: Story = {
+  name: 'A discard failure shows its message and retry action.',
+  args: {
+    action: {
+      id: 13,
+      sessionId: 'example-session',
+      sessionTitle: 'Review the example configuration',
+      kind: 'discard',
+      status: 'deleteFailed',
+      error: 'The worktree could not be deleted.',
+      createdAt: 1_800_000_000_000,
+    },
+    onRetry: () => undefined,
+    onDetails: () => undefined,
+  },
+}
+
 export const UnmergedBranchShowsItsReason: Story = {
   name: 'Activity shows the unmerged branch and reason.',
   args: {

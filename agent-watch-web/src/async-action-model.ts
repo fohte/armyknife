@@ -17,7 +17,6 @@ export type AsyncActionStatus =
   | 'closed'
   | 'closeFailed'
   | 'deleting'
-  | 'deleted'
   | 'deleteChanged'
   | 'deleteBlocked'
   | 'deleteFailed'
@@ -80,7 +79,6 @@ export type AsyncActionOutcome =
     }
   | { status: 'merged' | 'alreadyMerged' | 'queued'; message?: string }
   | { status: 'closed' | 'rewound' }
-  | { status: 'deleted' }
   | { status: 'launched' }
   | { status: 'launchFailed'; error: string }
   | {

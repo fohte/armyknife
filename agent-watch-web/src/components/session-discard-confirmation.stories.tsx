@@ -89,3 +89,8 @@ export const IPhoneReviewAgainWithNewItems: Story = {
   },
   parameters: { viewport: { defaultViewport: 'mobile1' } },
 }
+
+export const WorktreeWithoutABranch: Story = {
+  name: 'The dialog explains that only the worktree will be deleted.',
+  args: { branchName: null },
+}

@@ -28,6 +28,34 @@ type DiscardConfirmationSnapshot = {
   previousChecks?: CloseWorktreeChecks
 }
 
+function comparedItems(
+  current: CloseWorktreeChecks,
+  previous?: CloseWorktreeChecks,
+) {
+  const targetChanged =
+    previous !== undefined &&
+    (previous.path !== current.path || previous.branch !== current.branch)
+  const previousChanges = new Set(
+    previous?.changes.map(({ status, path }) => `${status}:${path}`) ?? [],
+  )
+  const previousCommits = new Set(previous?.commits.map(({ sha }) => sha) ?? [])
+
+  return {
+    changes: current.changes.map((change) =>
+      previous !== undefined &&
+      (targetChanged || !previousChanges.has(`${change.status}:${change.path}`))
+        ? { ...change, isNew: true }
+        : change,
+    ),
+    commits: current.commits.map((commit) =>
+      previous !== undefined &&
+      (targetChanged || !previousCommits.has(commit.sha))
+        ? { ...commit, isNew: true }
+        : commit,
+    ),
+  }
+}
+
 export type SessionDiscardConfirmationState = {
   sessionId: string
   sessionName: string
@@ -49,17 +77,9 @@ export type SessionDiscardConfirmationState = {
 function confirmationView(
   snapshot: DiscardConfirmationSnapshot,
 ): SessionDiscardConfirmationState {
-  const previousChecks = snapshot.previousChecks
-  const targetChanged =
-    previousChecks !== undefined &&
-    (previousChecks.path !== snapshot.checks.path ||
-      previousChecks.branch !== snapshot.checks.branch)
-  const previousChanges = new Set(
-    previousChecks?.changes.map(({ status, path }) => `${status}:${path}`) ??
-      [],
-  )
-  const previousCommits = new Set(
-    previousChecks?.commits.map(({ sha }) => sha) ?? [],
+  const { changes, commits } = comparedItems(
+    snapshot.checks,
+    snapshot.previousChecks,
   )
 
   return {
@@ -67,21 +87,9 @@ function confirmationView(
     sessionName: snapshot.sessionName,
     branchName: snapshot.checks.branch,
     worktreePath: snapshot.checks.path,
-    changes: snapshot.checks.changes.map((change) => ({
-      ...change,
-      ...(previousChecks !== undefined &&
-      (targetChanged || !previousChanges.has(`${change.status}:${change.path}`))
-        ? { isNew: true }
-        : {}),
-    })),
-    commits: snapshot.checks.commits.map((commit) => ({
-      ...commit,
-      ...(previousChecks !== undefined &&
-      (targetChanged || !previousCommits.has(commit.sha))
-        ? { isNew: true }
-        : {}),
-    })),
-    reviewAgain: previousChecks !== undefined,
+    changes,
+    commits,
+    reviewAgain: snapshot.previousChecks !== undefined,
   }
 }
 
@@ -98,18 +106,12 @@ function newItemSummary(
   confirmed: CloseWorktreeChecks,
   current: CloseWorktreeChecks,
 ) {
-  const targetChanged =
-    confirmed.path !== current.path || confirmed.branch !== current.branch
-  const confirmedChanges = new Set(
-    confirmed.changes.map(({ status, path }) => `${status}:${path}`),
-  )
-  const confirmedCommits = new Set(confirmed.commits.map(({ sha }) => sha))
-  const newFileCount = current.changes.filter(
-    ({ status, path }) =>
-      targetChanged || !confirmedChanges.has(`${status}:${path}`),
+  const changed = comparedItems(current, confirmed)
+  const newFileCount = changed.changes.filter(
+    ({ isNew }) => isNew === true,
   ).length
-  const newCommitCount = current.commits.filter(
-    ({ sha }) => targetChanged || !confirmedCommits.has(sha),
+  const newCommitCount = changed.commits.filter(
+    ({ isNew }) => isNew === true,
   ).length
   const items = [
     newFileCount > 0
@@ -270,7 +272,7 @@ export function useSessionClose({
               )
               clearSessionAttachments(snapshot.sessionId)
               setError(null)
-              return { status: 'deleted' as const }
+              return { status: 'closed' as const }
             },
             (operationError) => {
               const checks = operationError.checks

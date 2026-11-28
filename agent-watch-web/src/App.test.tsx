@@ -4891,6 +4891,124 @@ it('requires a new review when the worktree changes during discard confirmation'
   ])
 })
 
+it('offers retry and terminal access when a process blocks discard', async () => {
+  const clearChecks = {
+    path: '/worktrees/sample-process-guard',
+    files: ['src/sample.ts'],
+    changes: [{ status: 'M', path: 'src/sample.ts' }],
+    commits: [],
+    branch: 'feature/sample-process-guard',
+    merged: true,
+    reason: null,
+    processes: [],
+    commitInspectionUnavailable: false,
+    processInspectionUnavailable: false,
+  }
+  const blockedChecks = {
+    ...clearChecks,
+    processes: [{ pid: 23456, name: 'sample-server' }],
+  }
+  const closeBodies: unknown[] = []
+  const fetchMock = vi.fn<typeof fetch>().mockImplementation((input, init) => {
+    if (!requestUrl(input).endsWith('/close')) {
+      return mockSessionActionFetch(input)
+    }
+    closeBodies.push(
+      typeof init?.body === 'string'
+        ? (JSON.parse(init.body) as unknown)
+        : null,
+    )
+    return Promise.resolve(
+      Response.json(
+        closeBodies.length === 1
+          ? {
+              error: 'The worktree contains uncommitted changes.',
+              code: 'dirty_worktree',
+              checks: clearChecks,
+            }
+          : {
+              error: 'The worktree still has a running process.',
+              code: 'worktree_process_guard',
+              checks: blockedChecks,
+            },
+        { status: 409 },
+      ),
+    )
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-process-guard', 'Review sample process guard')],
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
+    dispatchKey(window, 'e')
+  })
+  await act(async () => {
+    document
+      .querySelector<HTMLButtonElement>('.confirm-dialog-confirm')
+      ?.click()
+    await flushAsyncState()
+  })
+
+  const discardButton = Array.from(
+    container.querySelectorAll<HTMLButtonElement>(
+      '.async-action-toast-stack button',
+    ),
+  ).find((button) => button.textContent === 'Discard changes…')
+  if (discardButton === undefined) {
+    throw new Error('The close failure did not offer discard')
+  }
+  await act(async () => {
+    discardButton.click()
+    await flushAsyncState()
+  })
+  await act(async () => {
+    document
+      .querySelector<HTMLButtonElement>('.confirm-dialog-confirm')
+      ?.click()
+    await flushAsyncState()
+  })
+
+  const blockedAction = Array.from(
+    container.querySelectorAll('.async-action-item--toast'),
+  ).find(
+    (item) =>
+      item.querySelector('strong')?.textContent === 'Did not delete worktree',
+  )
+  const content = blockedAction?.querySelector('.async-action-item-content')
+  const controls = blockedAction?.querySelector(
+    '.async-action-controls--discard',
+  )
+  const snapshot = () => ({
+    message: content?.textContent ?? null,
+    actions: Array.from(
+      controls?.querySelectorAll('button') ?? [],
+      (button) => button.textContent,
+    ),
+    closeBodies,
+  })
+  expect(snapshot()).toEqual({
+    message:
+      'Did not delete worktreeReview sample process guardRunning in the worktree: 23456 (sample-server). Stop it, then Retry.',
+    actions: ['Retry', 'Open in terminal'],
+    closeBodies: [
+      { keepWorktree: false, stopAndClose: true },
+      {
+        keepWorktree: false,
+        stopAndClose: true,
+        discard: {
+          path: '/worktrees/sample-process-guard',
+          branch: 'feature/sample-process-guard',
+          changes: [{ status: 'M', path: 'src/sample.ts' }],
+          commits: [],
+        },
+      },
+    ],
+  })
+})
+
 it('offers a keep-worktree retry after a non-Done session close fails', async () => {
   const message =
     'Branch `sample-branch` is not merged (pull request is open); close the session while keeping its worktree to continue'

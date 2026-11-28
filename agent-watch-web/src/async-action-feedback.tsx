@@ -189,7 +189,6 @@ export function AsyncActionFeedbackProvider({
         outcome.status === 'alreadyMerged' ||
         outcome.status === 'queued' ||
         outcome.status === 'closed' ||
-        outcome.status === 'deleted' ||
         outcome.status === 'rewound' ||
         outcome.status === 'ranCommand' ||
         outcome.status === 'reviewDocumentActionSucceeded' ||
