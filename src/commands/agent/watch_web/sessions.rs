@@ -11,7 +11,6 @@ use axum::routing::get;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 
-use super::EnrichmentUpdates;
 use super::interrupted::interrupted_session_ids;
 use super::session_enrichment::{
     SessionEnrichmentCache, SessionPullRequestInfo, SessionTaskMetadata,
@@ -365,11 +364,11 @@ impl SessionSource for LiveSessionSource {
 }
 
 pub(super) fn router(
-    updates: EnrichmentUpdates,
+    enrichment: SessionEnrichmentCache,
     message_loaders: super::messages::RouteLoaders,
 ) -> Router {
     router_with_source(LiveSessionSource {
-        enrichment: SessionEnrichmentCache::new(updates),
+        enrichment,
         message_loaders,
     })
 }
