@@ -83,11 +83,20 @@ export const ModelAndEffortPickerIsOpen: Story = {
 }
 
 export const SessionIsStarting: Story = {
-  name: 'The form waits for the launched session to appear in the feed',
+  name: 'After Start the form shows the sent message and that the session is starting',
   args: {
-    launchPending: true,
+    pendingLaunch: {
+      request: {
+        directory: exampleSessionDirectories[0]?.path ?? '',
+        engine: 'claude',
+        worktree: false,
+        initialMessage: 'Add a setting for retaining application logs.',
+      },
+      startedAt: new Date('2026-05-06T12:03:00Z').getTime(),
+    },
     state: createNewSessionStoryState({
       selectedDirectory: exampleSessionDirectories[0] ?? null,
+      initialMessage: 'Add a setting for retaining application logs.',
     }),
   },
 }

@@ -21,6 +21,7 @@ export type ComposerProps = {
   statusText?: string
   isMobile?: boolean
   isBusy?: boolean
+  addDisabled?: boolean
   trailingAction?: ReactNode
 }
 
@@ -35,6 +36,7 @@ export function Composer({
   statusText,
   isMobile = false,
   isBusy = false,
+  addDisabled = false,
   trailingAction,
 }: ComposerProps) {
   return (
@@ -92,6 +94,7 @@ export function Composer({
             type="button"
             variant="plain"
             aria-label="Add attachment"
+            disabled={addDisabled}
             onClick={onAddAttachments}
           >
             <Plus aria-hidden="true" size={isMobile ? 22 : 18} />

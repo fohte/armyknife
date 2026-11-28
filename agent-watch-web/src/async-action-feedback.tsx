@@ -193,6 +193,7 @@ export function AsyncActionFeedbackProvider({
           ...(options.initialMessage === undefined
             ? {}
             : { initialMessage: options.initialMessage }),
+          ...(options.engine === undefined ? {} : { engine: options.engine }),
           ...(options.repo === undefined ? {} : { repo: options.repo }),
           ...(options.discardable === true ? { discardable: true } : {}),
           ...(options.reviewDocumentAction === undefined

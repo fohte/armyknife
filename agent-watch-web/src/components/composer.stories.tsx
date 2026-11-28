@@ -94,6 +94,11 @@ export const SendButtonOff: Story = {
   },
 }
 
+export const AttachmentButtonIsDisabled: Story = {
+  name: 'The attachment button is disabled while the session starts',
+  args: { addDisabled: true },
+}
+
 export const IPhoneComposer: Story = {
   name: 'The iPhone composer uses larger controls and centered status text',
   args: {

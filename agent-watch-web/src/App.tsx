@@ -476,7 +476,7 @@ function AppContent() {
           waitingExpanded,
           doneExpanded,
           statusPanelOpen,
-          launchPending: pendingLaunch !== null,
+          pendingLaunch,
           projects,
           focusedProjectName,
           hideQuietProjects,
