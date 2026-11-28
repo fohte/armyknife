@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.995](https://github.com/fohte/armyknife/compare/v0.1.994...v0.1.995) (2026-11-28)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** remove stale proposal claim ([#2421](https://github.com/fohte/armyknife/issues/2421)) ([8d668cb](https://github.com/fohte/armyknife/commit/8d668cb891e28b558280bb58f18a0781d1523dc0))
+
 ## [0.1.994](https://github.com/fohte/armyknife/compare/v0.1.993...v0.1.994) (2026-11-28)
 
 
