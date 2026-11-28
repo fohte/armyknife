@@ -13210,6 +13210,14 @@ it.each([
     cleanupTrigger: 'response',
   },
   {
+    cardType: 'todo',
+    atBottom: false,
+    nearBottom: false,
+    resolution: 'withdrawn',
+    resolvedSeq: 62,
+    cleanupTrigger: 'response',
+  },
+  {
     cardType: 'proposal',
     atBottom: true,
     nearBottom: false,

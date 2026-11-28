@@ -15,6 +15,7 @@ import type { EncodedAttachment } from '#components/use-attachments'
 import { useAttachments } from '#components/use-attachments'
 import { cardDraftStorageKey, useDraft } from '#components/use-composer-draft'
 import { useFileDrop } from '#components/use-file-drop'
+import { WithdrawnCard } from '#components/withdrawn-card'
 import type { ProposalAnswer, ProposalOption } from '#types'
 
 type ProposalCardProps = {
@@ -27,7 +28,6 @@ type ProposalCardProps = {
   answer: ProposalAnswer | null
   resolved: boolean
   resolution: 'withdrawn' | null
-  withdrawalComment: string | null
   isMobile: boolean
   defaultChoice?: number | null
   defaultComment?: string
@@ -47,13 +47,13 @@ export function ProposalCard({
   answer,
   resolved,
   resolution,
-  withdrawalComment,
   isMobile,
   defaultChoice = null,
   defaultComment = '',
   onAnswer,
 }: ProposalCardProps) {
   const [draftSessionId] = useState(() => sessionId ?? crypto.randomUUID())
+  const conversationCardId = JSON.stringify([draftSessionId, 'proposal', seq])
   const proposalFieldId = `proposal-${useId()}`
   const attachmentState = useAttachments(
     `${sessionId ?? 'proposal'}:proposal:${String(seq)}`,
@@ -211,16 +211,24 @@ export function ProposalCard({
     submitAnswer,
   ])
 
+  if (isWithdrawn) {
+    return (
+      <WithdrawnCard
+        kind="Proposal"
+        title={title}
+        cardId={conversationCardId}
+      />
+    )
+  }
+
   const status =
     latestAnswer !== null
       ? latestAnswer.choice === null
         ? 'asked for another option'
         : `chose ${options[latestAnswer.choice]?.label ?? 'an option'}`
-      : isWithdrawn
-        ? 'withdrawn'
-        : resolved
-          ? 'answered elsewhere'
-          : 'waiting for your choice'
+      : resolved
+        ? 'answered elsewhere'
+        : 'waiting for your choice'
 
   return (
     <article
@@ -229,6 +237,7 @@ export function ProposalCard({
       aria-busy={isSubmitting || attachmentState.isProcessingAttachments}
       data-mobile={isMobile ? 'true' : undefined}
       data-answerable={isDisabled ? undefined : 'true'}
+      data-conversation-card-id={conversationCardId}
       ref={cardRef}
     >
       <h2>Proposal · {status}</h2>
@@ -239,14 +248,6 @@ export function ProposalCard({
           {...(imageSources === undefined ? {} : { imageSources })}
         >
           {summary}
-        </MarkdownMessage>
-      ) : null}
-      {isWithdrawn && withdrawalComment !== null ? (
-        <MarkdownMessage
-          className="chat-proposal-withdrawal-comment"
-          {...(imageSources === undefined ? {} : { imageSources })}
-        >
-          {withdrawalComment}
         </MarkdownMessage>
       ) : null}
       <div

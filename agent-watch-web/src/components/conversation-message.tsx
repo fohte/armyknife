@@ -243,7 +243,6 @@ export function renderConversationMessage({
         answer={message.answer}
         resolved={message.resolved}
         resolution={message.resolution}
-        withdrawalComment={message.comment}
         {...(imageSources === undefined ? {} : { imageSources })}
         isMobile={isMobile}
         onAnswer={(answer, attachments) =>

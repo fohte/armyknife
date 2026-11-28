@@ -42,7 +42,6 @@ const meta = {
     answer: null,
     resolved: false,
     resolution: null,
-    withdrawalComment: null,
     isMobile: false,
     ...callbacks,
   },
@@ -200,11 +199,9 @@ export const ProposalShowsItWasAnsweredElsewhere: Story = {
 }
 
 export const ProposalShowsItWasWithdrawn: Story = {
-  name: 'A proposal shows that it was withdrawn with a reason',
+  name: 'A withdrawn proposal shows only its heading and title',
   args: {
     resolved: true,
     resolution: 'withdrawn',
-    withdrawalComment:
-      'See [the update](https://example.test) for **context**.',
   },
 }

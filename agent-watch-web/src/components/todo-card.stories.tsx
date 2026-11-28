@@ -122,6 +122,6 @@ export const TodoIsRejected: Story = {
 }
 
 export const TodoIsWithdrawn: Story = {
-  name: 'A withdrawn to-do shows its title without a comment',
-  args: { resolution: 'withdrawn', defaultComment: '' },
+  name: 'A withdrawn to-do shows only its heading and title, even with a saved comment',
+  args: { resolution: 'withdrawn', defaultComment: 'The plan changed.' },
 }
