@@ -243,7 +243,7 @@ export function AsyncActionFeedbackProvider({
           ...(options.timelineIndex === undefined
             ? {}
             : { timelineIndex: options.timelineIndex }),
-          createdAt: Date.now(),
+          createdAt: options.createdAt ?? Date.now(),
         },
         ...current,
       ])

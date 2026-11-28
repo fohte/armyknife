@@ -96,6 +96,52 @@ function LaunchFeedbackHarness({
   )
 }
 
+function LaunchHandoffTimestampHarness() {
+  const feedback = useOptionalAsyncActionFeedback()
+  const startAsyncAction = useAsyncActionStarter(() => {})
+  const [launchStartedAt] = useState(() => Date.now())
+  const addLaunch = (message: string, createdAt: number) => {
+    startAsyncAction({
+      kind: 'launch',
+      sessionId: `launch-${message}`,
+      sessionTitle: 'Sample directory',
+      initialMessage: message,
+      repo: 'example-org/example-service',
+      createdAt,
+      run: () => new Promise<AsyncActionOutcome>(() => undefined),
+      onOpenSession: () => undefined,
+    })
+  }
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => {
+          addLaunch('Later launch', Date.now())
+        }}
+      >
+        Start later launch
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          addLaunch('Earlier launch', launchStartedAt)
+        }}
+      >
+        Hand off earlier launch
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          feedback?.openActivity()
+        }}
+      >
+        Show activity
+      </button>
+    </>
+  )
+}
+
 function MissingProviderHarness({
   run,
 }: {
@@ -404,6 +450,39 @@ it('opens a launched session through its registered handler', async () => {
     openCalls: 1,
     status: '{"actions":["launched"],"toastIds":[0]}',
   })
+})
+
+it('orders a handed-off launch by its original start time', () => {
+  vi.useFakeTimers()
+  vi.setSystemTime(new Date(2026, 10, 20, 14, 13))
+  act(() => {
+    root?.render(
+      <AsyncActionFeedbackProvider>
+        <LaunchHandoffTimestampHarness />
+      </AsyncActionFeedbackProvider>,
+    )
+  })
+  vi.setSystemTime(new Date(2026, 10, 20, 14, 14))
+  act(() => {
+    Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent === 'Start later launch')
+      ?.click()
+    Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent === 'Hand off earlier launch')
+      ?.click()
+    Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent === 'Show activity')
+      ?.click()
+  })
+
+  const snapshot = () =>
+    Array.from(
+      container.querySelectorAll(
+        '.async-action-activity-list .async-action-launch-message',
+      ),
+      (message) => message.textContent,
+    )
+  expect(snapshot()).toEqual(['Later launch', 'Earlier launch'])
 })
 
 it('reports a failed launch and retries it successfully', async () => {

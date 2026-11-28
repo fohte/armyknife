@@ -17,7 +17,7 @@ type NewSessionNavigationOptions = {
   ) => void
   resetNewSession: () => void
   setCommandPaletteOpen: (isOpen: boolean) => void
-  setPendingLaunchId: (sessionId: string | null) => void
+  handOffSessionLaunch: () => boolean
   requestComposerFocus: (sessionId: string) => void
 }
 
@@ -28,13 +28,14 @@ export function useNewSessionNavigation({
   replaceNewSessionWithSession,
   resetNewSession,
   setCommandPaletteOpen,
-  setPendingLaunchId,
+  handOffSessionLaunch,
   requestComposerFocus,
 }: NewSessionNavigationOptions) {
   const openNewSession = useCallback(
     (mode: NewSessionMode) => {
-      resetNewSession()
-      setPendingLaunchId(null)
+      if (!handOffSessionLaunch()) {
+        resetNewSession()
+      }
       setCommandPaletteOpen(false)
       closeMobileNav()
       navigate((current) => ({
@@ -51,29 +52,31 @@ export function useNewSessionNavigation({
     },
     [
       closeMobileNav,
+      handOffSessionLaunch,
       navigate,
       resetNewSession,
       setCommandPaletteOpen,
-      setPendingLaunchId,
     ],
   )
   const closeNewSession = useCallback(() => {
-    resetNewSession()
-    setPendingLaunchId(null)
+    if (!handOffSessionLaunch()) {
+      resetNewSession()
+    }
     backFromNewSession()
-  }, [backFromNewSession, resetNewSession, setPendingLaunchId])
+  }, [backFromNewSession, handOffSessionLaunch, resetNewSession])
   const switchFromNewSessionToSession = useCallback(
     (sessionId: string, conversationOpen: boolean) => {
-      resetNewSession()
-      setPendingLaunchId(null)
+      if (!handOffSessionLaunch()) {
+        resetNewSession()
+      }
       replaceNewSessionWithSession(sessionId, conversationOpen)
       requestComposerFocus(sessionId)
     },
     [
+      handOffSessionLaunch,
       replaceNewSessionWithSession,
       requestComposerFocus,
       resetNewSession,
-      setPendingLaunchId,
     ],
   )
 

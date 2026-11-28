@@ -12,7 +12,7 @@ const meta = {
     state: createNewSessionStoryState(),
     now: new Date('2026-05-06T12:00:00Z'),
     onClose: () => undefined,
-    onLaunched: () => undefined,
+    onStart: () => undefined,
   },
 } satisfies Meta<typeof NewSessionPicker>
 
@@ -22,7 +22,6 @@ type Story = StoryObj<typeof meta>
 export const DirectorySelectionIsOpen: Story = {
   name: 'The picker shows directories before engine choices',
 }
-
 export const EngineAndWorktreeCanBeSelected: Story = {
   name: 'Claude Code, Codex, and worktree options appear for the chosen directory',
   args: {
@@ -76,16 +75,6 @@ export const StartedSessionIsPendingInTheFeed: Story = {
     launchPending: true,
     state: createNewSessionStoryState({
       selectedDirectory: exampleSessionDirectories[0] ?? null,
-    }),
-  },
-}
-
-export const LaunchRequestIsSending: Story = {
-  name: 'The picker shows progress while the launch request is sending',
-  args: {
-    state: createNewSessionStoryState({
-      selectedDirectory: exampleSessionDirectories[0] ?? null,
-      isStarting: true,
     }),
   },
 }
