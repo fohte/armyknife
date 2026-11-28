@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.990](https://github.com/fohte/armyknife/compare/v0.1.989...v0.1.990) (2026-11-28)
+
+
+### Performance Improvements
+
+* **agent/hook:** cache nested status per session ([#2412](https://github.com/fohte/armyknife/issues/2412)) ([c659ae4](https://github.com/fohte/armyknife/commit/c659ae4499b1387dc1eb93618085282c5bacef91))
+
 ## [0.1.989](https://github.com/fohte/armyknife/compare/v0.1.988...v0.1.989) (2026-11-27)
 
 
