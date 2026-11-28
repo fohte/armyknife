@@ -121,6 +121,7 @@ fn finish_ended_session(
     sessions_dir: &Path,
     side_effects: &SideEffects,
 ) {
+    crate::shared::cleanup::withdraw_ended_session_cards(sessions_dir, session_id);
     side_effects.remove_notification_group(session_id);
     side_effects.archive_tq_session(session_id);
     let work_type_config = session
@@ -290,6 +291,7 @@ mod tests {
     struct LifecycleTestContext {
         temp_dir: TempDir,
         sinks: RecordingSideEffects,
+        session_end_cards: crate::commands::agent::test_support::SessionEndCardFixture,
     }
 
     #[fixture]
@@ -297,6 +299,7 @@ mod tests {
         LifecycleTestContext {
             temp_dir: TempDir::new().expect("temp dir"),
             sinks: recording_side_effects(),
+            session_end_cards: crate::commands::agent::test_support::session_end_cards(),
         }
     }
 
@@ -382,6 +385,67 @@ mod tests {
     }
 
     #[rstest]
+    #[case::close_ends_claude_session(Engine::Claude, true)]
+    #[case::codex_end_ends_codex_session(Engine::Codex, false)]
+    fn ended_lifecycle_paths_withdraw_only_unanswered_cards(
+        lifecycle_test_context: LifecycleTestContext,
+        #[case] engine: Engine,
+        #[case] is_close: bool,
+    ) {
+        let LifecycleTestContext {
+            temp_dir,
+            sinks,
+            session_end_cards,
+        } = lifecycle_test_context;
+        store::save_session_to(
+            temp_dir.path(),
+            &session(engine, SessionStatus::Stopped, false),
+        )
+        .expect("save session");
+        session_end_cards.add_to(temp_dir.path(), "thread-one");
+
+        if is_close {
+            mark_session_ended_after_close_in("thread-one", temp_dir.path(), &sinks.side_effects)
+                .expect("close should end the session");
+        } else {
+            end_codex_session_in("thread-one", temp_dir.path(), &sinks.side_effects)
+                .expect("Codex end should end the session");
+        }
+
+        let updated = store::load_session_from(temp_dir.path(), "thread-one")
+            .expect("load session")
+            .expect("session exists");
+        let actual_cards =
+            crate::commands::agent::test_support::agent_card_state(temp_dir.path(), "thread-one")
+                .expect("cards should load");
+        assert_eq!(
+            (updated.status, actual_cards),
+            (
+                SessionStatus::Ended,
+                (
+                    vec![
+                        (1, Some(store::TodoResolution::Completed), None),
+                        (
+                            2,
+                            Some(store::TodoResolution::Withdrawn),
+                            Some("Withdrawn because the session ended.".to_string()),
+                        ),
+                    ],
+                    vec![
+                        (1, None, true, None),
+                        (
+                            2,
+                            Some(store::ProposalResolution::Withdrawn),
+                            true,
+                            Some("Withdrawn because the session ended.".to_string()),
+                        ),
+                    ],
+                ),
+            ),
+        );
+    }
+
+    #[rstest]
     #[case::codex_stopped(Engine::Codex, SessionStatus::Stopped, false, SessionStatus::Ended, vec!["thread-one"], vec!["thread-one"])]
     #[case::codex_paused(Engine::Codex, SessionStatus::Paused, false, SessionStatus::Paused, Vec::<&str>::new(), Vec::<&str>::new())]
     #[case::codex_sweep_signaled(Engine::Codex, SessionStatus::Stopped, true, SessionStatus::Stopped, Vec::<&str>::new(), Vec::<&str>::new())]
@@ -395,7 +459,9 @@ mod tests {
         #[case] expected_removed: Vec<&str>,
         #[case] expected_archived: Vec<&str>,
     ) {
-        let LifecycleTestContext { temp_dir, sinks } = lifecycle_test_context;
+        let LifecycleTestContext {
+            temp_dir, sinks, ..
+        } = lifecycle_test_context;
         store::save_session_to(
             temp_dir.path(),
             &session(engine, initial_status, sweep_signaled),
@@ -439,7 +505,9 @@ mod tests {
 
     #[rstest]
     fn process_exit_restores_archived_codex_session(lifecycle_test_context: LifecycleTestContext) {
-        let LifecycleTestContext { temp_dir, sinks } = lifecycle_test_context;
+        let LifecycleTestContext {
+            temp_dir, sinks, ..
+        } = lifecycle_test_context;
         let mut archived = session(Engine::Codex, SessionStatus::Stopped, false);
         archived.archived_at = Some(Utc::now());
         store::save_session_to(temp_dir.path(), &archived).expect("save session");
@@ -458,7 +526,9 @@ mod tests {
 
     #[rstest]
     fn explicit_close_ends_a_paused_codex_session(lifecycle_test_context: LifecycleTestContext) {
-        let LifecycleTestContext { temp_dir, sinks } = lifecycle_test_context;
+        let LifecycleTestContext {
+            temp_dir, sinks, ..
+        } = lifecycle_test_context;
         let mut closing_session = session(Engine::Codex, SessionStatus::Paused, false);
         closing_session.web_uis = vec![crate::commands::agent::types::WebUiRegistration {
             name: "Editor".to_owned(),
@@ -496,7 +566,9 @@ mod tests {
         lifecycle_test_context: LifecycleTestContext,
         #[case] engine: Engine,
     ) {
-        let LifecycleTestContext { temp_dir, sinks } = lifecycle_test_context;
+        let LifecycleTestContext {
+            temp_dir, sinks, ..
+        } = lifecycle_test_context;
         let mut paused = session(engine, SessionStatus::Paused, true);
         paused.ancestor_session_ids = vec!["fixture-parent-session".to_string()];
         store::save_session_to(temp_dir.path(), &paused).expect("save session");
@@ -560,7 +632,9 @@ mod tests {
         #[case] newer_activity: bool,
         #[case] expected_transition: bool,
     ) {
-        let LifecycleTestContext { temp_dir, sinks } = lifecycle_test_context;
+        let LifecycleTestContext {
+            temp_dir, sinks, ..
+        } = lifecycle_test_context;
         let expected_session = session(Engine::Claude, SessionStatus::Stopped, true);
         let mut current_session = expected_session.clone();
         current_session.status = current_status;
@@ -623,7 +697,9 @@ mod tests {
     fn explicit_close_retries_when_compacting_state_cannot_be_cleared(
         lifecycle_test_context: LifecycleTestContext,
     ) {
-        let LifecycleTestContext { temp_dir, sinks } = lifecycle_test_context;
+        let LifecycleTestContext {
+            temp_dir, sinks, ..
+        } = lifecycle_test_context;
         store::save_session_to(
             temp_dir.path(),
             &session(Engine::Claude, SessionStatus::Paused, false),

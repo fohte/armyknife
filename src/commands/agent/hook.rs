@@ -298,7 +298,15 @@ fn end_sessions_on_pane_takeover(
 
         session.status = SessionStatus::Ended;
         session.updated_at = now;
-        let _ = store::save_session_to(sessions_dir, &session);
+        if let Err(error) = store::save_session_to(sessions_dir, &session) {
+            tracing::warn!(
+                event = "agent.hook.pane_takeover_end_failed",
+                session = %session.session_id,
+                error = %error,
+            );
+            continue;
+        }
+        crate::shared::cleanup::withdraw_ended_session_cards(sessions_dir, &session.session_id);
         side_effects.archive_tq_session(&session.session_id);
     }
 }
@@ -547,6 +555,10 @@ fn process_hook_event_impl_with_env_and_unreported_stop(
                         session.updated_at = Utc::now();
                         session.restore_from_archive();
                         store::save_session_to(sessions_dir, &session)?;
+                        crate::shared::cleanup::withdraw_ended_session_cards(
+                            sessions_dir,
+                            &input.session_id,
+                        );
                         side_effects.remove_notification_group(&input.session_id);
                         side_effects.archive_tq_session(&input.session_id);
                     }
@@ -2259,6 +2271,7 @@ mod tests {
         temp_dir: tempfile::TempDir,
         archived_calls: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
         side_effects: SideEffects,
+        session_end_cards: crate::commands::agent::test_support::SessionEndCardFixture,
     }
 
     type PaneBindingResolveCall = (bool, Option<bool>);
@@ -2337,7 +2350,27 @@ mod tests {
             temp_dir: tempfile::TempDir::new().expect("temp dir"),
             archived_calls,
             side_effects,
+            session_end_cards: crate::commands::agent::test_support::session_end_cards(),
         }
+    }
+
+    type ExpectedSessionEndCardState = crate::commands::agent::test_support::AgentCardState;
+    type ExpectedHookSessionEnd = (SessionStatus, bool, Vec<String>);
+
+    fn expected_session_end_card_state(withdrawn: bool) -> ExpectedSessionEndCardState {
+        let todo_resolution = withdrawn.then_some(store::TodoResolution::Withdrawn);
+        let proposal_resolution = withdrawn.then_some(store::ProposalResolution::Withdrawn);
+        let comment = withdrawn.then(|| "Withdrawn because the session ended.".to_string());
+        (
+            vec![
+                (1, Some(store::TodoResolution::Completed), None),
+                (2, todo_resolution, comment.clone()),
+            ],
+            vec![
+                (1, None, true, None),
+                (2, proposal_resolution, withdrawn, comment),
+            ],
+        )
     }
 
     fn create_test_input(notification_type: Option<&str>) -> HookInput {
@@ -4594,63 +4627,61 @@ mod tests {
         Engine::Claude,
         SessionStatus::Running,
         false,
-        SessionStatus::Ended,
-        false,
-        vec!["end-sess".to_string()],
+        (
+            SessionStatus::Ended,
+            false,
+            vec!["end-sess".to_string()],
+        ),
+        true,
     )]
     #[case::claude_sweep_paused_keeps_notification_and_session(
         Engine::Claude,
         SessionStatus::Paused,
         false,
-        SessionStatus::Paused,
-        true,
-        Vec::<String>::new(),
+        (SessionStatus::Paused, true, Vec::<String>::new()),
+        false,
     )]
     #[case::claude_sweep_signaled_stopped_keeps_notification_and_session(
         Engine::Claude,
         SessionStatus::Stopped,
         true,
-        SessionStatus::Paused,
+        (SessionStatus::Paused, false, Vec::<String>::new()),
         false,
-        Vec::<String>::new(),
     )]
     #[case::codex_session_end_stops_without_finalizing(
         Engine::Codex,
         SessionStatus::Running,
         false,
-        SessionStatus::Stopped,
+        (SessionStatus::Stopped, false, Vec::<String>::new()),
         false,
-        Vec::<String>::new(),
     )]
     #[case::codex_already_ended_stays_ended_without_repeating_side_effects(
         Engine::Codex,
         SessionStatus::Ended,
         false,
-        SessionStatus::Ended,
-        true,
-        Vec::<String>::new(),
+        (SessionStatus::Ended, true, Vec::<String>::new()),
+        false,
     )]
     #[case::codex_sweep_signaled_confirms_pause(
         Engine::Codex,
         SessionStatus::Stopped,
         true,
-        SessionStatus::Paused,
+        (SessionStatus::Paused, false, Vec::<String>::new()),
         false,
-        Vec::<String>::new(),
     )]
     fn session_end_applies_engine_specific_lifecycle(
         #[case] engine: Engine,
         #[case] initial_status: SessionStatus,
         #[case] sweep_signaled: bool,
-        #[case] expected_status: SessionStatus,
-        #[case] expected_archived: bool,
-        #[case] expected_removed: Vec<String>,
+        #[case] expected: ExpectedHookSessionEnd,
+        #[case] expected_cards_withdrawn: bool,
         tq_archive_context: TqArchiveContext,
     ) {
         let TqArchiveContext {
             temp_dir,
             archived_calls,
             mut side_effects,
+            session_end_cards,
         } = tq_archive_context;
         let sessions_dir = temp_dir.path();
 
@@ -4696,6 +4727,7 @@ mod tests {
             effort: None,
         };
         store::save_session_to(sessions_dir, &session).expect("save");
+        session_end_cards.add_to(sessions_dir, &session.session_id);
 
         let removed = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
         side_effects.removed_notification_groups = Some(removed.clone());
@@ -4715,14 +4747,17 @@ mod tests {
             reloaded.archived_at.is_some(),
             removed.lock().expect("lock").clone(),
             archived_calls.lock().expect("lock").clone(),
+            crate::commands::agent::test_support::agent_card_state(sessions_dir, "end-sess")
+                .expect("cards should load"),
         );
         assert_eq!(
             recorded,
             (
-                expected_status,
-                expected_archived,
-                expected_removed.clone(),
-                expected_removed,
+                expected.0,
+                expected.1,
+                expected.2.clone(),
+                expected.2,
+                expected_session_end_card_state(expected_cards_withdrawn),
             ),
         );
     }
@@ -7950,13 +7985,13 @@ mod tests {
             (Engine::Claude, SessionStatus::Paused),
             "old",
             "%42",
-            "%42",
-            "new",
+            ("%42", "new"),
             (
                 SessionStatus::Ended,
                 vec!["old".to_string()],
                 Vec::<String>::new(),
             ),
+            true,
         )]
         #[case::keeps_when_session_id_matches(
             // `claude -c <same-id>` resume: session_id matches, must be left
@@ -7964,25 +7999,25 @@ mod tests {
             (Engine::Claude, SessionStatus::Paused),
             "same",
             "%42",
-            "%42",
-            "same",
+            ("%42", "same"),
             (
                 SessionStatus::Paused,
                 Vec::<String>::new(),
                 Vec::<String>::new(),
             ),
+            false,
         )]
         #[case::keeps_when_pane_differs(
             (Engine::Claude, SessionStatus::Paused),
             "other",
             "%99",
-            "%42",
-            "new",
+            ("%42", "new"),
             (
                 SessionStatus::Paused,
                 Vec::<String>::new(),
                 Vec::<String>::new(),
             ),
+            false,
         )]
         #[case::keeps_when_not_paused(
             // A Running session sharing the pane (shouldn't happen in practice
@@ -7990,66 +8025,63 @@ mod tests {
             (Engine::Claude, SessionStatus::Running),
             "active",
             "%42",
-            "%42",
-            "new",
+            ("%42", "new"),
             (
                 SessionStatus::Running,
                 Vec::<String>::new(),
                 Vec::<String>::new(),
             ),
+            false,
         )]
         #[case::ends_codex_after_daemon_restart(
             (Engine::Codex, SessionStatus::Stopped),
             "old-codex",
             "%42",
-            "%42",
-            "new-codex",
+            ("%42", "new-codex"),
             (
                 SessionStatus::Ended,
                 vec!["old-codex".to_string()],
                 vec!["old-codex".to_string()],
             ),
+            true,
         )]
         #[case::ends_running_codex_on_thread_switch(
             (Engine::Codex, SessionStatus::Running),
             "active-codex",
             "%42",
-            "%42",
-            "new-codex",
+            ("%42", "new-codex"),
             (
                 SessionStatus::Ended,
                 vec!["active-codex".to_string()],
                 vec!["active-codex".to_string()],
             ),
+            true,
         )]
         fn end_sessions_on_pane_takeover_cases(
             tq_archive_context: TqArchiveContext,
             #[case] engine_status: (Engine, SessionStatus),
             #[case] session_id: &str,
             #[case] session_pane: &str,
-            #[case] takeover_pane: &str,
-            #[case] takeover_session_id: &str,
+            #[case] takeover: (&str, &str),
             #[case] expected: (SessionStatus, Vec<String>, Vec<String>),
+            #[case] expected_cards_withdrawn: bool,
         ) {
             let (engine, initial_status) = engine_status;
             let TqArchiveContext {
                 temp_dir,
                 archived_calls,
                 mut side_effects,
+                session_end_cards,
             } = tq_archive_context;
             let mut session = make_session(session_id, session_pane);
             session.engine = engine;
             session.status = initial_status;
             store::save_session_to(temp_dir.path(), &session).expect("save");
+            session_end_cards.add_to(temp_dir.path(), session_id);
             let removed = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
             side_effects.removed_notification_groups = Some(removed.clone());
 
-            end_sessions_on_pane_takeover(
-                temp_dir.path(),
-                takeover_pane,
-                takeover_session_id,
-                &side_effects,
-            );
+            end_sessions_on_pane_takeover(temp_dir.path(), takeover.0, takeover.1, &side_effects);
 
             let reloaded = store::load_session_from(temp_dir.path(), session_id)
                 .expect("load")
@@ -8058,8 +8090,18 @@ mod tests {
                 reloaded.status,
                 archived_calls.lock().expect("lock").clone(),
                 removed.lock().expect("lock").clone(),
+                crate::commands::agent::test_support::agent_card_state(temp_dir.path(), session_id)
+                    .expect("cards should load"),
             );
-            assert_eq!(recorded, expected);
+            assert_eq!(
+                recorded,
+                (
+                    expected.0,
+                    expected.1,
+                    expected.2,
+                    expected_session_end_card_state(expected_cards_withdrawn),
+                ),
+            );
         }
 
         #[rstest]
@@ -8070,6 +8112,7 @@ mod tests {
                 temp_dir,
                 archived_calls,
                 mut side_effects,
+                ..
             } = tq_archive_context;
             let archived_at = Utc::now();
             let mut session = make_session("archived-codex", "%42");
