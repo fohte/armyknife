@@ -19,14 +19,26 @@ pub struct AdoptArgs {
 }
 
 pub fn run(args: &AdoptArgs) -> Result<()> {
-    store::cleanup_stale_sessions()?;
     let caller_id = current_session_id()?;
-    adopt_in(
-        &store::sessions_dir()?,
+    let sessions_dir = store::sessions_dir()?;
+    adopt_after_cleanup(
+        &sessions_dir,
         &caller_id,
         &args.session_id,
         args.force,
+        || store::cleanup_stale_sessions().map(|_| ()),
     )
+}
+
+fn adopt_after_cleanup(
+    sessions_dir: &Path,
+    caller_id: &str,
+    target_id: &str,
+    force: bool,
+    cleanup: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    cleanup()?;
+    adopt_in(sessions_dir, caller_id, target_id, force)
 }
 
 fn adopt_in(sessions_dir: &Path, caller_id: &str, target_id: &str, force: bool) -> Result<()> {
@@ -310,22 +322,28 @@ mod tests {
     }
 
     #[rstest]
-    #[case::no_current_parent(None, vec![])]
-    #[case::missing_parent(None, vec!["old-parent"])]
-    #[case::ended_parent(Some(SessionStatus::Ended), vec!["old-parent"])]
+    #[case::no_current_parent(None, false, vec![])]
+    #[case::missing_parent(None, false, vec!["old-parent"])]
+    #[case::ended_parent(Some(SessionStatus::Ended), false, vec!["old-parent"])]
+    #[case::archived_paused_parent(Some(SessionStatus::Paused), true, vec!["old-parent"])]
     fn adopt_does_not_require_force_when_current_parent_is_not_alive(
         session_store: TestSessionStore,
         #[case] parent_status: Option<SessionStatus>,
+        #[case] parent_archived: bool,
         #[case] target_ancestors: Vec<&str>,
     ) {
         seed_caller_and_target(&session_store, &["root"], &target_ancestors);
         if let Some(status) = parent_status {
-            session_store.save(&session("old-parent", &[], status));
+            let mut parent = session("old-parent", &[], status);
+            if parent_archived {
+                parent.archived_at = Some(Utc::now());
+            }
+            session_store.save(&parent);
         }
 
         session_store
             .adopt("caller", "target", false)
-            .expect("missing or ended parent should not block adoption");
+            .expect("missing, ended, or archived parent should not block adoption");
 
         assert_eq!(
             session_store.load("target").ancestor_session_ids,
@@ -334,16 +352,19 @@ mod tests {
     }
 
     #[test]
-    fn adopt_does_not_require_force_when_current_parent_is_archived() {
+    fn adopt_cleans_up_stale_parent_before_checking_its_liveness() {
         let store = session_store();
         seed_caller_and_target(&store, &["root"], &["old-parent"]);
-        let mut parent = session("old-parent", &[], SessionStatus::Paused);
-        parent.archived_at = Some(Utc::now());
-        store.save(&parent);
+        store.save(&session("old-parent", &[], SessionStatus::Running));
+        let cleanup = || {
+            let mut parent = store.load("old-parent");
+            parent.archived_at = Some(Utc::now());
+            store.save(&parent);
+            Ok(())
+        };
 
-        store
-            .adopt("caller", "target", false)
-            .expect("archived parents should not block adoption");
+        adopt_after_cleanup(&store.path, "caller", "target", false, cleanup)
+            .expect("stale parent cleanup should happen before adoption");
 
         assert_eq!(
             store.load("target").ancestor_session_ids,
