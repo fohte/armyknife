@@ -49,6 +49,7 @@ mod session_start;
 mod side_effects;
 mod stop;
 mod title_generation;
+mod tmux_cleanup_hooks;
 mod unreported_stop;
 mod vibe;
 mod work_type;
@@ -146,6 +147,9 @@ pub fn run(args: &HookArgs) -> Result<()> {
         .as_ref()
         .map(|tool_input| tool_input.raw.clone());
     let result = process_hook_event(event, input)?;
+    if event == HookEvent::SessionStart {
+        tmux_cleanup_hooks::configure_for_session_start(&session_id);
+    }
     if event == HookEvent::PermissionRequest {
         let sessions_dir = store::sessions_dir()?;
         permission_request::wait_for_request(

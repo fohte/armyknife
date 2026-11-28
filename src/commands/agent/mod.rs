@@ -12,6 +12,7 @@ pub(crate) mod claude_registry;
 pub(crate) mod claude_sessions;
 mod clean;
 mod clean_detached;
+mod cleanup_stale_sessions;
 mod close;
 mod codex;
 pub(crate) mod codex_steer;
@@ -134,6 +135,10 @@ pub enum AgentCommands {
 
     /// Delete merged or closed worktrees
     Clean(CleanArgs),
+
+    /// Clean up stale agent sessions after a tmux pane exits
+    #[command(name = "cleanup-stale-sessions")]
+    CleanupStaleSessions,
 
     /// Safely close an agent session and its tmux pane
     #[command(visible_alias = "c")]
@@ -282,6 +287,7 @@ impl AgentCommands {
             Self::CodexSubagentStop(args) => codex_subagent_stop::run(args)?,
             Self::CodexSubagentStopWorker(args) => codex_subagent_stop::run_worker(args)?,
             Self::Clean(args) => clean::run(args).await?,
+            Self::CleanupStaleSessions => cleanup_stale_sessions::run()?,
             Self::Close(args) => close::run(args).await?,
             Self::Crit(command) => crit::run(command)?,
             Self::WebUi(command) => web_ui::run(command)?,
