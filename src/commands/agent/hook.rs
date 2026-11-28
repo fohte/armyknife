@@ -2350,24 +2350,17 @@ mod tests {
         }
     }
 
-    type ExpectedSessionEndCardState = (
-        Vec<(i64, Option<store::TodoResolution>, Option<&'static str>)>,
-        Vec<(
-            i64,
-            Option<store::ProposalResolution>,
-            bool,
-            Option<&'static str>,
-        )>,
-    );
+    type ExpectedSessionEndCardState = crate::commands::agent::test_support::AgentCardState;
+    type ExpectedHookSessionEnd = (SessionStatus, bool, Vec<String>);
 
     fn expected_session_end_card_state(withdrawn: bool) -> ExpectedSessionEndCardState {
         let todo_resolution = withdrawn.then_some(store::TodoResolution::Withdrawn);
         let proposal_resolution = withdrawn.then_some(store::ProposalResolution::Withdrawn);
-        let comment = withdrawn.then_some("Withdrawn because the session ended.");
+        let comment = withdrawn.then(|| "Withdrawn because the session ended.".to_string());
         (
             vec![
                 (1, Some(store::TodoResolution::Completed), None),
-                (2, todo_resolution, comment),
+                (2, todo_resolution, comment.clone()),
             ],
             vec![
                 (1, None, true, None),
@@ -4630,57 +4623,54 @@ mod tests {
         Engine::Claude,
         SessionStatus::Running,
         false,
-        SessionStatus::Ended,
-        false,
-        vec!["end-sess".to_string()],
+        (
+            SessionStatus::Ended,
+            false,
+            vec!["end-sess".to_string()],
+        ),
+        true,
     )]
     #[case::claude_sweep_paused_keeps_notification_and_session(
         Engine::Claude,
         SessionStatus::Paused,
         false,
-        SessionStatus::Paused,
-        true,
-        Vec::<String>::new(),
+        (SessionStatus::Paused, true, Vec::<String>::new()),
+        false,
     )]
     #[case::claude_sweep_signaled_stopped_keeps_notification_and_session(
         Engine::Claude,
         SessionStatus::Stopped,
         true,
-        SessionStatus::Paused,
+        (SessionStatus::Paused, false, Vec::<String>::new()),
         false,
-        Vec::<String>::new(),
     )]
     #[case::codex_session_end_stops_without_finalizing(
         Engine::Codex,
         SessionStatus::Running,
         false,
-        SessionStatus::Stopped,
+        (SessionStatus::Stopped, false, Vec::<String>::new()),
         false,
-        Vec::<String>::new(),
     )]
     #[case::codex_already_ended_stays_ended_without_repeating_side_effects(
         Engine::Codex,
         SessionStatus::Ended,
         false,
-        SessionStatus::Ended,
-        true,
-        Vec::<String>::new(),
+        (SessionStatus::Ended, true, Vec::<String>::new()),
+        false,
     )]
     #[case::codex_sweep_signaled_confirms_pause(
         Engine::Codex,
         SessionStatus::Stopped,
         true,
-        SessionStatus::Paused,
+        (SessionStatus::Paused, false, Vec::<String>::new()),
         false,
-        Vec::<String>::new(),
     )]
     fn session_end_applies_engine_specific_lifecycle(
         #[case] engine: Engine,
         #[case] initial_status: SessionStatus,
         #[case] sweep_signaled: bool,
-        #[case] expected_status: SessionStatus,
-        #[case] expected_archived: bool,
-        #[case] expected_removed: Vec<String>,
+        #[case] expected: ExpectedHookSessionEnd,
+        #[case] expected_cards_withdrawn: bool,
         tq_archive_context: TqArchiveContext,
     ) {
         let TqArchiveContext {
@@ -4748,41 +4738,21 @@ mod tests {
         let reloaded = store::load_session_from(sessions_dir, "end-sess")
             .expect("load")
             .expect("session exists");
-        let todos = store::agent_todos_from(sessions_dir, "end-sess").expect("todos should load");
-        let proposals =
-            store::agent_proposals_from(sessions_dir, "end-sess").expect("proposals should load");
         let recorded = (
             reloaded.status,
             reloaded.archived_at.is_some(),
             removed.lock().expect("lock").clone(),
             archived_calls.lock().expect("lock").clone(),
-            (
-                todos
-                    .iter()
-                    .map(|todo| (todo.seq, todo.resolution, todo.comment.as_deref()))
-                    .collect::<Vec<_>>(),
-                proposals
-                    .iter()
-                    .map(|proposal| {
-                        (
-                            proposal.seq,
-                            proposal.resolution,
-                            proposal.resolved_at.is_some(),
-                            proposal.comment.as_deref(),
-                        )
-                    })
-                    .collect::<Vec<_>>(),
-            ),
+            crate::commands::agent::test_support::agent_card_state(sessions_dir, "end-sess")
+                .expect("cards should load"),
         );
-        let expected_cards_withdrawn =
-            engine == Engine::Claude && expected_status == SessionStatus::Ended;
         assert_eq!(
             recorded,
             (
-                expected_status,
-                expected_archived,
-                expected_removed.clone(),
-                expected_removed,
+                expected.0,
+                expected.1,
+                expected.2.clone(),
+                expected.2,
                 expected_session_end_card_state(expected_cards_withdrawn),
             ),
         );
@@ -8011,13 +7981,13 @@ mod tests {
             (Engine::Claude, SessionStatus::Paused),
             "old",
             "%42",
-            "%42",
-            "new",
+            ("%42", "new"),
             (
                 SessionStatus::Ended,
                 vec!["old".to_string()],
                 Vec::<String>::new(),
             ),
+            true,
         )]
         #[case::keeps_when_session_id_matches(
             // `claude -c <same-id>` resume: session_id matches, must be left
@@ -8025,25 +7995,25 @@ mod tests {
             (Engine::Claude, SessionStatus::Paused),
             "same",
             "%42",
-            "%42",
-            "same",
+            ("%42", "same"),
             (
                 SessionStatus::Paused,
                 Vec::<String>::new(),
                 Vec::<String>::new(),
             ),
+            false,
         )]
         #[case::keeps_when_pane_differs(
             (Engine::Claude, SessionStatus::Paused),
             "other",
             "%99",
-            "%42",
-            "new",
+            ("%42", "new"),
             (
                 SessionStatus::Paused,
                 Vec::<String>::new(),
                 Vec::<String>::new(),
             ),
+            false,
         )]
         #[case::keeps_when_not_paused(
             // A Running session sharing the pane (shouldn't happen in practice
@@ -8051,46 +8021,46 @@ mod tests {
             (Engine::Claude, SessionStatus::Running),
             "active",
             "%42",
-            "%42",
-            "new",
+            ("%42", "new"),
             (
                 SessionStatus::Running,
                 Vec::<String>::new(),
                 Vec::<String>::new(),
             ),
+            false,
         )]
         #[case::ends_codex_after_daemon_restart(
             (Engine::Codex, SessionStatus::Stopped),
             "old-codex",
             "%42",
-            "%42",
-            "new-codex",
+            ("%42", "new-codex"),
             (
                 SessionStatus::Ended,
                 vec!["old-codex".to_string()],
                 vec!["old-codex".to_string()],
             ),
+            true,
         )]
         #[case::ends_running_codex_on_thread_switch(
             (Engine::Codex, SessionStatus::Running),
             "active-codex",
             "%42",
-            "%42",
-            "new-codex",
+            ("%42", "new-codex"),
             (
                 SessionStatus::Ended,
                 vec!["active-codex".to_string()],
                 vec!["active-codex".to_string()],
             ),
+            true,
         )]
         fn end_sessions_on_pane_takeover_cases(
             tq_archive_context: TqArchiveContext,
             #[case] engine_status: (Engine, SessionStatus),
             #[case] session_id: &str,
             #[case] session_pane: &str,
-            #[case] takeover_pane: &str,
-            #[case] takeover_session_id: &str,
+            #[case] takeover: (&str, &str),
             #[case] expected: (SessionStatus, Vec<String>, Vec<String>),
+            #[case] expected_cards_withdrawn: bool,
         ) {
             let (engine, initial_status) = engine_status;
             let TqArchiveContext {
@@ -8107,42 +8077,18 @@ mod tests {
             let removed = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
             side_effects.removed_notification_groups = Some(removed.clone());
 
-            end_sessions_on_pane_takeover(
-                temp_dir.path(),
-                takeover_pane,
-                takeover_session_id,
-                &side_effects,
-            );
+            end_sessions_on_pane_takeover(temp_dir.path(), takeover.0, takeover.1, &side_effects);
 
             let reloaded = store::load_session_from(temp_dir.path(), session_id)
                 .expect("load")
                 .expect("session exists");
-            let todos = store::agent_todos_from(temp_dir.path(), session_id).expect("load todos");
-            let proposals =
-                store::agent_proposals_from(temp_dir.path(), session_id).expect("load proposals");
             let recorded = (
                 reloaded.status,
                 archived_calls.lock().expect("lock").clone(),
                 removed.lock().expect("lock").clone(),
-                (
-                    todos
-                        .iter()
-                        .map(|todo| (todo.seq, todo.resolution, todo.comment.as_deref()))
-                        .collect::<Vec<_>>(),
-                    proposals
-                        .iter()
-                        .map(|proposal| {
-                            (
-                                proposal.seq,
-                                proposal.resolution,
-                                proposal.resolved_at.is_some(),
-                                proposal.comment.as_deref(),
-                            )
-                        })
-                        .collect::<Vec<_>>(),
-                ),
+                crate::commands::agent::test_support::agent_card_state(temp_dir.path(), session_id)
+                    .expect("cards should load"),
             );
-            let expected_cards_withdrawn = expected.0 == SessionStatus::Ended;
             assert_eq!(
                 recorded,
                 (

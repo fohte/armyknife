@@ -415,27 +415,9 @@ mod tests {
         let updated = store::load_session_from(temp_dir.path(), "thread-one")
             .expect("load session")
             .expect("session exists");
-        let todos =
-            store::agent_todos_from(temp_dir.path(), "thread-one").expect("todos should load");
-        let proposals = store::agent_proposals_from(temp_dir.path(), "thread-one")
-            .expect("proposals should load");
-        let actual_cards = (
-            todos
-                .iter()
-                .map(|todo| (todo.seq, todo.resolution, todo.comment.as_deref()))
-                .collect::<Vec<_>>(),
-            proposals
-                .iter()
-                .map(|proposal| {
-                    (
-                        proposal.seq,
-                        proposal.resolution,
-                        proposal.resolved_at.is_some(),
-                        proposal.comment.as_deref(),
-                    )
-                })
-                .collect::<Vec<_>>(),
-        );
+        let actual_cards =
+            crate::commands::agent::test_support::agent_card_state(temp_dir.path(), "thread-one")
+                .expect("cards should load");
         assert_eq!(
             (updated.status, actual_cards),
             (
@@ -446,7 +428,7 @@ mod tests {
                         (
                             2,
                             Some(store::TodoResolution::Withdrawn),
-                            Some("Withdrawn because the session ended."),
+                            Some("Withdrawn because the session ended.".to_string()),
                         ),
                     ],
                     vec![
@@ -455,7 +437,7 @@ mod tests {
                             2,
                             Some(store::ProposalResolution::Withdrawn),
                             true,
-                            Some("Withdrawn because the session ended."),
+                            Some("Withdrawn because the session ended.".to_string()),
                         ),
                     ],
                 ),

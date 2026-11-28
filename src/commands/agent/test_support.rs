@@ -6,6 +6,41 @@ use rstest::fixture;
 
 use super::types::{Engine, Session, SessionStatus};
 
+pub(super) type AgentCardState = (
+    Vec<(i64, Option<super::store::TodoResolution>, Option<String>)>,
+    Vec<(
+        i64,
+        Option<super::store::ProposalResolution>,
+        bool,
+        Option<String>,
+    )>,
+);
+
+pub(super) fn agent_card_state(
+    sessions_dir: &std::path::Path,
+    session_id: &str,
+) -> anyhow::Result<AgentCardState> {
+    let todos = super::store::agent_todos_from(sessions_dir, session_id)?;
+    let proposals = super::store::agent_proposals_from(sessions_dir, session_id)?;
+    Ok((
+        todos
+            .into_iter()
+            .map(|todo| (todo.seq, todo.resolution, todo.comment))
+            .collect(),
+        proposals
+            .into_iter()
+            .map(|proposal| {
+                (
+                    proposal.seq,
+                    proposal.resolution,
+                    proposal.resolved_at.is_some(),
+                    proposal.comment,
+                )
+            })
+            .collect(),
+    ))
+}
+
 pub(super) struct SessionEndCardFixture;
 
 #[fixture]

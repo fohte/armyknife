@@ -413,11 +413,7 @@ pub(crate) fn withdraw_ended_session_cards(sessions_dir: &Path, session_id: &str
         session_id,
         "Withdrawn because the session ended.",
     );
-    let PendingCardCleanup {
-        _todo_resolution_lock,
-        error,
-    } = cleanup;
-    drop(_todo_resolution_lock);
+    let PendingCardCleanup { error, .. } = cleanup;
 
     if let Some(error) = error {
         tracing::warn!(
