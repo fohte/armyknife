@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
-import { classifyNavigation, isAllowedWatchUrl } from './navigation.js'
+import {
+  classifyNavigation,
+  isAllowedWatchUrl,
+  isWatchAppPageUrl,
+} from './navigation.js'
 
 describe('classifyNavigation', () => {
   it.each([
@@ -91,5 +95,30 @@ describe('isAllowedWatchUrl', () => {
     },
   ])('$name', ({ url, expected }) => {
     expect(isAllowedWatchUrl(url, 'http://127.0.0.1:4317')).toEqual(expected)
+  })
+})
+
+describe('isWatchAppPageUrl', () => {
+  it.each([
+    {
+      name: 'matches the app page while ignoring its query and fragment',
+      url: 'http://127.0.0.1:4317/?session=first#conversation',
+      watchUrl: 'http://127.0.0.1:4317/',
+      expected: true,
+    },
+    {
+      name: 'rejects same-origin file content URLs',
+      url: 'http://127.0.0.1:4317/api/sessions/example/files/file',
+      watchUrl: 'http://127.0.0.1:4317/',
+      expected: false,
+    },
+    {
+      name: 'rejects pages at a different origin',
+      url: 'https://example.test/',
+      watchUrl: 'http://127.0.0.1:4317/',
+      expected: false,
+    },
+  ])('$name', ({ url, watchUrl, expected }) => {
+    expect(isWatchAppPageUrl(url, watchUrl)).toEqual(expected)
   })
 })
