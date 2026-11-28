@@ -1299,7 +1299,7 @@ Files sent by an agent are served by `GET /api/sessions/{id}/files/{file_id}` on
 - `POST /api/sessions/{id}/focus`
 - `POST /api/sessions/{id}/read`
 - `POST /api/sessions/{id}/primary-task` with `{"taskId":"..."}` to choose the primary linked tq task
-- `POST /api/sessions/{id}/close` to close a session; send `{"keepWorktree":true}` to preserve its linked worktree
+- `POST /api/sessions/{id}/close` to close a session; send `{"keepWorktree":true}` to preserve its linked worktree. To discard worktree changes, send a `discard` object with the confirmed `path`, `branch`, `changes` (`status` and `path`), and commit SHA values. The server rechecks that current changes and unmerged commits are included in that confirmation before stopping the session and again before deletion. A changed snapshot returns `409` with `code: "close_checks_changed"` and current checks; `keepWorktree` cannot be combined with `discard`.
 - `POST /api/sessions/{id}/later` with `{"preset":"one_hour"}` (also accepts `this_evening`, `tomorrow`, `next_week`, `until_it_changes`, and `back_now`)
 - `POST /api/sessions/{id}/today` with `{"isToday":true}` or `{"isToday":false}`
 - `POST /api/sessions/{id}/title` with `{"title":"A fixture title"}`; an empty or whitespace-only title restores the automatic title

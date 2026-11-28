@@ -38,8 +38,15 @@ pub(crate) async fn close_from_watch_web(
     session: &Session,
     keep_worktree: bool,
     stop_and_close: bool,
+    discard: Option<worktree_delete::discard::ConfirmedDiscard>,
 ) -> Result<()> {
-    session_close::close_session_value_from_watch_web(session, keep_worktree, stop_and_close).await
+    session_close::close_session_value_from_watch_web(
+        session,
+        keep_worktree,
+        stop_and_close,
+        discard,
+    )
+    .await
 }
 
 #[derive(Args, Clone, Default, PartialEq, Eq)]

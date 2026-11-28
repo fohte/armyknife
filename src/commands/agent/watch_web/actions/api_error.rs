@@ -77,6 +77,18 @@ impl ApiError {
             return Self::internal(error);
         }
 
+        if error
+            .downcast_ref::<crate::shared::worktree_delete::discard::DiscardMismatchError>()
+            .is_some()
+        {
+            return Self {
+                status: StatusCode::CONFLICT,
+                message: error.to_string(),
+                code: Some("close_checks_changed"),
+                checks: None,
+            };
+        }
+
         if let Some(dirty_worktree) =
             error.downcast_ref::<crate::shared::worktree::DirtyWorktreeError>()
         {

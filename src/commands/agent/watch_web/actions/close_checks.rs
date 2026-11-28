@@ -11,6 +11,7 @@ use crate::infra::process::ProcessInPath;
 use crate::infra::process::find_non_shell_processes_in_path;
 use crate::shared::cleanup::{self, WorktreeProcessGuardError};
 use crate::shared::worktree;
+use crate::shared::worktree_delete::discard::{self, CommitInspection};
 use crate::shared::worktree_delete::{self, MergeGuardStatus, WorktreeDeleteTarget};
 
 #[derive(Debug, Serialize)]
@@ -34,22 +35,12 @@ struct CloseChange {
     path: String,
 }
 
-#[derive(Debug, PartialEq, Eq, Serialize)]
-pub(super) struct CloseCommit {
-    sha: String,
-    subject: String,
-}
+pub(super) use discard::CloseCommit;
 
 #[derive(Debug, Serialize)]
 struct CloseProcess {
     pid: u32,
     name: String,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct CommitInspection {
-    commits: Vec<CloseCommit>,
-    unavailable: bool,
 }
 
 async fn inspect_close_merge_status(
@@ -105,6 +96,7 @@ impl CloseChecks {
         Self::inspect_with(
             worktree_path,
             branch,
+            true,
             |path| worktree::uncommitted_changes(path).unwrap_or_default(),
             move |branch| async move {
                 // The preview checks local refs; close fetches and revalidates before deletion.
@@ -119,7 +111,7 @@ impl CloseChecks {
                 .await
             },
             move |branch| {
-                read_branch_commits_with(
+                discard::read_branch_commits(
                     commits_repo.workdir(),
                     &branch,
                     || get_default_branch_for_repo(&commits_repo).ok(),
@@ -152,6 +144,7 @@ impl CloseChecks {
         Self::inspect_with(
             worktree_path,
             None,
+            false,
             |path| worktree::uncommitted_changes(path).unwrap_or_default(),
             |_| async { None },
             |_| CommitInspection {
@@ -178,6 +171,7 @@ impl CloseChecks {
     async fn inspect_with<Changes, Merge, MergeFuture, Commits, Processes>(
         worktree_path: PathBuf,
         branch: Option<String>,
+        commit_inspection_required: bool,
         inspect_changes: Changes,
         inspect_merge_status: Merge,
         inspect_commits: Commits,
@@ -201,29 +195,31 @@ impl CloseChecks {
             Some(branch) => inspect_merge_status(branch).await,
             None => None,
         };
-        let commit_inspection = match (merge_status.as_ref(), branch.as_ref()) {
-            (Some(status), _)
-                if matches!(
-                    &status.status,
-                    crate::infra::git::MergeStatus::NotMerged { .. }
-                        | crate::infra::git::MergeStatus::Closed { .. }
-                ) =>
-            {
-                let branch = status.branch.clone();
-                tokio::task::spawn_blocking(move || inspect_commits(branch))
-                    .await
-                    .unwrap_or(CommitInspection {
-                        commits: Vec::new(),
-                        unavailable: true,
-                    })
-            }
-            (None, Some(_)) => CommitInspection {
+        let commit_inspection = match merge_status.as_ref() {
+            Some(status) => match &status.status {
+                crate::infra::git::MergeStatus::NotMerged { .. }
+                | crate::infra::git::MergeStatus::Closed { .. } => {
+                    let branch = status.branch.clone();
+                    tokio::task::spawn_blocking(move || inspect_commits(branch))
+                        .await
+                        .unwrap_or(CommitInspection {
+                            commits: Vec::new(),
+                            unavailable: true,
+                        })
+                }
+                crate::infra::git::MergeStatus::Merged { .. }
+                | crate::infra::git::MergeStatus::NoUniqueCommits { .. } => CommitInspection {
+                    commits: Vec::new(),
+                    unavailable: false,
+                },
+            },
+            None if branch.is_some() => CommitInspection {
                 commits: Vec::new(),
                 unavailable: true,
             },
-            _ => CommitInspection {
+            None => CommitInspection {
                 commits: Vec::new(),
-                unavailable: false,
+                unavailable: commit_inspection_required,
             },
         };
         let (changes, processes) = files_and_processes
@@ -300,43 +296,6 @@ impl CloseChecks {
             processes,
             process_inspection_unavailable,
         }
-    }
-}
-
-fn parse_commits(log: &str) -> Vec<CloseCommit> {
-    log.lines()
-        .filter_map(|line| {
-            let (sha, subject) = line.split_once('\0')?;
-            Some(CloseCommit {
-                sha: sha.to_string(),
-                subject: subject.to_string(),
-            })
-        })
-        .collect()
-}
-
-fn read_branch_commits_with(
-    worktree_path: &Path,
-    branch: &str,
-    get_default_branch: impl FnOnce() -> Option<String>,
-    run_git: impl FnOnce(&Path, [&str; 3]) -> Option<String>,
-) -> CommitInspection {
-    let Some(default_branch) = get_default_branch() else {
-        return CommitInspection {
-            commits: Vec::new(),
-            unavailable: true,
-        };
-    };
-    let range = format!("origin/{default_branch}..refs/heads/{branch}");
-    let Some(log) = run_git(worktree_path, ["log", "--format=%H%x00%s", range.as_str()]) else {
-        return CommitInspection {
-            commits: Vec::new(),
-            unavailable: true,
-        };
-    };
-    CommitInspection {
-        commits: parse_commits(&log),
-        unavailable: false,
     }
 }
 
@@ -458,6 +417,7 @@ mod tests {
         let checks = CloseChecks::inspect_with(
             PathBuf::from("/fictional/worktree"),
             Some("feature/fictional".to_string()),
+            true,
             |_| Vec::new(),
             |branch| async move {
                 inspect_close_merge_status(branch, async {
@@ -500,6 +460,7 @@ mod tests {
         let checks = CloseChecks::inspect_with(
             PathBuf::from("/fictional/worktree"),
             Some("feature/fictional".to_string()),
+            true,
             |_| Vec::new(),
             |branch| async move {
                 inspect_close_merge_status(branch, async {
@@ -610,6 +571,7 @@ mod tests {
         let checks = CloseChecks::inspect_with(
             PathBuf::from("/fictional/worktree"),
             Some("feature/fictional".to_string()),
+            true,
             |_| Vec::new(),
             |_| async { None },
             move |_| {
@@ -744,6 +706,7 @@ mod tests {
         let checks = CloseChecks::inspect_with(
             PathBuf::from("/fictional/worktree"),
             Some("feature/fictional".to_string()),
+            true,
             move |_| {
                 files_flag.store(true, Ordering::SeqCst);
                 vec![change("M", "src/fictional.rs")]
@@ -810,108 +773,42 @@ mod tests {
         );
     }
 
-    #[test]
-    fn parses_commit_log_records_without_running_git() {
-        let log = indoc::indoc! {
-            r#"
-            1111111111111111111111111111111111111111\0preserve fictional work
-            2222222222222222222222222222222222222222\0add fictional detail
-            "#
-        }
-        .replace("\\0", "\0");
-
-        assert_eq!(
-            parse_commits(&log),
-            vec![
-                commit(
-                    "1111111111111111111111111111111111111111",
-                    "preserve fictional work"
-                ),
-                commit(
-                    "2222222222222222222222222222222222222222",
-                    "add fictional detail"
-                ),
-            ],
-        );
-    }
-
-    #[test]
-    fn reads_branch_commits_from_the_expected_default_branch_range_without_running_git() {
-        let mut observed_git_call = None;
-        let inspection = read_branch_commits_with(
-            Path::new("/fictional/worktree"),
-            "feature/fictional",
-            || Some("master".to_string()),
-            |path, args| {
-                observed_git_call = Some((path.to_path_buf(), args.map(str::to_string)));
-                Some(
-                    indoc::indoc! {
-                        r#"
-                        1111111111111111111111111111111111111111\0preserve fictional work
-                        2222222222222222222222222222222222222222\0add fictional detail
-                        "#
-                    }
-                    .replace("\\0", "\0"),
-                )
-            },
-        );
-
-        assert_eq!(
-            (inspection, observed_git_call),
-            (
-                CommitInspection {
-                    commits: vec![
-                        commit(
-                            "1111111111111111111111111111111111111111",
-                            "preserve fictional work"
-                        ),
-                        commit(
-                            "2222222222222222222222222222222222222222",
-                            "add fictional detail"
-                        ),
-                    ],
-                    unavailable: false,
-                },
-                Some((
-                    PathBuf::from("/fictional/worktree"),
-                    [
-                        "log".to_string(),
-                        "--format=%H%x00%s".to_string(),
-                        "origin/master..refs/heads/feature/fictional".to_string(),
-                    ],
-                )),
-            ),
-        );
-    }
-
     #[rstest::rstest]
-    #[case::default_branch_unavailable(None, false, false)]
-    #[case::git_query_failed(Some("main"), false, true)]
-    fn reports_commit_inspection_failures(
-        #[case] default_branch: Option<&str>,
-        #[case] git_result: bool,
-        #[case] expected_git_call: bool,
+    #[case::worktree_without_local_branch(true, true)]
+    #[case::session_without_worktree(false, false)]
+    #[tokio::test]
+    async fn missing_branch_is_unavailable_only_for_a_worktree_target(
+        #[case] commit_inspection_required: bool,
+        #[case] expected_unavailable: bool,
     ) {
-        let mut git_called = false;
-        let inspection = read_branch_commits_with(
-            Path::new("/fictional/worktree"),
-            "feature/fictional",
-            || default_branch.map(str::to_string),
-            |_, _| {
-                git_called = true;
-                git_result.then(String::new)
+        let checks = CloseChecks::inspect_with(
+            PathBuf::from("/fictional/worktree"),
+            None,
+            commit_inspection_required,
+            |_| Vec::new(),
+            |_| async { None },
+            |_| CommitInspection {
+                commits: Vec::new(),
+                unavailable: false,
             },
-        );
+            |_| Ok(Vec::new()),
+        )
+        .await;
 
         assert_eq!(
-            (inspection, git_called),
-            (
-                CommitInspection {
-                    commits: Vec::new(),
-                    unavailable: true,
-                },
-                expected_git_call,
-            ),
+            serde_json::to_value(checks).unwrap(),
+            json!({
+                "path": "/fictional/worktree",
+                "files": [],
+                "changes": [],
+                "commits": [],
+                "commitInspectionUnavailable": expected_unavailable,
+                "branch": null,
+                "merged": null,
+                "reason": null,
+                "processes": [],
+                "processInspectionUnavailable": false,
+            }),
         );
     }
 
