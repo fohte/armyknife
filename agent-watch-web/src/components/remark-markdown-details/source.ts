@@ -77,7 +77,10 @@ export function parseMarkdownSection(
   const tree = parse(`${prefix}${source}${suffix}`)
   tree.children = tree.children.filter((node) => {
     const start = node.position?.start.offset
-    return start === undefined || (start >= sectionStart && start < sectionEnd)
+    return (
+      node.type !== 'definition' &&
+      (start === undefined || (start >= sectionStart && start < sectionEnd))
+    )
   })
   shiftMarkdownNodeOffsets(tree.children, sourceOffset - sectionStart)
   return tree.children
