@@ -3,35 +3,31 @@ import type {
   MarkdownRoot,
 } from '#components/markdown-message-types'
 import {
+  analyzeHtmlSource,
+  createMarkdownSource,
+  type HtmlSourceAnalysis,
+  type MarkdownSource,
+} from '#components/remark-markdown-details/html-source'
+import {
+  getSupportedDetailsIntervals,
+  renderMarkdownDetails,
+} from '#components/remark-markdown-details/render'
+import {
   getReferenceDefinitionSources,
   type MarkdownParser,
-  parseMarkdownSection,
   type ReferenceDefinitionSource,
+  type SourceOffsetMap,
 } from '#components/remark-markdown-details/source'
 
 const htmlCandidateStart = /^\s*<\/?(?:details|summary)\b/i
 const htmlLexemePattern =
   /<!--[\s\S]*?(?:-->|$)|<(script|style|pre|textarea)\b[\s\S]*?(?:<\/\1\s*>|$)|<\/?(?:details|summary)\b(?:[^>"']|"[^"]*"|'[^']*')*>/gi
-const detailsOpenPattern =
-  /^<details(?:\s+open(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?)?\s*>$/i
-const detailsClosePattern = /^<\/details\s*>$/i
-const summaryOpenPattern = /^<summary\s*>$/i
-const summaryClosePattern = /^<\/summary\s*>$/i
 
 type Processor = { parse: (value: string) => unknown }
-type Kind =
-  | 'details-open'
-  | 'details-raw-open'
-  | 'details-close'
-  | 'summary-open'
-  | 'summary-close'
-  | 'summary-text'
-type Marker = { kind: Kind; value: string; node: MarkdownNode; offset: number }
-type HtmlGroup = { node: MarkdownNode; offset: number }
-type Unit =
-  | { node: MarkdownNode; group?: HtmlGroup }
-  | { marker: Marker; group?: HtmlGroup }
-type Pair = { close: number; summaryOpen: number; summaryClose: number }
+type HiddenDefinition = {
+  node: MarkdownNode
+  reference: ReferenceDefinitionSource
+}
 
 function isRoot(value: unknown): value is MarkdownRoot {
   return (
@@ -44,350 +40,174 @@ function isRoot(value: unknown): value is MarkdownRoot {
   )
 }
 
-function marker(
-  kind: Kind,
-  value: string,
-  node: MarkdownNode,
-  offset: number,
-  group?: HtmlGroup,
-): Unit {
-  return { marker: { kind, value, node, offset }, ...(group ? { group } : {}) }
-}
-
-function section(
-  source: string,
-  offset: number,
-  parse: MarkdownParser,
-  references: readonly ReferenceDefinitionSource[],
-) {
-  return source.trim() === ''
-    ? []
-    : parseMarkdownSection(source, parse, references, offset)
-}
-
-function splitHtml(
-  node: MarkdownNode,
-  parse: MarkdownParser,
-  references: readonly ReferenceDefinitionSource[],
-): Unit[] | null {
-  if (
-    node.type !== 'html' ||
-    node.value === undefined ||
-    !htmlCandidateStart.test(node.value)
-  ) {
-    return null
-  }
-  const base = node.position?.start.offset ?? 0
-  const group = { node, offset: base }
-  const units: Unit[] = []
-  const pattern = new RegExp(htmlLexemePattern.source, 'gi')
-  let cursor = 0
-  let inSummary = false
-  const appendText = (end: number) => {
-    const text = node.value?.slice(cursor, end) ?? ''
-    if (text !== '') {
-      if (inSummary) {
-        units.push(marker('summary-text', text, node, base + cursor, group))
-      } else {
-        for (const parsed of section(text, base + cursor, parse, references)) {
-          units.push({ node: parsed, group })
-        }
+function getDefinitionNodes(nodes: readonly MarkdownNode[]) {
+  const definitions: MarkdownNode[] = []
+  const pending = [...nodes].reverse()
+  while (pending.length > 0) {
+    const node = pending.pop()
+    if (node === undefined) continue
+    if (node.type === 'definition') definitions.push(node)
+    if (node.children !== undefined) {
+      for (let index = node.children.length - 1; index >= 0; index -= 1) {
+        const child = node.children[index]
+        if (child !== undefined) pending.push(child)
       }
     }
   }
-
-  for (const match of node.value.matchAll(pattern)) {
-    const at = match.index
-    const value = match[0]
-    appendText(at)
-    if (/^<!--|^<(?:script|style|pre|textarea)\b/i.test(value)) {
-      units.push({ node: { ...node, value }, group })
-    } else {
-      const kind: Kind | null = detailsOpenPattern.test(value)
-        ? 'details-open'
-        : detailsClosePattern.test(value)
-          ? 'details-close'
-          : summaryOpenPattern.test(value)
-            ? 'summary-open'
-            : summaryClosePattern.test(value)
-              ? 'summary-close'
-              : /^<details\b/i.test(value)
-                ? 'details-raw-open'
-                : null
-      if (kind === null) units.push({ node: { ...node, value }, group })
-      else {
-        units.push(marker(kind, value, node, base + at, group))
-        if (kind === 'summary-open') inSummary = true
-        if (kind === 'summary-close') inSummary = false
-      }
-    }
-    cursor = at + value.length
-  }
-  appendText(node.value.length)
-  return units
+  return definitions
 }
 
-function unitsFrom(
+function mapDefinitionOffsets(node: MarkdownNode, offsets: SourceOffsetMap) {
+  const pending = [node]
+  while (pending.length > 0) {
+    const current = pending.pop()
+    if (current === undefined) continue
+    if (current.position !== undefined) {
+      const { start, end } = current.position
+      current.position = {
+        start: {
+          ...start,
+          ...(start.offset === undefined || offsets[start.offset] === undefined
+            ? {}
+            : { offset: offsets[start.offset] }),
+        },
+        end: {
+          ...end,
+          ...(end.offset === undefined || offsets[end.offset] === undefined
+            ? {}
+            : { offset: offsets[end.offset] }),
+        },
+      }
+    }
+    if (current.children !== undefined) {
+      for (const child of current.children) pending.push(child)
+    }
+  }
+}
+
+function analyzeHtmlGroups(
   nodes: MarkdownNode[],
   parse: MarkdownParser,
-  references: readonly ReferenceDefinitionSource[],
-): Unit[] {
-  const units: Unit[] = []
+  markdown: MarkdownSource,
+  analyses: Map<MarkdownNode, HtmlSourceAnalysis>,
+  hiddenDefinitions: HiddenDefinition[],
+) {
   for (const node of nodes) {
-    const split = splitHtml(node, parse, references)
-    if (split === null) units.push({ node })
-    else for (const unit of split) units.push(unit)
+    if (
+      node.type === 'html' &&
+      node.value !== undefined &&
+      htmlCandidateStart.test(node.value)
+    ) {
+      analyses.set(
+        node,
+        analyzeHtmlSource(node, markdown, parse, htmlLexemePattern),
+      )
+    }
   }
-  return units
+
+  const intervals = getSupportedDetailsIntervals(nodes, parse, analyses)
+  let intervalIndex = 0
+  for (const node of nodes) {
+    const analysis = analyses.get(node)
+    if (analysis !== undefined) {
+      for (const definition of getDefinitionNodes(
+        analysis.markdownTree.children,
+      )) {
+        const localStart = definition.position?.start.offset
+        const localEnd = definition.position?.end.offset
+        if (localStart === undefined || localEnd === undefined) continue
+        const offset = analysis.group.offsets[localStart]
+        const end = analysis.group.offsets[localEnd]
+        while (
+          intervals[intervalIndex] !== undefined &&
+          intervals[intervalIndex].end < (offset ?? Number.MAX_SAFE_INTEGER)
+        ) {
+          intervalIndex += 1
+        }
+        const interval = intervals[intervalIndex]
+        if (
+          offset === undefined ||
+          end === undefined ||
+          interval === undefined ||
+          interval.start > offset ||
+          end > interval.end
+        ) {
+          continue
+        }
+
+        const source = analysis.maskedSource.slice(localStart, localEnd)
+        mapDefinitionOffsets(definition, analysis.group.offsets)
+        hiddenDefinitions.push({
+          node: definition,
+          reference: { offset, source },
+        })
+      }
+    }
+    if (node.children !== undefined) {
+      analyzeHtmlGroups(
+        node.children,
+        parse,
+        markdown,
+        analyses,
+        hiddenDefinitions,
+      )
+    }
+  }
 }
 
-function pairDetails(units: Unit[]) {
-  type Frame = {
-    open: number
-    render: boolean
-    summaryOpen?: number
-    summaryClose?: number
-  }
-  const pairs = new Map<number, Pair>()
-  const closes = new Map<number, number>()
-  const stack: Frame[] = []
-  const pending = new Set<Frame>()
-  const invalidatePending = () => {
-    pending.clear()
-  }
-
-  for (const [index, unit] of units.entries()) {
-    if (!('marker' in unit)) {
-      invalidatePending()
+function removeDefinitionNodes(
+  nodes: MarkdownNode[],
+  definitions: MarkdownNode[],
+): MarkdownNode[] {
+  const remaining: MarkdownNode[] = []
+  for (const node of nodes) {
+    if (node.type === 'definition') {
+      definitions.push(node)
       continue
     }
-    const { kind } = unit.marker
-    if (kind === 'details-open') {
-      invalidatePending()
-      const frame = { open: index, render: true }
-      stack.push(frame)
-      pending.add(frame)
-    } else if (kind === 'details-raw-open') {
-      invalidatePending()
-      stack.push({ open: index, render: false })
-    } else if (kind === 'summary-open') {
-      const frame = stack.at(-1)
-      if (frame?.render === true && pending.delete(frame))
-        frame.summaryOpen = index
-      else invalidatePending()
-    } else if (kind === 'summary-close') {
-      const frame = stack.at(-1)
-      if (
-        frame?.render === true &&
-        frame.summaryOpen !== undefined &&
-        frame.summaryClose === undefined
-      ) {
-        frame.summaryClose = index
-      } else invalidatePending()
-    } else if (kind === 'details-close') {
-      const frame = stack.pop()
-      if (frame === undefined) continue
-      pending.delete(frame)
-      closes.set(frame.open, index)
-      if (
-        frame.render &&
-        frame.summaryOpen !== undefined &&
-        frame.summaryClose !== undefined
-      ) {
-        pairs.set(frame.open, {
-          close: index,
-          summaryOpen: frame.summaryOpen,
-          summaryClose: frame.summaryClose,
-        })
-      }
+    if (node.children !== undefined) {
+      node.children = removeDefinitionNodes(node.children, definitions)
     }
+    remaining.push(node)
   }
-  return { pairs, closes }
+  return remaining
 }
 
-function rawDetailsNode(group: HtmlGroup, open: Marker, end: number) {
-  const start = open.offset - group.offset
-  const position = group.node.position
-  return {
-    ...group.node,
-    value: (group.node.value ?? '').slice(start, end),
-    ...(position === undefined
-      ? {}
-      : {
-          position: {
-            ...position,
-            start: { ...position.start, offset: open.offset },
-            end: { ...position.end, offset: group.offset + end },
-          },
-        }),
-  }
-}
-
-function summaryNode(
-  units: Unit[],
-  start: number,
-  end: number,
-  parse: MarkdownParser,
-  references: readonly ReferenceDefinitionSource[],
-): MarkdownNode {
-  const children: MarkdownNode[] = []
-  let fallback = ''
-  const append = (nodes: MarkdownNode[]) => {
-    for (const node of nodes) {
-      if (node.type !== 'paragraph') continue
-      if (children.length > 0) children.push({ type: 'break' })
-      for (const child of node.children ?? []) children.push(child)
-    }
-  }
-  for (let index = start; index < end; index += 1) {
-    const unit = units[index]
-    if (unit === undefined) continue
-    if ('marker' in unit && unit.marker.kind === 'summary-text') {
-      fallback += unit.marker.value
-      append(section(unit.marker.value, unit.marker.offset, parse, references))
-    } else if (!('marker' in unit) && unit.node.type === 'paragraph') {
-      append([unit.node])
-      fallback += (unit.node.children ?? [])
-        .filter((child) => child.type === 'text')
-        .map((child) => child.value ?? '')
-        .join('')
-    } else if (!('marker' in unit) && unit.node.type === 'html') {
-      fallback += unit.node.value ?? ''
-    }
-  }
-  return {
-    type: 'summary',
-    children:
-      children.length === 0 ? [{ type: 'text', value: fallback }] : children,
-    data: {
-      hName: 'span',
-      hProperties: { className: 'markdown-details-summary-content' },
-    },
-  }
-}
-
-function toNode(unit: Unit): MarkdownNode {
-  if (!('marker' in unit)) return unit.node
-  if (unit.marker.kind === 'summary-text') {
-    return { type: 'text', value: unit.marker.value }
-  }
-  return { ...unit.marker.node, type: 'html', value: unit.marker.value }
-}
-
-function renderUnits(
-  nodes: MarkdownNode[],
-  parse: MarkdownParser,
-  references: readonly ReferenceDefinitionSource[],
-): MarkdownNode[] {
-  const units = unitsFrom(nodes, parse, references)
-  const { pairs, closes } = pairDetails(units)
-  const result: MarkdownNode[] = []
-  const frames: Array<{
-    close: number
-    node: MarkdownNode
-    parent: MarkdownNode[]
-  }> = []
-  let output = result
-
-  for (let index = 0; index < units.length; index += 1) {
-    const unit = units[index]
-    if (unit === undefined) continue
+function mergeByOffset<T>(
+  left: readonly T[],
+  right: readonly T[],
+  offset: (value: T) => number,
+) {
+  const merged: T[] = []
+  let leftIndex = 0
+  let rightIndex = 0
+  while (leftIndex < left.length || rightIndex < right.length) {
+    const leftValue = left[leftIndex]
+    const rightValue = right[rightIndex]
     if (
-      'marker' in unit &&
-      (unit.marker.kind === 'details-open' ||
-        unit.marker.kind === 'details-raw-open')
+      rightValue === undefined ||
+      (leftValue !== undefined && offset(leftValue) <= offset(rightValue))
     ) {
-      const pair =
-        unit.marker.kind === 'details-open' ? pairs.get(index) : undefined
-      if (pair !== undefined) {
-        const children = [
-          summaryNode(
-            units,
-            pair.summaryOpen + 1,
-            pair.summaryClose,
-            parse,
-            references,
-          ),
-        ]
-        const node: MarkdownNode = {
-          type: 'details',
-          children,
-          data: {
-            hName: 'details',
-            ...(/^<details\s+open(?:\s*=|\s*>)/i.test(unit.marker.value)
-              ? { hProperties: { open: true } }
-              : {}),
-          },
-        }
-        frames.push({
-          close: pair.close,
-          node,
-          parent: output,
-        })
-        output = children
-        index = pair.summaryClose
-        continue
-      }
-      if (unit.group !== undefined) {
-        const ownCloseIndex = closes.get(index)
-        const ownCloseUnit =
-          ownCloseIndex === undefined ? undefined : units[ownCloseIndex]
-        const ownClose =
-          ownCloseUnit !== undefined &&
-          'marker' in ownCloseUnit &&
-          ownCloseUnit.group === unit.group
-            ? ownCloseUnit.marker
-            : undefined
-        const activeCloseIndex = frames.at(-1)?.close
-        const activeCloseUnit =
-          activeCloseIndex === undefined ? undefined : units[activeCloseIndex]
-        const activeClose =
-          activeCloseUnit !== undefined &&
-          'marker' in activeCloseUnit &&
-          activeCloseUnit.group === unit.group
-            ? activeCloseUnit.marker
-            : undefined
-        const end =
-          ownClose !== undefined
-            ? ownClose.offset - unit.group.offset + ownClose.value.length
-            : activeClose !== undefined
-              ? activeClose.offset - unit.group.offset
-              : (unit.group.node.value ?? '').length
-        output.push(rawDetailsNode(unit.group, unit.marker, end))
-        if (ownClose !== undefined && ownCloseIndex !== undefined) {
-          index = ownCloseIndex
-        } else if (
-          activeClose !== undefined &&
-          activeCloseIndex !== undefined
-        ) {
-          index = activeCloseIndex - 1
-        } else {
-          while (units[index + 1]?.group === unit.group) index += 1
-        }
-        continue
-      }
-    }
-
-    if (
-      'marker' in unit &&
-      unit.marker.kind === 'details-close' &&
-      frames.at(-1)?.close === index
-    ) {
-      const frame = frames.pop()
-      if (frame !== undefined) {
-        output = frame.parent
-        output.push(frame.node)
-      }
-    } else if ('marker' in unit) {
-      output.push(toNode(unit))
+      if (leftValue !== undefined) merged.push(leftValue)
+      leftIndex += 1
     } else {
-      if (unit.node.children !== undefined) {
-        unit.node.children = renderUnits(unit.node.children, parse, references)
-      }
-      output.push(unit.node)
+      merged.push(rightValue)
+      rightIndex += 1
     }
   }
-  return result
+  return merged
+}
+
+function orderDefinitions(definitions: MarkdownNode[]) {
+  const unique: MarkdownNode[] = []
+  const identifiers = new Set<string>()
+  for (const definition of definitions) {
+    const identifier = definition.identifier?.toUpperCase()
+    if (identifier !== undefined && identifiers.has(identifier)) continue
+    if (identifier !== undefined) identifiers.add(identifier)
+    unique.push(definition)
+  }
+  return unique
 }
 
 export function remarkMarkdownDetails(this: Processor) {
@@ -400,7 +220,40 @@ export function remarkMarkdownDetails(this: Processor) {
       typeof file.value === 'string'
         ? file.value
         : new TextDecoder().decode(file.value)
-    const references = getReferenceDefinitionSources(tree.children, source)
-    tree.children = renderUnits(tree.children, parse, references)
+    const visibleReferences = getReferenceDefinitionSources(
+      tree.children,
+      source,
+    )
+    const analyses = new Map<MarkdownNode, HtmlSourceAnalysis>()
+    const hiddenDefinitions: HiddenDefinition[] = []
+    analyzeHtmlGroups(
+      tree.children,
+      parse,
+      createMarkdownSource(source),
+      analyses,
+      hiddenDefinitions,
+    )
+    const hiddenReferences = hiddenDefinitions.map((item) => item.reference)
+    const references = mergeByOffset(
+      visibleReferences,
+      hiddenReferences,
+      (reference) => reference.offset,
+    )
+    const hiddenNodes = hiddenDefinitions.map((item) => item.node)
+    const visibleNodes: MarkdownNode[] = []
+    tree.children = removeDefinitionNodes(tree.children, visibleNodes)
+    const definitions = mergeByOffset(
+      visibleNodes,
+      hiddenNodes,
+      (definition) =>
+        definition.position?.start.offset ?? Number.MAX_SAFE_INTEGER,
+    )
+    tree.children = [...orderDefinitions(definitions), ...tree.children]
+    tree.children = renderMarkdownDetails(
+      tree.children,
+      parse,
+      references,
+      analyses,
+    )
   }
 }

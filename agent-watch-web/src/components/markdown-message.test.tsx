@@ -345,6 +345,16 @@ it('keeps unsafe summary HTML as text', () => {
   )
 })
 
+it('keeps comments visible between text in a details summary', () => {
+  expect(
+    renderMessage(
+      '<details open><summary>Before <!-- note --> after</summary>\n\nBody\n</details>',
+    ),
+  ).toBe(
+    '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Before &lt;!-- note --&gt; after</span></button><div class="markdown-details-body"><p>Body</p></div></div></div>',
+  )
+})
+
 it('renders nested details with both opening tags on the same line', () => {
   expect(
     renderMessage(`<details open><summary>Outer</summary><details open><summary>Inner</summary>
@@ -427,6 +437,18 @@ Hidden context
     ].join(String.fromCharCode(10)),
   },
   {
+    name: 'a non-ASCII autolink in a blockquote',
+    markdown: `> <details open>
+> <summary>Context</summary>
+> http://example.com/日本語 説明
+> </details>`,
+    expected: [
+      '<div class="markdown-message"><blockquote>',
+      '<div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Context</span></button><div class="markdown-details-body"><p><a href="http://example.com/" target="_blank" rel="noopener noreferrer">http://example.com/</a>日本語 説明</p></div></div>',
+      '</blockquote></div>',
+    ].join(String.fromCharCode(10)),
+  },
+  {
     name: 'a second details block',
     markdown: `<details>
 <summary>First section</summary>
@@ -457,6 +479,21 @@ See the [guide][shared-guide].
 [shared-guide]: https://example.com/guide`,
     expected:
       '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">References</span></button><div class="markdown-details-body"><p>See the <a href="https://example.com/guide" target="_blank" rel="noopener noreferrer">guide</a>.</p></div></div></div>',
+  },
+  {
+    name: 'a reference defined immediately after the summary',
+    markdown: `<details open>
+<summary>References</summary>
+[shared-guide]: https://example.com/hidden
+
+Body
+</details>
+
+See the [guide][shared-guide].`,
+    expected: [
+      '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">References</span></button><div class="markdown-details-body"><p>Body</p></div></div>',
+      '<p>See the <a href="https://example.com/hidden" target="_blank" rel="noopener noreferrer">guide</a>.</p></div>',
+    ].join(String.fromCharCode(10)),
   },
   {
     name: 'source order for duplicate definitions',
@@ -595,6 +632,20 @@ it.each([
     expected: [
       '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Code</span></button><div class="markdown-details-body"><p><code>&lt;/details&gt;</code>',
       'Body</p></div></div></div>',
+    ].join(String.fromCharCode(10)),
+  },
+  {
+    name: 'a fenced code block immediately after the summary',
+    markdown: `<details open>
+<summary>Code</summary>
+~~~
+</details>
+~~~
+Still inside
+</details>`,
+    expected: [
+      '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Code</span></button><div class="markdown-details-body"><div class="syntax-code-block-container"><div class="syntax-code-block-toolbar"><span class="syntax-code-block-language">text</span><button class="syntax-code-block-copy-button" type="button" aria-label="Copy code" title="Copy code">Copy</button></div><pre class="syntax-code-block" data-language="text"><code class="language-text">&lt;/details&gt;\n</code></pre></div>',
+      '<p>Still inside</p></div></div></div>',
     ].join(String.fromCharCode(10)),
   },
   {

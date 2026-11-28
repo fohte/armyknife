@@ -5,8 +5,14 @@ import type {
 
 export type MarkdownParser = (value: string) => MarkdownRoot
 export type ReferenceDefinitionSource = { offset: number; source: string }
+export type SourceOffsetMap = readonly number[]
 
-function shiftMarkdownNodeOffsets(nodes: MarkdownNode[], offset: number) {
+function shiftMarkdownNodeOffsets(
+  nodes: MarkdownNode[],
+  offset: number,
+  sourceOffsets?: SourceOffsetMap,
+  sectionStart = 0,
+) {
   const pending = [...nodes]
   while (pending.length > 0) {
     const node = pending.pop()
@@ -18,11 +24,25 @@ function shiftMarkdownNodeOffsets(nodes: MarkdownNode[], offset: number) {
           ...start,
           ...(start.offset === undefined
             ? {}
-            : { offset: start.offset + offset }),
+            : sourceOffsets === undefined
+              ? { offset: start.offset + offset }
+              : {
+                  offset:
+                    sourceOffsets[start.offset - sectionStart] ??
+                    start.offset + offset,
+                }),
         },
         end: {
           ...end,
-          ...(end.offset === undefined ? {} : { offset: end.offset + offset }),
+          ...(end.offset === undefined
+            ? {}
+            : sourceOffsets === undefined
+              ? { offset: end.offset + offset }
+              : {
+                  offset:
+                    sourceOffsets[end.offset - sectionStart] ??
+                    end.offset + offset,
+                }),
         },
       }
     }
@@ -63,12 +83,15 @@ export function parseMarkdownSection(
   parse: MarkdownParser,
   definitions: readonly ReferenceDefinitionSource[],
   sourceOffset: number,
+  sourceOffsets?: SourceOffsetMap,
 ): MarkdownNode[] {
+  const sourceEndOffset =
+    sourceOffsets?.[sourceOffsets.length - 1] ?? sourceOffset + source.length
   const preceding = definitions
     .filter((definition) => definition.offset < sourceOffset)
     .map((definition) => definition.source)
   const following = definitions
-    .filter((definition) => definition.offset >= sourceOffset + source.length)
+    .filter((definition) => definition.offset >= sourceEndOffset)
     .map((definition) => definition.source)
   const prefix = preceding.length > 0 ? `${preceding.join('\n\n')}\n\n` : ''
   const suffix = following.length > 0 ? `\n\n${following.join('\n\n')}` : ''
@@ -82,6 +105,11 @@ export function parseMarkdownSection(
       (start === undefined || (start >= sectionStart && start < sectionEnd))
     )
   })
-  shiftMarkdownNodeOffsets(tree.children, sourceOffset - sectionStart)
+  shiftMarkdownNodeOffsets(
+    tree.children,
+    sourceOffset - sectionStart,
+    sourceOffsets,
+    sectionStart,
+  )
   return tree.children
 }

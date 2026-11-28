@@ -5,6 +5,8 @@ export type MarkdownNode = {
     end: { offset?: number }
   }
   tagName?: string
+  identifier?: string
+  title?: string | null
   type: string
   url?: string
   value?: string
