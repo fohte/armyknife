@@ -27,7 +27,7 @@ type Kind =
   | 'summary-close'
   | 'summary-text'
 type Marker = { kind: Kind; value: string; node: MarkdownNode; offset: number }
-type HtmlGroup = { node: MarkdownNode }
+type HtmlGroup = { node: MarkdownNode; offset: number }
 type Unit =
   | { node: MarkdownNode; group?: HtmlGroup }
   | { marker: Marker; group?: HtmlGroup }
@@ -78,7 +78,7 @@ function splitHtml(
     return null
   }
   const base = node.position?.start.offset ?? 0
-  const group = { node }
+  const group = { node, offset: base }
   const units: Unit[] = []
   const pattern = new RegExp(htmlLexemePattern.source, 'gi')
   let cursor = 0
@@ -149,7 +149,6 @@ function pairDetails(units: Unit[]) {
     summaryClose?: number
   }
   const pairs = new Map<number, Pair>()
-  const closes = new Map<number, number>()
   const stack: Frame[] = []
   const pending = new Set<Frame>()
   const invalidatePending = () => {
@@ -188,7 +187,6 @@ function pairDetails(units: Unit[]) {
       const frame = stack.pop()
       if (frame === undefined) continue
       pending.delete(frame)
-      closes.set(frame.open, index)
       if (
         frame.render &&
         frame.summaryOpen !== undefined &&
@@ -202,22 +200,22 @@ function pairDetails(units: Unit[]) {
       }
     }
   }
-  return { pairs, closes }
+  return pairs
 }
 
-function rawDetailsNode(open: Marker, close: Marker, source: string) {
-  const end = close.offset + close.value.length
-  const position = open.node.position
+function rawDetailsNode(group: HtmlGroup, open: Marker, end: number) {
+  const start = open.offset - group.offset
+  const position = group.node.position
   return {
-    ...open.node,
-    value: source.slice(open.offset, end),
+    ...group.node,
+    value: (group.node.value ?? '').slice(start, end),
     ...(position === undefined
       ? {}
       : {
           position: {
             ...position,
             start: { ...position.start, offset: open.offset },
-            end: { ...position.end, offset: end },
+            end: { ...position.end, offset: group.offset + end },
           },
         }),
   }
@@ -278,10 +276,9 @@ function renderUnits(
   nodes: MarkdownNode[],
   parse: MarkdownParser,
   references: readonly ReferenceDefinitionSource[],
-  source: string,
 ): MarkdownNode[] {
   const units = unitsFrom(nodes, parse, references)
-  const { pairs, closes } = pairDetails(units)
+  const pairs = pairDetails(units)
   const result: MarkdownNode[] = []
   const frames: Array<{
     close: number
@@ -330,16 +327,25 @@ function renderUnits(
         continue
       }
       if (unit.group !== undefined) {
-        const closeIndex = closes.get(index)
-        const closeUnit =
-          closeIndex === undefined ? undefined : units[closeIndex]
-        if (closeUnit !== undefined && 'marker' in closeUnit) {
-          output.push(rawDetailsNode(unit.marker, closeUnit.marker, source))
-          index = closeIndex
-          continue
+        const activeCloseIndex = frames.at(-1)?.close
+        const activeCloseUnit =
+          activeCloseIndex === undefined ? undefined : units[activeCloseIndex]
+        const activeClose =
+          activeCloseUnit !== undefined &&
+          'marker' in activeCloseUnit &&
+          activeCloseUnit.group === unit.group
+            ? activeCloseUnit.marker
+            : undefined
+        const end =
+          activeClose !== undefined
+            ? activeClose.offset - unit.group.offset
+            : (unit.group.node.value ?? '').length
+        output.push(rawDetailsNode(unit.group, unit.marker, end))
+        if (activeClose !== undefined && activeCloseIndex !== undefined) {
+          index = activeCloseIndex - 1
+        } else {
+          while (units[index + 1]?.group === unit.group) index += 1
         }
-        output.push(unit.group.node)
-        while (units[index + 1]?.group === unit.group) index += 1
         continue
       }
     }
@@ -358,12 +364,7 @@ function renderUnits(
       output.push(toNode(unit))
     } else {
       if (unit.node.children !== undefined) {
-        unit.node.children = renderUnits(
-          unit.node.children,
-          parse,
-          references,
-          source,
-        )
+        unit.node.children = renderUnits(unit.node.children, parse, references)
       }
       output.push(unit.node)
     }
@@ -382,6 +383,6 @@ export function remarkMarkdownDetails(this: Processor) {
         ? file.value
         : new TextDecoder().decode(file.value)
     const references = getReferenceDefinitionSources(tree.children, source)
-    tree.children = renderUnits(tree.children, parse, references, source)
+    tree.children = renderUnits(tree.children, parse, references)
   }
 }

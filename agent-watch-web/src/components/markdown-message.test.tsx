@@ -249,6 +249,42 @@ Body
   )
 })
 
+it.each([
+  {
+    name: 'a list item',
+    markdown: `- <details>
+  foo
+  <summary>Summary</summary>
+
+  Body
+  </details>`,
+    expected: [
+      '<div class="markdown-message"><ul><li>&lt;details&gt;',
+      'foo',
+      '&lt;summary&gt;Summary&lt;/summary&gt;<p>Body</p>&lt;/details&gt;</li></ul></div>',
+    ].join(String.fromCharCode(10)),
+  },
+  {
+    name: 'a blockquote',
+    markdown: `> <details>
+> foo
+> <summary>Summary</summary>
+>
+> Body
+> </details>`,
+    expected: [
+      '<div class="markdown-message"><blockquote>&lt;details&gt;',
+      'foo',
+      '&lt;summary&gt;Summary&lt;/summary&gt;<p>Body</p>&lt;/details&gt;</blockquote></div>',
+    ].join(String.fromCharCode(10)),
+  },
+])(
+  'keeps content before a summary as text in $name',
+  ({ markdown, expected }) => {
+    expect(renderMessage(markdown)).toBe(expected)
+  },
+)
+
 it('keeps unsafe summary HTML as text', () => {
   expect(
     renderMessage(
@@ -279,7 +315,7 @@ it.each([
 inner
 </details>
 </details>`,
-    rawText: ['&lt;details&gt;', 'inner', '&lt;/details&gt;'].join(
+    body: ['&lt;details&gt;', 'inner', '&lt;/details&gt;'].join(
       String.fromCharCode(10),
     ),
   },
@@ -294,12 +330,12 @@ inner
 more
 </details>
 </details>`,
-    rawText: ['&lt;details&gt;', 'inner', '', 'more', '&lt;/details&gt;'].join(
-      String.fromCharCode(10),
-    ),
+    body:
+      ['&lt;details&gt;', 'inner'].join(String.fromCharCode(10)) +
+      '<p>more</p>&lt;/details&gt;',
   },
-])('preserves unsupported nested details in $name', ({ markdown, rawText }) => {
-  const expected = `<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Outer</span></button><div class="markdown-details-body">${rawText}</div></div></div>`
+])('preserves unsupported nested details in $name', ({ markdown, body }) => {
+  const expected = `<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Outer</span></button><div class="markdown-details-body">${body}</div></div></div>`
 
   expect(renderMessage(markdown)).toBe(expected)
 })
