@@ -25,8 +25,17 @@ pub(crate) async fn close_session_value_from_watch_web(
     session: &Session,
     keep_worktree: bool,
     stop_and_close: bool,
+    discard: Option<crate::shared::worktree_delete::discard::ConfirmedDiscard>,
 ) -> Result<()> {
     let linked_worktree_root = super::worktree::linked_worktree_root(&session.cwd);
+    if discard.is_some() && linked_worktree_root.is_none() {
+        return Err(
+            crate::shared::worktree_delete::discard::DiscardMismatchError::new(
+                crate::shared::worktree_delete::discard::DiscardVerificationError::TargetChanged,
+            )
+            .into(),
+        );
+    }
     let runtime = super::LiveCloseRuntime;
     let runtime_ref = &runtime;
 
@@ -37,6 +46,26 @@ pub(crate) async fn close_session_value_from_watch_web(
         linked_worktree_root,
         runtime_ref,
         |worktree_root, unmerged_policy| async move {
+            let prepare_worktree_root = worktree_root.clone();
+            let prepare = async move {
+                match discard {
+                    Some(confirmed) => {
+                        crate::shared::worktree_delete::discard::prepare_discard(
+                            &prepare_worktree_root,
+                            confirmed,
+                        )
+                        .await
+                    }
+                    None => {
+                        crate::shared::worktree_delete::prepare(
+                            &prepare_worktree_root,
+                            false,
+                            unmerged_policy,
+                        )
+                        .await
+                    }
+                }
+            };
             close_session_value_with_worktree(
                 SessionWorktreeContext {
                     session,
@@ -45,7 +74,7 @@ pub(crate) async fn close_session_value_from_watch_web(
                     worktree_root: &worktree_root,
                 },
                 find_shared_worktree_session_ids,
-                crate::shared::worktree_delete::prepare(&worktree_root, false, unmerged_policy),
+                prepare,
                 |session, force| {
                     super::close_tracked_session_with_runtime_and_stop(
                         session,

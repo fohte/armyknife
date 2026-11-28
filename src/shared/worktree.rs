@@ -76,6 +76,15 @@ pub(crate) fn uncommitted_changes(
     uncommitted_changes_with_status(worktree_path, &lock_dir, status_from_git)
 }
 
+pub(crate) fn uncommitted_changes_without_lock(
+    worktree_path: &std::path::Path,
+) -> anyhow::Result<Vec<UncommittedChange>> {
+    if !worktree_path.is_dir() {
+        return Ok(Vec::new());
+    }
+    status_from_git(worktree_path).map(|status| parse_uncommitted_changes(&status))
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct UncommittedChange {
     pub(crate) status: String,

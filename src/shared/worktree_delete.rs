@@ -10,15 +10,18 @@ use crate::shared::env_var::EnvVars;
 use crate::shared::hooks;
 use crate::shared::merge_notify::notify_delegator_of_merge;
 use crate::shared::worktree::{
-    branch_to_worktree_name, ensure_clean_for_deletion, find_worktree_name, get_main_repo,
+    self, branch_to_worktree_name, ensure_clean_for_deletion, find_worktree_name, get_main_repo,
     get_worktree_branch, get_worktree_branch_checked,
 };
 use crate::shared::worktree_error::WmError;
+
+pub(crate) mod discard;
 
 pub(crate) struct WorktreeDeletePlan {
     target: WorktreeDeleteTarget,
     merge_status: Option<MergeStatus>,
     force: bool,
+    discard: Option<discard::ConfirmedDiscard>,
 }
 
 pub(crate) struct WorktreeDeleteTarget {
@@ -104,6 +107,7 @@ pub(crate) async fn prepare(
         target,
         merge_status,
         force,
+        discard: None,
     })
 }
 
@@ -134,10 +138,13 @@ pub(crate) async fn execute(plan: WorktreeDeletePlan, skip_hooks: bool) -> Resul
             },
         merge_status,
         force,
+        discard,
     } = plan;
     let worktree_path_str = worktree_path.to_string_lossy();
 
-    ensure_clean_for_deletion(&worktree_path, force)?;
+    if discard.is_none() {
+        ensure_clean_for_deletion(&worktree_path, force)?;
+    }
 
     // Must complete before cleanup_worktree_by_name below: it deletes this
     // worktree's session records and, when the command runs from the
@@ -156,12 +163,44 @@ pub(crate) async fn execute(plan: WorktreeDeletePlan, skip_hooks: bool) -> Resul
         skip_hooks,
     );
 
+    let discard_confirmed = discard;
+    let before_delete_path = worktree_path.clone();
+    let before_delete_repo = main_repo.clone();
+    let before_delete_worktree_name = worktree_name.clone();
+
     let result = cleanup::cleanup_worktree_by_name_with_before_delete(
         &main_repo,
         &worktree_name,
         &worktree_path,
         force,
+        discard_confirmed.is_some(),
         || {
+            if let Some(confirmed) = discard_confirmed {
+                let current_branch =
+                    get_worktree_branch_checked(&before_delete_repo, &before_delete_worktree_name)
+                        .context("Could not inspect worktree branch before discard")?;
+                let changes = worktree::uncommitted_changes_without_lock(&before_delete_path)?;
+                let commits = match current_branch.as_deref() {
+                    Some(branch) => discard::read_branch_commits(
+                        &before_delete_path,
+                        branch,
+                        || get_default_branch_for_repo(&before_delete_repo).ok(),
+                        |path, args| crate::infra::git::cmd::run_git(path, args).ok(),
+                    ),
+                    None => discard::CommitInspection {
+                        commits: Vec::new(),
+                        unavailable: false,
+                    },
+                };
+                let observed = discard::observe_before_delete(
+                    &before_delete_path,
+                    current_branch,
+                    changes,
+                    commits,
+                );
+                discard::verify(&confirmed, &observed)
+                    .map_err(discard::DiscardMismatchError::new)?;
+            }
             ensure_worktree_delete_plan_before_delete(
                 merge_status.as_ref(),
                 force,

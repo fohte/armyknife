@@ -199,6 +199,7 @@ trait ActionRuntime: Send + Sync {
         session: &'a Session,
         keep_worktree: bool,
         stop_and_close: bool,
+        discard: Option<crate::shared::worktree_delete::discard::ConfirmedDiscard>,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
     fn merge_pull_request<'a>(
         &'a self,
@@ -566,6 +567,7 @@ mod tests {
         DirtyWorktree,
         ActiveProcesses,
         UnmergedWorktree,
+        DiscardMismatch,
         Operation(String),
     }
 
@@ -778,16 +780,21 @@ mod tests {
             session: &'a Session,
             keep_worktree: bool,
             stop_and_close: bool,
+            discard: Option<crate::shared::worktree_delete::discard::ConfirmedDiscard>,
         ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
             let close_error = self.close_error.lock().unwrap().clone();
             let sessions_dir = self.sessions_dir.lock().unwrap().clone();
             let session_id = session.session_id.clone();
-            self.calls.lock().unwrap().push(json!({
+            let mut call = json!({
                 "kind": "close",
                 "sessionId": session.session_id,
                 "keepWorktree": keep_worktree,
                 "stopAndClose": stop_and_close,
-            }));
+            });
+            if let Some(discard) = discard {
+                call["discard"] = serde_json::to_value(discard).unwrap();
+            }
+            self.calls.lock().unwrap().push(call);
             Box::pin(async move {
                 if let Some(error) = close_error {
                     return Err(match error {
@@ -810,6 +817,11 @@ mod tests {
                             crate::shared::worktree_delete::UnmergedWorktreeError::new(
                                 "sample-branch",
                                 "not merged",
+                            ),
+                        ),
+                        FakeCloseFailure::DiscardMismatch => anyhow::Error::new(
+                            crate::shared::worktree_delete::discard::DiscardMismatchError::new(
+                                crate::shared::worktree_delete::discard::DiscardVerificationError::TargetChanged,
                             ),
                         ),
                         FakeCloseFailure::Operation(error) => anyhow::anyhow!(error),
@@ -2841,6 +2853,77 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
+    async fn close_forwards_confirmed_discard_to_common_close(action_context: ActionContext) {
+        action_context.save_session(&session("sample-session"));
+        let discard = json!({
+            "path": "/fictional/worktree",
+            "branch": "feature/fictional",
+            "changes": [{ "status": "M", "path": "src/fictional.rs" }],
+            "commits": ["sha-a"],
+        });
+        let response = action_context
+            .router()
+            .oneshot(post(
+                "/sessions/sample-session/close",
+                json!({ "discard": discard }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response_snapshot(response, &action_context).await,
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": { "ok": true },
+                "calls": [{
+                    "kind": "close",
+                    "sessionId": "sample-session",
+                    "keepWorktree": false,
+                    "stopAndClose": false,
+                    "discard": {
+                        "path": "/fictional/worktree",
+                        "branch": "feature/fictional",
+                        "changes": [{ "status": "M", "path": "src/fictional.rs" }],
+                        "commits": ["sha-a"],
+                    },
+                }],
+            }),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn close_rejects_keep_worktree_with_discard(action_context: ActionContext) {
+        action_context.save_session(&session("sample-session"));
+        let response = action_context
+            .router()
+            .oneshot(post(
+                "/sessions/sample-session/close",
+                json!({
+                    "keepWorktree": true,
+                    "discard": {
+                        "path": "/fictional/worktree",
+                        "branch": "feature/fictional",
+                        "changes": [],
+                        "commits": [],
+                    },
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response_snapshot(response, &action_context).await,
+            json!({
+                "status": StatusCode::BAD_REQUEST.as_u16(),
+                "body": { "error": "keepWorktree cannot be combined with discard" },
+                "calls": [],
+            }),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
     async fn close_returns_unmerged_worktree_choice_with_the_reason(action_context: ActionContext) {
         action_context.save_session(&session("sample-session"));
         action_context.set_close_unmerged_worktree(true);
@@ -2898,6 +2981,13 @@ mod tests {
         false,
         "Worktree '/fictional/worktree' contains running processes: 23456 (fictional-worker). Stop them and retry, or close the session while keeping the worktree.",
         "worktree_process_guard"
+    )]
+    #[case::discard_confirmation_mismatch(
+        FakeCloseFailure::DiscardMismatch,
+        false,
+        false,
+        "Worktree changed since discard confirmation; review the current close checks and retry",
+        "close_checks_changed"
     )]
     #[case::stop_and_close_dirty_preflight_keeps_the_session_agent(
         FakeCloseFailure::DirtyWorktree,
