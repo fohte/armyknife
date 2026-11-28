@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1015](https://github.com/fohte/armyknife/compare/v0.1.1014...v0.1.1015) (2026-11-28)
+
+
+### Features
+
+* **agent-watch-web:** retry stuck session resumes ([#2462](https://github.com/fohte/armyknife/issues/2462)) ([7868b20](https://github.com/fohte/armyknife/commit/7868b20a1ba8c4dd40f42118dbece439fc53ca71))
+
 ## [0.1.1014](https://github.com/fohte/armyknife/compare/v0.1.1013...v0.1.1014) (2026-11-28)
 
 
