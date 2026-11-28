@@ -75,6 +75,7 @@ export function useNewSession(active: boolean) {
   const [error, setError] = useState<string | null>(null)
   const [restoredAt, setRestoredAt] = useState<string | null>(null)
   const activeRef = useRef(false)
+  const previousEngineRef = useRef(engine)
   const lastFieldsRef = useRef(
     JSON.stringify(
       initialDraft === null
@@ -210,6 +211,51 @@ export function useNewSession(active: boolean) {
       current = false
     }
   }, [active, updateSelection])
+
+  useEffect(() => {
+    const engineChanged = previousEngineRef.current !== engine
+    previousEngineRef.current = engine
+    if (
+      !active ||
+      !engineChanged ||
+      modelOptionsByEngine[engine].error === null
+    ) {
+      return
+    }
+    let current = true
+    setModelOptionsByEngine((states) => ({
+      ...states,
+      [engine]: { ...states[engine], isLoading: true, error: null },
+    }))
+    void getSessionModelOptions(engine).match(
+      (options) => {
+        if (!current) return
+        setModelOptionsByEngine((states) => ({
+          ...states,
+          [engine]: { modelOptions: options, isLoading: false, error: null },
+        }))
+        const reconciled = reconcileModelSelection(
+          selectionsRef.current[engine],
+          options,
+        )
+        updateSelection(engine, reconciled, false)
+      },
+      (requestError) => {
+        if (!current) return
+        setModelOptionsByEngine((states) => ({
+          ...states,
+          [engine]: {
+            ...states[engine],
+            isLoading: false,
+            error: requestError.message,
+          },
+        }))
+      },
+    )
+    return () => {
+      current = false
+    }
+  }, [active, engine, modelOptionsByEngine, updateSelection])
 
   useEffect(() => {
     if (!active) return

@@ -774,20 +774,43 @@ it('retains the selection when loading model options fails', async () => {
   await flushRequests()
 
   const snapshot = () => ({
-    engine: currentState?.engine,
-    isLoadingModelOptions: currentState?.isLoadingModelOptions,
-    modelOptions: currentState?.modelOptions,
-    modelOptionsError: currentState?.modelOptionsError,
-    selectedModel: currentState?.selectedModel,
-    selectedEffort: currentState?.selectedEffort,
+    engineOptions: currentState?.engineOptions,
+    currentEngineState: {
+      engine: currentState?.engine,
+      isLoadingModelOptions: currentState?.isLoadingModelOptions,
+      modelOptions: currentState?.modelOptions,
+      modelOptionsError: currentState?.modelOptionsError,
+      selectedModel: currentState?.selectedModel,
+      selectedEffort: currentState?.selectedEffort,
+    },
   })
   expect(snapshot()).toEqual({
-    engine: 'codex',
-    isLoadingModelOptions: false,
-    modelOptions: null,
-    modelOptionsError: 'Fixture catalog unavailable',
-    selectedModel: 'fixture-model-codex',
-    selectedEffort: 'xhigh',
+    engineOptions: {
+      claude: {
+        modelOptions: exampleModelOptions,
+        isLoading: false,
+        error: null,
+        selectedModel: null,
+        selectedEffort: null,
+        activeModelOption: exampleModelOptions.models[0],
+      },
+      codex: {
+        modelOptions: null,
+        isLoading: false,
+        error: 'Fixture catalog unavailable',
+        selectedModel: 'fixture-model-codex',
+        selectedEffort: 'xhigh',
+        activeModelOption: undefined,
+      },
+    },
+    currentEngineState: {
+      engine: 'codex',
+      isLoadingModelOptions: false,
+      modelOptions: null,
+      modelOptionsError: 'Fixture catalog unavailable',
+      selectedModel: 'fixture-model-codex',
+      selectedEffort: 'xhigh',
+    },
   })
 })
 
