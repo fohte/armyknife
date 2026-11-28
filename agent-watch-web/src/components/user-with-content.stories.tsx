@@ -28,6 +28,24 @@ export const ImageAppearsBetweenUserText: Story = {
   name: 'The user message shows an image between its text',
 }
 
+export const FirstMessageShowsBoundedImage: Story = {
+  name: 'The first message shows a large attached image as a bounded thumbnail below its text',
+  args: {
+    message: {
+      type: 'user_with_content',
+      content: [
+        { type: 'text', text: 'Inspect this screenshot.' },
+        {
+          type: 'image',
+          source:
+            'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%221200%22 height=%22900%22%3E%3Crect width=%221200%22 height=%22900%22 fill=%22%23dbeafe%22/%3E%3C/svg%3E',
+          available: true,
+        },
+      ],
+    },
+  },
+}
+
 export const ExpiredImageIsExplained: Story = {
   name: 'The user message explains that its image is no longer available',
   args: {

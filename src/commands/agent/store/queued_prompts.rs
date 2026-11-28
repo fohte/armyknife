@@ -37,6 +37,14 @@ pub(crate) fn insert_watch_web_queued_prompt_from(
     )
 }
 
+pub(crate) fn move_watch_web_queued_prompts_to_session_from(
+    sessions_dir: &Path,
+    launch_session_id: &str,
+    session_id: &str,
+) -> Result<()> {
+    database::move_watch_web_queued_prompts_to_session(sessions_dir, launch_session_id, session_id)
+}
+
 pub(crate) fn watch_web_queued_prompt_message_id_exists_from(
     sessions_dir: &Path,
     session_id: &str,

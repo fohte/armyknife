@@ -10,8 +10,10 @@ use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
 use crate::commands::agent::new::{CommonNewArgs, NewArgs};
+use crate::commands::agent::store;
 use crate::commands::agent::types::{Engine, ReasoningEffort};
 use crate::commands::agent::watch_web::attachments;
+use crate::commands::agent::watch_web::messages::queued_prompt;
 use crate::commands::agent::watch_web::paths::normalize_directory;
 
 use super::ApiError;
@@ -24,6 +26,7 @@ fn router_with_host(host: Arc<dyn LaunchHost>) -> Router {
     router_with_state(LaunchState {
         host,
         attachment_dir: None,
+        sessions_dir: None,
         branch_name_for_message: Arc::new(|message| {
             let backend = crate::commands::name_branch::detect_backend();
             crate::commands::name_branch::generate_branch_name(message, backend.as_ref())
@@ -35,10 +38,12 @@ fn router_with_host(host: Arc<dyn LaunchHost>) -> Router {
 fn router_with_host_and_attachment_dir(
     host: Arc<dyn LaunchHost>,
     attachment_dir: PathBuf,
+    sessions_dir: PathBuf,
 ) -> Router {
     router_with_state(LaunchState {
         host,
         attachment_dir: Some(attachment_dir),
+        sessions_dir: Some(sessions_dir),
         branch_name_for_message: Arc::new(|message| Ok(format!("branch-from-{message}"))),
     })
 }
@@ -56,6 +61,7 @@ fn router_with_state(state: LaunchState) -> Router {
 struct LaunchState {
     host: Arc<dyn LaunchHost>,
     attachment_dir: Option<PathBuf>,
+    sessions_dir: Option<PathBuf>,
     branch_name_for_message: Arc<BranchNameGenerator>,
 }
 
@@ -128,11 +134,56 @@ async fn launch_session(
         .map(|attachment| attachment.path.clone())
         .collect::<Vec<_>>();
     let has_attachments = !attachment_paths.is_empty();
-    // The prompt gives the agent access to saved files; conversation thumbnails are presentation data.
-    let prompt = attachments::append_paths_to_message(
+    let sessions_dir = has_attachments
+        .then(|| super::support::resolve_sessions_dir(state.sessions_dir.clone()))
+        .transpose()
+        .map_err(ApiError::internal)?;
+    let launch_session_id = format!("watch-web-launch:{launch_id}");
+    let queued_attachments = saved_attachments
+        .iter()
+        .map(|attachment| match &attachment.image_source {
+            Some(source) => store::WatchWebQueuedAttachment::Image {
+                source: source.clone(),
+            },
+            None => store::WatchWebQueuedAttachment::File {
+                name: attachment.name.clone(),
+            },
+        })
+        .collect::<Vec<_>>();
+    let queued_prompt_id = if let Some(sessions_dir) = sessions_dir.as_ref() {
+        let sessions_dir = sessions_dir.clone();
+        let launch_session_id = launch_session_id.clone();
+        let content = initial_message.clone().unwrap_or_default();
+        let attachments = queued_attachments.clone();
+        match super::run_blocking(move || {
+            store::insert_watch_web_queued_prompt_from(
+                &sessions_dir,
+                &launch_session_id,
+                &launch_session_id,
+                &content,
+                &attachments,
+                None,
+                Utc::now(),
+            )
+        })
+        .await
+        {
+            Ok(id) => Some(id),
+            Err(error) => {
+                super::messages::remove_attachments(attachment_paths).await;
+                return Err(error);
+            }
+        }
+    } else {
+        None
+    };
+    let mut prompt = attachments::append_paths_to_message(
         initial_message.clone().unwrap_or_default(),
         &attachment_paths,
     );
+    if queued_prompt_id.is_some() {
+        prompt = queued_prompt::add_id_marker(&prompt, &launch_session_id);
+    }
     let prompt = (!prompt.trim().is_empty()).then_some(prompt);
     let args = NewArgs {
         worktree: request.worktree.then_some(None),
@@ -179,16 +230,45 @@ async fn launch_session(
     match launch_result {
         Ok(Ok(())) => {}
         Ok(Err(error)) => {
+            if let (Some(sessions_dir), Some(prompt_id)) = (&sessions_dir, queued_prompt_id) {
+                remove_initial_prompt_row(sessions_dir, &launch_session_id, Some(prompt_id)).await;
+            }
             super::messages::remove_attachments(attachment_paths).await;
             return Err(ApiError::operation(error));
         }
         Err(error) => {
+            if let (Some(sessions_dir), Some(prompt_id)) = (&sessions_dir, queued_prompt_id) {
+                remove_initial_prompt_row(sessions_dir, &launch_session_id, Some(prompt_id)).await;
+            }
             super::messages::remove_attachments(attachment_paths).await;
             return Err(ApiError::internal(error));
         }
     }
 
     Ok(Json(LaunchResponse { launch_id }))
+}
+
+async fn remove_initial_prompt_row(
+    sessions_dir: &std::path::Path,
+    launch_session_id: &str,
+    queued_prompt_id: Option<i64>,
+) {
+    let Some(id) = queued_prompt_id else {
+        return;
+    };
+    let sessions_dir = sessions_dir.to_path_buf();
+    let session_id = launch_session_id.to_owned();
+    if let Err(error) = super::run_blocking(move || {
+        store::delete_watch_web_queued_prompts_from(&sessions_dir, &session_id, &[id])
+    })
+    .await
+    {
+        tracing::warn!(
+            session_id = %launch_session_id,
+            error = ?error,
+            "failed to remove unsent watch-web initial prompt"
+        );
+    }
 }
 
 fn resolve_worktree(
@@ -346,12 +426,16 @@ mod tests {
     async fn saves_initial_images_and_appends_their_paths_to_the_first_message() {
         let directory = tempfile::tempdir().unwrap();
         let storage = tempfile::tempdir().unwrap();
+        let sessions = tempfile::tempdir().unwrap();
         let host = Arc::new(FakeLaunchHost::default());
-        let router =
-            router_with_host_and_attachment_dir(host.clone(), storage.path().to_path_buf());
+        let router = router_with_host_and_attachment_dir(
+            host.clone(),
+            storage.path().to_path_buf(),
+            sessions.path().to_path_buf(),
+        );
         let mut image = PNG_SIGNATURE.to_vec();
         image.resize(2 * 1024 * 1024 + 1, 0);
-        let (status, _) = request(
+        let (status, response) = request(
             &router,
             json!({
                 "directory": directory.path(),
@@ -371,12 +455,23 @@ mod tests {
             .path()
             .canonicalize()
             .unwrap();
+        let launch_session_id = format!(
+            "watch-web-launch:{}",
+            response["launchId"].as_str().unwrap()
+        );
+        let mut queued_prompts =
+            store::watch_web_queued_prompts_from(sessions.path(), &launch_session_id).unwrap();
+        for prompt in &mut queued_prompts {
+            prompt.sent_at = Utc.with_ymd_and_hms(2026, 1, 2, 3, 4, 5).single().unwrap();
+        }
+        let image_name = saved_path.file_name().unwrap().to_str().unwrap();
 
         assert_eq!(
             (
                 status,
                 args.common.prompt,
-                std::fs::read(&saved_path).unwrap()
+                std::fs::read(&saved_path).unwrap(),
+                queued_prompts,
             ),
             (
                 StatusCode::OK,
@@ -386,11 +481,23 @@ mod tests {
 
                         Attached file(s):
                         - {}
-                    ", saved_path.display()}
+                        <!-- armyknife-queued-prompt-id:{} -->
+                    ", saved_path.display(), launch_session_id}
                     .trim_end()
                     .to_string(),
                 ),
                 image,
+                vec![store::WatchWebQueuedPrompt {
+                    id: 1,
+                    message_id: Some(launch_session_id.clone()),
+                    content: "Inspect this image.".to_string(),
+                    action_event_kind: None,
+                    attachments: vec![store::WatchWebQueuedAttachment::Image {
+                        source: format!("/api/images/{image_name}"),
+                    }],
+                    resolved: false,
+                    sent_at: Utc.with_ymd_and_hms(2026, 1, 2, 3, 4, 5).single().unwrap(),
+                }],
             ),
         );
     }
@@ -399,12 +506,16 @@ mod tests {
     async fn removes_saved_images_when_launch_fails() {
         let directory = tempfile::tempdir().unwrap();
         let storage = tempfile::tempdir().unwrap();
+        let sessions = tempfile::tempdir().unwrap();
         let host = Arc::new(FakeLaunchHost {
             fail: true,
             ..FakeLaunchHost::default()
         });
-        let router =
-            router_with_host_and_attachment_dir(host.clone(), storage.path().to_path_buf());
+        let router = router_with_host_and_attachment_dir(
+            host.clone(),
+            storage.path().to_path_buf(),
+            sessions.path().to_path_buf(),
+        );
         let (status, _) = request(
             &router,
             json!({
@@ -417,6 +528,10 @@ mod tests {
         )
         .await;
         let args = host.calls.lock().unwrap().pop().unwrap();
+        let launch_session_id = format!(
+            "watch-web-launch:{}",
+            args.common.watch_web_launch_id.as_deref().unwrap()
+        );
 
         assert_eq!(
             (
@@ -426,10 +541,12 @@ mod tests {
                     .unwrap()
                     .map(|entry| entry.unwrap().path())
                     .collect::<Vec<_>>(),
+                store::watch_web_queued_prompts_from(sessions.path(), &launch_session_id).unwrap(),
             ),
             (
                 StatusCode::BAD_GATEWAY,
                 Some(Some("Recover this request.".to_string())),
+                vec![],
                 vec![],
             ),
         );
@@ -466,9 +583,13 @@ mod tests {
     async fn worktree_launch_generates_its_branch_from_the_user_message() {
         let directory = tempfile::tempdir().unwrap();
         let storage = tempfile::tempdir().unwrap();
+        let sessions = tempfile::tempdir().unwrap();
         let host = Arc::new(FakeLaunchHost::default());
-        let router =
-            router_with_host_and_attachment_dir(host.clone(), storage.path().to_path_buf());
+        let router = router_with_host_and_attachment_dir(
+            host.clone(),
+            storage.path().to_path_buf(),
+            sessions.path().to_path_buf(),
+        );
         let (status, _) = request(
             &router,
             json!({

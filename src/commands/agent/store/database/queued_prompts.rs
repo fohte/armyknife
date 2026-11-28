@@ -88,6 +88,25 @@ pub(crate) fn insert_watch_web_queued_prompt(
     Ok(connection.last_insert_rowid())
 }
 
+pub(crate) fn move_watch_web_queued_prompts_to_session(
+    sessions_dir: &Path,
+    launch_session_id: &str,
+    session_id: &str,
+) -> Result<()> {
+    super::validate_session_id(launch_session_id)?;
+    super::validate_session_id(session_id)?;
+    if !sessions_dir.exists() {
+        return Ok(());
+    }
+
+    let connection = open_connection(sessions_dir)?;
+    connection.execute(
+        "UPDATE watch_web_queued_prompt SET session_id = ?2 WHERE session_id = ?1",
+        params![launch_session_id, session_id],
+    )?;
+    Ok(())
+}
+
 pub(crate) fn watch_web_queued_prompt_message_id_exists(
     sessions_dir: &Path,
     session_id: &str,

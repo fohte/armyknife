@@ -181,7 +181,24 @@ fn record_in(
         session.last_prompted_at = Some(now);
     }
 
-    session_lock.save(&session)
+    session_lock.save(&session)?;
+    drop(session_lock);
+    if let Some(launch_id) = metadata.launch_id {
+        let launch_session_id = format!("watch-web-launch:{launch_id}");
+        if let Err(error) = store::move_watch_web_queued_prompts_to_session_from(
+            sessions_dir,
+            &launch_session_id,
+            session_id,
+        ) {
+            tracing::warn!(
+                event = "agent.new.watch_web_launch_prompt_claim_failed",
+                session = session_id,
+                launch_id,
+                error = %error,
+            );
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

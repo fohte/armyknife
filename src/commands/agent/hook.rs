@@ -678,6 +678,7 @@ fn process_hook_event_impl_with_env_and_unreported_stop(
                     session_lock.save(&existing_session)?;
                 }
                 drop(session_lock);
+                claim_watch_web_launch_prompt(sessions_dir, &existing_session);
                 return Ok(ProcessResult::Skipped);
             }
 
@@ -718,6 +719,7 @@ fn process_hook_event_impl_with_env_and_unreported_stop(
             ensure_watch_web_user_marker(&session_lock, event, input.engine)?;
             session_lock.save(&session)?;
             drop(session_lock);
+            claim_watch_web_launch_prompt(sessions_dir, &session);
             return Ok(ProcessResult::SessionSaved);
         }
 
@@ -1111,6 +1113,10 @@ fn process_hook_event_impl_with_env_and_unreported_stop(
     }
     drop(session_lock);
 
+    if event == HookEvent::SessionStart {
+        claim_watch_web_launch_prompt(sessions_dir, &session);
+    }
+
     if event == HookEvent::SessionStart && input.source.as_deref() == Some("resume") {
         store::clear_session_closed_from(sessions_dir, &session.session_id)?;
     }
@@ -1325,6 +1331,25 @@ fn process_hook_event_impl_with_env_and_unreported_stop(
     }
 
     Ok(ProcessResult::SessionSaved)
+}
+
+fn claim_watch_web_launch_prompt(sessions_dir: &Path, session: &Session) {
+    let Some(launch_id) = session.launch_id.as_deref() else {
+        return;
+    };
+    let launch_session_id = format!("watch-web-launch:{launch_id}");
+    if let Err(error) = store::move_watch_web_queued_prompts_to_session_from(
+        sessions_dir,
+        &launch_session_id,
+        &session.session_id,
+    ) {
+        tracing::warn!(
+            event = "agent.hook.watch_web_launch_prompt_claim_failed",
+            session = %session.session_id,
+            launch_id,
+            error = %error,
+        );
+    }
 }
 
 fn is_headless_entrypoint(entrypoint: Option<&str>) -> bool {
@@ -2636,6 +2661,67 @@ mod tests {
         expected["updated_at"] = serde_json::json!("<timestamp>");
 
         assert_eq!(actual, expected);
+    }
+
+    #[rstest]
+    #[case::matching_launch_id(Some("fixture-launch"), false, true)]
+    #[case::missing_launch_id(None, true, false)]
+    fn hook_claims_the_initial_prompt_only_for_a_matching_launch_id(
+        #[case] launch_id: Option<&str>,
+        #[case] expected_unclaimed: bool,
+        #[case] expected_claimed: bool,
+    ) {
+        let sessions_dir = tempfile::TempDir::new().expect("sessions directory should be created");
+        let launch_session_id = "watch-web-launch:fixture-launch";
+        let session_id = "fixture-session-id";
+        let sent_at = Utc.with_ymd_and_hms(2026, 1, 2, 3, 4, 5).single().unwrap();
+        store::insert_watch_web_queued_prompt_from(
+            sessions_dir.path(),
+            launch_session_id,
+            launch_session_id,
+            "Inspect this image.",
+            &[store::WatchWebQueuedAttachment::Image {
+                source: "/api/images/fixture.png".to_string(),
+            }],
+            None,
+            sent_at,
+        )
+        .expect("queued prompt should be inserted");
+        let mut session = create_test_session(None);
+        session.session_id = session_id.to_string();
+        session.launch_id = launch_id.map(str::to_string);
+
+        claim_watch_web_launch_prompt(sessions_dir.path(), &session);
+
+        let expected_prompt = store::WatchWebQueuedPrompt {
+            id: 1,
+            message_id: Some(launch_session_id.to_string()),
+            content: "Inspect this image.".to_string(),
+            action_event_kind: None,
+            attachments: vec![store::WatchWebQueuedAttachment::Image {
+                source: "/api/images/fixture.png".to_string(),
+            }],
+            resolved: false,
+            sent_at,
+        };
+        assert_eq!(
+            (
+                store::watch_web_queued_prompts_from(sessions_dir.path(), launch_session_id)
+                    .expect("unclaimed queued prompts should load"),
+                store::watch_web_queued_prompts_from(sessions_dir.path(), session_id)
+                    .expect("claimed queued prompts should load"),
+            ),
+            (
+                expected_unclaimed
+                    .then_some(expected_prompt.clone())
+                    .into_iter()
+                    .collect::<Vec<_>>(),
+                expected_claimed
+                    .then_some(expected_prompt)
+                    .into_iter()
+                    .collect::<Vec<_>>(),
+            ),
+        );
     }
 
     #[rstest]
