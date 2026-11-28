@@ -76,8 +76,8 @@ pub(crate) use queued_prompts::{
 };
 pub(crate) use queued_prompts::{
     delete_watch_web_queued_prompts, insert_watch_web_queued_prompt,
-    mark_watch_web_queued_prompts_resolved, watch_web_queued_prompt_message_id_exists,
-    watch_web_queued_prompts,
+    mark_watch_web_queued_prompts_resolved, move_watch_web_queued_prompts_to_session,
+    watch_web_queued_prompt_message_id_exists, watch_web_queued_prompts,
 };
 pub(crate) use replacements::{
     all_unreplaced_sessions, resolve_current_session_id, save_rewind_sessions,

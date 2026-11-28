@@ -52,6 +52,7 @@ mod title_generation;
 mod tmux_cleanup_hooks;
 mod unreported_stop;
 mod vibe;
+mod watch_web;
 mod work_type;
 
 /// Delay between retries when waiting for transcript to be updated.
@@ -678,6 +679,7 @@ fn process_hook_event_impl_with_env_and_unreported_stop(
                     session_lock.save(&existing_session)?;
                 }
                 drop(session_lock);
+                watch_web::claim_launch_prompt(sessions_dir, &existing_session);
                 return Ok(ProcessResult::Skipped);
             }
 
@@ -718,6 +720,7 @@ fn process_hook_event_impl_with_env_and_unreported_stop(
             ensure_watch_web_user_marker(&session_lock, event, input.engine)?;
             session_lock.save(&session)?;
             drop(session_lock);
+            watch_web::claim_launch_prompt(sessions_dir, &session);
             return Ok(ProcessResult::SessionSaved);
         }
 

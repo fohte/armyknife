@@ -11,6 +11,8 @@ import { getImageLightboxState } from '#image-lightbox-state.test'
 import type { ChatItem, RewindMode } from '#types'
 
 const imageSource = 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs='
+const largeImageSource =
+  'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%221200%22 height=%22900%22%3E%3Crect width=%221200%22 height=%22900%22 fill=%22%23dbeafe%22/%3E%3C/svg%3E'
 const now = new Date(2026, 5, 2, 0, 3)
 
 let container: HTMLDivElement
@@ -94,6 +96,31 @@ it('renders the sender, text, and image in message order', () => {
       source: null,
     },
   ])
+})
+
+it('bounds a large attached image in a 1000px conversation pane', async () => {
+  container.style.width = '1000px'
+  container.style.display = 'flex'
+  container.style.flexDirection = 'column'
+  render({
+    type: 'user_with_content',
+    content: [
+      { type: 'text', text: 'Inspect this screenshot.' },
+      { type: 'image', source: largeImageSource, available: true },
+    ],
+  })
+
+  const image = container.querySelector<HTMLImageElement>('.chat-user-image')
+  await image?.decode()
+
+  const size =
+    image === null
+      ? null
+      : (() => {
+          const { width, height } = image.getBoundingClientRect()
+          return { width, height }
+        })()
+  expect(size).toEqual({ width: 560, height: 420 })
 })
 
 it('labels a queued prompt as You and keeps the user bubble style', () => {

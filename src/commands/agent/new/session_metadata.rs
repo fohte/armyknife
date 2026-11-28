@@ -181,7 +181,20 @@ fn record_in(
         session.last_prompted_at = Some(now);
     }
 
-    session_lock.save(&session)
+    session_lock.save(&session)?;
+    drop(session_lock);
+    if let Some(launch_id) = metadata.launch_id
+        && let Err(error) =
+            store::claim_watch_web_launch_prompt_from(sessions_dir, launch_id, session_id)
+    {
+        tracing::warn!(
+            event = "agent.new.watch_web_launch_prompt_claim_failed",
+            session = session_id,
+            launch_id,
+            error = %error,
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -316,6 +329,59 @@ mod tests {
             expected["last_prompted_at"] = json!("<timestamp>");
         }
         assert_eq!(actual, expected,);
+    }
+
+    #[test]
+    fn codex_metadata_claims_the_initial_prompt_for_its_launch_id() {
+        let sessions_dir = tempfile::tempdir().expect("sessions directory should be created");
+        let launch_id = "fixture-launch";
+        let launch_session_id = store::watch_web_launch_session_id(launch_id);
+        let sent_at = Utc.with_ymd_and_hms(2026, 1, 2, 3, 4, 5).single().unwrap();
+        store::insert_watch_web_queued_prompt_from(
+            sessions_dir.path(),
+            &launch_session_id,
+            &launch_session_id,
+            "Inspect this image.",
+            &[store::WatchWebQueuedAttachment::Image {
+                source: "/api/images/fixture.png".to_string(),
+            }],
+            None,
+            sent_at,
+        )
+        .expect("queued prompt should be inserted");
+        let env_vars = [(EnvVars::session_launch_id_name(), launch_id)];
+
+        record_from_env_in(
+            sessions_dir.path(),
+            "thread-a",
+            Path::new("/fixture/project"),
+            &env_vars,
+            None,
+        )
+        .expect("Codex session metadata should be saved");
+
+        assert_eq!(
+            (
+                store::watch_web_queued_prompts_from(sessions_dir.path(), &launch_session_id)
+                    .expect("unclaimed prompts should load"),
+                store::watch_web_queued_prompts_from(sessions_dir.path(), "thread-a")
+                    .expect("claimed prompts should load"),
+            ),
+            (
+                vec![],
+                vec![store::WatchWebQueuedPrompt {
+                    id: 1,
+                    message_id: Some(launch_session_id),
+                    content: "Inspect this image.".to_string(),
+                    action_event_kind: None,
+                    attachments: vec![store::WatchWebQueuedAttachment::Image {
+                        source: "/api/images/fixture.png".to_string(),
+                    }],
+                    resolved: false,
+                    sent_at,
+                }],
+            ),
+        );
     }
 
     #[rstest]
