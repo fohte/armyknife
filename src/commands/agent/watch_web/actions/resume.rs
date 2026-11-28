@@ -78,6 +78,7 @@ enum ResumeStartupState {
         started_at: DateTime<Utc>,
     },
     Stuck {
+        attempt_id: u64,
         session_start_generation: i64,
         started_at: DateTime<Utc>,
     },
@@ -190,12 +191,34 @@ impl PendingSessionResumes {
         states.insert(
             session_id.to_string(),
             ResumeStartupState::Stuck {
+                attempt_id,
                 session_start_generation,
                 started_at,
             },
         );
         drop(states);
         self.updates.notify();
+    }
+
+    pub(super) async fn clear_pending(&self, session_id: &str, attempt_id: u64) {
+        let mut states = self.states.lock().await;
+        let matches_attempt = matches!(
+            states.get(session_id),
+            Some(
+                ResumeStartupState::Pending {
+                    attempt_id: current_attempt_id,
+                    ..
+                } | ResumeStartupState::Stuck {
+                    attempt_id: current_attempt_id,
+                    ..
+                }
+            ) if *current_attempt_id == attempt_id
+        );
+        if matches_attempt {
+            states.remove(session_id);
+            drop(states);
+            self.updates.notify();
+        }
     }
 
     pub(super) async fn startup_status(

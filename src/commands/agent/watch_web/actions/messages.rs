@@ -1,5 +1,4 @@
 use std::{
-    future::Future,
     path::{Path, PathBuf},
     sync::{Arc, LazyLock},
 };
@@ -140,7 +139,16 @@ pub(super) async fn send_message(
     let resume_pending = state.resume_pending.clone();
     let is_paused = session.status == SessionStatus::Paused;
     let pending_session_id = session.session_id.clone();
-    let mut pending_attempt = None;
+    let pending_attempt = if is_paused {
+        Some(
+            resume_pending
+                .mark_pending(pending_session_id.clone(), session_start_generation)
+                .await,
+        )
+    } else {
+        None
+    };
+    let mut delivery_started = false;
     let queued_prompt_id = send_queued_prompt_with_before_delivery(
         QueuedPromptDelivery {
             runtime: state.runtime,
@@ -154,14 +162,8 @@ pub(super) async fn send_message(
             queued_attachments,
             attachment_paths,
         },
-        || async {
-            if is_paused {
-                pending_attempt = Some(
-                    resume_pending
-                        .mark_pending(pending_session_id.clone(), session_start_generation)
-                        .await,
-                );
-            }
+        || {
+            delivery_started = true;
         },
     )
     .await;
@@ -169,9 +171,15 @@ pub(super) async fn send_message(
         Ok(queued_prompt_id) => queued_prompt_id,
         Err(error) => {
             if let Some(attempt_id) = pending_attempt {
-                resume_pending
-                    .mark_stuck(&pending_session_id, attempt_id)
-                    .await;
+                if delivery_started {
+                    resume_pending
+                        .mark_stuck(&pending_session_id, attempt_id)
+                        .await;
+                } else {
+                    resume_pending
+                        .clear_pending(&pending_session_id, attempt_id)
+                        .await;
+                }
             }
             return Err(error);
         }
@@ -209,16 +217,15 @@ enum QueueStoreFailurePolicy {
 }
 
 pub(super) async fn send_queued_prompt(delivery: QueuedPromptDelivery) -> Result<String, ApiError> {
-    send_queued_prompt_with_before_delivery(delivery, || async {}).await
+    send_queued_prompt_with_before_delivery(delivery, || {}).await
 }
 
-pub(super) async fn send_queued_prompt_with_before_delivery<F, Fut>(
+async fn send_queued_prompt_with_before_delivery<F>(
     delivery: QueuedPromptDelivery,
     before_delivery: F,
 ) -> Result<String, ApiError>
 where
-    F: FnOnce() -> Fut,
-    Fut: Future<Output = ()>,
+    F: FnOnce(),
 {
     send_queued_prompt_with_policy_and_before_delivery(
         delivery,
@@ -235,19 +242,18 @@ pub(super) async fn send_queued_prompt_best_effort(
     send_queued_prompt_with_policy_and_before_delivery(
         delivery,
         QueueStoreFailurePolicy::DeliverWithoutQueue,
-        || async {},
+        || {},
     )
     .await
 }
 
-async fn send_queued_prompt_with_policy_and_before_delivery<F, Fut>(
+async fn send_queued_prompt_with_policy_and_before_delivery<F>(
     delivery: QueuedPromptDelivery,
     queue_store_failure_policy: QueueStoreFailurePolicy,
     before_delivery: F,
 ) -> Result<Option<String>, ApiError>
 where
-    F: FnOnce() -> Fut,
-    Fut: Future<Output = ()>,
+    F: FnOnce(),
 {
     let QueuedPromptDelivery {
         runtime,
@@ -292,7 +298,7 @@ where
                 error = %error.message,
                 "failed to save sent watch-web queued prompt; delivering without queue metadata"
             );
-            before_delivery().await;
+            before_delivery();
             let content = watch_web_message_content(&session, marker.as_deref(), &message_content);
             let send_session = session.clone();
             if let Err(delivery_error) =
@@ -305,7 +311,7 @@ where
         }
     };
 
-    before_delivery().await;
+    before_delivery();
     let content = watch_web_message_content(&session, marker.as_deref(), &message_content);
     let content = super::super::messages::queued_prompt::add_id_marker(&content, &message_id);
     let send_session = session.clone();
