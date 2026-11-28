@@ -15,7 +15,10 @@ use crate::infra::tmux;
 use crate::shared::command::{self, find_command_path};
 use crate::shared::env_var::EnvVars;
 
+mod resume_command;
 mod session_metadata;
+
+use resume_command::{build_resume_command, build_resume_command_for_session};
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct ResumeArgs {
@@ -477,35 +480,6 @@ fn check_idle_at_shell_prompt(pane_current_command: Option<&str>) -> Result<(), 
         Some(cmd) => Err(RespawnError::PaneBusy(cmd.to_string())),
         None => Err(RespawnError::PaneStateUnreadable),
     }
-}
-
-/// Wraps `a agent resume` in the user's login shell so that when claude exits
-/// normally, control returns to a shell prompt instead of tmux closing the
-/// pane (`respawn-pane` replaces the pane's root process).
-///
-/// `-i` is required on the outer shell: `a agent resume` looks up the selected
-/// agent CLI in $PATH via `find_command_path`, and many users only extend
-/// $PATH in their interactive rc file (e.g. `.zshrc`). Running without `-i`
-/// would inherit tmux's pre-rc $PATH and fail to locate the CLI.
-fn build_resume_command() -> Option<String> {
-    let exe = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.to_str().map(String::from))
-        .unwrap_or_else(|| "a".to_string());
-    let inner = shlex::try_join([exe.as_str(), "agent", "resume"]).ok()?;
-    build_login_shell_command(&inner)
-}
-
-fn build_resume_command_for_session(session: &Session) -> Option<String> {
-    let inner = crate::commands::agent::resurrect::resume_command_for_session(session);
-    build_login_shell_command(&inner)
-}
-
-fn build_login_shell_command(inner: &str) -> Option<String> {
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-    let exec_shell = shlex::try_join([shell.as_str(), "-i"]).ok()?;
-    let script = format!("{inner}; exec {exec_shell}");
-    shlex::try_join([shell.as_str(), "-i", "-c", &script]).ok()
 }
 
 #[cfg(test)]

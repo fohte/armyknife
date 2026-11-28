@@ -3,7 +3,9 @@ use std::pin::Pin;
 
 use anyhow::Result;
 
-use super::super::super::types::{Engine, Session, TmuxInfo, resolve_session_option};
+use super::super::super::types::{
+    Engine, Session, TMUX_SESSION_OPTION, TMUX_SESSION_OPTION_LEGACY, TmuxInfo,
+};
 use super::{ActionRuntime, CommandResult};
 use crate::shared::config::Config;
 
@@ -29,20 +31,23 @@ impl ActionRuntime for LiveActionRuntime {
     }
 
     fn retry_resume(&self, session: &Session) -> Result<bool> {
-        if let Some(tmux_info) = session.tmux_info.as_ref() {
-            let recorded_session_id = resolve_session_option(|option| {
-                crate::infra::tmux::get_pane_option_for_socket(
-                    tmux_info.socket_path.as_deref(),
-                    &tmux_info.pane_id,
-                    option,
+        retry_stuck_resume_with(
+            session,
+            |socket_path, pane_id, option| {
+                let format = format!("#{{{option}}}");
+                crate::infra::tmux::run_tmux_output_for_socket(
+                    socket_path,
+                    &["display-message", "-p", "-t", pane_id, format.as_str()],
                 )
-            });
-            if recorded_session_id.as_deref() != Some(session.session_id.as_str()) {
-                return Ok(false);
-            }
-        }
-        crate::commands::agent::resume::respawn_stuck_session(session)?;
-        Ok(true)
+                .map(|value| (!value.is_empty()).then_some(value))
+                .map_err(anyhow::Error::from)
+            },
+            |session| {
+                crate::commands::agent::resume::respawn_stuck_session(session)
+                    .map(|_| ())
+                    .map_err(anyhow::Error::from)
+            },
+        )
     }
 
     fn execute_command(&self, cwd: &std::path::Path, command: &str) -> Result<CommandResult> {
@@ -166,6 +171,29 @@ impl ActionRuntime for LiveActionRuntime {
     }
 }
 
+fn retry_stuck_resume_with(
+    session: &Session,
+    mut read_pane_option: impl FnMut(Option<&str>, &str, &str) -> Result<Option<String>>,
+    respawn: impl FnOnce(&Session) -> Result<()>,
+) -> Result<bool> {
+    if let Some(tmux_info) = session.tmux_info.as_ref() {
+        let socket_path = tmux_info.socket_path.as_deref();
+        let recorded_session_id =
+            match read_pane_option(socket_path, &tmux_info.pane_id, TMUX_SESSION_OPTION)? {
+                Some(session_id) => Some(session_id),
+                None => {
+                    read_pane_option(socket_path, &tmux_info.pane_id, TMUX_SESSION_OPTION_LEGACY)?
+                }
+            };
+        if recorded_session_id.as_deref() != Some(session.session_id.as_str()) {
+            return Ok(false);
+        }
+    }
+
+    respawn(session)?;
+    Ok(true)
+}
+
 fn resume_ended_session_with_config(
     session: &Session,
     config: &Config,
@@ -179,10 +207,13 @@ mod tests {
     use std::sync::Mutex;
 
     use anyhow::Result;
+    use rstest::rstest;
     use serde_json::{Value, json};
 
-    use super::resume_ended_session_with_config;
-    use crate::commands::agent::types::{Engine, Session, TmuxInfo};
+    use super::{resume_ended_session_with_config, retry_stuck_resume_with};
+    use crate::commands::agent::types::{
+        Engine, Session, TMUX_SESSION_OPTION, TMUX_SESSION_OPTION_LEGACY, TmuxInfo,
+    };
     use crate::infra::tmux::layout::ResumeLayoutSpec;
     use crate::shared::config::{Config, LayoutNode, PaneConfig};
 
@@ -239,6 +270,94 @@ mod tests {
                 "layout": { "command": "fixture-editor", "focus": true },
                 "agentCommand": "a agent resume fixture-session --engine codex",
             })],
+        );
+    }
+
+    #[rstest]
+    #[case::primary_option_matches(TMUX_SESSION_OPTION, Some("fixture-session"), true)]
+    #[case::legacy_option_matches(TMUX_SESSION_OPTION_LEGACY, Some("fixture-session"), true)]
+    #[case::another_session_is_recorded(TMUX_SESSION_OPTION, Some("fixture-other"), false)]
+    #[case::no_session_is_recorded(TMUX_SESSION_OPTION, None, false)]
+    fn retry_respawns_only_when_the_pane_records_the_requested_session(
+        #[case] recorded_option: &str,
+        #[case] recorded_session_id: Option<&str>,
+        #[case] expected_respawn: bool,
+    ) {
+        let mut session: Session = serde_json::from_value(json!({
+            "session_id": "fixture-session",
+            "cwd": "/fixture/worktree",
+            "transcript_path": null,
+            "tmux_info": null,
+            "status": "ended",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "last_message": null,
+        }))
+        .unwrap();
+        session.tmux_info = Some(TmuxInfo {
+            session_name: "fixture-tmux-session".to_string(),
+            window_name: "fixture-window".to_string(),
+            window_index: 0,
+            pane_id: "%17".to_string(),
+            socket_path: Some("/fixture/tmux.sock".to_string()),
+        });
+        let mut option_reads = Vec::new();
+        let mut respawn_calls = Vec::new();
+
+        let result = retry_stuck_resume_with(
+            &session,
+            |socket_path, pane_id, option| {
+                option_reads.push((
+                    socket_path.map(str::to_string),
+                    pane_id.to_string(),
+                    option.to_string(),
+                ));
+                Ok((option == recorded_option)
+                    .then(|| recorded_session_id.map(str::to_string))
+                    .flatten())
+            },
+            |session| {
+                respawn_calls.push(session.session_id.clone());
+                Ok(())
+            },
+        )
+        .map_err(|error| error.to_string());
+
+        let expected_options = if recorded_option == TMUX_SESSION_OPTION {
+            vec![TMUX_SESSION_OPTION]
+                .into_iter()
+                .chain(
+                    recorded_session_id
+                        .is_none()
+                        .then_some(TMUX_SESSION_OPTION_LEGACY),
+                )
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        } else {
+            vec![TMUX_SESSION_OPTION, TMUX_SESSION_OPTION_LEGACY]
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        };
+        let expected_calls = expected_options
+            .into_iter()
+            .map(|option| {
+                (
+                    Some("/fixture/tmux.sock".to_string()),
+                    "%17".to_string(),
+                    option,
+                )
+            })
+            .collect::<Vec<_>>();
+        let expected_respawn_calls = if expected_respawn {
+            vec!["fixture-session".to_string()]
+        } else {
+            Vec::new()
+        };
+
+        assert_eq!(
+            (result, option_reads, respawn_calls),
+            (Ok(expected_respawn), expected_calls, expected_respawn_calls),
         );
     }
 }
