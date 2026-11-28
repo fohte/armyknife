@@ -226,10 +226,10 @@ it('validates complete usage payloads received over the event stream', () => {
     quotas: { claude: null },
   }
 
-  const result = JSON.stringify({
-    complete: isAgentUsage(complete),
-    incomplete: isAgentUsage(incomplete),
-  })
+  const result = Object.fromEntries([
+    ['complete', isAgentUsage(complete)],
+    ['incomplete', isAgentUsage(incomplete)],
+  ])
 
-  expect(result).toEqual('{"complete":true,"incomplete":false}')
+  expect(result).toEqual({ complete: true, incomplete: false })
 })

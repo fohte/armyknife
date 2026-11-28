@@ -91,6 +91,7 @@ impl UsageMonitor {
     pub(super) fn subscribe(&self) -> UsageSubscription {
         self.inner.subscribers.send_modify(|count| {
             if *count == 0 {
+                // Force a fresh read when a client reconnects after all subscribers leave.
                 self.inner.updates.send_replace(None);
             }
             *count = count.saturating_add(1);

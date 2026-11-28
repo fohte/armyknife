@@ -588,15 +588,18 @@ mod tests {
             next_chunk(&mut chunks).await,
         );
         let initial_event = next_chunk(&mut chunks).await;
-        let actual = match case {
+        let (actual, no_follow_up_event) = match case {
             UsageEventCase::Initial | UsageEventCase::Error => {
-                format!("{connection}{initial_event}")
+                (format!("{connection}{initial_event}"), None)
             }
             UsageEventCase::Changed => {
                 usage_event_sender.send(()).unwrap();
-                format!(
-                    "{connection}{initial_event}{}",
-                    next_usage_chunk(&mut chunks).await
+                (
+                    format!(
+                        "{connection}{initial_event}{}",
+                        next_usage_chunk(&mut chunks).await
+                    ),
+                    None,
                 )
             }
             UsageEventCase::Unchanged => {
@@ -605,8 +608,10 @@ mod tests {
                     tokio::time::timeout(Duration::from_millis(1250), chunks.next())
                         .await
                         .is_err();
-                assert!(no_follow_up_event);
-                format!("{connection}{initial_event}")
+                (
+                    format!("{connection}{initial_event}"),
+                    Some(no_follow_up_event),
+                )
             }
         };
         let expected = match case {
@@ -659,8 +664,15 @@ mod tests {
             "}
             .to_owned(),
         };
+        let expected_no_follow_up_event = match case {
+            UsageEventCase::Unchanged => Some(true),
+            UsageEventCase::Initial | UsageEventCase::Changed | UsageEventCase::Error => None,
+        };
 
-        assert_eq!(actual, expected);
+        assert_eq!(
+            (actual, no_follow_up_event),
+            (expected, expected_no_follow_up_event),
+        );
     }
 
     #[tokio::test]

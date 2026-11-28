@@ -82,25 +82,24 @@ it('retains the latest usage and clears its error after a new usage event', asyn
       )
       await Promise.resolve()
     })
-    return (
+    const state: unknown = JSON.parse(
       container?.querySelector('[data-testid="usage-state"]')?.textContent ??
-      'null'
+        'null',
     )
+    return state
   }
 
-  const states = JSON.stringify({
-    initial: await render(null),
-    firstUsage: await render({ type: 'usage', value: firstUsage }),
-    staleAfterError: await render({ type: 'error' }),
-    recovered: await render({ type: 'usage', value: nextUsage }),
-  })
+  const states = Object.fromEntries([
+    ['initial', await render(null)],
+    ['firstUsage', await render({ type: 'usage', value: firstUsage })],
+    ['staleAfterError', await render({ type: 'error' })],
+    ['recovered', await render({ type: 'usage', value: nextUsage })],
+  ])
 
-  expect(states).toEqual(
-    JSON.stringify({
-      initial: JSON.stringify({ usage: null, error: false }),
-      firstUsage: JSON.stringify({ usage: firstUsage, error: false }),
-      staleAfterError: JSON.stringify({ usage: firstUsage, error: true }),
-      recovered: JSON.stringify({ usage: nextUsage, error: false }),
-    }),
-  )
+  expect(states).toEqual({
+    initial: { usage: null, error: false },
+    firstUsage: { usage: firstUsage, error: false },
+    staleAfterError: { usage: firstUsage, error: true },
+    recovered: { usage: nextUsage, error: false },
+  })
 })
