@@ -1,13 +1,11 @@
 use std::collections::{HashMap, HashSet};
-use std::future::pending;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use reqwest::Url;
-use tokio::net::TcpListener;
-use tokio::sync::{broadcast, mpsc, watch};
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use super::web_ui_proxy;
@@ -15,11 +13,11 @@ use crate::commands::agent::store;
 use crate::commands::agent::types::{SessionStatus, WebUiRegistration};
 use crate::shared::hooks;
 
-const STORE_EVENT_DEBOUNCE: Duration = Duration::from_millis(150);
 const HOOK_TIMEOUT: Duration = Duration::from_secs(30);
 
 type HookRunner = dyn Fn(&str, &[(&str, &str)]) -> Result<Option<String>> + Send + Sync;
 
+mod manager;
 mod registrations;
 mod retry_backoff;
 
@@ -55,6 +53,7 @@ struct Relay {
     exposed_url: Option<String>,
     exposed: bool,
     registration_saved: bool,
+    server_abort: tokio::task::AbortHandle,
     server: JoinHandle<()>,
 }
 
@@ -67,6 +66,8 @@ pub(super) struct WebUiRelays {
     relay_exit_sender: Option<mpsc::UnboundedSender<RelayKey>>,
     #[cfg(test)]
     relay_abort_handles: Arc<std::sync::Mutex<Vec<tokio::task::AbortHandle>>>,
+    #[cfg(test)]
+    sync_error_sender: Option<mpsc::UnboundedSender<()>>,
 }
 
 impl WebUiRelays {
@@ -89,92 +90,9 @@ impl WebUiRelays {
             relay_exit_sender: None,
             #[cfg(test)]
             relay_abort_handles: Arc::new(std::sync::Mutex::new(Vec::new())),
+            #[cfg(test)]
+            sync_error_sender: None,
         }
-    }
-
-    pub(super) async fn start(
-        self,
-        shutdown: watch::Receiver<bool>,
-        store_events: broadcast::Receiver<()>,
-    ) -> JoinHandle<()> {
-        tokio::spawn(self.run_event_driven(shutdown, store_events))
-    }
-
-    async fn run_event_driven(
-        mut self,
-        mut shutdown: watch::Receiver<bool>,
-        mut store_events: broadcast::Receiver<()>,
-    ) {
-        let (relay_exit_sender, mut relay_exits) = mpsc::unbounded_channel();
-        self.relay_exit_sender = Some(relay_exit_sender);
-        let mut store_events_open = true;
-        if !*shutdown.borrow() {
-            self.sync_and_record_failure("at startup").await;
-        }
-        loop {
-            let retry_at = self.next_attempt_at();
-            tokio::select! {
-                event = store_events.recv(), if store_events_open => {
-                    match event {
-                        Err(broadcast::error::RecvError::Closed) => store_events_open = false,
-                        Ok(()) | Err(broadcast::error::RecvError::Lagged(_)) => {
-                            tokio::time::sleep(STORE_EVENT_DEBOUNCE).await;
-                            loop {
-                                match store_events.try_recv() {
-                                    Ok(()) | Err(broadcast::error::TryRecvError::Lagged(_)) => {}
-                                    Err(broadcast::error::TryRecvError::Closed) => {
-                                        store_events_open = false;
-                                        break;
-                                    }
-                                    Err(broadcast::error::TryRecvError::Empty) => break,
-                                }
-                            }
-                            self.sync_and_record_failure("").await;
-                        }
-                    }
-                }
-                relay_exit = relay_exits.recv() => {
-                    if relay_exit.is_some() {
-                        self.sync_and_record_failure("").await;
-                    }
-                }
-                _ = async {
-                    if let Some(retry_at) = retry_at {
-                        tokio::time::sleep_until(retry_at.into()).await;
-                    } else {
-                        pending::<()>().await;
-                    }
-                } => self.sync_and_record_failure("").await,
-                result = shutdown.changed() => {
-                    if result.is_err() || *shutdown.borrow() {
-                        break;
-                    }
-                }
-            }
-        }
-
-        self.stop_all().await;
-    }
-
-    async fn sync_and_record_failure(&mut self, timing: &str) {
-        match self.sync().await {
-            Ok(()) => self.expose_backoff.clear_sync_failure(),
-            Err(error) => {
-                self.expose_backoff
-                    .record_sync_failure(std::time::Instant::now());
-                tracing::warn!(%error, timing, "failed to synchronize web UI relays");
-            }
-        }
-    }
-
-    fn next_attempt_at(&self) -> Option<std::time::Instant> {
-        [
-            self.expose_backoff.next_attempt_at(),
-            self.unexpose_backoff.next_attempt_at(),
-        ]
-        .into_iter()
-        .flatten()
-        .min()
     }
 
     async fn sync(&mut self) -> Result<()> {
@@ -328,6 +246,7 @@ impl WebUiRelays {
             }
         }
 
+        let mut start_error = None;
         for (key, registration) in desired {
             if let Some(mut relay) = self.active.remove(&key) {
                 let previous_exposed_url = relay.exposed_url.clone();
@@ -386,51 +305,15 @@ impl WebUiRelays {
                         %error,
                         "failed to start web UI relay"
                     );
+                    start_error.get_or_insert(error);
                 }
             }
         }
-        Ok(())
-    }
-
-    async fn start_relay(&self, key: &RelayKey, registration: &WebUiRegistration) -> Result<Relay> {
-        let upstream_port = super::super::web_ui::local_web_ui_port(&registration.url)?;
-        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
-        let port = listener.local_addr()?.port();
-        let url = relay_url(&registration.url, port)?;
-        let client = web_ui_proxy::new_client()?;
-        let session_id = key.session_id.clone();
-        let web_ui_name = key.name.clone();
-        let relay_exit_sender = self.relay_exit_sender.clone();
-        let relay_key = key.clone();
-        let server = tokio::spawn(async move {
-            if let Err(error) =
-                axum::serve(listener, web_ui_proxy::router(upstream_port, client)).await
-            {
-                tracing::warn!(
-                    session = %session_id,
-                    web_ui = %web_ui_name,
-                    %error,
-                    "web UI relay server stopped"
-                );
-            }
-            if let Some(sender) = relay_exit_sender {
-                let _ = sender.send(relay_key);
-            }
-        });
-        #[cfg(test)]
-        self.relay_abort_handles
-            .lock()
-            .expect("relay abort handle lock should succeed")
-            .push(server.abort_handle());
-
-        Ok(Relay {
-            url,
-            port,
-            exposed_url: None,
-            exposed: false,
-            registration_saved: false,
-            server,
-        })
+        if let Some(error) = start_error {
+            Err(error)
+        } else {
+            Ok(())
+        }
     }
 
     async fn stop_all(&mut self) {
@@ -457,7 +340,7 @@ impl WebUiRelays {
         if unexpose_result.is_ok() {
             self.unexpose_backoff.remove(&registration);
         }
-        relay.server.abort();
+        relay.server_abort.abort();
         if let Err(error) = relay.server.await
             && !error.is_cancelled()
         {
@@ -1335,7 +1218,7 @@ mod tests {
             session.web_uis.clear();
             true
         })?;
-        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(1_100)).await;
         let no_call_without_event = calls.try_recv().is_err();
 
         events
@@ -1379,6 +1262,65 @@ mod tests {
                     ),
                 ],
             ),
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn sync_failure_retries_without_a_store_event() -> anyhow::Result<()> {
+        let directory = TempDir::new()?;
+        let sessions_dir = directory.path().join("sessions");
+        fs::write(&sessions_dir, "fixture path blocker")?;
+        let (hook_sender, mut calls) = tokio::sync::mpsc::unbounded_channel();
+        let mut relays = WebUiRelays::with_hook_runner(
+            sessions_dir.clone(),
+            recording_hook_runner(hook_sender, false, false),
+        );
+        let (sync_error_sender, mut sync_errors) = tokio::sync::mpsc::unbounded_channel();
+        relays.sync_error_sender = Some(sync_error_sender);
+        let (shutdown, shutdown_receiver) = tokio::sync::watch::channel(false);
+        let (_event_sender, event_receiver) = tokio::sync::broadcast::channel(16);
+        let manager = relays.start(shutdown_receiver, event_receiver).await;
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), sync_errors.recv())
+            .await?
+            .context("startup sync should fail")?;
+        fs::remove_file(&sessions_dir)?;
+        fs::create_dir(&sessions_dir)?;
+        store::save_session_to(&sessions_dir, &session_with_one_web_ui())?;
+        let expose = next_hook_call(&mut calls).await?;
+        shutdown.send_replace(true);
+        let unexpose = next_hook_call(&mut calls).await?;
+        tokio::time::timeout(std::time::Duration::from_secs(5), manager).await??;
+
+        assert_eq!(
+            normalize_hook_calls(&[expose, unexpose]),
+            vec![
+                (
+                    "web-ui-expose".to_owned(),
+                    vec![
+                        (
+                            "ARMYKNIFE_WEB_UI_URL".to_owned(),
+                            "/design/sample/".to_owned(),
+                        ),
+                        ("ARMYKNIFE_WEB_UI_PORT".to_owned(), "<port>".to_owned()),
+                    ],
+                ),
+                (
+                    "web-ui-unexpose".to_owned(),
+                    vec![
+                        (
+                            "ARMYKNIFE_WEB_UI_URL".to_owned(),
+                            "/design/sample/".to_owned(),
+                        ),
+                        ("ARMYKNIFE_WEB_UI_PORT".to_owned(), "<port>".to_owned()),
+                        (
+                            "ARMYKNIFE_WEB_UI_EXPOSED_URL".to_owned(),
+                            "https://public.example.invalid/relay/".to_owned(),
+                        ),
+                    ],
+                ),
+            ],
         );
         Ok(())
     }

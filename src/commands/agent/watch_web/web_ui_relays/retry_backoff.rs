@@ -25,16 +25,22 @@ impl RetryBackoff {
     }
 
     pub(super) fn record_failure(&mut self, registration: RelayRegistration, now: Instant) {
-        Self::record(&mut self.failures, registration, now);
+        match self.failures.entry(registration) {
+            std::collections::hash_map::Entry::Occupied(mut entry) => {
+                entry.get_mut().record_failure(now);
+            }
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(Failure::after_failure(now));
+            }
+        }
     }
 
     pub(super) fn record_sync_failure(&mut self, now: Instant) {
-        let failure = self.sync_failure.get_or_insert(Failure {
-            next_attempt_at: now,
-            next_delay: FIRST_RETRY_DELAY,
-        });
-        failure.next_attempt_at = now + failure.next_delay;
-        failure.next_delay = failure.next_delay.saturating_mul(2).min(MAX_RETRY_DELAY);
+        if let Some(failure) = &mut self.sync_failure {
+            failure.record_failure(now);
+        } else {
+            self.sync_failure = Some(Failure::after_failure(now));
+        }
     }
 
     pub(super) fn clear_sync_failure(&mut self) {
@@ -53,19 +59,6 @@ impl RetryBackoff {
             .min()
     }
 
-    fn record(
-        failures: &mut HashMap<RelayRegistration, Failure>,
-        registration: RelayRegistration,
-        now: Instant,
-    ) {
-        let failure = failures.entry(registration).or_insert(Failure {
-            next_attempt_at: now,
-            next_delay: FIRST_RETRY_DELAY,
-        });
-        failure.next_attempt_at = now + failure.next_delay;
-        failure.next_delay = failure.next_delay.saturating_mul(2).min(MAX_RETRY_DELAY);
-    }
-
     pub(super) fn remove(&mut self, registration: &RelayRegistration) {
         self.failures.remove(registration);
     }
@@ -73,6 +66,22 @@ impl RetryBackoff {
     pub(super) fn retain_for(&mut self, registrations: &HashSet<RelayRegistration>) {
         self.failures
             .retain(|registration, _| registrations.contains(registration));
+    }
+}
+
+impl Failure {
+    fn after_failure(now: Instant) -> Self {
+        let mut failure = Self {
+            next_attempt_at: now,
+            next_delay: FIRST_RETRY_DELAY,
+        };
+        failure.record_failure(now);
+        failure
+    }
+
+    fn record_failure(&mut self, now: Instant) {
+        self.next_attempt_at = now + self.next_delay;
+        self.next_delay = self.next_delay.saturating_mul(2).min(MAX_RETRY_DELAY);
     }
 }
 
