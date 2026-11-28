@@ -537,6 +537,7 @@ mod tests {
             .archived_at;
         let withdrawn_comment =
             is_archived.then_some("Withdrawn because the session ended.".to_string());
+        let withdrawal_reason = is_archived.then_some(super::super::WithdrawalReason::SessionEnded);
         assert_eq!(
             (
                 archived_at,
@@ -546,19 +547,21 @@ mod tests {
                 is_archived.then_some(now),
                 (
                     vec![
-                        (1, Some(super::super::TodoResolution::Completed), None),
+                        (1, Some(super::super::TodoResolution::Completed), None, None),
                         (
                             2,
                             is_archived.then_some(super::super::TodoResolution::Withdrawn),
+                            withdrawal_reason,
                             withdrawn_comment.clone(),
                         ),
                     ],
                     vec![
-                        (1, None, true, None),
+                        (1, None, true, None, None),
                         (
                             2,
                             is_archived.then_some(super::super::ProposalResolution::Withdrawn),
                             is_archived,
+                            withdrawal_reason,
                             withdrawn_comment,
                         ),
                     ],

@@ -186,7 +186,7 @@ pub(crate) fn agent_todos(sessions_dir: &Path, session_id: &str) -> Result<Vec<A
                 })
                 .transpose()?,
             resolution,
-            withdrawal_reason: WithdrawalReason::parse(withdrawal_reason)?,
+            withdrawal_reason: WithdrawalReason::parse(withdrawal_reason),
             comment,
         })
     })
@@ -386,7 +386,6 @@ mod tests {
             .timestamp_opt(0, 0)
             .single()
             .expect("epoch should be valid");
-        actual.completed_at = Some(resolved_at);
         assert_eq!(
             actual,
             AgentTodo {
