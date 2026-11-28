@@ -571,8 +571,7 @@ fn process_hook_event_impl_with_env_and_unreported_stop(
     let startup_metadata = startup_metadata_for_resume(sessions_dir, &input)?;
 
     // Pane lookup stays per event because `Session::tmux_info` follows pane changes.
-    // A failed non-SessionStart check stays closed until SessionStart.
-    // An unresolved SessionStart leaves state missing so the next event can retry.
+    // Unavailable ancestry is not cached so a transient process lookup can recover.
     let is_session_start = event == HookEvent::SessionStart;
     let (mut stored_session, cached_has_parent_agent) = if is_session_start {
         (None, None)
@@ -586,15 +585,15 @@ fn process_hook_event_impl_with_env_and_unreported_stop(
         store::set_has_parent_agent_process_from(
             sessions_dir,
             &input.session_id,
-            pane_resolution.has_parent_agent.map(Some),
+            pane_resolution.has_parent_agent,
         )?;
     } else if cached_has_parent_agent.is_none()
-        && (pane_resolution.has_parent_agent.is_some() || pane_resolution.ancestry_checked)
+        && let Some(has_parent_agent) = pane_resolution.has_parent_agent
     {
         store::set_has_parent_agent_process_from(
             sessions_dir,
             &input.session_id,
-            Some(pane_resolution.has_parent_agent),
+            Some(has_parent_agent),
         )?;
     }
 
@@ -2258,7 +2257,7 @@ mod tests {
         side_effects: SideEffects,
     }
 
-    type PaneBindingResolveCall = (bool, Option<Option<bool>>);
+    type PaneBindingResolveCall = (bool, Option<bool>);
     type PaneBindingResolveCallSink = std::sync::Arc<std::sync::Mutex<Vec<PaneBindingResolveCall>>>;
 
     struct RecordingPaneBinding {
@@ -2275,36 +2274,31 @@ mod tests {
             &self,
             _input: &HookInput,
             is_session_start: bool,
-            cached_has_parent_agent: Option<Option<bool>>,
+            cached_has_parent_agent: Option<bool>,
         ) -> pane_binding::Resolution {
             self.resolve_calls
                 .lock()
                 .expect("pane binding resolve calls lock should not be poisoned")
                 .push((is_session_start, cached_has_parent_agent));
-            let (has_parent_agent, ancestry_checked) = if is_session_start {
-                (
-                    Some(
-                        self.session_start_calls
-                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-                            > 0,
-                    ),
-                    true,
+            let has_parent_agent = if is_session_start {
+                Some(
+                    self.session_start_calls
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                        > 0,
                 )
             } else {
                 match cached_has_parent_agent {
-                    Some(Some(state)) => (Some(state), false),
-                    Some(None) => (None, false),
+                    Some(state) => Some(state),
                     None => {
                         self.classification_checks
                             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        (self.fallback_has_parent_agent, true)
+                        self.fallback_has_parent_agent
                     }
                 }
             };
             pane_binding::Resolution {
                 pane_info: (has_parent_agent == Some(false)).then(|| self.pane_info.clone()),
                 has_parent_agent,
-                ancestry_checked,
             }
         }
 
@@ -2746,8 +2740,8 @@ mod tests {
                 session.tmux_info.map(|info| info.pane_id),
             ),
             (
-                Some(Some(false)),
-                vec![(true, None), (false, Some(Some(false)))],
+                Some(false),
+                vec![(true, None), (false, Some(false))],
                 Some("%42".to_string()),
             ),
         );
@@ -2782,7 +2776,7 @@ mod tests {
             None,
             EnvVars::default(),
         )
-        .expect("unavailable classification should be reused");
+        .expect("unavailable classification should be retried");
         let session = store::load_session_from(temp_dir.path(), "test-123")
             .expect("session should load")
             .expect("session should exist");
@@ -2799,15 +2793,15 @@ mod tests {
                 session.tmux_info.map(|info| info.pane_id),
             ),
             (
-                Some(None),
+                None,
                 vec![
                     (true, None),
-                    (false, Some(Some(false))),
-                    (false, Some(Some(false))),
+                    (false, Some(false)),
+                    (false, Some(false)),
                     (false, None),
-                    (false, Some(None)),
+                    (false, None),
                 ],
-                1,
+                2,
                 Some("%42".to_string()),
             ),
         );
@@ -2832,13 +2826,13 @@ mod tests {
                     .clone(),
             ),
             (
-                Some(Some(true)),
+                Some(true),
                 vec![
                     (true, None),
-                    (false, Some(Some(false))),
-                    (false, Some(Some(false))),
+                    (false, Some(false)),
+                    (false, Some(false)),
                     (false, None),
-                    (false, Some(None)),
+                    (false, None),
                     (true, None),
                 ],
             ),

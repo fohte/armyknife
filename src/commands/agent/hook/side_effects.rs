@@ -29,7 +29,7 @@ pub(super) trait PaneBindingOperations: Send + Sync {
         &self,
         input: &HookInput,
         is_session_start: bool,
-        cached_has_parent_agent: Option<Option<bool>>,
+        cached_has_parent_agent: Option<bool>,
     ) -> super::pane_binding::Resolution;
     fn set_session_id(&self, pane_id: &str, session_id: &str);
     fn current_socket_path(&self) -> anyhow::Result<Option<String>>;
@@ -42,7 +42,7 @@ impl PaneBindingOperations for LivePaneBindingOperations {
         &self,
         input: &HookInput,
         is_session_start: bool,
-        cached_has_parent_agent: Option<Option<bool>>,
+        cached_has_parent_agent: Option<bool>,
     ) -> super::pane_binding::Resolution {
         super::pane_binding::resolve(input, is_session_start, cached_has_parent_agent)
     }
@@ -182,15 +182,14 @@ impl SideEffects {
         &self,
         input: &HookInput,
         is_session_start: bool,
-        cached_has_parent_agent: Option<Option<bool>>,
+        cached_has_parent_agent: Option<bool>,
     ) -> super::pane_binding::Resolution {
         self.pane_binding
             .as_ref()
             .map(|binding| binding.resolve(input, is_session_start, cached_has_parent_agent))
             .unwrap_or(super::pane_binding::Resolution {
                 pane_info: None,
-                has_parent_agent: cached_has_parent_agent.flatten(),
-                ancestry_checked: false,
+                has_parent_agent: cached_has_parent_agent,
             })
     }
 

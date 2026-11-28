@@ -167,7 +167,7 @@ pub(crate) fn load_session(sessions_dir: &Path, session_id: &str) -> Result<Opti
 pub(crate) fn load_hook_session_state(
     sessions_dir: &Path,
     session_id: &str,
-) -> Result<(Option<Session>, Option<Option<bool>>)> {
+) -> Result<(Option<Session>, Option<bool>)> {
     validate_session_id(session_id)?;
     if !sessions_dir.exists() {
         return Ok((None, None));

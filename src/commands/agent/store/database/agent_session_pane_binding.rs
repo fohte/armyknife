@@ -5,17 +5,16 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use super::{open_connection, validate_session_id};
 
-// A NULL row records an unavailable fallback result so later hooks do not retry ancestry.
 pub(super) fn has_parent_agent_process_from_connection(
     connection: &Connection,
     session_id: &str,
-) -> Result<Option<Option<bool>>> {
+) -> Result<Option<bool>> {
     let state = connection
         .query_row(
             "SELECT has_parent_agent FROM agent_session_pane_binding_state
              WHERE session_id = ?1",
             [session_id],
-            |row| row.get::<_, Option<bool>>(0),
+            |row| row.get::<_, bool>(0),
         )
         .optional()?;
     Ok(state)
@@ -24,7 +23,7 @@ pub(super) fn has_parent_agent_process_from_connection(
 pub(crate) fn set_has_parent_agent_process(
     sessions_dir: &Path,
     session_id: &str,
-    has_parent_agent: Option<Option<bool>>,
+    has_parent_agent: Option<bool>,
 ) -> Result<()> {
     validate_session_id(session_id)?;
     let connection = open_connection(sessions_dir)?;
@@ -59,14 +58,13 @@ mod tests {
     }
 
     #[rstest]
-    #[case::direct_agent(Some(Some(false)))]
-    #[case::nested_agent(Some(Some(true)))]
-    #[case::unavailable(Some(None))]
+    #[case::direct_agent(false)]
+    #[case::nested_agent(true)]
     fn parent_agent_state_persists_per_session(
         sessions_dir: tempfile::TempDir,
-        #[case] state: Option<Option<bool>>,
+        #[case] state: bool,
     ) -> Result<()> {
-        set_has_parent_agent_process(sessions_dir.path(), "fixture-session-cedar", state)?;
+        set_has_parent_agent_process(sessions_dir.path(), "fixture-session-cedar", Some(state))?;
         let connection = open_connection(sessions_dir.path())?;
         let state_exists = connection.query_row(
             "SELECT EXISTS(SELECT 1 FROM agent_session_pane_binding_state WHERE session_id = ?1)",
@@ -79,7 +77,7 @@ mod tests {
                 has_parent_agent_process_from_connection(&connection, "fixture-session-cedar",)?,
                 state_exists,
             ),
-            (state, state.is_some()),
+            (Some(state), true),
         );
         Ok(())
     }
@@ -106,21 +104,13 @@ mod tests {
     fn parent_agent_state_is_replaced_after_a_later_session_start(
         sessions_dir: tempfile::TempDir,
     ) -> Result<()> {
-        set_has_parent_agent_process(
-            sessions_dir.path(),
-            "fixture-session-cedar",
-            Some(Some(false)),
-        )?;
-        set_has_parent_agent_process(
-            sessions_dir.path(),
-            "fixture-session-cedar",
-            Some(Some(true)),
-        )?;
+        set_has_parent_agent_process(sessions_dir.path(), "fixture-session-cedar", Some(false))?;
+        set_has_parent_agent_process(sessions_dir.path(), "fixture-session-cedar", Some(true))?;
         let connection = open_connection(sessions_dir.path())?;
 
         assert_eq!(
             has_parent_agent_process_from_connection(&connection, "fixture-session-cedar",)?,
-            Some(Some(true)),
+            Some(true),
         );
         Ok(())
     }
@@ -129,11 +119,7 @@ mod tests {
     fn clearing_session_start_classification_removes_the_cached_state(
         sessions_dir: tempfile::TempDir,
     ) -> Result<()> {
-        set_has_parent_agent_process(
-            sessions_dir.path(),
-            "fixture-session-cedar",
-            Some(Some(false)),
-        )?;
+        set_has_parent_agent_process(sessions_dir.path(), "fixture-session-cedar", Some(false))?;
         set_has_parent_agent_process(sessions_dir.path(), "fixture-session-cedar", None)?;
         let connection = open_connection(sessions_dir.path())?;
         let state_exists = connection.query_row(

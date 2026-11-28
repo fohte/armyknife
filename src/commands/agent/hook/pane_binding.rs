@@ -24,20 +24,19 @@ use crate::infra::tmux::{self, PaneInfo, PaneInfoWithOption};
 pub(super) struct Resolution {
     pub(super) pane_info: Option<PaneInfo>,
     pub(super) has_parent_agent: Option<bool>,
-    pub(super) ancestry_checked: bool,
 }
 
 #[derive(Clone, Copy)]
 enum ParentAgentResolution {
     Check,
-    Cached(Option<Option<bool>>),
+    Cached(Option<bool>),
 }
 
 /// Resolves the hook's pane through process ancestry or its explicit session binding.
 pub(super) fn resolve(
     input: &HookInput,
     is_session_start: bool,
-    cached_has_parent_agent: Option<Option<bool>>,
+    cached_has_parent_agent: Option<bool>,
 ) -> Resolution {
     resolve_with(
         input.engine,
@@ -64,17 +63,15 @@ fn resolve_with(
     find_by_session: impl FnOnce(&str) -> Option<PaneInfo>,
 ) -> Resolution {
     if let Some((pane, pane_pid)) = get_pane_info(pid) {
-        let (has_parent_agent, ancestry_checked) = match parent_agent_resolution {
+        let has_parent_agent = match parent_agent_resolution {
             ParentAgentResolution::Check | ParentAgentResolution::Cached(None) => {
-                (has_parent_agent(pid, pane_pid), true)
+                has_parent_agent(pid, pane_pid)
             }
-            ParentAgentResolution::Cached(Some(Some(state))) => (Some(state), false),
-            ParentAgentResolution::Cached(Some(None)) => (None, false),
+            ParentAgentResolution::Cached(Some(state)) => Some(state),
         };
         return Resolution {
             pane_info: (!has_parent_agent.unwrap_or(true)).then_some(pane),
             has_parent_agent,
-            ancestry_checked,
         };
     }
 
@@ -83,8 +80,7 @@ fn resolve_with(
         let has_parent_agent = match parent_agent_resolution {
             ParentAgentResolution::Check if pane_info.is_some() => Some(false),
             ParentAgentResolution::Check => None,
-            ParentAgentResolution::Cached(Some(Some(state))) => Some(state),
-            ParentAgentResolution::Cached(Some(None)) => None,
+            ParentAgentResolution::Cached(Some(state)) => Some(state),
             ParentAgentResolution::Cached(None) if pane_info.is_some() => Some(false),
             ParentAgentResolution::Cached(None) => None,
         };
@@ -95,7 +91,6 @@ fn resolve_with(
                 None
             },
             has_parent_agent,
-            ancestry_checked: false,
         };
     }
 
@@ -103,10 +98,9 @@ fn resolve_with(
         pane_info: None,
         has_parent_agent: match parent_agent_resolution {
             ParentAgentResolution::Check => None,
-            ParentAgentResolution::Cached(Some(Some(state))) => Some(state),
-            ParentAgentResolution::Cached(Some(None) | None) => None,
+            ParentAgentResolution::Cached(Some(state)) => Some(state),
+            ParentAgentResolution::Cached(None) => None,
         },
-        ancestry_checked: false,
     }
 }
 
@@ -231,9 +225,8 @@ mod tests {
                 result.pane_info,
                 result.has_parent_agent,
                 ancestry_arguments,
-                result.ancestry_checked,
             ),
-            (expected, Some(has_parent_agent), Some((123, 100)), true),
+            (expected, Some(has_parent_agent), Some((123, 100))),
         );
     }
 
@@ -256,39 +249,22 @@ mod tests {
             Resolution {
                 pane_info: None,
                 has_parent_agent,
-                ancestry_checked: true,
             },
         );
     }
 
     #[rstest]
-    #[case::cached_direct_agent(
-        Some(Some(false)),
-        None,
-        Some(pane_info()),
-        Some(false),
-        false,
-        false
-    )]
-    #[case::cached_nested_agent(Some(Some(true)), None, None, Some(true), false, false)]
-    #[case::legacy_direct_agent_is_reclassified(
-        None,
-        Some(false),
-        Some(pane_info()),
-        Some(false),
-        true,
-        true
-    )]
-    #[case::legacy_nested_agent_is_not_bound(None, Some(true), None, Some(true), true, true)]
-    #[case::missing_classification_stays_unbound(None, None, None, None, true, true)]
-    #[case::unavailable_classification_is_not_retried(Some(None), None, None, None, false, false)]
-    fn non_session_start_reuses_known_state_and_retries_only_unclassified_state(
-        #[case] cached_has_parent_agent: Option<Option<bool>>,
+    #[case::cached_direct_agent(Some(false), None, Some(pane_info()), Some(false), false)]
+    #[case::cached_nested_agent(Some(true), None, None, Some(true), false)]
+    #[case::missing_direct_agent(None, Some(false), Some(pane_info()), Some(false), true)]
+    #[case::missing_nested_agent(None, Some(true), None, Some(true), true)]
+    #[case::missing_classification_is_retried(None, None, None, None, true)]
+    fn non_session_start_reuses_known_state_and_retries_unclassified_state(
+        #[case] cached_has_parent_agent: Option<bool>,
         #[case] checked_has_parent_agent: Option<bool>,
         #[case] expected_pane: Option<PaneInfo>,
         #[case] expected_state: Option<bool>,
         #[case] expected_ancestry_check: bool,
-        #[case] expected_resolution_check: bool,
     ) {
         let mut ancestry_was_checked = false;
         let mut pane_lookup_count = 0;
@@ -312,17 +288,10 @@ mod tests {
             (
                 result.pane_info,
                 result.has_parent_agent,
-                result.ancestry_checked,
                 ancestry_was_checked,
                 pane_lookup_count,
             ),
-            (
-                expected_pane,
-                expected_state,
-                expected_resolution_check,
-                expected_ancestry_check,
-                1,
-            ),
+            (expected_pane, expected_state, expected_ancestry_check, 1,),
         );
     }
 
@@ -342,17 +311,16 @@ mod tests {
             Resolution {
                 pane_info: Some(expected),
                 has_parent_agent: Some(false),
-                ancestry_checked: false,
             },
         );
     }
 
     #[rstest]
-    #[case::direct_classification(Some(Some(false)), Some(false), Some(pane_info()))]
-    #[case::nested_classification(Some(Some(true)), Some(true), None)]
-    #[case::unavailable_classification(Some(None), None, None)]
+    #[case::direct_classification(Some(false), Some(false), Some(pane_info()))]
+    #[case::nested_classification(Some(true), Some(true), None)]
+    #[case::unclassified_session_option_resolves_directly(None, Some(false), Some(pane_info()))]
     fn codex_session_option_pane_requires_a_direct_classification(
-        #[case] cached_has_parent_agent: Option<Option<bool>>,
+        #[case] cached_has_parent_agent: Option<bool>,
         #[case] expected_has_parent_agent: Option<bool>,
         #[case] expected_pane_info: Option<PaneInfo>,
     ) {
@@ -370,7 +338,6 @@ mod tests {
             Resolution {
                 pane_info: expected_pane_info,
                 has_parent_agent: expected_has_parent_agent,
-                ancestry_checked: false,
             },
         );
     }
@@ -391,7 +358,6 @@ mod tests {
             Resolution {
                 pane_info: Some(expected),
                 has_parent_agent: Some(false),
-                ancestry_checked: false,
             },
         );
     }

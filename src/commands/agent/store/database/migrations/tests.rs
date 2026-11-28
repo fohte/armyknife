@@ -770,6 +770,7 @@ fn adds_pane_binding_state_to_version_thirty_four_database(database_fixture: Dat
                 EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'agent_session_pane_binding_state'),
                 EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = 'agent_session_pane_binding_state_delete_session'),
                 EXISTS(SELECT 1 FROM agent_session_pane_binding_state WHERE session_id = 'fixture-session-cedar'),
+                (SELECT \"notnull\" = 1 FROM pragma_table_info('agent_session_pane_binding_state') WHERE name = 'has_parent_agent'),
                 (SELECT user_version FROM pragma_user_version)",
             [],
             |row| {
@@ -777,11 +778,12 @@ fn adds_pane_binding_state_to_version_thirty_four_database(database_fixture: Dat
                     row.get::<_, bool>(0)?,
                     row.get::<_, bool>(1)?,
                     row.get::<_, bool>(2)?,
-                    row.get::<_, i64>(3)?,
+                    row.get::<_, bool>(3)?,
+                    row.get::<_, i64>(4)?,
                 ))
             },
         )
         .expect("pane binding state schema should be queryable");
 
-    assert_eq!(actual, (true, true, false, current_version()));
+    assert_eq!(actual, (true, true, false, true, current_version()));
 }

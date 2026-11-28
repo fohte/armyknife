@@ -146,7 +146,7 @@ pub(crate) fn load_session_from(sessions_dir: &Path, session_id: &str) -> Result
 pub(crate) fn load_hook_session_state_from(
     sessions_dir: &Path,
     session_id: &str,
-) -> Result<(Option<Session>, Option<Option<bool>>)> {
+) -> Result<(Option<Session>, Option<bool>)> {
     database::load_hook_session_state(sessions_dir, session_id)
 }
 
@@ -159,7 +159,7 @@ pub(crate) fn save_session_to(sessions_dir: &Path, session: &Session) -> Result<
 pub(crate) fn set_has_parent_agent_process_from(
     sessions_dir: &Path,
     session_id: &str,
-    has_parent_agent: Option<Option<bool>>,
+    has_parent_agent: Option<bool>,
 ) -> Result<()> {
     database::set_has_parent_agent_process(sessions_dir, session_id, has_parent_agent)
 }
