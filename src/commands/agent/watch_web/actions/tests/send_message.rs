@@ -259,6 +259,77 @@ async fn send_message_tracks_startup_only_for_paused_sessions(
 }
 
 #[rstest]
+#[case::paused_queue_persistence_failed(SessionStatus::Paused)]
+#[tokio::test(start_paused = true)]
+async fn send_message_does_not_mark_startup_when_queue_persistence_fails(
+    #[case] status: SessionStatus,
+    action_context: ActionContext,
+) {
+    let mut paused_session = session("sample-session");
+    paused_session.status = status;
+    action_context.save_session(&paused_session);
+    rusqlite::Connection::open(action_context.temp_dir.path().join("sessions/sessions.db"))
+        .unwrap()
+        .execute_batch(
+            "CREATE TRIGGER reject_queued_prompt BEFORE INSERT ON watch_web_queued_prompt
+             BEGIN SELECT RAISE(ABORT, 'fixture queue persistence failed'); END;",
+        )
+        .unwrap();
+
+    let app = action_context.router();
+    let send = app
+        .clone()
+        .oneshot(post(
+            "/sessions/sample-session/messages",
+            json!({ "content": "continue the investigation" }),
+        ))
+        .await
+        .unwrap();
+    let mut send = response_snapshot(send, &action_context).await;
+    send["body"]["error"] = json!("<queue-error>");
+    let actions = app
+        .oneshot(
+            Request::builder()
+                .uri("/sessions/sample-session/actions")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (actions, startup_at) = response_snapshot_with_startup_at(actions, &action_context).await;
+
+    assert_eq!(
+        (
+            send,
+            actions,
+            startup_at,
+            normalized_queued_prompts(&action_context, "sample-session", None),
+        ),
+        (
+            json!({
+                "status": StatusCode::BAD_GATEWAY.as_u16(),
+                "body": { "error": "<queue-error>" },
+                "calls": [],
+            }),
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": {
+                    "message": true,
+                    "answerQuestion": false,
+                    "resume": true,
+                    "interrupt": false,
+                    "openInTerminal": true,
+                    "rewind": false,
+                },
+                "calls": [],
+            }),
+            None,
+            json!([]),
+        ),
+    );
+}
+
+#[rstest]
 #[tokio::test]
 async fn send_message_forwards_nonempty_content_unchanged(action_context: ActionContext) {
     action_context.save_session(&session("sample-session"));

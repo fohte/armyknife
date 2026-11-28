@@ -266,19 +266,35 @@ pub(super) async fn resume_session(
         .mark_pending(current_id.clone(), session_start_generation)
         .await;
     if let Some(pane_id) = pane_id {
-        let sessions_dir =
-            resolve_sessions_dir(state.sessions_dir.clone()).map_err(ApiError::internal)?;
-        let session_id = current_id.clone();
-        run_blocking(move || {
-            store::update_session_in(&sessions_dir, &session_id, |session| {
-                let Some(tmux_info) = session.tmux_info.as_mut() else {
-                    return false;
-                };
-                tmux_info.pane_id = pane_id;
-                true
-            })
-        })
-        .await?;
+        match resolve_sessions_dir(state.sessions_dir.clone()) {
+            Ok(sessions_dir) => {
+                let session_id = current_id.clone();
+                if let Err(error) = run_blocking(move || {
+                    store::update_session_in(&sessions_dir, &session_id, |session| {
+                        let Some(tmux_info) = session.tmux_info.as_mut() else {
+                            return false;
+                        };
+                        tmux_info.pane_id = pane_id;
+                        true
+                    })
+                })
+                .await
+                {
+                    tracing::warn!(
+                        session_id = %current_id,
+                        error = %error.message,
+                        "failed to persist resumed session pane ID"
+                    );
+                }
+            }
+            Err(error) => {
+                tracing::warn!(
+                    session_id = %current_id,
+                    error = %error,
+                    "failed to resolve session storage while persisting resumed pane ID"
+                );
+            }
+        }
     }
     Ok(Json(Success::new()))
 }

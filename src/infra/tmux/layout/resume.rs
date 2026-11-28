@@ -155,17 +155,21 @@ fn find_agent_pane_id(output: &str, agent_session_id: &str) -> Option<String> {
 #[cfg(test)]
 mod pane_id_tests {
     use super::find_agent_pane_id;
+    use rstest::rstest;
 
+    #[rstest]
+    #[case::matching_marker("fixture-session", Some("%18".to_string()))]
+    #[case::marker_mismatch("missing-session", None)]
     #[test]
-    fn resume_resolves_the_agent_pane_from_its_session_marker() {
+    fn resume_resolves_the_agent_pane_from_its_session_marker(
+        #[case] session_id: &str,
+        #[case] expected: Option<String>,
+    ) {
         let output = indoc::indoc! {"
             %17\tother-session
             %18\tfixture-session
         "};
-        assert_eq!(
-            find_agent_pane_id(output, "fixture-session"),
-            Some("%18".to_string()),
-        );
+        assert_eq!(find_agent_pane_id(output, session_id), expected);
     }
 }
 

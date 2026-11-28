@@ -61,6 +61,84 @@ async fn resume_endpoint_delegates_ended_and_paused_sessions_to_the_runtime(
 }
 
 #[rstest]
+#[case::ended_pane_persistence_failed(SessionStatus::Ended)]
+#[tokio::test(start_paused = true)]
+async fn resume_succeeds_when_the_new_pane_id_cannot_be_persisted(
+    #[case] status: SessionStatus,
+    action_context: ActionContext,
+) {
+    let mut session = session("fixture-session");
+    session.status = status;
+    action_context.save_session(&session);
+    rusqlite::Connection::open(action_context.temp_dir.path().join("sessions/sessions.db"))
+        .unwrap()
+        .execute_batch(
+            "CREATE TRIGGER reject_session_update BEFORE UPDATE OF data ON sessions
+             BEGIN SELECT RAISE(ABORT, 'fixture session persistence failed'); END;",
+        )
+        .unwrap();
+    let app = action_context.router();
+    let mut updates = action_context.resume_updates.subscribe();
+
+    let resume = app
+        .clone()
+        .oneshot(post_empty("/sessions/fixture-session/resume"))
+        .await
+        .unwrap();
+    updates.changed().await.unwrap();
+    let pending = app
+        .oneshot(
+            Request::builder()
+                .uri("/sessions/fixture-session/actions")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        (
+            response_snapshot(resume, &action_context).await,
+            response_snapshot(pending, &action_context).await,
+            action_context
+                .load_session("fixture-session")
+                .tmux_info
+                .map(|tmux_info| tmux_info.pane_id),
+        ),
+        (
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": { "ok": true },
+                "calls": [{
+                    "kind": "resume",
+                    "sessionId": "fixture-session",
+                    "status": status,
+                }],
+            }),
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": {
+                    "message": false,
+                    "answerQuestion": false,
+                    "resume": true,
+                    "startup": "pending",
+                    "startupAt": "<startup-at>",
+                    "interrupt": false,
+                    "openInTerminal": true,
+                    "rewind": false,
+                },
+                "calls": [{
+                    "kind": "resume",
+                    "sessionId": "fixture-session",
+                    "status": status,
+                }],
+            }),
+            Some("%4".to_string()),
+        ),
+    );
+}
+
+#[rstest]
 #[tokio::test]
 async fn resume_endpoint_rejects_sessions_that_are_not_ended_or_paused(
     action_context: ActionContext,

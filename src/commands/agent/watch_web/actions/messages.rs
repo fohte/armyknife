@@ -1,4 +1,5 @@
 use std::{
+    future::Future,
     path::{Path, PathBuf},
     sync::{Arc, LazyLock},
 };
@@ -137,37 +138,44 @@ pub(super) async fn send_message(
         })
         .collect::<Vec<_>>();
     let resume_pending = state.resume_pending.clone();
-    let pending_attempt = if session.status == SessionStatus::Paused {
-        Some(
-            resume_pending
-                .mark_pending(session.session_id.clone(), session_start_generation)
-                .await,
-        )
-    } else {
-        None
-    };
+    let is_paused = session.status == SessionStatus::Paused;
     let pending_session_id = session.session_id.clone();
-    let queued_prompt_id = send_queued_prompt(QueuedPromptDelivery {
-        runtime: state.runtime,
-        sessions_dir,
-        session,
-        marker,
-        message_id: Some(message_id),
-        action_event_kind: None,
-        queued_content,
-        message_content: content,
-        queued_attachments,
-        attachment_paths,
-    })
+    let mut pending_attempt = None;
+    let queued_prompt_id = send_queued_prompt_with_before_delivery(
+        QueuedPromptDelivery {
+            runtime: state.runtime,
+            sessions_dir,
+            session,
+            marker,
+            message_id: Some(message_id),
+            action_event_kind: None,
+            queued_content,
+            message_content: content,
+            queued_attachments,
+            attachment_paths,
+        },
+        || async {
+            if is_paused {
+                pending_attempt = Some(
+                    resume_pending
+                        .mark_pending(pending_session_id.clone(), session_start_generation)
+                        .await,
+                );
+            }
+        },
+    )
     .await;
-    if queued_prompt_id.is_err()
-        && let Some(attempt_id) = pending_attempt
-    {
-        resume_pending
-            .mark_stuck(&pending_session_id, attempt_id)
-            .await;
-    }
-    let queued_prompt_id = queued_prompt_id?;
+    let queued_prompt_id = match queued_prompt_id {
+        Ok(queued_prompt_id) => queued_prompt_id,
+        Err(error) => {
+            if let Some(attempt_id) = pending_attempt {
+                resume_pending
+                    .mark_stuck(&pending_session_id, attempt_id)
+                    .await;
+            }
+            return Err(error);
+        }
+    };
     Ok(Json(MessageSuccess {
         ok: true,
         queued_prompt_id,
@@ -201,21 +209,46 @@ enum QueueStoreFailurePolicy {
 }
 
 pub(super) async fn send_queued_prompt(delivery: QueuedPromptDelivery) -> Result<String, ApiError> {
-    send_queued_prompt_with_policy(delivery, QueueStoreFailurePolicy::RejectDelivery)
-        .await?
-        .ok_or_else(|| ApiError::internal("queued prompt ID is missing after delivery"))
+    send_queued_prompt_with_before_delivery(delivery, || async {}).await
+}
+
+pub(super) async fn send_queued_prompt_with_before_delivery<F, Fut>(
+    delivery: QueuedPromptDelivery,
+    before_delivery: F,
+) -> Result<String, ApiError>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = ()>,
+{
+    send_queued_prompt_with_policy_and_before_delivery(
+        delivery,
+        QueueStoreFailurePolicy::RejectDelivery,
+        before_delivery,
+    )
+    .await?
+    .ok_or_else(|| ApiError::internal("queued prompt ID is missing after delivery"))
 }
 
 pub(super) async fn send_queued_prompt_best_effort(
     delivery: QueuedPromptDelivery,
 ) -> Result<Option<String>, ApiError> {
-    send_queued_prompt_with_policy(delivery, QueueStoreFailurePolicy::DeliverWithoutQueue).await
+    send_queued_prompt_with_policy_and_before_delivery(
+        delivery,
+        QueueStoreFailurePolicy::DeliverWithoutQueue,
+        || async {},
+    )
+    .await
 }
 
-async fn send_queued_prompt_with_policy(
+async fn send_queued_prompt_with_policy_and_before_delivery<F, Fut>(
     delivery: QueuedPromptDelivery,
     queue_store_failure_policy: QueueStoreFailurePolicy,
-) -> Result<Option<String>, ApiError> {
+    before_delivery: F,
+) -> Result<Option<String>, ApiError>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = ()>,
+{
     let QueuedPromptDelivery {
         runtime,
         sessions_dir,
@@ -259,6 +292,7 @@ async fn send_queued_prompt_with_policy(
                 error = %error.message,
                 "failed to save sent watch-web queued prompt; delivering without queue metadata"
             );
+            before_delivery().await;
             let content = watch_web_message_content(&session, marker.as_deref(), &message_content);
             let send_session = session.clone();
             if let Err(delivery_error) =
@@ -271,6 +305,7 @@ async fn send_queued_prompt_with_policy(
         }
     };
 
+    before_delivery().await;
     let content = watch_web_message_content(&session, marker.as_deref(), &message_content);
     let content = super::super::messages::queued_prompt::add_id_marker(&content, &message_id);
     let send_session = session.clone();
