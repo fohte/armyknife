@@ -165,14 +165,6 @@ export function NewSessionForm({
               onSelect={skillCompletion.selectSkill}
             />
           ) : null}
-          {state.modelChangeNotice !== null ? (
-            <div className="new-session-model-change" role="status">
-              <span>{state.modelChangeNotice}</span>
-              <button onClick={state.undoEngineChange} type="button">
-                Undo
-              </button>
-            </div>
-          ) : null}
           <div className="new-session-composer-actions">
             {!isMobile ? (
               <span className="new-session-message-hint">

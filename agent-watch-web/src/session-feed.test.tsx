@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest'
 
+import type { AgentUsage } from '#agent-usage'
 import { startSessionFeed } from '#session-feed'
 
 afterEach(() => {
@@ -210,6 +211,41 @@ it('requests deltas and restores the ordered full session response', async () =>
       },
     ],
   })
+})
+
+it('validates usage events and reports usage stream errors', () => {
+  const source = new FakeEventSource()
+  const usage: AgentUsage = {
+    sessions: [],
+    quotas: { claude: null, codex: null },
+  }
+  const received: { usage: AgentUsage[]; errors: number } = {
+    usage: [],
+    errors: 0,
+  }
+  const fetcher = vi.fn<typeof fetch>(() => new Promise(() => {}))
+  const stop = startSessionFeed(
+    () => {},
+    () => {},
+    {
+      fetcher,
+      createEventSource: () => source,
+      onUsage: (nextUsage) => received.usage.push(nextUsage),
+      onUsageError: () => {
+        received.errors += 1
+      },
+    },
+  )
+
+  source.emit('usage', JSON.stringify(usage))
+  source.emit(
+    'usage',
+    JSON.stringify({ sessions: [], quotas: { claude: null } }),
+  )
+  source.emit('usage-error', 'Usage is unavailable')
+  stop()
+
+  expect(received).toEqual({ usage: [usage], errors: 2 })
 })
 
 it('does not mark sessions changed when only the store revision advances', async () => {

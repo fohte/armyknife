@@ -92,28 +92,48 @@ fn parse_pane_ids(output: &str) -> std::result::Result<HashSet<String>, PaneIdsP
     Ok(pane_ids)
 }
 
-/// Lists pane IDs from the recorded server. An error means liveness is unknown.
-///
-/// Empty output is ambiguous because a successful command may omit pane IDs entirely.
+/// Lists pane IDs from the recorded server. Empty output and a stopped server
+/// both mean that no panes remain; other errors mean liveness is unknown.
 pub fn list_all_pane_ids_for_socket(socket_path: Option<&str>) -> Result<HashSet<String>> {
-    let output = super::run_tmux_output_untrimmed(&socket_command_args(
+    pane_ids_from_query(
+        super::run_tmux_output_untrimmed(&socket_command_args(
+            socket_path,
+            &["list-panes", "-a", "-F", "#{pane_id}"],
+        )),
         socket_path,
-        &["list-panes", "-a", "-F", "#{pane_id}"],
-    ))?;
-    parse_pane_ids(&output).map_err(|error| {
-        let (reason, message) = match error {
-            PaneIdsParseError::Empty => ("empty output", "tmux returned no pane IDs"),
-            PaneIdsParseError::InvalidPaneId => {
-                ("invalid pane ID", "tmux returned an invalid pane ID")
-            }
-        };
-        tracing::warn!(
-            ?socket_path,
-            reason,
-            "tmux list-panes output is untrusted; pane liveness is unknown"
-        );
-        TmuxError::Internal(message.to_owned())
-    })
+    )
+}
+
+fn pane_ids_from_query(
+    output: Result<String>,
+    socket_path: Option<&str>,
+) -> Result<HashSet<String>> {
+    let output = match output {
+        Ok(output) => output,
+        Err(TmuxError::CommandFailed(error))
+            if error
+                .stderr
+                .as_deref()
+                .is_some_and(|stderr| stderr.trim_start().starts_with("no server running on ")) =>
+        {
+            return Ok(HashSet::new());
+        }
+        Err(error) => return Err(error),
+    };
+    match parse_pane_ids(&output) {
+        Ok(pane_ids) => Ok(pane_ids),
+        Err(PaneIdsParseError::Empty) => Ok(HashSet::new()),
+        Err(PaneIdsParseError::InvalidPaneId) => {
+            tracing::warn!(
+                ?socket_path,
+                reason = "invalid pane ID",
+                "tmux list-panes output is untrusted; pane liveness is unknown"
+            );
+            Err(TmuxError::Internal(
+                "tmux returned an invalid pane ID".to_owned(),
+            ))
+        }
+    }
 }
 
 /// Returns whether a pane exists in its recorded server.
@@ -407,6 +427,36 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+    use crate::infra::tmux::CommandFailedError;
+
+    #[rstest]
+    #[case::stopped_server(
+        Err(TmuxError::CommandFailed(CommandFailedError {
+            command: "tmux".to_string(),
+            args: vec!["list-panes".to_string()],
+            message: "command exited with non-zero status".to_string(),
+            stderr: Some("no server running on /fixture/tmux.sock".to_string()),
+        })),
+        Some("/fixture/tmux.sock")
+    )]
+    #[case::empty_listing(Ok(String::new()), Some("/fixture/tmux.sock"))]
+    fn empty_or_stopped_tmux_server_has_no_panes(
+        #[case] query: Result<String>,
+        #[case] socket_path: Option<&str>,
+    ) {
+        assert_eq!(
+            pane_ids_from_query(query, socket_path).expect("there are no live panes"),
+            HashSet::new(),
+        );
+    }
+
+    #[test]
+    fn invalid_pane_ids_do_not_become_an_empty_pane_list() {
+        let result = pane_ids_from_query(Ok("%47\n%48x".to_owned()), Some("/fixture/tmux.sock"))
+            .map_err(|error| error.to_string());
+
+        assert_eq!(result, Err("tmux returned an invalid pane ID".to_owned()),);
+    }
 
     #[rstest]
     #[case::legacy_targets_default_server(None, vec!["-L", "default"])]

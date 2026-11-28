@@ -1,51 +1,33 @@
-import { err, ok } from 'neverthrow'
-import { act } from 'react'
+import { act, useEffect } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { afterEach, expect, it, vi } from 'vitest'
 
 import type { AgentUsage } from '#agent-usage'
 import {
   AgentUsageProvider,
   useAgentUsageContext,
 } from '#components/agent-usage-context'
-import { QuotaPanel } from '#components/quota-panel'
 
-const { requestAgentUsageMock } = vi.hoisted(() => ({
-  requestAgentUsageMock: vi.fn(),
-}))
+type UsageEvent =
+  { type: 'usage'; value: AgentUsage } | { type: 'error' } | null
 
-vi.mock('#api-requests', () => ({
-  requestJson: requestAgentUsageMock,
-}))
+function UsagePublisher({ event }: { event: UsageEvent }) {
+  const { onUsage, onUsageError } = useAgentUsageContext()
 
-let container: HTMLDivElement
-let root: Root | null
-const visibilityStateDescriptor = Object.getOwnPropertyDescriptor(
-  document,
-  'visibilityState',
-)
+  useEffect(() => {
+    if (event?.type === 'usage') onUsage(event.value)
+    if (event?.type === 'error') onUsageError()
+  }, [event, onUsage, onUsageError])
 
-function setVisibilityState(visibilityState: DocumentVisibilityState) {
-  Object.defineProperty(document, 'visibilityState', {
-    configurable: true,
-    value: visibilityState,
-  })
-  document.dispatchEvent(new Event('visibilitychange'))
+  return null
 }
 
 function UsageSnapshot() {
   const { error, usage } = useAgentUsageContext()
   return (
-    <>
-      <span data-error={String(error)} data-session-model="">
-        {usage?.sessions[0]?.model ?? 'loading'}
-      </span>
-      <QuotaPanel
-        error={error}
-        nowSeconds={1_794_832_000}
-        quotas={usage?.quotas ?? null}
-      />
-    </>
+    <output data-testid="usage-state">
+      {JSON.stringify({ usage, error })}
+    </output>
   )
 }
 
@@ -64,180 +46,60 @@ function usageResponse(model: string): AgentUsage {
       },
     ],
     quotas: {
-      claude: {
-        engine: 'claude',
-        rateLimits: {
-          fiveHour: {
-            usedPercentage: 22,
-            resetsAt: 1_794_841_200,
-            windowSeconds: 18_000,
-          },
-          sevenDay: null,
-        },
-        observedAt: '2026-11-16T12:00:00Z',
-      },
+      claude: null,
       codex: null,
     },
   }
 }
 
-beforeEach(() => {
-  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
-  vi.useFakeTimers()
-  requestAgentUsageMock.mockReset()
-  container = document.createElement('div')
-  document.body.append(container)
-  root = createRoot(container)
-})
+let container: HTMLDivElement | null = null
+let root: Root | null = null
 
 afterEach(() => {
   if (root !== null) act(() => root?.unmount())
   root = null
-  container.remove()
-  vi.useRealTimers()
-  if (visibilityStateDescriptor === undefined) {
-    Reflect.deleteProperty(document, 'visibilityState')
-  } else {
-    Object.defineProperty(
-      document,
-      'visibilityState',
-      visibilityStateDescriptor,
-    )
-  }
+  container?.remove()
+  container = null
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
 })
 
-it('pauses usage refresh while hidden and refreshes when visible again', async () => {
-  requestAgentUsageMock.mockReturnValue(ok(usageResponse('fixture-model')))
-  setVisibilityState('hidden')
+it('retains the latest usage and clears its error after a new usage event', async () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  container = document.createElement('div')
+  document.body.append(container)
+  root = createRoot(container)
+  const firstUsage = usageResponse('fixture-model-one')
+  const nextUsage = usageResponse('fixture-model-two')
 
-  await act(async () => {
-    root?.render(
-      <AgentUsageProvider>
-        <UsageSnapshot />
-      </AgentUsageProvider>,
+  const render = async (event: UsageEvent) => {
+    await act(async () => {
+      root?.render(
+        <AgentUsageProvider>
+          <UsagePublisher event={event} />
+          <UsageSnapshot />
+        </AgentUsageProvider>,
+      )
+      await Promise.resolve()
+    })
+    const state: unknown = JSON.parse(
+      container?.querySelector('[data-testid="usage-state"]')?.textContent ??
+        'null',
     )
-    await Promise.resolve()
-  })
-  const requestCounts = [requestAgentUsageMock.mock.calls.length]
+    return state
+  }
 
-  await act(async () => {
-    setVisibilityState('visible')
-    await Promise.resolve()
-  })
-  requestCounts.push(requestAgentUsageMock.mock.calls.length)
-
-  await act(async () => {
-    setVisibilityState('hidden')
-    await vi.advanceTimersByTimeAsync(120_000)
-  })
-  requestCounts.push(requestAgentUsageMock.mock.calls.length)
-
-  await act(async () => {
-    setVisibilityState('visible')
-    await Promise.resolve()
-  })
-  requestCounts.push(requestAgentUsageMock.mock.calls.length)
-
-  expect(requestCounts).toEqual([0, 1, 1, 2])
-})
-
-it('queues one refresh when a request spans a visibility change', async () => {
-  let resolveFirstRequest: (() => void) | undefined
-  const firstRequest = new Promise((resolve) => {
-    resolveFirstRequest = () => {
-      resolve(ok(usageResponse('fixture-model-one')))
-    }
-  })
-  requestAgentUsageMock
-    .mockReturnValueOnce(firstRequest)
-    .mockReturnValue(ok(usageResponse('fixture-model-two')))
-
-  await act(async () => {
-    root?.render(
-      <AgentUsageProvider>
-        <UsageSnapshot />
-      </AgentUsageProvider>,
-    )
-    await Promise.resolve()
-  })
-  const requestCounts = [requestAgentUsageMock.mock.calls.length]
-
-  act(() => {
-    setVisibilityState('hidden')
-    setVisibilityState('visible')
-  })
-  requestCounts.push(requestAgentUsageMock.mock.calls.length)
-
-  await act(async () => {
-    resolveFirstRequest?.()
-    await firstRequest
-  })
-  requestCounts.push(requestAgentUsageMock.mock.calls.length)
-
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(60_000)
-  })
-  requestCounts.push(requestAgentUsageMock.mock.calls.length)
-
-  expect(requestCounts).toEqual([1, 1, 2, 3])
-})
-
-it('shows stale usage after a failed refresh and clears the status on recovery', async () => {
-  requestAgentUsageMock
-    .mockReturnValueOnce(ok(usageResponse('fixture-model-one')))
-    .mockReturnValueOnce(err(new Error('fixture refresh failure')))
-    .mockReturnValueOnce(ok(usageResponse('fixture-model-two')))
-
-  await act(async () => {
-    root?.render(
-      <AgentUsageProvider>
-        <UsageSnapshot />
-      </AgentUsageProvider>,
-    )
-    await Promise.resolve()
-  })
-  const snapshot = () => ({
-    model: container.querySelector('[data-session-model]')?.textContent ?? null,
-    error:
-      container
-        .querySelector('[data-session-model]')
-        ?.getAttribute('data-error') ?? null,
-    quotaStatus:
-      container.querySelector('.quota-panel-error')?.textContent ?? null,
-    requests: requestAgentUsageMock.mock.calls.length,
-  })
-  const states = [snapshot()]
-
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(60_000)
-  })
-  states.push(snapshot())
-
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(60_000)
-  })
-  states.push(snapshot())
-
-  expect(states).toEqual([
-    {
-      model: 'fixture-model-one',
-      error: 'false',
-      quotaStatus: null,
-      requests: 1,
-    },
-    {
-      model: 'fixture-model-one',
-      error: 'true',
-      quotaStatus: 'Refresh failed; showing stale usage',
-      requests: 2,
-    },
-    {
-      model: 'fixture-model-two',
-      error: 'false',
-      quotaStatus: null,
-      requests: 3,
-    },
+  const states = Object.fromEntries([
+    ['initial', await render(null)],
+    ['firstUsage', await render({ type: 'usage', value: firstUsage })],
+    ['staleAfterError', await render({ type: 'error' })],
+    ['recovered', await render({ type: 'usage', value: nextUsage })],
   ])
+
+  expect(states).toEqual({
+    initial: { usage: null, error: false },
+    firstUsage: { usage: firstUsage, error: false },
+    staleAfterError: { usage: firstUsage, error: true },
+    recovered: { usage: nextUsage, error: false },
+  })
 })

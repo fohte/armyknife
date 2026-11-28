@@ -7,7 +7,10 @@ import {
 } from '#async-action-feedback'
 import { useCommandPaletteController } from '#command-palette-controller'
 import { getCommandPaletteShortcut } from '#command-palette-shortcut'
-import { AgentUsageProvider } from '#components/agent-usage-context'
+import {
+  AgentUsageProvider,
+  useAgentUsageContext,
+} from '#components/agent-usage-context'
 import { SessionConversationCacheProvider } from '#components/session-conversation-cache'
 import { SessionElapsedStartedAtProvider } from '#components/session-elapsed-context'
 import { startFreezeProfiler } from '#freeze-profiler'
@@ -45,6 +48,8 @@ export function App() {
 }
 
 function AppContent() {
+  const { onUsage, onUsageError } = useAgentUsageContext()
+
   useEffect(() => startFreezeProfiler(), [])
 
   useEffect(() => {
@@ -269,9 +274,9 @@ function AppContent() {
           setLoaded(true)
         },
         setError,
-        { onUpdateAvailable: setAvailableVersion },
+        { onUpdateAvailable: setAvailableVersion, onUsage, onUsageError },
       ),
-    [recordSessionSnapshot],
+    [recordSessionSnapshot, onUsage, onUsageError],
   )
 
   const selectedWaitingIndex = inboxSort.navigableSessions

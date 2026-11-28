@@ -551,6 +551,7 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | `current`                                                                                             |         | Print the current engine as JSON, or exit 1 when no supported agent is detected             |
 | `close [target] [--child] [--force] [--skip-hooks] [--keep-worktree]`                                 | `c`     | Close an agent session and optionally keep its linked worktree                              |
 | `clean [--dry-run] [--all] [--force]`                                                                 |         | Delete merged or closed worktrees                                                           |
+| `cleanup-stale-sessions`                                                                              |         | Archive sessions whose tmux panes or working directories no longer exist                    |
 | `hook <event>`                                                                                        |         | Record coding agent hook events                                                             |
 | `attribution pre-tool-use <provider>`                                                                 |         | Pass through the existing provider permission proxy result                                  |
 | `list`                                                                                                | `ls`    | List all Claude Code sessions with status                                                   |
@@ -686,7 +687,7 @@ Edited todo 1
 
 ### `a agent usage record`
 
-Read a Claude Code status-line JSON object from stdin and save its latest model, effort, context usage, rate limits, and CLI version for watch-web. The command is best-effort and exits successfully when recording fails so callers can keep their status-line output. `GET /api/usage` returns saved Claude Code usage, Codex usage parsed from session transcripts, and the latest quota for each engine.
+Read a Claude Code status-line JSON object from stdin and save its latest model, effort, context usage, rate limits, and CLI version for watch-web. The command is best-effort and exits successfully when recording fails so callers can keep their status-line output. Watch-web sends usage snapshots over the `usage` event on `GET /api/events`.
 
 ```console
 $ cat status-line.json | a agent usage record
@@ -982,6 +983,8 @@ These hooks record session state changes, enabling `a agent list` to display act
 
 The `SessionStart` and `UserPromptSubmit` hooks store the agent session ID in the tmux pane user option `@armyknife-last-agent-session-id`, so that `a agent resume` can relaunch the session inside that pane. Reading this option falls back to the pre-rename key `@armyknife-last-claude-code-session-id` when the current key is unset, since a pane only gets its option rewritten on those two hook events, and a pane holding a still-running session would otherwise lose its binding right after the rename.
 
+On each `SessionStart`, armyknife starts stale-session cleanup in a detached process before configuring global `pane-exited`, `pane-died`, `after-kill-pane`, `window-unlinked`, `after-kill-window`, and `session-closed` hooks when it can identify the tmux server from the hook process or the session's recorded tmux binding. This covers Codex hooks that run outside their pane's process tree, while the startup cleanup recovers sessions left behind by a tmux server crash. The hooks run `a agent cleanup-stale-sessions` in the background and discard its output; watch-web also runs cleanup on startup and periodically while it is open.
+
 Claude Code records the model from `SessionStart.model` or `PostModelSwitch.to_model`; if no model has been recorded, the last assistant message in the transcript supplies it. Hook events that include `effort.level` record that effort. Codex sessions also record model and effort metadata when available.
 
 The pane is normally found by walking the hook process's ancestry up to it. A Codex session running through the shared `codex app-server` daemon breaks that link: the daemon runs the agent loop, hooks included, outside any pane's process tree, so armyknife falls back to the launcher-written session ID option. It binds only when exactly one pane has that session ID and is currently running the Codex CLI. The lookup accepts both `@armyknife-last-agent-session-id` and the pre-rename `@armyknife-last-claude-code-session-id` option; if there is no unique match, the session remains unbound.
@@ -1256,7 +1259,7 @@ Assistant replies and to-do/proposal cards can display local images written as M
 
 By default, watch-web accepts loopback Host values. To access it through a proxy or tunnel, set `ARMYKNIFE_WATCH_WEB_ALLOWED_HOSTS` to the comma-separated DNS hostnames it will receive, then forward requests to `127.0.0.1:4317` (or the port selected with `--port`) with matching Host and Origin authorities.
 
-`GET /api/usage` returns per-session usage for Claude Code and Codex plus the latest quota for each engine.
+`GET /api/events` sends per-session usage for Claude Code and Codex plus the latest quota for each engine with the `usage` event, and sends `usage-error` when a snapshot cannot be loaded.
 
 Files sent by an agent are served by `GET /api/sessions/{id}/files/{file_id}` only when recorded for that session, or by `GET /api/sessions/{id}/transcript-files/{tool_use_id}/{index}` only when the session transcript contains the matching file-send record and file index.
 

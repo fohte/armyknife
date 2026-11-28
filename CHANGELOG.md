@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.1.999](https://github.com/fohte/armyknife/compare/v0.1.998...v0.1.999) (2026-11-28)
+
+
+### Features
+
+* **agent-watch-web:** stream usage over SSE ([#2429](https://github.com/fohte/armyknife/issues/2429)) ([86c1431](https://github.com/fohte/armyknife/commit/86c143115d4d3b2bac69d1eeef3864d3db2934a6))
+
+## [0.1.998](https://github.com/fohte/armyknife/compare/v0.1.997...v0.1.998) (2026-11-28)
+
+
+### Features
+
+* **agent:** recover sessions after tmux exits ([#2359](https://github.com/fohte/armyknife/issues/2359)) ([6ef4b38](https://github.com/fohte/armyknife/commit/6ef4b38eb209c06fdf5e5c85a28581f84063efaa))
+
+## [0.1.997](https://github.com/fohte/armyknife/compare/v0.1.996...v0.1.997) (2026-11-28)
+
+
+### Features
+
+* **agent-watch-web:** separate engine selections ([#2425](https://github.com/fohte/armyknife/issues/2425)) ([ebd02a5](https://github.com/fohte/armyknife/commit/ebd02a5ea19c9eba68ef3864c91a9cdc1a9ff204))
+
 ## [0.1.996](https://github.com/fohte/armyknife/compare/v0.1.995...v0.1.996) (2026-11-28)
 
 
