@@ -571,7 +571,8 @@ fn process_hook_event_impl_with_env_and_unreported_stop(
     let startup_metadata = startup_metadata_for_resume(sessions_dir, &input)?;
 
     // Pane lookup stays per event because `Session::tmux_info` follows pane changes.
-    // Missing state gets one fallback check; unresolved ancestry stays closed until SessionStart.
+    // A failed non-SessionStart check stays closed until SessionStart.
+    // An unresolved SessionStart leaves state missing so the next event can retry.
     let is_session_start = event == HookEvent::SessionStart;
     let (mut stored_session, cached_has_parent_agent) = if is_session_start {
         (None, None)
@@ -2684,6 +2685,42 @@ mod tests {
                 )],
             ),
         );
+    }
+
+    #[test]
+    fn hook_reuses_session_pane_classification_and_retries_unknown_state() {
+        let temp_dir = tempfile::TempDir::new().expect("temporary directory should be created");
+        let resolve_calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let session_start_calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let classification_checks = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let side_effects = SideEffects {
+            pane_binding: Some(std::sync::Arc::new(RecordingPaneBinding {
+                pane_info: tmux::PaneInfo {
+                    session_name: "main".to_string(),
+                    window_name: "claude".to_string(),
+                    window_index: 0,
+                    pane_id: "%42".to_string(),
+                },
+                option_writes: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+                resolve_calls: resolve_calls.clone(),
+                session_start_calls,
+                classification_checks: classification_checks.clone(),
+                fallback_has_parent_agent: None,
+            })),
+            ..SideEffects::none()
+        };
+        process_hook_event_impl_with_env(
+            HookEvent::SessionStart,
+            create_test_input_with_source(None, Some("startup")),
+            temp_dir.path(),
+            &side_effects,
+            None,
+            EnvVars {
+                session_launch_id: Some("launch-fixture".to_string()),
+                ..EnvVars::default()
+            },
+        )
+        .expect("startup should save the session classification");
 
         process_hook_event_impl_with_env(
             HookEvent::PostToolUse,
@@ -2728,35 +2765,31 @@ mod tests {
         .expect("a subagent should reuse the session classification");
         store::set_has_parent_agent_process_from(temp_dir.path(), "test-123", None)
             .expect("session classification should be unavailable");
-        let mut subagent_input = create_test_input_with_source(None, None);
-        subagent_input.agent_id = Some("fixture-agent-cobalt".to_string());
         process_hook_event_impl_with_env(
             HookEvent::PostToolUse,
-            subagent_input,
+            create_test_input_with_source(None, None),
             temp_dir.path(),
             &side_effects,
             None,
             EnvVars::default(),
         )
-        .expect("a subagent should classify a missing session state");
-        let mut subagent_input = create_test_input_with_source(None, None);
-        subagent_input.agent_id = Some("fixture-agent-cobalt".to_string());
+        .expect("missing classification should trigger one fallback check");
         process_hook_event_impl_with_env(
             HookEvent::PostToolUse,
-            subagent_input,
+            create_test_input_with_source(None, None),
             temp_dir.path(),
             &side_effects,
             None,
             EnvVars::default(),
         )
-        .expect("a subagent should reuse an unavailable classification");
+        .expect("unavailable classification should be reused");
         let session = store::load_session_from(temp_dir.path(), "test-123")
             .expect("session should load")
             .expect("session should exist");
         assert_eq!(
             (
                 store::load_hook_session_state_from(temp_dir.path(), "test-123")
-                    .expect("main agent hook state should load")
+                    .expect("hook state should load")
                     .1,
                 resolve_calls
                     .lock()
