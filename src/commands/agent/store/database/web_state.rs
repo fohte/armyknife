@@ -105,6 +105,13 @@ pub(in crate::commands::agent::store) fn watch_web_session_start_generation(
     }
 
     let connection = open_connection(sessions_dir)?;
+    watch_web_session_start_generation_in_transaction(&connection, session_id)
+}
+
+pub(super) fn watch_web_session_start_generation_in_transaction(
+    connection: &Connection,
+    session_id: &str,
+) -> Result<i64> {
     connection
         .query_row(
             "SELECT generation FROM watch_web_session_start WHERE session_id = ?1",

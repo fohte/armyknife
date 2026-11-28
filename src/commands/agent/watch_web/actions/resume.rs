@@ -247,20 +247,45 @@ impl PendingSessionResumes {
     }
 }
 
+struct LockedResumeSession {
+    current_id: String,
+    session_start_generation: i64,
+    session: Session,
+    _guard: tokio::sync::OwnedMutexGuard<()>,
+}
+
+async fn lock_resume_session(
+    state: &ActionState,
+    id: &str,
+) -> Result<LockedResumeSession, ApiError> {
+    load_session(state.clone(), id.to_string()).await?;
+    let current_id = resolve_current_session_id(state, id).await?;
+    let lock = state.resume_locks.get_or_create(current_id.clone()).await;
+    let guard = lock
+        .try_lock_owned()
+        .map_err(|_| ApiError::conflict("session resume is already in progress"))?;
+    let session_start_generation = load_session_start_generation(state, &current_id).await?;
+    // SessionStart writes this marker with the session row, so reading it first avoids pairing a
+    // newer marker with a stale resumable status.
+    let session = load_session(state.clone(), current_id.clone()).await?;
+    Ok(LockedResumeSession {
+        current_id,
+        session_start_generation,
+        session,
+        _guard: guard,
+    })
+}
+
 pub(super) async fn resume_session(
     State(state): State<ActionState>,
     RoutePath(id): RoutePath<String>,
 ) -> Result<Json<Success>, ApiError> {
-    load_session(state.clone(), id.clone()).await?;
-    let current_id = resolve_current_session_id(&state, &id).await?;
-    let lock = state.resume_locks.get_or_create(current_id.clone()).await;
-    let _guard = lock
-        .try_lock_owned()
-        .map_err(|_| ApiError::conflict("session resume is already in progress"))?;
-    let session_start_generation = load_session_start_generation(&state, &current_id).await?;
-    // SessionStart writes this marker with the session row, so reading it first avoids pairing a
-    // newer marker with a stale resumable status.
-    let session = load_session(state.clone(), current_id.clone()).await?;
+    let LockedResumeSession {
+        current_id,
+        session_start_generation,
+        session,
+        _guard,
+    } = lock_resume_session(&state, &id).await?;
     if state
         .resume_pending
         .is_pending(&current_id, session.status, session_start_generation)
@@ -322,6 +347,108 @@ pub(super) async fn resume_session(
     Ok(Json(Success::new()))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum RetryResumeOutcome {
+    StartupChanged,
+    PaneMismatch,
+    Retried,
+}
+
+pub(super) enum RetryResumeError {
+    Store(anyhow::Error),
+    Runtime(anyhow::Error),
+}
+
+fn retry_resume_after_generation_check(
+    expected_generation: i64,
+    read_generation: impl FnOnce() -> anyhow::Result<i64>,
+) -> std::result::Result<bool, RetryResumeError> {
+    let current_generation = read_generation().map_err(RetryResumeError::Store)?;
+    Ok(current_generation == expected_generation)
+}
+
+pub(super) async fn retry_resume(
+    State(state): State<ActionState>,
+    RoutePath(id): RoutePath<String>,
+) -> Result<Json<Success>, ApiError> {
+    let LockedResumeSession {
+        current_id,
+        session_start_generation,
+        session,
+        _guard,
+    } = lock_resume_session(&state, &id).await?;
+    if !matches!(
+        state
+            .resume_pending
+            .startup_status(&current_id, session.status, session_start_generation)
+            .await,
+        Some((ResumeStartupStatus::Stuck, _))
+    ) {
+        return Err(ApiError::conflict("session startup is not stuck"));
+    }
+
+    let sessions_dir =
+        resolve_sessions_dir(state.sessions_dir.clone()).map_err(ApiError::internal)?;
+    let sessions_dir_for_validation = sessions_dir.clone();
+    let retry_session_id = current_id.clone();
+    let session_for_retry =
+        tokio::task::spawn_blocking(move || -> anyhow::Result<Option<Session>> {
+            let session_lock =
+                store::lock_session_for_update(&sessions_dir_for_validation, &retry_session_id)?;
+            let current_generation = session_lock.watch_web_session_start_generation()?;
+            let Some(current_session) = session_lock.load()? else {
+                return Ok(None);
+            };
+            if current_generation != session_start_generation
+                || !is_awaiting_session_start(current_session.status)
+                || current_session.archived_at.is_some()
+            {
+                return Ok(None);
+            }
+
+            Ok(Some(current_session))
+        })
+        .await
+        .map_err(ApiError::internal)?
+        .map_err(ApiError::internal)?;
+    let Some(session_for_retry) = session_for_retry else {
+        return Err(ApiError::conflict("session startup is not stuck"));
+    };
+    let runtime = state.runtime;
+    let retry_session_id = current_id.clone();
+    let outcome = tokio::task::spawn_blocking(move || {
+        let mut check_generation = || {
+            retry_resume_after_generation_check(session_start_generation, || {
+                store::watch_web_session_start_generation_from(&sessions_dir, &retry_session_id)
+            })
+        };
+        runtime.retry_resume(&session_for_retry, &mut check_generation)
+    })
+    .await
+    .map_err(ApiError::internal)?;
+    let outcome = match outcome {
+        Ok(outcome) => outcome,
+        Err(RetryResumeError::Store(error)) => return Err(ApiError::internal(error)),
+        Err(RetryResumeError::Runtime(error)) => return Err(ApiError::operation(error)),
+    };
+    match outcome {
+        RetryResumeOutcome::StartupChanged => {
+            return Err(ApiError::conflict("session startup is not stuck"));
+        }
+        RetryResumeOutcome::PaneMismatch => {
+            return Err(ApiError::conflict(
+                "session pane does not match the requested session",
+            ));
+        }
+        RetryResumeOutcome::Retried => {}
+    }
+    state
+        .resume_pending
+        .mark_pending(current_id, session_start_generation)
+        .await;
+    Ok(Json(Success::new()))
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex as StdMutex;
@@ -329,7 +456,7 @@ mod tests {
     use anyhow::Result;
     use serde_json::{Value, json};
 
-    use super::{EndedSessionHost, resume_ended_session};
+    use super::{EndedSessionHost, resume_ended_session, retry_resume_after_generation_check};
     use crate::commands::agent::types::{Engine, Session, TmuxInfo};
     use crate::infra::tmux::layout::ResumeLayoutSpec;
     use crate::shared::config::LayoutNode;
@@ -354,6 +481,14 @@ mod tests {
             }));
             Ok(Some("%18".to_string()))
         }
+    }
+
+    #[test]
+    fn retry_generation_check_rejects_an_advanced_generation() {
+        let generation_matches =
+            retry_resume_after_generation_check(3, || Ok(4)).map_err(|_| "generation read failed");
+
+        assert_eq!(generation_matches, Ok(false));
     }
 
     #[test]

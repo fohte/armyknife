@@ -83,7 +83,19 @@ pub const TMUX_SESSION_OPTION_LEGACY: &str = "@armyknife-last-claude-code-sessio
 /// `peer::wake`'s `Host` trait) share the same fallback order instead of
 /// each re-deriving it.
 pub fn resolve_session_option(read: impl Fn(&str) -> Option<String>) -> Option<String> {
-    read(TMUX_SESSION_OPTION).or_else(|| read(TMUX_SESSION_OPTION_LEGACY))
+    resolve_session_option_with(|option| Ok(read(option)))
+        .ok()
+        .flatten()
+}
+
+/// Resolves the pane options while preserving errors from the underlying read.
+pub(crate) fn resolve_session_option_with(
+    mut read: impl FnMut(&str) -> Result<Option<String>>,
+) -> Result<Option<String>> {
+    match read(TMUX_SESSION_OPTION)? {
+        Some(session_id) => Ok(Some(session_id)),
+        None => read(TMUX_SESSION_OPTION_LEGACY),
+    }
 }
 
 /// Tmux window-scoped user option holding the aggregated Claude Code status

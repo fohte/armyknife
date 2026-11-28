@@ -466,6 +466,254 @@ async fn actions_report_stuck_resume_after_twenty_seconds_and_clear_it_when_star
 
 #[rstest]
 #[tokio::test(start_paused = true)]
+async fn retrying_a_stuck_resume_restarts_the_startup_timeout(action_context: ActionContext) {
+    let mut session = session("fixture-session");
+    session.status = SessionStatus::Ended;
+    action_context.save_session(&session);
+    let app = action_context.router();
+    let mut updates = action_context.resume_updates.subscribe();
+
+    let resume = app
+        .clone()
+        .oneshot(post_empty("/sessions/fixture-session/resume"))
+        .await
+        .unwrap();
+    updates.changed().await.unwrap();
+    advance(Duration::from_secs(20)).await;
+    updates.changed().await.unwrap();
+
+    let retry = app
+        .clone()
+        .oneshot(post_empty("/sessions/fixture-session/resume/retry"))
+        .await
+        .unwrap();
+    updates.changed().await.unwrap();
+    let actions = app
+        .oneshot(
+            Request::builder()
+                .uri("/sessions/fixture-session/actions")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        (
+            response_snapshot(resume, &action_context).await,
+            response_snapshot(retry, &action_context).await,
+            response_snapshot(actions, &action_context).await,
+        ),
+        (
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": { "ok": true },
+                "calls": [
+                    {
+                        "kind": "resume",
+                        "sessionId": "fixture-session",
+                        "status": SessionStatus::Ended,
+                    },
+                    {
+                        "kind": "retry-resume",
+                        "sessionId": "fixture-session",
+                        "status": SessionStatus::Ended,
+                    },
+                ],
+            }),
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": { "ok": true },
+                "calls": [
+                    {
+                        "kind": "resume",
+                        "sessionId": "fixture-session",
+                        "status": SessionStatus::Ended,
+                    },
+                    {
+                        "kind": "retry-resume",
+                        "sessionId": "fixture-session",
+                        "status": SessionStatus::Ended,
+                    },
+                ],
+            }),
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": {
+                    "message": false,
+                    "answerQuestion": false,
+                    "resume": true,
+                    "startup": "pending",
+                    "startupAt": "<startup-at>",
+                    "interrupt": false,
+                    "openInTerminal": true,
+                    "rewind": false,
+                },
+                "calls": [
+                    {
+                        "kind": "resume",
+                        "sessionId": "fixture-session",
+                        "status": SessionStatus::Ended,
+                    },
+                    {
+                        "kind": "retry-resume",
+                        "sessionId": "fixture-session",
+                        "status": SessionStatus::Ended,
+                    },
+                ],
+            }),
+        ),
+    );
+}
+
+#[rstest]
+#[case::never_resumed(false, false)]
+#[case::still_pending(true, false)]
+#[case::started_after_stuck(true, true)]
+#[tokio::test(start_paused = true)]
+async fn retry_resume_rejects_a_session_that_is_not_stuck(
+    #[case] start_resume: bool,
+    #[case] session_started: bool,
+    action_context: ActionContext,
+) {
+    let mut session = session("fixture-session");
+    session.status = SessionStatus::Ended;
+    action_context.save_session(&session);
+    let app = action_context.router();
+    let mut updates = action_context.resume_updates.subscribe();
+
+    if start_resume {
+        app.clone()
+            .oneshot(post_empty("/sessions/fixture-session/resume"))
+            .await
+            .unwrap();
+        updates.changed().await.unwrap();
+    }
+    if session_started {
+        advance(Duration::from_secs(20)).await;
+        updates.changed().await.unwrap();
+        session.status = SessionStatus::Running;
+        session.updated_at += chrono::Duration::seconds(1);
+        action_context.record_session_start(&session);
+    }
+    let retry = app
+        .oneshot(post_empty("/sessions/fixture-session/resume/retry"))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response_snapshot(retry, &action_context).await,
+        json!({
+            "status": StatusCode::CONFLICT.as_u16(),
+            "body": { "error": "session startup is not stuck" },
+            "calls": if start_resume {
+                json!([{
+                    "kind": "resume",
+                    "sessionId": "fixture-session",
+                    "status": SessionStatus::Ended,
+                }])
+            } else {
+                json!([])
+            },
+        }),
+    );
+}
+
+#[rstest]
+#[tokio::test(start_paused = true)]
+async fn retry_resume_rejects_a_pane_recorded_for_another_session(action_context: ActionContext) {
+    let mut session = session("fixture-session");
+    session.status = SessionStatus::Ended;
+    action_context.save_session(&session);
+    let app = action_context.router();
+    let mut updates = action_context.resume_updates.subscribe();
+
+    app.clone()
+        .oneshot(post_empty("/sessions/fixture-session/resume"))
+        .await
+        .unwrap();
+    updates.changed().await.unwrap();
+    advance(Duration::from_secs(20)).await;
+    updates.changed().await.unwrap();
+    *action_context
+        .runtime
+        .retry_resume_matches_pane
+        .lock()
+        .unwrap() = false;
+
+    let retry = app
+        .oneshot(post_empty("/sessions/fixture-session/resume/retry"))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response_snapshot(retry, &action_context).await,
+        json!({
+            "status": StatusCode::CONFLICT.as_u16(),
+            "body": { "error": "session pane does not match the requested session" },
+            "calls": [{
+                "kind": "resume",
+                "sessionId": "fixture-session",
+                "status": SessionStatus::Ended,
+            }],
+        }),
+    );
+}
+
+#[rstest]
+#[tokio::test(start_paused = true)]
+async fn retry_resume_rejects_a_session_that_started_after_pane_validation(
+    action_context: ActionContext,
+) {
+    let mut session = session("fixture-session");
+    session.status = SessionStatus::Ended;
+    action_context.save_session(&session);
+    let app = action_context.router();
+    let mut updates = action_context.resume_updates.subscribe();
+
+    app.clone()
+        .oneshot(post_empty("/sessions/fixture-session/resume"))
+        .await
+        .unwrap();
+    updates.changed().await.unwrap();
+    advance(Duration::from_secs(20)).await;
+    updates.changed().await.unwrap();
+
+    let sessions_dir = action_context.temp_dir.path().join("sessions");
+    let mut started_session = session.clone();
+    started_session.status = SessionStatus::Running;
+    *action_context
+        .runtime
+        .retry_resume_before_generation_check
+        .lock()
+        .unwrap() = Some(Box::new(move || {
+        let lock =
+            store::lock_session_for_update(&sessions_dir, &started_session.session_id).unwrap();
+        lock.record_watch_web_session_start().unwrap();
+        lock.save(&started_session).unwrap();
+    }));
+
+    let retry = app
+        .oneshot(post_empty("/sessions/fixture-session/resume/retry"))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response_snapshot(retry, &action_context).await,
+        json!({
+            "status": StatusCode::CONFLICT.as_u16(),
+            "body": { "error": "session startup is not stuck" },
+            "calls": [{
+                "kind": "resume",
+                "sessionId": "fixture-session",
+                "status": SessionStatus::Ended,
+            }],
+        }),
+    );
+}
+
+#[rstest]
+#[tokio::test(start_paused = true)]
 async fn codex_resume_keeps_startup_status_while_marked_stopped(action_context: ActionContext) {
     let mut session = session("fixture-session");
     session.engine = Engine::Codex;

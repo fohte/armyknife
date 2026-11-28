@@ -15,7 +15,10 @@ use crate::infra::tmux;
 use crate::shared::command::{self, find_command_path};
 use crate::shared::env_var::EnvVars;
 
+mod resume_command;
 mod session_metadata;
+
+use resume_command::{build_resume_command, build_resume_command_for_session};
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct ResumeArgs {
@@ -426,8 +429,43 @@ fn respawn_paused_session_with(
     let pane_current_command = get_pane_current_command(socket_path, &tmux_info.pane_id);
     check_idle_at_shell_prompt(pane_current_command.as_deref())?;
 
-    let wrapped = build_resume_command().ok_or(RespawnError::CommandBuildFailed)?;
-    respawn_pane(socket_path, &tmux_info.pane_id, &session.cwd, &wrapped)
+    let command = build_resume_command().ok_or(RespawnError::CommandBuildFailed)?;
+    respawn_session_pane(session, tmux_info, &command, respawn_pane)
+}
+
+/// Replaces a stuck session's pane with a resume command for its recorded ID.
+/// Unlike paused-session recovery, a stuck pane is expected to still run the agent.
+pub(crate) fn respawn_stuck_session(session: &Session) -> Result<String, RespawnError> {
+    respawn_stuck_session_with(session, |socket_path, pane_id, cwd, command| {
+        tmux::respawn_pane_for_socket(socket_path, pane_id, cwd, command)
+            .map_err(|error| error.to_string())
+    })
+}
+
+fn respawn_stuck_session_with(
+    session: &Session,
+    respawn_pane: impl FnOnce(Option<&str>, &str, &Path, &str) -> std::result::Result<(), String>,
+) -> Result<String, RespawnError> {
+    let tmux_info = session.tmux_info.as_ref().ok_or(RespawnError::NoTmuxPane)?;
+    if !session.cwd.is_dir() {
+        return Err(RespawnError::WorkingDirectoryUnavailable(
+            session.cwd.clone(),
+        ));
+    }
+
+    let command =
+        build_resume_command_for_session(session).ok_or(RespawnError::CommandBuildFailed)?;
+    respawn_session_pane(session, tmux_info, &command, respawn_pane)
+}
+
+fn respawn_session_pane(
+    session: &Session,
+    tmux_info: &TmuxInfo,
+    command: &str,
+    respawn_pane: impl FnOnce(Option<&str>, &str, &Path, &str) -> std::result::Result<(), String>,
+) -> Result<String, RespawnError> {
+    let socket_path = tmux_info.socket_path.as_deref();
+    respawn_pane(socket_path, &tmux_info.pane_id, &session.cwd, command)
         .map_err(RespawnError::RespawnFailed)?;
 
     Ok(tmux_info.pane_id.clone())
@@ -442,26 +480,6 @@ fn check_idle_at_shell_prompt(pane_current_command: Option<&str>) -> Result<(), 
         Some(cmd) => Err(RespawnError::PaneBusy(cmd.to_string())),
         None => Err(RespawnError::PaneStateUnreadable),
     }
-}
-
-/// Wraps `a agent resume` in the user's login shell so that when claude exits
-/// normally, control returns to a shell prompt instead of tmux closing the
-/// pane (`respawn-pane` replaces the pane's root process).
-///
-/// `-i` is required on the outer shell: `a agent resume` looks up the selected
-/// agent CLI in $PATH via `find_command_path`, and many users only extend
-/// $PATH in their interactive rc file (e.g. `.zshrc`). Running without `-i`
-/// would inherit tmux's pre-rc $PATH and fail to locate the CLI.
-fn build_resume_command() -> Option<String> {
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-    let exe = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.to_str().map(String::from))
-        .unwrap_or_else(|| "a".to_string());
-    let inner = shlex::try_join([exe.as_str(), "agent", "resume"]).ok()?;
-    let exec_shell = shlex::try_join([shell.as_str(), "-i"]).ok()?;
-    let script = format!("{inner}; exec {exec_shell}");
-    shlex::try_join([shell.as_str(), "-i", "-c", &script]).ok()
 }
 
 #[cfg(test)]
@@ -518,6 +536,62 @@ mod tests {
         temp_env::with_vars([("TMUX_PANE", env_value)], || {
             assert_eq!(current_pane_id().map_err(|e| e.to_string()), expected);
         });
+    }
+
+    #[rstest]
+    #[case::ended(SessionStatus::Ended)]
+    #[case::paused(SessionStatus::Paused)]
+    fn respawn_stuck_session_uses_the_recorded_pane_without_checking_status(
+        #[case] status: SessionStatus,
+    ) {
+        let directory = tempfile::tempdir().unwrap();
+        let mut session: Session = serde_json::from_value(serde_json::json!({
+            "session_id": "fixture-session",
+            "cwd": directory.path(),
+            "transcript_path": null,
+            "tmux_info": null,
+            "status": status,
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "last_message": null,
+        }))
+        .unwrap();
+        session.tmux_info = Some(TmuxInfo {
+            session_name: "fixture-tmux-session".to_string(),
+            window_name: "fixture-window".to_string(),
+            window_index: 0,
+            pane_id: "%17".to_string(),
+            socket_path: Some("/fixture/tmux.sock".to_string()),
+        });
+        session.engine = Engine::Codex;
+        session.ancestor_session_ids = vec!["fixture-parent".to_string()];
+        session.launched_with_vibe = true;
+        let mut respawn_calls = Vec::new();
+
+        let result = temp_env::with_vars([("SHELL", Some("/bin/sh"))], || {
+            respawn_stuck_session_with(&session, |socket_path, pane_id, cwd, command| {
+                respawn_calls.push((
+                    socket_path.map(str::to_string),
+                    pane_id.to_string(),
+                    cwd.to_path_buf(),
+                    command.to_string(),
+                ));
+                Ok(())
+            })
+        });
+
+        assert_eq!(
+            (result, respawn_calls),
+            (
+                Ok("%17".to_string()),
+                vec![(
+                    Some("/fixture/tmux.sock".to_string()),
+                    "%17".to_string(),
+                    directory.path().to_path_buf(),
+                    "/bin/sh -i -c 'a agent resume fixture-session --engine codex --ancestor-session-ids fixture-parent --launched-with-vibe; exec /bin/sh -i'".to_string(),
+                )],
+            ),
+        );
     }
 
     mod session_id_from_pane_option_tests {
