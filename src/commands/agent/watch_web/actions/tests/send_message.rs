@@ -1,10 +1,12 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use axum::http::StatusCode;
+use axum::body::Body;
+use axum::http::{Request, StatusCode};
 use chrono::Utc;
 use rstest::rstest;
 use serde_json::json;
+use tokio::time::{Duration, advance};
 use tower::ServiceExt;
 
 use super::super::messages::lock_session_action;
@@ -12,7 +14,7 @@ use super::{
     ActionContext, action_context, normalized_queued_prompts, post, response_snapshot, session,
 };
 use crate::commands::agent::store;
-use crate::commands::agent::types::Engine;
+use crate::commands::agent::types::{Engine, SessionStatus};
 use crate::commands::agent::watch_web::attachments;
 
 fn normalize_message_ids(ids: Vec<String>, labels: &mut HashMap<String, String>) -> Vec<String> {
@@ -22,6 +24,227 @@ fn normalize_message_ids(ids: Vec<String>, labels: &mut HashMap<String, String>)
             labels.entry(id).or_insert(label).clone()
         })
         .collect()
+}
+
+#[derive(Debug, Clone, Copy)]
+enum PausedMessageScenario {
+    DeliveredWithoutStart,
+    DeliveryFailed,
+    StartedDuringDelivery,
+    WaitingInput,
+}
+
+#[rstest]
+#[case::paused_delivered_without_start(PausedMessageScenario::DeliveredWithoutStart)]
+#[case::paused_delivery_failed(PausedMessageScenario::DeliveryFailed)]
+#[case::paused_started_during_delivery(PausedMessageScenario::StartedDuringDelivery)]
+#[case::waiting_input_does_not_resume(PausedMessageScenario::WaitingInput)]
+#[tokio::test(start_paused = true)]
+async fn send_message_tracks_startup_only_for_paused_sessions(
+    #[case] scenario: PausedMessageScenario,
+    action_context: ActionContext,
+) {
+    let initial_status = if matches!(scenario, PausedMessageScenario::WaitingInput) {
+        SessionStatus::WaitingInput
+    } else {
+        SessionStatus::Paused
+    };
+    let mut paused_session = session("sample-session");
+    paused_session.status = initial_status;
+    action_context.save_session(&paused_session);
+    if matches!(scenario, PausedMessageScenario::DeliveryFailed) {
+        action_context.set_message_error("message transport failed");
+    }
+    if matches!(scenario, PausedMessageScenario::StartedDuringDelivery) {
+        let sessions_dir = action_context.temp_dir.path().join("sessions");
+        let mut started_session = paused_session.clone();
+        started_session.status = SessionStatus::Running;
+        action_context.set_after_message(move || {
+            let lock = store::lock_session_for_update(&sessions_dir, "sample-session").unwrap();
+            lock.record_watch_web_session_start().unwrap();
+            lock.save(&started_session).unwrap();
+        });
+    }
+
+    let app = action_context.router();
+    let mut updates = action_context.resume_updates.subscribe();
+    let send = app
+        .clone()
+        .oneshot(post(
+            "/sessions/sample-session/messages",
+            json!({ "content": "continue the investigation" }),
+        ))
+        .await
+        .unwrap();
+    let send = response_snapshot(send, &action_context).await;
+    let mut actions = Vec::new();
+    if matches!(scenario, PausedMessageScenario::DeliveredWithoutStart) {
+        updates.changed().await.unwrap();
+        let pending = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/sample-session/actions")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        actions.push(response_snapshot(pending, &action_context).await);
+        advance(Duration::from_secs(20)).await;
+        updates.changed().await.unwrap();
+        let stuck = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/sample-session/actions")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        actions.push(response_snapshot(stuck, &action_context).await);
+    } else {
+        if matches!(scenario, PausedMessageScenario::DeliveryFailed) {
+            updates.changed().await.unwrap();
+        }
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/sample-session/actions")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        actions.push(response_snapshot(response, &action_context).await);
+    }
+
+    let actual = (
+        send,
+        actions,
+        normalized_queued_prompts(&action_context, "sample-session", None),
+    );
+    let message_call = json!([{
+        "kind": "message",
+        "sessionId": "sample-session",
+        "content": "continue the investigation",
+    }]);
+    let (expected_send, expected_actions, expected_prompts) = match scenario {
+        PausedMessageScenario::DeliveredWithoutStart => (
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": { "ok": true, "queuedPromptId": "<message-id>" },
+                "calls": message_call.clone(),
+            }),
+            vec![
+                json!({
+                    "status": StatusCode::OK.as_u16(),
+                    "body": {
+                        "message": true,
+                        "answerQuestion": false,
+                        "resume": true,
+                        "startup": "pending",
+                        "startupAt": "<startup-at>",
+                        "interrupt": false,
+                        "openInTerminal": true,
+                        "rewind": false,
+                    },
+                    "calls": message_call.clone(),
+                }),
+                json!({
+                    "status": StatusCode::OK.as_u16(),
+                    "body": {
+                        "message": true,
+                        "answerQuestion": false,
+                        "resume": true,
+                        "startup": "stuck",
+                        "startupAt": "<startup-at>",
+                        "interrupt": false,
+                        "openInTerminal": true,
+                        "rewind": false,
+                    },
+                    "calls": message_call.clone(),
+                }),
+            ],
+            json!([{
+                "id": "<prompt-id>",
+                "content": "continue the investigation",
+                "sentAt": "<sent-at>",
+            }]),
+        ),
+        PausedMessageScenario::DeliveryFailed => (
+            json!({
+                "status": StatusCode::BAD_GATEWAY.as_u16(),
+                "body": { "error": "message transport failed" },
+                "calls": message_call.clone(),
+            }),
+            vec![json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": {
+                    "message": true,
+                    "answerQuestion": false,
+                    "resume": true,
+                    "startup": "stuck",
+                    "startupAt": "<startup-at>",
+                    "interrupt": false,
+                    "openInTerminal": true,
+                    "rewind": false,
+                },
+                "calls": message_call.clone(),
+            })],
+            json!([]),
+        ),
+        PausedMessageScenario::StartedDuringDelivery => (
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": { "ok": true, "queuedPromptId": "<message-id>" },
+                "calls": message_call.clone(),
+            }),
+            vec![json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": {
+                    "message": true,
+                    "answerQuestion": false,
+                    "resume": false,
+                    "interrupt": true,
+                    "openInTerminal": true,
+                    "rewind": false,
+                },
+                "calls": message_call.clone(),
+            })],
+            json!([{
+                "id": "<prompt-id>",
+                "content": "continue the investigation",
+                "sentAt": "<sent-at>",
+            }]),
+        ),
+        PausedMessageScenario::WaitingInput => (
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": { "ok": true, "queuedPromptId": "<message-id>" },
+                "calls": message_call.clone(),
+            }),
+            vec![json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": {
+                    "message": true,
+                    "answerQuestion": false,
+                    "resume": false,
+                    "interrupt": false,
+                    "openInTerminal": true,
+                    "rewind": false,
+                },
+                "calls": message_call.clone(),
+            })],
+            json!([{
+                "id": "<prompt-id>",
+                "content": "continue the investigation",
+                "sentAt": "<sent-at>",
+            }]),
+        ),
+    };
+    assert_eq!(actual, (expected_send, expected_actions, expected_prompts));
 }
 
 #[rstest]

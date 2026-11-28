@@ -18,7 +18,10 @@ use super::super::super::{
 use super::super::attachments;
 use super::super::messages::{action_event, queued_prompt};
 use super::keyed_mutex_registry::KeyedMutexRegistry;
-use super::{ActionState, ApiError, load_session, resolve_sessions_dir, run_blocking};
+use super::{
+    ActionState, ApiError, load_session, load_session_start_generation, resolve_sessions_dir,
+    run_blocking,
+};
 
 pub(super) const MAX_MESSAGE_BODY_BYTES: usize = 72 * 1024 * 1024;
 
@@ -60,6 +63,7 @@ pub(super) async fn send_message(
     Json(request): Json<MessageRequest>,
 ) -> Result<Json<MessageSuccess>, ApiError> {
     let _session_action_guard = lock_session_action(&id).await;
+    let session_start_generation = load_session_start_generation(&state, &id).await?;
     let session = load_session(state.clone(), id).await?;
     if session.sweep_signaled {
         return Err(ApiError::conflict("session is being stopped"));
@@ -132,6 +136,17 @@ pub(super) async fn send_message(
             },
         })
         .collect::<Vec<_>>();
+    let resume_pending = state.resume_pending.clone();
+    let pending_attempt = if session.status == SessionStatus::Paused {
+        Some(
+            resume_pending
+                .mark_pending(session.session_id.clone(), session_start_generation)
+                .await,
+        )
+    } else {
+        None
+    };
+    let pending_session_id = session.session_id.clone();
     let queued_prompt_id = send_queued_prompt(QueuedPromptDelivery {
         runtime: state.runtime,
         sessions_dir,
@@ -144,7 +159,15 @@ pub(super) async fn send_message(
         queued_attachments,
         attachment_paths,
     })
-    .await?;
+    .await;
+    if queued_prompt_id.is_err()
+        && let Some(attempt_id) = pending_attempt
+    {
+        resume_pending
+            .mark_stuck(&pending_session_id, attempt_id)
+            .await;
+    }
+    let queued_prompt_id = queued_prompt_id?;
     Ok(Json(MessageSuccess {
         ok: true,
         queued_prompt_id,

@@ -24,6 +24,7 @@ trait LayoutExecutor {
         commands: &[TmuxCommand],
         session: &str,
         window_name: &str,
+        agent_session_id: &str,
         socket_path: Option<&str>,
     ) -> anyhow::Result<String>;
 }
@@ -36,14 +37,21 @@ impl LayoutExecutor for TmuxLayoutExecutor {
         commands: &[TmuxCommand],
         session: &str,
         window_name: &str,
+        agent_session_id: &str,
         socket_path: Option<&str>,
     ) -> anyhow::Result<String> {
-        execute_layout_for_socket(commands, session, window_name, true, socket_path)
-            .map_err(Into::into)
+        let window_id =
+            execute_layout_for_socket(commands, session, window_name, true, socket_path)?;
+        let format = format!("#{{pane_id}}\t#{{{TMUX_SESSION_OPTION}}}");
+        let output = crate::infra::tmux::run_tmux_output_for_socket(
+            socket_path,
+            &["list-panes", "-t", &window_id, "-F", &format],
+        )?;
+        find_agent_pane_id(&output, agent_session_id)
     }
 }
 
-/// Opens a new window with the configured panes and resumes the agent in its pane.
+/// Opens the configured window and returns the resumed agent's pane ID.
 pub fn build_resume_layout(spec: ResumeLayoutSpec<'_>) -> anyhow::Result<String> {
     build_resume_layout_with_executor(spec, &TmuxLayoutExecutor)
 }
@@ -121,7 +129,40 @@ fn build_resume_layout_with_executor(
         },
     );
 
-    executor.execute(&commands, session, window_name, socket_path)
+    executor.execute(
+        &commands,
+        session,
+        window_name,
+        agent_session_id,
+        socket_path,
+    )
+}
+
+fn find_agent_pane_id(output: &str, agent_session_id: &str) -> anyhow::Result<String> {
+    output
+        .lines()
+        .find_map(|line| {
+            let (pane_id, session_id) = line.split_once('\t')?;
+            (session_id == agent_session_id).then(|| pane_id.to_string())
+        })
+        .ok_or_else(|| anyhow::anyhow!("tmux layout did not report the resumed agent pane"))
+}
+
+#[cfg(test)]
+mod pane_id_tests {
+    use super::find_agent_pane_id;
+
+    #[test]
+    fn resume_resolves_the_agent_pane_from_its_session_marker() {
+        let output = indoc::indoc! {"
+            %17\tother-session
+            %18\tfixture-session
+        "};
+        assert_eq!(
+            find_agent_pane_id(output, "fixture-session").unwrap(),
+            "%18",
+        );
+    }
 }
 
 #[cfg(test)]
@@ -147,15 +188,17 @@ mod tests {
             commands: &[TmuxCommand],
             session: &str,
             window_name: &str,
+            agent_session_id: &str,
             socket_path: Option<&str>,
         ) -> Result<String> {
             self.calls.lock().unwrap().push(json!({
                 "session": session,
                 "windowName": window_name,
+                "agentSessionId": agent_session_id,
                 "socketPath": socket_path,
                 "commands": commands.iter().map(|command| command.args.clone()).collect::<Vec<_>>(),
             }));
-            Ok("fixture-window-id".to_string())
+            Ok("%18".to_string())
         }
     }
 
@@ -195,10 +238,11 @@ mod tests {
         assert_eq!(
             (result.unwrap(), executor.calls.lock().unwrap().clone()),
             (
-                "fixture-window-id".to_string(),
+                "%18".to_string(),
                 vec![json!({
                     "session": "fixture-session",
                     "windowName": "fixture-agent",
+                    "agentSessionId": "fixture-session",
                     "socketPath": "/fixture/tmux.sock",
                     "commands": [
                         ["new-window", "-d", "-t", "fixture-session", "-c", "/fixture/worktree", "-n", "fixture-agent"],
@@ -242,10 +286,11 @@ mod tests {
         assert_eq!(
             (result.unwrap(), executor.calls.lock().unwrap().clone()),
             (
-                "fixture-window-id".to_string(),
+                "%18".to_string(),
                 vec![json!({
                     "session": "fixture-session",
                     "windowName": "fixture-agent",
+                    "agentSessionId": "fixture-session",
                     "socketPath": "/fixture/tmux.sock",
                     "commands": [
                         ["new-window", "-d", "-t", "fixture-session", "-c", "/fixture/worktree", "-n", "fixture-agent"],
