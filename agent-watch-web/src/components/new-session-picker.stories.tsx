@@ -45,6 +45,16 @@ export const RestoredDraft: Story = {
   },
 }
 
+export const RestoredDraftBeforeDirectorySelection: Story = {
+  name: 'The palette shows a restored notice below directory search',
+  args: {
+    state: createNewSessionStoryState({
+      directoryQuery: 'project',
+      restoredAt: '2026-05-06T12:03:00Z',
+    }),
+  },
+}
+
 export const ModelEffortOptionsAreOpen: Story = {
   name: 'The command palette exposes the selected model and effort controls',
   args: {
