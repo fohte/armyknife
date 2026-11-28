@@ -69,6 +69,28 @@
   font-weight: 700;
 }
 
+html[data-agent-watch-desktop='true'] .brand-row,
+html[data-agent-watch-desktop='true'] .inbox-view > .view-header,
+html[data-agent-watch-desktop='true']
+  .conversation-pane:not([data-mobile='true'])
+  .conversation-header {
+  -webkit-app-region: drag;
+}
+
+html[data-agent-watch-desktop='true'] .brand-row {
+  padding-left: 64px;
+}
+
+html[data-agent-watch-desktop='true']
+  :is(
+    .brand-row,
+    .inbox-view > .view-header,
+    .conversation-pane:not([data-mobile='true']) .conversation-header
+  )
+  :is(a, button, input, select, textarea, [role='button']) {
+  -webkit-app-region: no-drag;
+}
+
 .brand-mark {
   margin-right: 7px;
   color: var(--primary);

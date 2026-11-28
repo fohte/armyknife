@@ -6,6 +6,8 @@ import type { WatchTarget } from './config.js'
 import { createConnectionController } from './connection.js'
 import { installApplicationMenu } from './menu.js'
 import { classifyNavigation, isAllowedWatchUrl } from './navigation.js'
+import { appendDesktopUserAgentMarker } from './user-agent.js'
+import { withHiddenTitleBar } from './window-options.js'
 import {
   createQuitLifecycle,
   handleRendererPreventedUnload,
@@ -97,18 +99,20 @@ const createMainWindow = () => {
     },
   })
 
-  mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 900,
-    minWidth: 800,
-    minHeight: 600,
-    title: appName,
-    webPreferences: {
-      nodeIntegration: false,
-      contextIsolation: true,
-      sandbox: true,
-    },
-  })
+  mainWindow = new BrowserWindow(
+    withHiddenTitleBar(process.platform, {
+      width: 1280,
+      height: 900,
+      minWidth: 800,
+      minHeight: 600,
+      title: appName,
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        sandbox: true,
+      },
+    }),
+  )
 
   mainWindow.on('close', (event) => {
     if (quitLifecycle.isQuitting()) return
@@ -128,6 +132,8 @@ const createMainWindow = () => {
 const configureWebContents = (contents: Electron.WebContents) => {
   if (watchTarget === undefined) return
   const target = watchTarget
+
+  contents.setUserAgent(appendDesktopUserAgentMarker(contents.getUserAgent()))
 
   contents.on('will-navigate', (event, navigationUrl) => {
     const action = classifyNavigation(
@@ -170,7 +176,7 @@ const configureWebContents = (contents: Electron.WebContents) => {
     if (action === 'open-window') {
       return {
         action: 'allow',
-        overrideBrowserWindowOptions: {
+        overrideBrowserWindowOptions: withHiddenTitleBar(process.platform, {
           width: 1100,
           height: 800,
           webPreferences: {
@@ -178,7 +184,7 @@ const configureWebContents = (contents: Electron.WebContents) => {
             contextIsolation: true,
             sandbox: true,
           },
-        },
+        }),
       }
     }
 

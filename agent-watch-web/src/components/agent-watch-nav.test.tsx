@@ -15,6 +15,7 @@ import type { Session } from '#types'
 
 let container: HTMLDivElement
 let root: Root | null = null
+let titleBarFixture: HTMLDivElement | null = null
 
 const baseTodaySession: Session = {
   id: 'today-session',
@@ -126,6 +127,8 @@ function MobileNavigationWithActivity({
 
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  document.documentElement.removeAttribute('data-agent-watch-desktop')
+  titleBarFixture = null
   container = document.createElement('div')
   container.className = 'agent-watch-shell'
   document.body.append(container)
@@ -135,8 +138,82 @@ afterEach(() => {
   if (root !== null) act(() => root?.unmount())
   root = null
   container.remove()
+  titleBarFixture?.remove()
+  titleBarFixture = null
+  document.documentElement.removeAttribute('data-agent-watch-desktop')
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
+})
+
+it('adds draggable title-bar space only in the desktop app', () => {
+  titleBarFixture = document.createElement('div')
+  const fixture = titleBarFixture
+  fixture.innerHTML = `
+    <section class="inbox-view">
+      <header class="view-header"><button>Close</button></header>
+    </section>
+    <section class="conversation-pane">
+      <header class="conversation-header"><a href="#session">Session</a></header>
+    </section>
+  `
+  document.body.append(fixture)
+  renderNav([])
+
+  const brandRow = container.querySelector<HTMLElement>('.brand-row')
+  const brandButton =
+    container.querySelector<HTMLButtonElement>('.brand-row button')
+  const inboxHeader = fixture.querySelector<HTMLElement>('.view-header')
+  const inboxButton = fixture.querySelector<HTMLButtonElement>('button')
+  const conversationHeader = fixture.querySelector<HTMLElement>(
+    '.conversation-header',
+  )
+  const conversationLink = fixture.querySelector<HTMLAnchorElement>('a')
+  if (
+    brandRow === null ||
+    brandButton === null ||
+    inboxHeader === null ||
+    inboxButton === null ||
+    conversationHeader === null ||
+    conversationLink === null
+  ) {
+    throw new Error('Title-bar header fixture is incomplete')
+  }
+
+  const region = (element: Element) =>
+    getComputedStyle(element).getPropertyValue('-webkit-app-region')
+  const snapshot = () => ({
+    browserPadding: getComputedStyle(brandRow).paddingLeft,
+    browserRegions: [
+      region(brandRow),
+      region(brandButton),
+      region(inboxHeader),
+      region(inboxButton),
+      region(conversationHeader),
+      region(conversationLink),
+    ],
+  })
+  const desktopSnapshot = () => ({
+    desktopPadding: getComputedStyle(brandRow).paddingLeft,
+    desktopRegions: [
+      region(brandRow),
+      region(brandButton),
+      region(inboxHeader),
+      region(inboxButton),
+      region(conversationHeader),
+      region(conversationLink),
+    ],
+  })
+
+  expect(snapshot()).toEqual({
+    browserPadding: '8px',
+    browserRegions: ['none', 'none', 'none', 'none', 'none', 'none'],
+  })
+
+  document.documentElement.dataset['agentWatchDesktop'] = 'true'
+  expect(desktopSnapshot()).toEqual({
+    desktopPadding: '64px',
+    desktopRegions: ['drag', 'no-drag', 'drag', 'no-drag', 'drag', 'no-drag'],
+  })
 })
 
 it('renders the configured label and opens the selected session', () => {
