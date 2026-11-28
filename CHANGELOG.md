@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1005](https://github.com/fohte/armyknife/compare/v0.1.1004...v0.1.1005) (2026-11-28)
+
+
+### Features
+
+* **agent-watch-web:** reflect tq updates ([#2439](https://github.com/fohte/armyknife/issues/2439)) ([f92b1c0](https://github.com/fohte/armyknife/commit/f92b1c0ad68667cbb62c4c664562326ea9500aa6))
+
 ## [0.1.1004](https://github.com/fohte/armyknife/compare/v0.1.1003...v0.1.1004) (2026-11-28)
 
 
