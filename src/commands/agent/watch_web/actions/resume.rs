@@ -347,6 +347,34 @@ pub(super) async fn resume_session(
     Ok(Json(Success::new()))
 }
 
+#[derive(Debug, PartialEq)]
+enum RetryResumeOutcome {
+    StartupChanged,
+    PaneMismatch,
+    Retried,
+}
+
+enum RetryResumeError {
+    Store(anyhow::Error),
+    Runtime(anyhow::Error),
+}
+
+fn retry_resume_after_generation_check(
+    expected_generation: i64,
+    read_generation: impl FnOnce() -> anyhow::Result<i64>,
+    retry: impl FnOnce() -> anyhow::Result<bool>,
+) -> Result<RetryResumeOutcome, RetryResumeError> {
+    let current_generation = read_generation().map_err(RetryResumeError::Store)?;
+    if current_generation != expected_generation {
+        return Ok(RetryResumeOutcome::StartupChanged);
+    }
+
+    match retry().map_err(RetryResumeError::Runtime)? {
+        true => Ok(RetryResumeOutcome::Retried),
+        false => Ok(RetryResumeOutcome::PaneMismatch),
+    }
+}
+
 pub(super) async fn retry_resume(
     State(state): State<ActionState>,
     RoutePath(id): RoutePath<String>,
@@ -369,10 +397,12 @@ pub(super) async fn retry_resume(
 
     let sessions_dir =
         resolve_sessions_dir(state.sessions_dir.clone()).map_err(ApiError::internal)?;
+    let sessions_dir_for_validation = sessions_dir.clone();
     let retry_session_id = current_id.clone();
     let session_for_retry =
         tokio::task::spawn_blocking(move || -> anyhow::Result<Option<Session>> {
-            let session_lock = store::lock_session_for_update(&sessions_dir, &retry_session_id)?;
+            let session_lock =
+                store::lock_session_for_update(&sessions_dir_for_validation, &retry_session_id)?;
             let current_generation = session_lock.watch_web_session_start_generation()?;
             let Some(current_session) = session_lock.load()? else {
                 return Ok(None);
@@ -393,14 +423,31 @@ pub(super) async fn retry_resume(
         return Err(ApiError::conflict("session startup is not stuck"));
     };
     let runtime = state.runtime;
-    let retried = tokio::task::spawn_blocking(move || runtime.retry_resume(&session_for_retry))
-        .await
-        .map_err(ApiError::internal)?
-        .map_err(ApiError::operation)?;
-    if !retried {
-        return Err(ApiError::conflict(
-            "session pane does not match the requested session",
-        ));
+    let retry_session_id = current_id.clone();
+    let outcome = tokio::task::spawn_blocking(move || {
+        retry_resume_after_generation_check(
+            session_start_generation,
+            || store::watch_web_session_start_generation_from(&sessions_dir, &retry_session_id),
+            || runtime.retry_resume(&session_for_retry),
+        )
+    })
+    .await
+    .map_err(ApiError::internal)?;
+    let outcome = match outcome {
+        Ok(outcome) => outcome,
+        Err(RetryResumeError::Store(error)) => return Err(ApiError::internal(error)),
+        Err(RetryResumeError::Runtime(error)) => return Err(ApiError::operation(error)),
+    };
+    match outcome {
+        RetryResumeOutcome::StartupChanged => {
+            return Err(ApiError::conflict("session startup is not stuck"));
+        }
+        RetryResumeOutcome::PaneMismatch => {
+            return Err(ApiError::conflict(
+                "session pane does not match the requested session",
+            ));
+        }
+        RetryResumeOutcome::Retried => {}
     }
     state
         .resume_pending
@@ -416,7 +463,10 @@ mod tests {
     use anyhow::Result;
     use serde_json::{Value, json};
 
-    use super::{EndedSessionHost, resume_ended_session};
+    use super::{
+        EndedSessionHost, RetryResumeOutcome, resume_ended_session,
+        retry_resume_after_generation_check,
+    };
     use crate::commands::agent::types::{Engine, Session, TmuxInfo};
     use crate::infra::tmux::layout::ResumeLayoutSpec;
     use crate::shared::config::LayoutNode;
@@ -441,6 +491,25 @@ mod tests {
             }));
             Ok(Some("%18".to_string()))
         }
+    }
+
+    #[test]
+    fn retry_skips_respawn_when_the_session_start_generation_advanced() {
+        let mut respawn_calls = Vec::new();
+        let outcome = retry_resume_after_generation_check(
+            3,
+            || Ok(4),
+            || {
+                respawn_calls.push("respawn");
+                Ok(true)
+            },
+        )
+        .map_err(|_| "retry failed");
+
+        assert_eq!(
+            (outcome, respawn_calls),
+            (Ok(RetryResumeOutcome::StartupChanged), Vec::<&str>::new()),
+        );
     }
 
     #[test]

@@ -268,14 +268,70 @@ mod tests {
     }
 
     #[rstest]
-    #[case::primary_option_matches(TMUX_SESSION_OPTION, Some("fixture-session"), true)]
-    #[case::legacy_option_matches(TMUX_SESSION_OPTION_LEGACY, Some("fixture-session"), true)]
-    #[case::another_session_is_recorded(TMUX_SESSION_OPTION, Some("fixture-other"), false)]
-    #[case::no_session_is_recorded(TMUX_SESSION_OPTION, None, false)]
+    #[case::primary_option_matches(
+        TMUX_SESSION_OPTION,
+        Some("fixture-session"),
+        true,
+        vec![json!({
+            "socketPath": "/fixture/tmux.sock",
+            "paneId": "%17",
+            "option": "@armyknife-last-agent-session-id",
+        })],
+        vec![json!({ "sessionId": "fixture-session" })],
+    )]
+    #[case::legacy_option_matches(
+        TMUX_SESSION_OPTION_LEGACY,
+        Some("fixture-session"),
+        true,
+        vec![
+            json!({
+                "socketPath": "/fixture/tmux.sock",
+                "paneId": "%17",
+                "option": "@armyknife-last-agent-session-id",
+            }),
+            json!({
+                "socketPath": "/fixture/tmux.sock",
+                "paneId": "%17",
+                "option": "@armyknife-last-claude-code-session-id",
+            }),
+        ],
+        vec![json!({ "sessionId": "fixture-session" })],
+    )]
+    #[case::another_session_is_recorded(
+        TMUX_SESSION_OPTION,
+        Some("fixture-other"),
+        false,
+        vec![json!({
+            "socketPath": "/fixture/tmux.sock",
+            "paneId": "%17",
+            "option": "@armyknife-last-agent-session-id",
+        })],
+        vec![],
+    )]
+    #[case::no_session_is_recorded(
+        TMUX_SESSION_OPTION,
+        None,
+        false,
+        vec![
+            json!({
+                "socketPath": "/fixture/tmux.sock",
+                "paneId": "%17",
+                "option": "@armyknife-last-agent-session-id",
+            }),
+            json!({
+                "socketPath": "/fixture/tmux.sock",
+                "paneId": "%17",
+                "option": "@armyknife-last-claude-code-session-id",
+            }),
+        ],
+        vec![],
+    )]
     fn retry_respawns_only_when_the_pane_records_the_requested_session(
         #[case] recorded_option: &str,
         #[case] recorded_session_id: Option<&str>,
         #[case] expected_respawn: bool,
+        #[case] expected_option_reads: Vec<Value>,
+        #[case] expected_respawn_calls: Vec<Value>,
     ) {
         let mut session: Session = serde_json::from_value(json!({
             "session_id": "fixture-session",
@@ -301,57 +357,29 @@ mod tests {
         let result = retry_stuck_resume_with(
             &session,
             |socket_path, pane_id, option| {
-                option_reads.push((
-                    socket_path.map(str::to_string),
-                    pane_id.to_string(),
-                    option.to_string(),
-                ));
+                option_reads.push(json!({
+                    "socketPath": socket_path,
+                    "paneId": pane_id,
+                    "option": option,
+                }));
                 Ok((option == recorded_option)
                     .then(|| recorded_session_id.map(str::to_string))
                     .flatten())
             },
             |session| {
-                respawn_calls.push(session.session_id.clone());
+                respawn_calls.push(json!({ "sessionId": session.session_id }));
                 Ok(())
             },
         )
         .map_err(|error| error.to_string());
 
-        let expected_options = if recorded_option == TMUX_SESSION_OPTION {
-            vec![TMUX_SESSION_OPTION]
-                .into_iter()
-                .chain(
-                    recorded_session_id
-                        .is_none()
-                        .then_some(TMUX_SESSION_OPTION_LEGACY),
-                )
-                .map(str::to_string)
-                .collect::<Vec<_>>()
-        } else {
-            vec![TMUX_SESSION_OPTION, TMUX_SESSION_OPTION_LEGACY]
-                .into_iter()
-                .map(str::to_string)
-                .collect::<Vec<_>>()
-        };
-        let expected_calls = expected_options
-            .into_iter()
-            .map(|option| {
-                (
-                    Some("/fixture/tmux.sock".to_string()),
-                    "%17".to_string(),
-                    option,
-                )
-            })
-            .collect::<Vec<_>>();
-        let expected_respawn_calls = if expected_respawn {
-            vec!["fixture-session".to_string()]
-        } else {
-            Vec::new()
-        };
-
         assert_eq!(
             (result, option_reads, respawn_calls),
-            (Ok(expected_respawn), expected_calls, expected_respawn_calls),
+            (
+                Ok(expected_respawn),
+                expected_option_reads,
+                expected_respawn_calls,
+            ),
         );
     }
 
