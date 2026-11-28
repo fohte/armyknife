@@ -1,0 +1,75 @@
+.new-session-starting {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
+.new-session-starting-timeline {
+  display: flex;
+  width: min(712px, calc(100% - 48px));
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 24px;
+  overflow-y: auto;
+  margin: 0 auto;
+  padding: 24px 0;
+}
+
+.new-session-starting .async-action-item--line {
+  width: 100%;
+  align-self: center;
+}
+
+.new-session-starting
+  .async-action-item--line
+  .async-action-item-content
+  strong,
+.new-session-starting
+  .async-action-item--line
+  .async-action-item-content
+  > span {
+  color: var(--aw-text-muted);
+}
+
+.new-session-starting .async-action-item--line .async-action-item-content {
+  max-width: 100%;
+  min-width: 0;
+}
+
+.new-session-starting
+  .async-action-item--line
+  .async-action-item-content
+  strong {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.new-session-starting .composer-input-slot textarea:disabled {
+  color: var(--aw-text-muted);
+  cursor: default;
+}
+
+.new-session-starting .composer-add-button[data-slot='button']:disabled {
+  cursor: default;
+}
+
+.new-session-starting .composer-send-button--dim[data-slot='button'] {
+  opacity: 0.5;
+}
+
+.new-session-starting .new-session-directory-button:disabled {
+  color: var(--aw-text-muted);
+  cursor: default;
+}
+
+@media (max-width: 700px) {
+  .new-session-starting-timeline {
+    width: calc(100% - 32px);
+    gap: 20px;
+    padding: 20px 0;
+  }
+}

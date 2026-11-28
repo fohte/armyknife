@@ -130,8 +130,24 @@ function copy(action: AsyncAction) {
             }
       case 'commandTimedOut':
         return { title: 'Command timed out', line: 'Command timed out' }
-      case 'launching':
-        return { title: 'Starting session', line: 'Starting session' }
+      case 'launching': {
+        if (action.kind !== 'launch') return { title: '', line: '' }
+        const engine =
+          action.engine === 'claude'
+            ? 'Claude Code'
+            : action.engine === 'codex'
+              ? 'Codex'
+              : undefined
+        if (
+          engine === undefined ||
+          action.repo === undefined ||
+          action.repo.length === 0
+        ) {
+          return { title: 'Starting session', line: 'Starting session' }
+        }
+        const label = `Starting ${engine} in ${action.repo}…`
+        return { title: label, line: label }
+      }
       case 'launched':
         return { title: 'Session started', line: 'Session started' }
       case 'launchFailed':

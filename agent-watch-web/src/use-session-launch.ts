@@ -15,6 +15,8 @@ type PendingLaunch = {
   result: ResultAsyncType<string, Error>
 }
 
+export type PendingLaunchView = Pick<PendingLaunch, 'request' | 'startedAt'>
+
 type UseSessionLaunchOptions = {
   sessions: readonly Session[]
   newSessionMode: 'form' | 'palette' | null
@@ -144,6 +146,7 @@ export function useSessionLaunch({
       kind: 'launch',
       sessionId: `launch-${String(current.key)}`,
       sessionTitle: current.request.directory,
+      engine: current.request.engine,
       ...(current.request.initialMessage === undefined
         ? {}
         : { initialMessage: current.request.initialMessage }),

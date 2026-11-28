@@ -1,3 +1,4 @@
+import type { SessionEngine } from '#new-session-api'
 import type { CloseWorktreeChecks } from '#session-operation-types'
 
 export type AsyncActionStatus =
@@ -31,6 +32,7 @@ export type AsyncAction = {
   status: AsyncActionStatus
   command?: string
   initialMessage?: string
+  engine?: SessionEngine
   repo?: string
   reviewDocumentAction?: string
   commandOutputIndex?: number
@@ -80,6 +82,7 @@ type StartAsyncActionBaseOptions = {
   sessionTitle: string
   command?: string
   initialMessage?: string
+  engine?: SessionEngine
   repo?: string
   reviewDocumentAction?: AsyncAction['reviewDocumentAction']
   pullRequestNumber?: number

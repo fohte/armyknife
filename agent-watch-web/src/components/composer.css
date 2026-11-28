@@ -159,6 +159,11 @@
   color: var(--aw-text-body);
 }
 
+.composer-add-button[data-slot='button']:disabled {
+  color: var(--aw-text-muted);
+  opacity: 0.5;
+}
+
 .composer-key-hint {
   flex: 1 1 0;
   min-width: 0;

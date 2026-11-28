@@ -22,6 +22,7 @@ import type { SessionOperation } from '#session-operations'
 import type { Session } from '#types'
 import type { useNewSession } from '#use-new-session'
 import type { useSavedInboxViews } from '#use-saved-inbox-views'
+import type { PendingLaunchView } from '#use-session-launch'
 
 type AppWorkspaceState = {
   isMobile: boolean
@@ -48,7 +49,7 @@ type AppWorkspaceState = {
   waitingExpanded: boolean
   doneExpanded: boolean
   statusPanelOpen: boolean
-  launchPending: boolean
+  pendingLaunch: PendingLaunchView | null
   projects: readonly BoardProject[]
   focusedProjectName: string | null
   hideQuietProjects: boolean
@@ -273,7 +274,7 @@ export function AppWorkspace({
             state.newSessionMode === 'form' ? (
               <NewSessionForm
                 isMobile={state.isMobile}
-                launchPending={state.launchPending}
+                pendingLaunch={state.pendingLaunch}
                 mobileUpdateNotice={mobileUpdateNotice}
                 onClose={actions.closeNewSession}
                 onStart={actions.onStart}
@@ -448,7 +449,7 @@ export function AppWorkspace({
         {state.newSessionMode === 'palette' ? (
           <NewSessionPicker
             isMobile={state.isMobile}
-            launchPending={state.launchPending}
+            launchPending={state.pendingLaunch !== null}
             onClose={actions.closeNewSession}
             onStart={actions.onStart}
             state={newSession}
