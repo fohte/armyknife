@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1002](https://github.com/fohte/armyknife/compare/v0.1.1001...v0.1.1002) (2026-11-28)
+
+
+### Features
+
+* **agent-watch-web:** reconcile relays on events ([#2430](https://github.com/fohte/armyknife/issues/2430)) ([265b1cc](https://github.com/fohte/armyknife/commit/265b1cca37790d251831439e5ef11ee68845259b))
+
 ## [0.1.1001](https://github.com/fohte/armyknife/compare/v0.1.1000...v0.1.1001) (2026-11-28)
 
 
