@@ -149,6 +149,7 @@ function pairDetails(units: Unit[]) {
     summaryClose?: number
   }
   const pairs = new Map<number, Pair>()
+  const closes = new Map<number, number>()
   const stack: Frame[] = []
   const pending = new Set<Frame>()
   const invalidatePending = () => {
@@ -187,6 +188,7 @@ function pairDetails(units: Unit[]) {
       const frame = stack.pop()
       if (frame === undefined) continue
       pending.delete(frame)
+      closes.set(frame.open, index)
       if (
         frame.render &&
         frame.summaryOpen !== undefined &&
@@ -200,7 +202,7 @@ function pairDetails(units: Unit[]) {
       }
     }
   }
-  return pairs
+  return { pairs, closes }
 }
 
 function rawDetailsNode(group: HtmlGroup, open: Marker, end: number) {
@@ -278,7 +280,7 @@ function renderUnits(
   references: readonly ReferenceDefinitionSource[],
 ): MarkdownNode[] {
   const units = unitsFrom(nodes, parse, references)
-  const pairs = pairDetails(units)
+  const { pairs, closes } = pairDetails(units)
   const result: MarkdownNode[] = []
   const frames: Array<{
     close: number
@@ -327,6 +329,15 @@ function renderUnits(
         continue
       }
       if (unit.group !== undefined) {
+        const ownCloseIndex = closes.get(index)
+        const ownCloseUnit =
+          ownCloseIndex === undefined ? undefined : units[ownCloseIndex]
+        const ownClose =
+          ownCloseUnit !== undefined &&
+          'marker' in ownCloseUnit &&
+          ownCloseUnit.group === unit.group
+            ? ownCloseUnit.marker
+            : undefined
         const activeCloseIndex = frames.at(-1)?.close
         const activeCloseUnit =
           activeCloseIndex === undefined ? undefined : units[activeCloseIndex]
@@ -337,11 +348,18 @@ function renderUnits(
             ? activeCloseUnit.marker
             : undefined
         const end =
-          activeClose !== undefined
-            ? activeClose.offset - unit.group.offset
-            : (unit.group.node.value ?? '').length
+          ownClose !== undefined
+            ? ownClose.offset - unit.group.offset + ownClose.value.length
+            : activeClose !== undefined
+              ? activeClose.offset - unit.group.offset
+              : (unit.group.node.value ?? '').length
         output.push(rawDetailsNode(unit.group, unit.marker, end))
-        if (activeClose !== undefined && activeCloseIndex !== undefined) {
+        if (ownClose !== undefined && ownCloseIndex !== undefined) {
+          index = ownCloseIndex
+        } else if (
+          activeClose !== undefined &&
+          activeCloseIndex !== undefined
+        ) {
           index = activeCloseIndex - 1
         } else {
           while (units[index + 1]?.group === unit.group) index += 1

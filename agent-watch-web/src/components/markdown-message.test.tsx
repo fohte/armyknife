@@ -249,6 +249,20 @@ Body
   )
 })
 
+it('renders Markdown after an unsupported details block normally', () => {
+  expect(
+    renderMessage(`<details>
+foo
+</details>[guide](https://example.com)`),
+  ).toBe(
+    [
+      '<div class="markdown-message">&lt;details&gt;',
+      'foo',
+      '&lt;/details&gt;<p><a href="https://example.com" target="_blank" rel="noopener noreferrer">guide</a></p></div>',
+    ].join(String.fromCharCode(10)),
+  )
+})
+
 it.each([
   {
     name: 'a list item',
