@@ -3,9 +3,7 @@ use std::pin::Pin;
 
 use anyhow::Result;
 
-use super::super::super::types::{
-    Engine, Session, TMUX_SESSION_OPTION, TMUX_SESSION_OPTION_LEGACY, TmuxInfo,
-};
+use super::super::super::types::{Engine, Session, TmuxInfo, resolve_session_option_with};
 use super::{ActionRuntime, CommandResult};
 use crate::shared::config::Config;
 
@@ -178,13 +176,9 @@ fn retry_stuck_resume_with(
 ) -> Result<bool> {
     if let Some(tmux_info) = session.tmux_info.as_ref() {
         let socket_path = tmux_info.socket_path.as_deref();
-        let recorded_session_id =
-            match read_pane_option(socket_path, &tmux_info.pane_id, TMUX_SESSION_OPTION)? {
-                Some(session_id) => Some(session_id),
-                None => {
-                    read_pane_option(socket_path, &tmux_info.pane_id, TMUX_SESSION_OPTION_LEGACY)?
-                }
-            };
+        let recorded_session_id = resolve_session_option_with(|option| {
+            read_pane_option(socket_path, &tmux_info.pane_id, option)
+        })?;
         if recorded_session_id.as_deref() != Some(session.session_id.as_str()) {
             return Ok(false);
         }
@@ -358,6 +352,47 @@ mod tests {
         assert_eq!(
             (result, option_reads, respawn_calls),
             (Ok(expected_respawn), expected_calls, expected_respawn_calls),
+        );
+    }
+
+    #[test]
+    fn retry_preserves_pane_option_lookup_errors() {
+        let mut session: Session = serde_json::from_value(json!({
+            "session_id": "fixture-session",
+            "cwd": "/fixture/worktree",
+            "transcript_path": null,
+            "tmux_info": null,
+            "status": "ended",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "last_message": null,
+        }))
+        .unwrap();
+        session.tmux_info = Some(TmuxInfo {
+            session_name: "fixture-tmux-session".to_string(),
+            window_name: "fixture-window".to_string(),
+            window_index: 0,
+            pane_id: "%17".to_string(),
+            socket_path: Some("/fixture/tmux.sock".to_string()),
+        });
+        let mut respawn_calls = Vec::new();
+
+        let result = retry_stuck_resume_with(
+            &session,
+            |_, _, _| Err(anyhow::anyhow!("fixture pane option read failed")),
+            |session| {
+                respawn_calls.push(session.session_id.clone());
+                Ok(())
+            },
+        )
+        .map_err(|error| error.to_string());
+
+        assert_eq!(
+            (result, respawn_calls),
+            (
+                Err("fixture pane option read failed".to_string()),
+                Vec::new()
+            ),
         );
     }
 }
