@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1006](https://github.com/fohte/armyknife/compare/v0.1.1005...v0.1.1006) (2026-11-28)
+
+
+### Bug Fixes
+
+* **watch-web:** track resume state and pane ([#2440](https://github.com/fohte/armyknife/issues/2440)) ([4680aae](https://github.com/fohte/armyknife/commit/4680aae9664904e2f0fdb935935e9034ad2a317c))
+
 ## [0.1.1005](https://github.com/fohte/armyknife/compare/v0.1.1004...v0.1.1005) (2026-11-28)
 
 
