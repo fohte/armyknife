@@ -22,6 +22,8 @@ type SessionDiscardConfirmationProps = {
   worktreePath: string
   changes: readonly DiscardFileChange[]
   commits: readonly DiscardCommit[]
+  defaultExpandedChanges?: boolean
+  defaultExpandedCommits?: boolean
   reviewAgain?: boolean
   mobile?: boolean
   onCancel: () => void
@@ -58,13 +60,15 @@ export function SessionDiscardConfirmation({
   worktreePath,
   changes,
   commits,
+  defaultExpandedChanges = false,
+  defaultExpandedCommits = false,
   reviewAgain = false,
   mobile = false,
   onCancel,
   onDiscard,
 }: SessionDiscardConfirmationProps) {
-  const [showAllChanges, setShowAllChanges] = useState(false)
-  const [showAllCommits, setShowAllCommits] = useState(false)
+  const [showAllChanges, setShowAllChanges] = useState(defaultExpandedChanges)
+  const [showAllCommits, setShowAllCommits] = useState(defaultExpandedCommits)
   const changesHeadingId = useId()
   const changesListId = useId()
   const commitsHeadingId = useId()
