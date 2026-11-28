@@ -716,18 +716,32 @@ mod tests {
             ..
         } = cleanup_test_context;
         let delete_called = std::cell::Cell::new(false);
+        let confirmed = crate::shared::worktree_delete::discard::ConfirmedDiscard {
+            path: "/fictional/worktree".to_string(),
+            branch: Some("feature/fictional".to_string()),
+            changes: vec![],
+            commits: vec![],
+        };
+        let observed = crate::shared::worktree_delete::discard::ObservedDiscard {
+            path: "/fictional/worktree".to_string(),
+            branch: Some("feature/fictional".to_string()),
+            changes: vec![crate::shared::worktree_delete::discard::ConfirmedChange {
+                status: "??".to_string(),
+                path: "src/new-fictional.txt".to_string(),
+            }],
+            commits: vec![],
+            commits_unavailable: false,
+        };
 
         let result = cleanup_worktree_by_name_with_operations(
             &worktree_path,
             false,
             true,
             || {
-                events.borrow_mut().push("verify_mismatch");
-                Err(anyhow::Error::new(
-                    crate::shared::worktree_delete::discard::DiscardMismatchError::new(
-                        crate::shared::worktree_delete::discard::DiscardVerificationError::TargetChanged,
-                    ),
-                ))
+                events.borrow_mut().push("verify_new_file");
+                crate::shared::worktree_delete::discard::verify(&confirmed, &observed)
+                    .map_err(crate::shared::worktree_delete::discard::DiscardMismatchError::new)?;
+                Ok(())
             },
             || events.borrow_mut().push("after_delete"),
             WorktreeCleanupOperations {
@@ -763,7 +777,7 @@ mod tests {
                 Some("Worktree changed since discard confirmation; review the current close checks and retry".to_string()),
                 false,
                 true,
-                vec!["verify_mismatch"],
+                vec!["verify_new_file"],
             ),
         );
     }

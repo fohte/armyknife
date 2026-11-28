@@ -176,6 +176,7 @@ pub(crate) async fn execute(plan: WorktreeDeletePlan, skip_hooks: bool) -> Resul
         discard_confirmed.is_some(),
         || {
             if let Some(confirmed) = discard_confirmed {
+                // shortcut: The deletion lock cannot prevent unrelated shells from writing before removal.
                 let current_branch =
                     get_worktree_branch_checked(&before_delete_repo, &before_delete_worktree_name)
                         .context("Could not inspect worktree branch before discard")?;
@@ -189,7 +190,7 @@ pub(crate) async fn execute(plan: WorktreeDeletePlan, skip_hooks: bool) -> Resul
                     ),
                     None => discard::CommitInspection {
                         commits: Vec::new(),
-                        unavailable: false,
+                        unavailable: true,
                     },
                 };
                 let observed = discard::observe_before_delete(

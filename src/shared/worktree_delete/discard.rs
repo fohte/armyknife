@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::Path;
 
 use anyhow::Result;
@@ -19,7 +20,7 @@ pub(crate) struct ConfirmedDiscard {
     pub(crate) commits: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ConfirmedChange {
     pub(crate) status: String,
@@ -85,16 +86,26 @@ pub(crate) fn verify(
 
     // shortcut: Git status cannot detect edits to content inside a path already listed as changed.
     // shortcut: Normal untracked-file status hides new entries below an already listed directory.
+    let confirmed_changes = confirmed
+        .changes
+        .iter()
+        .map(|change| (&change.status, &change.path))
+        .collect::<HashSet<_>>();
+    let confirmed_commits = confirmed
+        .commits
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
     let changes = observed
         .changes
         .iter()
-        .filter(|change| !confirmed.changes.contains(change))
+        .filter(|change| !confirmed_changes.contains(&(&change.status, &change.path)))
         .cloned()
         .collect::<Vec<_>>();
     let commits = observed
         .commits
         .iter()
-        .filter(|commit| !confirmed.commits.contains(commit))
+        .filter(|commit| !confirmed_commits.contains(commit.as_str()))
         .cloned()
         .collect::<Vec<_>>();
     if changes.is_empty() && commits.is_empty() {
@@ -126,7 +137,7 @@ pub(crate) async fn prepare_discard(
                 |path, args| run_git(path, args).ok(),
             )
         }
-        (Some(_), None) => CommitInspection {
+        (None, _) => CommitInspection {
             commits: Vec::new(),
             unavailable: true,
         },

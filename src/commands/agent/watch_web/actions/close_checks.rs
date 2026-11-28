@@ -214,7 +214,7 @@ impl CloseChecks {
             },
             _ => CommitInspection {
                 commits: Vec::new(),
-                unavailable: false,
+                unavailable: branch.is_none(),
             },
         };
         let (changes, processes) = files_and_processes
