@@ -230,7 +230,10 @@ impl Queue {
             return;
         };
         let (body, trailing_text) = match extract_peer_message(prompt_text, user_marker) {
-            Some(message) if message.has_user_marker => (message.body, message.trailing_text),
+            Some(message) if message.has_user_marker => (
+                user_text_without_session_context(&message.body),
+                message.trailing_text,
+            ),
             _ if is_queued_command => (prompt_text.to_owned(), String::new()),
             _ if matches!(event.kind, QueueRecordKind::User) => (
                 user_text_without_session_context(prompt_text),
@@ -402,7 +405,7 @@ mod tests {
     use rstest::rstest;
 
     use super::super::claude::ParserAdditions;
-    use crate::commands::agent::store::WatchWebQueuedPrompt;
+    use crate::commands::agent::store::{WatchWebQueuedAttachment, WatchWebQueuedPrompt};
     use crate::commands::agent::watch_web::messages::{
         BackgroundTask, ChatItem, ParentSession, PeerDirection, UserContentPart,
     };
@@ -606,6 +609,61 @@ mod tests {
                     timestamp: Some("2026-01-01T00:00:01+00:00".to_string()),
                     from: None,
                     queued_prompt_id: Some("fixture-message-7".to_string()),
+                }],
+                Vec::<BackgroundTask>::new(),
+                vec![7],
+            ),
+        );
+    }
+
+    #[test]
+    fn resolves_an_initial_user_prompt_before_generated_session_context() {
+        let transcript = format!(
+            "{}\n",
+            serde_json::json!({
+                "type": "user",
+                "uuid": "fixture-user-message",
+                "parentUuid": null,
+                "origin": {"kind": "human"},
+                "timestamp": "2026-06-01T12:05:00Z",
+                "message": {"content": formatdoc! {"
+                    Inspect this image.
+
+                    Attached file(s):
+                    - /fixture/upload/image.png
+                    <!-- armyknife-queued-prompt-id:fixture-message-7 -->
+
+                    <session-context>
+                    - Working directory: /fixture/project
+                    - Branch: fixture-branch
+                    - Base: fixture-base
+                    - Parent working directory: /fixture
+                    </session-context>
+                "}},
+            }),
+        );
+        let mut prompt = saved_prompt(7, "Inspect this image.");
+        prompt.attachments = vec![WatchWebQueuedAttachment::Image {
+            source: "/api/images/fixture-image.png".to_owned(),
+        }];
+
+        assert_eq!(
+            parse_with_saved_prompts(&transcript, &[prompt], None),
+            (
+                vec![ChatItem::UserWithContent {
+                    content: vec![
+                        UserContentPart::Text {
+                            text: "Inspect this image.".to_owned(),
+                        },
+                        UserContentPart::Image {
+                            source: "/api/images/fixture-image.png".to_owned(),
+                            available: false,
+                        },
+                    ],
+                    rewind_id: Some("fixture-user-message".to_owned()),
+                    queued_prompt_id: Some("fixture-message-7".to_owned()),
+                    timestamp: Some("2026-06-01T12:05:00+00:00".to_owned()),
+                    from: None,
                 }],
                 Vec::<BackgroundTask>::new(),
                 vec![7],
