@@ -306,12 +306,14 @@ mod tests {
     #[rstest]
     #[case::running(SessionStatus::Running)]
     #[case::paused(SessionStatus::Paused)]
-    fn adopt_requires_force_when_current_parent_is_alive(#[case] parent_status: SessionStatus) {
-        let store = session_store();
-        seed_caller_and_target(&store, &[], &["old-parent"]);
-        store.save(&session("old-parent", &[], parent_status));
+    fn adopt_requires_force_when_current_parent_is_alive(
+        session_store: TestSessionStore,
+        #[case] parent_status: SessionStatus,
+    ) {
+        seed_caller_and_target(&session_store, &[], &["old-parent"]);
+        session_store.save(&session("old-parent", &[], parent_status));
 
-        let error = store
+        let error = session_store
             .adopt("caller", "target", false)
             .expect_err("a living parent requires force");
 
