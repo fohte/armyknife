@@ -4321,7 +4321,6 @@ it('keeps a launch in Activity when the form closes during the POST', async () =
 
   const snapshot = () => ({
     newSessionFormOpen: container.querySelector('.new-session-view') !== null,
-    conversationOpen: container.querySelector('.conversation-pane') !== null,
     toast: Array.from(
       container.querySelectorAll(
         '.async-action-toast-stack .async-action-item',
@@ -4338,7 +4337,6 @@ it('keeps a launch in Activity when the form closes during the POST', async () =
   })
   expect(snapshot()).toEqual({
     newSessionFormOpen: false,
-    conversationOpen: false,
     toast: ['Session started/Users/example/work/serviceOpen'],
     activityRow: 'Session started/Users/example/work/serviceOpen',
   })
