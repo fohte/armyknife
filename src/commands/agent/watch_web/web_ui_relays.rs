@@ -68,6 +68,8 @@ pub(super) struct WebUiRelays {
     relay_abort_handles: Arc<std::sync::Mutex<Vec<tokio::task::AbortHandle>>>,
     #[cfg(test)]
     sync_error_sender: Option<mpsc::UnboundedSender<()>>,
+    #[cfg(test)]
+    sync_attempt_sender: Option<mpsc::UnboundedSender<()>>,
 }
 
 impl WebUiRelays {
@@ -92,10 +94,16 @@ impl WebUiRelays {
             relay_abort_handles: Arc::new(std::sync::Mutex::new(Vec::new())),
             #[cfg(test)]
             sync_error_sender: None,
+            #[cfg(test)]
+            sync_attempt_sender: None,
         }
     }
 
     async fn sync(&mut self) -> Result<()> {
+        #[cfg(test)]
+        if let Some(sender) = &self.sync_attempt_sender {
+            let _ = sender.send(());
+        }
         let mut registrations = match load_relay_registrations(&self.sessions_dir) {
             Ok(registrations) => Some(registrations),
             Err(error) => {
@@ -518,6 +526,17 @@ mod tests {
         fs::create_dir(directory.path().join("web_ui_relays.tmp"))
             .expect("relay state temp path should block writes");
         directory
+    }
+
+    #[fixture]
+    fn pending_relay_registration() -> RelayRegistration {
+        RelayRegistration {
+            session_id: "fixture-session".to_owned(),
+            name: "Preview".to_owned(),
+            url: "http://127.0.0.1:49121/preview/".to_owned(),
+            port: 49121,
+            exposed_url: None,
+        }
     }
 
     fn hook_runner(
@@ -1322,6 +1341,84 @@ mod tests {
                 ),
             ],
         );
+        Ok(())
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn unreadable_registration_state_does_not_repeat_an_expired_unexpose_retry(
+        pending_relay_registration: RelayRegistration,
+    ) -> anyhow::Result<()> {
+        let directory = TempDir::new()?;
+        let sessions_dir = directory.path().join("sessions");
+        fs::create_dir_all(sessions_dir.join("web_ui_relays.state"))?;
+        let mut relays = WebUiRelays::with_hook_runner(sessions_dir, |_, _| Ok(None));
+        relays
+            .unexpose_backoff
+            .record_failure(pending_relay_registration, std::time::Instant::now());
+        let (sync_attempt_sender, mut sync_attempts) = tokio::sync::mpsc::unbounded_channel();
+        relays.sync_attempt_sender = Some(sync_attempt_sender);
+        let (shutdown, shutdown_receiver) = tokio::sync::watch::channel(false);
+        let (_event_sender, event_receiver) = tokio::sync::broadcast::channel(16);
+        let manager = relays.start(shutdown_receiver, event_receiver).await;
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), sync_attempts.recv())
+            .await?
+            .context("startup sync should run")?;
+        tokio::time::timeout(std::time::Duration::from_secs(5), sync_attempts.recv())
+            .await?
+            .context("expired unexpose retry should trigger one sync")?;
+        let retried_immediately =
+            tokio::time::timeout(std::time::Duration::from_millis(100), sync_attempts.recv())
+                .await
+                .is_ok();
+        shutdown.send_replace(true);
+        tokio::time::timeout(std::time::Duration::from_secs(5), manager).await??;
+
+        assert!(!retried_immediately);
+        Ok(())
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn session_lookup_failure_does_not_repeat_an_expired_expose_retry(
+        pending_relay_registration: RelayRegistration,
+    ) -> anyhow::Result<()> {
+        let directory = TempDir::new()?;
+        let sessions_dir = directory.path().join("sessions");
+        fs::write(&sessions_dir, "fixture path blocker")?;
+        let (hook_sender, _calls) = tokio::sync::mpsc::unbounded_channel();
+        let mut relays = WebUiRelays::with_hook_runner(
+            sessions_dir,
+            recording_hook_runner(hook_sender, false, false),
+        );
+        relays
+            .expose_backoff
+            .record_failure(pending_relay_registration, std::time::Instant::now());
+        let (sync_error_sender, mut sync_errors) = tokio::sync::mpsc::unbounded_channel();
+        relays.sync_error_sender = Some(sync_error_sender);
+        let (sync_attempt_sender, mut sync_attempts) = tokio::sync::mpsc::unbounded_channel();
+        relays.sync_attempt_sender = Some(sync_attempt_sender);
+        let (shutdown, shutdown_receiver) = tokio::sync::watch::channel(false);
+        let (_event_sender, event_receiver) = tokio::sync::broadcast::channel(16);
+        let manager = relays.start(shutdown_receiver, event_receiver).await;
+
+        for _ in 0..2 {
+            tokio::time::timeout(std::time::Duration::from_secs(5), sync_attempts.recv())
+                .await?
+                .context("sync should run")?;
+            tokio::time::timeout(std::time::Duration::from_secs(5), sync_errors.recv())
+                .await?
+                .context("session lookup should fail")?;
+        }
+        let retried_immediately =
+            tokio::time::timeout(std::time::Duration::from_millis(100), sync_attempts.recv())
+                .await
+                .is_ok();
+        shutdown.send_replace(true);
+        tokio::time::timeout(std::time::Duration::from_secs(5), manager).await??;
+
+        assert!(!retried_immediately);
         Ok(())
     }
 

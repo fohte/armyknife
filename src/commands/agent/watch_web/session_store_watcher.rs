@@ -39,7 +39,7 @@ impl SessionStoreWatcher {
             Err(error) => {
                 tracing::warn!(
                     %error,
-                    "failed to start session store watcher; revisions will refresh on connection"
+                    "failed to start session store watcher; revisions will refresh on connection and web UI relays will sync only at startup"
                 );
                 None
             }

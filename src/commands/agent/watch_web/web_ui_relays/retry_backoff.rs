@@ -47,7 +47,14 @@ impl RetryBackoff {
         self.sync_failure = None;
     }
 
-    pub(super) fn next_attempt_at(&self) -> Option<Instant> {
+    pub(super) fn next_attempt_at(&mut self, now: Instant) -> Option<Instant> {
+        for failure in self
+            .failures
+            .values_mut()
+            .chain(self.sync_failure.iter_mut())
+        {
+            failure.reschedule_if_due(now);
+        }
         self.failures
             .values()
             .map(|failure| failure.next_attempt_at)
@@ -82,6 +89,12 @@ impl Failure {
     fn record_failure(&mut self, now: Instant) {
         self.next_attempt_at = now + self.next_delay;
         self.next_delay = self.next_delay.saturating_mul(2).min(MAX_RETRY_DELAY);
+    }
+
+    fn reschedule_if_due(&mut self, now: Instant) {
+        if now >= self.next_attempt_at {
+            self.record_failure(now);
+        }
     }
 }
 
@@ -164,8 +177,26 @@ mod tests {
         backoff.record_failure(later, start + Duration::from_secs(1));
 
         assert_eq!(
-            backoff.next_attempt_at(),
+            backoff.next_attempt_at(start),
             Some(start + Duration::from_secs(2))
+        );
+    }
+
+    #[rstest]
+    fn next_attempt_at_advances_due_failures_once(registration: RelayRegistration) {
+        let start = Instant::now();
+        let mut backoff = RetryBackoff::default();
+        backoff.record_failure(registration, start);
+
+        assert_eq!(
+            (
+                backoff.next_attempt_at(start + Duration::from_secs(2)),
+                backoff.next_attempt_at(start + Duration::from_secs(2)),
+            ),
+            (
+                Some(start + Duration::from_secs(6)),
+                Some(start + Duration::from_secs(6)),
+            ),
         );
     }
 }

@@ -9,6 +9,7 @@ use tokio::task::JoinHandle;
 use super::{Relay, RelayKey, WebUiRelays, relay_url, web_ui_proxy};
 use crate::commands::agent::types::WebUiRegistration;
 
+// Coalesce the database and WAL notifications emitted by one store update.
 const STORE_EVENT_DEBOUNCE: Duration = Duration::from_millis(150);
 
 impl WebUiRelays {
@@ -91,7 +92,7 @@ impl WebUiRelays {
             self.sync_and_record_failure("at startup").await;
         }
         loop {
-            let retry_at = self.next_attempt_at();
+            let retry_at = self.next_attempt_at(Instant::now());
             tokio::select! {
                 event = store_events.recv(), if store_events_open => {
                     match event {
@@ -108,13 +109,14 @@ impl WebUiRelays {
                                     Err(broadcast::error::TryRecvError::Empty) => break,
                                 }
                             }
-                            self.sync_and_record_failure("").await;
+                            self.sync_and_record_failure("after a session store change")
+                                .await;
                         }
                     }
                 }
                 relay_exit = relay_exits.recv() => {
                     if relay_exit.is_some() {
-                        self.sync_and_record_failure("").await;
+                        self.sync_and_record_failure("after a relay exit").await;
                     }
                 }
                 _ = async {
@@ -123,7 +125,7 @@ impl WebUiRelays {
                     } else {
                         pending::<()>().await;
                     }
-                } => self.sync_and_record_failure("").await,
+                } => self.sync_and_record_failure("after a retry deadline").await,
                 result = shutdown.changed() => {
                     if result.is_err() || *shutdown.borrow() {
                         break;
@@ -149,10 +151,10 @@ impl WebUiRelays {
         }
     }
 
-    fn next_attempt_at(&self) -> Option<Instant> {
+    fn next_attempt_at(&mut self, now: Instant) -> Option<Instant> {
         [
-            self.expose_backoff.next_attempt_at(),
-            self.unexpose_backoff.next_attempt_at(),
+            self.expose_backoff.next_attempt_at(now),
+            self.unexpose_backoff.next_attempt_at(now),
         ]
         .into_iter()
         .flatten()
