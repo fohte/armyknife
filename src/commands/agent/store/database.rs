@@ -267,6 +267,13 @@ impl SessionLock {
         read_session_strict(&self.connection, &self.session_id)
     }
 
+    pub(crate) fn watch_web_session_start_generation(&self) -> Result<i64> {
+        web_state::watch_web_session_start_generation_in_transaction(
+            &self.connection,
+            &self.session_id,
+        )
+    }
+
     pub(crate) fn load_skipping_undecodable(&self) -> Result<Option<Session>> {
         read_session_skipping_undecodable(&self.connection, &self.session_id)
     }

@@ -567,11 +567,13 @@ async fn retrying_a_stuck_resume_restarts_the_startup_timeout(action_context: Ac
 }
 
 #[rstest]
-#[case::never_resumed(false)]
-#[case::still_pending(true)]
+#[case::never_resumed(false, false)]
+#[case::still_pending(true, false)]
+#[case::started_after_stuck(true, true)]
 #[tokio::test(start_paused = true)]
 async fn retry_resume_rejects_a_session_that_is_not_stuck(
     #[case] start_resume: bool,
+    #[case] session_started: bool,
     action_context: ActionContext,
 ) {
     let mut session = session("fixture-session");
@@ -586,6 +588,13 @@ async fn retry_resume_rejects_a_session_that_is_not_stuck(
             .await
             .unwrap();
         updates.changed().await.unwrap();
+    }
+    if session_started {
+        advance(Duration::from_secs(20)).await;
+        updates.changed().await.unwrap();
+        session.status = SessionStatus::Running;
+        session.updated_at += chrono::Duration::seconds(1);
+        action_context.record_session_start(&session);
     }
     let retry = app
         .oneshot(post_empty("/sessions/fixture-session/resume/retry"))

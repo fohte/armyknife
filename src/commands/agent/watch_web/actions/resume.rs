@@ -247,20 +247,45 @@ impl PendingSessionResumes {
     }
 }
 
+struct LockedResumeSession {
+    current_id: String,
+    session_start_generation: i64,
+    session: Session,
+    _guard: tokio::sync::OwnedMutexGuard<()>,
+}
+
+async fn lock_resume_session(
+    state: &ActionState,
+    id: &str,
+) -> Result<LockedResumeSession, ApiError> {
+    load_session(state.clone(), id.to_string()).await?;
+    let current_id = resolve_current_session_id(state, id).await?;
+    let lock = state.resume_locks.get_or_create(current_id.clone()).await;
+    let guard = lock
+        .try_lock_owned()
+        .map_err(|_| ApiError::conflict("session resume is already in progress"))?;
+    let session_start_generation = load_session_start_generation(state, &current_id).await?;
+    // SessionStart writes this marker with the session row, so reading it first avoids pairing a
+    // newer marker with a stale resumable status.
+    let session = load_session(state.clone(), current_id.clone()).await?;
+    Ok(LockedResumeSession {
+        current_id,
+        session_start_generation,
+        session,
+        _guard: guard,
+    })
+}
+
 pub(super) async fn resume_session(
     State(state): State<ActionState>,
     RoutePath(id): RoutePath<String>,
 ) -> Result<Json<Success>, ApiError> {
-    load_session(state.clone(), id.clone()).await?;
-    let current_id = resolve_current_session_id(&state, &id).await?;
-    let lock = state.resume_locks.get_or_create(current_id.clone()).await;
-    let _guard = lock
-        .try_lock_owned()
-        .map_err(|_| ApiError::conflict("session resume is already in progress"))?;
-    let session_start_generation = load_session_start_generation(&state, &current_id).await?;
-    // SessionStart writes this marker with the session row, so reading it first avoids pairing a
-    // newer marker with a stale resumable status.
-    let session = load_session(state.clone(), current_id.clone()).await?;
+    let LockedResumeSession {
+        current_id,
+        session_start_generation,
+        session,
+        _guard,
+    } = lock_resume_session(&state, &id).await?;
     if state
         .resume_pending
         .is_pending(&current_id, session.status, session_start_generation)
@@ -326,14 +351,12 @@ pub(super) async fn retry_resume(
     State(state): State<ActionState>,
     RoutePath(id): RoutePath<String>,
 ) -> Result<Json<Success>, ApiError> {
-    load_session(state.clone(), id.clone()).await?;
-    let current_id = resolve_current_session_id(&state, &id).await?;
-    let lock = state.resume_locks.get_or_create(current_id.clone()).await;
-    let _guard = lock
-        .try_lock_owned()
-        .map_err(|_| ApiError::conflict("session resume is already in progress"))?;
-    let session_start_generation = load_session_start_generation(&state, &current_id).await?;
-    let session = load_session(state.clone(), current_id.clone()).await?;
+    let LockedResumeSession {
+        current_id,
+        session_start_generation,
+        session,
+        _guard,
+    } = lock_resume_session(&state, &id).await?;
     if !matches!(
         state
             .resume_pending
@@ -344,11 +367,33 @@ pub(super) async fn retry_resume(
         return Err(ApiError::conflict("session startup is not stuck"));
     }
 
+    let sessions_dir =
+        resolve_sessions_dir(state.sessions_dir.clone()).map_err(ApiError::internal)?;
+    let retry_session_id = current_id.clone();
     let runtime = state.runtime;
-    tokio::task::spawn_blocking(move || runtime.retry_resume(&session))
-        .await
-        .map_err(ApiError::internal)?
-        .map_err(ApiError::operation)?;
+    let retried = tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
+        let session_lock = store::lock_session_for_update(&sessions_dir, &retry_session_id)?;
+        let current_generation = session_lock.watch_web_session_start_generation()?;
+        let Some(current_session) = session_lock.load()? else {
+            return Ok(false);
+        };
+        if current_generation != session_start_generation
+            || !is_awaiting_session_start(current_session.status)
+            || current_session.archived_at.is_some()
+        {
+            return Ok(false);
+        }
+
+        // The transaction keeps SessionStart from committing until the pane is replaced.
+        runtime.retry_resume(&current_session)?;
+        Ok(true)
+    })
+    .await
+    .map_err(ApiError::internal)?
+    .map_err(ApiError::operation)?;
+    if !retried {
+        return Err(ApiError::conflict("session startup is not stuck"));
+    }
     state
         .resume_pending
         .mark_pending(current_id, session_start_generation)
