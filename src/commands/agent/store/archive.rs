@@ -181,9 +181,11 @@ where
                 .is_some_and(|info| is_pane_alive(info) == Some(false));
         let orphaned = session.status != SessionStatus::Ended && !cwd_exists(&session.cwd);
 
-        if stale_pane || orphaned {
-            changed_any |=
-                archive_stale_session(dir, session_id, session, stale_pane, now, &cwd_exists);
+        if (stale_pane || orphaned)
+            && archive_stale_session(dir, session_id, session, stale_pane, now, &cwd_exists)
+        {
+            changed_any = true;
+            crate::shared::cleanup::withdraw_ended_session_cards(dir, session_id);
         }
     }
 
@@ -389,6 +391,7 @@ fn is_expired_ended(session: &Session, now: DateTime<Utc>, retention: TimeDelta)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::agent::test_support::{agent_card_state, session_end_cards};
     use crate::commands::agent::types::{SessionStatus, TmuxInfo};
     use chrono::Utc;
     use rstest::{fixture, rstest};
@@ -498,6 +501,70 @@ mod tests {
             model: None,
             effort: None,
         }
+    }
+
+    #[rstest]
+    #[case::pane_gone(false, true, true)]
+    #[case::cwd_gone(true, false, true)]
+    #[case::live_session(true, true, false)]
+    fn stale_session_cleanup_withdraws_unanswered_cards(
+        test_session_dir: TestSessionDir,
+        #[case] pane_is_alive: bool,
+        #[case] cwd_exists: bool,
+        #[case] is_archived: bool,
+    ) {
+        let TestSessionDir { sessions_dir, .. } = test_session_dir;
+        let now = Utc::now();
+        let session_id = "session-with-cards";
+        let mut session = make_session(session_id, Engine::Claude);
+        session.updated_at = now;
+        super::super::save_session_to(&sessions_dir, &session)
+            .expect("session save should succeed");
+        session_end_cards().add_to(&sessions_dir, session_id);
+
+        cleanup_stale_sessions_in_with_archive_at(
+            &sessions_dir,
+            |_| Some(pane_is_alive),
+            |_| cwd_exists,
+            now,
+            |_| Ok(()),
+        )
+        .expect("stale session cleanup should succeed");
+
+        let archived_at = super::super::load_session_from(&sessions_dir, session_id)
+            .expect("session lookup should succeed")
+            .expect("session should remain stored")
+            .archived_at;
+        let withdrawn_comment =
+            is_archived.then_some("Withdrawn because the session ended.".to_string());
+        assert_eq!(
+            (
+                archived_at,
+                agent_card_state(&sessions_dir, session_id).expect("agent cards should load"),
+            ),
+            (
+                is_archived.then_some(now),
+                (
+                    vec![
+                        (1, Some(super::super::TodoResolution::Completed), None),
+                        (
+                            2,
+                            is_archived.then_some(super::super::TodoResolution::Withdrawn),
+                            withdrawn_comment.clone(),
+                        ),
+                    ],
+                    vec![
+                        (1, None, true, None),
+                        (
+                            2,
+                            is_archived.then_some(super::super::ProposalResolution::Withdrawn),
+                            is_archived,
+                            withdrawn_comment,
+                        ),
+                    ],
+                ),
+            ),
+        );
     }
 
     #[rstest]
