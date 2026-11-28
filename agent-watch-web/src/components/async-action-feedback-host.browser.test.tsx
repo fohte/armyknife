@@ -67,6 +67,12 @@ function ActivityHarness({
         setActivityOpen(false)
       }}
       closeWithWorktree={() => undefined}
+      discardChanges={() => {
+        calls.push('discard')
+      }}
+      reviewDiscardAgain={() => {
+        calls.push('review-again')
+      }}
       openInTerminal={() => undefined}
       showCommandOutput={() => {
         calls.push('show-output')
@@ -114,6 +120,90 @@ it('closes Activity before retrying a failed action', () => {
     activityOpen: false,
   })
 })
+
+it('closes Activity before opening discard and review-again dialogs', () => {
+  const calls: string[] = []
+  const closeFailure: AsyncAction = {
+    id: 20,
+    sessionId: 'example-session',
+    sessionTitle: 'Example session',
+    kind: 'close',
+    status: 'closeFailed',
+    discardable: true,
+    checks: {
+      path: '/worktrees/example-project',
+      files: ['src/example.ts'],
+      changes: [{ status: 'M', path: 'src/example.ts' }],
+      commits: [],
+      branch: 'feature/example-work',
+      merged: true,
+      reason: null,
+      processes: [],
+      commitInspectionUnavailable: false,
+      processInspectionUnavailable: false,
+    },
+    createdAt: 1_800_000_000_020,
+  }
+  const discardFailure: AsyncAction = {
+    id: 21,
+    sessionId: 'example-session',
+    sessionTitle: 'Example session',
+    kind: 'discard',
+    status: 'deleteChanged',
+    createdAt: 1_800_000_000_021,
+  }
+  container = document.createElement('div')
+  document.body.append(container)
+  root = createRoot(container)
+  act(() => {
+    root?.render(<ActivityHarness actions={[closeFailure]} calls={calls} />)
+  })
+  const discardButton = Array.from(
+    container.querySelectorAll<HTMLButtonElement>(
+      '.async-action-activity-list button',
+    ),
+  ).find((button) => button.textContent === 'Discard changes…')
+  if (discardButton === undefined) {
+    throw new Error('Expected the discard action in Activity')
+  }
+  act(() => {
+    discardButton.click()
+  })
+
+  const discardActivityOpen =
+    container.querySelector('[aria-label="Activity"]') !== null
+  act(() => {
+    root?.unmount()
+  })
+  root = createRoot(container)
+  act(() => {
+    root?.render(<ActivityHarness actions={[discardFailure]} calls={calls} />)
+  })
+  const reviewAgainButton = Array.from(
+    container.querySelectorAll<HTMLButtonElement>(
+      '.async-action-activity-list button',
+    ),
+  ).find((button) => button.textContent === 'Review again')
+  if (reviewAgainButton === undefined) {
+    throw new Error('Expected the review-again action in Activity')
+  }
+  act(() => {
+    reviewAgainButton.click()
+  })
+
+  const snapshot = () => ({
+    calls,
+    discardActivityOpen,
+    reviewActivityOpen:
+      container.querySelector('[aria-label="Activity"]') !== null,
+  })
+  expect(snapshot()).toEqual({
+    calls: ['close', 'discard', 'close', 'review-again'],
+    discardActivityOpen: false,
+    reviewActivityOpen: false,
+  })
+})
+
 it('shows command output as the only command failure action', () => {
   const action: AsyncAction = {
     id: 9,

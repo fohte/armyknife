@@ -12,7 +12,6 @@ import {
   SkillSuggestionList,
   useSkillCompletion,
 } from '#components/skill-completion'
-import { useBeforeUnloadWarning } from '#components/use-beforeunload-warning'
 import { useDismissableLayer } from '#components/use-dismissable-layer'
 import { useNewSessionMessageKeyboard } from '#components/use-new-session-message-keyboard'
 import type { LaunchSessionRequest } from '#new-session-api'
@@ -76,7 +75,6 @@ export function NewSessionForm({
     }
     hadPendingLaunch.current = false
   }, [launchPending, skillCompletion.textareaRef, state.error])
-  useBeforeUnloadWarning(state.initialMessage !== '' && !launchPending)
   useDismissableLayer(directoryPickerOpen, setDirectoryPickerOpen, [
     directoryTriggerRef,
     directoryPopoverRef,

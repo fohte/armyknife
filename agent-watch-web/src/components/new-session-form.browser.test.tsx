@@ -195,43 +195,6 @@ it('requires a directory before the session can start', () => {
   ).toBe(true)
 })
 
-it('warns before leaving while the first message is unsent', () => {
-  renderForm(makeState({ initialMessage: 'An unsent first message' }))
-  const event = new Event('beforeunload', { cancelable: true })
-
-  act(() => {
-    window.dispatchEvent(event)
-  })
-
-  expect(event.defaultPrevented).toBe(true)
-})
-
-it('does not warn before leaving when the first message is empty', () => {
-  renderForm(makeState())
-  const event = new Event('beforeunload', { cancelable: true })
-
-  act(() => {
-    window.dispatchEvent(event)
-  })
-
-  expect(event.defaultPrevented).toBe(false)
-})
-
-it('does not warn before leaving after the first message is sent', () => {
-  renderForm(
-    makeState({ initialMessage: 'A sent first message' }),
-    vi.fn(),
-    makePendingLaunch(),
-  )
-  const event = new Event('beforeunload', { cancelable: true })
-
-  act(() => {
-    window.dispatchEvent(event)
-  })
-
-  expect(event.defaultPrevented).toBe(false)
-})
-
 it('clears the restored draft from the form', async () => {
   const clearDraft = vi.fn()
   renderForm(
@@ -377,17 +340,12 @@ it('moves focus to the starting timeline and restores it after a launch failure'
   await act(async () => {
     await userEvent.click(requireButton('.test-fail-launch'))
   })
-  const beforeUnload = new Event('beforeunload', { cancelable: true })
-  act(() => {
-    window.dispatchEvent(beforeUnload)
-  })
   const restoredMessage = container.querySelector<HTMLTextAreaElement>(
     '[aria-label="First message"]',
   )
   const afterFailure = {
     isFocused: document.activeElement === restoredMessage,
     message: restoredMessage?.value ?? null,
-    warnsBeforeLeaving: beforeUnload.defaultPrevented,
   }
 
   const snapshot = () => ({ duringLaunch, afterFailure })
@@ -396,7 +354,6 @@ it('moves focus to the starting timeline and restores it after a launch failure'
     afterFailure: {
       isFocused: true,
       message: 'A sent first message',
-      warnsBeforeLeaving: true,
     },
   })
 })

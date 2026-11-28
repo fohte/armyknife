@@ -38,6 +38,7 @@ export type SessionOperation =
       sessionId: string
       keepWorktree: boolean
       stopAndClose?: boolean
+      discard?: ConfirmedDiscard
     }
   | { type: 'focus'; sessionId: string }
   | { type: 'resume'; sessionId: string }
@@ -134,6 +135,13 @@ export type SessionOperation =
     }
 
 export type CloseChangeStatus = 'M' | 'A' | 'D' | 'R' | '??'
+
+export type ConfirmedDiscard = {
+  path: string
+  branch: string | null
+  changes: { status: CloseChangeStatus; path: string }[]
+  commits: string[]
+}
 
 export type CloseWorktreeChecks = {
   path: string

@@ -19,6 +19,8 @@ type AsyncActionFeedbackHostProps = {
   openActivity: (id?: number) => void
   closeActivity: () => void
   closeWithWorktree: (id: number) => void
+  discardChanges?: (id: number) => void
+  reviewDiscardAgain?: (id: number) => void
   openInTerminal: (id: number) => void
   openSession?: (id: number) => void
   showCommandOutput: (id: number) => void
@@ -38,6 +40,8 @@ export function AsyncActionFeedbackHost({
   openActivity,
   closeActivity,
   closeWithWorktree,
+  discardChanges,
+  reviewDiscardAgain,
   openInTerminal,
   openSession,
   showCommandOutput,
@@ -99,6 +103,12 @@ export function AsyncActionFeedbackHost({
               }}
               onCloseKeepWorktree={() => {
                 closeWithWorktree(id)
+              }}
+              onDiscardChanges={() => {
+                discardChanges?.(id)
+              }}
+              onReviewDiscardAgain={() => {
+                reviewDiscardAgain?.(id)
               }}
               {...(openSession === undefined
                 ? {}
@@ -174,6 +184,14 @@ export function AsyncActionFeedbackHost({
                     }}
                     onCloseKeepWorktree={() => {
                       closeWithWorktree(action.id)
+                    }}
+                    onDiscardChanges={() => {
+                      closeActivity()
+                      discardChanges?.(action.id)
+                    }}
+                    onReviewDiscardAgain={() => {
+                      closeActivity()
+                      reviewDiscardAgain?.(action.id)
                     }}
                     onOpenInTerminal={() => {
                       closeActivity()
