@@ -8,6 +8,7 @@ import {
   type LaunchSessionRequest,
   type SessionDirectory,
   type SessionEngine,
+  type SessionModelOption,
   type SessionModelOptions,
 } from '#new-session-api'
 import {
@@ -39,13 +40,19 @@ export function useNewSession(active: boolean) {
   const [engine, setEngine] = useState<SessionEngine>(
     () => initialDraft?.engine ?? 'claude',
   )
-  const [modelOptionsCache, setModelOptionsCache] = useState<
-    Partial<Record<SessionEngine, SessionModelOptions>>
-  >({})
-  const [isLoadingModelOptions, setIsLoadingModelOptions] = useState(false)
-  const [modelOptionsError, setModelOptionsError] = useState<string | null>(
-    null,
-  )
+  const [modelOptionsByEngine, setModelOptionsByEngine] = useState<
+    Record<
+      SessionEngine,
+      {
+        modelOptions: SessionModelOptions | null
+        isLoading: boolean
+        error: string | null
+      }
+    >
+  >({
+    claude: { modelOptions: null, isLoading: false, error: null },
+    codex: { modelOptions: null, isLoading: false, error: null },
+  })
   const [selections, setSelections] = useState<
     Record<SessionEngine, NewSessionModelSelection>
   >(
@@ -156,34 +163,53 @@ export function useNewSession(active: boolean) {
 
   useEffect(() => {
     if (!active) {
-      setModelOptionsCache({})
-      setIsLoadingModelOptions(false)
+      setModelOptionsByEngine({
+        claude: { modelOptions: null, isLoading: false, error: null },
+        codex: { modelOptions: null, isLoading: false, error: null },
+      })
       return
     }
     let current = true
-    setModelOptionsError(null)
-    setIsLoadingModelOptions(true)
-    void getSessionModelOptions(engine).match(
-      (options) => {
-        if (!current) return
-        setModelOptionsCache((cache) => ({ ...cache, [engine]: options }))
-        setIsLoadingModelOptions(false)
-        const reconciled = reconcileModelSelection(
-          selectionsRef.current[engine],
-          options,
-        )
-        updateSelection(engine, reconciled, false)
-      },
-      (error) => {
-        if (!current) return
-        setIsLoadingModelOptions(false)
-        setModelOptionsError(error.message)
-      },
-    )
+    const engines: SessionEngine[] = ['claude', 'codex']
+    setModelOptionsByEngine({
+      claude: { modelOptions: null, isLoading: true, error: null },
+      codex: { modelOptions: null, isLoading: true, error: null },
+    })
+    for (const optionEngine of engines) {
+      void getSessionModelOptions(optionEngine).match(
+        (options) => {
+          if (!current) return
+          setModelOptionsByEngine((states) => ({
+            ...states,
+            [optionEngine]: {
+              modelOptions: options,
+              isLoading: false,
+              error: null,
+            },
+          }))
+          const reconciled = reconcileModelSelection(
+            selectionsRef.current[optionEngine],
+            options,
+          )
+          updateSelection(optionEngine, reconciled, false)
+        },
+        (requestError) => {
+          if (!current) return
+          setModelOptionsByEngine((states) => ({
+            ...states,
+            [optionEngine]: {
+              ...states[optionEngine],
+              isLoading: false,
+              error: requestError.message,
+            },
+          }))
+        },
+      )
+    }
     return () => {
       current = false
     }
-  }, [active, engine, updateSelection])
+  }, [active, updateSelection])
 
   useEffect(() => {
     if (!active) return
@@ -265,9 +291,10 @@ export function useNewSession(active: boolean) {
     skillSuggestionsSequence.current += 1
     clearDraft()
     setDirectories([])
-    setModelOptionsCache({})
-    setIsLoadingModelOptions(false)
-    setModelOptionsError(null)
+    setModelOptionsByEngine({
+      claude: { modelOptions: null, isLoading: false, error: null },
+      codex: { modelOptions: null, isLoading: false, error: null },
+    })
     setSkillSuggestions([])
     setIsLoadingDirectories(false)
   }, [clearDraft])
@@ -276,13 +303,13 @@ export function useNewSession(active: boolean) {
     setEngine(nextEngine)
   }, [])
 
-  const chooseModel = useCallback(
-    (model: string | null) => {
-      const selection = selectionsRef.current[engine]
-      const options = modelOptionsCache[engine]
+  const chooseModelFor = useCallback(
+    (selectionEngine: SessionEngine, model: string | null) => {
+      const selection = selectionsRef.current[selectionEngine]
+      const options = modelOptionsByEngine[selectionEngine].modelOptions
       const target =
         model === null
-          ? options === undefined
+          ? options === null
             ? undefined
             : defaultEffortModelOption(options)
           : options?.models.find((option) => option.id === model)
@@ -292,16 +319,33 @@ export function useNewSession(active: boolean) {
         !target.efforts.includes(selection.effort)
           ? null
           : selection.effort
-      updateSelection(engine, { model, effort })
+      updateSelection(selectionEngine, { model, effort })
     },
-    [engine, modelOptionsCache, updateSelection],
+    [modelOptionsByEngine, updateSelection],
+  )
+
+  const chooseEffortFor = useCallback(
+    (selectionEngine: SessionEngine, effort: string | null) => {
+      updateSelection(selectionEngine, {
+        ...selectionsRef.current[selectionEngine],
+        effort,
+      })
+    },
+    [updateSelection],
+  )
+
+  const chooseModel = useCallback(
+    (model: string | null) => {
+      chooseModelFor(engine, model)
+    },
+    [chooseModelFor, engine],
   )
 
   const chooseEffort = useCallback(
     (effort: string | null) => {
-      updateSelection(engine, { ...selectionsRef.current[engine], effort })
+      chooseEffortFor(engine, effort)
     },
-    [engine, updateSelection],
+    [chooseEffortFor, engine],
   )
 
   const chooseDirectory = useCallback((directory: SessionDirectory | null) => {
@@ -319,7 +363,7 @@ export function useNewSession(active: boolean) {
       const launchEngine = engineOverride ?? engine
       const launchSelection = selectionsRef.current[launchEngine]
       const launchModel = launchSelection.model
-      const launchOptions = modelOptionsCache[launchEngine]
+      const launchOptions = modelOptionsByEngine[launchEngine].modelOptions
       const chosenModel = launchOptions?.models.find(
         (option) => option.id === launchModel,
       )
@@ -336,29 +380,60 @@ export function useNewSession(active: boolean) {
         initialMessage,
       })
     },
-    [engine, initialMessage, modelOptionsCache, selectedDirectory, worktree],
+    [engine, initialMessage, modelOptionsByEngine, selectedDirectory, worktree],
   )
 
-  const modelOptions = modelOptionsCache[engine] ?? null
-  const { model: selectedModel, effort: selectedEffort } = selections[engine]
-  const activeModel = modelOptions?.models.find(
-    (option) => option.id === selectedModel,
-  )
-  const defaultModel =
-    modelOptions === null ? undefined : defaultEffortModelOption(modelOptions)
-  const activeModelOption = selectedModel === null ? defaultModel : activeModel
+  const getEngineOptions = (
+    optionEngine: SessionEngine,
+  ): {
+    modelOptions: SessionModelOptions | null
+    isLoading: boolean
+    error: string | null
+    selectedModel: string | null
+    selectedEffort: string | null
+    activeModelOption: SessionModelOption | undefined
+  } => {
+    const { modelOptions, isLoading, error } =
+      modelOptionsByEngine[optionEngine]
+    const { model: selectedModel, effort: selectedEffort } =
+      selections[optionEngine]
+    const activeModel = modelOptions?.models.find(
+      (option) => option.id === selectedModel,
+    )
+    const defaultModel =
+      modelOptions === null ? undefined : defaultEffortModelOption(modelOptions)
+    const activeModelOption =
+      selectedModel === null ? defaultModel : activeModel
+    return {
+      modelOptions,
+      isLoading,
+      error,
+      selectedModel,
+      selectedEffort,
+      activeModelOption,
+    }
+  }
+  const engineOptions: Record<
+    SessionEngine,
+    ReturnType<typeof getEngineOptions>
+  > = {
+    claude: getEngineOptions('claude'),
+    codex: getEngineOptions('codex'),
+  }
+  const currentEngineOptions = engineOptions[engine]
 
   return {
     directoryQuery,
     directories,
     selectedDirectory,
     engine,
-    modelOptions,
-    isLoadingModelOptions,
-    modelOptionsError,
-    selectedModel,
-    selectedEffort,
-    activeModelOption,
+    engineOptions,
+    modelOptions: currentEngineOptions.modelOptions,
+    isLoadingModelOptions: currentEngineOptions.isLoading,
+    modelOptionsError: currentEngineOptions.error,
+    selectedModel: currentEngineOptions.selectedModel,
+    selectedEffort: currentEngineOptions.selectedEffort,
+    activeModelOption: currentEngineOptions.activeModelOption,
     worktree,
     initialMessage,
     restoredAt,
@@ -371,6 +446,8 @@ export function useNewSession(active: boolean) {
     setEngine: changeEngine,
     chooseModel,
     setSelectedEffort: chooseEffort,
+    chooseModelFor,
+    chooseEffortFor,
     setWorktree,
     setInitialMessage,
     start,

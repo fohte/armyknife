@@ -3,7 +3,10 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, expect, it, vi } from 'vitest'
 
 import type { LaunchSessionRequest } from '#new-session-api'
-import { NEW_SESSION_DRAFT_STORAGE_KEY } from '#new-session-draft'
+import {
+  decodeNewSessionDraft,
+  NEW_SESSION_DRAFT_STORAGE_KEY,
+} from '#new-session-draft'
 import { exampleModelOptions } from '#new-session-story-fixtures.test'
 import { type NewSessionState, useNewSession } from '#use-new-session'
 
@@ -249,8 +252,8 @@ it('reloads skill suggestions when the selected engine and directory change', as
     ],
     requests: [
       '/api/model-options?engine=claude',
-      '/api/skill-suggestions?engine=claude',
       '/api/model-options?engine=codex',
+      '/api/skill-suggestions?engine=claude',
       '/api/skill-suggestions?engine=codex',
       '/api/skill-suggestions?engine=codex&directory=%2Ffixture%2Fproject',
     ],
@@ -460,6 +463,152 @@ const codexModelOptions = {
   ],
 }
 
+it('loads and reconciles model selections for both engines on activation', async () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  container = document.createElement('div')
+  document.body.append(container)
+  const savedDraft = JSON.stringify({
+    version: 1,
+    savedAt: '2026-05-06T12:03:00.000Z',
+    directory: null,
+    directoryQuery: '',
+    engine: 'claude',
+    selections: {
+      claude: { model: 'retired-fixture-model', effort: 'xhigh' },
+      codex: { model: 'fixture-model-codex', effort: 'xhigh' },
+    },
+    worktree: false,
+    initialMessage: '',
+  })
+  window.localStorage.setItem(NEW_SESSION_DRAFT_STORAGE_KEY, savedDraft)
+  vi.stubGlobal(
+    'fetch',
+    vi.fn<typeof fetch>((input) => {
+      const url = new URL(requestUrl(input), window.location.href)
+      const body =
+        url.pathname === '/api/model-options'
+          ? url.searchParams.get('engine') === 'codex'
+            ? codexModelOptions
+            : exampleModelOptions
+          : { skills: [] }
+      return Promise.resolve(
+        new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      )
+    }),
+  )
+  root = createRoot(container)
+
+  act(() => root?.render(<NewSessionHarness />))
+  await flushRequests()
+
+  const snapshot = () => ({
+    engineOptions: currentState?.engineOptions,
+    storedDraft: window.localStorage.getItem(NEW_SESSION_DRAFT_STORAGE_KEY),
+  })
+  expect(snapshot()).toEqual({
+    engineOptions: {
+      claude: {
+        modelOptions: exampleModelOptions,
+        isLoading: false,
+        error: null,
+        selectedModel: null,
+        selectedEffort: null,
+        activeModelOption: exampleModelOptions.models[0],
+      },
+      codex: {
+        modelOptions: codexModelOptions,
+        isLoading: false,
+        error: null,
+        selectedModel: 'fixture-model-codex',
+        selectedEffort: 'xhigh',
+        activeModelOption: codexModelOptions.models[0],
+      },
+    },
+    storedDraft: savedDraft,
+  })
+})
+
+it('changes Codex model and effort without changing Claude and stores the draft', async () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  container = document.createElement('div')
+  document.body.append(container)
+  vi.stubGlobal(
+    'fetch',
+    vi.fn<typeof fetch>((input) => {
+      const url = new URL(requestUrl(input), window.location.href)
+      const body =
+        url.pathname === '/api/model-options'
+          ? url.searchParams.get('engine') === 'codex'
+            ? codexModelOptions
+            : exampleModelOptions
+          : { skills: [] }
+      return Promise.resolve(
+        new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      )
+    }),
+  )
+  root = createRoot(container)
+
+  act(() => root?.render(<NewSessionHarness />))
+  await flushRequests()
+  act(() => {
+    currentState?.chooseModelFor('codex', 'fixture-model-codex')
+    currentState?.chooseEffortFor('codex', 'xhigh')
+  })
+
+  const snapshot = () => {
+    const rawDraft = window.localStorage.getItem(NEW_SESSION_DRAFT_STORAGE_KEY)
+    const storedDraft =
+      rawDraft === null ? null : decodeNewSessionDraft(rawDraft)
+    if (storedDraft !== null) {
+      storedDraft.savedAt = '<normalized timestamp>'
+    }
+    return {
+      engineOptions: currentState?.engineOptions,
+      storedDraft,
+    }
+  }
+  expect(snapshot()).toEqual({
+    engineOptions: {
+      claude: {
+        modelOptions: exampleModelOptions,
+        isLoading: false,
+        error: null,
+        selectedModel: null,
+        selectedEffort: null,
+        activeModelOption: exampleModelOptions.models[0],
+      },
+      codex: {
+        modelOptions: codexModelOptions,
+        isLoading: false,
+        error: null,
+        selectedModel: 'fixture-model-codex',
+        selectedEffort: 'xhigh',
+        activeModelOption: codexModelOptions.models[0],
+      },
+    },
+    storedDraft: {
+      version: 1,
+      savedAt: '<normalized timestamp>',
+      directory: null,
+      directoryQuery: '',
+      engine: 'claude',
+      selections: {
+        claude: { model: null, effort: null },
+        codex: { model: 'fixture-model-codex', effort: 'xhigh' },
+      },
+      worktree: false,
+      initialMessage: '',
+    },
+  })
+})
+
 it('restores each engine model and effort selection after switching', async () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   container = document.createElement('div')
@@ -588,29 +737,19 @@ it('retains the selection when loading model options fails', async () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   container = document.createElement('div')
   document.body.append(container)
-  let codexLoadCount = 0
   const fetcher = vi.fn<typeof fetch>((input) => {
     const url = requestUrl(input)
     if (url === '/api/model-options?engine=codex') {
-      codexLoadCount += 1
-      if (codexLoadCount > 1) {
-        return Promise.resolve(
-          new Response(
-            JSON.stringify({ error: 'Fixture catalog unavailable' }),
-            {
-              status: 503,
-              headers: { 'content-type': 'application/json' },
-            },
-          ),
-        )
-      }
+      return Promise.resolve(
+        new Response(JSON.stringify({ error: 'Fixture catalog unavailable' }), {
+          status: 503,
+          headers: { 'content-type': 'application/json' },
+        }),
+      )
     }
-    const body =
-      url === '/api/model-options?engine=codex'
-        ? codexModelOptions
-        : url.startsWith('/api/skill-suggestions')
-          ? { skills: [] }
-          : exampleModelOptions
+    const body = url.startsWith('/api/skill-suggestions')
+      ? { skills: [] }
+      : exampleModelOptions
     return Promise.resolve(
       new Response(JSON.stringify(body), {
         status: 200,
@@ -645,7 +784,7 @@ it('retains the selection when loading model options fails', async () => {
   expect(snapshot()).toEqual({
     engine: 'codex',
     isLoadingModelOptions: false,
-    modelOptions: codexModelOptions,
+    modelOptions: null,
     modelOptionsError: 'Fixture catalog unavailable',
     selectedModel: 'fixture-model-codex',
     selectedEffort: 'xhigh',
