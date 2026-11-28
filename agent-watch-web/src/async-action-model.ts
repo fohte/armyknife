@@ -16,6 +16,10 @@ export type AsyncActionStatus =
   | 'closing'
   | 'closed'
   | 'closeFailed'
+  | 'deleting'
+  | 'deleteChanged'
+  | 'deleteBlocked'
+  | 'deleteFailed'
   | 'rewinding'
   | 'rewound'
   | 'rewindFailed'
@@ -27,7 +31,14 @@ export type AsyncAction = {
   id: number
   sessionId: string
   sessionTitle: string
-  kind: 'merge' | 'close' | 'command' | 'rewind' | 'review_document' | 'launch'
+  kind:
+    | 'merge'
+    | 'close'
+    | 'discard'
+    | 'command'
+    | 'rewind'
+    | 'review_document'
+    | 'launch'
   status: AsyncActionStatus
   command?: string
   initialMessage?: string
@@ -43,6 +54,7 @@ export type AsyncAction = {
   message?: string
   error?: string
   retryable?: boolean
+  discardable?: boolean
   checks?: CloseWorktreeChecks
   createdAt: number
   completedAt?: number
@@ -74,6 +86,12 @@ export type AsyncActionOutcome =
       error: string
       checks?: CloseWorktreeChecks
     }
+  | {
+      status: 'deleteChanged' | 'deleteBlocked' | 'deleteFailed'
+      error: string
+      message?: string
+      checks?: CloseWorktreeChecks
+    }
 
 type StartAsyncActionBaseOptions = {
   sessionId: string
@@ -92,6 +110,10 @@ type StartAsyncActionBaseOptions = {
   onRetry?: (retry: () => void, actionId: number) => void
   onCloseKeepWorktree?: () => void
   onOpenInTerminal?: () => void
+  replacesActionId?: number
+  discardable?: boolean
+  onDiscardChanges?: (action: AsyncAction) => void
+  onReviewDiscardAgain?: (action: AsyncAction) => void
 }
 
 export type StartAsyncActionOptions =
@@ -107,6 +129,9 @@ export function isAsyncActionFailureStatus(status: AsyncActionStatus) {
   return (
     status === 'mergeFailed' ||
     status === 'closeFailed' ||
+    status === 'deleteChanged' ||
+    status === 'deleteBlocked' ||
+    status === 'deleteFailed' ||
     status === 'rewindFailed' ||
     status === 'commandFailed' ||
     status === 'commandTimedOut' ||
@@ -119,6 +144,7 @@ export function isAsyncActionRunningStatus(status: AsyncActionStatus) {
   return (
     status === 'merging' ||
     status === 'closing' ||
+    status === 'deleting' ||
     status === 'rewinding' ||
     status === 'runningCommand' ||
     status === 'reviewDocumentActionRunning' ||
@@ -137,6 +163,8 @@ export function runningStatusFor(kind: AsyncAction['kind']): AsyncActionStatus {
       return 'merging'
     case 'close':
       return 'closing'
+    case 'discard':
+      return 'deleting'
     case 'command':
       return 'runningCommand'
     case 'rewind':

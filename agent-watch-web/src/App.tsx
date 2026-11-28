@@ -237,9 +237,12 @@ function AppContent() {
   )
   const {
     confirmationSession: closeConfirmationSession,
+    discardConfirmation,
     requestCloseSession,
     cancelCloseConfirmation,
     confirmCloseSession,
+    cancelDiscardConfirmation,
+    confirmDiscardChanges,
   } = useSessionClose({
     sessions: sessionsWithElapsedTime,
     runSessionOperation,
@@ -489,6 +492,7 @@ function AppContent() {
           workTypeNavLabels,
           pendingFocusSessionId,
           closeConfirmationSession,
+          discardConfirmation,
         }}
         updateNoticeVersion={
           availableVersion === dismissedVersion ? null : availableVersion
@@ -528,6 +532,8 @@ function AppContent() {
           requestCloseSession,
           cancelCloseConfirmation,
           confirmCloseSession,
+          cancelDiscardConfirmation,
+          confirmDiscardChanges,
           onLater: openLater,
           closeLater,
           laterSubmissionInFlight,

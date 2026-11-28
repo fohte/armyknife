@@ -390,9 +390,62 @@ const failedCloseInActivity = {
   sessionId: 'example-session',
   sessionTitle: 'Review the example configuration',
   kind: 'close' as const,
+  discardable: true,
   status: 'closeFailed' as const,
   error: 'The session could not be closed.',
   createdAt: 1_800_000_000_000,
+}
+
+const failedCloseWithDiscard = {
+  ...failedCloseInActivity,
+  checks: {
+    path: '/worktrees/example-project',
+    files: ['src/example.ts'],
+    changes: [{ status: 'M' as const, path: 'src/example.ts' }],
+    commits: [],
+    branch: 'feature/example-work',
+    merged: true,
+    reason: null,
+    processes: [],
+    commitInspectionUnavailable: false,
+    processInspectionUnavailable: false,
+  },
+}
+
+export const CloseFailureOffersDiscardInToast: Story = {
+  name: 'The toast offers to keep or discard the worktree after Close fails.',
+  args: {
+    form: 'toast',
+    action: failedCloseWithDiscard,
+    onCloseKeepWorktree: () => undefined,
+    onDiscardChanges: () => undefined,
+    onRetry: () => undefined,
+    onDetails: () => undefined,
+  },
+}
+
+export const CloseFailureOffersDiscardInActivity: Story = {
+  name: 'Activity offers to keep or discard the worktree after Close fails.',
+  args: {
+    form: 'row',
+    action: failedCloseWithDiscard,
+    onCloseKeepWorktree: () => undefined,
+    onDiscardChanges: () => undefined,
+    onRetry: () => undefined,
+    onOpenInTerminal: () => undefined,
+  },
+}
+
+export const CloseFailureOffersDiscardInConversation: Story = {
+  name: 'The conversation line offers to keep or discard the worktree.',
+  args: {
+    form: 'line',
+    action: failedCloseWithDiscard,
+    onCloseKeepWorktree: () => undefined,
+    onDiscardChanges: () => undefined,
+    onRetry: () => undefined,
+    onDetails: () => undefined,
+  },
 }
 
 export const UncommittedFilesAreListed: Story = {
@@ -417,6 +470,121 @@ export const UncommittedFilesAreListed: Story = {
         processInspectionUnavailable: false,
       },
     },
+  },
+}
+
+export const NewChangesRequireAnotherReview: Story = {
+  name: 'The changed worktree can be reviewed again before discarding.',
+  args: {
+    form: 'row',
+    action: {
+      id: 9,
+      sessionId: 'example-session',
+      sessionTitle: 'Review the example configuration',
+      kind: 'discard',
+      status: 'deleteChanged',
+      message: 'Changed after you confirmed: 1 new file and 1 new commit.',
+      checks: {
+        path: '/worktrees/example-project',
+        files: ['src/example.ts', 'tmp/example-output.log'],
+        changes: [
+          { status: 'M', path: 'src/example.ts' },
+          { status: '??', path: 'tmp/example-output.log' },
+        ],
+        commits: [
+          {
+            sha: '2222222222222222222222222222222222222222',
+            subject: 'add example output',
+          },
+        ],
+        branch: 'feature/example-work',
+        merged: true,
+        reason: null,
+        processes: [],
+        commitInspectionUnavailable: false,
+        processInspectionUnavailable: false,
+      },
+      createdAt: 1_800_000_000_000,
+    },
+    onReviewDiscardAgain: () => undefined,
+    onCloseKeepWorktree: () => undefined,
+  },
+}
+
+export const RunningProcessBlocksDiscard: Story = {
+  name: 'A running process blocks discard and can be retried.',
+  args: {
+    action: {
+      id: 10,
+      sessionId: 'example-session',
+      sessionTitle: 'Review the example configuration',
+      kind: 'discard',
+      status: 'deleteBlocked',
+      message:
+        'Running in the worktree: 12345 (example-server). Stop it, then Retry.',
+      error: 'The worktree still has a running process.',
+      checks: {
+        path: '/worktrees/example-project',
+        files: ['src/example.ts'],
+        changes: [{ status: 'M', path: 'src/example.ts' }],
+        commits: [],
+        branch: 'feature/example-work',
+        merged: true,
+        reason: null,
+        processes: [{ pid: 12345, name: 'example-server' }],
+        commitInspectionUnavailable: false,
+        processInspectionUnavailable: false,
+      },
+      createdAt: 1_800_000_000_000,
+    },
+    onRetry: () => undefined,
+    onOpenInTerminal: () => undefined,
+    onCloseKeepWorktree: () => undefined,
+  },
+}
+
+export const DiscardIsInProgress: Story = {
+  name: 'The confirmed discard is removing the worktree.',
+  args: {
+    action: {
+      id: 11,
+      sessionId: 'example-session',
+      sessionTitle: 'Review the example configuration',
+      kind: 'discard',
+      status: 'deleting',
+      createdAt: 1_800_000_000_000,
+    },
+  },
+}
+
+export const SessionClosesAfterDiscard: Story = {
+  name: 'The session closes after the confirmed discard succeeds.',
+  args: {
+    action: {
+      id: 12,
+      sessionId: 'example-session',
+      sessionTitle: 'Review the example configuration',
+      kind: 'discard',
+      status: 'closed',
+      createdAt: 1_800_000_000_000,
+    },
+  },
+}
+
+export const DiscardFailureCanBeRetried: Story = {
+  name: 'A discard failure shows its message and retry action.',
+  args: {
+    action: {
+      id: 13,
+      sessionId: 'example-session',
+      sessionTitle: 'Review the example configuration',
+      kind: 'discard',
+      status: 'deleteFailed',
+      error: 'The worktree could not be deleted.',
+      createdAt: 1_800_000_000_000,
+    },
+    onRetry: () => undefined,
+    onDetails: () => undefined,
   },
 }
 

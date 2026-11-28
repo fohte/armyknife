@@ -1,14 +1,13 @@
 import { err, ok, type Result } from 'neverthrow'
-import type { ReactNode, RefObject } from 'react'
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useRef,
-  useState,
-} from 'react'
+import type { ReactNode } from 'react'
+import { useCallback, useContext, useEffect, useRef, useState } from 'react'
 
+import { createCloseActionHandlers } from '#async-action-close-handlers'
+import {
+  AsyncActionFeedbackContext,
+  type AsyncActionFeedbackValue,
+  type AsyncActionRetryUpdate,
+} from '#async-action-feedback-context'
 import {
   type AsyncAction,
   type AsyncActionOutcome,
@@ -33,44 +32,6 @@ export {
   isAsyncActionFailureStatus,
   isAsyncActionRunningStatus,
 } from '#async-action-model'
-
-type AsyncActionRetryUpdate = Pick<
-  StartAsyncActionOptions,
-  'run' | 'onRetry' | 'pullRequestHeadSha'
->
-type AsyncActionFeedbackValue = {
-  actions: readonly AsyncAction[]
-  toastIds: readonly number[]
-  toastRef: RefObject<HTMLDivElement | null>
-  activityOpen: boolean
-  activityPosition: { left: number; bottom: number } | null
-  toastBottomOffset: number | null
-  setToastBottomOffset: (offset: number | null) => void
-  pendingMergeRetryActionIds: readonly number[]
-  pendingCommandOutputActionIds: readonly number[]
-  activeMergeRetryConfirmationActionId: number | null
-  start: (options: StartAsyncActionOptions) => number
-  retry: (id: number) => void
-  retryWith: (id: number, update: AsyncActionRetryUpdate) => void
-  shiftActionTimelineIndices: (
-    options: ShiftActionTimelineIndicesOptions,
-  ) => void
-  requestMergeRetryConfirmation: (id: number) => void
-  consumeMergeRetryConfirmation: (id: number) => void
-  finishMergeRetryConfirmation: (id: number) => void
-  requestCommandOutput: (id: number) => void
-  consumeCommandOutput: (id: number) => void
-  dismissToast: (id: number) => void
-  clearFinished: () => void
-  openActivity: (actionId?: number, anchor?: HTMLElement) => void
-  closeActivity: () => void
-  closeWithWorktree: (id: number) => void
-  openInTerminal: (id: number) => void
-  openSession: (id: number) => void
-}
-
-const AsyncActionFeedbackContext =
-  createContext<AsyncActionFeedbackValue | null>(null)
 
 const AUTO_DISMISS_MS = 5_000
 
@@ -105,10 +66,19 @@ export function AsyncActionFeedbackProvider({
   const retryHandlers = useRef(
     new Map<number, (retry: () => void, actionId: number) => void>(),
   )
-  const closeWithWorktreeHandlers = useRef(new Map<number, () => void>())
-  const openInTerminalHandlers = useRef(new Map<number, () => void>())
+  const closeActionHandlers = useRef(createCloseActionHandlers())
   const openSessionHandlers = useRef(new Map<number, () => void>())
   const timers = useRef(new Map<number, ReturnType<typeof setTimeout>>())
+
+  const removeActionResources = useCallback((id: number) => {
+    runs.current.delete(id)
+    const timer = timers.current.get(id)
+    if (timer !== undefined) clearTimeout(timer)
+    timers.current.delete(id)
+    retryHandlers.current.delete(id)
+    closeActionHandlers.current.delete(id)
+    openSessionHandlers.current.delete(id)
+  }, [])
 
   const dismissToast = useCallback((id: number) => {
     const timer = timers.current.get(id)
@@ -198,16 +168,15 @@ export function AsyncActionFeedbackProvider({
   const start = useCallback(
     (options: StartAsyncActionOptions) => {
       const id = nextId.current++
+      const replacedActionId = options.replacesActionId
+      if (replacedActionId !== undefined) {
+        removeActionResources(replacedActionId)
+      }
       runs.current.set(id, options.run)
       if (options.onRetry !== undefined) {
         retryHandlers.current.set(id, options.onRetry)
       }
-      if (options.onCloseKeepWorktree !== undefined) {
-        closeWithWorktreeHandlers.current.set(id, options.onCloseKeepWorktree)
-      }
-      if (options.onOpenInTerminal !== undefined) {
-        openInTerminalHandlers.current.set(id, options.onOpenInTerminal)
-      }
+      closeActionHandlers.current.register(id, options)
       if (options.kind === 'launch') {
         openSessionHandlers.current.set(id, options.onOpenSession)
       }
@@ -225,6 +194,7 @@ export function AsyncActionFeedbackProvider({
             ? {}
             : { initialMessage: options.initialMessage }),
           ...(options.repo === undefined ? {} : { repo: options.repo }),
+          ...(options.discardable === true ? { discardable: true } : {}),
           ...(options.reviewDocumentAction === undefined
             ? {}
             : { reviewDocumentAction: options.reviewDocumentAction }),
@@ -245,13 +215,16 @@ export function AsyncActionFeedbackProvider({
             : { timelineIndex: options.timelineIndex }),
           createdAt: options.createdAt ?? Date.now(),
         },
-        ...current,
+        ...current.filter((action) => action.id !== replacedActionId),
       ])
-      setToastIds((current) => [id, ...current])
+      setToastIds((current) => [
+        id,
+        ...current.filter((toastId) => toastId !== replacedActionId),
+      ])
       void runAction(id, options.run)
       return id
     },
-    [runAction],
+    [removeActionResources, runAction],
   )
 
   const retry = useCallback(
@@ -345,16 +318,9 @@ export function AsyncActionFeedbackProvider({
       current.filter((id) => !finished.has(id)),
     )
     for (const id of finished) {
-      runs.current.delete(id)
-      const timer = timers.current.get(id)
-      if (timer !== undefined) clearTimeout(timer)
-      timers.current.delete(id)
-      retryHandlers.current.delete(id)
-      closeWithWorktreeHandlers.current.delete(id)
-      openInTerminalHandlers.current.delete(id)
-      openSessionHandlers.current.delete(id)
+      removeActionResources(id)
     }
-  }, [actions])
+  }, [actions, removeActionResources])
 
   const openActivity = useCallback(
     (actionId?: number, anchor?: HTMLElement) => {
@@ -380,11 +346,25 @@ export function AsyncActionFeedbackProvider({
   }, [])
 
   const closeWithWorktree = useCallback((id: number) => {
-    closeWithWorktreeHandlers.current.get(id)?.()
+    closeActionHandlers.current.closeWithWorktree(id)
   }, [])
 
+  const discardChanges = useCallback(
+    (id: number) => {
+      closeActionHandlers.current.discardChanges(id, actions)
+    },
+    [actions],
+  )
+
+  const reviewDiscardAgain = useCallback(
+    (id: number) => {
+      closeActionHandlers.current.reviewDiscardAgain(id, actions)
+    },
+    [actions],
+  )
+
   const openInTerminal = useCallback((id: number) => {
-    openInTerminalHandlers.current.get(id)?.()
+    closeActionHandlers.current.openInTerminal(id)
   }, [])
 
   const openSession = useCallback((id: number) => {
@@ -426,6 +406,8 @@ export function AsyncActionFeedbackProvider({
         openActivity,
         closeActivity,
         closeWithWorktree,
+        discardChanges,
+        reviewDiscardAgain,
         openInTerminal,
         openSession,
       }}
@@ -445,6 +427,8 @@ export function AsyncActionFeedbackProvider({
         openActivity={openActivity}
         closeActivity={closeActivity}
         closeWithWorktree={closeWithWorktree}
+        discardChanges={discardChanges}
+        reviewDiscardAgain={reviewDiscardAgain}
         openInTerminal={openInTerminal}
         openSession={openSession}
         showCommandOutput={requestCommandOutput}

@@ -5296,6 +5296,321 @@ it('shows every close check in Activity and opens the failed worktree in a termi
   })
 })
 
+it('requires a new review when the worktree changes during discard confirmation', async () => {
+  const confirmedChecks = {
+    path: '/worktrees/sample-discard',
+    files: ['src/sample.ts'],
+    changes: [{ status: 'M', path: 'src/sample.ts' }],
+    commits: [
+      {
+        sha: '1111111111111111111111111111111111111111',
+        subject: 'add sample behavior',
+      },
+    ],
+    branch: 'feature/sample-discard',
+    merged: false,
+    reason: 'The sample branch has not merged yet.',
+    processes: [],
+    commitInspectionUnavailable: false,
+    processInspectionUnavailable: false,
+  }
+  const changedChecks = {
+    ...confirmedChecks,
+    files: ['src/sample.ts', 'tmp/new-output.log'],
+    changes: [
+      { status: 'M', path: 'src/sample.ts' },
+      { status: '??', path: 'tmp/new-output.log' },
+    ],
+    commits: [
+      ...confirmedChecks.commits,
+      {
+        sha: '2222222222222222222222222222222222222222',
+        subject: 'add another sample behavior',
+      },
+    ],
+  }
+  const closeBodies: unknown[] = []
+  const actionLabels = () => ({
+    toast: Array.from(
+      container.querySelectorAll(
+        '.async-action-toast-stack .async-action-item-content strong',
+      ),
+      (element) => element.textContent,
+    ),
+    conversation: Array.from(
+      container.querySelectorAll(
+        '.conversation-pane .async-action-item--line .async-action-item-content strong',
+      ),
+      (element) => element.textContent,
+    ),
+  })
+  const fetchMock = vi.fn<typeof fetch>().mockImplementation((input, init) => {
+    if (!requestUrl(input).endsWith('/close')) {
+      return mockSessionActionFetch(input)
+    }
+    const body =
+      typeof init?.body === 'string' ? (JSON.parse(init.body) as unknown) : null
+    closeBodies.push(body)
+    if (closeBodies.length === 1) {
+      return Promise.resolve(
+        Response.json(
+          {
+            error: 'The worktree still contains local changes.',
+            code: 'dirty_worktree',
+            checks: confirmedChecks,
+          },
+          { status: 409 },
+        ),
+      )
+    }
+    if (closeBodies.length === 2) {
+      return Promise.resolve(
+        Response.json(
+          {
+            error: 'The worktree changed after confirmation.',
+            code: 'close_checks_changed',
+            checks: changedChecks,
+          },
+          { status: 409 },
+        ),
+      )
+    }
+    return Promise.resolve(new Response(null, { status: 204 }))
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-sample-discard', 'Review sample changes')],
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
+    dispatchKey(window, 'e')
+  })
+  await act(async () => {
+    document
+      .querySelector<HTMLButtonElement>('.confirm-dialog-confirm')
+      ?.click()
+    await flushAsyncState()
+  })
+
+  const discardButton = Array.from(
+    container.querySelectorAll<HTMLButtonElement>(
+      '.async-action-toast-stack button',
+    ),
+  ).find((button) => button.textContent === 'Discard changes…')
+  if (discardButton === undefined) {
+    throw new Error('The close failure did not offer discard')
+  }
+  await act(async () => {
+    discardButton.click()
+    await flushAsyncState()
+  })
+  await act(async () => {
+    document
+      .querySelector<HTMLButtonElement>('.confirm-dialog-confirm')
+      ?.click()
+    await flushAsyncState()
+  })
+  expect(actionLabels()).toEqual({
+    toast: ['Did not delete worktree'],
+    conversation: ['Did not delete worktree'],
+  })
+
+  const reviewAgainButton = Array.from(
+    container.querySelectorAll<HTMLButtonElement>(
+      '.async-action-toast-stack button',
+    ),
+  ).find((button) => button.textContent === 'Review again')
+  if (reviewAgainButton === undefined) {
+    throw new Error('The changed discard did not offer another review')
+  }
+  await act(async () => {
+    reviewAgainButton.click()
+    await flushAsyncState()
+  })
+
+  const reviewDialog = document.querySelector<HTMLElement>(
+    '.session-discard-confirmation',
+  )
+  const reviewSnapshot = () => ({
+    title: reviewDialog?.querySelector('h2')?.textContent,
+    description: reviewDialog?.querySelector(
+      '.session-discard-confirmation__description',
+    )?.textContent,
+    newItems: Array.from(
+      reviewDialog?.querySelectorAll(
+        '.session-discard-confirmation__new-badge',
+      ) ?? [],
+      (badge) => badge.textContent,
+    ),
+  })
+  expect(reviewSnapshot()).toEqual({
+    title: 'Review the changes again',
+    description:
+      'Nothing was deleted: 1 new file and 1 new commit appeared after you confirmed. Discarding deletes these too.',
+    newItems: ['New', 'New'],
+  })
+
+  await act(async () => {
+    reviewDialog
+      ?.querySelector<HTMLButtonElement>('.confirm-dialog-confirm')
+      ?.click()
+    await flushAsyncState()
+  })
+  expect(actionLabels()).toEqual({
+    toast: ['Closed session and deleted worktree'],
+    conversation: ['Closed session and deleted worktree'],
+  })
+  expect(closeBodies).toEqual([
+    { keepWorktree: false, stopAndClose: true },
+    {
+      keepWorktree: false,
+      stopAndClose: true,
+      discard: {
+        path: '/worktrees/sample-discard',
+        branch: 'feature/sample-discard',
+        changes: [{ status: 'M', path: 'src/sample.ts' }],
+        commits: ['1111111111111111111111111111111111111111'],
+      },
+    },
+    {
+      keepWorktree: false,
+      stopAndClose: true,
+      discard: {
+        path: '/worktrees/sample-discard',
+        branch: 'feature/sample-discard',
+        changes: [
+          { status: 'M', path: 'src/sample.ts' },
+          { status: '??', path: 'tmp/new-output.log' },
+        ],
+        commits: [
+          '1111111111111111111111111111111111111111',
+          '2222222222222222222222222222222222222222',
+        ],
+      },
+    },
+  ])
+})
+
+it('offers retry and terminal access when a process blocks discard', async () => {
+  const clearChecks = {
+    path: '/worktrees/sample-process-guard',
+    files: ['src/sample.ts'],
+    changes: [{ status: 'M', path: 'src/sample.ts' }],
+    commits: [],
+    branch: 'feature/sample-process-guard',
+    merged: true,
+    reason: null,
+    processes: [],
+    commitInspectionUnavailable: false,
+    processInspectionUnavailable: false,
+  }
+  const blockedChecks = {
+    ...clearChecks,
+    processes: [{ pid: 23456, name: 'sample-server' }],
+  }
+  const closeBodies: unknown[] = []
+  const fetchMock = vi.fn<typeof fetch>().mockImplementation((input, init) => {
+    if (!requestUrl(input).endsWith('/close')) {
+      return mockSessionActionFetch(input)
+    }
+    closeBodies.push(
+      typeof init?.body === 'string'
+        ? (JSON.parse(init.body) as unknown)
+        : null,
+    )
+    return Promise.resolve(
+      Response.json(
+        closeBodies.length === 1
+          ? {
+              error: 'The worktree contains uncommitted changes.',
+              code: 'dirty_worktree',
+              checks: clearChecks,
+            }
+          : {
+              error: 'The worktree still has a running process.',
+              code: 'worktree_process_guard',
+              checks: blockedChecks,
+            },
+        { status: 409 },
+      ),
+    )
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-process-guard', 'Review sample process guard')],
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
+    dispatchKey(window, 'e')
+  })
+  await act(async () => {
+    document
+      .querySelector<HTMLButtonElement>('.confirm-dialog-confirm')
+      ?.click()
+    await flushAsyncState()
+  })
+
+  const discardButton = Array.from(
+    container.querySelectorAll<HTMLButtonElement>(
+      '.async-action-toast-stack button',
+    ),
+  ).find((button) => button.textContent === 'Discard changes…')
+  if (discardButton === undefined) {
+    throw new Error('The close failure did not offer discard')
+  }
+  await act(async () => {
+    discardButton.click()
+    await flushAsyncState()
+  })
+  await act(async () => {
+    document
+      .querySelector<HTMLButtonElement>('.confirm-dialog-confirm')
+      ?.click()
+    await flushAsyncState()
+  })
+
+  const blockedAction = Array.from(
+    container.querySelectorAll('.async-action-item--toast'),
+  ).find(
+    (item) =>
+      item.querySelector('strong')?.textContent === 'Did not delete worktree',
+  )
+  const content = blockedAction?.querySelector('.async-action-item-content')
+  const controls = blockedAction?.querySelector(
+    '.async-action-controls--discard',
+  )
+  const snapshot = () => ({
+    message: content?.textContent ?? null,
+    actions: Array.from(
+      controls?.querySelectorAll('button') ?? [],
+      (button) => button.textContent,
+    ),
+    closeBodies,
+  })
+  expect(snapshot()).toEqual({
+    message:
+      'Did not delete worktreeReview sample process guardRunning in the worktree: 23456 (sample-server). Stop it, then Retry.RetryOpen in terminal',
+    actions: ['Retry', 'Open in terminal'],
+    closeBodies: [
+      { keepWorktree: false, stopAndClose: true },
+      {
+        keepWorktree: false,
+        stopAndClose: true,
+        discard: {
+          path: '/worktrees/sample-process-guard',
+          branch: 'feature/sample-process-guard',
+          changes: [{ status: 'M', path: 'src/sample.ts' }],
+          commits: [],
+        },
+      },
+    ],
+  })
+})
+
 it('offers a keep-worktree retry after a non-Done session close fails', async () => {
   const message =
     'Branch `sample-branch` is not merged (pull request is open); close the session while keeping its worktree to continue'
@@ -5362,7 +5677,7 @@ it('offers a keep-worktree retry after a non-Done session close fails', async ()
   expect(initialFailure).toEqual({
     error: null,
     toast:
-      'Close failedAnswer a questionLeft in the worktree: branch not mergedClose and keep worktreeRetryDetails',
+      'Close failedAnswer a questionLeft in the worktree: branch not mergedClose anywayKeep worktreeDiscard changes…RetryDetails',
   })
   await act(async () => {
     container
@@ -5378,7 +5693,7 @@ it('offers a keep-worktree retry after a non-Done session close fails', async ()
     initialFailure: {
       error: null,
       toast:
-        'Close failedAnswer a questionLeft in the worktree: branch not mergedClose and keep worktreeRetryDetails',
+        'Close failedAnswer a questionLeft in the worktree: branch not mergedClose anywayKeep worktreeDiscard changes…RetryDetails',
     },
     closeBodies: [
       { keepWorktree: false, stopAndClose: true },

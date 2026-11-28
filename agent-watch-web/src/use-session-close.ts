@@ -1,9 +1,10 @@
 import type { Result } from 'neverthrow'
 import { useCallback, useState } from 'react'
 
-import { useAsyncActionStarter } from '#async-action-feedback'
+import { type AsyncAction, useAsyncActionStarter } from '#async-action-feedback'
 import { useSessionConversationCache } from '#components/session-conversation-cache'
 import { clearSessionAttachments } from '#components/use-composer-message'
+import type { CloseWorktreeChecks } from '#session-operation-types'
 import {
   type SessionOperation,
   type SessionOperationError,
@@ -20,6 +21,125 @@ type UseSessionCloseOptions = {
   setError: (error: string | null) => void
 }
 
+type DiscardConfirmationSnapshot = {
+  sourceActionId: number
+  sessionId: string
+  sessionName: string
+  checks: CloseWorktreeChecks
+  previousChecks?: CloseWorktreeChecks
+}
+
+type ComparedItems = {
+  changes: (CloseWorktreeChecks['changes'][number] & { isNew?: boolean })[]
+  commits: (CloseWorktreeChecks['commits'][number] & { isNew?: boolean })[]
+}
+
+function comparedItems(
+  current: CloseWorktreeChecks,
+  previous?: CloseWorktreeChecks,
+): ComparedItems {
+  const targetChanged =
+    previous !== undefined &&
+    (previous.path !== current.path || previous.branch !== current.branch)
+  const previousChanges = new Set(
+    previous?.changes.map(({ status, path }) => `${status}:${path}`) ?? [],
+  )
+  const previousCommits = new Set(previous?.commits.map(({ sha }) => sha) ?? [])
+
+  return {
+    changes: current.changes.map((change) =>
+      previous !== undefined &&
+      (targetChanged || !previousChanges.has(`${change.status}:${change.path}`))
+        ? { ...change, isNew: true }
+        : change,
+    ),
+    commits: current.commits.map((commit) =>
+      previous !== undefined &&
+      (targetChanged || !previousCommits.has(commit.sha))
+        ? { ...commit, isNew: true }
+        : commit,
+    ),
+  }
+}
+
+export type SessionDiscardConfirmationState = {
+  sessionId: string
+  sessionName: string
+  branchName: string | null
+  worktreePath: string
+  changes: {
+    status: CloseWorktreeChecks['changes'][number]['status']
+    path: string
+    isNew?: boolean
+  }[]
+  commits: {
+    sha: string
+    subject: string
+    isNew?: boolean
+  }[]
+  reviewAgain: boolean
+}
+
+function confirmationView(
+  snapshot: DiscardConfirmationSnapshot,
+): SessionDiscardConfirmationState {
+  const { changes, commits } = comparedItems(
+    snapshot.checks,
+    snapshot.previousChecks,
+  )
+
+  return {
+    sessionId: snapshot.sessionId,
+    sessionName: snapshot.sessionName,
+    branchName: snapshot.checks.branch,
+    worktreePath: snapshot.checks.path,
+    changes,
+    commits,
+    reviewAgain: snapshot.previousChecks !== undefined,
+  }
+}
+
+function discardPayload(checks: CloseWorktreeChecks) {
+  return {
+    path: checks.path,
+    branch: checks.branch,
+    changes: checks.changes,
+    commits: checks.commits.map(({ sha }) => sha),
+  }
+}
+
+function newItemSummary(
+  confirmed: CloseWorktreeChecks,
+  current: CloseWorktreeChecks,
+) {
+  const changed = comparedItems(current, confirmed)
+  const newFileCount = changed.changes.filter(
+    ({ isNew }) => isNew === true,
+  ).length
+  const newCommitCount = changed.commits.filter(
+    ({ isNew }) => isNew === true,
+  ).length
+  const items = [
+    newFileCount > 0
+      ? `${String(newFileCount)} new ${newFileCount === 1 ? 'file' : 'files'}`
+      : null,
+    newCommitCount > 0
+      ? `${String(newCommitCount)} new ${newCommitCount === 1 ? 'commit' : 'commits'}`
+      : null,
+  ].filter((item) => item !== null)
+  return items.length === 0
+    ? 'The worktree or branch changed after you confirmed.'
+    : `Changed after you confirmed: ${items.join(' and ')}.`
+}
+
+function runningProcessSummary(checks: CloseWorktreeChecks | undefined) {
+  if (checks === undefined || checks.processes.length === 0) return undefined
+  const processes = checks.processes
+    .map(({ pid, name }) => `${String(pid)} (${name})`)
+    .join(', ')
+  return `Running in the worktree: ${processes}. Stop it, then Retry.`
+}
+
 export function useSessionClose({
   sessions,
   runSessionOperation,
@@ -30,6 +150,8 @@ export function useSessionClose({
   const [confirmationSessionId, setConfirmationSessionId] = useState<
     string | null
   >(null)
+  const [discardSnapshot, setDiscardSnapshot] =
+    useState<DiscardConfirmationSnapshot | null>(null)
   const sessionConversationCache = useSessionConversationCache()
   const startAsyncAction = useAsyncActionStarter((feedbackError) => {
     setError(feedbackError.message)
@@ -44,6 +166,7 @@ export function useSessionClose({
       if (session === undefined) return
       startAsyncAction({
         kind: 'close',
+        discardable: !keepWorktree,
         sessionId,
         sessionTitle: session.title,
         run: async () =>
@@ -73,6 +196,21 @@ export function useSessionClose({
           ),
         onCloseKeepWorktree: () => {
           closeNonDoneSession(sessionId, true)
+        },
+        onDiscardChanges: (action) => {
+          if (
+            action.kind !== 'close' ||
+            action.checks === undefined ||
+            action.checks.commitInspectionUnavailable
+          ) {
+            return
+          }
+          setDiscardSnapshot({
+            sourceActionId: action.id,
+            sessionId: action.sessionId,
+            sessionName: action.sessionTitle,
+            checks: action.checks,
+          })
         },
         onOpenInTerminal: () => {
           openInTerminal(sessionId)
@@ -114,10 +252,110 @@ export function useSessionClose({
     [closeNonDoneSession],
   )
 
+  const cancelDiscardConfirmation = useCallback(() => {
+    setDiscardSnapshot(null)
+  }, [])
+
+  const confirmDiscardChanges = useCallback(() => {
+    if (discardSnapshot === null) return
+    const snapshot = discardSnapshot
+    setDiscardSnapshot(null)
+    startAsyncAction({
+      kind: 'discard',
+      replacesActionId: snapshot.sourceActionId,
+      sessionId: snapshot.sessionId,
+      sessionTitle: snapshot.sessionName,
+      run: async () =>
+        runSessionOperation({
+          type: 'close',
+          sessionId: snapshot.sessionId,
+          keepWorktree: false,
+          stopAndClose: true,
+          discard: discardPayload(snapshot.checks),
+        }).then((result) =>
+          result.match(
+            () => {
+              sessionConversationCache?.clearCachedConversation(
+                snapshot.sessionId,
+              )
+              clearSessionAttachments(snapshot.sessionId)
+              setError(null)
+              return { status: 'closed' as const }
+            },
+            (operationError) => {
+              const checks = operationError.checks
+              if (
+                operationError.code === 'close_checks_changed' &&
+                checks !== undefined &&
+                !checks.commitInspectionUnavailable
+              ) {
+                return {
+                  status: 'deleteChanged' as const,
+                  error: operationError.message,
+                  message: newItemSummary(snapshot.checks, checks),
+                  checks,
+                }
+              }
+              if (operationError.code === 'worktree_process_guard') {
+                const message = runningProcessSummary(checks)
+                return {
+                  status: 'deleteBlocked' as const,
+                  error: operationError.message,
+                  message: message ?? operationError.message,
+                  ...(checks === undefined ? {} : { checks }),
+                }
+              }
+              return {
+                status: 'deleteFailed' as const,
+                error: operationError.message,
+                ...(checks === undefined ? {} : { checks }),
+              }
+            },
+          ),
+        ),
+      onCloseKeepWorktree: () => {
+        closeNonDoneSession(snapshot.sessionId, true)
+      },
+      onOpenInTerminal: () => {
+        openInTerminal(snapshot.sessionId)
+      },
+      onReviewDiscardAgain: (action: AsyncAction) => {
+        if (
+          action.kind !== 'discard' ||
+          action.checks === undefined ||
+          action.checks.commitInspectionUnavailable
+        ) {
+          return
+        }
+        setDiscardSnapshot({
+          sourceActionId: action.id,
+          sessionId: action.sessionId,
+          sessionName: action.sessionTitle,
+          checks: action.checks,
+          previousChecks: snapshot.checks,
+        })
+      },
+    })
+  }, [
+    closeNonDoneSession,
+    discardSnapshot,
+    openInTerminal,
+    runSessionOperation,
+    sessionConversationCache,
+    setError,
+    startAsyncAction,
+  ])
+
+  const discardConfirmation =
+    discardSnapshot === null ? undefined : confirmationView(discardSnapshot)
+
   return {
     confirmationSession,
+    discardConfirmation,
     requestCloseSession,
     cancelCloseConfirmation,
     confirmCloseSession,
+    cancelDiscardConfirmation,
+    confirmDiscardChanges,
   }
 }

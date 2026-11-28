@@ -196,6 +196,21 @@
     align-self: flex-start;
     flex-wrap: wrap;
   }
+  .async-action-activity-list
+    .async-action-item--row.has-close-worktree
+    .async-action-controls--close-options,
+  .async-action-activity-list
+    .async-action-item--row.has-close-worktree
+    .async-action-controls--close-secondary {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .async-action-activity-list
+    .async-action-item--row.has-close-worktree
+    .async-action-controls--discard {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
   .async-action-activity-list .async-action-item--row .async-action-session,
   .async-action-activity-list
     .async-action-item--row
