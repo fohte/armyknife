@@ -32,6 +32,7 @@ mod routes;
 mod skill_suggestions;
 mod subagent_reports;
 mod transcript_path;
+mod withdrawal;
 
 pub(super) use self::conversation::conversation_contains_markdown_source;
 #[cfg(test)]
@@ -53,6 +54,7 @@ use self::questions::QuestionChoice;
 use self::questions::{QuestionPrompt, question_item_from_input};
 use self::routes::MessagesRouteState;
 pub(super) use self::routes::{RouteLoaders, routes_with_proposals_and_peer_out_messages};
+use self::withdrawal::session_ended_at;
 
 pub(in crate::commands::agent::watch_web) mod action_event;
 mod cache;

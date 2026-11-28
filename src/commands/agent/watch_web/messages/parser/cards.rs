@@ -183,14 +183,10 @@ pub(in crate::commands::agent::watch_web::messages) fn cards_from_sources(
                 added_folded: todo.added_folded,
                 completed: todo.completed_at.is_some(),
                 resolution: todo.resolution,
-                session_ended_at: todo
-                    .completed_at
-                    .as_ref()
-                    .filter(|_| {
-                        todo.withdrawal_reason
-                            == Some(crate::commands::agent::store::WithdrawalReason::SessionEnded)
-                    })
-                    .map(chrono::DateTime::to_rfc3339),
+                session_ended_at: super::super::session_ended_at(
+                    todo.withdrawal_reason,
+                    todo.completed_at.as_ref(),
+                ),
                 comment: todo.comment.clone(),
             },
         )

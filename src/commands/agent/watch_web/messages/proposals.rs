@@ -40,14 +40,10 @@ pub(super) fn proposal_chat_item(proposal: &AgentProposal) -> Result<ProposalIte
             answer,
             resolved: proposal.resolved_at.is_some(),
             resolution: proposal.resolution,
-            session_ended_at: proposal
-                .resolved_at
-                .as_ref()
-                .filter(|_| {
-                    proposal.withdrawal_reason
-                        == Some(crate::commands::agent::store::WithdrawalReason::SessionEnded)
-                })
-                .map(DateTime::to_rfc3339),
+            session_ended_at: super::session_ended_at(
+                proposal.withdrawal_reason,
+                proposal.resolved_at.as_ref(),
+            ),
             comment: proposal.comment.clone(),
         },
     })
