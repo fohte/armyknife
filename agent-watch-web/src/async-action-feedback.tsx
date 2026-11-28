@@ -70,6 +70,16 @@ export function AsyncActionFeedbackProvider({
   const openSessionHandlers = useRef(new Map<number, () => void>())
   const timers = useRef(new Map<number, ReturnType<typeof setTimeout>>())
 
+  const removeActionResources = useCallback((id: number) => {
+    runs.current.delete(id)
+    const timer = timers.current.get(id)
+    if (timer !== undefined) clearTimeout(timer)
+    timers.current.delete(id)
+    retryHandlers.current.delete(id)
+    closeActionHandlers.current.delete(id)
+    openSessionHandlers.current.delete(id)
+  }, [])
+
   const dismissToast = useCallback((id: number) => {
     const timer = timers.current.get(id)
     if (timer !== undefined) clearTimeout(timer)
@@ -160,13 +170,7 @@ export function AsyncActionFeedbackProvider({
       const id = nextId.current++
       const replacedActionId = options.replacesActionId
       if (replacedActionId !== undefined) {
-        runs.current.delete(replacedActionId)
-        retryHandlers.current.delete(replacedActionId)
-        closeActionHandlers.current.delete(replacedActionId)
-        openSessionHandlers.current.delete(replacedActionId)
-        const timer = timers.current.get(replacedActionId)
-        if (timer !== undefined) clearTimeout(timer)
-        timers.current.delete(replacedActionId)
+        removeActionResources(replacedActionId)
       }
       runs.current.set(id, options.run)
       if (options.onRetry !== undefined) {
@@ -220,7 +224,7 @@ export function AsyncActionFeedbackProvider({
       void runAction(id, options.run)
       return id
     },
-    [runAction],
+    [removeActionResources, runAction],
   )
 
   const retry = useCallback(
@@ -314,15 +318,9 @@ export function AsyncActionFeedbackProvider({
       current.filter((id) => !finished.has(id)),
     )
     for (const id of finished) {
-      runs.current.delete(id)
-      const timer = timers.current.get(id)
-      if (timer !== undefined) clearTimeout(timer)
-      timers.current.delete(id)
-      retryHandlers.current.delete(id)
-      closeActionHandlers.current.delete(id)
-      openSessionHandlers.current.delete(id)
+      removeActionResources(id)
     }
-  }, [actions])
+  }, [actions, removeActionResources])
 
   const openActivity = useCallback(
     (actionId?: number, anchor?: HTMLElement) => {
