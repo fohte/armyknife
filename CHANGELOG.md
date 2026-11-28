@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.999](https://github.com/fohte/armyknife/compare/v0.1.998...v0.1.999) (2026-11-28)
+
+
+### Features
+
+* **agent-watch-web:** stream usage over SSE ([#2429](https://github.com/fohte/armyknife/issues/2429)) ([86c1431](https://github.com/fohte/armyknife/commit/86c143115d4d3b2bac69d1eeef3864d3db2934a6))
+
 ## [0.1.998](https://github.com/fohte/armyknife/compare/v0.1.997...v0.1.998) (2026-11-28)
 
 
