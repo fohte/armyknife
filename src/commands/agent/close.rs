@@ -338,7 +338,11 @@ fn prepare_close_session<'a, R: CloseRuntime>(
             (Some(pid), true, draft_inspection)
         }
         None if force => (None, true, DraftInspection::NotChecked),
-        None if !matches!(session.status, SessionStatus::Ended | SessionStatus::Paused) => {
+        None if !matches!(
+            session.status,
+            SessionStatus::Ended | SessionStatus::Paused | SessionStatus::Stopped
+        ) =>
+        {
             bail!(
                 "Could not find a running agent process for session `{}`; its pane was left open",
                 session.session_id
@@ -1359,7 +1363,7 @@ mod tests {
     }
 
     #[test]
-    fn close_refuses_to_remove_a_stopped_session_without_a_resolved_agent() {
+    fn close_removes_a_stopped_session_without_a_resolved_agent() {
         let runtime = FakeRuntime {
             draft: None,
             pid: None,
@@ -1367,6 +1371,42 @@ mod tests {
         };
 
         let result = close_session(&session(), false, &runtime);
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                runtime.calls.into_inner()
+            ),
+            (
+                Ok(()),
+                vec![
+                    pane_exists_call(),
+                    pane_session_call(),
+                    resolve_pid_call(Engine::Claude),
+                    pane_exists_call(),
+                    pane_session_call(),
+                    kill_pane_call(),
+                ],
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::running(SessionStatus::Running)]
+    #[case::waiting_for_input(SessionStatus::WaitingInput)]
+    #[case::failed(SessionStatus::Failed)]
+    fn close_refuses_to_remove_a_disallowed_session_without_a_resolved_agent(
+        mut session: Session,
+        #[case] status: SessionStatus,
+    ) {
+        session.status = status;
+        let runtime = FakeRuntime {
+            draft: None,
+            pid: None,
+            ..FakeRuntime::default()
+        };
+
+        let result = close_session_with_stop_and_close(&session, false, true, &runtime);
 
         assert_eq!(
             (result.unwrap_err().to_string(), runtime.calls.into_inner()),
