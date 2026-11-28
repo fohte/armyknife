@@ -25,6 +25,7 @@ type NewSessionPickerProps = {
   isMobile?: boolean
   initialModelPickerOpen?: boolean
   launchPending?: boolean
+  now?: Date
   onClose: () => void
   onLaunched: (launchId: string) => void
 }
@@ -34,6 +35,7 @@ export function NewSessionPicker({
   isMobile = false,
   initialModelPickerOpen = false,
   launchPending = false,
+  now,
   onClose,
   onLaunched,
 }: NewSessionPickerProps) {
@@ -229,6 +231,7 @@ export function NewSessionPicker({
             directories={state.directories}
             error={state.error}
             isLoading={state.isLoadingDirectories}
+            {...(now === undefined ? {} : { now })}
             onActiveIndexChange={setActiveIndex}
             onQueryChange={(query) => {
               state.setDirectoryQuery(query)

@@ -21,6 +21,7 @@ type NewSessionFormProps = {
   initialDirectoryPickerOpen?: boolean
   initialModelPickerOpen?: boolean
   launchPending?: boolean
+  now?: Date
   onClose: () => void
   onLaunched: (launchId: string) => void
   mobileUpdateNotice?: ReactNode
@@ -32,6 +33,7 @@ export function NewSessionForm({
   initialDirectoryPickerOpen = false,
   initialModelPickerOpen = false,
   launchPending = false,
+  now,
   onClose,
   onLaunched,
   mobileUpdateNotice,
@@ -123,6 +125,7 @@ export function NewSessionForm({
               directories={state.directories}
               error={state.error}
               isLoading={state.isLoadingDirectories}
+              {...(now === undefined ? {} : { now })}
               onQueryChange={state.setDirectoryQuery}
               onSelect={(directory) => {
                 state.chooseDirectory(directory)

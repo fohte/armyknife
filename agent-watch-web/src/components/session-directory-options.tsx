@@ -1,3 +1,4 @@
+import { formatLastUsed } from '#components/format-last-used'
 import type { SessionDirectory } from '#new-session-api'
 
 type SessionDirectoryOptionsProps = {
@@ -7,6 +8,7 @@ type SessionDirectoryOptionsProps = {
   query: string
   autoFocus?: boolean
   activeIndex?: number
+  now?: Date
   onQueryChange: (query: string) => void
   onSelect: (directory: SessionDirectory) => void
   onActiveIndexChange?: (index: number) => void
@@ -28,10 +30,13 @@ export function SessionDirectoryOptions({
   query,
   autoFocus = false,
   activeIndex = 0,
+  now,
   onQueryChange,
   onSelect,
   onActiveIndexChange = () => {},
 }: SessionDirectoryOptionsProps) {
+  const currentTime = now ?? new Date()
+
   return (
     <div className="session-directory-options">
       <label className="session-directory-search">
@@ -75,6 +80,11 @@ export function SessionDirectoryOptions({
                 {options.map((directory) => {
                   const index = directories.indexOf(directory)
                   const title = directory.path.split('/').filter(Boolean).at(-1)
+                  const lastUsed =
+                    directory.source === 'recent' &&
+                    directory.lastUsedAt !== undefined
+                      ? formatLastUsed(directory.lastUsedAt, currentTime)
+                      : null
                   return (
                     <button
                       key={`${directory.source}:${directory.path}`}
@@ -90,8 +100,15 @@ export function SessionDirectoryOptions({
                       role="option"
                       type="button"
                     >
-                      <span className="session-directory-option-title">
-                        {title ?? directory.path}
+                      <span className="session-directory-option-title-row">
+                        <span className="session-directory-option-title">
+                          {title ?? directory.path}
+                        </span>
+                        {lastUsed === null ? null : (
+                          <span className="session-directory-option-when">
+                            {lastUsed}
+                          </span>
+                        )}
                       </span>
                       <span className="session-directory-option-path is-monospace">
                         {directory.path}

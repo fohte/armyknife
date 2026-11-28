@@ -10,6 +10,7 @@ const meta = {
   component: NewSessionForm,
   args: {
     state: createNewSessionStoryState(),
+    now: new Date('2026-05-06T12:00:00Z'),
     onClose: () => undefined,
     onLaunched: () => undefined,
   },

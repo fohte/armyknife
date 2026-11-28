@@ -1,3 +1,5 @@
+import '#components/new-session.css'
+
 import type { Meta, StoryObj } from '@storybook/react-vite'
 
 import { SessionDirectoryOptions } from '#components/session-directory-options'
@@ -7,6 +9,7 @@ const meta = {
   component: SessionDirectoryOptions,
   args: {
     directories: exampleSessionDirectories,
+    now: new Date('2026-05-06T12:00:00Z'),
     isLoading: false,
     query: '',
     onQueryChange: () => undefined,
