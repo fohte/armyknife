@@ -66,13 +66,6 @@ export type SessionOperation =
       answers?: Record<string, string>
       skip?: boolean
     }
-  | { type: 'decision_ok'; sessionId: string; seq: number }
-  | {
-      type: 'decision_change'
-      sessionId: string
-      seq: number
-      comment: string
-    }
   | {
       type: 'proposal_answer'
       sessionId: string
@@ -140,9 +133,14 @@ export type SessionOperation =
       expectedPullRequestTarget?: ExpectedPullRequestTarget
     }
 
+export type CloseChangeStatus = 'M' | 'A' | 'D' | 'R' | '??'
+
 export type CloseWorktreeChecks = {
   path: string
   files: string[]
+  changes: { status: CloseChangeStatus; path: string }[]
+  commits: { sha: string; subject: string }[]
+  commitInspectionUnavailable: boolean
   branch: string | null
   merged: boolean | null
   reason: string | null
@@ -165,12 +163,6 @@ function operationKey(operation: SessionOperation) {
   }
   if (operation.type === 'permission_dismiss') {
     return `${operation.sessionId}:permission_dismiss:${String(operation.seq)}`
-  }
-  if (
-    operation.type === 'decision_ok' ||
-    operation.type === 'decision_change'
-  ) {
-    return `${operation.sessionId}:${operation.type}:${String(operation.seq)}`
   }
   if (operation.type === 'merge') {
     return `${operation.sessionId}:merge:${String(operation.number)}:${operation.owner}/${operation.repo}`

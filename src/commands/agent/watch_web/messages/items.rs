@@ -5,7 +5,7 @@ use serde::Serialize;
 
 use crate::commands::agent::proposal::{ProposalAnswer, ProposalOption};
 use crate::commands::agent::store::{
-    AgentDecision, PermissionDeniedResolution, ProposalResolution, TodoResolution,
+    PermissionDeniedResolution, ProposalResolution, TodoResolution,
 };
 
 use super::questions::QuestionPrompt;
@@ -186,17 +186,6 @@ pub(super) enum ChatItem {
         resolved: bool,
         resolution: Option<PermissionDeniedResolution>,
     },
-    Decision {
-        seq: i64,
-        title: String,
-        why: String,
-        considered: Vec<String>,
-        #[serde(rename = "easyToChange")]
-        easy_to_change: String,
-        review: Option<String>,
-        #[serde(rename = "createdAt")]
-        created_at: String,
-    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -218,20 +207,6 @@ pub(super) enum ToolGroupItem {
 
 fn is_false(value: &bool) -> bool {
     !value
-}
-
-impl From<AgentDecision> for ChatItem {
-    fn from(decision: AgentDecision) -> Self {
-        Self::Decision {
-            seq: decision.seq,
-            title: decision.title,
-            why: decision.why,
-            considered: decision.considered,
-            easy_to_change: decision.easy_to_change,
-            review: decision.review,
-            created_at: decision.created_at,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -267,7 +242,6 @@ pub(super) struct ConversationResponse {
     pub(super) skill_suggestions_are_fallback: bool,
     pub(super) start: usize,
     pub(super) total: usize,
-    pub(super) decisions: Vec<ChatItem>,
     pub(super) has_unanswered_proposal: bool,
     pub(super) active_question_index: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]

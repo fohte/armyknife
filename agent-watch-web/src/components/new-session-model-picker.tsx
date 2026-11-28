@@ -96,17 +96,20 @@ function ModelChoices({
           </button>
         ))}
       </div>
+      {error === null ? null : (
+        <p className="new-session-model-state" role="alert">
+          {error}
+        </p>
+      )}
       <h2 className="new-session-model-effort-heading">EFFORT</h2>
       {activeModelOption === undefined ? (
-        <p
-          className="new-session-model-state"
-          role={error === null ? 'status' : 'alert'}
-        >
-          {error ??
-            (isLoading
+        error === null ? (
+          <p className="new-session-model-state" role="status">
+            {isLoading
               ? 'Loading model options…'
-              : 'Effort options are unavailable.')}
-        </p>
+              : 'Effort options are unavailable.'}
+          </p>
+        ) : null
       ) : (
         <div
           aria-label="Reasoning effort"

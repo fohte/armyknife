@@ -5,12 +5,14 @@ import { Filter, X } from 'lucide-react'
 import { type ReactNode, useCallback, useState } from 'react'
 
 import { InboxFilterBar } from '#components/inbox-filter-bar'
+import { InboxSessionList } from '#components/inbox-session-list'
+import { InboxSortControl } from '#components/inbox-sort-control'
 import { InboxViewDialogLayers } from '#components/inbox-view-dialog-layers'
 import { MobileNavigationActions } from '#components/mobile-navigation-actions'
 import { MobileTodoLaterCount } from '#components/mobile-todo-later-count'
 import { filterInboxSessions, parseInboxFilterQuery } from '#inbox-filter'
-import { InboxSessionListItem } from '#inbox-session-list-item'
 import { renderInboxSessionSection } from '#inbox-session-section'
+import { type InboxSort, sortInboxSessions } from '#inbox-sort'
 import { sumTodoLaterCount } from '#inbox-todo-later-count'
 import { formatMobileConnectionTime, nextReturnLabel } from '#inbox-view-utils'
 import type { SavedInboxView } from '#saved-inbox-views'
@@ -18,6 +20,9 @@ import type { Session } from '#types'
 import { useInboxFilterShortcut } from '#use-inbox-filter-shortcut'
 
 type InboxViewProps = {
+  sort?: InboxSort
+  sortStorageAvailable?: boolean
+  onSortChange?: (sort: InboxSort) => void
   sessions: readonly Session[]
   selectedId: string | null
   loaded: boolean
@@ -26,6 +31,8 @@ type InboxViewProps = {
   lastUpdatedAt: number
   showAllInProgress: boolean
   onShowMore: () => void
+  showAllWaiting: boolean
+  onShowMoreWaiting: () => void
   onSelect: (id: string) => void
   onLater?: (id: string) => void
   onCloseSession?: (id: string) => void
@@ -37,6 +44,8 @@ type InboxViewProps = {
   isMobile: boolean
   inProgressExpanded: boolean
   onToggleInProgress: () => void
+  waitingExpanded: boolean
+  onToggleWaiting: () => void
   doneExpanded: boolean
   onToggleDone: () => void
   onCloseDone?: (sessions: readonly Session[]) => void
@@ -63,6 +72,9 @@ type InboxViewProps = {
 }
 
 export function InboxView({
+  sort: inboxSort = 'priority',
+  sortStorageAvailable = true,
+  onSortChange = () => undefined,
   sessions,
   selectedId,
   loaded,
@@ -71,6 +83,8 @@ export function InboxView({
   lastUpdatedAt,
   showAllInProgress,
   onShowMore,
+  showAllWaiting,
+  onShowMoreWaiting,
   onSelect,
   onLater,
   onCloseSession,
@@ -81,6 +95,8 @@ export function InboxView({
   isMobile,
   inProgressExpanded,
   onToggleInProgress,
+  waitingExpanded,
+  onToggleWaiting,
   doneExpanded,
   onToggleDone,
   onCloseDone = () => undefined,
@@ -102,6 +118,7 @@ export function InboxView({
   onNewSession = () => undefined,
   mobileUpdateNotice,
 }: InboxViewProps) {
+  const [sortMenuOpen, setSortMenuOpen] = useState(false)
   const [localFilterQuery, setLocalFilterQuery] = useState('')
   const [localDialogOpen, setLocalDialogOpen] = useState(false)
   const [draftQuery, setDraftQuery] = useState(controlledFilterQuery ?? '')
@@ -115,26 +132,32 @@ export function InboxView({
   const allNeedsActionCount = sessions.filter(
     (session) => session.category === 'needs_action',
   ).length
-  const needsAction = filteredSessions.filter(
-    (session) => session.category === 'needs_action',
+  const needsAction = sortInboxSessions(
+    filteredSessions.filter((session) => session.category === 'needs_action'),
+    inboxSort,
   )
-  const inProgress = filteredSessions.filter(
-    (session) => session.category === 'in_progress',
+  const inProgress = sortInboxSessions(
+    filteredSessions.filter((session) => session.category === 'in_progress'),
+    inboxSort,
+  )
+  const waiting = sortInboxSessions(
+    filteredSessions.filter((session) => session.category === 'waiting'),
+    inboxSort,
   )
   const todoLaterCount = sumTodoLaterCount(inProgress)
-  const done = filteredSessions.filter((session) => session.category === 'done')
+  const done = sortInboxSessions(
+    filteredSessions.filter((session) => session.category === 'done'),
+    inboxSort,
+  )
   const allDone = sessions.filter(
     (session) =>
       session.category === 'done' && (session.todoLaterCount ?? 0) === 0,
   )
-  const unreviewedDoneCount = done.reduce(
-    (count, session) => count + (session.unreviewedDecisionCount ?? 0),
-    0,
-  )
   const connected = connectionError === null
   const lastUpdatedTime = formatMobileConnectionTime(lastUpdatedAt)
-  const later = filteredSessions.filter(
-    (session) => session.category === 'later',
+  const later = sortInboxSessions(
+    filteredSessions.filter((session) => session.category === 'later'),
+    inboxSort,
   )
   const laterTodoLaterCount = sumTodoLaterCount(later)
   const doneTodoLaterCount = sumTodoLaterCount(done)
@@ -173,6 +196,14 @@ export function InboxView({
       ? inProgress
       : inProgress.slice(0, 2)
   const hiddenInProgressCount = inProgress.length - visibleInProgress.length
+  const visibleWaiting = isMobile
+    ? waitingExpanded
+      ? waiting
+      : []
+    : showAllWaiting
+      ? waiting
+      : waiting.slice(0, 2)
+  const hiddenWaitingCount = waiting.length - visibleWaiting.length
 
   return (
     <section className="inbox-view" aria-labelledby="inbox-title">
@@ -201,7 +232,14 @@ export function InboxView({
       {isMobile ? mobileUpdateNotice : null}
       <header className="view-header">
         <h1 id="inbox-title">Inbox</h1>
-        <span className="sort-description">Sorted by tq priority</span>
+        <InboxSortControl
+          sort={inboxSort}
+          storageAvailable={sortStorageAvailable}
+          isMobile={isMobile}
+          open={sortMenuOpen}
+          onOpenChange={setSortMenuOpen}
+          onSortChange={onSortChange}
+        />
       </header>
       <InboxFilterBar
         filters={filters}
@@ -310,6 +348,7 @@ export function InboxView({
           onLater,
           onCloseSession,
           onOpenActions: setActionSheetSession,
+          groupByProject: inboxSort === 'project',
         })}
         <Button
           type="button"
@@ -340,20 +379,57 @@ export function InboxView({
           ) : null}
         </Button>
         {laterExpanded && later.length > 0 ? (
-          <ul className="session-list later-session-list">
-            {later.map((session) => (
-              <InboxSessionListItem
-                key={session.id}
-                session={session}
-                selectedId={selectedId}
-                onSelect={onSelect}
-                isMobile={isMobile}
-                onLater={onLater}
-                onCloseSession={onCloseSession}
-                onOpenActions={setActionSheetSession}
-              />
-            ))}
-          </ul>
+          <InboxSessionList
+            sessions={later}
+            selectedId={selectedId}
+            onSelect={onSelect}
+            isMobile={isMobile}
+            groupByProject={inboxSort === 'project'}
+            className="later-session-list"
+            onLater={onLater}
+            onCloseSession={onCloseSession}
+            onOpenActions={setActionSheetSession}
+          />
+        ) : null}
+        {isMobile && waiting.length > 0 ? (
+          <Button
+            type="button"
+            variant="plain"
+            className="mobile-collapse-row mobile-waiting-row cursor-pointer"
+            aria-expanded={waitingExpanded}
+            onClick={onToggleWaiting}
+          >
+            <span>Waiting</span>
+            <span className="mobile-collapse-count">{waiting.length}</span>
+            <span className="mobile-collapse-chevron" aria-hidden="true">
+              {waitingExpanded ? '⌄' : '›'}
+            </span>
+          </Button>
+        ) : null}
+        {waiting.length > 0
+          ? renderInboxSessionSection({
+              title: 'Waiting',
+              className: 'waiting-section',
+              sessions: visibleWaiting,
+              count: waiting.length,
+              selectedId,
+              onSelect,
+              isMobile,
+              onLater,
+              onCloseSession,
+              onOpenActions: setActionSheetSession,
+            })
+          : null}
+        {hiddenWaitingCount > 0 && !isMobile ? (
+          <Button
+            className="show-more-button cursor-pointer"
+            type="button"
+            variant="plain"
+            aria-expanded={showAllWaiting}
+            onClick={onShowMoreWaiting}
+          >
+            {hiddenWaitingCount} more ▸
+          </Button>
         ) : null}
         <Button
           type="button"
@@ -380,6 +456,7 @@ export function InboxView({
           onLater,
           onCloseSession,
           onOpenActions: setActionSheetSession,
+          groupByProject: inboxSort === 'project',
         })}
         {hiddenInProgressCount > 0 && !isMobile ? (
           <Button
@@ -403,18 +480,9 @@ export function InboxView({
             <span>Done</span>
             <span className="mobile-collapse-count">{done.length}</span>
             <MobileTodoLaterCount count={doneTodoLaterCount} />
-            {unreviewedDoneCount > 0 ? (
-              <span className="mobile-done-review-count">
-                ◇ {String(unreviewedDoneCount)} to review
-                <span className="mobile-collapse-chevron" aria-hidden="true">
-                  {doneExpanded ? '⌄' : '›'}
-                </span>
-              </span>
-            ) : (
-              <span className="mobile-collapse-chevron" aria-hidden="true">
-                {doneExpanded ? '⌄' : '›'}
-              </span>
-            )}
+            <span className="mobile-collapse-chevron" aria-hidden="true">
+              {doneExpanded ? '⌄' : '›'}
+            </span>
           </Button>
           <Button
             type="button"
@@ -442,6 +510,7 @@ export function InboxView({
             onCloseDone(allDone)
           },
           closeAllDisabled: allDone.length === 0,
+          groupByProject: inboxSort === 'project',
         })}
       </div>
       <footer className="inbox-footer" aria-label="Keyboard shortcuts">

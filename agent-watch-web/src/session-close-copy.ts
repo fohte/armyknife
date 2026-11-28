@@ -50,7 +50,7 @@ export function getSessionCloseCopy(session: Session): SessionCloseCopy {
         state: 'Proposal',
         title: 'Close without choosing?',
         description:
-          'It is waiting for you to choose a proposal. Closing ends the session, and the proposal stays unchosen.',
+          'It is waiting for you to choose a proposal. Closing ends the session.',
         confirmLabel: 'Close session',
       }
     case 'Approve':

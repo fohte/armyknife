@@ -49,6 +49,17 @@ export const OtherModelIsSelected: Story = {
   },
 }
 
+export const CachedChoicesHaveARefreshError: Story = {
+  name: 'The cached choices remain visible with a catalog error',
+  args: {
+    variant: 'control',
+    isOpen: true,
+    selectedModel: 'fixture-model-orbit',
+    selectedEffort: 'high',
+    error: 'Model catalog refresh failed.',
+  },
+}
+
 export const PalettePicker: Story = {
   name: 'The command palette shows the model and effort selection view',
   args: { variant: 'palette', isOpen: true },

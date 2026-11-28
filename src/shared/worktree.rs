@@ -66,19 +66,28 @@ pub fn ensure_clean_for_deletion(
     ensure_clean_for_deletion_with(worktree_path, force, &lock_dir, status_from_git)
 }
 
-pub(crate) fn uncommitted_files(worktree_path: &std::path::Path) -> anyhow::Result<Vec<String>> {
+pub(crate) fn uncommitted_changes(
+    worktree_path: &std::path::Path,
+) -> anyhow::Result<Vec<UncommittedChange>> {
     if !worktree_path.is_dir() {
         return Ok(Vec::new());
     }
     let lock_dir = lock::default_lock_dir()?;
-    uncommitted_files_with_status(worktree_path, &lock_dir)
+    uncommitted_changes_with_status(worktree_path, &lock_dir, status_from_git)
 }
 
-fn uncommitted_files_with_status(
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct UncommittedChange {
+    pub(crate) status: String,
+    pub(crate) path: String,
+}
+
+fn uncommitted_changes_with_status(
     worktree_path: &std::path::Path,
     lock_dir: &std::path::Path,
-) -> anyhow::Result<Vec<String>> {
-    uncommitted_files_with(worktree_path, lock_dir, status_from_git)
+    status: impl FnOnce(&std::path::Path) -> anyhow::Result<String>,
+) -> anyhow::Result<Vec<UncommittedChange>> {
+    worktree_changes_with(worktree_path, lock_dir, status).map(|changes| changes.changes)
 }
 
 fn status_from_git(worktree_path: &std::path::Path) -> anyhow::Result<String> {
@@ -88,16 +97,8 @@ fn status_from_git(worktree_path: &std::path::Path) -> anyhow::Result<String> {
     )
 }
 
-fn uncommitted_files_with(
-    worktree_path: &std::path::Path,
-    lock_dir: &std::path::Path,
-    status: impl FnOnce(&std::path::Path) -> anyhow::Result<String>,
-) -> anyhow::Result<Vec<String>> {
-    worktree_changes_with(worktree_path, lock_dir, status).map(|changes| changes.files)
-}
-
 struct WorktreeChanges {
-    files: Vec<String>,
+    changes: Vec<UncommittedChange>,
     is_dirty: bool,
 }
 
@@ -108,7 +109,7 @@ fn worktree_changes_with(
 ) -> anyhow::Result<WorktreeChanges> {
     if !worktree_path.is_dir() {
         return Ok(WorktreeChanges {
-            files: Vec::new(),
+            changes: Vec::new(),
             is_dirty: false,
         });
     }
@@ -116,30 +117,47 @@ fn worktree_changes_with(
         .map_err(|error| worktree_lock_error(error, worktree_path))?;
     if !worktree_path.is_dir() {
         return Ok(WorktreeChanges {
-            files: Vec::new(),
+            changes: Vec::new(),
             is_dirty: false,
         });
     }
-    status(worktree_path).map(|status| WorktreeChanges {
-        is_dirty: !status.is_empty(),
-        files: parse_uncommitted_files(&status),
+    status(worktree_path).map(|status| {
+        let changes = parse_uncommitted_changes(&status);
+        WorktreeChanges {
+            is_dirty: !status.is_empty(),
+            changes,
+        }
     })
 }
 
-fn parse_uncommitted_files(status: &str) -> Vec<String> {
+fn parse_uncommitted_changes(status: &str) -> Vec<UncommittedChange> {
     let mut records = status.split('\0');
-    let mut files = Vec::new();
+    let mut changes = Vec::new();
     while let Some(record) = records.next() {
         if record.len() < 4 {
             continue;
         }
         let status_code = &record[..2];
-        files.push(record[3..].to_string());
+        let status = if status_code == "??" {
+            "??"
+        } else if status_code.contains('R') {
+            "R"
+        } else if status_code.contains('A') {
+            "A"
+        } else if status_code.contains('D') {
+            "D"
+        } else {
+            "M"
+        };
+        changes.push(UncommittedChange {
+            status: status.to_string(),
+            path: record[3..].to_string(),
+        });
         if status_code.contains('R') || status_code.contains('C') {
             let _ = records.next();
         }
     }
-    files
+    changes
 }
 
 fn ensure_clean_for_deletion_with(
@@ -531,17 +549,50 @@ mod tests {
     }
 
     #[test]
-    fn uncommitted_files_use_the_status_paths_including_renames() {
+    fn uncommitted_changes_normalize_status_to_close_dialog_union() {
         let directory = tempfile::tempdir().expect("temporary worktree should be created");
         let lock_dir = tempfile::tempdir().expect("temporary lock directory should be created");
-        let files = uncommitted_files_with(directory.path(), lock_dir.path(), |_| {
-            Ok(" M src/changed.rs\0R  src/renamed.rs\0src/old.rs\0?? src/new.rs\0".into())
+        let changes = uncommitted_changes_with_status(directory.path(), lock_dir.path(), |_| {
+            Ok(" M src/changed.rs\0A  src/added.rs\0 D src/deleted.rs\0R  src/renamed.rs\0src/old.rs\0?? src/new.rs\0 T src/type-changed.rs\0C  src/copied.rs\0src/source.rs\0UU src/conflicted.rs\0".into())
         })
         .expect("status should be parsed");
 
         assert_eq!(
-            files,
-            vec!["src/changed.rs", "src/renamed.rs", "src/new.rs",],
+            changes,
+            vec![
+                UncommittedChange {
+                    status: "M".into(),
+                    path: "src/changed.rs".into()
+                },
+                UncommittedChange {
+                    status: "A".into(),
+                    path: "src/added.rs".into()
+                },
+                UncommittedChange {
+                    status: "D".into(),
+                    path: "src/deleted.rs".into()
+                },
+                UncommittedChange {
+                    status: "R".into(),
+                    path: "src/renamed.rs".into()
+                },
+                UncommittedChange {
+                    status: "??".into(),
+                    path: "src/new.rs".into()
+                },
+                UncommittedChange {
+                    status: "M".into(),
+                    path: "src/type-changed.rs".into()
+                },
+                UncommittedChange {
+                    status: "M".into(),
+                    path: "src/copied.rs".into()
+                },
+                UncommittedChange {
+                    status: "M".into(),
+                    path: "src/conflicted.rs".into()
+                },
+            ],
         );
     }
 
@@ -558,17 +609,18 @@ mod tests {
                 status_calls.set(status_calls.get() + 1);
                 Ok(String::new())
             });
-        let files_result = uncommitted_files_with(worktree.path(), lock_dir.path(), |_| {
-            status_calls.set(status_calls.get() + 1);
-            Ok(String::new())
-        });
+        let changes_result =
+            uncommitted_changes_with_status(worktree.path(), lock_dir.path(), |_| {
+                status_calls.set(status_calls.get() + 1);
+                Ok(String::new())
+            });
         let observed = (
             ensure_result
                 .as_ref()
                 .err()
                 .and_then(|error| error.downcast_ref::<WorktreeDeletionInProgressError>())
                 .is_some(),
-            files_result
+            changes_result
                 .as_ref()
                 .err()
                 .and_then(|error| error.downcast_ref::<WorktreeDeletionInProgressError>())

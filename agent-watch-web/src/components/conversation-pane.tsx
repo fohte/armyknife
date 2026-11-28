@@ -326,12 +326,7 @@ export function ConversationPane({
     onOpenCritInFullscreen,
     onOpenWebUiInFullscreen,
     mobileWebUi,
-    onDecisionJumpComplete,
-    onDecisionJumpSucceeded,
-    onSelectDecision,
-    decisionJump,
     onTabChange,
-    selectedDecisionSeq,
     tabs: panelTabs,
     pullRequestListTarget,
   } = useConversationStatusPanel({
@@ -343,8 +338,6 @@ export function ConversationPane({
       : {
           onRetryReviewDocumentSummaries: editorReviewDocument.retrySummaries,
         }),
-    messages,
-    allDecisions: displayedConversation.decisions,
     backgroundTasks,
     sessionTree,
     sessionTreeError,
@@ -382,7 +375,6 @@ export function ConversationPane({
       start={displayedConversation.start}
       epoch={conversation.epoch}
       olderCursor={conversation.olderCursor}
-      decisions={displayedConversation.decisions}
       hasUnansweredProposal={displayedConversation.hasUnansweredProposal}
       loadingOlder={loadingOlder}
       onLoadOlder={loadOlder}
@@ -424,12 +416,7 @@ export function ConversationPane({
       }}
       isMobile={isMobile}
       statusPanelOpen={statusPanelOpen}
-      selectedDecisionSeq={selectedDecisionSeq}
-      decisionJump={decisionJump}
-      onDecisionJumpComplete={onDecisionJumpComplete}
-      onDecisionJumpSucceeded={onDecisionJumpSucceeded}
       onToggleStatusPanel={onToggleStatusPanel}
-      onSelectDecision={onSelectDecision}
       mobileStatusPanel={statusPanel}
       pullRequestListTarget={pullRequestListTarget}
       mobileNavOpen={mobileNavOpen}

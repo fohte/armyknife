@@ -1,6 +1,10 @@
 use std::path::Path;
 
 pub(super) fn is_session_store_change(event: &notify::Event) -> bool {
+    if event.need_rescan() {
+        return true;
+    }
+
     let is_database_file = |path: &Path| {
         path.file_name()
             .and_then(|name| name.to_str())
@@ -24,6 +28,7 @@ pub(super) fn is_session_store_change(event: &notify::Event) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use notify::event::Flag;
     use rstest::rstest;
     use std::path::PathBuf;
 
@@ -119,6 +124,14 @@ mod tests {
         };
 
         let expected = true;
+        assert_eq!(is_session_store_change(&event), expected);
+    }
+
+    #[test]
+    fn accepts_rescan_events_without_database_paths() {
+        let event = notify::Event::new(notify::EventKind::Other).set_flag(Flag::Rescan);
+        let expected = true;
+
         assert_eq!(is_session_store_change(&event), expected);
     }
 }

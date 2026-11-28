@@ -251,7 +251,7 @@ it('fits the empty phone sheet to its content and shows the dimmed backdrop', as
   expect(snapshot()).toEqual({
     emptyMessages: [
       'No recent activity.',
-      'Merge, Close, Rewind and command results appear here.',
+      'Launches, merges, closes, rewinds, and command results appear here.',
     ],
     contentSized: true,
     closeButtonHeight: 44,

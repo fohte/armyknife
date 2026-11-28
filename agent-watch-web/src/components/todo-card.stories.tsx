@@ -70,6 +70,26 @@ export const TodoShowsMarkdownCodeBlock: Story = {
   },
 }
 
+export const TodoShowsAServedImageInItsDetail: Story = {
+  name: 'A to-do shows a served image in its detail',
+  args: {
+    defaultDetailExpanded: true,
+    detail: '![Sample screenshot](/Users/guest/screenshot.png)',
+    imageSources: {
+      '/Users/guest/screenshot.png': '/card-comment-attachment.svg',
+    },
+  },
+}
+
+export const TodoShowsWhenItsImageIsUnavailable: Story = {
+  name: 'A to-do explains when its local image is unavailable',
+  args: {
+    defaultDetailExpanded: true,
+    detail: '![Sample screenshot](/Users/guest/screenshot.png)',
+    imageSources: {},
+  },
+}
+
 export const TodoHasNoAdditionalDetail: Story = {
   name: 'A to-do shows only its title when it has no detail',
   args: { detail: null },

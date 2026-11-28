@@ -570,10 +570,32 @@ fn process_hook_event_impl_with_env_and_unreported_stop(
 
     let startup_metadata = startup_metadata_for_resume(sessions_dir, &input)?;
 
-    // Resolved once and shared by the pane option, the pane takeover check and
-    // `Session::tmux_info` below: all three want the same pane, and the lookup
-    // shells out to tmux.
-    let pane_info = side_effects.resolve_pane(&input);
+    // Pane lookup stays per event because `Session::tmux_info` follows pane changes.
+    // Unavailable ancestry is not cached so a transient process lookup can recover.
+    let is_session_start = event == HookEvent::SessionStart;
+    let (mut stored_session, cached_has_parent_agent) = if is_session_start {
+        (None, None)
+    } else {
+        store::load_hook_session_state_from(sessions_dir, &input.session_id)?
+    };
+    let pane_resolution =
+        side_effects.resolve_pane(&input, is_session_start, cached_has_parent_agent);
+    let pane_info = pane_resolution.pane_info;
+    if is_session_start {
+        store::set_has_parent_agent_process_from(
+            sessions_dir,
+            &input.session_id,
+            pane_resolution.has_parent_agent,
+        )?;
+    } else if cached_has_parent_agent.is_none()
+        && let Some(has_parent_agent) = pane_resolution.has_parent_agent
+    {
+        store::set_has_parent_agent_process_from(
+            sessions_dir,
+            &input.session_id,
+            Some(has_parent_agent),
+        )?;
+    }
 
     // A `claude -c` resume can emit startup for a temporary ID; watch-web's
     // launch ID identifies a new session that can be bound before its first prompt.
@@ -716,7 +738,9 @@ fn process_hook_event_impl_with_env_and_unreported_stop(
     // saved separately, after this lock is released -- see the comment at
     // its update below.
     let now = Utc::now();
-    let stored_session = store::load_session_from(sessions_dir, &input.session_id)?;
+    if is_session_start {
+        stored_session = store::load_session_from(sessions_dir, &input.session_id)?;
+    }
     let current_model = stored_session
         .as_ref()
         .and_then(|session| session.model.as_deref());
@@ -1050,6 +1074,10 @@ fn process_hook_event_impl_with_env_and_unreported_stop(
         if let Some(compacting) = compacting {
             session_lock.queue_watch_web_compacting(compacting);
         }
+    }
+
+    if event == HookEvent::SessionStart && input.agent_id.is_none() {
+        session_lock.record_watch_web_session_start()?;
     }
 
     if vibe_setting_requested {
@@ -2229,14 +2257,54 @@ mod tests {
         side_effects: SideEffects,
     }
 
+    type PaneBindingResolveCall = (bool, Option<bool>);
+    type PaneBindingResolveCallSink = std::sync::Arc<std::sync::Mutex<Vec<PaneBindingResolveCall>>>;
+
     struct RecordingPaneBinding {
         pane_info: tmux::PaneInfo,
         option_writes: std::sync::Arc<std::sync::Mutex<Vec<(String, String, String)>>>,
+        resolve_calls: PaneBindingResolveCallSink,
+        session_start_calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        classification_checks: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        fallback_has_parent_agent:
+            std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<Option<bool>>>>,
     }
 
     impl PaneBindingOperations for RecordingPaneBinding {
-        fn resolve(&self, _input: &HookInput) -> Option<tmux::PaneInfo> {
-            Some(self.pane_info.clone())
+        fn resolve(
+            &self,
+            _input: &HookInput,
+            is_session_start: bool,
+            cached_has_parent_agent: Option<bool>,
+        ) -> pane_binding::Resolution {
+            self.resolve_calls
+                .lock()
+                .expect("pane binding resolve calls lock should not be poisoned")
+                .push((is_session_start, cached_has_parent_agent));
+            let has_parent_agent = if is_session_start {
+                Some(
+                    self.session_start_calls
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                        > 0,
+                )
+            } else {
+                match cached_has_parent_agent {
+                    Some(state) => Some(state),
+                    None => {
+                        self.classification_checks
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        self.fallback_has_parent_agent
+                            .lock()
+                            .expect("classification result queue lock should not be poisoned")
+                            .pop_front()
+                            .unwrap_or(None)
+                    }
+                }
+            };
+            pane_binding::Resolution {
+                pane_info: (has_parent_agent == Some(false)).then(|| self.pane_info.clone()),
+                has_parent_agent,
+            }
         }
 
         fn set_session_id(&self, pane_id: &str, session_id: &str) {
@@ -2548,6 +2616,9 @@ mod tests {
             ..EnvVars::default()
         };
         let option_writes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let resolve_calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let session_start_calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let classification_checks = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let pane_info = tmux::PaneInfo {
             session_name: "main".to_string(),
             window_name: "claude".to_string(),
@@ -2558,6 +2629,12 @@ mod tests {
             pane_binding: Some(std::sync::Arc::new(RecordingPaneBinding {
                 pane_info,
                 option_writes: option_writes.clone(),
+                resolve_calls: resolve_calls.clone(),
+                session_start_calls,
+                classification_checks: classification_checks.clone(),
+                fallback_has_parent_agent: std::sync::Arc::new(std::sync::Mutex::new(
+                    std::collections::VecDeque::new(),
+                )),
             })),
             ..SideEffects::none()
         };
@@ -2607,6 +2684,177 @@ mod tests {
                     TMUX_SESSION_OPTION.to_string(),
                     "test-123".to_string(),
                 )],
+            ),
+        );
+    }
+
+    #[test]
+    fn hook_reuses_session_pane_classification_and_retries_unknown_state() {
+        let temp_dir = tempfile::TempDir::new().expect("temporary directory should be created");
+        let resolve_calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let session_start_calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let classification_checks = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let side_effects = SideEffects {
+            pane_binding: Some(std::sync::Arc::new(RecordingPaneBinding {
+                pane_info: tmux::PaneInfo {
+                    session_name: "main".to_string(),
+                    window_name: "claude".to_string(),
+                    window_index: 0,
+                    pane_id: "%42".to_string(),
+                },
+                option_writes: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+                resolve_calls: resolve_calls.clone(),
+                session_start_calls,
+                classification_checks: classification_checks.clone(),
+                fallback_has_parent_agent: std::sync::Arc::new(std::sync::Mutex::new(
+                    std::collections::VecDeque::from([None, Some(false)]),
+                )),
+            })),
+            ..SideEffects::none()
+        };
+        process_hook_event_impl_with_env(
+            HookEvent::SessionStart,
+            create_test_input_with_source(None, Some("startup")),
+            temp_dir.path(),
+            &side_effects,
+            None,
+            EnvVars {
+                session_launch_id: Some("launch-fixture".to_string()),
+                ..EnvVars::default()
+            },
+        )
+        .expect("startup should save the session classification");
+
+        process_hook_event_impl_with_env(
+            HookEvent::PostToolUse,
+            create_test_input_with_source(None, None),
+            temp_dir.path(),
+            &side_effects,
+            None,
+            EnvVars::default(),
+        )
+        .expect("tool event should use the saved pane classification");
+        let session = store::load_session_from(temp_dir.path(), "test-123")
+            .expect("session should load")
+            .expect("session should exist");
+        assert_eq!(
+            (
+                store::load_hook_session_state_from(temp_dir.path(), "test-123")
+                    .expect("hook state should load")
+                    .1,
+                resolve_calls
+                    .lock()
+                    .expect("pane binding resolve calls lock should not be poisoned")
+                    .clone(),
+                session.tmux_info.map(|info| info.pane_id),
+            ),
+            (
+                Some(false),
+                vec![(true, None), (false, Some(false))],
+                Some("%42".to_string()),
+            ),
+        );
+
+        let mut subagent_input = create_test_input_with_source(None, None);
+        subagent_input.agent_id = Some("fixture-agent-cobalt".to_string());
+        process_hook_event_impl_with_env(
+            HookEvent::PostToolUse,
+            subagent_input,
+            temp_dir.path(),
+            &side_effects,
+            None,
+            EnvVars::default(),
+        )
+        .expect("a subagent should reuse the session classification");
+        store::set_has_parent_agent_process_from(temp_dir.path(), "test-123", None)
+            .expect("session classification should be unavailable");
+        process_hook_event_impl_with_env(
+            HookEvent::PostToolUse,
+            create_test_input_with_source(None, None),
+            temp_dir.path(),
+            &side_effects,
+            None,
+            EnvVars::default(),
+        )
+        .expect("missing classification should trigger one fallback check");
+        process_hook_event_impl_with_env(
+            HookEvent::PostToolUse,
+            create_test_input_with_source(None, None),
+            temp_dir.path(),
+            &side_effects,
+            None,
+            EnvVars::default(),
+        )
+        .expect("the next fallback should recover the classification");
+        process_hook_event_impl_with_env(
+            HookEvent::PostToolUse,
+            create_test_input_with_source(None, None),
+            temp_dir.path(),
+            &side_effects,
+            None,
+            EnvVars::default(),
+        )
+        .expect("a recovered classification should be reused");
+        let session = store::load_session_from(temp_dir.path(), "test-123")
+            .expect("session should load")
+            .expect("session should exist");
+        assert_eq!(
+            (
+                store::load_hook_session_state_from(temp_dir.path(), "test-123")
+                    .expect("hook state should load")
+                    .1,
+                resolve_calls
+                    .lock()
+                    .expect("pane binding resolve calls lock should not be poisoned")
+                    .clone(),
+                classification_checks.load(std::sync::atomic::Ordering::Relaxed),
+                session.tmux_info.map(|info| info.pane_id),
+            ),
+            (
+                Some(false),
+                vec![
+                    (true, None),
+                    (false, Some(false)),
+                    (false, Some(false)),
+                    (false, None),
+                    (false, None),
+                    (false, Some(false)),
+                ],
+                2,
+                Some("%42".to_string()),
+            ),
+        );
+
+        process_hook_event_impl_with_env(
+            HookEvent::SessionStart,
+            create_test_input_with_source(None, None),
+            temp_dir.path(),
+            &side_effects,
+            None,
+            EnvVars::default(),
+        )
+        .expect("a later SessionStart should refresh the saved classification");
+        assert_eq!(
+            (
+                store::load_hook_session_state_from(temp_dir.path(), "test-123")
+                    .expect("hook state should load")
+                    .1,
+                resolve_calls
+                    .lock()
+                    .expect("pane binding resolve calls lock should not be poisoned")
+                    .clone(),
+            ),
+            (
+                Some(true),
+                vec![
+                    (true, None),
+                    (false, Some(false)),
+                    (false, Some(false)),
+                    (false, None),
+                    (false, None),
+                    (false, Some(false)),
+                    (true, None),
+                ],
             ),
         );
     }
@@ -6219,6 +6467,41 @@ mod tests {
                 result, expected_result,
                 "source={:?} should return {:?}",
                 source, expected_result
+            );
+        }
+
+        #[test]
+        fn resume_session_start_advances_watch_web_generation() {
+            let temp_dir = create_temp_sessions_dir();
+            let first_input = create_test_input_with_source(None, Some("resume"));
+
+            process_hook_event_impl(
+                HookEvent::SessionStart,
+                first_input,
+                temp_dir.path(),
+                &SideEffects::none(),
+            )
+            .expect("resume SessionStart should save the session");
+            let first_generation =
+                store::watch_web_session_start_generation_from(temp_dir.path(), "test-123")
+                    .expect("first session start generation should load");
+
+            let second_input = create_test_input_with_source(None, Some("resume"));
+            process_hook_event_impl(
+                HookEvent::SessionStart,
+                second_input,
+                temp_dir.path(),
+                &SideEffects::none(),
+            )
+            .expect("second resume SessionStart should save the session");
+
+            assert_eq!(
+                (
+                    first_generation,
+                    store::watch_web_session_start_generation_from(temp_dir.path(), "test-123",)
+                        .expect("second session start generation should load"),
+                ),
+                (1, 2),
             );
         }
 

@@ -143,10 +143,25 @@ pub(crate) fn load_session_from(sessions_dir: &Path, session_id: &str) -> Result
     database::load_session(sessions_dir, session_id)
 }
 
+pub(crate) fn load_hook_session_state_from(
+    sessions_dir: &Path,
+    session_id: &str,
+) -> Result<(Option<Session>, Option<bool>)> {
+    database::load_hook_session_state(sessions_dir, session_id)
+}
+
 /// Saves a session to the database in a specific directory.
 /// Allows testing with temporary directories.
 pub(crate) fn save_session_to(sessions_dir: &Path, session: &Session) -> Result<()> {
     database::save_session(sessions_dir, session)
+}
+
+pub(crate) fn set_has_parent_agent_process_from(
+    sessions_dir: &Path,
+    session_id: &str,
+    has_parent_agent: Option<bool>,
+) -> Result<()> {
+    database::set_has_parent_agent_process(sessions_dir, session_id, has_parent_agent)
 }
 
 pub(crate) fn agent_response_timestamps_from(
@@ -235,6 +250,10 @@ pub(crate) fn insert_agent_decision(
     )
 }
 
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "Part of the persisted agent decision API.")
+)]
 pub(crate) fn agent_decisions_from(
     sessions_dir: &Path,
     session_id: &str,
@@ -242,12 +261,20 @@ pub(crate) fn agent_decisions_from(
     database::agent_decisions(sessions_dir, session_id)
 }
 
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "Part of the persisted agent decision API.")
+)]
 pub(crate) fn agent_decision_counts_by_session_from(
     sessions_dir: &Path,
 ) -> Result<HashMap<String, AgentDecisionCounts>> {
     database::agent_decision_counts_by_session(sessions_dir)
 }
 
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "Part of the persisted agent decision API.")
+)]
 pub(crate) fn set_agent_decision_review_from(
     sessions_dir: &Path,
     session_id: &str,
@@ -787,6 +814,13 @@ pub(crate) fn watch_web_session_states_from(
     sessions_dir: &Path,
 ) -> Result<Vec<WatchWebSessionState>> {
     database::watch_web_session_states(sessions_dir)
+}
+
+pub(crate) fn watch_web_session_start_generation_from(
+    sessions_dir: &Path,
+    session_id: &str,
+) -> Result<i64> {
+    database::watch_web_session_start_generation(sessions_dir, session_id)
 }
 
 pub(crate) fn set_watch_web_later(

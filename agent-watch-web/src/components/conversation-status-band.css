@@ -77,6 +77,11 @@
   background: var(--aw-color-neutral);
 }
 
+.conversation-status-band-hourglass {
+  flex: 0 0 auto;
+  color: var(--aw-color-neutral);
+}
+
 .conversation-status-band-label {
   flex: 0 0 auto;
   font-size: 13px;

@@ -12,6 +12,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::error::{Result, TqError};
+use super::events::TqEventSubscription;
 use crate::infra::external_tool::ExternalTool;
 use crate::infra::process;
 
@@ -127,6 +128,11 @@ impl TqClient {
     /// integration is then simply skipped, not treated as an error.
     pub fn detect() -> Option<Self> {
         ExternalTool::Tq.is_available().then_some(Self)
+    }
+
+    /// Subscribes to changes streamed by `tq events`.
+    pub fn subscribe_events(&self) -> TqEventSubscription {
+        super::events::start_subscription()
     }
 
     /// Lists the tq-linked tasks for the given `session_ids`; only those

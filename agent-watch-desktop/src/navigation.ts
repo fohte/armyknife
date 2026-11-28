@@ -43,3 +43,15 @@ export const isAllowedWatchUrl = (
     parsedUrl.value.origin === parsedOrigin.value.origin
   )
 }
+
+export const isWatchAppPageUrl = (url: string, watchUrl: string): boolean => {
+  const parsedUrl = parseUrl(url)
+  const parsedWatchUrl = parseUrl(watchUrl)
+
+  return (
+    parsedUrl.isOk() &&
+    parsedWatchUrl.isOk() &&
+    parsedUrl.value.origin === parsedWatchUrl.value.origin &&
+    parsedUrl.value.pathname === parsedWatchUrl.value.pathname
+  )
+}

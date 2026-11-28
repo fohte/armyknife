@@ -28,6 +28,7 @@ function PickerHarness({
   selectedModel = null,
   selectedEffort = null,
   activeModelOption = exampleModelOptions.models[0],
+  modelOptionsError = null,
   initialModelPickerOpen = false,
 }: {
   start: NewSessionState['start']
@@ -38,6 +39,7 @@ function PickerHarness({
   selectedModel?: NewSessionState['selectedModel']
   selectedEffort?: NewSessionState['selectedEffort']
   activeModelOption?: NewSessionState['activeModelOption']
+  modelOptionsError?: NewSessionState['modelOptionsError']
   initialModelPickerOpen?: boolean
 }) {
   const [selectedDirectory, setSelectedDirectory] = useState<
@@ -52,10 +54,9 @@ function PickerHarness({
     engine,
     modelOptions: exampleModelOptions,
     isLoadingModelOptions: false,
-    modelOptionsError: null,
+    modelOptionsError,
     selectedModel,
     selectedEffort,
-    modelChangeNotice: null,
     activeModelOption,
     worktree,
     initialMessage: '',
@@ -68,7 +69,6 @@ function PickerHarness({
     setEngine,
     chooseModel,
     setSelectedEffort,
-    undoEngineChange: () => undefined,
     setWorktree,
     setInitialMessage: () => undefined,
     start,
@@ -340,6 +340,38 @@ it('shows the profile model in Default while another model is selected', () => {
       '.new-session-model-option .new-session-model-detail',
     )?.textContent,
   ).toEqual('fixture-model-orbit')
+})
+
+it('shows a catalog error alongside cached model and effort choices', () => {
+  const start = vi.fn<NewSessionState['start']>(() => Promise.resolve())
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <PickerHarness
+        initialModelPickerOpen
+        modelOptionsError="Model catalog refresh failed."
+        selectedDirectory={exampleSessionDirectories[0] ?? null}
+        selectedEffort="high"
+        selectedModel="fixture-model-orbit"
+        start={start}
+      />,
+    )
+  })
+
+  const snapshot = () => ({
+    alert: container.querySelector('[role="alert"]')?.textContent,
+    checkedModel: container.querySelector(
+      '[aria-label="Model"] [aria-checked="true"]',
+    )?.textContent,
+    checkedEffort: container.querySelector(
+      '[aria-label="Reasoning effort"] [aria-checked="true"]',
+    )?.textContent,
+  })
+  expect(snapshot()).toEqual({
+    alert: 'Model catalog refresh failed.',
+    checkedModel: 'Orbitup to high',
+    checkedEffort: 'high',
+  })
 })
 
 it('closes the picker when Enter activates the close button', async () => {

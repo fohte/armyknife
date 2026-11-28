@@ -23,6 +23,7 @@ type ProposalCardProps = {
   seq: number
   title: string
   summary: string | null
+  imageSources?: Readonly<Record<string, string | null>>
   options: ProposalOption[]
   answer: ProposalAnswer | null
   resolved: boolean
@@ -41,6 +42,7 @@ export function ProposalCard({
   seq,
   title,
   summary,
+  imageSources,
   options,
   answer,
   resolved,
@@ -241,7 +243,10 @@ export function ProposalCard({
       <h2>Proposal · {status}</h2>
       <h3>{title}</h3>
       {summary !== null ? (
-        <MarkdownMessage className="chat-proposal-summary">
+        <MarkdownMessage
+          className="chat-proposal-summary"
+          {...(imageSources === undefined ? {} : { imageSources })}
+        >
           {summary}
         </MarkdownMessage>
       ) : null}
@@ -291,7 +296,10 @@ export function ProposalCard({
                 ) : null}
               </div>
               {option.description !== null ? (
-                <MarkdownMessage className="chat-proposal-option-description">
+                <MarkdownMessage
+                  className="chat-proposal-option-description"
+                  {...(imageSources === undefined ? {} : { imageSources })}
+                >
                   {option.description}
                 </MarkdownMessage>
               ) : null}
@@ -314,7 +322,10 @@ export function ProposalCard({
         ))}
       </div>
       {latestAnswer?.comment != null ? (
-        <MarkdownMessage className="chat-proposal-answer-comment">
+        <MarkdownMessage
+          className="chat-proposal-answer-comment"
+          {...(imageSources === undefined ? {} : { imageSources })}
+        >
           {latestAnswer.comment}
         </MarkdownMessage>
       ) : (
@@ -326,7 +337,9 @@ export function ProposalCard({
             Comment (optional)
           </label>
           <div className="chat-card-comment-drop-zone">
-            {isFileDragActive ? <FileDropIndicator /> : null}
+            {isFileDragActive ? (
+              <FileDropIndicator label="Drop files to attach" variant="card" />
+            ) : null}
             <textarea
               id={`${proposalFieldId}-comment`}
               className="chat-card-comment chat-proposal-comment"

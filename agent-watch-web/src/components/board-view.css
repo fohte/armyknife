@@ -198,6 +198,10 @@
   color: var(--aw-color-warning);
 }
 
+.board-group.waiting h3 {
+  color: var(--aw-text-muted);
+}
+
 .board-group.in-progress h3 {
   color: var(--aw-color-working);
 }

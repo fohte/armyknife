@@ -340,7 +340,7 @@ export function clearConversationAnchorOffsets(
   }
 }
 
-export function clearConversationScrollCompensation(
+function clearConversationScrollCompensation(
   scrollContainer: HTMLDivElement,
   anchorLayout: readonly ConversationChildLayout[],
   anchorOffsets: Map<HTMLElement, ConversationAnchorSpacing>,

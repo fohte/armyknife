@@ -1,5 +1,215 @@
 # Changelog
 
+## [0.1.997](https://github.com/fohte/armyknife/compare/v0.1.996...v0.1.997) (2026-11-28)
+
+
+### Features
+
+* **agent-watch-web:** separate engine selections ([#2425](https://github.com/fohte/armyknife/issues/2425)) ([ebd02a5](https://github.com/fohte/armyknife/commit/ebd02a5ea19c9eba68ef3864c91a9cdc1a9ff204))
+
+## [0.1.996](https://github.com/fohte/armyknife/compare/v0.1.995...v0.1.996) (2026-11-28)
+
+
+### Features
+
+* **infra/tq:** support tq event subscriptions ([#2423](https://github.com/fohte/armyknife/issues/2423)) ([fd5d1fb](https://github.com/fohte/armyknife/commit/fd5d1fb6789885f8bea097a529d51f867d299570))
+
+## [0.1.995](https://github.com/fohte/armyknife/compare/v0.1.994...v0.1.995) (2026-11-28)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** remove stale proposal claim ([#2421](https://github.com/fohte/armyknife/issues/2421)) ([8d668cb](https://github.com/fohte/armyknife/commit/8d668cb891e28b558280bb58f18a0781d1523dc0))
+
+## [0.1.994](https://github.com/fohte/armyknife/compare/v0.1.993...v0.1.994) (2026-11-28)
+
+
+### Bug Fixes
+
+* **agent/close:** close stopped sessions ([#2419](https://github.com/fohte/armyknife/issues/2419)) ([bf9e040](https://github.com/fohte/armyknife/commit/bf9e040884b24d1bfcda42655d508c882d4a1122))
+
+## [0.1.993](https://github.com/fohte/armyknife/compare/v0.1.992...v0.1.993) (2026-11-28)
+
+
+### Features
+
+* **agent-watch-desktop:** hide macOS title bar ([#2417](https://github.com/fohte/armyknife/issues/2417)) ([98be6b9](https://github.com/fohte/armyknife/commit/98be6b9db8e3bbefe669a4a90bb0e8393cc355af))
+
+## [0.1.992](https://github.com/fohte/armyknife/compare/v0.1.991...v0.1.992) (2026-11-28)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** render details correctly ([#2413](https://github.com/fohte/armyknife/issues/2413)) ([48c83f6](https://github.com/fohte/armyknife/commit/48c83f6d84c606f266123124a1e01470671b4c70))
+
+## [0.1.991](https://github.com/fohte/armyknife/compare/v0.1.990...v0.1.991) (2026-11-28)
+
+
+### Bug Fixes
+
+* **watch-web:** avoid full transcript reparses ([#2345](https://github.com/fohte/armyknife/issues/2345)) ([e561852](https://github.com/fohte/armyknife/commit/e5618528d29671ad6583322cb50bcb5704b462b7))
+
+## [0.1.990](https://github.com/fohte/armyknife/compare/v0.1.989...v0.1.990) (2026-11-28)
+
+
+### Performance Improvements
+
+* **agent/hook:** cache nested status per session ([#2412](https://github.com/fohte/armyknife/issues/2412)) ([c659ae4](https://github.com/fohte/armyknife/commit/c659ae4499b1387dc1eb93618085282c5bacef91))
+
+## [0.1.989](https://github.com/fohte/armyknife/compare/v0.1.988...v0.1.989) (2026-11-27)
+
+
+### Features
+
+* **agent-watch-web:** separate waiting sessions ([#2404](https://github.com/fohte/armyknife/issues/2404)) ([f065c16](https://github.com/fohte/armyknife/commit/f065c161976eac2b55f32872f9b88e6553d128ca))
+
+## [0.1.988](https://github.com/fohte/armyknife/compare/v0.1.987...v0.1.988) (2026-11-27)
+
+
+### Features
+
+* **agent/watch-web:** stream task output live ([#2398](https://github.com/fohte/armyknife/issues/2398)) ([ac010cb](https://github.com/fohte/armyknife/commit/ac010cb12cc290280664fa14b76903bbe2cec8b3))
+
+## [0.1.987](https://github.com/fohte/armyknife/compare/v0.1.986...v0.1.987) (2026-11-27)
+
+
+### Bug Fixes
+
+* **agent/hook:** avoid ps forks in ancestry checks ([#2399](https://github.com/fohte/armyknife/issues/2399)) ([f5e0ea0](https://github.com/fohte/armyknife/commit/f5e0ea0bdd1c02ca6155ad298e07fb9e6fee43b0))
+
+## [0.1.986](https://github.com/fohte/armyknife/compare/v0.1.985...v0.1.986) (2026-11-27)
+
+
+### Features
+
+* **agent/watch-web:** expose resume startup state ([#2396](https://github.com/fohte/armyknife/issues/2396)) ([9165007](https://github.com/fohte/armyknife/commit/916500792eb593f07d807407fa11db7f23f1533d))
+
+## [0.1.985](https://github.com/fohte/armyknife/compare/v0.1.984...v0.1.985) (2026-11-27)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** truncate long session labels ([#2371](https://github.com/fohte/armyknife/issues/2371)) ([4ac9182](https://github.com/fohte/armyknife/commit/4ac918288350e857f502a6a83c05102a07de3b54))
+
+## [0.1.984](https://github.com/fohte/armyknife/compare/v0.1.983...v0.1.984) (2026-11-27)
+
+
+### Features
+
+* **agent-watch:** accept files on session launch ([#2390](https://github.com/fohte/armyknife/issues/2390)) ([8cf9ea1](https://github.com/fohte/armyknife/commit/8cf9ea19a598b5b3be25be2204eb0def09f9037c))
+
+## [0.1.983](https://github.com/fohte/armyknife/compare/v0.1.982...v0.1.983) (2026-11-27)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show card images ([#2392](https://github.com/fohte/armyknife/issues/2392)) ([0305e8f](https://github.com/fohte/armyknife/commit/0305e8f520fd71c6b3f05838e91a6a7fde6d2da1))
+
+## [0.1.982](https://github.com/fohte/armyknife/compare/v0.1.981...v0.1.982) (2026-11-27)
+
+
+### Features
+
+* **agent-watch-web:** return close check details ([#2393](https://github.com/fohte/armyknife/issues/2393)) ([6c77722](https://github.com/fohte/armyknife/commit/6c777221781d97f35c734209a896aa95266d32c9))
+
+## [0.1.981](https://github.com/fohte/armyknife/compare/v0.1.980...v0.1.981) (2026-11-27)
+
+
+### Features
+
+* **agent-watch-web:** add pane snapshot API ([#2385](https://github.com/fohte/armyknife/issues/2385)) ([6ba36d2](https://github.com/fohte/armyknife/commit/6ba36d2a91c03caa3363dca6f5e65a7ab240b099))
+
+## [0.1.980](https://github.com/fohte/armyknife/compare/v0.1.979...v0.1.980) (2026-11-27)
+
+
+### Features
+
+* **agent-watch-web:** apply Composer to replies ([#2383](https://github.com/fohte/armyknife/issues/2383)) ([15a6f45](https://github.com/fohte/armyknife/commit/15a6f45ab5fa1991c7d9654c5b8154049da5058d))
+
+## [0.1.979](https://github.com/fohte/armyknife/compare/v0.1.978...v0.1.979) (2026-11-27)
+
+
+### Features
+
+* **agent/watch-web:** push session updates ([#2379](https://github.com/fohte/armyknife/issues/2379)) ([24c18ed](https://github.com/fohte/armyknife/commit/24c18edb99c62d7eb0d57a240828a8c380482b20))
+
+## [0.1.978](https://github.com/fohte/armyknife/compare/v0.1.977...v0.1.978) (2026-11-27)
+
+
+### Features
+
+* **agent:** add the `a agent current` command ([#2387](https://github.com/fohte/armyknife/issues/2387)) ([3b76d4f](https://github.com/fohte/armyknife/commit/3b76d4f5a8e46d4c6ece7947860fe1535c194a05))
+
+## [0.1.977](https://github.com/fohte/armyknife/compare/v0.1.976...v0.1.977) (2026-11-27)
+
+
+### Bug Fixes
+
+* **watch-web:** block Resume for missing worktrees ([#2386](https://github.com/fohte/armyknife/issues/2386)) ([151c863](https://github.com/fohte/armyknife/commit/151c8638aaa925b811d66f47bcf2eb8f77c1de01))
+
+## [0.1.976](https://github.com/fohte/armyknife/compare/v0.1.975...v0.1.976) (2026-11-27)
+
+
+### Bug Fixes
+
+* **human-in-the-loop:** ignore stale markers ([#2382](https://github.com/fohte/armyknife/issues/2382)) ([72d1e77](https://github.com/fohte/armyknife/commit/72d1e77b7459bdf34a70acac05c40a1e7f43e9e7))
+
+## [0.1.975](https://github.com/fohte/armyknife/compare/v0.1.974...v0.1.975) (2026-11-27)
+
+
+### Features
+
+* **agent-watch-web:** let users sort the Inbox ([#2369](https://github.com/fohte/armyknife/issues/2369)) ([088fc39](https://github.com/fohte/armyknife/commit/088fc39af67679fa8b1254a7f28c802a38abb8ec))
+
+## [0.1.974](https://github.com/fohte/armyknife/compare/v0.1.973...v0.1.974) (2026-11-27)
+
+
+### Features
+
+* **agent-watch-web:** collapse Markdown details ([#2380](https://github.com/fohte/armyknife/issues/2380)) ([0191767](https://github.com/fohte/armyknife/commit/019176735a183ef4989aecf66351a6b19364c1ee))
+
+## [0.1.973](https://github.com/fohte/armyknife/compare/v0.1.972...v0.1.973) (2026-11-27)
+
+
+### Performance Improvements
+
+* **agent:** remove periodic executable checks ([#2377](https://github.com/fohte/armyknife/issues/2377)) ([38291cc](https://github.com/fohte/armyknife/commit/38291cc67e9e0e0ee6ea8111cb704e2b9323cec8))
+
+## [0.1.972](https://github.com/fohte/armyknife/compare/v0.1.971...v0.1.972) (2026-11-27)
+
+
+### Features
+
+* **agent-watch-web:** match drop overlay design ([#2374](https://github.com/fohte/armyknife/issues/2374)) ([f04ee0b](https://github.com/fohte/armyknife/commit/f04ee0b28b8a336843aa0a863c3e9ab38dab6b4c))
+
+## [0.1.971](https://github.com/fohte/armyknife/compare/v0.1.970...v0.1.971) (2026-11-27)
+
+
+### Features
+
+* **agent-watch-web:** add session launch feedback ([#2373](https://github.com/fohte/armyknife/issues/2373)) ([b1161dd](https://github.com/fohte/armyknife/commit/b1161dd4e5d6b33f9744131950a9ec63ee158c4e))
+
+## [0.1.970](https://github.com/fohte/armyknife/compare/v0.1.969...v0.1.970) (2026-11-27)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** avoid launch auto-navigation ([#2370](https://github.com/fohte/armyknife/issues/2370)) ([e4bca2e](https://github.com/fohte/armyknife/commit/e4bca2eee1a07fd70bd3842114ec91b61d24fbb8))
+
+## [0.1.969](https://github.com/fohte/armyknife/compare/v0.1.968...v0.1.969) (2026-11-27)
+
+
+### Features
+
+* **agent:** remove SessionStart decision guidance ([#2366](https://github.com/fohte/armyknife/issues/2366)) ([28b8a45](https://github.com/fohte/armyknife/commit/28b8a45a2655b5cdb4ee5003193c9c118f82ac51))
+
+## [0.1.968](https://github.com/fohte/armyknife/compare/v0.1.967...v0.1.968) (2026-11-27)
+
+
+### Bug Fixes
+
+* **agent-watch-desktop:** update without sudo ([#2365](https://github.com/fohte/armyknife/issues/2365)) ([20431ce](https://github.com/fohte/armyknife/commit/20431ce38514156392778e9c537defe2cba539e8))
+
 ## [0.1.967](https://github.com/fohte/armyknife/compare/v0.1.966...v0.1.967) (2026-11-27)
 
 
