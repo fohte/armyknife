@@ -687,7 +687,7 @@ Edited todo 1
 
 ### `a agent usage record`
 
-Read a Claude Code status-line JSON object from stdin and save its latest model, effort, context usage, rate limits, and CLI version for watch-web. The command is best-effort and exits successfully when recording fails so callers can keep their status-line output. `GET /api/usage` returns saved Claude Code usage, Codex usage parsed from session transcripts, and the latest quota for each engine.
+Read a Claude Code status-line JSON object from stdin and save its latest model, effort, context usage, rate limits, and CLI version for watch-web. The command is best-effort and exits successfully when recording fails so callers can keep their status-line output. Watch-web sends usage snapshots over the `usage` event on `GET /api/events`.
 
 ```console
 $ cat status-line.json | a agent usage record
@@ -1259,7 +1259,7 @@ Assistant replies and to-do/proposal cards can display local images written as M
 
 By default, watch-web accepts loopback Host values. To access it through a proxy or tunnel, set `ARMYKNIFE_WATCH_WEB_ALLOWED_HOSTS` to the comma-separated DNS hostnames it will receive, then forward requests to `127.0.0.1:4317` (or the port selected with `--port`) with matching Host and Origin authorities.
 
-`GET /api/usage` returns per-session usage for Claude Code and Codex plus the latest quota for each engine.
+`GET /api/events` sends per-session usage for Claude Code and Codex plus the latest quota for each engine with the `usage` event, and sends `usage-error` when a snapshot cannot be loaded.
 
 Files sent by an agent are served by `GET /api/sessions/{id}/files/{file_id}` only when recorded for that session, or by `GET /api/sessions/{id}/transcript-files/{tool_use_id}/{index}` only when the session transcript contains the matching file-send record and file index.
 

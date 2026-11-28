@@ -3,6 +3,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { userEvent } from 'vitest/browser'
 
+import type { AgentUsage } from '#agent-usage'
 import { App } from '#App'
 import { readSavedInboxViews } from '#saved-inbox-views'
 import type { Session, SessionsResponse } from '#types'
@@ -11,6 +12,8 @@ const capturedFeed = vi.hoisted(() => ({
   onSessions: null as
     ((response: unknown, changedSessionIds: readonly string[]) => void) | null,
   onUpdateAvailable: null as ((version: string | null) => void) | null,
+  onUsage: null as ((usage: AgentUsage) => void) | null,
+  onUsageError: null as (() => void) | null,
 }))
 
 vi.mock('#session-feed', () => ({
@@ -20,13 +23,21 @@ vi.mock('#session-feed', () => ({
       changedSessionIds: readonly string[],
     ) => void,
     _onError: (message: string | null) => void,
-    dependencies?: { onUpdateAvailable?: (version: string | null) => void },
+    dependencies?: {
+      onUpdateAvailable?: (version: string | null) => void
+      onUsage?: (usage: AgentUsage) => void
+      onUsageError?: () => void
+    },
   ) => {
     capturedFeed.onSessions = onSessions
     capturedFeed.onUpdateAvailable = dependencies?.onUpdateAvailable ?? null
+    capturedFeed.onUsage = dependencies?.onUsage ?? null
+    capturedFeed.onUsageError = dependencies?.onUsageError ?? null
     return () => {
       capturedFeed.onSessions = null
       capturedFeed.onUpdateAvailable = null
+      capturedFeed.onUsage = null
+      capturedFeed.onUsageError = null
     }
   },
 }))
@@ -1620,6 +1631,8 @@ beforeEach(() => {
   document.body.append(container)
   capturedFeed.onSessions = null
   capturedFeed.onUpdateAvailable = null
+  capturedFeed.onUsage = null
+  capturedFeed.onUsageError = null
 })
 
 afterEach(() => {
@@ -6797,14 +6810,12 @@ it('reloads only the selected conversation when its session changes', async () =
     requestsAfterUnrelatedChange: [
       '/api/sessions/session-a/actions',
       '/api/sessions/session-a/messages',
-      '/api/usage',
     ],
     requestPaths: [
       '/api/sessions/session-a/actions',
       '/api/sessions/session-a/actions',
       '/api/sessions/session-a/messages',
       '/api/sessions/session-a/messages',
-      '/api/usage',
     ],
   })
 })
@@ -6984,11 +6995,6 @@ it('answers an Inbox question with its request ID and selected answer', async ()
   expect(snapshot()).toEqual({
     selectedTitle: 'Choose a cache window',
     requests: [
-      {
-        path: '/api/usage',
-        method: 'GET',
-        body: null,
-      },
       {
         path: '/api/sessions/session-question/messages',
         method: 'GET',
