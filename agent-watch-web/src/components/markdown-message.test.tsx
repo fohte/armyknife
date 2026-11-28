@@ -269,18 +269,39 @@ Inner body
   )
 })
 
-it('preserves an unsupported nested details block inside an outer details block', () => {
-  expect(
-    renderMessage(`<details open>
+it.each([
+  {
+    name: 'a nested block without a blank line',
+    markdown: `<details open>
 <summary>Outer</summary>
 
 <details>
 inner
 </details>
-</details>`),
-  ).toBe(
-    '<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Outer</span></button><div class="markdown-details-body">&lt;details&gt;\ninner\n&lt;/details&gt;</div></div></div>',
-  )
+</details>`,
+    rawText: ['&lt;details&gt;', 'inner', '&lt;/details&gt;'].join(
+      String.fromCharCode(10),
+    ),
+  },
+  {
+    name: 'a nested block whose body spans HTML groups',
+    markdown: `<details open>
+<summary>Outer</summary>
+
+<details>
+inner
+
+more
+</details>
+</details>`,
+    rawText: ['&lt;details&gt;', 'inner', '', 'more', '&lt;/details&gt;'].join(
+      String.fromCharCode(10),
+    ),
+  },
+])('preserves unsupported nested details in $name', ({ markdown, rawText }) => {
+  const expected = `<div class="markdown-message"><div class="markdown-details"><button aria-expanded="true" class="markdown-details-summary" type="button"><svg aria-hidden="true" class="markdown-details-chevron" data-expanded="true" viewBox="0 0 10 10"><path d="M2 1l6 4-6 4z" fill="currentColor"></path></svg><span class="markdown-details-summary-content">Outer</span></button><div class="markdown-details-body">${rawText}</div></div></div>`
+
+  expect(renderMessage(markdown)).toBe(expected)
 })
 
 it.each([
@@ -497,6 +518,15 @@ it.each([
     escaped: '&lt;!-- &lt;/details&gt; --&gt;',
   },
   {
+    name: 'a multiline comment',
+    source: `<!--
+</details>
+-->`,
+    escaped: ['&lt;!--', '&lt;/details&gt;', '--&gt;'].join(
+      String.fromCharCode(10),
+    ),
+  },
+  {
     name: 'a script element',
     source: '<script>const closingTag = "</details>";</script>',
     escaped:
@@ -510,13 +540,21 @@ it.each([
   },
   {
     name: 'a pre element',
-    source: '<pre>\n</details>\n</pre>',
-    escaped: '&lt;pre&gt;\n&lt;/details&gt;\n&lt;/pre&gt;',
+    source: `<pre>
+</details>
+</pre>`,
+    escaped: ['&lt;pre&gt;', '&lt;/details&gt;', '&lt;/pre&gt;'].join(
+      String.fromCharCode(10),
+    ),
   },
   {
     name: 'a textarea element',
-    source: '<textarea>\n</details>\n</textarea>',
-    escaped: '&lt;textarea&gt;\n&lt;/details&gt;\n&lt;/textarea&gt;',
+    source: `<textarea>
+</details>
+</textarea>`,
+    escaped: ['&lt;textarea&gt;', '&lt;/details&gt;', '&lt;/textarea&gt;'].join(
+      String.fromCharCode(10),
+    ),
   },
 ])(
   'ignores closing details tags inside $name in the same HTML block',
