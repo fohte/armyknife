@@ -177,7 +177,11 @@ struct CommandResult {
 
 trait ActionRuntime: Send + Sync {
     fn resume_session(&self, session: &Session) -> Result<Option<String>>;
-    fn retry_resume(&self, session: &Session) -> Result<bool>;
+    fn retry_resume(
+        &self,
+        session: &Session,
+        check_generation: &mut dyn FnMut() -> std::result::Result<bool, resume::RetryResumeError>,
+    ) -> std::result::Result<resume::RetryResumeOutcome, resume::RetryResumeError>;
     fn send_message(&self, session: &Session, content: &str) -> Result<()>;
     fn execute_command(&self, cwd: &std::path::Path, command: &str) -> Result<CommandResult>;
     fn rewind_session(
@@ -598,6 +602,7 @@ mod tests {
         >,
         pane_command: Mutex<Option<String>>,
         retry_resume_matches_pane: Mutex<bool>,
+        retry_resume_before_generation_check: Mutex<Option<Box<dyn FnOnce() + Send>>>,
         pane_snapshot: Mutex<Option<String>>,
         pane_snapshot_error: Mutex<Option<String>>,
         pane_has_agent_process: Mutex<bool>,
@@ -626,6 +631,7 @@ mod tests {
                 command_gate: Mutex::new(None),
                 pane_command: Mutex::new(Some("claude".to_string())),
                 retry_resume_matches_pane: Mutex::new(true),
+                retry_resume_before_generation_check: Mutex::new(None),
                 pane_snapshot: Mutex::new(None),
                 pane_snapshot_error: Mutex::new(None),
                 pane_has_agent_process: Mutex::new(true),
@@ -650,16 +656,35 @@ mod tests {
             Ok((session.status == SessionStatus::Ended).then(|| "%18".to_string()))
         }
 
-        fn retry_resume(&self, session: &Session) -> Result<bool> {
+        fn retry_resume(
+            &self,
+            session: &Session,
+            check_generation: &mut dyn FnMut() -> std::result::Result<
+                bool,
+                super::resume::RetryResumeError,
+            >,
+        ) -> std::result::Result<super::resume::RetryResumeOutcome, super::resume::RetryResumeError>
+        {
             if !*self.retry_resume_matches_pane.lock().unwrap() {
-                return Ok(false);
+                return Ok(super::resume::RetryResumeOutcome::PaneMismatch);
+            }
+            let before_generation_check = self
+                .retry_resume_before_generation_check
+                .lock()
+                .unwrap()
+                .take();
+            if let Some(before_generation_check) = before_generation_check {
+                before_generation_check();
+            }
+            if !check_generation()? {
+                return Ok(super::resume::RetryResumeOutcome::StartupChanged);
             }
             self.calls.lock().unwrap().push(json!({
                 "kind": "retry-resume",
                 "sessionId": session.session_id,
                 "status": session.status,
             }));
-            Ok(true)
+            Ok(super::resume::RetryResumeOutcome::Retried)
         }
 
         fn send_message(&self, session: &Session, content: &str) -> Result<()> {

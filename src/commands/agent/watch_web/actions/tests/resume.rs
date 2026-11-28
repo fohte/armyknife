@@ -662,6 +662,58 @@ async fn retry_resume_rejects_a_pane_recorded_for_another_session(action_context
 
 #[rstest]
 #[tokio::test(start_paused = true)]
+async fn retry_resume_rejects_a_session_that_started_after_pane_validation(
+    action_context: ActionContext,
+) {
+    let mut session = session("fixture-session");
+    session.status = SessionStatus::Ended;
+    action_context.save_session(&session);
+    let app = action_context.router();
+    let mut updates = action_context.resume_updates.subscribe();
+
+    app.clone()
+        .oneshot(post_empty("/sessions/fixture-session/resume"))
+        .await
+        .unwrap();
+    updates.changed().await.unwrap();
+    advance(Duration::from_secs(20)).await;
+    updates.changed().await.unwrap();
+
+    let sessions_dir = action_context.temp_dir.path().join("sessions");
+    let mut started_session = session.clone();
+    started_session.status = SessionStatus::Running;
+    *action_context
+        .runtime
+        .retry_resume_before_generation_check
+        .lock()
+        .unwrap() = Some(Box::new(move || {
+        let lock =
+            store::lock_session_for_update(&sessions_dir, &started_session.session_id).unwrap();
+        lock.record_watch_web_session_start().unwrap();
+        lock.save(&started_session).unwrap();
+    }));
+
+    let retry = app
+        .oneshot(post_empty("/sessions/fixture-session/resume/retry"))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response_snapshot(retry, &action_context).await,
+        json!({
+            "status": StatusCode::CONFLICT.as_u16(),
+            "body": { "error": "session startup is not stuck" },
+            "calls": [{
+                "kind": "resume",
+                "sessionId": "fixture-session",
+                "status": SessionStatus::Ended,
+            }],
+        }),
+    );
+}
+
+#[rstest]
+#[tokio::test(start_paused = true)]
 async fn codex_resume_keeps_startup_status_while_marked_stopped(action_context: ActionContext) {
     let mut session = session("fixture-session");
     session.engine = Engine::Codex;

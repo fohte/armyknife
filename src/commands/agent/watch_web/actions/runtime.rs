@@ -4,6 +4,7 @@ use std::pin::Pin;
 use anyhow::Result;
 
 use super::super::super::types::{Engine, Session, TmuxInfo, resolve_session_option_with};
+use super::resume::{RetryResumeError, RetryResumeOutcome};
 use super::{ActionRuntime, CommandResult};
 use crate::shared::config::Config;
 
@@ -28,7 +29,11 @@ impl ActionRuntime for LiveActionRuntime {
         }
     }
 
-    fn retry_resume(&self, session: &Session) -> Result<bool> {
+    fn retry_resume(
+        &self,
+        session: &Session,
+        check_generation: &mut dyn FnMut() -> std::result::Result<bool, RetryResumeError>,
+    ) -> std::result::Result<RetryResumeOutcome, RetryResumeError> {
         retry_stuck_resume_with(
             session,
             |socket_path, pane_id, option| {
@@ -40,10 +45,12 @@ impl ActionRuntime for LiveActionRuntime {
                 .map(|value| (!value.is_empty()).then_some(value))
                 .map_err(anyhow::Error::from)
             },
+            check_generation,
             |session| {
                 crate::commands::agent::resume::respawn_stuck_session(session)
                     .map(|_| ())
                     .map_err(anyhow::Error::from)
+                    .map_err(RetryResumeError::Runtime)
             },
         )
     }
@@ -172,20 +179,25 @@ impl ActionRuntime for LiveActionRuntime {
 fn retry_stuck_resume_with(
     session: &Session,
     mut read_pane_option: impl FnMut(Option<&str>, &str, &str) -> Result<Option<String>>,
-    respawn: impl FnOnce(&Session) -> Result<()>,
-) -> Result<bool> {
+    check_generation: &mut dyn FnMut() -> std::result::Result<bool, RetryResumeError>,
+    respawn: impl FnOnce(&Session) -> std::result::Result<(), RetryResumeError>,
+) -> std::result::Result<RetryResumeOutcome, RetryResumeError> {
     if let Some(tmux_info) = session.tmux_info.as_ref() {
         let socket_path = tmux_info.socket_path.as_deref();
         let recorded_session_id = resolve_session_option_with(|option| {
             read_pane_option(socket_path, &tmux_info.pane_id, option)
-        })?;
+        })
+        .map_err(RetryResumeError::Runtime)?;
         if recorded_session_id.as_deref() != Some(session.session_id.as_str()) {
-            return Ok(false);
+            return Ok(RetryResumeOutcome::PaneMismatch);
         }
     }
 
+    if !check_generation()? {
+        return Ok(RetryResumeOutcome::StartupChanged);
+    }
     respawn(session)?;
-    Ok(true)
+    Ok(RetryResumeOutcome::Retried)
 }
 
 fn resume_ended_session_with_config(
@@ -204,6 +216,7 @@ mod tests {
     use rstest::rstest;
     use serde_json::{Value, json};
 
+    use super::super::resume::{RetryResumeError, RetryResumeOutcome};
     use super::{resume_ended_session_with_config, retry_stuck_resume_with};
     use crate::commands::agent::types::{
         Engine, Session, TMUX_SESSION_OPTION, TMUX_SESSION_OPTION_LEGACY, TmuxInfo,
@@ -272,6 +285,7 @@ mod tests {
         TMUX_SESSION_OPTION,
         Some("fixture-session"),
         true,
+        RetryResumeOutcome::Retried,
         vec![json!({
             "socketPath": "/fixture/tmux.sock",
             "paneId": "%17",
@@ -283,6 +297,7 @@ mod tests {
         TMUX_SESSION_OPTION_LEGACY,
         Some("fixture-session"),
         true,
+        RetryResumeOutcome::Retried,
         vec![
             json!({
                 "socketPath": "/fixture/tmux.sock",
@@ -301,6 +316,7 @@ mod tests {
         TMUX_SESSION_OPTION,
         Some("fixture-other"),
         false,
+        RetryResumeOutcome::PaneMismatch,
         vec![json!({
             "socketPath": "/fixture/tmux.sock",
             "paneId": "%17",
@@ -312,6 +328,7 @@ mod tests {
         TMUX_SESSION_OPTION,
         None,
         false,
+        RetryResumeOutcome::PaneMismatch,
         vec![
             json!({
                 "socketPath": "/fixture/tmux.sock",
@@ -326,10 +343,23 @@ mod tests {
         ],
         vec![],
     )]
+    #[case::generation_advanced_after_pane_match(
+        TMUX_SESSION_OPTION,
+        Some("fixture-session"),
+        false,
+        RetryResumeOutcome::StartupChanged,
+        vec![json!({
+            "socketPath": "/fixture/tmux.sock",
+            "paneId": "%17",
+            "option": "@armyknife-last-agent-session-id",
+        })],
+        vec![],
+    )]
     fn retry_respawns_only_when_the_pane_records_the_requested_session(
         #[case] recorded_option: &str,
         #[case] recorded_session_id: Option<&str>,
-        #[case] expected_respawn: bool,
+        #[case] generation_matches: bool,
+        #[case] expected_outcome: RetryResumeOutcome,
         #[case] expected_option_reads: Vec<Value>,
         #[case] expected_respawn_calls: Vec<Value>,
     ) {
@@ -366,17 +396,18 @@ mod tests {
                     .then(|| recorded_session_id.map(str::to_string))
                     .flatten())
             },
+            &mut || Ok(generation_matches),
             |session| {
                 respawn_calls.push(json!({ "sessionId": session.session_id }));
                 Ok(())
             },
         )
-        .map_err(|error| error.to_string());
+        .map_err(retry_error_message);
 
         assert_eq!(
             (result, option_reads, respawn_calls),
             (
-                Ok(expected_respawn),
+                Ok(expected_outcome),
                 expected_option_reads,
                 expected_respawn_calls,
             ),
@@ -408,12 +439,14 @@ mod tests {
         let result = retry_stuck_resume_with(
             &session,
             |_, _, _| Err(anyhow::anyhow!("fixture pane option read failed")),
+            &mut || Ok(true),
             |session| {
                 respawn_calls.push(session.session_id.clone());
                 Ok(())
             },
         )
-        .map_err(|error| error.to_string());
+        .map(|outcome| outcome == RetryResumeOutcome::Retried)
+        .map_err(retry_error_message);
 
         assert_eq!(
             (result, respawn_calls),
@@ -422,5 +455,12 @@ mod tests {
                 Vec::new()
             ),
         );
+    }
+
+    fn retry_error_message(error: RetryResumeError) -> String {
+        match error {
+            RetryResumeError::Store(_) => "fixture store error".to_string(),
+            RetryResumeError::Runtime(error) => error.to_string(),
+        }
     }
 }

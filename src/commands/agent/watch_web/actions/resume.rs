@@ -347,14 +347,14 @@ pub(super) async fn resume_session(
     Ok(Json(Success::new()))
 }
 
-#[derive(Debug, PartialEq)]
-enum RetryResumeOutcome {
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum RetryResumeOutcome {
     StartupChanged,
     PaneMismatch,
     Retried,
 }
 
-enum RetryResumeError {
+pub(super) enum RetryResumeError {
     Store(anyhow::Error),
     Runtime(anyhow::Error),
 }
@@ -362,17 +362,9 @@ enum RetryResumeError {
 fn retry_resume_after_generation_check(
     expected_generation: i64,
     read_generation: impl FnOnce() -> anyhow::Result<i64>,
-    retry: impl FnOnce() -> anyhow::Result<bool>,
-) -> Result<RetryResumeOutcome, RetryResumeError> {
+) -> std::result::Result<bool, RetryResumeError> {
     let current_generation = read_generation().map_err(RetryResumeError::Store)?;
-    if current_generation != expected_generation {
-        return Ok(RetryResumeOutcome::StartupChanged);
-    }
-
-    match retry().map_err(RetryResumeError::Runtime)? {
-        true => Ok(RetryResumeOutcome::Retried),
-        false => Ok(RetryResumeOutcome::PaneMismatch),
-    }
+    Ok(current_generation == expected_generation)
 }
 
 pub(super) async fn retry_resume(
@@ -425,11 +417,12 @@ pub(super) async fn retry_resume(
     let runtime = state.runtime;
     let retry_session_id = current_id.clone();
     let outcome = tokio::task::spawn_blocking(move || {
-        retry_resume_after_generation_check(
-            session_start_generation,
-            || store::watch_web_session_start_generation_from(&sessions_dir, &retry_session_id),
-            || runtime.retry_resume(&session_for_retry),
-        )
+        let mut check_generation = || {
+            retry_resume_after_generation_check(session_start_generation, || {
+                store::watch_web_session_start_generation_from(&sessions_dir, &retry_session_id)
+            })
+        };
+        runtime.retry_resume(&session_for_retry, &mut check_generation)
     })
     .await
     .map_err(ApiError::internal)?;
@@ -463,10 +456,7 @@ mod tests {
     use anyhow::Result;
     use serde_json::{Value, json};
 
-    use super::{
-        EndedSessionHost, RetryResumeOutcome, resume_ended_session,
-        retry_resume_after_generation_check,
-    };
+    use super::{EndedSessionHost, resume_ended_session, retry_resume_after_generation_check};
     use crate::commands::agent::types::{Engine, Session, TmuxInfo};
     use crate::infra::tmux::layout::ResumeLayoutSpec;
     use crate::shared::config::LayoutNode;
@@ -494,22 +484,11 @@ mod tests {
     }
 
     #[test]
-    fn retry_skips_respawn_when_the_session_start_generation_advanced() {
-        let mut respawn_calls = Vec::new();
-        let outcome = retry_resume_after_generation_check(
-            3,
-            || Ok(4),
-            || {
-                respawn_calls.push("respawn");
-                Ok(true)
-            },
-        )
-        .map_err(|_| "retry failed");
+    fn retry_generation_check_rejects_an_advanced_generation() {
+        let generation_matches =
+            retry_resume_after_generation_check(3, || Ok(4)).map_err(|_| "generation read failed");
 
-        assert_eq!(
-            (outcome, respawn_calls),
-            (Ok(RetryResumeOutcome::StartupChanged), Vec::<&str>::new()),
-        );
+        assert_eq!(generation_matches, Ok(false));
     }
 
     #[test]
