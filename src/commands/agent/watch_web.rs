@@ -45,6 +45,8 @@ use super::browser;
 use super::error::CcError;
 use crate::commands::agent::store;
 use crate::commands::agent::types::Session;
+use crate::commands::agent::watch_web::session_enrichment::SessionEnrichmentCache;
+use crate::infra::tq::{TqEvent, TqEventSubscription};
 use crate::shared::env_var::EnvVars;
 use session_store_watcher::SessionStoreWatcher;
 
@@ -145,6 +147,42 @@ struct SessionStoreWatch {
     available: bool,
 }
 
+trait TqEventReceiver: Send {
+    fn recv(&mut self) -> impl Future<Output = Option<TqEvent>> + Send + '_;
+}
+
+impl TqEventReceiver for TqEventSubscription {
+    fn recv(&mut self) -> impl Future<Output = Option<TqEvent>> + Send + '_ {
+        TqEventSubscription::recv(self)
+    }
+}
+
+#[cfg(test)]
+impl TqEventReceiver for tokio::sync::mpsc::Receiver<TqEvent> {
+    fn recv(&mut self) -> impl Future<Output = Option<TqEvent>> + Send + '_ {
+        tokio::sync::mpsc::Receiver::recv(self)
+    }
+}
+
+async fn forward_tq_events<E: TqEventReceiver + 'static>(
+    mut events: E,
+    mut shutdown: watch::Receiver<bool>,
+    cache: SessionEnrichmentCache,
+) {
+    if *shutdown.borrow() {
+        return;
+    }
+    loop {
+        tokio::select! {
+            _ = shutdown.changed() => break,
+            event = events.recv() => match event {
+                Some(event) => cache.apply_tq_event(&event).await,
+                None => break,
+            },
+        }
+    }
+}
+
 impl EnrichmentUpdates {
     fn new() -> Self {
         let (sender, _) = watch::channel(());
@@ -214,6 +252,7 @@ pub async fn run(args: &WatchWebArgs) -> Result<()> {
                         available: session_store_watcher_available,
                     },
                     output_shutdown_receiver,
+                    crate::infra::tq::subscribe_events(),
                 ),
             )
             .with_graceful_shutdown(async move {
@@ -292,6 +331,7 @@ fn app(
     restart_signal: watch::Receiver<bool>,
     session_store_watch: SessionStoreWatch,
     output_shutdown_signal: watch::Receiver<bool>,
+    tq_events: Option<TqEventSubscription>,
 ) -> Router {
     app_with_assets_and_queued_prompt_loaders_and_restart_signal(
         &assets::DIST,
@@ -323,6 +363,7 @@ fn app(
         restart_signal,
         session_store_watch,
         output_shutdown_signal,
+        tq_events,
     )
 }
 
@@ -368,9 +409,14 @@ fn app_with_assets_and_loader_and_restart_signal(
             available: true,
         },
         watch::channel(false).1,
+        None,
     )
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep the router dependencies explicit while adding the optional tq event subscription"
+)]
 fn app_with_assets_and_queued_prompt_loaders_and_restart_signal(
     dist: &'static Dir<'static>,
     load_session: impl Fn(&str) -> anyhow::Result<Option<Session>> + Send + Sync + 'static,
@@ -379,19 +425,25 @@ fn app_with_assets_and_queued_prompt_loaders_and_restart_signal(
     restart_signal: watch::Receiver<bool>,
     session_store_watch: SessionStoreWatch,
     output_shutdown_signal: watch::Receiver<bool>,
+    tq_events: Option<TqEventSubscription>,
 ) -> Router {
     let SessionStoreWatch {
         events: session_store_events,
         available: session_store_watcher_available,
     } = session_store_watch;
     let enrichment_updates = EnrichmentUpdates::new();
+    let session_enrichment = SessionEnrichmentCache::new(enrichment_updates.clone());
+    if let Some(tq_events) = tq_events {
+        tokio::spawn(forward_tq_events(
+            tq_events,
+            output_shutdown_signal.clone(),
+            session_enrichment.clone(),
+        ));
+    }
     let api = Router::new()
         .merge(actions::router(loaders.clone(), enrichment_updates.clone()))
         .merge(session_state::router())
-        .merge(sessions::router(
-            enrichment_updates.clone(),
-            loaders.clone(),
-        ))
+        .merge(sessions::router(session_enrichment, loaders.clone()))
         .merge(freeze_profiler::router())
         .merge(directories::router())
         .merge(model_options::router())
@@ -444,22 +496,49 @@ mod tests {
     use std::ffi::OsString;
     use std::io::Read;
     use std::net::{IpAddr, Ipv4Addr};
+    use std::time::Duration;
     use tokio::sync::watch;
     use tower::ServiceExt;
 
     use super::messages::{BackgroundTask, BackgroundTaskKind, RouteLoaders};
     use super::{
-        LISTEN_PORT, SessionStoreWatch, app, app_with_assets, app_with_assets_and_loader,
+        EnrichmentUpdates, LISTEN_PORT, SessionEnrichmentCache, SessionStoreWatch, app,
+        app_with_assets, app_with_assets_and_loader,
         app_with_assets_and_queued_prompt_loaders_and_restart_signal, bind_listener,
-        compression_layer, ensure_port_allowed, open_browser_on_startup, restart_args_with_port,
-        start_web_ui_relay_manager_if_allowed, watch_web_url,
+        compression_layer, ensure_port_allowed, forward_tq_events, open_browser_on_startup,
+        restart_args_with_port, start_web_ui_relay_manager_if_allowed, watch_web_url,
     };
     use crate::cli::{Cli, Commands};
     use crate::commands::agent::AgentCommands;
     use crate::commands::agent::types::{Engine, Session};
+    use crate::infra::tq::TqEvent;
 
     static TEST_DIST: Dir<'static> =
         include_dir!("$CARGO_MANIFEST_DIR/src/commands/agent/watch_web/test_assets");
+
+    #[tokio::test]
+    async fn tq_event_forwarder_applies_events_and_stops_on_shutdown() {
+        let updates = EnrichmentUpdates::new();
+        let mut receiver = updates.subscribe();
+        let cache = SessionEnrichmentCache::new(updates);
+        let (event_sender, event_receiver) = tokio::sync::mpsc::channel(1);
+        let (shutdown_sender, shutdown_receiver) = tokio::sync::watch::channel(false);
+        let consumer = tokio::spawn(forward_tq_events(event_receiver, shutdown_receiver, cache));
+
+        let event_sent = event_sender.send(TqEvent::Connected).await.is_ok();
+        let event_applied = tokio::time::timeout(Duration::from_secs(1), receiver.changed())
+            .await
+            .is_ok_and(|changed| changed.is_ok());
+        shutdown_sender.send_replace(true);
+        let consumer_stopped = tokio::time::timeout(Duration::from_secs(1), consumer)
+            .await
+            .is_ok_and(|result| result.is_ok());
+
+        assert_eq!(
+            (event_sent, event_applied, consumer_stopped),
+            (true, true, true),
+        );
+    }
 
     #[rstest]
     #[case::agent_session_cannot_use_production_port(LISTEN_PORT, Some("fixture-session"), false)]
@@ -723,6 +802,7 @@ mod tests {
                 available: true,
             },
             watch::channel(false).1,
+            None,
         )
         .oneshot(request(method, uri, host, origin))
         .await
@@ -826,6 +906,7 @@ mod tests {
                 available: false,
             },
             shutdown_signal,
+            None,
         );
         let response = router
             .oneshot(request(
@@ -1022,6 +1103,7 @@ mod tests {
                 available: true,
             },
             watch::channel(false).1,
+            None,
         )
         .oneshot(
             Request::builder()

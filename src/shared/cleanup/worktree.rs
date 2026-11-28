@@ -119,6 +119,7 @@ pub fn cleanup_worktree_by_name(
         worktree_name,
         worktree_path,
         force,
+        false,
         || Ok(()),
         after_delete,
     )
@@ -129,12 +130,14 @@ pub(crate) fn cleanup_worktree_by_name_with_before_delete(
     worktree_name: &str,
     worktree_path: &Path,
     force: bool,
+    allow_dirty: bool,
     before_delete: impl FnOnce() -> anyhow::Result<()>,
     after_delete: impl FnOnce(),
 ) -> anyhow::Result<WorktreeCleanupResult> {
     cleanup_worktree_by_name_with_operations(
         worktree_path,
         force,
+        allow_dirty,
         before_delete,
         after_delete,
         WorktreeCleanupOperations {
@@ -186,6 +189,7 @@ fn cleanup_worktree_by_name_with_operations<
 >(
     worktree_path: &Path,
     force: bool,
+    allow_dirty: bool,
     before_delete_check: BeforeDeleteCheck,
     after_delete: impl FnOnce(),
     operations: WorktreeCleanupOperations<
@@ -239,7 +243,11 @@ where
         .map_err(anyhow::Error::from)?;
         before_delete_check()
     });
-    let mut result = delete_worktree(force, worktree_path.to_path_buf(), before_delete)?;
+    let mut result = delete_worktree(
+        force || allow_dirty,
+        worktree_path.to_path_buf(),
+        before_delete,
+    )?;
     let daemon_descendant_pgids = daemon_descendant_pgids.borrow().clone();
 
     // Clean up sessions before killing panes so a caller in the pane can finish.
@@ -493,6 +501,7 @@ mod tests {
     #[rstest]
     #[case::active_process_without_force(
         false,
+        false,
         Some(WorktreeProcessInspection {
             non_shell_processes: vec![ProcessInPath { pid: 42, comm: "editor".to_string() }],
             daemon_descendant_pgids: vec![88],
@@ -502,17 +511,20 @@ mod tests {
     )]
     #[case::inspection_unavailable_without_force(
         false,
+        false,
         None,
         true,
         (false, Some("unavailable"), true, 0, vec!["panes", "detect"]),
     )]
     #[case::shell_only_without_force(
         false,
+        false,
         Some(WorktreeProcessInspection::default()),
         true,
         (true, None, false, 0, vec!["panes", "detect", "verify", "delete:false", "after_delete", "sessions:false", "pane_closed"]),
     )]
     #[case::daemon_groups_are_signaled_after_delete(
+        false,
         false,
         Some(WorktreeProcessInspection {
             non_shell_processes: vec![],
@@ -523,6 +535,7 @@ mod tests {
     )]
     #[case::daemon_groups_are_not_signaled_when_deletion_returns_false(
         false,
+        false,
         Some(WorktreeProcessInspection {
             non_shell_processes: vec![],
             daemon_descendant_pgids: vec![88],
@@ -532,13 +545,22 @@ mod tests {
     )]
     #[case::force_skips_the_guard_and_signals_process_groups(
         true,
+        false,
         None,
         true,
         (true, None, false, 1, vec!["panes", "groups_detect", "verify", "delete:true", "after_delete", "sessions:true", "groups:[77]", "pane_closed"]),
     )]
+    #[case::allow_dirty_keeps_the_process_guard_and_session_cleanup_safe(
+        false,
+        true,
+        Some(WorktreeProcessInspection::default()),
+        true,
+        (true, None, false, 0, vec!["panes", "detect", "verify", "delete:true", "after_delete", "sessions:false", "pane_closed"]),
+    )]
     fn cleanup_checks_processes_before_deleting_and_signals_after_success(
         cleanup_test_context: CleanupTestContext,
         #[case] force: bool,
+        #[case] allow_dirty: bool,
         #[case] detected_processes: Option<WorktreeProcessInspection>,
         #[case] delete_succeeds: bool,
         #[case] expected: (bool, Option<&'static str>, bool, usize, Vec<&'static str>),
@@ -552,6 +574,7 @@ mod tests {
         let result = cleanup_worktree_by_name_with_operations(
             &worktree_path,
             force,
+            allow_dirty,
             || {
                 events.borrow_mut().push("verify");
                 Ok(())
@@ -643,6 +666,7 @@ mod tests {
         let result = cleanup_worktree_by_name_with_operations(
             &worktree_path,
             false,
+            false,
             || {
                 events.borrow_mut().push("verify");
                 Ok(())
@@ -681,6 +705,80 @@ mod tests {
         assert_eq!(
             (result.is_err(), events.into_inner()),
             (true, vec!["panes", "detect", "verify", "delete_failed"]),
+        );
+    }
+
+    #[rstest]
+    fn before_delete_mismatch_prevents_worktree_deletion(cleanup_test_context: CleanupTestContext) {
+        let CleanupTestContext {
+            worktree_path,
+            events,
+            ..
+        } = cleanup_test_context;
+        let delete_called = std::cell::Cell::new(false);
+        let confirmed = crate::shared::worktree_delete::discard::ConfirmedDiscard {
+            path: "/fictional/worktree".to_string(),
+            branch: Some("feature/fictional".to_string()),
+            changes: vec![],
+            commits: vec![],
+        };
+        let observed = crate::shared::worktree_delete::discard::ObservedDiscard {
+            path: "/fictional/worktree".to_string(),
+            branch: Some("feature/fictional".to_string()),
+            changes: vec![crate::shared::worktree_delete::discard::ConfirmedChange {
+                status: "??".to_string(),
+                path: "src/new-fictional.txt".to_string(),
+            }],
+            commits: vec![],
+            commits_unavailable: false,
+        };
+
+        let result = cleanup_worktree_by_name_with_operations(
+            &worktree_path,
+            false,
+            true,
+            || {
+                events.borrow_mut().push("verify_new_file");
+                crate::shared::worktree_delete::discard::verify(&confirmed, &observed)
+                    .map_err(crate::shared::worktree_delete::discard::DiscardMismatchError::new)?;
+                Ok(())
+            },
+            || events.borrow_mut().push("after_delete"),
+            WorktreeCleanupOperations {
+                inspect_processes: |_: &Path| Some(WorktreeProcessInspection::default()),
+                find_panes: |_: &Path| vec![],
+                find_groups: |_: &Path| vec![],
+                clean_sessions: |_: &Path, _: bool| 0,
+                kill_groups: |_: &[libc::pid_t]| 0,
+                kill_pane: |_: &str| true,
+                delete_worktree: |_, _, before_delete: BeforeWorktreeDelete<'_>| {
+                    before_delete()?;
+                    delete_called.set(true);
+                    Ok(WorktreeCleanupResult {
+                        worktree_deleted: true,
+                        ..WorktreeCleanupResult::default()
+                    })
+                },
+            },
+        );
+
+        assert_eq!(
+            (
+                result.as_ref().err().and_then(|error| {
+                    error
+                        .downcast_ref::<crate::shared::worktree_delete::discard::DiscardMismatchError>()
+                        .map(ToString::to_string)
+                }),
+                delete_called.get(),
+                worktree_path.is_dir(),
+                events.into_inner(),
+            ),
+            (
+                Some("Worktree changed since discard confirmation; review the current close checks and retry".to_string()),
+                false,
+                true,
+                vec!["verify_new_file"],
+            ),
         );
     }
 

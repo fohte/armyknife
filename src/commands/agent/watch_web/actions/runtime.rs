@@ -10,10 +10,11 @@ use crate::shared::config::Config;
 pub(super) struct LiveActionRuntime;
 
 impl ActionRuntime for LiveActionRuntime {
-    fn resume_session(&self, session: &Session) -> Result<()> {
+    fn resume_session(&self, session: &Session) -> Result<Option<String>> {
         match session.status {
             crate::commands::agent::types::SessionStatus::Paused => {
                 crate::commands::agent::resume::respawn_paused_session(session)?;
+                Ok(None)
             }
             crate::commands::agent::types::SessionStatus::Ended => {
                 let config = crate::shared::config::load_config_or_default();
@@ -21,11 +22,10 @@ impl ActionRuntime for LiveActionRuntime {
                     session,
                     &config,
                     &super::resume::TmuxEndedSessionHost,
-                )?;
+                )
             }
             _ => anyhow::bail!("session is not ended or paused"),
         }
-        Ok(())
     }
 
     fn execute_command(&self, cwd: &std::path::Path, command: &str) -> Result<CommandResult> {
@@ -118,11 +118,17 @@ impl ActionRuntime for LiveActionRuntime {
         session: &'a Session,
         keep_worktree: bool,
         stop_and_close: bool,
+        discard: Option<crate::shared::worktree_delete::discard::ConfirmedDiscard>,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         let session = session.clone();
         Box::pin(super::close::run_on_blocking_worker(move || async move {
-            crate::commands::agent::close_from_watch_web(&session, keep_worktree, stop_and_close)
-                .await
+            crate::commands::agent::close_from_watch_web(
+                &session,
+                keep_worktree,
+                stop_and_close,
+                discard,
+            )
+            .await
         }))
     }
 
@@ -147,7 +153,7 @@ fn resume_ended_session_with_config(
     session: &Session,
     config: &Config,
     host: &impl super::resume::EndedSessionHost,
-) -> Result<()> {
+) -> Result<Option<String>> {
     super::resume::resume_ended_session(session, &config.agent.worktree.layout, host)
 }
 
@@ -169,12 +175,12 @@ mod tests {
     }
 
     impl super::super::resume::EndedSessionHost for FakeEndedSessionHost {
-        fn open_layout(&self, spec: ResumeLayoutSpec<'_>) -> Result<()> {
+        fn open_layout(&self, spec: ResumeLayoutSpec<'_>) -> Result<Option<String>> {
             self.calls.lock().unwrap().push(json!({
                 "layout": serde_json::to_value(spec.layout).unwrap(),
                 "agentCommand": spec.agent_command,
             }));
-            Ok(())
+            Ok(Some("%18".to_string()))
         }
     }
 

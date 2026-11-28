@@ -15,7 +15,6 @@ import { SessionConversationCacheProvider } from '#components/session-conversati
 import { SessionElapsedStartedAtProvider } from '#components/session-elapsed-context'
 import { startFreezeProfiler } from '#freeze-profiler'
 import { useMobileLayout, useSessionMobileNavigation } from '#mobile-layout'
-import { findLaunchedSession } from '#new-session-navigation'
 import { startSessionFeed } from '#session-feed'
 import { useSessionHistory } from '#session-history'
 import { useSessionKeyboardNavigation } from '#session-keyboard-navigation'
@@ -31,6 +30,7 @@ import { useNewSession } from '#use-new-session'
 import { useNewSessionNavigation } from '#use-new-session-navigation'
 import { usePendingMergeRetryNavigation } from '#use-pending-merge-retry-navigation'
 import { useSessionClose } from '#use-session-close'
+import { useSessionLaunch } from '#use-session-launch'
 import { useSessionRefreshRevisions } from '#use-session-refresh-revisions'
 
 export function App() {
@@ -115,7 +115,6 @@ function AppContent() {
   const [inboxFilterQuery, setInboxFilterQuery] = useState('')
   const [statusPanelOpen, setStatusPanelOpen] = useState(false)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
-  const [pendingLaunchId, setPendingLaunchId] = useState<string | null>(null)
   const [manualInboxCollapsed, setManualInboxCollapsed] = useState<
     boolean | null
   >(null)
@@ -399,6 +398,27 @@ function AppContent() {
     closeMobileNav()
     setCommandPaletteOpen(true)
   }, [closeMobileNav])
+  const openSessionFromNavigation = useCallback(
+    (id: string) => {
+      closeMobileNav()
+      openSessionInInbox(id)
+    },
+    [closeMobileNav, openSessionInInbox],
+  )
+  const {
+    pendingLaunch,
+    start: startSessionLaunch,
+    handOff,
+  } = useSessionLaunch({
+    sessions: sessionsWithElapsedTime,
+    newSessionMode,
+    view,
+    newSession,
+    setCommandPaletteOpen,
+    openSessionInInbox,
+    openSessionFromNavigation,
+    navigate,
+  })
   const { closeNewSession, openNewSession, switchFromNewSessionToSession } =
     useNewSessionNavigation({
       backFromNewSession,
@@ -407,16 +427,9 @@ function AppContent() {
       replaceNewSessionWithSession,
       resetNewSession: newSession.reset,
       setCommandPaletteOpen,
-      setPendingLaunchId,
+      handOffSessionLaunch: handOff,
       requestComposerFocus,
     })
-  const openSessionFromNavigation = useCallback(
-    (id: string) => {
-      closeMobileNav()
-      openSessionInInbox(id)
-    },
-    [closeMobileNav, openSessionInInbox],
-  )
   usePendingMergeRetryNavigation({
     isMobile,
     view,
@@ -433,36 +446,6 @@ function AppContent() {
     },
     [closeMobileNav, selectInboxSavedView],
   )
-  useEffect(() => {
-    if (pendingLaunchId === null) return
-    const launchedSession = findLaunchedSession(
-      sessionsWithElapsedTime,
-      pendingLaunchId,
-    )
-    if (launchedSession === undefined) return
-    setPendingLaunchId(null)
-    const shouldOpenLaunchedSession =
-      newSessionMode === 'palette' ||
-      (newSessionMode === 'form' && view === 'inbox')
-    if (!shouldOpenLaunchedSession) {
-      if (newSessionMode === 'form') {
-        newSession.reset()
-        navigate((current) => ({ ...current, newSessionMode: null }), 'replace')
-      }
-      return
-    }
-    setCommandPaletteOpen(false)
-    openSessionInInbox(launchedSession.id, 'replace')
-  }, [
-    navigate,
-    newSessionMode,
-    newSession.reset,
-    openSessionInInbox,
-    pendingLaunchId,
-    sessionsWithElapsedTime,
-    setCommandPaletteOpen,
-    view,
-  ])
   return (
     <SessionElapsedStartedAtProvider value={sessionsReceivedAt}>
       <AppWorkspace
@@ -491,7 +474,7 @@ function AppContent() {
           waitingExpanded,
           doneExpanded,
           statusPanelOpen,
-          pendingLaunchId,
+          launchPending: pendingLaunch !== null,
           projects,
           focusedProjectName,
           hideQuietProjects,
@@ -522,10 +505,10 @@ function AppContent() {
           setDoneExpanded,
           setMobileNavOpen,
           setStatusPanelOpen,
-          setPendingLaunchId,
           setHideQuietProjects,
           setCommandPaletteOpen,
           setFocusedProjectName,
+          onStart: startSessionLaunch,
           toggleInbox,
           toggleStatusPanel,
           toggleToday,

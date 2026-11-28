@@ -10,6 +10,7 @@ import {
 
 import { NewSessionModelPicker } from '#components/new-session-model-picker'
 import { SessionDirectoryOptions } from '#components/session-directory-options'
+import type { LaunchSessionRequest } from '#new-session-api'
 import type { NewSessionState } from '#use-new-session'
 
 function isImeEnter(event: ReactKeyboardEvent) {
@@ -27,7 +28,7 @@ type NewSessionPickerProps = {
   launchPending?: boolean
   now?: Date
   onClose: () => void
-  onLaunched: (launchId: string) => void
+  onStart: (request: LaunchSessionRequest) => void
 }
 
 export function NewSessionPicker({
@@ -37,7 +38,7 @@ export function NewSessionPicker({
   launchPending = false,
   now,
   onClose,
-  onLaunched,
+  onStart,
 }: NewSessionPickerProps) {
   const [activeIndex, setActiveIndex] = useState(0)
   const [modelPickerOpen, setModelPickerOpen] = useState(initialModelPickerOpen)
@@ -154,7 +155,7 @@ export function NewSessionPicker({
               return
             }
             if (launchPending) return
-            void state.start(onLaunched, event.altKey ? 'codex' : state.engine)
+            state.start(onStart, event.altKey ? 'codex' : state.engine)
             return
           }
           if (
@@ -265,7 +266,7 @@ export function NewSessionPicker({
             <button
               aria-selected={state.engine === 'claude'}
               className="new-session-picker-option"
-              disabled={state.isStarting || launchPending}
+              disabled={launchPending}
               onClick={() => {
                 state.setEngine('claude')
               }}
@@ -274,11 +275,8 @@ export function NewSessionPicker({
                   return
                 }
                 event.preventDefault()
-                if (!state.isStarting && !launchPending) {
-                  void state.start(
-                    onLaunched,
-                    event.altKey ? 'codex' : 'claude',
-                  )
+                if (!launchPending) {
+                  state.start(onStart, event.altKey ? 'codex' : 'claude')
                 }
               }}
               role="option"
@@ -293,7 +291,7 @@ export function NewSessionPicker({
             <button
               aria-selected={state.engine === 'codex'}
               className="new-session-picker-option"
-              disabled={state.isStarting || launchPending}
+              disabled={launchPending}
               onClick={() => {
                 state.setEngine('codex')
               }}
@@ -302,8 +300,8 @@ export function NewSessionPicker({
                   return
                 }
                 event.preventDefault()
-                if (!state.isStarting && !launchPending) {
-                  void state.start(onLaunched, 'codex')
+                if (!launchPending) {
+                  state.start(onStart, 'codex')
                 }
               }}
               role="option"
@@ -363,17 +361,13 @@ export function NewSessionPicker({
             {isMobile ? (
               <button
                 className="new-session-picker-start"
-                disabled={
-                  selectedDirectory === null ||
-                  state.isStarting ||
-                  launchPending
-                }
+                disabled={selectedDirectory === null || launchPending}
                 onClick={() => {
-                  if (!launchPending) void state.start(onLaunched, state.engine)
+                  if (!launchPending) state.start(onStart, state.engine)
                 }}
                 type="button"
               >
-                {state.isStarting || launchPending
+                {launchPending
                   ? 'Starting… Waiting for session'
                   : `Start with ${state.engine === 'claude' ? 'Claude Code' : 'Codex'}`}
               </button>
@@ -385,14 +379,9 @@ export function NewSessionPicker({
                 <button
                   aria-label={`Start session with ${state.engine === 'claude' ? 'Claude Code' : 'Codex'}`}
                   className="new-session-picker-start new-session-picker-start-desktop"
-                  disabled={
-                    selectedDirectory === null ||
-                    state.isStarting ||
-                    launchPending
-                  }
+                  disabled={selectedDirectory === null || launchPending}
                   onClick={() => {
-                    if (!launchPending)
-                      void state.start(onLaunched, state.engine)
+                    if (!launchPending) state.start(onStart, state.engine)
                   }}
                   type="button"
                 >
@@ -401,9 +390,7 @@ export function NewSessionPicker({
                 <span className="new-session-picker-summary">
                   {launchPending
                     ? 'Waiting for session feed…'
-                    : state.isStarting
-                      ? 'Starting session…'
-                      : `${state.engine} · ${selectedDirectory?.path ?? 'choose directory'}${state.worktree ? ' · new worktree' : ''}`}
+                    : `${state.engine} · ${selectedDirectory?.path ?? 'choose directory'}${state.worktree ? ' · new worktree' : ''}`}
                 </span>
               </>
             )}

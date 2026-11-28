@@ -1,5 +1,40 @@
 # Changelog
 
+## [0.1.1009](https://github.com/fohte/armyknife/compare/v0.1.1008...v0.1.1009) (2026-11-28)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** keep launches after leaving ([#2436](https://github.com/fohte/armyknife/issues/2436)) ([7b515e0](https://github.com/fohte/armyknife/commit/7b515e0e351365dd485a542298f6165e276c5533))
+
+## [0.1.1008](https://github.com/fohte/armyknife/compare/v0.1.1007...v0.1.1008) (2026-11-28)
+
+
+### Bug Fixes
+
+* **agent/store:** withdraw stale session cards ([#2445](https://github.com/fohte/armyknife/issues/2445)) ([8960109](https://github.com/fohte/armyknife/commit/8960109f35d6691837256408bc1ef8bc7b69fb50))
+
+## [0.1.1007](https://github.com/fohte/armyknife/compare/v0.1.1006...v0.1.1007) (2026-11-28)
+
+
+### Features
+
+* **agent-watch-web:** allow discarding work ([#2443](https://github.com/fohte/armyknife/issues/2443)) ([f1ab562](https://github.com/fohte/armyknife/commit/f1ab5629517fa21f8e06db5bf501eaceb9a3c87b))
+
+## [0.1.1006](https://github.com/fohte/armyknife/compare/v0.1.1005...v0.1.1006) (2026-11-28)
+
+
+### Bug Fixes
+
+* **watch-web:** track resume state and pane ([#2440](https://github.com/fohte/armyknife/issues/2440)) ([4680aae](https://github.com/fohte/armyknife/commit/4680aae9664904e2f0fdb935935e9034ad2a317c))
+
+## [0.1.1005](https://github.com/fohte/armyknife/compare/v0.1.1004...v0.1.1005) (2026-11-28)
+
+
+### Features
+
+* **agent-watch-web:** reflect tq updates ([#2439](https://github.com/fohte/armyknife/issues/2439)) ([f92b1c0](https://github.com/fohte/armyknife/commit/f92b1c0ad68667cbb62c4c664562326ea9500aa6))
+
 ## [0.1.1004](https://github.com/fohte/armyknife/compare/v0.1.1003...v0.1.1004) (2026-11-28)
 
 

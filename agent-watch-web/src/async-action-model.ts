@@ -87,6 +87,7 @@ type StartAsyncActionBaseOptions = {
   pullRequestRepo?: string
   pullRequestHeadSha?: string
   timelineIndex?: number
+  createdAt?: number
   run: () => Promise<AsyncActionOutcome>
   onRetry?: (retry: () => void, actionId: number) => void
   onCloseKeepWorktree?: () => void

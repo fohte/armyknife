@@ -15,10 +15,14 @@ use crate::shared::worktree::{
 };
 use crate::shared::worktree_error::WmError;
 
+pub(crate) mod discard;
+
 pub(crate) struct WorktreeDeletePlan {
     target: WorktreeDeleteTarget,
     merge_status: Option<MergeStatus>,
     force: bool,
+    discard: Option<discard::ConfirmedDiscard>,
+    discard_branch_head: Option<String>,
 }
 
 pub(crate) struct WorktreeDeleteTarget {
@@ -104,6 +108,8 @@ pub(crate) async fn prepare(
         target,
         merge_status,
         force,
+        discard: None,
+        discard_branch_head: None,
     })
 }
 
@@ -134,10 +140,14 @@ pub(crate) async fn execute(plan: WorktreeDeletePlan, skip_hooks: bool) -> Resul
             },
         merge_status,
         force,
+        discard,
+        discard_branch_head,
     } = plan;
     let worktree_path_str = worktree_path.to_string_lossy();
 
-    ensure_clean_for_deletion(&worktree_path, force)?;
+    if discard.is_none() {
+        ensure_clean_for_deletion(&worktree_path, force)?;
+    }
 
     // Must complete before cleanup_worktree_by_name below: it deletes this
     // worktree's session records and, when the command runs from the
@@ -156,12 +166,27 @@ pub(crate) async fn execute(plan: WorktreeDeletePlan, skip_hooks: bool) -> Resul
         skip_hooks,
     );
 
+    let discard_confirmed = discard;
+    let before_delete_branch_head = discard_branch_head;
+
     let result = cleanup::cleanup_worktree_by_name_with_before_delete(
         &main_repo,
         &worktree_name,
         &worktree_path,
         force,
+        discard_confirmed.is_some(),
         || {
+            if let Some(confirmed) = discard_confirmed {
+                // shortcut: Upgrade when deletion can prevent unrelated processes from writing between verification and removal.
+                discard::verify_before_delete(
+                    &confirmed,
+                    &worktree_path,
+                    merge_status.as_ref(),
+                    before_delete_branch_head.as_deref(),
+                    &main_repo,
+                    &worktree_name,
+                )?;
+            }
             ensure_worktree_delete_plan_before_delete(
                 merge_status.as_ref(),
                 force,

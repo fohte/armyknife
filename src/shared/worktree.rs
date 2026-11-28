@@ -76,6 +76,22 @@ pub(crate) fn uncommitted_changes(
     uncommitted_changes_with_status(worktree_path, &lock_dir, status_from_git)
 }
 
+pub(crate) fn uncommitted_changes_without_lock(
+    worktree_path: &std::path::Path,
+) -> anyhow::Result<Vec<UncommittedChange>> {
+    uncommitted_changes_without_lock_with_status(worktree_path, status_from_git)
+}
+
+fn uncommitted_changes_without_lock_with_status(
+    worktree_path: &std::path::Path,
+    status: impl FnOnce(&std::path::Path) -> anyhow::Result<String>,
+) -> anyhow::Result<Vec<UncommittedChange>> {
+    if !worktree_path.is_dir() {
+        return Ok(Vec::new());
+    }
+    status(worktree_path).map(|status| parse_uncommitted_changes(&status))
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct UncommittedChange {
     pub(crate) status: String,
@@ -593,6 +609,34 @@ mod tests {
                     path: "src/conflicted.rs".into()
                 },
             ],
+        );
+    }
+
+    #[rstest]
+    #[case::clean_status("", vec![])]
+    #[case::untracked_file(
+        "?? src/fictional.txt\0",
+        vec![UncommittedChange {
+            status: "??".into(),
+            path: "src/fictional.txt".into(),
+        }]
+    )]
+    fn lock_free_status_reader_parses_changes_without_external_git(
+        #[case] status: &str,
+        #[case] expected: Vec<UncommittedChange>,
+    ) {
+        let directory = tempfile::tempdir().expect("temporary worktree should be created");
+        let mut observed_path = None;
+
+        let changes = uncommitted_changes_without_lock_with_status(directory.path(), |path| {
+            observed_path = Some(path.to_path_buf());
+            Ok(status.to_string())
+        })
+        .expect("synthetic status should be parsed");
+
+        assert_eq!(
+            (changes, observed_path),
+            (expected, Some(directory.path().to_path_buf()))
         );
     }
 

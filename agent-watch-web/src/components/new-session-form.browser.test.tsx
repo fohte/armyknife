@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { userEvent } from 'vitest/browser'
 
 import { NewSessionForm } from '#components/new-session-form'
+import type { LaunchSessionRequest } from '#new-session-api'
 import {
   exampleModelOptions,
   exampleSessionDirectories,
@@ -35,8 +36,8 @@ function makeState(overrides: Partial<NewSessionState> = {}): NewSessionState {
     initialMessage: '',
     skillSuggestions: [],
     isLoadingDirectories: false,
-    isStarting: false,
     error: null,
+    setLaunchError: () => undefined,
     setDirectoryQuery: () => undefined,
     chooseDirectory: () => undefined,
     setEngine: () => undefined,
@@ -44,7 +45,7 @@ function makeState(overrides: Partial<NewSessionState> = {}): NewSessionState {
     setSelectedEffort: () => undefined,
     setWorktree: () => undefined,
     setInitialMessage: () => undefined,
-    start: () => Promise.resolve(),
+    start: () => undefined,
     reset: () => undefined,
     ...overrides,
   }
@@ -52,7 +53,7 @@ function makeState(overrides: Partial<NewSessionState> = {}): NewSessionState {
 
 function renderForm(
   state: NewSessionState,
-  onLaunched = vi.fn(),
+  onStart = vi.fn(),
   launchPending = false,
 ) {
   root = createRoot(container)
@@ -62,11 +63,11 @@ function renderForm(
         state={state}
         launchPending={launchPending}
         onClose={() => undefined}
-        onLaunched={onLaunched}
+        onStart={onStart}
       />,
     )
   })
-  return { onLaunched }
+  return { onStart }
 }
 
 function StatefulSkillForm() {
@@ -83,7 +84,7 @@ function StatefulSkillForm() {
     <NewSessionForm
       state={state}
       onClose={() => undefined}
-      onLaunched={() => undefined}
+      onStart={() => undefined}
     />
   )
 }
@@ -106,7 +107,7 @@ function StatefulKeyboardForm({
       })}
       isMobile={isMobile}
       onClose={() => undefined}
-      onLaunched={() => undefined}
+      onStart={() => undefined}
     />
   )
 }
@@ -196,7 +197,7 @@ it('suggests and inserts skills in the first message field', async () => {
 })
 
 it('uses the reply keyboard behavior for the first message', async () => {
-  const start = vi.fn<NewSessionState['start']>(() => Promise.resolve())
+  const start = vi.fn<NewSessionState['start']>()
   root = createRoot(container)
   act(() => root?.render(<StatefulKeyboardForm start={start} />))
   const textarea = container.querySelector<HTMLTextAreaElement>(
@@ -217,7 +218,7 @@ it('uses the reply keyboard behavior for the first message', async () => {
 
   const snapshot = () => ({
     afterNewlines,
-    starts: start.mock.calls.map(([onLaunched]) => typeof onLaunched),
+    starts: start.mock.calls.map(([onStart]) => typeof onStart),
   })
   expect(snapshot()).toEqual({
     afterNewlines: { message: '\n\n', starts: 0 },
@@ -226,7 +227,7 @@ it('uses the reply keyboard behavior for the first message', async () => {
 })
 
 it('keeps Enter as a newline in the mobile first message', async () => {
-  const start = vi.fn<NewSessionState['start']>(() => Promise.resolve())
+  const start = vi.fn<NewSessionState['start']>()
   root = createRoot(container)
   act(() => root?.render(<StatefulKeyboardForm isMobile start={start} />))
   const textarea = container.querySelector<HTMLTextAreaElement>(
@@ -437,18 +438,23 @@ it('selects a model and supported effort from the model chip', async () => {
   })
 })
 
-it('starts the session and reports the returned launch ID', async () => {
-  const onLaunched = vi.fn()
-  const start = vi.fn((callback: (launchId: string) => void) => {
-    callback('launch-fixture')
-    return Promise.resolve()
+it('passes the launch request to the launch handler', async () => {
+  const onStart = vi.fn()
+  const request: LaunchSessionRequest = {
+    directory: '/Users/example/work/service',
+    engine: 'claude',
+    worktree: false,
+    initialMessage: '',
+  }
+  const start = vi.fn((callback: (request: LaunchSessionRequest) => void) => {
+    callback(request)
   })
   renderForm(
     makeState({
       selectedDirectory: exampleSessionDirectories[0] ?? null,
       start,
     }),
-    onLaunched,
+    onStart,
   )
   await act(async () => {
     await userEvent.click(requireButton('.new-session-start'))
@@ -456,10 +462,10 @@ it('starts the session and reports the returned launch ID', async () => {
 
   const snapshot = () => ({
     startCalls: start.mock.calls.length,
-    launched: onLaunched.mock.calls,
+    launched: onStart.mock.calls,
   })
   expect(snapshot()).toEqual({
     startCalls: 1,
-    launched: [['launch-fixture']],
+    launched: [[request]],
   })
 })

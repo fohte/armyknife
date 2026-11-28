@@ -18,11 +18,12 @@ where
         .map_err(anyhow::Error::from)?
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Clone, Deserialize, Default)]
 #[serde(default, rename_all = "camelCase")]
 pub(super) struct CloseRequest {
     keep_worktree: bool,
     stop_and_close: bool,
+    discard: Option<crate::shared::worktree_delete::discard::ConfirmedDiscard>,
 }
 
 pub(super) async fn close(
@@ -32,9 +33,19 @@ pub(super) async fn close(
 ) -> Result<Json<Success>, ApiError> {
     let session = load_session(state.clone(), id).await?;
     let request = request.map(|Json(request)| request).unwrap_or_default();
+    if request.keep_worktree && request.discard.is_some() {
+        return Err(ApiError::bad_request(
+            "keepWorktree cannot be combined with discard",
+        ));
+    }
     if let Err(error) = state
         .runtime
-        .close_session(&session, request.keep_worktree, request.stop_and_close)
+        .close_session(
+            &session,
+            request.keep_worktree,
+            request.stop_and_close,
+            request.discard.clone(),
+        )
         .await
     {
         let filter_stopped_agent = request.stop_and_close

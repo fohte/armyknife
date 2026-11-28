@@ -2,6 +2,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, expect, it, vi } from 'vitest'
 
+import type { LaunchSessionRequest } from '#new-session-api'
 import { exampleModelOptions } from '#new-session-story-fixtures.test'
 import { type NewSessionState, useNewSession } from '#use-new-session'
 
@@ -183,7 +184,7 @@ it('keeps the current suggestions when an earlier request resolves last', async 
   })
 })
 
-it('forwards the selected model and effort when starting a session', async () => {
+it('passes the selected model and effort to the launch handler', async () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   container = document.createElement('div')
   document.body.append(container)
@@ -225,36 +226,18 @@ it('forwards the selected model and effort when starting a session', async () =>
     currentState?.chooseModel('fixture-model-orbit')
     currentState?.setSelectedEffort('high')
   })
-  await act(async () => {
-    await currentState?.start(() => undefined)
+  const requests: unknown[] = []
+  act(() => {
+    currentState?.start((request) => requests.push(request))
   })
-
-  const launchRequest = fetcher.mock.calls.find(
-    ([input]) => requestUrl(input) === '/api/sessions',
-  )
-  expect(
-    launchRequest === undefined
-      ? []
-      : [
-          {
-            url: requestUrl(launchRequest[0]),
-            method: launchRequest[1]?.method,
-            headers: launchRequest[1]?.headers,
-            body: launchRequest[1]?.body,
-          },
-        ],
-  ).toEqual([
+  expect(requests).toEqual([
     {
-      url: '/api/sessions',
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        directory: '/fixture/project',
-        engine: 'claude',
-        worktree: false,
-        model: 'fixture-model-orbit',
-        reasoningEffort: 'high',
-      }),
+      directory: '/fixture/project',
+      engine: 'claude',
+      worktree: false,
+      model: 'fixture-model-orbit',
+      reasoningEffort: 'high',
+      initialMessage: '',
     },
   ])
 })
@@ -313,20 +296,18 @@ it('uses profile defaults after clearing an effort unsupported by the default mo
     currentState?.setSelectedEffort('xhigh')
     currentState?.chooseModel(null)
   })
-  await act(async () => {
-    await currentState?.start(() => undefined)
+  const requests: unknown[] = []
+  act(() => {
+    currentState?.start((request) => requests.push(request))
   })
-
-  const launchRequestBody = fetcher.mock.calls.find(
-    ([input]) => requestUrl(input) === '/api/sessions',
-  )?.[1]?.body
-  expect(launchRequestBody).toEqual(
-    JSON.stringify({
+  expect(requests).toEqual([
+    {
       directory: '/fixture/project',
       engine: 'claude',
       worktree: false,
-    }),
-  )
+      initialMessage: '',
+    },
+  ])
 })
 
 const codexModelOptions = {
@@ -407,7 +388,7 @@ it('restores each engine model and effort selection after switching', async () =
   })
 })
 
-it('starts with the overridden engine model and effort selection', async () => {
+it('passes the overridden engine model and effort selection to launch', async () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   container = document.createElement('div')
   document.body.append(container)
@@ -449,22 +430,21 @@ it('starts with the overridden engine model and effort selection', async () => {
     currentState?.setEngine('claude')
   })
   await flushRequests()
-  await act(async () => {
-    await currentState?.start(() => undefined, 'codex')
+  const launchRequests: LaunchSessionRequest[] = []
+  act(() => {
+    currentState?.start((request) => launchRequests.push(request), 'codex')
   })
 
-  const launchBody = fetcher.mock.calls.find(
-    ([input]) => requestUrl(input) === '/api/sessions',
-  )?.[1]?.body
-  expect(launchBody).toEqual(
-    JSON.stringify({
+  expect(launchRequests).toEqual([
+    {
       directory: '/fixture/project',
       engine: 'codex',
       worktree: false,
       model: 'fixture-model-codex',
       reasoningEffort: 'xhigh',
-    }),
-  )
+      initialMessage: '',
+    },
+  ])
 })
 
 it('retains the selection when loading model options fails', async () => {

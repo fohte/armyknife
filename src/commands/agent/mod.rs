@@ -136,7 +136,7 @@ pub enum AgentCommands {
     /// Delete merged or closed worktrees
     Clean(CleanArgs),
 
-    /// Clean up stale agent sessions after a tmux pane exits
+    /// Archive sessions with missing tmux panes or working directories and withdraw unanswered to-dos and proposals
     #[command(name = "cleanup-stale-sessions")]
     CleanupStaleSessions,
 

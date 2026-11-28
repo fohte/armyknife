@@ -8,7 +8,7 @@ use anyhow::Result;
 use axum::extract::{DefaultBodyLimit, Path as RoutePath, State};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::super::store;
@@ -175,7 +175,7 @@ struct CommandResult {
 }
 
 trait ActionRuntime: Send + Sync {
-    fn resume_session(&self, session: &Session) -> Result<()>;
+    fn resume_session(&self, session: &Session) -> Result<Option<String>>;
     fn send_message(&self, session: &Session, content: &str) -> Result<()>;
     fn execute_command(&self, cwd: &std::path::Path, command: &str) -> Result<CommandResult>;
     fn rewind_session(
@@ -199,6 +199,7 @@ trait ActionRuntime: Send + Sync {
         session: &'a Session,
         keep_worktree: bool,
         stop_and_close: bool,
+        discard: Option<crate::shared::worktree_delete::discard::ConfirmedDiscard>,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
     fn merge_pull_request<'a>(
         &'a self,
@@ -217,6 +218,8 @@ struct ActionCapabilities {
     resume: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     startup: Option<resume::ResumeStartupStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    startup_at: Option<DateTime<Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     resume_disabled_reason: Option<ResumeDisabledReason>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -246,10 +249,13 @@ async fn actions(
     let current_id = resolve_current_session_id(&state, &id).await?;
     let session = load_session(state.clone(), current_id.clone()).await?;
     let session_start_generation = load_session_start_generation(&state, &current_id).await?;
-    let startup = state
+    let (startup, startup_at) = state
         .resume_pending
         .startup_status(&current_id, session.status, session_start_generation)
-        .await;
+        .await
+        .map_or((None, None), |(status, started_at)| {
+            (Some(status), Some(started_at))
+        });
     let has_tmux = session.tmux_info.is_some();
     let can_resume_by_status =
         matches!(session.status, SessionStatus::Ended | SessionStatus::Paused);
@@ -280,6 +286,7 @@ async fn actions(
             && session.has_pending_permission_requests(),
         resume: can_resume_by_status && resume_disabled_reason.is_none(),
         startup,
+        startup_at,
         resume_disabled_reason,
         permission: (has_live_session
             && matches!(session.engine, Engine::Claude | Engine::Codex)
@@ -566,6 +573,7 @@ mod tests {
         DirtyWorktree,
         ActiveProcesses,
         UnmergedWorktree,
+        DiscardMismatch,
         Operation(String),
     }
 
@@ -629,13 +637,13 @@ mod tests {
     }
 
     impl ActionRuntime for FakeRuntime {
-        fn resume_session(&self, session: &Session) -> Result<()> {
+        fn resume_session(&self, session: &Session) -> Result<Option<String>> {
             self.calls.lock().unwrap().push(json!({
                 "kind": "resume",
                 "sessionId": session.session_id,
                 "status": session.status,
             }));
-            Ok(())
+            Ok((session.status == SessionStatus::Ended).then(|| "%18".to_string()))
         }
 
         fn send_message(&self, session: &Session, content: &str) -> Result<()> {
@@ -778,16 +786,21 @@ mod tests {
             session: &'a Session,
             keep_worktree: bool,
             stop_and_close: bool,
+            discard: Option<crate::shared::worktree_delete::discard::ConfirmedDiscard>,
         ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
             let close_error = self.close_error.lock().unwrap().clone();
             let sessions_dir = self.sessions_dir.lock().unwrap().clone();
             let session_id = session.session_id.clone();
-            self.calls.lock().unwrap().push(json!({
+            let mut call = json!({
                 "kind": "close",
                 "sessionId": session.session_id,
                 "keepWorktree": keep_worktree,
                 "stopAndClose": stop_and_close,
-            }));
+            });
+            if let Some(discard) = discard {
+                call["discard"] = serde_json::to_value(discard).unwrap();
+            }
+            self.calls.lock().unwrap().push(call);
             Box::pin(async move {
                 if let Some(error) = close_error {
                     return Err(match error {
@@ -810,6 +823,11 @@ mod tests {
                             crate::shared::worktree_delete::UnmergedWorktreeError::new(
                                 "sample-branch",
                                 "not merged",
+                            ),
+                        ),
+                        FakeCloseFailure::DiscardMismatch => anyhow::Error::new(
+                            crate::shared::worktree_delete::discard::DiscardMismatchError::new(
+                                crate::shared::worktree_delete::discard::DiscardVerificationError::TargetChanged,
                             ),
                         ),
                         FakeCloseFailure::Operation(error) => anyhow::anyhow!(error),
@@ -1164,6 +1182,13 @@ mod tests {
     }
 
     async fn response_snapshot(response: Response<Body>, context: &ActionContext) -> Value {
+        response_snapshot_with_startup_at(response, context).await.0
+    }
+
+    async fn response_snapshot_with_startup_at(
+        response: Response<Body>,
+        context: &ActionContext,
+    ) -> (Value, Option<String>) {
         let status = response.status().as_u16();
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let mut calls = context.runtime.calls.lock().unwrap().clone();
@@ -1194,14 +1219,27 @@ mod tests {
             }
         }
         let mut body = serde_json::from_slice::<Value>(&body).unwrap_or(Value::Null);
+        let startup_at = body
+            .get("startupAt")
+            .and_then(Value::as_str)
+            .map(|timestamp| {
+                chrono::DateTime::parse_from_rfc3339(timestamp).expect("startupAt uses RFC 3339");
+                timestamp.to_string()
+            });
         if let Some(queued_prompt_id) = body.get_mut("queuedPromptId") {
             *queued_prompt_id = Value::String("<message-id>".to_string());
         }
-        json!({
-            "status": status,
-            "body": body,
-            "calls": calls,
-        })
+        if let Some(startup_at) = body.get_mut("startupAt") {
+            *startup_at = Value::String("<startup-at>".to_string());
+        }
+        (
+            json!({
+                "status": status,
+                "body": body,
+                "calls": calls,
+            }),
+            startup_at,
+        )
     }
 
     fn normalized_queued_prompts(
@@ -2841,6 +2879,77 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
+    async fn close_forwards_confirmed_discard_to_common_close(action_context: ActionContext) {
+        action_context.save_session(&session("sample-session"));
+        let discard = json!({
+            "path": "/fictional/worktree",
+            "branch": "feature/fictional",
+            "changes": [{ "status": "M", "path": "src/fictional.rs" }],
+            "commits": ["sha-a"],
+        });
+        let response = action_context
+            .router()
+            .oneshot(post(
+                "/sessions/sample-session/close",
+                json!({ "discard": discard }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response_snapshot(response, &action_context).await,
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": { "ok": true },
+                "calls": [{
+                    "kind": "close",
+                    "sessionId": "sample-session",
+                    "keepWorktree": false,
+                    "stopAndClose": false,
+                    "discard": {
+                        "path": "/fictional/worktree",
+                        "branch": "feature/fictional",
+                        "changes": [{ "status": "M", "path": "src/fictional.rs" }],
+                        "commits": ["sha-a"],
+                    },
+                }],
+            }),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn close_rejects_keep_worktree_with_discard(action_context: ActionContext) {
+        action_context.save_session(&session("sample-session"));
+        let response = action_context
+            .router()
+            .oneshot(post(
+                "/sessions/sample-session/close",
+                json!({
+                    "keepWorktree": true,
+                    "discard": {
+                        "path": "/fictional/worktree",
+                        "branch": "feature/fictional",
+                        "changes": [],
+                        "commits": [],
+                    },
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response_snapshot(response, &action_context).await,
+            json!({
+                "status": StatusCode::BAD_REQUEST.as_u16(),
+                "body": { "error": "keepWorktree cannot be combined with discard" },
+                "calls": [],
+            }),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
     async fn close_returns_unmerged_worktree_choice_with_the_reason(action_context: ActionContext) {
         action_context.save_session(&session("sample-session"));
         action_context.set_close_unmerged_worktree(true);
@@ -2898,6 +3007,13 @@ mod tests {
         false,
         "Worktree '/fictional/worktree' contains running processes: 23456 (fictional-worker). Stop them and retry, or close the session while keeping the worktree.",
         "worktree_process_guard"
+    )]
+    #[case::discard_confirmation_mismatch(
+        FakeCloseFailure::DiscardMismatch,
+        false,
+        false,
+        "Worktree changed since discard confirmation; review the current close checks and retry",
+        "close_checks_changed"
     )]
     #[case::stop_and_close_dirty_preflight_keeps_the_session_agent(
         FakeCloseFailure::DirtyWorktree,

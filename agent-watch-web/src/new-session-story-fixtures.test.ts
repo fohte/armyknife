@@ -48,8 +48,8 @@ export function createNewSessionStoryState(
     initialMessage: '',
     skillSuggestions: [],
     isLoadingDirectories: false,
-    isStarting: false,
     error: null,
+    setLaunchError: () => undefined,
     setDirectoryQuery: () => undefined,
     chooseDirectory: () => undefined,
     setEngine: () => undefined,
@@ -57,7 +57,7 @@ export function createNewSessionStoryState(
     setSelectedEffort: () => undefined,
     setWorktree: () => undefined,
     setInitialMessage: () => undefined,
-    start: () => Promise.resolve(),
+    start: () => undefined,
     reset: () => undefined,
     ...overrides,
   }
