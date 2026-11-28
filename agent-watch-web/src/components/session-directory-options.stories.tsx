@@ -1,3 +1,5 @@
+import '#components/new-session.css'
+
 import type { Meta, StoryObj } from '@storybook/react-vite'
 
 import { SessionDirectoryOptions } from '#components/session-directory-options'
