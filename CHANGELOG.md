@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1012](https://github.com/fohte/armyknife/compare/v0.1.1011...v0.1.1012) (2026-11-28)
+
+
+### Bug Fixes
+
+* **agent/peer:** skip --force for unlisted parents ([#2455](https://github.com/fohte/armyknife/issues/2455)) ([5da8d73](https://github.com/fohte/armyknife/commit/5da8d73ac33891249f623e9d65c386cd748bb93e))
+
 ## [0.1.1011](https://github.com/fohte/armyknife/compare/v0.1.1010...v0.1.1011) (2026-11-28)
 
 
