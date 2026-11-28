@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use super::super::{ChatItem, ParentSession, UserContentPart, claude_content_text};
 use super::append_text_with_user_marker_and_image_directory;
-use super::classifier::marked_user_body;
+use super::classifier::{marked_user_body, user_text_without_session_context};
 use crate::commands::agent::peer_message::extract_peer_message;
 use crate::commands::agent::store::WatchWebQueuedPrompt;
 
@@ -232,6 +232,10 @@ impl Queue {
         let (body, trailing_text) = match extract_peer_message(prompt_text, user_marker) {
             Some(message) if message.has_user_marker => (message.body, message.trailing_text),
             _ if is_queued_command => (prompt_text.to_owned(), String::new()),
+            _ if matches!(event.kind, QueueRecordKind::User) => (
+                user_text_without_session_context(prompt_text),
+                String::new(),
+            ),
             _ => return,
         };
         let index = [

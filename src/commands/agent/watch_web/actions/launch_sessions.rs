@@ -607,6 +607,8 @@ mod tests {
             .path()
             .canonicalize()
             .unwrap();
+        let launch_session_id =
+            store::watch_web_launch_session_id(args.common.watch_web_launch_id.as_deref().unwrap());
 
         assert_eq!(
             (
@@ -624,7 +626,8 @@ mod tests {
 
                         Attached file(s):
                         - {}
-                    ", saved_path.display()}
+                        <!-- armyknife-queued-prompt-id:{} -->
+                    ", saved_path.display(), launch_session_id}
                     .trim_end()
                     .to_string(),
                 ),
