@@ -136,6 +136,56 @@ it('restores a saved draft and clears it back to defaults', async () => {
   })
 })
 
+it('keeps the saved time when unavailable model choices are reconciled', async () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  container = document.createElement('div')
+  document.body.append(container)
+  const savedDraft = JSON.stringify({
+    version: 1,
+    savedAt: '2026-05-06T12:03:00.000Z',
+    directory: null,
+    directoryQuery: '',
+    engine: 'claude',
+    selections: {
+      claude: { model: 'retired-fixture-model', effort: 'xhigh' },
+      codex: { model: null, effort: null },
+    },
+    worktree: false,
+    initialMessage: '',
+  })
+  window.localStorage.setItem(NEW_SESSION_DRAFT_STORAGE_KEY, savedDraft)
+  vi.stubGlobal(
+    'fetch',
+    vi.fn<typeof fetch>((input) => {
+      const url = requestUrl(input)
+      const body = url.startsWith('/api/model-options')
+        ? exampleModelOptions
+        : { skills: [] }
+      return Promise.resolve(
+        new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      )
+    }),
+  )
+  root = createRoot(container)
+
+  act(() => root?.render(<NewSessionHarness />))
+  await flushRequests()
+
+  const snapshot = () => ({
+    selectedModel: currentState?.selectedModel,
+    selectedEffort: currentState?.selectedEffort,
+    storedDraft: window.localStorage.getItem(NEW_SESSION_DRAFT_STORAGE_KEY),
+  })
+  expect(snapshot()).toEqual({
+    selectedModel: null,
+    selectedEffort: null,
+    storedDraft: savedDraft,
+  })
+})
+
 it('reloads skill suggestions when the selected engine and directory change', async () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   container = document.createElement('div')

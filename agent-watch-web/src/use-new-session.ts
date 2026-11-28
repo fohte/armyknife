@@ -86,6 +86,16 @@ export function useNewSession(active: boolean) {
   const skillSuggestionsSequence = useRef(0)
   const selectionsRef = useRef(selections)
   selectionsRef.current = selections
+  const currentFields: NewSessionDraftFields = {
+    directory: selectedDirectory,
+    directoryQuery,
+    engine,
+    selections,
+    worktree,
+    initialMessage,
+  }
+  const draftFieldsRef = useRef(currentFields)
+  draftFieldsRef.current = currentFields
 
   useEffect(() => {
     if (active && !activeRef.current) {
@@ -123,10 +133,20 @@ export function useNewSession(active: boolean) {
   ])
 
   const updateSelection = useCallback(
-    (selectionEngine: SessionEngine, selection: NewSessionModelSelection) => {
+    (
+      selectionEngine: SessionEngine,
+      selection: NewSessionModelSelection,
+      persistDraft = true,
+    ) => {
       const nextSelections = {
         ...selectionsRef.current,
         [selectionEngine]: selection,
+      }
+      if (!persistDraft) {
+        lastFieldsRef.current = JSON.stringify({
+          ...draftFieldsRef.current,
+          selections: nextSelections,
+        })
       }
       selectionsRef.current = nextSelections
       setSelections(nextSelections)
@@ -152,7 +172,7 @@ export function useNewSession(active: boolean) {
           selectionsRef.current[engine],
           options,
         )
-        updateSelection(engine, reconciled)
+        updateSelection(engine, reconciled, false)
       },
       (error) => {
         if (!current) return

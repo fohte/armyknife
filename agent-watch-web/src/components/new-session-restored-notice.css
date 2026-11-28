@@ -24,22 +24,20 @@
   padding: 0 8px;
   border: 1px solid #3f3f46;
   background: transparent;
-  color: inherit;
+  color: var(--aw-text-primary);
   cursor: pointer;
   font: inherit;
 }
 
-@media (max-width: 760px) {
-  .new-session-restored-notice[data-mobile='true'] {
-    min-height: 44px;
-    padding: 0 8px 0 16px;
-    font-size: 12px;
-  }
+.new-session-restored-notice[data-mobile='true'] {
+  min-height: 44px;
+  padding: 0 8px 0 16px;
+  font-size: 12px;
+}
 
-  .new-session-restored-notice[data-mobile='true'] button {
-    min-height: 44px;
-    padding: 0 10px;
-    border: 0;
-    font-size: 14px;
-  }
+.new-session-restored-notice[data-mobile='true'] button {
+  min-height: 44px;
+  padding: 0 10px;
+  border: 0;
+  font-size: 14px;
 }

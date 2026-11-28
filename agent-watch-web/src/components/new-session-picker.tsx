@@ -48,6 +48,15 @@ export function NewSessionPicker({
   const pickerRef = useRef<HTMLElement>(null)
   const wasModelPickerOpen = useRef(false)
   const selectedDirectory = state.selectedDirectory
+  const restoredNotice =
+    state.restoredAt === null ? null : (
+      <NewSessionRestoredNotice
+        savedAt={state.restoredAt}
+        {...(now === undefined ? {} : { now })}
+        isMobile={isMobile}
+        onClear={state.clearDraft}
+      />
+    )
 
   useEffect(() => {
     if (modelPickerOpen) {
@@ -226,18 +235,12 @@ export function NewSessionPicker({
             <X aria-hidden="true" size={16} />
           </button>
         </header>
-        {state.restoredAt !== null ? (
-          <NewSessionRestoredNotice
-            savedAt={state.restoredAt}
-            {...(now === undefined ? {} : { now })}
-            isMobile={isMobile}
-            onClear={state.clearDraft}
-          />
-        ) : null}
+        {selectedDirectory !== null ? restoredNotice : null}
         {selectedDirectory === null ? (
           <SessionDirectoryOptions
             autoFocus={!isMobile}
             activeIndex={activeIndex}
+            afterSearchInput={restoredNotice}
             directories={state.directories}
             error={state.error}
             isLoading={state.isLoadingDirectories}

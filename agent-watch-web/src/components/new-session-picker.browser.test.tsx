@@ -170,6 +170,33 @@ it('clears a restored draft from the picker', async () => {
   expect(clearDraft.mock.calls).toEqual([[]])
 })
 
+it('shows the restored notice below the directory search input', () => {
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <PickerHarness
+        start={() => undefined}
+        restoredAt="2026-05-06T12:03:00Z"
+      />,
+    )
+  })
+
+  const searchInput = container.querySelector<HTMLInputElement>(
+    '[aria-label="Search directories"]',
+  )
+  const notice = container.querySelector('.new-session-restored-notice')
+  const listbox = container.querySelector('[aria-label="Directories"]')
+  const snapshot = () => ({
+    noticeImmediatelyFollowsInput:
+      searchInput?.closest('label')?.nextElementSibling === notice,
+    noticePrecedesListbox: notice?.nextElementSibling === listbox,
+  })
+  expect(snapshot()).toEqual({
+    noticeImmediatelyFollowsInput: true,
+    noticePrecedesListbox: true,
+  })
+})
+
 it('launches Codex when Option+Enter is pressed after choosing a directory', async () => {
   const start = vi.fn<NewSessionState['start']>()
   root = createRoot(container)
