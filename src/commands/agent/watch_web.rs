@@ -46,7 +46,7 @@ use super::error::CcError;
 use crate::commands::agent::store;
 use crate::commands::agent::types::Session;
 use crate::commands::agent::watch_web::session_enrichment::SessionEnrichmentCache;
-use crate::infra::tq::TqEventSubscription;
+use crate::infra::tq::{TqEvent, TqEventSubscription};
 use crate::shared::env_var::EnvVars;
 use session_store_watcher::SessionStoreWatcher;
 
@@ -145,6 +145,42 @@ pub(super) struct EnrichmentUpdates {
 struct SessionStoreWatch {
     events: tokio::sync::broadcast::Receiver<()>,
     available: bool,
+}
+
+trait TqEventReceiver: Send {
+    fn recv(&mut self) -> impl Future<Output = Option<TqEvent>> + Send + '_;
+}
+
+impl TqEventReceiver for TqEventSubscription {
+    fn recv(&mut self) -> impl Future<Output = Option<TqEvent>> + Send + '_ {
+        TqEventSubscription::recv(self)
+    }
+}
+
+#[cfg(test)]
+impl TqEventReceiver for tokio::sync::mpsc::Receiver<TqEvent> {
+    fn recv(&mut self) -> impl Future<Output = Option<TqEvent>> + Send + '_ {
+        tokio::sync::mpsc::Receiver::recv(self)
+    }
+}
+
+async fn forward_tq_events<E: TqEventReceiver + 'static>(
+    mut events: E,
+    mut shutdown: watch::Receiver<bool>,
+    cache: SessionEnrichmentCache,
+) {
+    if *shutdown.borrow() {
+        return;
+    }
+    loop {
+        tokio::select! {
+            _ = shutdown.changed() => break,
+            event = events.recv() => match event {
+                Some(event) => cache.apply_tq_event(&event).await,
+                None => break,
+            },
+        }
+    }
 }
 
 impl EnrichmentUpdates {
@@ -396,23 +432,12 @@ fn app_with_assets_and_queued_prompt_loaders_and_restart_signal(
     } = session_store_watch;
     let enrichment_updates = EnrichmentUpdates::new();
     let session_enrichment = SessionEnrichmentCache::new(enrichment_updates.clone());
-    if let Some(mut tq_events) = tq_events {
-        let cache = session_enrichment.clone();
-        let mut shutdown = output_shutdown_signal.clone();
-        tokio::spawn(async move {
-            if *shutdown.borrow() {
-                return;
-            }
-            loop {
-                tokio::select! {
-                    _ = shutdown.changed() => break,
-                    event = tq_events.recv() => match event {
-                        Some(event) => cache.apply_tq_event(&event).await,
-                        None => break,
-                    },
-                }
-            }
-        });
+    if let Some(tq_events) = tq_events {
+        tokio::spawn(forward_tq_events(
+            tq_events,
+            output_shutdown_signal.clone(),
+            session_enrichment.clone(),
+        ));
     }
     let api = Router::new()
         .merge(actions::router(loaders.clone(), enrichment_updates.clone()))
