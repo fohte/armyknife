@@ -142,19 +142,17 @@ export function SessionDiscardConfirmation({
                   </li>
                 ))}
             </ul>
-            {changes.length > ITEMS_PER_SECTION ? (
+            {changes.length > ITEMS_PER_SECTION && !showAllChanges ? (
               <button
                 aria-controls={changesListId}
                 aria-expanded={showAllChanges}
                 className="session-discard-confirmation__show-more"
                 onClick={() => {
-                  setShowAllChanges((expanded) => !expanded)
+                  setShowAllChanges(true)
                 }}
                 type="button"
               >
-                {showAllChanges
-                  ? 'Show less'
-                  : `Show ${String(changes.length - ITEMS_PER_SECTION)} more`}
+                {`Show ${String(changes.length - ITEMS_PER_SECTION)} more`}
               </button>
             ) : null}
           </section>
@@ -177,7 +175,7 @@ export function SessionDiscardConfirmation({
                     }
                     key={sha}
                   >
-                    <code>{sha}</code>
+                    <code>{sha.slice(0, 7)}</code>
                     <span className="session-discard-confirmation__subject">
                       {subject}
                     </span>
@@ -189,19 +187,17 @@ export function SessionDiscardConfirmation({
                   </li>
                 ))}
             </ul>
-            {commits.length > ITEMS_PER_SECTION ? (
+            {commits.length > ITEMS_PER_SECTION && !showAllCommits ? (
               <button
                 aria-controls={commitsListId}
                 aria-expanded={showAllCommits}
                 className="session-discard-confirmation__show-more"
                 onClick={() => {
-                  setShowAllCommits((expanded) => !expanded)
+                  setShowAllCommits(true)
                 }}
                 type="button"
               >
-                {showAllCommits
-                  ? 'Show less'
-                  : `Show ${String(commits.length - ITEMS_PER_SECTION)} more`}
+                {`Show ${String(commits.length - ITEMS_PER_SECTION)} more`}
               </button>
             ) : null}
           </section>

@@ -22,6 +22,7 @@ type UseSessionCloseOptions = {
 }
 
 type DiscardConfirmationSnapshot = {
+  sourceActionId: number
   sessionId: string
   sessionName: string
   checks: CloseWorktreeChecks
@@ -200,6 +201,7 @@ export function useSessionClose({
             return
           }
           setDiscardSnapshot({
+            sourceActionId: action.id,
             sessionId: action.sessionId,
             sessionName: action.sessionTitle,
             checks: action.checks,
@@ -255,6 +257,7 @@ export function useSessionClose({
     setDiscardSnapshot(null)
     startAsyncAction({
       kind: 'discard',
+      replacesActionId: snapshot.sourceActionId,
       sessionId: snapshot.sessionId,
       sessionTitle: snapshot.sessionName,
       run: async () =>
@@ -320,6 +323,7 @@ export function useSessionClose({
           return
         }
         setDiscardSnapshot({
+          sourceActionId: action.id,
           sessionId: action.sessionId,
           sessionName: action.sessionTitle,
           checks: action.checks,

@@ -161,7 +161,10 @@ export function AsyncActionItem({
           (!hasCloseChecks || action.status === 'deleteFailed') ? (
           <span className="async-action-error">{action.error}</span>
         ) : null}
-        {form === 'row' && hasCloseChecks ? (
+        {form === 'row' &&
+        action.kind === 'close' &&
+        action.status === 'closeFailed' &&
+        action.checks !== undefined ? (
           <CloseChecksList checks={action.checks} />
         ) : null}
         {canShowCommandOutput && form === 'toast' ? (
@@ -175,13 +178,18 @@ export function AsyncActionItem({
           <>
             <span className="async-action-control-caption">Close anyway</span>
             <div className="async-action-controls async-action-controls--close-options">
-              <button type="button" onClick={onCloseKeepWorktree}>
-                Close and keep worktree
+              <button
+                type="button"
+                aria-label="Close and keep worktree"
+                onClick={onCloseKeepWorktree}
+              >
+                Keep worktree
               </button>
               <button
                 className="async-action-discard"
                 type="button"
                 aria-haspopup="dialog"
+                aria-label="Discard changes and close…"
                 onClick={onDiscardChanges}
               >
                 <Trash2 aria-hidden="true" size={13} />
@@ -196,6 +204,7 @@ export function AsyncActionItem({
               ) : null}
               <button
                 type="button"
+                aria-label={form === 'row' ? undefined : 'Details in Activity'}
                 onClick={form === 'row' ? onOpenInTerminal : onDetails}
               >
                 {form === 'row' ? 'Open in terminal' : 'Details'}
@@ -205,14 +214,20 @@ export function AsyncActionItem({
         ) : null}
         {showDiscardControls && form === 'line' ? (
           <>
+            <span className="async-action-control-caption">Close anyway</span>
             <div className="async-action-controls async-action-controls--close-options">
-              <button type="button" onClick={onCloseKeepWorktree}>
-                Close and keep worktree
+              <button
+                type="button"
+                aria-label="Close and keep worktree"
+                onClick={onCloseKeepWorktree}
+              >
+                Keep worktree
               </button>
               <button
                 className="async-action-discard"
                 type="button"
                 aria-haspopup="dialog"
+                aria-label="Discard changes and close…"
                 onClick={onDiscardChanges}
               >
                 <Trash2 aria-hidden="true" size={13} />
@@ -225,7 +240,11 @@ export function AsyncActionItem({
                   Retry
                 </button>
               ) : null}
-              <button type="button" onClick={onDetails}>
+              <button
+                type="button"
+                aria-label="Details in Activity"
+                onClick={onDetails}
+              >
                 Details
               </button>
             </div>

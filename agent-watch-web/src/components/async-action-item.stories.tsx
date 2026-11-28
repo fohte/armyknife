@@ -396,6 +396,58 @@ const failedCloseInActivity = {
   createdAt: 1_800_000_000_000,
 }
 
+const failedCloseWithDiscard = {
+  ...failedCloseInActivity,
+  checks: {
+    path: '/worktrees/example-project',
+    files: ['src/example.ts'],
+    changes: [{ status: 'M' as const, path: 'src/example.ts' }],
+    commits: [],
+    branch: 'feature/example-work',
+    merged: true,
+    reason: null,
+    processes: [],
+    commitInspectionUnavailable: false,
+    processInspectionUnavailable: false,
+  },
+}
+
+export const CloseFailureOffersDiscardInToast: Story = {
+  name: 'The toast offers to keep or discard the worktree after Close fails.',
+  args: {
+    form: 'toast',
+    action: failedCloseWithDiscard,
+    onCloseKeepWorktree: () => undefined,
+    onDiscardChanges: () => undefined,
+    onRetry: () => undefined,
+    onDetails: () => undefined,
+  },
+}
+
+export const CloseFailureOffersDiscardInActivity: Story = {
+  name: 'Activity offers to keep or discard the worktree after Close fails.',
+  args: {
+    form: 'row',
+    action: failedCloseWithDiscard,
+    onCloseKeepWorktree: () => undefined,
+    onDiscardChanges: () => undefined,
+    onRetry: () => undefined,
+    onOpenInTerminal: () => undefined,
+  },
+}
+
+export const CloseFailureOffersDiscardInConversation: Story = {
+  name: 'The conversation line offers to keep or discard the worktree.',
+  args: {
+    form: 'line',
+    action: failedCloseWithDiscard,
+    onCloseKeepWorktree: () => undefined,
+    onDiscardChanges: () => undefined,
+    onRetry: () => undefined,
+    onDetails: () => undefined,
+  },
+}
+
 export const UncommittedFilesAreListed: Story = {
   name: 'Activity lists every uncommitted file.',
   args: {

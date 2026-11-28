@@ -43,7 +43,7 @@ function renderConfirmation(props: {
   })
 }
 
-it('expands the file list when Show more is activated', async () => {
+it('expands the file list and removes the Show more button', async () => {
   const changes = Array.from({ length: 7 }, (_, index) => ({
     status: 'M' as const,
     path: `src/module-${String(index + 1)}.ts`,
@@ -95,8 +95,8 @@ it('expands the file list when Show more is activated', async () => {
       'src/module-6.ts',
       'src/module-7.ts',
     ],
-    button: 'Show less',
-    expanded: 'true',
+    button: undefined,
+    expanded: undefined,
   })
 })
 
@@ -152,9 +152,30 @@ it('expands the commit list when its Show more button is activated', async () =>
       'Update module 6',
       'Update module 7',
     ],
-    button: 'Show less',
-    expanded: 'true',
+    button: undefined,
+    expanded: undefined,
   })
+})
+
+it('shows the first seven characters of a commit SHA', () => {
+  renderConfirmation({
+    changes: [],
+    commits: [
+      {
+        sha: '1234567890abcdef1234567890abcdef12345678',
+        subject: 'Update the sample workflow',
+      },
+    ],
+  })
+
+  const snapshot = () =>
+    Array.from(
+      document.querySelectorAll(
+        '.session-discard-confirmation__items section code',
+      ),
+      (element) => element.textContent,
+    )
+  expect(snapshot()).toEqual(['1234567'])
 })
 
 it('calls the matching action callback for each dialog button', async () => {

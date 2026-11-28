@@ -109,6 +109,7 @@ type StartAsyncActionBaseOptions = {
   onRetry?: (retry: () => void, actionId: number) => void
   onCloseKeepWorktree?: () => void
   onOpenInTerminal?: () => void
+  replacesActionId?: number
   discardable?: boolean
   onDiscardChanges?: (action: AsyncAction) => void
   onReviewDiscardAgain?: (action: AsyncAction) => void

@@ -4643,7 +4643,7 @@ it('shows every close check in Activity and opens the failed worktree in a termi
   await act(async () => {
     container
       .querySelector<HTMLButtonElement>(
-        '.async-action-toast-stack .async-action-controls button:nth-child(3)',
+        '.async-action-toast-stack .async-action-controls--close-secondary button:last-child',
       )
       ?.click()
     await flushAsyncState()
@@ -4676,11 +4676,11 @@ it('shows every close check in Activity and opens the failed worktree in a termi
     }
   }
   expect(activitySnapshot()).toEqual({
-    text: 'Close failedExample sessionUncommitted changessrc/example.ts · src/example.test.ts2 filesBranch feature/example-workThe example pull request is still open.Not mergedRunning processes12345 example-server · 23456 example-watcher2 running/worktrees/example-projectClose and keep worktreeRetryOpen in terminal<time>',
+    text: 'Close failedExample sessionUncommitted changessrc/example.ts · src/example.test.ts2 filesBranch feature/example-workThe example pull request is still open.Not mergedRunning processes12345 example-server · 23456 example-watcher2 running/worktrees/example-projectClose anywayKeep worktreeDiscard changes…RetryOpen in terminal<time>',
     time: '<time>',
-    buttons: ['Close and keep worktree', 'Retry', 'Open in terminal'],
+    buttons: ['Keep worktree', 'Discard changes…', 'Retry', 'Open in terminal'],
     conversationLine:
-      'Close failedLeft in the worktree: 2 uncommitted files, branch not merged, 2 running processesClose and keep worktreeRetry',
+      'Close failedLeft in the worktree: 2 uncommitted files, branch not merged, 2 running processesClose anywayKeep worktreeDiscard changes…RetryDetails',
   })
 
   await act(async () => {
@@ -4699,7 +4699,7 @@ it('shows every close check in Activity and opens the failed worktree in a termi
         '.async-action-toast-stack .async-action-controls button',
       ),
     )
-      .find((button) => button.textContent === 'Close and keep worktree')
+      .find((button) => button.textContent === 'Keep worktree')
       ?.click()
     await flushAsyncState()
   })
@@ -4750,6 +4750,20 @@ it('requires a new review when the worktree changes during discard confirmation'
     ],
   }
   const closeBodies: unknown[] = []
+  const actionLabels = () => ({
+    toast: Array.from(
+      container.querySelectorAll(
+        '.async-action-toast-stack .async-action-item-content strong',
+      ),
+      (element) => element.textContent,
+    ),
+    conversation: Array.from(
+      container.querySelectorAll(
+        '.async-action-item--line .async-action-item-content strong',
+      ),
+      (element) => element.textContent,
+    ),
+  })
   const fetchMock = vi.fn<typeof fetch>().mockImplementation((input, init) => {
     if (!requestUrl(input).endsWith('/close')) {
       return mockSessionActionFetch(input)
@@ -4818,6 +4832,10 @@ it('requires a new review when the worktree changes during discard confirmation'
       ?.click()
     await flushAsyncState()
   })
+  expect(actionLabels()).toEqual({
+    toast: ['Did not delete worktree'],
+    conversation: ['Did not delete worktree'],
+  })
 
   const reviewAgainButton = Array.from(
     container.querySelectorAll<HTMLButtonElement>(
@@ -4859,6 +4877,10 @@ it('requires a new review when the worktree changes during discard confirmation'
       ?.querySelector<HTMLButtonElement>('.confirm-dialog-confirm')
       ?.click()
     await flushAsyncState()
+  })
+  expect(actionLabels()).toEqual({
+    toast: ['Closed session and deleted worktree'],
+    conversation: ['Closed session and deleted worktree'],
   })
   expect(closeBodies).toEqual([
     { keepWorktree: false, stopAndClose: true },
@@ -5075,7 +5097,7 @@ it('offers a keep-worktree retry after a non-Done session close fails', async ()
   expect(initialFailure).toEqual({
     error: null,
     toast:
-      'Close failedAnswer a questionLeft in the worktree: branch not mergedClose anywayClose and keep worktreeDiscard changes…RetryDetails',
+      'Close failedAnswer a questionLeft in the worktree: branch not mergedClose anywayKeep worktreeDiscard changes…RetryDetails',
   })
   await act(async () => {
     container
@@ -5091,7 +5113,7 @@ it('offers a keep-worktree retry after a non-Done session close fails', async ()
     initialFailure: {
       error: null,
       toast:
-        'Close failedAnswer a questionLeft in the worktree: branch not mergedClose anywayClose and keep worktreeDiscard changes…RetryDetails',
+        'Close failedAnswer a questionLeft in the worktree: branch not mergedClose anywayKeep worktreeDiscard changes…RetryDetails',
     },
     closeBodies: [
       { keepWorktree: false, stopAndClose: true },

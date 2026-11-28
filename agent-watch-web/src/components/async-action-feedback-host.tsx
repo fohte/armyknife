@@ -186,9 +186,11 @@ export function AsyncActionFeedbackHost({
                       closeWithWorktree(action.id)
                     }}
                     onDiscardChanges={() => {
+                      closeActivity()
                       discardChanges?.(action.id)
                     }}
                     onReviewDiscardAgain={() => {
+                      closeActivity()
                       reviewDiscardAgain?.(action.id)
                     }}
                     onOpenInTerminal={() => {

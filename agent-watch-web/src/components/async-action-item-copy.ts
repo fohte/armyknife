@@ -56,7 +56,13 @@ export function copyAsyncAction(action: AsyncAction) {
           ? { title: 'Closing session', line: 'Closing session…' }
           : { title: '', line: '' }
       case 'closed':
-        return action.kind === 'close' || action.kind === 'discard'
+        if (action.kind === 'discard') {
+          return {
+            title: 'Closed session and deleted worktree',
+            line: 'Closed session and deleted worktree',
+          }
+        }
+        return action.kind === 'close'
           ? { title: 'Closed session', line: 'Closed session' }
           : { title: '', line: '' }
       case 'closeFailed':

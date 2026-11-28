@@ -202,9 +202,28 @@ it('opens the discard confirmation from a close failure', async () => {
   if (discardButton === undefined) {
     throw new Error('Expected the discard action')
   }
+  const keepButton = Array.from(container.querySelectorAll('button')).find(
+    (button) => button.textContent === 'Keep worktree',
+  )
+  const detailsButton = Array.from(container.querySelectorAll('button')).find(
+    (button) => button.textContent === 'Details',
+  )
   await userEvent.click(discardButton)
 
-  expect(onDiscardChanges.mock.calls).toEqual([[]])
+  const snapshot = () => ({
+    keepText: keepButton?.textContent ?? null,
+    keepLabel: keepButton?.getAttribute('aria-label') ?? null,
+    discardLabel: discardButton.getAttribute('aria-label'),
+    detailsLabel: detailsButton?.getAttribute('aria-label') ?? null,
+    calls: onDiscardChanges.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    keepText: 'Keep worktree',
+    keepLabel: 'Close and keep worktree',
+    discardLabel: 'Discard changes and close…',
+    detailsLabel: 'Details in Activity',
+    calls: [[]],
+  })
 })
 
 it('shows merge failure detail and Retry as the desktop design does', async () => {
