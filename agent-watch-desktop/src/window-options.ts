@@ -1,5 +1,7 @@
 import type { BrowserWindowConstructorOptions } from 'electron'
 
+import { isWatchAppPageUrl } from './navigation.js'
+
 const popupWindowOptions = {
   width: 1100,
   height: 800,
@@ -27,3 +29,12 @@ export const createPopupWindowOptions = (platform: NodeJS.Platform) =>
 
 export const createContentWindowOptions =
   (): BrowserWindowConstructorOptions => ({ ...popupWindowOptions })
+
+export const createWindowOpenOptions = (
+  url: string,
+  watchUrl: string,
+  platform: NodeJS.Platform,
+): BrowserWindowConstructorOptions =>
+  isWatchAppPageUrl(url, watchUrl)
+    ? createPopupWindowOptions(platform)
+    : createContentWindowOptions()
