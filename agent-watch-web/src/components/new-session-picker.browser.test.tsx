@@ -107,7 +107,7 @@ it('shows the last-used time beside a recent directory title', () => {
     root?.render(
       <PickerHarness
         start={() => Promise.resolve()}
-        now={new Date('2026-05-06T12:06:00Z')}
+        now={new Date('2026-05-06T12:00:00Z')}
       />,
     )
   })
@@ -127,7 +127,7 @@ it('shows the last-used time beside a recent directory title', () => {
   expect(snapshot()).toEqual([
     {
       title: 'service',
-      when: '6m ago',
+      when: '2h ago',
       path: '/Users/example/work/service',
     },
     {
