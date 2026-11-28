@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.991](https://github.com/fohte/armyknife/compare/v0.1.990...v0.1.991) (2026-11-28)
+
+
+### Bug Fixes
+
+* **watch-web:** avoid full transcript reparses ([#2345](https://github.com/fohte/armyknife/issues/2345)) ([e561852](https://github.com/fohte/armyknife/commit/e5618528d29671ad6583322cb50bcb5704b462b7))
+
 ## [0.1.990](https://github.com/fohte/armyknife/compare/v0.1.989...v0.1.990) (2026-11-28)
 
 
