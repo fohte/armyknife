@@ -426,10 +426,11 @@ fn respawn_paused_session_with(
     let pane_current_command = get_pane_current_command(socket_path, &tmux_info.pane_id);
     check_idle_at_shell_prompt(pane_current_command.as_deref())?;
 
-    respawn_session_pane(session, tmux_info, respawn_pane)
+    let command = build_resume_command().ok_or(RespawnError::CommandBuildFailed)?;
+    respawn_session_pane(session, tmux_info, &command, respawn_pane)
 }
 
-/// Replaces a stuck resumed session's pane with `a agent resume`.
+/// Replaces a stuck session's pane with a resume command for its recorded ID.
 /// Unlike paused-session recovery, a stuck pane is expected to still run the agent.
 pub(crate) fn respawn_stuck_session(session: &Session) -> Result<String, RespawnError> {
     respawn_stuck_session_with(session, |socket_path, pane_id, cwd, command| {
@@ -449,17 +450,19 @@ fn respawn_stuck_session_with(
         ));
     }
 
-    respawn_session_pane(session, tmux_info, respawn_pane)
+    let command =
+        build_resume_command_for_session(session).ok_or(RespawnError::CommandBuildFailed)?;
+    respawn_session_pane(session, tmux_info, &command, respawn_pane)
 }
 
 fn respawn_session_pane(
     session: &Session,
     tmux_info: &TmuxInfo,
+    command: &str,
     respawn_pane: impl FnOnce(Option<&str>, &str, &Path, &str) -> std::result::Result<(), String>,
 ) -> Result<String, RespawnError> {
-    let wrapped = build_resume_command().ok_or(RespawnError::CommandBuildFailed)?;
     let socket_path = tmux_info.socket_path.as_deref();
-    respawn_pane(socket_path, &tmux_info.pane_id, &session.cwd, &wrapped)
+    respawn_pane(socket_path, &tmux_info.pane_id, &session.cwd, command)
         .map_err(RespawnError::RespawnFailed)?;
 
     Ok(tmux_info.pane_id.clone())
@@ -485,12 +488,21 @@ fn check_idle_at_shell_prompt(pane_current_command: Option<&str>) -> Result<(), 
 /// $PATH in their interactive rc file (e.g. `.zshrc`). Running without `-i`
 /// would inherit tmux's pre-rc $PATH and fail to locate the CLI.
 fn build_resume_command() -> Option<String> {
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
     let exe = std::env::current_exe()
         .ok()
         .and_then(|p| p.to_str().map(String::from))
         .unwrap_or_else(|| "a".to_string());
     let inner = shlex::try_join([exe.as_str(), "agent", "resume"]).ok()?;
+    build_login_shell_command(&inner)
+}
+
+fn build_resume_command_for_session(session: &Session) -> Option<String> {
+    let inner = crate::commands::agent::resurrect::resume_command_for_session(session);
+    build_login_shell_command(&inner)
+}
+
+fn build_login_shell_command(inner: &str) -> Option<String> {
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
     let exec_shell = shlex::try_join([shell.as_str(), "-i"]).ok()?;
     let script = format!("{inner}; exec {exec_shell}");
     shlex::try_join([shell.as_str(), "-i", "-c", &script]).ok()
@@ -577,17 +589,21 @@ mod tests {
             pane_id: "%17".to_string(),
             socket_path: Some("/fixture/tmux.sock".to_string()),
         });
-        let expected_command = build_resume_command().unwrap();
+        session.engine = Engine::Codex;
+        session.ancestor_session_ids = vec!["fixture-parent".to_string()];
+        session.launched_with_vibe = true;
         let mut respawn_calls = Vec::new();
 
-        let result = respawn_stuck_session_with(&session, |socket_path, pane_id, cwd, command| {
-            respawn_calls.push((
-                socket_path.map(str::to_string),
-                pane_id.to_string(),
-                cwd.to_path_buf(),
-                command.to_string(),
-            ));
-            Ok(())
+        let result = temp_env::with_vars([("SHELL", Some("/bin/sh"))], || {
+            respawn_stuck_session_with(&session, |socket_path, pane_id, cwd, command| {
+                respawn_calls.push((
+                    socket_path.map(str::to_string),
+                    pane_id.to_string(),
+                    cwd.to_path_buf(),
+                    command.to_string(),
+                ));
+                Ok(())
+            })
         });
 
         assert_eq!(
@@ -598,7 +614,7 @@ mod tests {
                     Some("/fixture/tmux.sock".to_string()),
                     "%17".to_string(),
                     directory.path().to_path_buf(),
-                    expected_command,
+                    "/bin/sh -i -c 'a agent resume fixture-session --engine codex --ancestor-session-ids fixture-parent --launched-with-vibe; exec /bin/sh -i'".to_string(),
                 )],
             ),
         );

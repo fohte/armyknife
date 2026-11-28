@@ -370,29 +370,37 @@ pub(super) async fn retry_resume(
     let sessions_dir =
         resolve_sessions_dir(state.sessions_dir.clone()).map_err(ApiError::internal)?;
     let retry_session_id = current_id.clone();
-    let runtime = state.runtime;
-    let retried = tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
-        let session_lock = store::lock_session_for_update(&sessions_dir, &retry_session_id)?;
-        let current_generation = session_lock.watch_web_session_start_generation()?;
-        let Some(current_session) = session_lock.load()? else {
-            return Ok(false);
-        };
-        if current_generation != session_start_generation
-            || !is_awaiting_session_start(current_session.status)
-            || current_session.archived_at.is_some()
-        {
-            return Ok(false);
-        }
+    let session_for_retry =
+        tokio::task::spawn_blocking(move || -> anyhow::Result<Option<Session>> {
+            let session_lock = store::lock_session_for_update(&sessions_dir, &retry_session_id)?;
+            let current_generation = session_lock.watch_web_session_start_generation()?;
+            let Some(current_session) = session_lock.load()? else {
+                return Ok(None);
+            };
+            if current_generation != session_start_generation
+                || !is_awaiting_session_start(current_session.status)
+                || current_session.archived_at.is_some()
+            {
+                return Ok(None);
+            }
 
-        // The transaction keeps SessionStart from committing until the pane is replaced.
-        runtime.retry_resume(&current_session)?;
-        Ok(true)
-    })
-    .await
-    .map_err(ApiError::internal)?
-    .map_err(ApiError::operation)?;
-    if !retried {
+            Ok(Some(current_session))
+        })
+        .await
+        .map_err(ApiError::internal)?
+        .map_err(ApiError::internal)?;
+    let Some(session_for_retry) = session_for_retry else {
         return Err(ApiError::conflict("session startup is not stuck"));
+    };
+    let runtime = state.runtime;
+    let retried = tokio::task::spawn_blocking(move || runtime.retry_resume(&session_for_retry))
+        .await
+        .map_err(ApiError::internal)?
+        .map_err(ApiError::operation)?;
+    if !retried {
+        return Err(ApiError::conflict(
+            "session pane does not match the requested session",
+        ));
     }
     state
         .resume_pending

@@ -3,7 +3,7 @@ use std::pin::Pin;
 
 use anyhow::Result;
 
-use super::super::super::types::{Engine, Session, TmuxInfo};
+use super::super::super::types::{Engine, Session, TmuxInfo, resolve_session_option};
 use super::{ActionRuntime, CommandResult};
 use crate::shared::config::Config;
 
@@ -28,9 +28,21 @@ impl ActionRuntime for LiveActionRuntime {
         }
     }
 
-    fn retry_resume(&self, session: &Session) -> Result<()> {
+    fn retry_resume(&self, session: &Session) -> Result<bool> {
+        if let Some(tmux_info) = session.tmux_info.as_ref() {
+            let recorded_session_id = resolve_session_option(|option| {
+                crate::infra::tmux::get_pane_option_for_socket(
+                    tmux_info.socket_path.as_deref(),
+                    &tmux_info.pane_id,
+                    option,
+                )
+            });
+            if recorded_session_id.as_deref() != Some(session.session_id.as_str()) {
+                return Ok(false);
+            }
+        }
         crate::commands::agent::resume::respawn_stuck_session(session)?;
-        Ok(())
+        Ok(true)
     }
 
     fn execute_command(&self, cwd: &std::path::Path, command: &str) -> Result<CommandResult> {

@@ -177,7 +177,7 @@ struct CommandResult {
 
 trait ActionRuntime: Send + Sync {
     fn resume_session(&self, session: &Session) -> Result<Option<String>>;
-    fn retry_resume(&self, session: &Session) -> Result<()>;
+    fn retry_resume(&self, session: &Session) -> Result<bool>;
     fn send_message(&self, session: &Session, content: &str) -> Result<()>;
     fn execute_command(&self, cwd: &std::path::Path, command: &str) -> Result<CommandResult>;
     fn rewind_session(
@@ -597,6 +597,7 @@ mod tests {
             )>,
         >,
         pane_command: Mutex<Option<String>>,
+        retry_resume_matches_pane: Mutex<bool>,
         pane_snapshot: Mutex<Option<String>>,
         pane_snapshot_error: Mutex<Option<String>>,
         pane_has_agent_process: Mutex<bool>,
@@ -624,6 +625,7 @@ mod tests {
                 message_gate: Mutex::new(None),
                 command_gate: Mutex::new(None),
                 pane_command: Mutex::new(Some("claude".to_string())),
+                retry_resume_matches_pane: Mutex::new(true),
                 pane_snapshot: Mutex::new(None),
                 pane_snapshot_error: Mutex::new(None),
                 pane_has_agent_process: Mutex::new(true),
@@ -648,13 +650,16 @@ mod tests {
             Ok((session.status == SessionStatus::Ended).then(|| "%18".to_string()))
         }
 
-        fn retry_resume(&self, session: &Session) -> Result<()> {
+        fn retry_resume(&self, session: &Session) -> Result<bool> {
+            if !*self.retry_resume_matches_pane.lock().unwrap() {
+                return Ok(false);
+            }
             self.calls.lock().unwrap().push(json!({
                 "kind": "retry-resume",
                 "sessionId": session.session_id,
                 "status": session.status,
             }));
-            Ok(())
+            Ok(true)
         }
 
         fn send_message(&self, session: &Session, content: &str) -> Result<()> {
