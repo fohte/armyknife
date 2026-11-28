@@ -203,7 +203,7 @@ pub async fn run(args: &WatchWebArgs) -> Result<()> {
             })
             .await;
             let output_shutdown_receiver = relay_shutdown_receiver.clone();
-            let cleanup_task = stale_session_cleanup::start(relay_shutdown_receiver);
+            let cleanup_task = stale_session_cleanup::start();
             let shutdown_signal_sender = relay_shutdown_sender.clone();
             let result = axum::serve(
                 listener,
