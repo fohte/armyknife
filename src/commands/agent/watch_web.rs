@@ -495,6 +495,7 @@ mod tests {
     use std::ffi::OsString;
     use std::io::Read;
     use std::net::{IpAddr, Ipv4Addr};
+    use std::time::Duration;
     use tokio::sync::watch;
     use tower::ServiceExt;
 
@@ -524,9 +525,13 @@ mod tests {
         let consumer = tokio::spawn(forward_tq_events(event_receiver, shutdown_receiver, cache));
 
         let event_sent = event_sender.send(TqEvent::Connected).await.is_ok();
-        let event_applied = receiver.changed().await.is_ok();
+        let event_applied = tokio::time::timeout(Duration::from_secs(1), receiver.changed())
+            .await
+            .is_ok_and(|changed| changed.is_ok());
         shutdown_sender.send_replace(true);
-        let consumer_stopped = consumer.await.is_ok();
+        let consumer_stopped = tokio::time::timeout(Duration::from_secs(1), consumer)
+            .await
+            .is_ok_and(|result| result.is_ok());
 
         assert_eq!(
             (event_sent, event_applied, consumer_stopped),
