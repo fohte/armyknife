@@ -9,6 +9,7 @@ const MAX_RETRY_DELAY: Duration = Duration::from_secs(10 * 60);
 #[derive(Default)]
 pub(super) struct RetryBackoff {
     failures: HashMap<RelayRegistration, Failure>,
+    sync_failure: Option<Failure>,
 }
 
 struct Failure {
@@ -24,12 +25,45 @@ impl RetryBackoff {
     }
 
     pub(super) fn record_failure(&mut self, registration: RelayRegistration, now: Instant) {
-        let failure = self.failures.entry(registration).or_insert(Failure {
-            next_attempt_at: now,
-            next_delay: FIRST_RETRY_DELAY,
-        });
-        failure.next_attempt_at = now + failure.next_delay;
-        failure.next_delay = failure.next_delay.saturating_mul(2).min(MAX_RETRY_DELAY);
+        match self.failures.entry(registration) {
+            std::collections::hash_map::Entry::Occupied(mut entry) => {
+                entry.get_mut().record_failure(now);
+            }
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(Failure::after_failure(now));
+            }
+        }
+    }
+
+    pub(super) fn record_sync_failure(&mut self, now: Instant) {
+        if let Some(failure) = &mut self.sync_failure {
+            failure.record_failure(now);
+        } else {
+            self.sync_failure = Some(Failure::after_failure(now));
+        }
+    }
+
+    pub(super) fn clear_sync_failure(&mut self) {
+        self.sync_failure = None;
+    }
+
+    pub(super) fn next_attempt_at(&mut self, now: Instant) -> Option<Instant> {
+        for failure in self
+            .failures
+            .values_mut()
+            .chain(self.sync_failure.iter_mut())
+        {
+            failure.reschedule_if_due(now);
+        }
+        self.failures
+            .values()
+            .map(|failure| failure.next_attempt_at)
+            .chain(
+                self.sync_failure
+                    .iter()
+                    .map(|failure| failure.next_attempt_at),
+            )
+            .min()
     }
 
     pub(super) fn remove(&mut self, registration: &RelayRegistration) {
@@ -39,6 +73,28 @@ impl RetryBackoff {
     pub(super) fn retain_for(&mut self, registrations: &HashSet<RelayRegistration>) {
         self.failures
             .retain(|registration, _| registrations.contains(registration));
+    }
+}
+
+impl Failure {
+    fn after_failure(now: Instant) -> Self {
+        let mut failure = Self {
+            next_attempt_at: now,
+            next_delay: FIRST_RETRY_DELAY,
+        };
+        failure.record_failure(now);
+        failure
+    }
+
+    fn record_failure(&mut self, now: Instant) {
+        self.next_attempt_at = now + self.next_delay;
+        self.next_delay = self.next_delay.saturating_mul(2).min(MAX_RETRY_DELAY);
+    }
+
+    fn reschedule_if_due(&mut self, now: Instant) {
+        if now >= self.next_attempt_at {
+            self.record_failure(now);
+        }
     }
 }
 
@@ -107,5 +163,40 @@ mod tests {
         }
 
         assert_eq!(eligibility, vec![(false, true); 12]);
+    }
+
+    #[rstest]
+    fn next_attempt_at_returns_the_earliest_registration_deadline(registration: RelayRegistration) {
+        let start = Instant::now();
+        let later = RelayRegistration {
+            name: "Other preview".to_owned(),
+            ..registration.clone()
+        };
+        let mut backoff = RetryBackoff::default();
+        backoff.record_failure(registration, start);
+        backoff.record_failure(later, start + Duration::from_secs(1));
+
+        assert_eq!(
+            backoff.next_attempt_at(start),
+            Some(start + Duration::from_secs(2))
+        );
+    }
+
+    #[rstest]
+    fn next_attempt_at_advances_due_failures_once(registration: RelayRegistration) {
+        let start = Instant::now();
+        let mut backoff = RetryBackoff::default();
+        backoff.record_failure(registration, start);
+
+        assert_eq!(
+            (
+                backoff.next_attempt_at(start + Duration::from_secs(2)),
+                backoff.next_attempt_at(start + Duration::from_secs(2)),
+            ),
+            (
+                Some(start + Duration::from_secs(6)),
+                Some(start + Duration::from_secs(6)),
+            ),
+        );
     }
 }
