@@ -80,7 +80,7 @@ function PickerHarness({
     <NewSessionPicker
       state={state}
       initialModelPickerOpen={initialModelPickerOpen}
-      now={now}
+      {...(now === undefined ? {} : { now })}
       onClose={onClose}
       onLaunched={() => undefined}
     />

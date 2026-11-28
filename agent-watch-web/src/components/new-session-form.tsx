@@ -125,7 +125,7 @@ export function NewSessionForm({
               directories={state.directories}
               error={state.error}
               isLoading={state.isLoadingDirectories}
-              now={now}
+              {...(now === undefined ? {} : { now })}
               onQueryChange={state.setDirectoryQuery}
               onSelect={(directory) => {
                 state.chooseDirectory(directory)

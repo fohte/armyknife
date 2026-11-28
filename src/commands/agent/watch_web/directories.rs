@@ -438,7 +438,7 @@ mod tests {
                 StatusCode::OK,
                 serde_json::json!({
                     "directories": [
-                        {"path": repo.canonicalize().unwrap().to_string_lossy(), "source": "recent", "lastUsedAt": "1970-01-01T00:00:30Z"},
+                        {"path": repo.canonicalize().unwrap().to_string_lossy(), "source": "recent", "lastUsedAt": "1970-01-01T00:00:20Z"},
                     ],
                 }),
             ),

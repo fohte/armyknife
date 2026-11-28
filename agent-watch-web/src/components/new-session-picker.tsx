@@ -231,7 +231,7 @@ export function NewSessionPicker({
             directories={state.directories}
             error={state.error}
             isLoading={state.isLoadingDirectories}
-            now={now}
+            {...(now === undefined ? {} : { now })}
             onActiveIndexChange={setActiveIndex}
             onQueryChange={(query) => {
               state.setDirectoryQuery(query)
