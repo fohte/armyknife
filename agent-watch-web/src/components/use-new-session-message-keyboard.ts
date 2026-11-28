@@ -1,10 +1,11 @@
 import { useConversationPaneKeyboard } from '#components/use-conversation-pane-keyboard'
+import type { LaunchSessionRequest } from '#new-session-api'
 import type { NewSessionState } from '#use-new-session'
 
 type UseNewSessionMessageKeyboardOptions = {
   isMobile: boolean
   launchPending: boolean
-  onLaunched: (launchId: string) => void
+  onStart: (request: LaunchSessionRequest) => void
   state: NewSessionState
 }
 
@@ -13,7 +14,7 @@ const ignoreInterrupt = () => {}
 export function useNewSessionMessageKeyboard({
   isMobile,
   launchPending,
-  onLaunched,
+  onStart,
   state,
 }: UseNewSessionMessageKeyboardOptions) {
   return useConversationPaneKeyboard({
@@ -22,10 +23,11 @@ export function useNewSessionMessageKeyboard({
     interruptPending: false,
     interrupt: ignoreInterrupt,
     updateDraft: state.setInitialMessage,
-    sendMessage: async () => {
+    sendMessage: () => {
       if (state.selectedDirectory !== null && !launchPending) {
-        await state.start(onLaunched, state.engine)
+        state.start(onStart, state.engine)
       }
+      return Promise.resolve()
     },
   })
 }

@@ -13,6 +13,7 @@ import {
 import { useBeforeUnloadWarning } from '#components/use-beforeunload-warning'
 import { useDismissableLayer } from '#components/use-dismissable-layer'
 import { useNewSessionMessageKeyboard } from '#components/use-new-session-message-keyboard'
+import type { LaunchSessionRequest } from '#new-session-api'
 import type { NewSessionState } from '#use-new-session'
 
 type NewSessionFormProps = {
@@ -22,7 +23,7 @@ type NewSessionFormProps = {
   initialModelPickerOpen?: boolean
   launchPending?: boolean
   onClose: () => void
-  onLaunched: (launchId: string) => void
+  onStart: (request: LaunchSessionRequest) => void
   mobileUpdateNotice?: ReactNode
 }
 
@@ -33,7 +34,7 @@ export function NewSessionForm({
   initialModelPickerOpen = false,
   launchPending = false,
   onClose,
-  onLaunched,
+  onStart,
   mobileUpdateNotice,
 }: NewSessionFormProps) {
   const [directoryPickerOpen, setDirectoryPickerOpen] = useState(
@@ -48,7 +49,7 @@ export function NewSessionForm({
   const handleMessageKeyDown = useNewSessionMessageKeyboard({
     isMobile,
     launchPending,
-    onLaunched,
+    onStart,
     state,
   })
   const skillCompletion = useSkillCompletion({
@@ -250,15 +251,13 @@ export function NewSessionForm({
             </span>
             <button
               className="new-session-start"
-              disabled={
-                selectedDirectory === null || state.isStarting || launchPending
-              }
+              disabled={selectedDirectory === null || launchPending}
               onClick={() => {
-                void state.start(onLaunched)
+                state.start(onStart)
               }}
               type="button"
             >
-              {state.isStarting || launchPending ? 'Starting…' : 'Start ↵'}
+              {launchPending ? 'Starting…' : 'Start ↵'}
             </button>
           </div>
         </div>

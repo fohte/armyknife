@@ -11,7 +11,7 @@ const meta = {
   args: {
     state: createNewSessionStoryState(),
     onClose: () => undefined,
-    onLaunched: () => undefined,
+    onStart: () => undefined,
   },
   decorators: [
     (Story) => (

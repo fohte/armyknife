@@ -61,8 +61,8 @@ function PickerHarness({
     initialMessage: '',
     skillSuggestions: [],
     isLoadingDirectories: false,
-    isStarting: false,
     error: null,
+    setLaunchError: () => undefined,
     setDirectoryQuery: () => undefined,
     chooseDirectory: setSelectedDirectory,
     setEngine,
@@ -79,7 +79,7 @@ function PickerHarness({
       state={state}
       initialModelPickerOpen={initialModelPickerOpen}
       onClose={onClose}
-      onLaunched={() => undefined}
+      onStart={() => undefined}
     />
   )
 }
@@ -99,7 +99,7 @@ afterEach(() => {
 })
 
 it('launches Codex when Option+Enter is pressed after choosing a directory', async () => {
-  const start = vi.fn<NewSessionState['start']>(() => Promise.resolve())
+  const start = vi.fn<NewSessionState['start']>()
   root = createRoot(container)
   act(() => {
     root?.render(<PickerHarness start={start} />)
@@ -116,15 +116,15 @@ it('launches Codex when Option+Enter is pressed after choosing a directory', asy
   })
 
   const snapshot = () =>
-    start.mock.calls.map(([onLaunched, engine]) => ({
-      callbackType: typeof onLaunched,
+    start.mock.calls.map(([onStart, engine]) => ({
+      callbackType: typeof onStart,
       engine,
     }))
   expect(snapshot()).toEqual([{ callbackType: 'function', engine: 'codex' }])
 })
 
 it('selects the next directory with ArrowDown and Enter', async () => {
-  const start = vi.fn<NewSessionState['start']>(() => Promise.resolve())
+  const start = vi.fn<NewSessionState['start']>()
   root = createRoot(container)
   act(() => {
     root?.render(<PickerHarness start={start} />)
@@ -151,7 +151,7 @@ it.each([
 ] as const)(
   'does not launch during IME confirmation reported by %s',
   async (_signal, isComposing, keyCode) => {
-    const start = vi.fn<NewSessionState['start']>(() => Promise.resolve())
+    const start = vi.fn<NewSessionState['start']>()
     root = createRoot(container)
     act(() => {
       root?.render(<PickerHarness start={start} />)
@@ -186,7 +186,7 @@ it.each([
 )
 
 it('starts the selected engine from the desktop picker button', async () => {
-  const start = vi.fn<NewSessionState['start']>(() => Promise.resolve())
+  const start = vi.fn<NewSessionState['start']>()
   root = createRoot(container)
   act(() => {
     root?.render(<PickerHarness start={start} />)
@@ -205,12 +205,12 @@ it('starts the selected engine from the desktop picker button', async () => {
   })
 
   const snapshot = () =>
-    start.mock.calls.map(([onLaunched, engine]) => [typeof onLaunched, engine])
+    start.mock.calls.map(([onStart, engine]) => [typeof onStart, engine])
   expect(snapshot()).toEqual([['function', 'claude']])
 })
 
 it('launches the focused engine option when Enter is pressed', async () => {
-  const start = vi.fn<NewSessionState['start']>(() => Promise.resolve())
+  const start = vi.fn<NewSessionState['start']>()
   root = createRoot(container)
   act(() => {
     root?.render(<PickerHarness start={start} />)
@@ -229,12 +229,12 @@ it('launches the focused engine option when Enter is pressed', async () => {
   })
 
   const snapshot = () =>
-    start.mock.calls.map(([onLaunched, engine]) => [typeof onLaunched, engine])
+    start.mock.calls.map(([onStart, engine]) => [typeof onStart, engine])
   expect(snapshot()).toEqual([['function', 'codex']])
 })
 
 it('launches Codex when Option+Enter is pressed on the Claude Code option', async () => {
-  const start = vi.fn<NewSessionState['start']>(() => Promise.resolve())
+  const start = vi.fn<NewSessionState['start']>()
   root = createRoot(container)
   act(() => {
     root?.render(
@@ -253,12 +253,12 @@ it('launches Codex when Option+Enter is pressed on the Claude Code option', asyn
   })
 
   const snapshot = () =>
-    start.mock.calls.map(([onLaunched, engine]) => [typeof onLaunched, engine])
+    start.mock.calls.map(([onStart, engine]) => [typeof onStart, engine])
   expect(snapshot()).toEqual([['function', 'codex']])
 })
 
 it('toggles the worktree option with Option+W', async () => {
-  const start = vi.fn<NewSessionState['start']>(() => Promise.resolve())
+  const start = vi.fn<NewSessionState['start']>()
   root = createRoot(container)
   act(() => {
     root?.render(<PickerHarness start={start} />)
@@ -282,7 +282,7 @@ it('toggles the worktree option with Option+W', async () => {
 })
 
 it('changes the model and effort with arrow keys in the model picker', async () => {
-  const start = vi.fn<NewSessionState['start']>(() => Promise.resolve())
+  const start = vi.fn<NewSessionState['start']>()
   const chooseModel = vi.fn<NewSessionState['chooseModel']>()
   const setSelectedEffort = vi.fn<NewSessionState['setSelectedEffort']>()
   root = createRoot(container)
@@ -320,7 +320,7 @@ it('changes the model and effort with arrow keys in the model picker', async () 
 })
 
 it('shows the profile model in Default while another model is selected', () => {
-  const start = vi.fn<NewSessionState['start']>(() => Promise.resolve())
+  const start = vi.fn<NewSessionState['start']>()
   root = createRoot(container)
   act(() => {
     root?.render(
@@ -343,7 +343,7 @@ it('shows the profile model in Default while another model is selected', () => {
 })
 
 it('closes the picker when Enter activates the close button', async () => {
-  const start = vi.fn<NewSessionState['start']>(() => Promise.resolve())
+  const start = vi.fn<NewSessionState['start']>()
   const onClose = vi.fn()
   root = createRoot(container)
   act(() => {

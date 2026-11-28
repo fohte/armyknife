@@ -175,7 +175,7 @@ it('keeps the current suggestions when an earlier request resolves last', async 
   })
 })
 
-it('forwards the selected model and effort when starting a session', async () => {
+it('passes the selected model and effort to the launch handler', async () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   container = document.createElement('div')
   document.body.append(container)
@@ -217,36 +217,18 @@ it('forwards the selected model and effort when starting a session', async () =>
     currentState?.chooseModel('fixture-model-orbit')
     currentState?.setSelectedEffort('high')
   })
-  await act(async () => {
-    await currentState?.start(() => undefined)
+  const requests: unknown[] = []
+  act(() => {
+    currentState?.start((request) => requests.push(request))
   })
-
-  const launchRequest = fetcher.mock.calls.find(
-    ([input]) => requestUrl(input) === '/api/sessions',
-  )
-  expect(
-    launchRequest === undefined
-      ? []
-      : [
-          {
-            url: requestUrl(launchRequest[0]),
-            method: launchRequest[1]?.method,
-            headers: launchRequest[1]?.headers,
-            body: launchRequest[1]?.body,
-          },
-        ],
-  ).toEqual([
+  expect(requests).toEqual([
     {
-      url: '/api/sessions',
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        directory: '/fixture/project',
-        engine: 'claude',
-        worktree: false,
-        model: 'fixture-model-orbit',
-        reasoningEffort: 'high',
-      }),
+      directory: '/fixture/project',
+      engine: 'claude',
+      worktree: false,
+      model: 'fixture-model-orbit',
+      reasoningEffort: 'high',
+      initialMessage: '',
     },
   ])
 })
@@ -305,20 +287,18 @@ it('uses profile defaults after clearing an effort unsupported by the default mo
     currentState?.setSelectedEffort('xhigh')
     currentState?.chooseModel(null)
   })
-  await act(async () => {
-    await currentState?.start(() => undefined)
+  const requests: unknown[] = []
+  act(() => {
+    currentState?.start((request) => requests.push(request))
   })
-
-  const launchRequestBody = fetcher.mock.calls.find(
-    ([input]) => requestUrl(input) === '/api/sessions',
-  )?.[1]?.body
-  expect(launchRequestBody).toEqual(
-    JSON.stringify({
+  expect(requests).toEqual([
+    {
       directory: '/fixture/project',
       engine: 'claude',
       worktree: false,
-    }),
-  )
+      initialMessage: '',
+    },
+  ])
 })
 
 it('falls back to the new engine default and keeps a supported effort', async () => {

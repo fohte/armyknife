@@ -11,7 +11,7 @@ const meta = {
   args: {
     state: createNewSessionStoryState(),
     onClose: () => undefined,
-    onLaunched: () => undefined,
+    onStart: () => undefined,
   },
 } satisfies Meta<typeof NewSessionPicker>
 
@@ -84,7 +84,6 @@ export const LaunchRequestIsSending: Story = {
   args: {
     state: createNewSessionStoryState({
       selectedDirectory: exampleSessionDirectories[0] ?? null,
-      isStarting: true,
     }),
   },
 }

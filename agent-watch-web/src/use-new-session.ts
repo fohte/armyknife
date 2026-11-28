@@ -4,7 +4,7 @@ import {
   getSessionDirectories,
   getSessionModelOptions,
   getSessionSkillSuggestions,
-  launchSession,
+  type LaunchSessionRequest,
   type SessionDirectory,
   type SessionEngine,
   type SessionModelOptions,
@@ -40,11 +40,9 @@ export function useNewSession(active: boolean) {
     [],
   )
   const [isLoadingDirectories, setIsLoadingDirectories] = useState(false)
-  const [isStarting, setIsStarting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const requestSequence = useRef(0)
   const skillSuggestionsSequence = useRef(0)
-  const launchSequence = useRef(0)
   const engineTransition = useRef<{
     engine: SessionEngine
     selection: NewSessionModelSelection
@@ -183,7 +181,6 @@ export function useNewSession(active: boolean) {
   const reset = useCallback(() => {
     requestSequence.current += 1
     skillSuggestionsSequence.current += 1
-    launchSequence.current += 1
     setDirectoryQuery('')
     setDirectories([])
     setSelectedDirectory(null)
@@ -201,7 +198,6 @@ export function useNewSession(active: boolean) {
     setInitialMessage('')
     setSkillSuggestions([])
     setIsLoadingDirectories(false)
-    setIsStarting(false)
     setError(null)
   }, [])
 
@@ -272,11 +268,11 @@ export function useNewSession(active: boolean) {
   }, [])
 
   const start = useCallback(
-    async (
-      onLaunched: (launchId: string) => void,
+    (
+      onStart: (request: LaunchSessionRequest) => void,
       engineOverride?: SessionEngine,
     ) => {
-      if (selectedDirectory === null || isStarting) return
+      if (selectedDirectory === null) return
       const launchEngine = engineOverride ?? engine
       const useSelectedOptions = launchEngine === engine
       const launchModel = useSelectedOptions ? selectedModel : null
@@ -287,11 +283,8 @@ export function useNewSession(active: boolean) {
         ? (selectedEffort ??
           (launchModel === null ? null : (chosenModel?.defaultEffort ?? null)))
         : null
-      const sequence = launchSequence.current + 1
-      launchSequence.current = sequence
       setError(null)
-      setIsStarting(true)
-      const result = await launchSession({
+      onStart({
         directory: selectedDirectory.path,
         engine: launchEngine,
         worktree,
@@ -299,21 +292,10 @@ export function useNewSession(active: boolean) {
         ...(launchEffort === null ? {} : { reasoningEffort: launchEffort }),
         initialMessage,
       })
-      if (launchSequence.current !== sequence) return
-      result.match(
-        ({ launchId }) => {
-          onLaunched(launchId)
-        },
-        (launchError) => {
-          setError(launchError.message)
-        },
-      )
-      setIsStarting(false)
     },
     [
       engine,
       initialMessage,
-      isStarting,
       modelOptions,
       selectedDirectory,
       selectedEffort,
@@ -345,8 +327,8 @@ export function useNewSession(active: boolean) {
     initialMessage,
     skillSuggestions,
     isLoadingDirectories,
-    isStarting,
     error,
+    setLaunchError: setError,
     setDirectoryQuery,
     chooseDirectory,
     setEngine: changeEngine,

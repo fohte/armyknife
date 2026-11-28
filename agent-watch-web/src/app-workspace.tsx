@@ -15,6 +15,7 @@ import { ResizableColumns } from '#components/resizable-columns'
 import { SessionCloseConfirmation } from '#components/session-close-confirmation'
 import { UpdateNotice } from '#components/update-notice'
 import type { InboxSort } from '#inbox-sort'
+import type { LaunchSessionRequest } from '#new-session-api'
 import type { useSessionHistory } from '#session-history'
 import type { LaterPreset, LaterPresetTimes } from '#session-navigation'
 import type { SessionOperation } from '#session-operations'
@@ -47,7 +48,7 @@ type AppWorkspaceState = {
   waitingExpanded: boolean
   doneExpanded: boolean
   statusPanelOpen: boolean
-  pendingLaunchId: string | null
+  launchPending: boolean
   projects: readonly BoardProject[]
   focusedProjectName: string | null
   hideQuietProjects: boolean
@@ -76,7 +77,7 @@ type AppWorkspaceActions = {
   setDoneExpanded: Dispatch<SetStateAction<boolean>>
   setMobileNavOpen: Dispatch<SetStateAction<boolean>>
   setStatusPanelOpen: Dispatch<SetStateAction<boolean>>
-  setPendingLaunchId: Dispatch<SetStateAction<string | null>>
+  onStart: (request: LaunchSessionRequest) => void
   setHideQuietProjects: Dispatch<SetStateAction<boolean>>
   setCommandPaletteOpen: Dispatch<SetStateAction<boolean>>
   setFocusedProjectName: Dispatch<SetStateAction<string | null>>
@@ -272,10 +273,10 @@ export function AppWorkspace({
             state.newSessionMode === 'form' ? (
               <NewSessionForm
                 isMobile={state.isMobile}
-                launchPending={state.pendingLaunchId !== null}
+                launchPending={state.launchPending}
                 mobileUpdateNotice={mobileUpdateNotice}
                 onClose={actions.closeNewSession}
-                onLaunched={actions.setPendingLaunchId}
+                onStart={actions.onStart}
                 state={newSession}
               />
             ) : undefined
@@ -447,9 +448,9 @@ export function AppWorkspace({
         {state.newSessionMode === 'palette' ? (
           <NewSessionPicker
             isMobile={state.isMobile}
-            launchPending={state.pendingLaunchId !== null}
+            launchPending={state.launchPending}
             onClose={actions.closeNewSession}
-            onLaunched={actions.setPendingLaunchId}
+            onStart={actions.onStart}
             state={newSession}
           />
         ) : null}
