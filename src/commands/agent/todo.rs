@@ -121,12 +121,13 @@ fn withdraw_todo(
     let comment = comment.map(str::trim).filter(|comment| !comment.is_empty());
     let _todo_lock = store::lock_agent_todo_resolution(sessions_dir, session_id)?;
     ensure!(
-        store::resolve_agent_todo_from(
+        store::resolve_agent_todo_from_with_reason(
             sessions_dir,
             session_id,
             seq,
             store::TodoResolution::Withdrawn,
             comment,
+            store::WithdrawalReason::Manual,
         )?,
         "todo is already resolved or does not exist"
     );

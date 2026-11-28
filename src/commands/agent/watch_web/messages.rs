@@ -1718,6 +1718,7 @@ mod tests {
             answer: None,
             resolved_at: None,
             resolution: None,
+            withdrawal_reason: None,
             comment: None,
         }));
         let proposal_loader = Arc::clone(&proposal);
@@ -1855,6 +1856,7 @@ mod tests {
             answer: resolved.then(|| r#"{"choice":0,"comment":"Keep option A."}"#.to_string()),
             resolved_at: resolved.then_some(created_at),
             resolution: None,
+            withdrawal_reason: None,
             comment: None,
         };
 
@@ -1926,6 +1928,7 @@ mod tests {
                 created_at: epoch,
                 completed_at: None,
                 resolution: None,
+                withdrawal_reason: None,
                 comment: None,
             },
             AgentTodo {
@@ -1938,6 +1941,7 @@ mod tests {
                 created_at: epoch,
                 completed_at: Some(epoch),
                 resolution: Some(TodoResolution::Completed),
+                withdrawal_reason: None,
                 comment: Some("Done".to_string()),
             },
         ]));
@@ -3385,6 +3389,7 @@ mod tests {
             answer: None,
             resolved_at: None,
             resolution: None,
+            withdrawal_reason: None,
             comment: None,
         };
         let pending_todo = AgentTodo {
@@ -3397,6 +3402,7 @@ mod tests {
             created_at: old_created_at,
             completed_at: None,
             resolution: None,
+            withdrawal_reason: None,
             comment: None,
         };
         let pending_denial = PermissionDeniedOperation {

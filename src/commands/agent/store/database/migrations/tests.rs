@@ -633,6 +633,7 @@ fn adds_todo_resolution_to_master_version_fourteen_database(database_fixture: Da
                     .to_utc(),
             ),
             resolution: Some(super::super::TodoResolution::Completed),
+            withdrawal_reason: None,
             comment: Some("Already handled".to_string()),
         }],
     );

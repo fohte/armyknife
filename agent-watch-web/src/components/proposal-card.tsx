@@ -28,6 +28,8 @@ type ProposalCardProps = {
   answer: ProposalAnswer | null
   resolved: boolean
   resolution: 'withdrawn' | null
+  sessionEndedAt?: string
+  now?: Date
   isMobile: boolean
   defaultChoice?: number | null
   defaultComment?: string
@@ -47,6 +49,8 @@ export function ProposalCard({
   answer,
   resolved,
   resolution,
+  sessionEndedAt,
+  now,
   isMobile,
   defaultChoice = null,
   defaultComment = '',
@@ -217,6 +221,8 @@ export function ProposalCard({
         kind="Proposal"
         title={title}
         cardId={conversationCardId}
+        {...(sessionEndedAt === undefined ? {} : { sessionEndedAt })}
+        {...(now === undefined ? {} : { now })}
       />
     )
   }

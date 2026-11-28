@@ -27,6 +27,8 @@ type TodoCardProps = {
   addedFolded?: boolean
   defaultDetailExpanded?: boolean
   resolution: 'completed' | 'rejected' | 'withdrawn' | null
+  sessionEndedAt?: string
+  now?: Date
   defaultComment?: string
   onResolve: (
     resolution: 'completed' | 'rejected',
@@ -46,6 +48,8 @@ export function TodoCard({
   addedFolded = false,
   defaultDetailExpanded = false,
   resolution,
+  sessionEndedAt,
+  now,
   defaultComment = '',
   onResolve,
   onFold,
@@ -88,7 +92,13 @@ export function TodoCard({
   )
   if (resolution === 'withdrawn') {
     return (
-      <WithdrawnCard kind="To-do" title={title} cardId={conversationCardId} />
+      <WithdrawnCard
+        kind="To-do"
+        title={title}
+        cardId={conversationCardId}
+        {...(sessionEndedAt === undefined ? {} : { sessionEndedAt })}
+        {...(now === undefined ? {} : { now })}
+      />
     )
   }
 

@@ -424,19 +424,21 @@ mod tests {
                 SessionStatus::Ended,
                 (
                     vec![
-                        (1, Some(store::TodoResolution::Completed), None),
+                        (1, Some(store::TodoResolution::Completed), None, None,),
                         (
                             2,
                             Some(store::TodoResolution::Withdrawn),
+                            Some(store::WithdrawalReason::SessionEnded),
                             Some("Withdrawn because the session ended.".to_string()),
                         ),
                     ],
                     vec![
-                        (1, None, true, None),
+                        (1, None, true, None, None),
                         (
                             2,
                             Some(store::ProposalResolution::Withdrawn),
                             true,
+                            Some(store::WithdrawalReason::SessionEnded),
                             Some("Withdrawn because the session ended.".to_string()),
                         ),
                     ],

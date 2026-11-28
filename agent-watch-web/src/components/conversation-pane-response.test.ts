@@ -328,6 +328,37 @@ it('accepts todo cards with completion metadata', () => {
   ).toBe(true)
 })
 
+it.each([
+  {
+    name: 'a string session end time',
+    sessionEndedAt: '2026-11-21T14:32:00.000Z',
+    expected: true,
+  },
+  {
+    name: 'a numeric session end time',
+    sessionEndedAt: 42,
+    expected: false,
+  },
+])(
+  'validates to-do session end times as $name',
+  ({ sessionEndedAt, expected }) => {
+    expect(
+      isConversationResponse(
+        response({
+          type: 'todo',
+          seq: 1,
+          title: 'Check the page',
+          detail: null,
+          completed: true,
+          resolution: 'withdrawn',
+          comment: null,
+          sessionEndedAt,
+        }),
+      ),
+    ).toEqual(expected)
+  },
+)
+
 it('accepts a queued prompt ID on a delivered user message', () => {
   expect(
     isConversationResponse(

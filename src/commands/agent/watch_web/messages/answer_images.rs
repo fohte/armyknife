@@ -527,6 +527,7 @@ mod tests {
             added_folded: false,
             completed: false,
             resolution: None,
+            session_ended_at: None,
             comment,
         }
     }
@@ -548,6 +549,7 @@ mod tests {
             }),
             resolved: true,
             resolution: None,
+            session_ended_at: None,
             comment,
         }
     }
@@ -935,6 +937,7 @@ mod tests {
             added_folded: false,
             completed: false,
             resolution: None,
+            session_ended_at: None,
             comment: Some(todo_comment.clone()),
         };
         let proposal_message = ChatItem::Proposal {
@@ -954,6 +957,7 @@ mod tests {
             }),
             resolved: false,
             resolution: None,
+            session_ended_at: None,
             comment: Some(proposal_comment.clone()),
         };
         let mut conversation = ConversationResponse {
@@ -1015,6 +1019,7 @@ mod tests {
                     added_folded: false,
                     completed: false,
                     resolution: None,
+                    session_ended_at: None,
                     comment: None,
                 },
                 ChatItem::Proposal {
@@ -1025,6 +1030,7 @@ mod tests {
                     answer: None,
                     resolved: false,
                     resolution: None,
+                    session_ended_at: None,
                     comment: None,
                 },
             ],
@@ -1076,6 +1082,7 @@ mod tests {
             answer: None,
             resolved: false,
             resolution: None,
+            session_ended_at: None,
             comment: None,
         };
         let mut conversation = ConversationResponse {

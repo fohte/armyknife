@@ -2360,15 +2360,22 @@ mod tests {
     fn expected_session_end_card_state(withdrawn: bool) -> ExpectedSessionEndCardState {
         let todo_resolution = withdrawn.then_some(store::TodoResolution::Withdrawn);
         let proposal_resolution = withdrawn.then_some(store::ProposalResolution::Withdrawn);
+        let withdrawal_reason = withdrawn.then_some(store::WithdrawalReason::SessionEnded);
         let comment = withdrawn.then(|| "Withdrawn because the session ended.".to_string());
         (
             vec![
-                (1, Some(store::TodoResolution::Completed), None),
-                (2, todo_resolution, comment.clone()),
+                (1, Some(store::TodoResolution::Completed), None, None),
+                (2, todo_resolution, withdrawal_reason, comment.clone()),
             ],
             vec![
-                (1, None, true, None),
-                (2, proposal_resolution, withdrawn, comment),
+                (1, None, true, None, None),
+                (
+                    2,
+                    proposal_resolution,
+                    withdrawn,
+                    withdrawal_reason,
+                    comment,
+                ),
             ],
         )
     }

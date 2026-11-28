@@ -34,6 +34,7 @@ mod unreported_stop_checks;
 mod vibe_setting_revision;
 mod wake;
 mod web_state;
+mod withdrawal_reason;
 
 pub(crate) use activity::agent_response_timestamps;
 pub(crate) use agent_files::AgentFile;
@@ -66,10 +67,13 @@ pub(crate) use permission_requests::{
     PermissionRequestWait, PermissionRequestWaiter, permission_request_data,
     resolve_permission_request, resolve_permission_request_with_answers,
 };
+#[cfg(test)]
+pub(crate) use proposals::resolve_agent_proposal;
 pub(crate) use proposals::{AgentProposal, ProposalResolution};
 pub(crate) use proposals::{
     add_agent_proposal, agent_proposals, edit_agent_proposal, lock_agent_proposal_resolution,
-    resolve_agent_proposal, unanswered_agent_proposal_bodies, write_agent_proposal_answer_at,
+    resolve_agent_proposal_with_reason, unanswered_agent_proposal_bodies,
+    write_agent_proposal_answer_at,
 };
 pub(crate) use queued_prompts::{
     WatchWebActionEventKind, WatchWebQueuedAttachment, WatchWebQueuedPrompt,
@@ -83,11 +87,13 @@ pub(crate) use replacements::{
     all_unreplaced_sessions, resolve_current_session_id, save_rewind_sessions,
 };
 pub(crate) use session_closures::{clear_session_closed, closed_session_ids, mark_session_closed};
+#[cfg(test)]
+pub(crate) use todos::resolve_agent_todo;
 pub(crate) use todos::{AgentTodo, TodoResolution};
 pub(crate) use todos::{
     add_agent_todo, agent_todos, edit_agent_todo, has_incomplete_todos,
-    incomplete_agent_todo_titles, lock_agent_todo_resolution, resolve_agent_todo,
-    resolve_agent_todo_at, set_agent_todo_folded,
+    incomplete_agent_todo_titles, lock_agent_todo_resolution, resolve_agent_todo_at,
+    resolve_agent_todo_at_with_reason, set_agent_todo_folded,
 };
 pub(crate) use unreported_stop_checks::check_unreported_stop;
 pub(crate) use web_state::WatchWebSessionState;
@@ -96,6 +102,7 @@ pub(super) use web_state::{
     clear_watch_web_later, set_watch_web_later, set_watch_web_primary_task, set_watch_web_today,
     watch_web_session_start_generation, watch_web_session_states, watch_web_user_marker,
 };
+pub(crate) use withdrawal_reason::WithdrawalReason;
 
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 

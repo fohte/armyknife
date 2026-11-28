@@ -243,6 +243,10 @@ export function renderConversationMessage({
         answer={message.answer}
         resolved={message.resolved}
         resolution={message.resolution}
+        {...(message.sessionEndedAt === undefined
+          ? {}
+          : { sessionEndedAt: message.sessionEndedAt })}
+        {...(now === undefined ? {} : { now })}
         {...(imageSources === undefined ? {} : { imageSources })}
         isMobile={isMobile}
         onAnswer={(answer, attachments) =>
@@ -271,6 +275,10 @@ export function renderConversationMessage({
         folded={message.folded ?? false}
         addedFolded={message.addedFolded ?? false}
         resolution={message.resolution}
+        {...(message.sessionEndedAt === undefined
+          ? {}
+          : { sessionEndedAt: message.sessionEndedAt })}
+        {...(now === undefined ? {} : { now })}
         defaultComment={message.comment ?? ''}
         onResolve={(resolution, comment, attachments) =>
           onAction(`todos/${String(message.seq)}/resolve`, {

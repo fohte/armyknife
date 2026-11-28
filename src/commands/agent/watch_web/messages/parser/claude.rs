@@ -758,6 +758,7 @@ mod tests {
             created_at,
             completed_at: is_completed.then(|| created_at + chrono::Duration::minutes(1)),
             resolution: is_completed.then_some(TodoResolution::Completed),
+            withdrawal_reason: None,
             comment: is_completed.then(|| "The sample is ready.".to_string()),
         };
 
@@ -787,6 +788,7 @@ mod tests {
             added_folded: false,
             completed: is_completed,
             resolution: is_completed.then_some(TodoResolution::Completed),
+            session_ended_at: None,
             comment: is_completed.then(|| "The sample is ready.".to_string()),
         };
         let expected = if is_completed {
@@ -959,6 +961,7 @@ mod tests {
             answer: None,
             resolved: true,
             resolution: None,
+            session_ended_at: None,
             comment: None,
         };
 
@@ -1079,6 +1082,7 @@ mod tests {
             answer: None,
             resolved: true,
             resolution: None,
+            session_ended_at: None,
             comment: None,
         };
         let recorded_proposal = ChatItem::Proposal {
@@ -1095,6 +1099,7 @@ mod tests {
             answer: None,
             resolved: false,
             resolution: None,
+            session_ended_at: None,
             comment: None,
         };
 
@@ -1177,6 +1182,7 @@ mod tests {
             answer: None,
             resolved: false,
             resolution: None,
+            session_ended_at: None,
             comment: None,
         };
         let proposal_item = ProposalItem {

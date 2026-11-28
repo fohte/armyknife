@@ -1138,3 +1138,40 @@ it('shows only the heading and title for a withdrawn proposal', () => {
     comment: null,
   })
 })
+
+it('shows the session end time in a withdrawn proposal heading', () => {
+  const title = 'When should the setting take effect?'
+  renderCard(
+    props({
+      title,
+      resolved: true,
+      resolution: 'withdrawn',
+      sessionEndedAt: new Date(2026, 10, 21, 14, 32).toISOString(),
+      now: new Date(2026, 10, 21),
+    }),
+  )
+
+  const snapshot = () => {
+    const note = container.querySelector<HTMLElement>(
+      '.chat-withdrawn-card-note',
+    )
+    return {
+      label: container.querySelector('article')?.getAttribute('aria-label'),
+      headings: Array.from(
+        container.querySelectorAll('h2, h3'),
+        (heading) => heading.textContent,
+      ),
+      lightText: note?.textContent,
+      lightWeight: note === null ? null : getComputedStyle(note).fontWeight,
+      buttonCount: container.querySelectorAll('button').length,
+    }
+  }
+
+  expect(snapshot()).toEqual({
+    label: 'Proposal, withdrawn',
+    headings: ['Proposal · withdrawn · session ended 14:32', title],
+    lightText: ' · session ended 14:32',
+    lightWeight: '400',
+    buttonCount: 0,
+  })
+})

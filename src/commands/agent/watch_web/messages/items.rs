@@ -140,6 +140,8 @@ pub(super) enum ChatItem {
         answer: Option<ProposalAnswer>,
         resolved: bool,
         resolution: Option<ProposalResolution>,
+        #[serde(rename = "sessionEndedAt", skip_serializing_if = "Option::is_none")]
+        session_ended_at: Option<String>,
         comment: Option<String>,
     },
     Todo {
@@ -152,6 +154,8 @@ pub(super) enum ChatItem {
         added_folded: bool,
         completed: bool,
         resolution: Option<TodoResolution>,
+        #[serde(rename = "sessionEndedAt", skip_serializing_if = "Option::is_none")]
+        session_ended_at: Option<String>,
         comment: Option<String>,
     },
     Permission {
