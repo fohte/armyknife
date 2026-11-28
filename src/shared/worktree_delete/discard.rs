@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::infra::git::cmd::run_git;
@@ -61,15 +61,11 @@ pub(crate) enum DiscardVerificationError {
 
 #[derive(Debug, thiserror::Error)]
 #[error("Worktree changed since discard confirmation; review the current close checks and retry")]
-pub(crate) struct DiscardMismatchError {
-    _verification: DiscardVerificationError,
-}
+pub(crate) struct DiscardMismatchError;
 
 impl DiscardMismatchError {
-    pub(crate) fn new(verification: DiscardVerificationError) -> Self {
-        Self {
-            _verification: verification,
-        }
+    pub(crate) fn new(_verification: DiscardVerificationError) -> Self {
+        Self
     }
 }
 
@@ -84,8 +80,8 @@ pub(crate) fn verify(
         return Err(DiscardVerificationError::CommitsUnavailable);
     }
 
-    // shortcut: Git status cannot detect edits to content inside a path already listed as changed.
-    // shortcut: Normal untracked-file status hides new entries below an already listed directory.
+    // shortcut: Upgrade when status inspection can fingerprint file contents; Git status misses edits to listed paths.
+    // shortcut: Upgrade when normal Git status reports nested untracked files; it hides files under listed directories.
     let confirmed_changes = confirmed
         .changes
         .iter()
@@ -128,31 +124,25 @@ pub(crate) async fn prepare_discard(
         UnmergedWorktreePolicy::Reject,
     )
     .await?;
-    let commits = match (target.branch_name.as_deref(), merge_status.as_ref()) {
-        (Some(branch), Some(MergeStatus::NotMerged { .. } | MergeStatus::Closed { .. })) => {
+    let commits = inspect_commits_for_discard(
+        target.branch_name.as_deref(),
+        merge_status.as_ref(),
+        |branch| {
             read_branch_commits(
                 &target.worktree_path,
                 branch,
                 || get_default_branch_for_repo(&target.main_repo).ok(),
                 |path, args| run_git(path, args).ok(),
             )
-        }
-        (None, _) => CommitInspection {
-            commits: Vec::new(),
-            unavailable: true,
         },
-        _ => CommitInspection {
-            commits: Vec::new(),
-            unavailable: false,
-        },
-    };
+    );
     let observed = observed_discard(
         &target.worktree_path,
         target.branch_name.as_deref(),
         changes,
         commits,
     );
-    verify(&confirmed, &observed).map_err(DiscardMismatchError::new)?;
+    verify(&confirmed, &observed).map_err(|_| DiscardMismatchError)?;
 
     Ok(WorktreeDeletePlan {
         target,
@@ -162,13 +152,43 @@ pub(crate) async fn prepare_discard(
     })
 }
 
-pub(crate) fn observe_before_delete(
+fn inspect_commits_for_discard(
+    branch: Option<&str>,
+    merge_status: Option<&MergeStatus>,
+    inspect_branch_commits: impl FnOnce(&str) -> CommitInspection,
+) -> CommitInspection {
+    match (branch, merge_status) {
+        (Some(branch), Some(MergeStatus::NotMerged { .. } | MergeStatus::Closed { .. })) => {
+            inspect_branch_commits(branch)
+        }
+        (None, _) => CommitInspection {
+            commits: Vec::new(),
+            unavailable: true,
+        },
+        _ => CommitInspection {
+            commits: Vec::new(),
+            unavailable: false,
+        },
+    }
+}
+
+pub(crate) fn verify_before_delete_with(
+    confirmed: &ConfirmedDiscard,
     worktree_path: &Path,
-    branch: Option<String>,
-    changes: Vec<worktree::UncommittedChange>,
-    commits: CommitInspection,
-) -> ObservedDiscard {
-    observed_discard(worktree_path, branch.as_deref(), changes, commits)
+    merge_status: Option<&MergeStatus>,
+    read_branch: impl FnOnce() -> Result<Option<String>>,
+    read_changes: impl FnOnce(&Path) -> Result<Vec<worktree::UncommittedChange>>,
+    read_commits: impl FnOnce(&Path, &str) -> CommitInspection,
+) -> Result<()> {
+    let current_branch =
+        read_branch().context("Could not inspect worktree branch before discard")?;
+    let changes = read_changes(worktree_path)?;
+    let commits = inspect_commits_for_discard(current_branch.as_deref(), merge_status, |branch| {
+        read_commits(worktree_path, branch)
+    });
+    let observed = observed_discard(worktree_path, current_branch.as_deref(), changes, commits);
+    verify(confirmed, &observed).map_err(|_| DiscardMismatchError)?;
+    Ok(())
 }
 
 fn observed_discard(
@@ -349,6 +369,49 @@ mod tests {
         }
 
         assert_eq!(verify(&confirmed, &observed), expected);
+    }
+
+    #[rstest]
+    #[case::merged(MergeStatus::Merged { reason: "fictional merge".to_string() }, false)]
+    #[case::not_merged(MergeStatus::NotMerged { reason: "fictional open pull request".to_string() }, true)]
+    fn before_delete_reads_commits_only_for_unmerged_branches(
+        confirmed: ConfirmedDiscard,
+        #[case] merge_status: MergeStatus,
+        #[case] expected_commits_read: bool,
+    ) {
+        let merge_status = Some(merge_status);
+        let commits_read = std::cell::Cell::new(false);
+        let result = verify_before_delete_with(
+            &confirmed,
+            Path::new("/fictional/worktree"),
+            merge_status.as_ref(),
+            || Ok(Some("feature/fictional".to_string())),
+            |_| {
+                Ok(vec![
+                    worktree::UncommittedChange {
+                        status: "M".to_string(),
+                        path: "src/fictional.rs".to_string(),
+                    },
+                    worktree::UncommittedChange {
+                        status: "??".to_string(),
+                        path: "notes/fictional.txt".to_string(),
+                    },
+                ])
+            },
+            |_, _| {
+                commits_read.set(true);
+                CommitInspection {
+                    commits: vec![commit("sha-a", "preserve fictional work")],
+                    unavailable: false,
+                }
+            },
+        )
+        .map_err(|error| error.to_string());
+
+        assert_eq!(
+            (result, commits_read.get()),
+            (Ok(()), expected_commits_read)
+        );
     }
 
     #[test]

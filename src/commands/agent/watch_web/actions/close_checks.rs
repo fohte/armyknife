@@ -96,6 +96,7 @@ impl CloseChecks {
         Self::inspect_with(
             worktree_path,
             branch,
+            true,
             |path| worktree::uncommitted_changes(path).unwrap_or_default(),
             move |branch| async move {
                 // The preview checks local refs; close fetches and revalidates before deletion.
@@ -143,6 +144,7 @@ impl CloseChecks {
         Self::inspect_with(
             worktree_path,
             None,
+            false,
             |path| worktree::uncommitted_changes(path).unwrap_or_default(),
             |_| async { None },
             |_| CommitInspection {
@@ -169,6 +171,7 @@ impl CloseChecks {
     async fn inspect_with<Changes, Merge, MergeFuture, Commits, Processes>(
         worktree_path: PathBuf,
         branch: Option<String>,
+        commit_inspection_required: bool,
         inspect_changes: Changes,
         inspect_merge_status: Merge,
         inspect_commits: Commits,
@@ -214,7 +217,7 @@ impl CloseChecks {
             },
             _ => CommitInspection {
                 commits: Vec::new(),
-                unavailable: branch.is_none(),
+                unavailable: commit_inspection_required,
             },
         };
         let (changes, processes) = files_and_processes
@@ -412,6 +415,7 @@ mod tests {
         let checks = CloseChecks::inspect_with(
             PathBuf::from("/fictional/worktree"),
             Some("feature/fictional".to_string()),
+            true,
             |_| Vec::new(),
             |branch| async move {
                 inspect_close_merge_status(branch, async {
@@ -454,6 +458,7 @@ mod tests {
         let checks = CloseChecks::inspect_with(
             PathBuf::from("/fictional/worktree"),
             Some("feature/fictional".to_string()),
+            true,
             |_| Vec::new(),
             |branch| async move {
                 inspect_close_merge_status(branch, async {
@@ -564,6 +569,7 @@ mod tests {
         let checks = CloseChecks::inspect_with(
             PathBuf::from("/fictional/worktree"),
             Some("feature/fictional".to_string()),
+            true,
             |_| Vec::new(),
             |_| async { None },
             move |_| {
@@ -698,6 +704,7 @@ mod tests {
         let checks = CloseChecks::inspect_with(
             PathBuf::from("/fictional/worktree"),
             Some("feature/fictional".to_string()),
+            true,
             move |_| {
                 files_flag.store(true, Ordering::SeqCst);
                 vec![change("M", "src/fictional.rs")]
@@ -761,6 +768,45 @@ mod tests {
                     "processInspectionUnavailable": false,
                 }),
             ),
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::worktree_without_local_branch(true, true)]
+    #[case::session_without_worktree(false, false)]
+    #[tokio::test]
+    async fn missing_branch_is_unavailable_only_for_a_worktree_target(
+        #[case] commit_inspection_required: bool,
+        #[case] expected_unavailable: bool,
+    ) {
+        let checks = CloseChecks::inspect_with(
+            PathBuf::from("/fictional/worktree"),
+            None,
+            commit_inspection_required,
+            |_| Vec::new(),
+            |_| async { None },
+            |_| CommitInspection {
+                commits: Vec::new(),
+                unavailable: false,
+            },
+            |_| Ok(Vec::new()),
+        )
+        .await;
+
+        assert_eq!(
+            serde_json::to_value(checks).unwrap(),
+            json!({
+                "path": "/fictional/worktree",
+                "files": [],
+                "changes": [],
+                "commits": [],
+                "commitInspectionUnavailable": expected_unavailable,
+                "branch": null,
+                "merged": null,
+                "reason": null,
+                "processes": [],
+                "processInspectionUnavailable": false,
+            }),
         );
     }
 

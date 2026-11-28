@@ -167,6 +167,7 @@ pub(crate) async fn execute(plan: WorktreeDeletePlan, skip_hooks: bool) -> Resul
     let before_delete_path = worktree_path.clone();
     let before_delete_repo = main_repo.clone();
     let before_delete_worktree_name = worktree_name.clone();
+    let before_delete_merge_status = merge_status.clone();
 
     let result = cleanup::cleanup_worktree_by_name_with_before_delete(
         &main_repo,
@@ -176,31 +177,27 @@ pub(crate) async fn execute(plan: WorktreeDeletePlan, skip_hooks: bool) -> Resul
         discard_confirmed.is_some(),
         || {
             if let Some(confirmed) = discard_confirmed {
-                // shortcut: The deletion lock cannot prevent unrelated shells from writing before removal.
-                let current_branch =
-                    get_worktree_branch_checked(&before_delete_repo, &before_delete_worktree_name)
-                        .context("Could not inspect worktree branch before discard")?;
-                let changes = worktree::uncommitted_changes_without_lock(&before_delete_path)?;
-                let commits = match current_branch.as_deref() {
-                    Some(branch) => discard::read_branch_commits(
-                        &before_delete_path,
-                        branch,
-                        || get_default_branch_for_repo(&before_delete_repo).ok(),
-                        |path, args| crate::infra::git::cmd::run_git(path, args).ok(),
-                    ),
-                    None => discard::CommitInspection {
-                        commits: Vec::new(),
-                        unavailable: true,
-                    },
-                };
-                let observed = discard::observe_before_delete(
+                // shortcut: Upgrade when deletion can prevent unrelated processes from writing between verification and removal.
+                discard::verify_before_delete_with(
+                    &confirmed,
                     &before_delete_path,
-                    current_branch,
-                    changes,
-                    commits,
-                );
-                discard::verify(&confirmed, &observed)
-                    .map_err(discard::DiscardMismatchError::new)?;
+                    before_delete_merge_status.as_ref(),
+                    || {
+                        get_worktree_branch_checked(
+                            &before_delete_repo,
+                            &before_delete_worktree_name,
+                        )
+                    },
+                    worktree::uncommitted_changes_without_lock,
+                    |path, branch| {
+                        discard::read_branch_commits(
+                            path,
+                            branch,
+                            || get_default_branch_for_repo(&before_delete_repo).ok(),
+                            |path, args| crate::infra::git::cmd::run_git(path, args).ok(),
+                        )
+                    },
+                )?;
             }
             ensure_worktree_delete_plan_before_delete(
                 merge_status.as_ref(),
